@@ -176,7 +176,9 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "darkly-core",
+ "js-sys",
  "log",
+ "wasm-bindgen",
  "web-sys",
  "wgpu",
 ]

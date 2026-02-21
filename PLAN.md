@@ -4,7 +4,7 @@
 
 Darkly is a browser-based art tool that uses "Veils" (filter layers) to obscure and transform artwork, stimulating creative exploration. Phase 1 establishes the foundation: a tiled raster layer system with GPU compositing and filter shaders. No UI — just a canvas with hardcoded layers and mouse painting.
 
-The project is a new standalone Rust+WASM+Svelte codebase at `/mega/ARTEXP/darkly/`. The Graphite editor at `/mega/ARTEXP/darkly/Graphite/` is reference only.
+The project is a new standalone Rust+WASM+Svelte codebase at `/mega/ARTEXP/darkly/`. The Graphite editor at `/mega/ARTEXP/darkly/Graphite/` is reference only. Krita also is at `/mega/ARTEXP/darkly/krita/` if needed.
 
 **Demo goal:** Two raster layers + a noise filter layer between them. Mouse paints on the top layer. The noise filter obscures the painting with a procedural grain overlay. The bottom layer has a pre-filled color gradient. This proves tiles, dirty tracking, GPU compositing, blend modes, and filter shaders all work end-to-end.
 
