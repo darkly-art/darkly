@@ -6,9 +6,11 @@ Darkly is a browser-based art tool that uses "Veils" (filter layers) to obscure 
 
 The project is a new standalone Rust+WASM+Svelte codebase at `/mega/ARTEXP/darkly/`. The Graphite editor at `/mega/ARTEXP/darkly/Graphite/` is reference only.
 
-**Demo goal:** Two raster layers + a Gaussian blur filter layer between them. Mouse paints on the top layer. The blur filter obscures the painting. The bottom layer has a pre-filled color gradient. This proves tiles, dirty tracking, GPU compositing, blend modes, and filter shaders all work end-to-end.
+**Demo goal:** Two raster layers + a noise filter layer between them. Mouse paints on the top layer. The noise filter obscures the painting with a procedural grain overlay. The bottom layer has a pre-filled color gradient. This proves tiles, dirty tracking, GPU compositing, blend modes, and filter shaders all work end-to-end.
 
-**Engineering principle:** The core engine does not need to be 100% implemented, but every part that is implemented must be implemented properly on the first iteration. No hacks, no hardcoding, no shortcuts in the engine. If we implement one filter, we build a proper modular filter system and register that one filter in it. If we implement one blend mode, we build a proper blend mode system. The UI/demo layer can hardcode and cut corners freely — the engine cannot. This applies to every system: tiles, layers, filters, compositing, undo, GPU resource management.
+**Engineering principle:** The core engine does not need to be 100% implemented, but every part that is implemented must be implemented properly on the first iteration. No hacks, no hardcoding, no shortcuts in the engine. If we implement one filter, we build a proper modular filter system and register that one filter in it. If we implement one blend mode, we build a proper blend mode system. The frontend (TypeScript/Svelte) can hardcode and cut corners freely — Rust code cannot, including the WASM bridge. This applies to every system: tiles, layers, filters, compositing, undo, GPU resource management.
+
+**Modularity principle:** Generic systems must not contain domain-specific knowledge. The layer system must not know what filter types exist. The compositor render loop must not branch on filter type. Each filter is a self-contained module that implements a trait and registers itself — adding a new filter means creating a new file, not modifying existing ones. If an enum would need a new variant every time a module is added, use a trait object instead.
 
 ---
 
@@ -37,7 +39,9 @@ darkly/
 │           ├── staging.rs        # StagingRing: CPU→GPU tile upload buffers
 │           ├── compositor.rs     # Compositor: chained render passes
 │           ├── blend.rs          # Blend mode pipeline management
-│           └── filter.rs         # Filter shader pipeline management
+│           ├── filter.rs         # FilterHandler trait, FilterRegistry, FilterLayerCache
+│           └── filters/
+│               └── noise.rs      # NoiseParams, NoiseHandler (self-contained filter module)
 │
 ├── frontend/
 │   ├── package.json
@@ -61,7 +65,7 @@ darkly/
     ├── blend_modes.wgsl          # Blend mode functions (included by composite)
     ├── present.wgsl              # Final blit to surface
     └── filters/
-        └── blur.wgsl             # Gaussian blur filter (Phase 1 demo)
+        └── noise.wgsl            # Noise overlay filter (Phase 1 demo)
 ```
 
 ---
@@ -108,7 +112,7 @@ Cache invalidation:
 - Layer added/removed/reordered → invalidate entirely
 - Canvas resize → recreate the texture
 
-Filter layers propagate naturally — if a layer below a blur changes, the cache is invalidated from that layer, so the blur re-runs. If only a layer above the blur changes, the blur result is preserved in the cache.
+Filter layers propagate naturally — if a layer below a filter changes, the cache is invalidated from that layer, so the filter re-runs. If only a layer above the filter changes, the filter result is preserved in the cache.
 
 *(Reference: Krita's projection system — each layer has a cached `projection()`. Layers below the dirty one are tagged `N_BELOW_FILTHY` and skip recalculation entirely, using the cached result. See `krita-performance.md` §4.2)*
 
@@ -208,12 +212,22 @@ pub struct RasterLayer {
     pub visible: bool,
 }
 
-pub enum FilterType { GaussianBlur }
+/// String identifier for a filter type (e.g., "noise", "blur").
+/// Each filter module defines its own constant. The layer system
+/// never interprets this — it's an opaque key for the filter registry.
+pub type FilterTypeId = &'static str;
+
+/// Trait for filter parameters. Implemented by each filter module.
+/// The layer system only sees this trait — never concrete param types.
+pub trait FilterParams: std::fmt::Debug + Send + Sync {
+    fn filter_type_id(&self) -> FilterTypeId;
+    fn clone_boxed(&self) -> Box<dyn FilterParams>;
+    fn as_any(&self) -> &dyn std::any::Any;
+}
 
 pub struct FilterLayer {
     pub id: LayerId,
-    pub filter_type: FilterType,
-    pub params: FilterParams,  // e.g., blur radius
+    pub params: Box<dyn FilterParams>,
     pub visible: bool,
 }
 
@@ -250,7 +264,7 @@ pub struct Document {
 impl Document {
     pub fn new(width: u32, height: u32) -> Self;
     pub fn add_raster_layer(&mut self) -> LayerId;
-    pub fn add_filter_layer(&mut self, filter_type: FilterType, params: FilterParams) -> LayerId;
+    pub fn add_filter_layer(&mut self, params: Box<dyn FilterParams>) -> LayerId;
     pub fn paint_circle(&mut self, layer_id: LayerId, cx: f32, cy: f32, radius: f32, color: [u8; 4]);
     pub fn fill_gradient(&mut self, layer_id: LayerId); // demo helper
     pub fn layer(&self, id: LayerId) -> Option<&Layer>;
@@ -361,9 +375,9 @@ impl StagingRing {
 **`compositor.rs`:**
 ```rust
 pub struct Compositor {
-    /// Two accumulator textures for ping-pong rendering + one blur temp
-    accum: [wgpu::Texture; 3],
-    accum_views: [wgpu::TextureView; 3],
+    /// Two accumulator textures for ping-pong rendering
+    accum: [wgpu::Texture; 2],
+    accum_views: [wgpu::TextureView; 2],
     current_accum: usize,
 
     /// Cached composite result (GPU-resident). Stores the final composited
@@ -506,97 +520,130 @@ fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
 
 ### Step 7: Filter shader system (`darkly-gpu`)
 
-The filter system is a **modular registry** of GPU filter pipelines. Each filter type (blur, noise, sharpen, etc.) registers its pipeline and bind group layout once at init. Per-filter-layer instance state (uniform buffers, bind groups) is cached in the compositor alongside raster layer caches (P1). Adding a new filter means writing a shader, implementing the `Filter` trait, and registering it — no changes to the compositor or the render loop.
+The filter system is a **modular registry** of GPU filter pipelines. Each filter type (noise, blur, sharpen, etc.) registers its pipeline and bind group layout once at init. Per-filter-layer instance state (uniform buffers, bind groups, textures) is cached in the compositor alongside raster layer caches (P1). Adding a new filter means writing a shader, implementing the `Filter` trait, and registering it — no changes to the compositor or the render loop.
 
-Phase 1 ships one filter (Gaussian blur) to prove the system works end-to-end. The system itself is not blur-specific.
+Phase 1 ships one filter (noise overlay) to prove the system works end-to-end. The system itself is not noise-specific.
 
-**`layer.rs` — filter params as an enum:**
+**Noise params (defined in the noise filter module, NOT in `layer.rs`):**
 ```rust
+// e.g., in darkly-gpu/src/filters/noise.rs
+pub const FILTER_TYPE: FilterTypeId = "noise";
+
 #[derive(Clone, Debug)]
-pub enum FilterParams {
-    GaussianBlur { radius: f32 },
-    // Future: Noise { seed: u32, intensity: f32 }, Sharpen { amount: f32 }, etc.
+pub struct NoiseParams {
+    /// Strength of the noise effect (0.0–1.0).
+    pub amount: f32,
+    /// Size in pixels of each noise "cell". 1 = per-pixel noise,
+    /// 4 = each 4×4 block shares the same noise value (coarser grain).
+    pub resolution: u32,
+}
+
+impl FilterParams for NoiseParams {
+    fn filter_type_id(&self) -> FilterTypeId { FILTER_TYPE }
+    fn clone_boxed(&self) -> Box<dyn FilterParams> { Box::new(self.clone()) }
+    fn as_any(&self) -> &dyn Any { self }
 }
 ```
 
-Each variant carries only the parameters specific to that filter type. The `FilterType` enum mirrors it for type-level dispatch without the parameter values:
-```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum FilterType {
-    GaussianBlur,
-    // Future: Noise, Sharpen, etc.
-}
-
-impl FilterParams {
-    pub fn filter_type(&self) -> FilterType {
-        match self {
-            FilterParams::GaussianBlur { .. } => FilterType::GaussianBlur,
-        }
-    }
-}
-```
+The `FilterParams` trait is defined in `layer.rs` (see Step 3). `layer.rs` has zero knowledge of `NoiseParams` or any other concrete filter type.
 
 **`filter.rs` — filter registry:**
 ```rust
-/// Describes a single filter type's GPU resources (pipeline + layout).
-/// Created once at registration, never in the render loop.
-struct FilterEntry {
-    pipeline: wgpu::RenderPipeline,
-    bind_group_layout: wgpu::BindGroupLayout,
-    /// Number of render passes this filter requires (e.g., blur = 2 for H+V).
-    pass_count: u32,
-    /// Size in bytes of this filter's uniform struct.
-    uniform_size: u32,
+/// Per-filter-type GPU resources + a factory for creating per-instance state.
+/// Implemented by each filter module, registered once at init.
+pub trait FilterHandler: Send + Sync {
+    /// Number of render passes this filter requires (noise = 1).
+    fn pass_count(&self) -> u32;
+    /// The pipeline for this filter's shader.
+    fn pipeline(&self) -> &wgpu::RenderPipeline;
+    /// The bind group layout for this filter's shader.
+    fn bind_group_layout(&self) -> &wgpu::BindGroupLayout;
+    /// Deserialize filter params from a JS object. Called by the WASM bridge
+    /// so it doesn't need to know concrete param types.
+    fn create_params(&self, js: wasm_bindgen::JsValue) -> Box<dyn FilterParams>;
+    /// Create per-instance GPU state (uniform buffers, bind groups, aux textures)
+    /// for a newly added filter layer. Called once at layer creation (P1).
+    fn create_instance(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        params: &dyn FilterParams,
+        accum_views: &[wgpu::TextureView; 2],
+        sampler: &wgpu::Sampler,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) -> FilterLayerCache;
 }
 
 /// Registry of all available filter pipelines.
-/// Pure infrastructure — holds pipelines and layouts, no per-instance state.
+/// Pure infrastructure — maps FilterTypeId to handlers, no per-instance state.
 pub struct FilterRegistry {
-    filters: HashMap<FilterType, FilterEntry>,
+    handlers: HashMap<FilterTypeId, Box<dyn FilterHandler>>,
 }
 
 impl FilterRegistry {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        let mut registry = FilterRegistry { filters: HashMap::new() };
-        registry.register_blur(device, format);
-        // Future: registry.register_noise(device, format);
-        registry
+    pub fn new() -> Self {
+        FilterRegistry { handlers: HashMap::new() }
     }
-
-    pub fn entry(&self, filter_type: FilterType) -> &FilterEntry;
-    pub fn pipeline(&self, filter_type: FilterType) -> &wgpu::RenderPipeline;
-    pub fn bind_group_layout(&self, filter_type: FilterType) -> &wgpu::BindGroupLayout;
-
-    fn register_blur(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat);
+    pub fn register(&mut self, id: FilterTypeId, handler: Box<dyn FilterHandler>);
+    pub fn get(&self, id: FilterTypeId) -> Option<&dyn FilterHandler>;
 }
 ```
 
+Registration happens at compositor init — each filter module provides a function that creates its handler:
+```rust
+// In Compositor::new():
+let mut filter_registry = FilterRegistry::new();
+filter_registry.register(
+    noise::FILTER_TYPE,
+    Box::new(noise::NoiseHandler::new(device, format)),
+);
+// Future: filter_registry.register(blur::FILTER_TYPE, ...);
+```
+
+The registry itself has no filter-specific code. Adding a new filter means writing a new module that implements `FilterHandler` and a single `register()` call.
+
 **Per-filter-layer GPU cache (in compositor):**
 
-The compositor manages per-filter-layer cached GPU objects the same way it manages per-raster-layer caches. When a filter layer is added, the compositor creates uniform buffers and bind groups for it using the registry's bind group layout:
+The compositor manages per-filter-layer cached GPU objects the same way it manages per-raster-layer caches. When a filter layer is added, the compositor calls `handler.create_instance()` which returns a `FilterLayerCache`:
 
 ```rust
 /// Cached GPU objects for a filter layer instance (P1).
 struct FilterLayerCache {
-    /// One uniform buffer per pass (e.g., blur has 2: H and V directions).
+    /// One uniform buffer per pass.
     uniform_bufs: Vec<wgpu::Buffer>,
     /// One bind group per pass, per ping-pong direction.
-    /// Indexed as bind_groups[ping_pong_src][pass_index].
+    /// Indexed as bind_groups[pass_index][ping_pong_src].
     bind_groups: Vec<[wgpu::BindGroup; 2]>,
+    /// Optional auxiliary textures (e.g., noise texture for noise filter).
+    aux_textures: Vec<wgpu::Texture>,
+    aux_views: Vec<wgpu::TextureView>,
 }
 ```
 
-This lives in the compositor's cache alongside raster caches, keyed by `LayerId`. The filter registry provides the pipeline and layout; the compositor owns the instance state.
+This lives in the compositor's cache alongside raster caches, keyed by `LayerId`. The filter registry provides the handler; the handler's `create_instance()` builds instance state. The compositor stores it but never inspects it.
+
+**Noise texture generation (inside `NoiseHandler::create_instance`):**
+
+When a noise filter layer is created, the handler downcasts `&dyn FilterParams` to `&NoiseParams` via `as_any()`, then:
+
+1. Computes the noise texture dimensions: `ceil(canvas_width / resolution) × ceil(canvas_height / resolution)`.
+2. Fills with random `u8` values (one channel — luminance noise) using a simple PRNG seeded from the layer ID.
+3. Uploads to a `R8Unorm` GPU texture via `queue.write_texture()`.
+4. Stores the texture in the returned `FilterLayerCache::aux_textures`.
+
+The noise texture is static — generated once at layer creation. It does not change per-frame. The shader samples this texture and uses it to modulate the input image. All of this logic lives in the noise module — the compositor just calls `handler.create_instance()` generically.
 
 **Compositor render loop — generic filter dispatch:**
 
 ```rust
 Layer::Filter(filter) => {
-    let entry = filter_registry.entry(filter.filter_type);
+    let type_id = filter.params.filter_type_id();
+    let handler = filter_registry.get(type_id).unwrap();
     let cache = &filter_layer_cache[&filter.id];
-    for pass in 0..entry.pass_count {
+    for pass in 0..handler.pass_count() {
         let mut rpass = encoder.begin_render_pass(...);
-        rpass.set_pipeline(&entry.pipeline);
+        rpass.set_pipeline(handler.pipeline());
         rpass.set_bind_group(0, &cache.bind_groups[pass][current_accum], &[]);
         rpass.draw(0..3, 0..1);
         // ping-pong between accumulators
@@ -604,35 +651,42 @@ Layer::Filter(filter) => {
 }
 ```
 
-No `match filter.filter_type` in the render loop — the registry and cached bind groups handle dispatch generically. The compositor doesn't know or care what kind of filter it's running.
+No `match` on filter type in the render loop — the registry trait objects and cached bind groups handle dispatch generically. The compositor doesn't know or care what kind of filter it's running.
 
-**Blur shader (`filters/blur.wgsl`):**
+**Noise shader (`filters/noise.wgsl`):**
 
 ```wgsl
-struct BlurParams { radius: f32, direction: vec2f, _pad: f32 }
-@group(0) @binding(0) var t_input: texture_2d<f32>;
-@group(0) @binding(1) var t_sampler: sampler;
-@group(0) @binding(2) var<uniform> params: BlurParams;
+struct NoiseParams { amount: f32, resolution: f32, _pad0: f32, _pad1: f32 }
+@group(0) @binding(0) var t_input: texture_2d<f32>;    // accumulator (composite so far)
+@group(0) @binding(1) var t_noise: texture_2d<f32>;    // pre-generated noise texture (R8)
+@group(0) @binding(2) var t_sampler: sampler;
+@group(0) @binding(3) var<uniform> params: NoiseParams;
 
-@fragment fn fs_blur(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+@fragment fn fs_noise(@builtin(position) pos: vec4f) -> @location(0) vec4f {
     let dims = vec2f(textureDimensions(t_input));
     let uv = pos.xy / dims;
-    let step = params.direction / dims;
-    var color = vec4f(0.0);
-    var weight_sum = 0.0;
-    let r = i32(params.radius);
-    for (var i = -r; i <= r; i++) {
-        let w = 1.0 - abs(f32(i)) / (params.radius + 1.0); // triangle kernel
-        color += textureSample(t_input, t_sampler, uv + step * f32(i)) * w;
-        weight_sum += w;
-    }
-    return color / weight_sum;
+    let color = textureSample(t_input, t_sampler, uv);
+
+    // Sample noise texture — UV maps pixel position to noise cell
+    let noise_val = textureSample(t_noise, t_sampler, uv).r;
+
+    // Overlay blend: brightens highlights, darkens shadows
+    let noise_rgb = vec3f(noise_val);
+    var blended: vec3f;
+    // Overlay blend mode: 2*a*b if a < 0.5, else 1 - 2*(1-a)*(1-b)
+    let base = color.rgb;
+    let lo = 2.0 * base * noise_rgb;
+    let hi = 1.0 - 2.0 * (1.0 - base) * (1.0 - noise_rgb);
+    blended = select(hi, lo, base < vec3f(0.5));
+
+    // Mix between original and blended by amount
+    return vec4f(mix(color.rgb, blended, params.amount), color.a);
 }
 ```
 
-Blur is registered with `pass_count = 2` (H then V) and consumes two ping-pong flips.
+Noise is registered with `pass_count = 1` — a single overlay pass. The noise texture binding is included in the bind group created at filter layer init, so no additional setup is needed in the render loop.
 
-**Verification:** Add blur filter between two raster layers. Bottom layer has a gradient, top layer is painted. The blur obscures the composite-so-far when viewed from above.
+**Verification:** Add noise filter between two raster layers. Bottom layer has a gradient, top layer is painted. The noise filter applies a visible grain overlay to the composite-so-far when viewed from above. Adjusting `amount` changes intensity, adjusting `resolution` changes grain size.
 
 ---
 
@@ -658,7 +712,9 @@ impl DarklyHandle {
     pub fn paint(&mut self, layer_id: u64, x: f32, y: f32, radius: f32, r: u8, g: u8, b: u8, a: u8);
     pub fn render(&mut self);
     pub fn add_raster_layer(&mut self) -> u64;
-    pub fn add_filter_layer(&mut self, filter_type: u32, param: f32) -> u64;
+    /// Accepts a filter type string and a JsValue object of params.
+    /// Delegates to the filter registry to deserialize params generically.
+    pub fn add_filter_layer(&mut self, filter_type: &str, params: JsValue) -> u64;
     pub fn set_opacity(&mut self, layer_id: u64, opacity: f32);
     pub fn set_blend_mode(&mut self, layer_id: u64, mode: u32);
     pub fn undo(&mut self);
@@ -675,12 +731,12 @@ impl DarklyHandle {
   ```ts
   const bg = handle.add_raster_layer();
   handle.fill_gradient(bg);             // pre-fill
-  const blur = handle.add_filter_layer(0, 8.0); // blur, radius=8
+  const noise = handle.add_filter_layer("noise", { amount: 0.5, resolution: 2 });
   const paint = handle.add_raster_layer();
   // mouse painting targets `paint` layer
   ```
 
-**Verification:** Full end-to-end: open browser, see gradient background, paint with mouse, blur filter softens everything.
+**Verification:** Full end-to-end: open browser, see gradient background, paint with mouse, noise filter applies grain overlay to the composite.
 
 ---
 
@@ -694,8 +750,8 @@ impl DarklyHandle {
 | 4 | GPU context + surface | Colored rectangle clears to screen |
 | 5 | Tile upload to GPU | Painted tiles visible on screen |
 | 6 | Compositor with blend modes | Two layers composite correctly |
-| 7 | Blur filter shader | Filter obscures composite |
-| 8 | Full WASM bridge + demo | Paint behind the blur, end-to-end |
+| 7 | Noise filter shader | Filter applies grain to composite |
+| 8 | Full WASM bridge + demo | Paint with noise overlay, end-to-end |
 
 ## Key Reference Files (Graphite, patterns only)
 
