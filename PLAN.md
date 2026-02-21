@@ -89,7 +89,9 @@ Bind groups reference stable objects (accumulator views, layer views, sampler, u
 
 ### P2: No work when nothing changed
 
-The compositor tracks a `needs_composite` flag. If no tiles were uploaded and no layer properties changed since the last render, `render()` skips compositing entirely and re-presents the last frame. The `requestAnimationFrame` loop still runs (for future animation support), but the per-frame cost when idle is effectively zero — just a boolean check and a lightweight present-only blit.
+The compositor tracks a `needs_composite` flag. If no tiles were uploaded and no layer properties changed since the last render, `render()` returns immediately — no surface acquisition, no command encoder, no GPU submission, no present. Zero GPU interaction. The browser compositor retains and continues displaying the last presented surface frame; there is no need to re-blit it. The `requestAnimationFrame` loop still runs (for future animation support), but the per-frame cost when idle is effectively zero — just a boolean check and an early return.
+
+**Never** call `surface.get_current_texture()`, `device.create_command_encoder()`, or `queue.submit()` when nothing has changed. Each of these triggers real GPU/compositor work even if the visual output is identical. The idle path must touch no GPU APIs whatsoever.
 
 Mutation paths (`paint`, `set_opacity`, `set_blend_mode`, `undo`, `redo`, `add_layer`) set the flag. The render loop clears it after compositing.
 
