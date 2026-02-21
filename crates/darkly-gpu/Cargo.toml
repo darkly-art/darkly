@@ -1,0 +1,13 @@
+[package]
+name = "darkly-gpu"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+darkly-core = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true }
