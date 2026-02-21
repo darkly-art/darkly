@@ -47,3 +47,28 @@ Because performance is so important, even the basic Phase 1 version of Darkly wi
 Graphite's vector-specific performance optimizations aren't helpful to us. However, its working implementation of wasm and wgpu will be an extremely useful reference.
 
 WASM64 is pretty much ready, so we'll use that, and not implement any annoying memory optimizations like compression (ick!)
+
+### Phase 1 — First Attempt (Failed)
+
+The first implementation of Phase 1 was functionally complete — tiles, layers, dirty tracking, COW undo, GPU compositing with blend modes, a blur filter, and a full WASM+Svelte frontend. It ran, the demo worked visually, and 15 unit tests passed. But the performance was catastrophic: 100% CPU on all cores, extremely laggy even when idle.
+
+**What went wrong:**
+
+1. **The compositor re-composited everything every frame, unconditionally.** The `requestAnimationFrame` loop called `render()` 60 times per second. Inside `render()`, the full compositing pipeline ran regardless of whether anything had changed — clearing accumulators, running every blend pass, running every blur pass, presenting. There was no concept of "nothing changed, skip." Dirty tracking existed for tile uploads but was completely ignored for compositing.
+
+2. **GPU objects were allocated inside the render loop.** Every frame, for every layer, the compositor created new `wgpu::Buffer` (uniform buffers) and `wgpu::BindGroup` objects, used them once, and dropped them. For the 3-layer demo this meant 4 buffer allocations + 4 bind group allocations + 5 render passes, 60 times per second while idle. All of these objects referenced stable, unchanging data (opacity, blend mode, texture views, sampler) — there was zero reason to recreate them. They should have been created once at layer creation time and reused indefinitely.
+
+3. **The filter system was hardcoded to blur.** `FilterPipelines` was named generically but contained only blur-specific fields (`blur_pipeline`, `blur_uniform_bufs`, `blur_pass_cache`, `cached_radius`). There was no registry, no way to add a second filter type without bolting more fields onto the struct. This violated the project's core requirement: if we implement one filter, we build a proper modular filter system and register that one filter in it.
+
+**Root cause:**
+
+The detailed implementation plan (`PLAN.md`) was written without performance principles. It described *what* to build (tiles, layers, compositor, filters) but not *how the GPU compositor must behave* — no rules about allocation, no dirty gating, no caching. The implementation followed the plan faithfully, which meant faithfully reproducing the omission. References to Graphite and Krita existed in the plan but weren't translated into concrete architectural constraints.
+
+**What we learned:**
+
+- Performance principles must be first-class in the plan, not afterthoughts. We added three: P1 (zero GPU allocation in the render loop), P2 (no work when nothing changed), P3 (cache composite results, re-composite only from the dirty layer upward).
+- Every system in the core engine must be properly modular from the start, even if only one variant is implemented. No hacks in the engine; hacks are only acceptable in the UI/demo layer.
+- The plan now includes an explicit engineering principle: "The core engine does not need to be 100% implemented, but every part that is implemented must be implemented properly on the first iteration."
+
+The updated `PLAN.md` addresses all three failures. Phase 1 is being re-implemented against the corrected plan.
+
