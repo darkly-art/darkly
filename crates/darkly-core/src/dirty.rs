@@ -70,6 +70,49 @@ impl DirtyRegion {
     }
 }
 
+/// Compute the union of all dirty regions as a pixel-coordinate rect (x, y, w, h),
+/// clamped to canvas bounds and aligned to tile boundaries.
+/// Returns None if all regions are empty.
+pub fn dirty_pixel_rect<'a>(
+    regions: impl Iterator<Item = &'a DirtyRegion>,
+    canvas_width: u32,
+    canvas_height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    use crate::tile::TILE_SIZE;
+
+    let mut min_tx = i32::MAX;
+    let mut min_ty = i32::MAX;
+    let mut max_tx = i32::MIN;
+    let mut max_ty = i32::MIN;
+    let mut found = false;
+
+    for d in regions {
+        if let Some((x0, y0, x1, y1)) = d.bounding_rect() {
+            min_tx = min_tx.min(x0);
+            min_ty = min_ty.min(y0);
+            max_tx = max_tx.max(x1);
+            max_ty = max_ty.max(y1);
+            found = true;
+        }
+    }
+
+    if !found {
+        return None;
+    }
+
+    let ts = TILE_SIZE as u32;
+    let px = (min_tx.max(0) as u32) * ts;
+    let py = (min_ty.max(0) as u32) * ts;
+    let px2 = ((max_tx + 1).max(0) as u32 * ts).min(canvas_width);
+    let py2 = ((max_ty + 1).max(0) as u32 * ts).min(canvas_height);
+
+    if px < px2 && py < py2 {
+        Some((px, py, px2 - px, py2 - py))
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,5 +140,64 @@ mod tests {
         d.mark(2, 3);
         d.mark(-1, 5);
         assert_eq!(d.bounding_rect(), Some((-1, 3, 2, 5)));
+    }
+
+    #[test]
+    fn dirty_pixel_rect_single_tile() {
+        let mut d = DirtyRegion::new();
+        d.mark(1, 2);
+        let rect = super::dirty_pixel_rect(std::iter::once(&d), 1920, 1080);
+        // Tile (1,2) → pixels (64, 128) to (128, 192) → (x=64, y=128, w=64, h=64)
+        assert_eq!(rect, Some((64, 128, 64, 64)));
+    }
+
+    #[test]
+    fn dirty_pixel_rect_multiple_tiles() {
+        let mut d = DirtyRegion::new();
+        d.mark(0, 0);
+        d.mark(2, 1);
+        let rect = super::dirty_pixel_rect(std::iter::once(&d), 1920, 1080);
+        // Tiles (0,0) to (2,1) → pixels (0, 0) to (192, 128) → (x=0, y=0, w=192, h=128)
+        assert_eq!(rect, Some((0, 0, 192, 128)));
+    }
+
+    #[test]
+    fn dirty_pixel_rect_union_across_regions() {
+        let mut d1 = DirtyRegion::new();
+        d1.mark(0, 0);
+        let mut d2 = DirtyRegion::new();
+        d2.mark(5, 3);
+        let regions = [d1, d2];
+        let rect = super::dirty_pixel_rect(regions.iter(), 1920, 1080);
+        // Union: tiles (0,0) to (5,3) → pixels (0, 0) to (384, 256) → (x=0, y=0, w=384, h=256)
+        assert_eq!(rect, Some((0, 0, 384, 256)));
+    }
+
+    #[test]
+    fn dirty_pixel_rect_clamps_to_canvas() {
+        let mut d = DirtyRegion::new();
+        d.mark(29, 16); // Tile (29,16) → pixel (1856, 1024) to (1920, 1088) — exceeds 1080
+        let rect = super::dirty_pixel_rect(std::iter::once(&d), 1920, 1080);
+        // Clamped: (1856, 1024, 64, 56) — height clamped from 1088 to 1080
+        assert_eq!(rect, Some((1856, 1024, 64, 56)));
+    }
+
+    #[test]
+    fn dirty_pixel_rect_empty_regions() {
+        let d1 = DirtyRegion::new();
+        let d2 = DirtyRegion::new();
+        let regions = [d1, d2];
+        let rect = super::dirty_pixel_rect(regions.iter(), 1920, 1080);
+        assert_eq!(rect, None);
+    }
+
+    #[test]
+    fn dirty_pixel_rect_negative_tiles_clamped() {
+        let mut d = DirtyRegion::new();
+        d.mark(-1, -1); // Negative tile coords — clamp to 0
+        d.mark(1, 1);
+        let rect = super::dirty_pixel_rect(std::iter::once(&d), 1920, 1080);
+        // min clamped to (0,0), max tile (1,1) → (0, 0, 128, 128)
+        assert_eq!(rect, Some((0, 0, 128, 128)));
     }
 }

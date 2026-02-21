@@ -3,6 +3,7 @@ use crate::blend::BlendPipelines;
 use crate::filter::{FilterLayerCache, FilterRegistry};
 use crate::filters::noise;
 use crate::staging::StagingRing;
+use darkly_core::dirty::dirty_pixel_rect;
 use darkly_core::document::Document;
 use darkly_core::layer::{BlendMode, Layer, LayerId};
 use std::collections::HashMap;
@@ -476,7 +477,20 @@ impl Compositor {
             return;
         }
 
-        // 3. Acquire surface — only when we actually have work to do.
+        // 3. Compute dirty bounding rect (P3) — union of all dirty regions in pixel coords.
+        // This rect limits all compositing passes via scissor and scoped texture copies.
+        let dirty_rect = dirty_pixel_rect(
+            doc.dirty.values(),
+            self.canvas_width,
+            self.canvas_height,
+        );
+
+        // If needs_composite was set by a non-tile-dirty source (e.g. layer property change,
+        // undo/redo), we need a full-canvas rect since there's no tile-level dirty info.
+        let (scissor_x, scissor_y, scissor_w, scissor_h) = dirty_rect
+            .unwrap_or((0, 0, self.canvas_width, self.canvas_height));
+
+        // 4. Acquire surface — only when we actually have work to do.
         let output = match surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost) => {
@@ -496,7 +510,7 @@ impl Compositor {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // 4. Composite cache (P3): determine start point
+        // 5. Composite cache (P3): determine start point
         let start_layer = match self.cache_valid_through {
             Some(valid_through) => valid_through + 1,
             None => 0,
@@ -511,7 +525,7 @@ impl Compositor {
         });
 
         if !resuming_from_cache {
-            // Clear accumulator[0] for fresh composite
+            // Clear accumulator[0] for fresh composite (fullscreen — first frame or full invalidation)
             {
                 let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("clear-accum"),
@@ -533,7 +547,7 @@ impl Compositor {
         // Instead, the first blend pass uses cache_source_bind_group which
         // reads directly from composite_cache. This saves one fullscreen copy.
 
-        // 5. Composite layers from start_layer to top.
+        // 6. Composite layers from start_layer to top.
         // `wrote_to_cache` tracks whether the final result landed in
         // composite_cache (true) or in accum[current_accum] (false).
         let num_layers = doc.layers.len();
@@ -582,12 +596,13 @@ impl Compositor {
                                 resolve_target: None,
                                 depth_slice: None,
                                 ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                    load: wgpu::LoadOp::Load,
                                     store: wgpu::StoreOp::Store,
                                 },
                             })],
                             ..Default::default()
                         });
+                        rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
                         rpass.set_pipeline(self.blend_pipelines.pipeline());
                         rpass.set_bind_group(0, bind_group, &[]);
                         rpass.draw(0..3, 0..1);
@@ -606,24 +621,30 @@ impl Compositor {
 
                     // For filters resuming from cache, we need to copy cache→accum
                     // since filter bind groups only reference accum views.
+                    // Scope the copy to the dirty rect only.
                     if use_cache_source {
                         use_cache_source = false;
+                        let origin = wgpu::Origin3d {
+                            x: scissor_x,
+                            y: scissor_y,
+                            z: 0,
+                        };
                         encoder.copy_texture_to_texture(
                             wgpu::TexelCopyTextureInfo {
                                 texture: &self.composite_cache,
                                 mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
+                                origin,
                                 aspect: wgpu::TextureAspect::All,
                             },
                             wgpu::TexelCopyTextureInfo {
                                 texture: &self.accum[0],
                                 mip_level: 0,
-                                origin: wgpu::Origin3d::ZERO,
+                                origin,
                                 aspect: wgpu::TextureAspect::All,
                             },
                             wgpu::Extent3d {
-                                width: self.canvas_width,
-                                height: self.canvas_height,
+                                width: scissor_w,
+                                height: scissor_h,
                                 depth_or_array_layers: 1,
                             },
                         );
@@ -653,12 +674,13 @@ impl Compositor {
                                         resolve_target: None,
                                         depth_slice: None,
                                         ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                            load: wgpu::LoadOp::Load,
                                             store: wgpu::StoreOp::Store,
                                         },
                                     })],
                                     ..Default::default()
                                 });
+                            rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
                             rpass.set_pipeline(handler.pipeline());
                             rpass.set_bind_group(0, &cache.bind_groups[pass][src], &[]);
                             rpass.draw(0..3, 0..1);
@@ -668,24 +690,29 @@ impl Compositor {
             }
         }
 
-        // If the final result is in an accumulator, copy it to the cache.
+        // If the final result is in an accumulator, copy only the dirty rect to the cache.
         if !wrote_to_cache && start_layer < num_layers {
+            let origin = wgpu::Origin3d {
+                x: scissor_x,
+                y: scissor_y,
+                z: 0,
+            };
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.accum[self.current_accum],
                     mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
+                    origin,
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.composite_cache,
                     mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
+                    origin,
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::Extent3d {
-                    width: self.canvas_width,
-                    height: self.canvas_height,
+                    width: scissor_w,
+                    height: scissor_h,
                     depth_or_array_layers: 1,
                 },
             );

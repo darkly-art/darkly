@@ -97,18 +97,27 @@ Mutation paths (`paint`, `set_opacity`, `set_blend_mode`, `undo`, `redo`, `add_l
 
 *(Reference: Graphite's `surface_outdated` flag in `state.rs:250` — `if !self.surface_outdated { return Ok(()); }`)*
 
-### P3: Cache the composite result — only re-composite from the dirty layer upward
+### P3: Only composite dirty layers within the dirty rect
 
-The compositor maintains a **cached composite texture** (GPU-resident, same size as the accumulators). This texture stores the accumulated composite result after compositing all layers. When a layer changes:
+Compositing work is bounded in two dimensions:
+
+- **Vertically (layers):** Skip all layers below the lowest dirty layer using the cached composite texture.
+- **Horizontally (pixels):** Clip all blend/filter passes to the bounding rect of dirty tiles via `rpass.set_scissor_rect()`. Only pixels within the dirty rect invoke the fragment shader.
+
+Both are required. Skipping layers without scissoring still processes every pixel on the canvas per pass. Scissoring without layer caching still walks the entire layer stack. Together they reduce compositing work from `O(layers × canvas_pixels)` to `O(dirty_layers × dirty_pixels)`.
+
+**Composite cache:** The compositor maintains a **cached composite texture** (GPU-resident, same size as the accumulators). This texture stores the accumulated composite result after compositing all layers. When a layer changes:
 
 1. Find the **lowest dirty layer** in the stack (the layer whose tiles were uploaded or whose properties changed)
-2. Copy the cached composite into the accumulator via `encoder.copy_texture_to_texture()` (GPU→GPU, no CPU involvement)
-3. Re-composite only from the dirty layer upward, not from scratch
-4. Save the final result back to the cached composite texture
+2. Compute the **dirty bounding rect** in pixel coordinates from `DirtyRegion::bounding_rect()`, expanded to tile boundaries
+3. Re-composite only from the dirty layer upward, only within the dirty rect
+4. Copy only the dirty rect from the accumulator back to the cached composite texture
 
-**Why this matters:** When the user paints on the top layer (the common case), this skips re-compositing everything below — just one blend pass instead of walking the entire stack. For a 100-layer document where the user paints on the top layer, this reduces compositing work from 100+ render passes to 1.
+**Scissor-rect compositing:** Every blend and filter render pass calls `rpass.set_scissor_rect(x, y, w, h)` with the dirty bounding rect. The fullscreen triangle vertex shader still runs, but the rasterizer clips to the scissor — only fragments inside invoke the fragment shader. Render passes use `LoadOp::Load` (not `LoadOp::Clear`) to preserve pixels outside the scissor from the previous frame. The `copy_texture_to_texture` between accumulator and cache is also scoped to the dirty rect via the `origin` and `size` parameters.
 
-Cache invalidation:
+**Why this matters:** When the user paints a 24px brush dab on the top layer of a 1920×1080 canvas, the dirty rect is ~128×64 pixels (2 tiles). Instead of processing 2,073,600 pixels across every layer, the compositor processes ~8,192 pixels across 1 layer. On software wgpu (no hardware GPU), this is the difference between ~56 MB/frame and ~32 KB/frame of CPU pixel processing — a ~1700× reduction.
+
+**Cache invalidation:**
 - Tile upload to layer N → invalidate from layer N upward
 - Layer property change (opacity, blend mode) → invalidate from that layer upward
 - Layer added/removed/reordered → invalidate entirely
@@ -116,7 +125,7 @@ Cache invalidation:
 
 Filter layers propagate naturally — if a layer below a filter changes, the cache is invalidated from that layer, so the filter re-runs. If only a layer above the filter changes, the filter result is preserved in the cache.
 
-*(Reference: Krita's projection system — each layer has a cached `projection()`. Layers below the dirty one are tagged `N_BELOW_FILTHY` and skip recalculation entirely, using the cached result. See `krita-performance.md` §4.2)*
+*(Reference: Krita's projection system — each layer has a cached `projection()`. Layers below the dirty one are tagged `N_BELOW_FILTHY` and skip recalculation entirely, using the cached result. Krita composites only dirty rects tile-by-tile on CPU; the GPU equivalent is scissor-rect clipping.)*
 
 ---
 
@@ -447,14 +456,16 @@ impl Compositor {
 
 **Render pipeline per frame:**
 1. Upload dirty tiles for each dirty raster layer via staging ring → layer texture. If any tiles were uploaded, note the lowest dirty layer index and set `needs_composite = true`.
-2. **Dirty gate (P2):** if `!needs_composite`, call `present_only()` and return.
-3. **Composite cache (P3):** if `cache_valid_through` is set and >= 0, copy the cached composite into accumulator[0] via `copy_texture_to_texture()` and start compositing from `cache_valid_through + 1` instead of layer 0.
-4. For each layer from the start point to the top, bottom-to-top:
+2. **Dirty gate (P2):** if `!needs_composite`, return immediately (no surface acquisition, no GPU work).
+3. **Compute dirty bounding rect (P3):** Union all `DirtyRegion::bounding_rect()` across dirty layers into a single pixel-coordinate rect, expanded to tile boundaries. This is the scissor rect for all compositing passes.
+4. **Composite cache (P3):** if `cache_valid_through` is set and >= 0, start compositing from `cache_valid_through + 1` instead of layer 0. The first blend pass reads from the cached composite texture (via a pre-built bind group) instead of a cleared accumulator.
+5. For each layer from the start point to the top, bottom-to-top:
+   - Set `rpass.set_scissor_rect(dirty_rect)` on every render pass. Use `LoadOp::Load` to preserve pixels outside the scissor.
    - **Raster:** set pre-built bind group for the current ping-pong direction, set pipeline, draw. Ping-pong.
    - **Filter:** look up pipeline from filter registry, set pre-built bind groups from filter cache, draw each pass. Ping-pong.
-5. Save the final accumulator to `composite_cache` via `copy_texture_to_texture()`. Update `cache_valid_through`.
-6. Present: blit accumulator to surface using pre-built present bind group.
-7. Clear dirty regions, set `needs_composite = false`.
+6. Copy only the dirty rect from the final accumulator to `composite_cache` via `copy_texture_to_texture()` with scoped `origin` and `size`. Update `cache_valid_through`.
+7. Present: blit `composite_cache` to surface (fullscreen — the cache always contains the complete composited image).
+8. Clear dirty regions, set `needs_composite = false`.
 
 **`blend.rs`:**
 ```rust
