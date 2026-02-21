@@ -14,6 +14,9 @@ struct RasterLayerCache {
     /// Bind groups for both ping-pong directions.
     /// bind_groups[src_accum_index]
     bind_groups: [wgpu::BindGroup; 2],
+    /// Bind group that reads from the composite cache as background.
+    /// Used when resuming compositing from the cache (avoids cache→accum copy).
+    cache_source_bind_group: wgpu::BindGroup,
 }
 
 /// Uniforms for raster layer compositing.
@@ -52,8 +55,8 @@ pub struct Compositor {
     filter_registry: FilterRegistry,
 
     present_pipeline: wgpu::RenderPipeline,
-    present_bind_group_layout: wgpu::BindGroupLayout,
-    present_bind_groups: [wgpu::BindGroup; 2],
+    /// Present bind group that reads from composite_cache directly.
+    present_cache_bind_group: wgpu::BindGroup,
 
     staging: StagingRing,
     sampler: wgpu::Sampler,
@@ -65,7 +68,6 @@ pub struct Compositor {
 
     canvas_width: u32,
     canvas_height: u32,
-    accum_format: wgpu::TextureFormat,
 }
 
 impl Compositor {
@@ -190,26 +192,23 @@ impl Compositor {
             cache: None,
         });
 
-        // Pre-build present bind groups for both accumulators
-        let present_bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
-            let view = if i == 0 { &accum_view0 } else { &accum_view1 };
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("present-bg-{i}")),
-                layout: &present_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            })
+        // Present bind group that reads from composite cache
+        let present_cache_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("present-bg-cache"),
+            layout: &present_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&composite_cache_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
         });
 
-        let staging = StagingRing::new(device, 64);
+        let staging = StagingRing::new();
 
         Compositor {
             accum: [accum0, accum1],
@@ -224,15 +223,13 @@ impl Compositor {
             blend_pipelines,
             filter_registry,
             present_pipeline,
-            present_bind_group_layout,
-            present_bind_groups,
+            present_cache_bind_group,
             staging,
             sampler,
             needs_composite: true,
             lowest_dirty_layer: None,
             canvas_width: width,
             canvas_height: height,
-            accum_format,
         }
     }
 
@@ -288,11 +285,38 @@ impl Compositor {
             })
         });
 
+        // Bind group that reads from the composite cache as background source.
+        // Used when this is the first layer after a cache resume, avoiding
+        // a fullscreen cache→accum texture copy.
+        let cache_source_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("blend-bg-{layer_id}-cache")),
+            layout: &self.blend_pipelines.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&self.composite_cache_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&layer_tex.view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+
         self.raster_cache.insert(
             layer_id,
             RasterLayerCache {
                 uniform_buf,
                 bind_groups,
+                cache_source_bind_group,
             },
         );
         self.layer_textures.insert(layer_id, layer_tex);
@@ -472,39 +496,21 @@ impl Compositor {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        // 3. Composite cache (P3): determine start point
+        // 4. Composite cache (P3): determine start point
         let start_layer = match self.cache_valid_through {
             Some(valid_through) => valid_through + 1,
             None => 0,
         };
+        let resuming_from_cache = start_layer > 0;
+        // Track whether the first layer after cache resume still needs the
+        // cache_source_bind_group (reads from composite_cache instead of accum).
+        let mut use_cache_source = resuming_from_cache;
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("composite"),
         });
 
-        // If we have a valid cache, copy it into accum[0] as the starting point
-        if start_layer > 0 {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.composite_cache,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.accum[0],
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: self.canvas_width,
-                    height: self.canvas_height,
-                    depth_or_array_layers: 1,
-                },
-            );
-            self.current_accum = 0;
-        } else {
+        if !resuming_from_cache {
             // Clear accumulator[0] for fresh composite
             {
                 let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -523,13 +529,23 @@ impl Compositor {
             }
             self.current_accum = 0;
         }
+        // When resuming from cache, we DON'T copy cache→accum.
+        // Instead, the first blend pass uses cache_source_bind_group which
+        // reads directly from composite_cache. This saves one fullscreen copy.
 
-        // 4. Composite layers from start_layer to top
-        for layer_idx in start_layer..doc.layers.len() {
+        // 5. Composite layers from start_layer to top.
+        // `wrote_to_cache` tracks whether the final result landed in
+        // composite_cache (true) or in accum[current_accum] (false).
+        let num_layers = doc.layers.len();
+        let mut wrote_to_cache = false;
+
+        for layer_idx in start_layer..num_layers {
             let layer = &doc.layers[layer_idx];
             if !layer.visible() {
                 continue;
             }
+
+            let is_last_layer = layer_idx == num_layers - 1;
 
             match layer {
                 Layer::Raster(raster) => {
@@ -538,14 +554,31 @@ impl Compositor {
                         None => continue,
                     };
 
-                    let src = self.current_accum;
-                    let dst = 1 - src;
+                    let (dst_view, bind_group) = if use_cache_source {
+                        // First layer after cache resume: read from cache texture.
+                        // MUST write to accum (not cache) to avoid read-write hazard.
+                        use_cache_source = false;
+                        let dst = 0;
+                        self.current_accum = dst;
+                        (&self.accum_views[dst], &cache.cache_source_bind_group)
+                    } else if is_last_layer {
+                        // Last layer, not reading from cache: render directly to
+                        // composite_cache to skip the post-loop copy.
+                        wrote_to_cache = true;
+                        let src = self.current_accum;
+                        (&self.composite_cache_view, &cache.bind_groups[src])
+                    } else {
+                        let src = self.current_accum;
+                        let dst = 1 - src;
+                        self.current_accum = dst;
+                        (&self.accum_views[dst], &cache.bind_groups[src])
+                    };
 
                     {
                         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("blend-raster"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &self.accum_views[dst],
+                                view: dst_view,
                                 resolve_target: None,
                                 depth_slice: None,
                                 ops: wgpu::Operations {
@@ -556,11 +589,9 @@ impl Compositor {
                             ..Default::default()
                         });
                         rpass.set_pipeline(self.blend_pipelines.pipeline());
-                        rpass.set_bind_group(0, &cache.bind_groups[src], &[]);
+                        rpass.set_bind_group(0, bind_group, &[]);
                         rpass.draw(0..3, 0..1);
                     }
-
-                    self.current_accum = dst;
                 }
                 Layer::Filter(filter) => {
                     let type_id = filter.params.filter_type_id();
@@ -573,16 +604,52 @@ impl Compositor {
                         None => continue,
                     };
 
+                    // For filters resuming from cache, we need to copy cache→accum
+                    // since filter bind groups only reference accum views.
+                    if use_cache_source {
+                        use_cache_source = false;
+                        encoder.copy_texture_to_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.composite_cache,
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.accum[0],
+                                mip_level: 0,
+                                origin: wgpu::Origin3d::ZERO,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::Extent3d {
+                                width: self.canvas_width,
+                                height: self.canvas_height,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        self.current_accum = 0;
+                    }
+
                     for pass in 0..handler.pass_count() as usize {
                         let src = self.current_accum;
                         let dst = 1 - src;
+
+                        let is_last_pass = pass == handler.pass_count() as usize - 1;
+                        let dst_view = if is_last_layer && is_last_pass {
+                            // Last pass of last layer: render directly to cache.
+                            wrote_to_cache = true;
+                            &self.composite_cache_view
+                        } else {
+                            self.current_accum = dst;
+                            &self.accum_views[dst]
+                        };
 
                         {
                             let mut rpass =
                                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                     label: Some("filter-pass"),
                                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: &self.accum_views[dst],
+                                        view: dst_view,
                                         resolve_target: None,
                                         depth_slice: None,
                                         ops: wgpu::Operations {
@@ -596,36 +663,38 @@ impl Compositor {
                             rpass.set_bind_group(0, &cache.bind_groups[pass][src], &[]);
                             rpass.draw(0..3, 0..1);
                         }
-
-                        self.current_accum = dst;
                     }
                 }
             }
         }
 
-        // 5. Save result to composite cache
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.accum[self.current_accum],
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.composite_cache,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: self.canvas_width,
-                height: self.canvas_height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.cache_valid_through = Some(doc.layers.len().saturating_sub(1));
+        // If the final result is in an accumulator, copy it to the cache.
+        if !wrote_to_cache && start_layer < num_layers {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.accum[self.current_accum],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.composite_cache,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: self.canvas_width,
+                    height: self.canvas_height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        if start_layer < num_layers {
+            self.cache_valid_through = Some(num_layers.saturating_sub(1));
+        }
 
-        // 6. Present: blit accumulator to surface
+        // 6. Present: blit composite_cache to surface
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("present"),
@@ -641,7 +710,7 @@ impl Compositor {
                 ..Default::default()
             });
             rpass.set_pipeline(&self.present_pipeline);
-            rpass.set_bind_group(0, &self.present_bind_groups[self.current_accum], &[]);
+            rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
             rpass.draw(0..3, 0..1);
         }
 

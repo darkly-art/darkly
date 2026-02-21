@@ -1,31 +1,15 @@
-use darkly_core::tile::{TILE_BYTES, TILE_SIZE, TileData};
+use darkly_core::tile::{TILE_SIZE, TileData};
 
-/// Ring buffer of staging buffers for CPU→GPU tile uploads.
-/// Avoids allocating new buffers each frame (P1).
-pub struct StagingRing {
-    buffers: Vec<wgpu::Buffer>,
-    next: usize,
-}
+/// Handles CPU→GPU tile uploads via queue.write_texture.
+pub struct StagingRing;
 
 impl StagingRing {
-    pub fn new(device: &wgpu::Device, count: usize) -> Self {
-        let buffers = (0..count)
-            .map(|i| {
-                device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some(&format!("staging-{i}")),
-                    size: TILE_BYTES as u64,
-                    usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::MAP_WRITE,
-                    mapped_at_creation: false,
-                })
-            })
-            .collect();
-
-        StagingRing { buffers, next: 0 }
+    pub fn new() -> Self {
+        StagingRing
     }
 
     /// Upload a single tile to the target texture at the given tile coordinates.
-    /// Uses queue.write_texture for simplicity — no staging buffer mapping needed
-    /// since WebGPU's write_texture handles the CPU→GPU copy efficiently.
+    /// Uses queue.write_texture — WebGPU handles the CPU→GPU copy efficiently.
     pub fn upload_tile(
         &mut self,
         queue: &wgpu::Queue,
@@ -48,7 +32,7 @@ impl StagingRing {
                 },
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::bytes_of(&tile_data.0),
+            &tile_data.0,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(TILE_SIZE as u32 * 4),
