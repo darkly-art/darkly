@@ -34,7 +34,18 @@ Phase 1 established the core engine: tiled raster layers, GPU compositing with d
 
 **Why not a library:** Existing config libraries (convict, nconf, electron-store) solve server/Node.js problems (env vars, CLI args, filesystem). Darkly needs typed defaults + preset layering + Svelte reactivity + browser storage — all simple, composable problems that a 100-line custom system handles better than any off-the-shelf solution.
 
-**Resolution order:** `user overrides > active preset > defaults`. The `defu` utility handles recursive merging with leftmost-wins semantics: `defu(userOverrides, presetOverrides, DEFAULTS)`.
+**Two config scopes:**
+
+| Scope | Persistence | Contents |
+|-------|------------|----------|
+| **Project** (`ProjectConfig`) | Saved with the document (future: embedded in `.darkly` file; Phase 2: `localStorage` keyed by project) | Canvas dimensions, background color |
+| **User** (`UserConfig`) | `localStorage` (global, survives across documents) | Hotkeys, UI preferences, active preset |
+
+Presets only apply to `UserConfig` — they override hotkeys, never document properties or tool state.
+
+**Resolution order (user config):** `user overrides > active preset > defaults`. The `defu` utility handles recursive merging with leftmost-wins semantics: `defu(userOverrides, presetOverrides, USER_DEFAULTS)`.
+
+**Tool state:** Each tool declares its own runtime properties (brush size, fill tolerance, gradient type, etc.) as mutable state in its module file, with sensible initial values as constants. These are working values the user adjusts while painting — not persistent config. They serialize with the project so reopening a document restores the tool state you were working with. Each tool file also exports its default hotkey, which the schema imports for the hotkey map.
 
 ### Canvas View Transform
 
@@ -67,7 +78,7 @@ Informed by analysis of Krita's tool architecture (see `KRITA-TOOL-ARCHITECTURE.
 - PaintOp plugin system (we have one painting method; brush engines are a future concern)
 - Interaction strategies (no vector tools yet)
 
-**Rust side (`darkly-core`):** A `StrokeOp` enum that represents the different kinds of tool operations. Each variant captures the parameters needed to execute the operation on the document. `Document` gains methods that accept these operations and handle tile modification + dirty tracking. The WASM bridge exposes a stroke lifecycle: `begin_stroke(layer_id)` → `stroke_to(op_data)` → `end_stroke()`, where begin/end map to undo transactions.
+**Rust side (`darkly`):** A `StrokeOp` enum that represents the different kinds of tool operations. Each variant captures the parameters needed to execute the operation on the document. `Document` gains methods that accept these operations and handle tile modification + dirty tracking. The WASM bridge exposes a stroke lifecycle: `begin_stroke(layer_id)` → `stroke_to(op_data)` → `end_stroke()`, where begin/end map to undo transactions.
 
 This is NOT a trait-object registry like the filter system, because the two have fundamentally different lifecycles. Filters are **state**: a `FilterLayer` holds `Box<dyn FilterParams>` as part of the document — it persists, gets cloned for undo (`clone_boxed`), gets downcast for UI access (`as_any`), and must be stored polymorphically alongside raster layers. Trait objects are the right fit for stored polymorphic state. Stroke operations are **commands**: constructed from JS params, dispatched to `Document::apply_stroke_op()`, and immediately consumed. They're never stored, never cloned, never downcast. An enum is the right fit for transient dispatched commands — it gives exhaustive matching, zero allocation, and trivial WASM-boundary serialization. New tools add a variant to `StrokeOp` and a match arm in `Document::apply_stroke_op()`.
 
@@ -86,7 +97,7 @@ This is NOT a trait-object registry like the filter system, because the two have
 
 ### Layer Groups
 
-Layer groups are added to `darkly-core` as a new variant `Layer::Group(LayerGroup)`. Passthrough mode (default, matching Photoshop behavior) means groups are treated as organizational containers only — the compositor flattens the tree and composites layers in display order, ignoring group boundaries.
+Layer groups are added to `darkly` as a new variant `Layer::Group(LayerGroup)`. Passthrough mode (default, matching Photoshop behavior) means groups are treated as organizational containers only — the compositor flattens the tree and composites layers in display order, ignoring group boundaries.
 
 Non-passthrough mode (normal blending group) would isolate the group's composite result and blend it into the parent as a single unit. Phase 2 implements passthrough only; the data model supports both.
 
@@ -97,17 +108,21 @@ Non-passthrough mode (normal blending group) would isolate the group's composite
 ```
 darkly/
 ├── crates/
-│   ├── darkly-core/
-│   │   └── src/
-│   │       ├── layer.rs              # + LayerGroup, LayerNode tree structure
-│   │       ├── document.rs           # + tree traversal, group operations, reorder
-│   │       ├── stroke.rs             # StrokeOp enum + Document::apply_stroke_op()
-│   │       └── color.rs              # Color types (used by tools via WASM bridge)
-│   │
-│   └── darkly-gpu/
+│   └── darkly/
 │       └── src/
-│           ├── compositor.rs         # + view transform uniform, flatten groups
-│           └── view.rs               # ViewTransform: pan, zoom, rotate matrix
+│           ├── layer.rs              # + LayerGroup, LayerNode tree structure
+│           ├── document.rs           # + tree traversal, group operations, reorder
+│           ├── stroke.rs             # StrokeOp enum + Document::apply_stroke_op()
+│           ├── color.rs              # Color types (used by tools via WASM bridge)
+│           ├── tools/                # Pixel-modification impls, one file per tool op
+│           │   ├── mod.rs            # pub mod paint_circle; pub mod erase_circle; ...
+│           │   ├── paint_circle.rs   # impl Document::paint_circle()
+│           │   ├── erase_circle.rs   # impl Document::erase_circle()
+│           │   ├── flood_fill.rs     # impl Document::flood_fill()
+│           │   └── gradient.rs       # impl Document::fill_linear_gradient()
+│           └── gpu/
+│               ├── compositor.rs     # + view transform uniform, flatten groups
+│               └── view.rs           # ViewTransform: pan, zoom, rotate matrix
 │
 ├── frontend/
 │   ├── src/
@@ -116,12 +131,12 @@ darkly/
 │   │   │   ├── CanvasView.svelte     # Canvas element + pointer handlers + navigation
 │   │   │   └── navigation.svelte.ts  # Pan/zoom/rotate state machine
 │   │   ├── config/
-│   │   │   ├── schema.ts             # DarklyConfig interface + DEFAULTS
+│   │   │   ├── schema.ts             # ProjectConfig + UserConfig interfaces + defaults
 │   │   │   ├── presets/
 │   │   │   │   ├── krita.ts          # Krita hotkey preset (default)
 │   │   │   │   ├── photoshop.ts      # Photoshop hotkey preset
 │   │   │   │   └── gimp.ts           # GIMP hotkey preset
-│   │   │   ├── store.svelte.ts       # ConfigStore: reactive config with persistence
+│   │   │   ├── store.svelte.ts       # ProjectStore + UserStore: reactive config with persistence
 │   │   │   └── hotkeys.svelte.ts     # Hotkey registration via tinykeys
 │   │   ├── state/
 │   │   │   └── app.svelte.ts         # AppState: colors, active tool, active layer, handle
@@ -296,9 +311,36 @@ The following is the comprehensive Krita default shortcut map, extracted from `k
 
 Build the config schema, preset system, and reactive store before anything else — all other systems depend on it.
 
-**`frontend/src/config/schema.ts` — Config interface + defaults:**
+**`frontend/src/config/schema.ts` — Config interfaces + defaults:**
 
 ```typescript
+// ─── Tool hotkey imports (each tool defines its own default hotkey) ───
+import { BRUSH_HOTKEY } from '../tools/brush.svelte';
+import { ERASER_HOTKEY } from '../tools/eraser.svelte';
+import { FILL_HOTKEY } from '../tools/fill.svelte';
+import { GRADIENT_HOTKEY } from '../tools/gradient.svelte';
+import { COLORPICKER_HOTKEY } from '../tools/colorpicker.svelte';
+
+// ─── Project config (saved per document) ───
+
+export interface ProjectConfig {
+    canvas: {
+        width: number;
+        height: number;
+        backgroundColor: string;
+    };
+}
+
+export const PROJECT_DEFAULTS: ProjectConfig = {
+    canvas: {
+        width: 1920,
+        height: 1080,
+        backgroundColor: '#1a1a1a',
+    },
+};
+
+// ─── User config (global, persists across documents) ───
+
 export interface HotkeyMap {
     // Canvas navigation (modifier+drag combos handled by navigation state machine,
     // not tinykeys — but listed here for preset customization)
@@ -307,53 +349,28 @@ export interface HotkeyMap {
     zoomModifier: string;
 
     // Color
-    resetColors: string;            // "KeyD"
-    swapColors: string;             // "KeyX"
+    resetColors: string;
+    swapColors: string;
 
     // Edit
-    undo: string;                   // "$mod+KeyZ"
-    redo: string;                   // "$mod+Shift+KeyZ"
+    undo: string;
+    redo: string;
 
-    // Tools
-    brushTool: string;              // "KeyB"
-    eraserTool: string;             // "KeyE"
-    fillTool: string;               // "KeyF"
-    gradientTool: string;           // "KeyG"
-    colorPickerTool: string;        // "KeyP"
+    // Tools — default values sourced from each tool module
+    brushTool: string;
+    eraserTool: string;
+    fillTool: string;
+    gradientTool: string;
+    colorPickerTool: string;
 
-    // Brush size
-    brushSizeUp: string;            // "BracketRight"
-    brushSizeDown: string;          // "BracketLeft"
-    opacityUp: string;              // "KeyO"
-    opacityDown: string;            // "KeyI"
+    // Brush size / opacity
+    brushSizeUp: string;
+    brushSizeDown: string;
+    opacityUp: string;
+    opacityDown: string;
 }
 
-export interface DarklyConfig {
-    canvas: {
-        defaultWidth: number;
-        defaultHeight: number;
-        backgroundColor: string;
-    };
-    tools: {
-        brush: {
-            defaultSize: number;
-            minSize: number;
-            maxSize: number;
-            defaultOpacity: number;
-            sizeStep: number;       // increment for [ and ] keys
-        };
-        eraser: {
-            defaultSize: number;
-            defaultOpacity: number;
-        };
-        fill: {
-            tolerance: number;      // 0–255, flood fill threshold
-            fillAll: boolean;       // fill all similar, not just contiguous
-        };
-        gradient: {
-            type: 'linear' | 'radial';
-        };
-    };
+export interface UserConfig {
     colors: {
         defaultForeground: string;  // hex
         defaultBackground: string;  // hex
@@ -372,27 +389,10 @@ export type DeepPartial<T> = {
 export interface Preset {
     name: string;
     description: string;
-    overrides: DeepPartial<DarklyConfig>;
+    overrides: DeepPartial<UserConfig>;
 }
 
-export const DEFAULTS: DarklyConfig = {
-    canvas: {
-        defaultWidth: 1920,
-        defaultHeight: 1080,
-        backgroundColor: '#1a1a1a',
-    },
-    tools: {
-        brush: {
-            defaultSize: 24,
-            minSize: 1,
-            maxSize: 500,
-            defaultOpacity: 1.0,
-            sizeStep: 4,
-        },
-        eraser: { defaultSize: 24, defaultOpacity: 1.0 },
-        fill: { tolerance: 32, fillAll: false },
-        gradient: { type: 'linear' },
-    },
+export const USER_DEFAULTS: UserConfig = {
     colors: {
         defaultForeground: '#000000',
         defaultBackground: '#ffffff',
@@ -409,11 +409,12 @@ export const DEFAULTS: DarklyConfig = {
         swapColors: 'KeyX',
         undo: '$mod+KeyZ',
         redo: '$mod+Shift+KeyZ',
-        brushTool: 'KeyB',
-        eraserTool: 'KeyE',
-        fillTool: 'KeyF',
-        gradientTool: 'KeyG',
-        colorPickerTool: 'KeyP',
+        // Tool hotkeys — sourced from each tool module
+        brushTool: BRUSH_HOTKEY,
+        eraserTool: ERASER_HOTKEY,
+        fillTool: FILL_HOTKEY,
+        gradientTool: GRADIENT_HOTKEY,
+        colorPickerTool: COLORPICKER_HOTKEY,
         brushSizeUp: 'BracketRight',
         brushSizeDown: 'BracketLeft',
         opacityUp: 'KeyO',
@@ -425,13 +426,13 @@ export const DEFAULTS: DarklyConfig = {
 **`frontend/src/config/presets/krita.ts`:**
 
 ```typescript
-import type { Preset } from '../schema';
+import type { Preset } from '../schema';  // Preset.overrides is DeepPartial<UserConfig>
 
 export const PRESET_KRITA: Preset = {
     name: 'Krita',
     description: 'Default Krita-style keybindings',
     overrides: {
-        // Krita defaults match our DEFAULTS, so overrides are minimal.
+        // Krita defaults match our USER_DEFAULTS, so overrides are minimal.
         // This preset exists so switching back from Photoshop/GIMP restores Krita bindings.
         hotkeys: {
             brushTool: 'KeyB',
@@ -447,7 +448,7 @@ export const PRESET_KRITA: Preset = {
 **`frontend/src/config/presets/photoshop.ts`:**
 
 ```typescript
-import type { Preset } from '../schema';
+import type { Preset } from '../schema';  // Preset.overrides is DeepPartial<UserConfig>
 
 export const PRESET_PHOTOSHOP: Preset = {
     name: 'Photoshop',
@@ -467,7 +468,7 @@ export const PRESET_PHOTOSHOP: Preset = {
 **`frontend/src/config/presets/gimp.ts`:**
 
 ```typescript
-import type { Preset } from '../schema';
+import type { Preset } from '../schema';  // Preset.overrides is DeepPartial<UserConfig>
 
 export const PRESET_GIMP: Preset = {
     name: 'GIMP',
@@ -484,16 +485,21 @@ export const PRESET_GIMP: Preset = {
 };
 ```
 
-**`frontend/src/config/store.svelte.ts` — Reactive config store:**
+**`frontend/src/config/store.svelte.ts` — Reactive config stores:**
+
+Two stores: one for per-document project settings, one for global user preferences. Separate storage keys, separate resolution logic. Presets only apply to user config.
 
 ```typescript
 import { defu } from 'defu';
-import { DEFAULTS, type DarklyConfig, type DeepPartial, type Preset } from './schema';
+import {
+    PROJECT_DEFAULTS, USER_DEFAULTS,
+    type ProjectConfig, type UserConfig, type DeepPartial, type Preset,
+} from './schema';
 import { PRESET_KRITA } from './presets/krita';
 import { PRESET_PHOTOSHOP } from './presets/photoshop';
 import { PRESET_GIMP } from './presets/gimp';
 
-const STORAGE_KEY = 'darkly-config';
+const USER_STORAGE_KEY = 'darkly-user-config';
 const PRESET_KEY = 'darkly-preset';
 
 const PRESETS: Record<string, Preset> = {
@@ -502,11 +508,11 @@ const PRESETS: Record<string, Preset> = {
     'GIMP': PRESET_GIMP,
 };
 
-function loadFromStorage(): DeepPartial<DarklyConfig> {
+function loadJson<T>(key: string): DeepPartial<T> {
     try {
-        const raw = localStorage.getItem(STORAGE_KEY);
+        const raw = localStorage.getItem(key);
         return raw ? JSON.parse(raw) : {};
-    } catch { return {}; }
+    } catch { return {} as DeepPartial<T>; }
 }
 
 function loadPreset(): Preset {
@@ -514,17 +520,40 @@ function loadPreset(): Preset {
     return (name && PRESETS[name]) || PRESET_KRITA;
 }
 
-class ConfigStore {
-    userOverrides = $state<DeepPartial<DarklyConfig>>(loadFromStorage());
+// ─── Project config (per document) ───
+
+class ProjectStore {
+    overrides = $state<DeepPartial<ProjectConfig>>({});
+
+    get resolved(): ProjectConfig {
+        return defu(this.overrides, PROJECT_DEFAULTS) as ProjectConfig;
+    }
+
+    /** Load project config from a document (future: from .darkly file).
+     *  Phase 2: called with {} on new document. */
+    load(overrides: DeepPartial<ProjectConfig>) {
+        this.overrides = overrides;
+    }
+
+    /** Serialize project config for saving with the document. */
+    serialize(): DeepPartial<ProjectConfig> {
+        return structuredClone(this.overrides);
+    }
+}
+
+// ─── User config (global) ───
+
+class UserStore {
+    overrides = $state<DeepPartial<UserConfig>>(loadJson<UserConfig>(USER_STORAGE_KEY));
     activePreset = $state<Preset>(loadPreset());
 
-    /** Resolved config: user > preset > defaults */
-    get resolved(): DarklyConfig {
+    /** Resolved config: user overrides > active preset > defaults */
+    get resolved(): UserConfig {
         return defu(
-            this.userOverrides,
+            this.overrides,
             this.activePreset.overrides,
-            DEFAULTS
-        ) as DarklyConfig;
+            USER_DEFAULTS
+        ) as UserConfig;
     }
 
     get availablePresets(): Preset[] {
@@ -536,45 +565,46 @@ class ConfigStore {
         localStorage.setItem(PRESET_KEY, preset.name);
     }
 
-    setUserOverride(path: string, value: any) {
+    setOverride(path: string, value: any) {
         const parts = path.split('.');
-        let obj: any = this.userOverrides;
+        let obj: any = this.overrides;
         for (let i = 0; i < parts.length - 1; i++) {
             if (!obj[parts[i]]) obj[parts[i]] = {};
             obj = obj[parts[i]];
         }
         obj[parts[parts.length - 1]] = value;
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.userOverrides));
+        localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(this.overrides));
     }
 
     reset() {
-        this.userOverrides = {};
+        this.overrides = {};
         this.activePreset = PRESET_KRITA;
-        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(USER_STORAGE_KEY);
         localStorage.removeItem(PRESET_KEY);
     }
 }
 
-export const config = new ConfigStore();
+export const project = new ProjectStore();
+export const user = new UserStore();
 ```
 
 **`frontend/src/config/hotkeys.svelte.ts` — Hotkey registration:**
 
 ```typescript
 import tinykeys from 'tinykeys';
-import { config } from './store.svelte';
+import { user } from './store.svelte';
 
 let cleanup: (() => void) | null = null;
 
 /**
- * Register all hotkeys from the resolved config.
+ * Register all hotkeys from the resolved user config.
  * Call on init and whenever the preset changes.
  * `actions` maps HotkeyMap key names to handler functions.
  */
 export function registerHotkeys(actions: Record<string, () => void>) {
     cleanup?.();
 
-    const hotkeys = config.resolved.hotkeys;
+    const hotkeys = user.resolved.hotkeys;
     const bindings: Record<string, (e: KeyboardEvent) => void> = {};
 
     for (const [action, handler] of Object.entries(actions)) {
@@ -601,7 +631,7 @@ export function unregisterHotkeys() {
 cd frontend && npm install defu tinykeys
 ```
 
-**Verification:** Config store resolves correctly. Switching presets changes hotkey values. Values persist across page reloads via localStorage.
+**Verification:** Both stores resolve correctly. `project.resolved` returns canvas defaults. `user.resolved` merges user overrides + preset + defaults. Switching presets changes hotkey values. User values persist via localStorage. Project config is independent.
 
 ---
 
@@ -631,9 +661,13 @@ class AppState {
     // Active layer
     activeLayerId = $state<bigint | null>(null);
 
-    // Brush state (shared across tools that paint)
+    // Tool runtime state — working values adjusted while painting.
+    // Serialized with the project so reopening a doc restores tool state.
     brushSize = $state(24);
     brushOpacity = $state(1.0);
+    fillTolerance = $state(32);     // 0–255
+    fillAll = $state(false);
+    gradientType = $state<'linear' | 'radial'>('linear');
 
     // View transform (controlled by canvas navigation)
     panX = $state(0);
@@ -662,7 +696,7 @@ export const app = new AppState();
 
 Add a view transform to the present pipeline so the canvas can be panned, zoomed, and rotated without affecting compositing.
 
-**`crates/darkly-gpu/src/view.rs`:**
+**`crates/darkly/src/gpu/view.rs`:**
 
 ```rust
 /// 2D view transform for canvas navigation.
@@ -953,17 +987,36 @@ $effect(() => {
 
 The tool system is split: Rust owns pixel modification and undo; TypeScript owns gesture interpretation and UI.
 
-#### 5a: Rust side — StrokeOp + Document operations
+#### 5a: Rust side — StrokeOp + tool operation modules
 
-**`crates/darkly-core/src/stroke.rs` — Stroke operation enum:**
+The tool system follows the same single-file-per-module pattern as filters:
+
+| Filter system | Tool system | Role |
+|--------------|-------------|------|
+| `gpu/filter.rs` — `Filter` trait + `FilterPipelines` + `create_filter` | `stroke.rs` — `StrokeOp` enum + `Document::apply_stroke_op()` | Trait/enum + dispatch |
+| `gpu/filters/mod.rs` — barrel exports | `tools/mod.rs` — barrel exports | Module barrel |
+| `gpu/filters/noise.rs` — struct + `Filter` impl + pipeline | `tools/paint_circle.rs` — `impl Document { fn paint_circle() }` | One file per operation |
+
+Each tool operation is a single file in `tools/` containing an `impl Document` block with that operation's pixel-modification method. Rust allows `impl` blocks to be split across modules within the same crate — the crate merge to `darkly` makes this work cleanly.
+
+**Adding a new tool operation requires:**
+1. New file in `tools/` with the `impl Document` method
+2. New variant in `StrokeOp` enum in `stroke.rs`
+3. New match arm in `apply_stroke_op` in `stroke.rs`
+4. `pub mod` line in `tools/mod.rs`
+
+**`crates/darkly/src/stroke.rs` — Stroke operation enum + dispatcher:**
 
 ```rust
+use crate::document::Document;
+use crate::layer::LayerId;
+
 /// A discrete operation that a tool applies to the document.
 /// Each variant captures the parameters needed to execute the operation.
 ///
 /// This is an enum, not a trait — tool operations are a closed set known
-/// at compile time. Adding a new tool means adding a variant here and a
-/// match arm in Document::apply_stroke_op(). Same pattern as BlendMode.
+/// at compile time. Adding a new tool means adding a variant here, a
+/// match arm below, and a new file in tools/. Same pattern as BlendMode.
 pub enum StrokeOp {
     /// Paint a filled circle (brush dab). Called per pointer event.
     PaintCircle {
@@ -998,11 +1051,7 @@ pub enum StrokeOp {
         color1: [u8; 4],
     },
 }
-```
 
-**`document.rs` — apply method:**
-
-```rust
 impl Document {
     /// Apply a stroke operation to a raster layer.
     /// The caller is responsible for calling begin_transaction before
@@ -1026,9 +1075,51 @@ impl Document {
 }
 ```
 
-The existing `Document::paint_circle()` stays where it is — it's the implementation of `StrokeOp::PaintCircle`. New operations (`erase_circle`, `flood_fill`, `fill_linear_gradient`) are added as methods on `Document` in the same style: they take coordinates and parameters, modify tiles, and mark dirty regions. `apply_stroke_op` is the dispatcher that routes to them.
+**`crates/darkly/src/tools/mod.rs` — Barrel exports:**
 
-**Why an enum and not a trait?** The filter system uses trait objects (`Box<dyn FilterParams>`) because filters are open-ended — users will define custom filters, and the set grows unboundedly. Tool operations are a closed set: we know all variants at compile time, they share no common behavior worth abstracting, and they have wildly different parameter shapes. An enum gives exhaustive matching (compiler catches missing arms), zero allocation, and trivial serialization. If the set ever truly becomes open (third-party tool plugins), we can migrate to traits then.
+```rust
+pub mod paint_circle;
+pub mod erase_circle;
+pub mod flood_fill;
+pub mod gradient;
+```
+
+**`crates/darkly/src/tools/paint_circle.rs` — Brush dab operation:**
+
+The existing `Document::paint_circle()` moves here from `document.rs`. The file contains a single `impl Document` block with the pixel math:
+
+```rust
+use crate::document::Document;
+use crate::layer::{Layer, LayerId};
+use crate::tile::TILE_SIZE;
+
+impl Document {
+    /// Paint a filled circle on a raster layer.
+    pub fn paint_circle(
+        &mut self,
+        layer_id: LayerId,
+        cx: f32, cy: f32,
+        radius: f32,
+        color: [u8; 4],
+    ) {
+        // ... existing paint_circle pixel math (unchanged) ...
+    }
+}
+```
+
+**`crates/darkly/src/tools/erase_circle.rs`:**
+
+Same structure — single `impl Document` block with `erase_circle()`. Identical loop to `paint_circle` but writes `[0, 0, 0, 0]` instead of blending.
+
+**`crates/darkly/src/tools/flood_fill.rs`:**
+
+Single `impl Document` block with `flood_fill()`. Scanline flood-fill algorithm, marks dirty tiles as it goes.
+
+**`crates/darkly/src/tools/gradient.rs`:**
+
+Single `impl Document` block with `fill_linear_gradient()`. The existing `fill_gradient()` demo helper in `document.rs` is replaced by this proper two-point gradient.
+
+**Why an enum and not a trait?** The filter system uses trait objects (`Box<dyn Filter>`) because filters are **state**: a `FilterLayer` holds `Box<dyn Filter>` as part of the document — it persists, gets cloned for undo, and must be stored polymorphically. Tool operations are **commands**: constructed, dispatched, consumed. They're never stored, never cloned, never downcast. An enum gives exhaustive matching (compiler catches missing arms), zero allocation, and trivial serialization. If the set ever truly becomes open (third-party tool plugins), we can migrate to traits then.
 
 #### 5b: WASM bridge — stroke lifecycle
 
@@ -1118,6 +1209,10 @@ export interface Tool {
     readonly name: string;
     readonly icon: string;
 
+    /** Key name in HotkeyMap that activates this tool (e.g. 'brushTool').
+     *  Used by hotkey registration to wire up tool switching automatically. */
+    readonly hotkeyAction: string;
+
     /** Optional Svelte component for tool-specific options panel */
     readonly optionsComponent?: Component;
 
@@ -1153,20 +1248,34 @@ The TS `Tool` interface is deliberately simple: it's a gesture interpreter, not 
 
 **`frontend/src/tools/brush.svelte.ts` — Brush tool:**
 
+Each tool file is fully self-contained: constants, default hotkey, runtime state, and the gesture interpreter. Adding a new tool means creating one file like this and importing it in the registry + schema.
+
 ```typescript
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
+
+// ─── Constants & hotkey (hotkey imported by schema.ts) ───
+
+export const MIN_SIZE = 1;
+export const MAX_SIZE = 500;
+export const SIZE_STEP = 4;
+export const INITIAL_SIZE = 24;
+export const INITIAL_OPACITY = 1.0;
+
+export const BRUSH_HOTKEY = 'KeyB';
+
+// ─── Gesture interpreter ───
 
 export const brushTool: Tool = {
     id: 'brush',
     name: 'Brush',
     icon: 'B',
+    hotkeyAction: 'brushTool',
 
     onPointerDown(ctx, e, cx, cy) {
         const layerId = app.activeLayerId;
         if (!layerId) return;
 
-        // begin_stroke opens an undo transaction — one stroke = one undo step
         ctx.handle.begin_stroke(layerId);
 
         const c = app.foreground;
@@ -1188,7 +1297,6 @@ export const brushTool: Tool = {
     },
 
     onPointerUp(ctx) {
-        // end_stroke commits the undo transaction
         ctx.handle.end_stroke();
     },
 };
@@ -1198,29 +1306,35 @@ Note: the brush tool reads `app.foreground`, `app.brushSize`, `app.brushOpacity`
 
 **`frontend/src/tools/eraser.svelte.ts`:**
 
-Identical structure to brush. `onPointerDown` calls `begin_stroke`, each move calls `stroke_to('erase_circle', { x, y, radius })`, `onPointerUp` calls `end_stroke`.
+Same single-file pattern. Exports `ERASER_HOTKEY`. Shares `app.brushSize` / `app.brushOpacity` with the brush tool (matching Krita behavior). Gesture interpreter: `onPointerDown` calls `begin_stroke`, each move calls `stroke_to('erase_circle', { x, y, radius })`, `onPointerUp` calls `end_stroke`.
 
 **`frontend/src/tools/fill.svelte.ts`:**
 
-One-shot tool. `onPointerDown` does everything: `begin_stroke` → `stroke_to('flood_fill', { x, y, r, g, b, a, tolerance })` → `end_stroke`. No `onPointerMove` or `onPointerUp` work needed (the entire fill is one undo step triggered by a single click).
+Exports `FILL_HOTKEY`. Runtime state: `tolerance` (0–255, default 32) and `fillAll` (default false) as `$state` properties on the tool object, adjustable from the tool options panel. One-shot tool. `onPointerDown` does everything: `begin_stroke` → `stroke_to('flood_fill', { x, y, r, g, b, a, tolerance })` → `end_stroke`.
 
 **`frontend/src/tools/gradient.svelte.ts`:**
 
-Two-point tool. `onPointerDown` calls `begin_stroke` and records start point. `onPointerUp` calls `stroke_to('linear_gradient', { x0, y0, x1, y1, ... })` → `end_stroke`. The gradient parameters are computed from the start and end points, with colors from `app.foreground` and `app.background`.
+Exports `GRADIENT_HOTKEY`. Runtime state: `gradientType` ('linear' | 'radial', default 'linear'). Two-point tool. `onPointerDown` calls `begin_stroke` and records start point. `onPointerUp` calls `stroke_to('linear_gradient', { x0, y0, x1, y1, ... })` → `end_stroke`.
 
 **`frontend/src/tools/colorpicker.svelte.ts`:**
 
-Read-only tool — no stroke at all. `onPointerDown` calls `ctx.handle.pick_color(cx, cy)` which reads from the composite cache via GPU readback. Sets `app.foreground` to the sampled color.
-
-**Tool registration (in `editor.ts` or `tools/index.ts`):**
+Exports `COLORPICKER_HOTKEY = 'KeyP'`. No config interface needed (no settings). Read-only tool — no stroke at all. `onPointerDown` calls `ctx.handle.pick_color(cx, cy)` which reads from the composite cache via GPU readback. Sets `app.foreground` to the sampled color.
 
 ```typescript
-import { toolRegistry } from './tools/registry';
-import { brushTool } from './tools/brush.svelte';
-import { eraserTool } from './tools/eraser.svelte';
-import { fillTool } from './tools/fill.svelte';
-import { gradientTool } from './tools/gradient.svelte';
-import { colorPickerTool } from './tools/colorpicker.svelte';
+export const COLORPICKER_HOTKEY = 'KeyP';
+```
+
+**Tool registration (`tools/index.ts`):**
+
+Each tool is imported and registered. The `hotkeyAction` on each tool allows automatic hotkey wiring in Step 9 — no need to hardcode tool IDs in the hotkey registration.
+
+```typescript
+import { toolRegistry } from './registry';
+import { brushTool } from './brush.svelte';
+import { eraserTool } from './eraser.svelte';
+import { fillTool } from './fill.svelte';
+import { gradientTool } from './gradient.svelte';
+import { colorPickerTool } from './colorpicker.svelte';
 
 toolRegistry.register(brushTool);
 toolRegistry.register(eraserTool);
@@ -1233,7 +1347,7 @@ toolRegistry.register(colorPickerTool);
 
 ---
 
-### Step 6: Layer groups (`darkly-core`)
+### Step 6: Layer groups (`darkly`)
 
 **`layer.rs` additions:**
 
@@ -1348,7 +1462,7 @@ Cache invalidation: any structural change (layer move, group add/remove, visibil
 
 **`frontend/src/ui/LeftSidebar.svelte`:**
 
-A narrow (48px default, from `config.resolved.ui.leftSidebarWidth`) vertical bar on the left edge. Contents from top to bottom:
+A narrow (48px default, from `user.resolved.ui.leftSidebarWidth`) vertical bar on the left edge. Contents from top to bottom:
 
 1. **Color swatches** — Two overlapping squares (20x20px) showing foreground (top-left) and background (bottom-right). Click foreground square to open the color picker popup. Click the small swap icon or press X to swap. Displays `app.foreground` and `app.background`.
 
@@ -1453,12 +1567,20 @@ Note: returned in top-to-bottom display order (reversed from internal order) for
 
 ### Step 9: Hotkey registration + integration
 
-Wire everything together in `editor.ts`:
+Wire everything together in `editor.ts`. Tool hotkeys are built automatically from the registry — adding a new tool with a `hotkeyAction` field automatically gets a hotkey binding without touching this file.
 
 ```typescript
 import { registerHotkeys } from './config/hotkeys.svelte';
 import { app } from './state/app.svelte';
-import { config } from './config/store.svelte';
+import { toolRegistry } from './tools/registry';
+import { MIN_SIZE, MAX_SIZE, SIZE_STEP } from './tools/brush.svelte';
+
+// Build tool-switching hotkey actions from the registry.
+// Each tool's hotkeyAction (e.g. 'brushTool') maps to switching to that tool.
+const toolActions: Record<string, () => void> = {};
+for (const tool of toolRegistry.all()) {
+    toolActions[tool.hotkeyAction] = () => { app.activeToolId = tool.id; };
+}
 
 // Register all hotkey actions.
 // Canvas navigation (Space+drag, etc.) is handled by the navigation state machine,
@@ -1468,18 +1590,12 @@ registerHotkeys({
     redo:            () => app.handle?.redo(),
     resetColors:     () => app.resetColors(),
     swapColors:      () => app.swapColors(),
-    brushTool:       () => { app.activeToolId = 'brush'; },
-    eraserTool:      () => { app.activeToolId = 'eraser'; },
-    fillTool:        () => { app.activeToolId = 'fill'; },
-    gradientTool:    () => { app.activeToolId = 'gradient'; },
-    colorPickerTool: () => { app.activeToolId = 'colorpicker'; },
+    ...toolActions,
     brushSizeUp:     () => {
-        const cfg = config.resolved.tools.brush;
-        app.brushSize = Math.min(app.brushSize + cfg.sizeStep, cfg.maxSize);
+        app.brushSize = Math.min(app.brushSize + SIZE_STEP, MAX_SIZE);
     },
     brushSizeDown:   () => {
-        const cfg = config.resolved.tools.brush;
-        app.brushSize = Math.max(app.brushSize - cfg.sizeStep, cfg.minSize);
+        app.brushSize = Math.max(app.brushSize - SIZE_STEP, MIN_SIZE);
     },
     opacityUp:       () => {
         app.brushOpacity = Math.min(1.0, app.brushOpacity + 0.1);
@@ -1556,11 +1672,11 @@ Refactor `App.svelte` from a monolithic canvas component into a three-column lay
 
 | Step | Deliverable | Test |
 |------|-------------|------|
-| 1 | Config system: schema, presets, reactive store, hotkeys | Config resolves; presets swap; localStorage persists |
+| 1 | Config system: project/user split, presets, reactive stores, hotkeys | Both stores resolve; presets swap user config; localStorage persists |
 | 2 | AppState singleton | Colors, active tool, view state reactive |
 | 3 | View transform (Rust + shader) | `set_view_transform()` pans/zooms/rotates the canvas |
 | 4 | Navigation state machine | Space+drag pans, Shift+Space rotates, Ctrl+Space zooms |
-| 5a | Rust: StrokeOp enum + Document operations | `apply_stroke_op` dispatches correctly; unit tests for each op |
+| 5a | Rust: StrokeOp enum + `tools/` operation modules | `apply_stroke_op` dispatches correctly; unit tests for each op |
 | 5b | WASM: stroke lifecycle (begin/stroke_to/end) | Stroke → undo transaction; round-trips from TS work |
 | 5c | TS: 5 tool gesture interpreters | Brush/eraser/fill/gradient/picker respond to pointer events |
 | 6 | Layer groups (Rust) | `flat_layers()` correct order; passthrough compositing works |
