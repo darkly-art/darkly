@@ -1,6 +1,7 @@
 use crate::filter::{FilterHandler, FilterLayerCache};
 use darkly_core::layer::{FilterParams, FilterTypeId};
 use std::any::Any;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 
 pub const FILTER_TYPE: FilterTypeId = "noise";
@@ -249,6 +250,7 @@ impl FilterHandler for NoiseHandler {
         &self.bind_group_layout
     }
 
+    #[cfg(target_arch = "wasm32")]
     fn create_params(&self, js: JsValue) -> Box<dyn FilterParams> {
         // Deserialize from JS object: { amount: f32, resolution: u32 }
         let amount = js_sys::Reflect::get(&js, &"amount".into())

@@ -8,6 +8,24 @@ use darkly_core::document::Document;
 use darkly_core::layer::{BlendMode, Layer, LayerId};
 use std::collections::HashMap;
 
+/// Timing helpers — compile to no-ops unless `cfg(feature = "profile")`.
+#[cfg(feature = "profile")]
+mod perf {
+    pub fn time(label: &str) {
+        web_sys::console::time_with_label(label);
+    }
+    pub fn time_end(label: &str) {
+        web_sys::console::time_end_with_label(label);
+    }
+}
+#[cfg(not(feature = "profile"))]
+mod perf {
+    #[inline(always)]
+    pub fn time(_: &str) {}
+    #[inline(always)]
+    pub fn time_end(_: &str) {}
+}
+
 /// Pre-built GPU objects for a raster layer (P1 — created once, never per-frame).
 struct RasterLayerCache {
     /// Uniform buffer holding opacity + blend_mode.
@@ -399,6 +417,285 @@ impl Compositor {
         &self.filter_registry
     }
 
+    /// Upload dirty tiles and composite changed layers (no surface present).
+    /// Returns true if GPU work was submitted, false if skipped (nothing dirty).
+    pub fn render_offscreen(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        doc: &mut Document,
+    ) -> bool {
+        // 1. Check if any dirty regions exist before scanning layers.
+        let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
+
+        if !self.needs_composite && !has_dirty {
+            return false;
+        }
+
+        // 2. Upload dirty tiles for each dirty raster layer
+        if has_dirty {
+            for layer in &doc.layers {
+                if let Layer::Raster(raster) = layer {
+                    let dirty = match doc.dirty.get(&raster.id) {
+                        Some(d) if !d.is_empty() => d,
+                        _ => continue,
+                    };
+
+                    let layer_tex = match self.layer_textures.get(&raster.id) {
+                        Some(t) => t,
+                        None => continue,
+                    };
+
+                    for (tx, ty) in dirty.iter() {
+                        if tx < 0 || ty < 0 {
+                            continue;
+                        }
+                        if let Some(tile) = raster.tiles.get(tx, ty) {
+                            self.staging.upload_tile(
+                                queue,
+                                tile.data(),
+                                &layer_tex.texture,
+                                tx as u32,
+                                ty as u32,
+                            );
+                        }
+                    }
+
+                    if let Some(idx) = doc.layer_index(raster.id) {
+                        match self.lowest_dirty_layer {
+                            Some(current) => {
+                                if idx < current {
+                                    self.lowest_dirty_layer = Some(idx);
+                                }
+                            }
+                            None => self.lowest_dirty_layer = Some(idx),
+                        }
+                    }
+                    self.needs_composite = true;
+                }
+            }
+        }
+
+        if let Some(lowest) = self.lowest_dirty_layer.take() {
+            self.invalidate_cache_from(lowest);
+        }
+
+        if !self.needs_composite {
+            for dirty in doc.dirty.values_mut() {
+                dirty.clear();
+            }
+            return false;
+        }
+
+        let dirty_rect = dirty_pixel_rect(
+            doc.dirty.values(),
+            self.canvas_width,
+            self.canvas_height,
+        );
+        let (scissor_x, scissor_y, scissor_w, scissor_h) = dirty_rect
+            .unwrap_or((0, 0, self.canvas_width, self.canvas_height));
+
+        let start_layer = match self.cache_valid_through {
+            Some(valid_through) => valid_through + 1,
+            None => 0,
+        };
+        let resuming_from_cache = start_layer > 0;
+        let mut use_cache_source = resuming_from_cache;
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("composite"),
+        });
+
+        if !resuming_from_cache {
+            {
+                let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("clear-accum"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.accum_views[0],
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+            }
+            self.current_accum = 0;
+        }
+
+        let num_layers = doc.layers.len();
+        let mut wrote_to_cache = false;
+
+        for layer_idx in start_layer..num_layers {
+            let layer = &doc.layers[layer_idx];
+            if !layer.visible() {
+                continue;
+            }
+
+            let is_last_layer = layer_idx == num_layers - 1;
+
+            match layer {
+                Layer::Raster(raster) => {
+                    let cache = match self.raster_cache.get(&raster.id) {
+                        Some(c) => c,
+                        None => continue,
+                    };
+
+                    let (dst_view, bind_group) = if use_cache_source {
+                        use_cache_source = false;
+                        let dst = 0;
+                        self.current_accum = dst;
+                        (&self.accum_views[dst], &cache.cache_source_bind_group)
+                    } else if is_last_layer {
+                        wrote_to_cache = true;
+                        let src = self.current_accum;
+                        (&self.composite_cache_view, &cache.bind_groups[src])
+                    } else {
+                        let src = self.current_accum;
+                        let dst = 1 - src;
+                        self.current_accum = dst;
+                        (&self.accum_views[dst], &cache.bind_groups[src])
+                    };
+
+                    {
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("blend-raster"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: dst_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            ..Default::default()
+                        });
+                        rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
+                        rpass.set_pipeline(self.blend_pipelines.pipeline());
+                        rpass.set_bind_group(0, bind_group, &[]);
+                        rpass.draw(0..3, 0..1);
+                    }
+                }
+                Layer::Filter(filter) => {
+                    let type_id = filter.params.filter_type_id();
+                    let handler = match self.filter_registry.get(type_id) {
+                        Some(h) => h,
+                        None => continue,
+                    };
+                    let cache = match self.filter_cache.get(&filter.id) {
+                        Some(c) => c,
+                        None => continue,
+                    };
+
+                    if use_cache_source {
+                        use_cache_source = false;
+                        let origin = wgpu::Origin3d {
+                            x: scissor_x,
+                            y: scissor_y,
+                            z: 0,
+                        };
+                        encoder.copy_texture_to_texture(
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.composite_cache,
+                                mip_level: 0,
+                                origin,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::TexelCopyTextureInfo {
+                                texture: &self.accum[0],
+                                mip_level: 0,
+                                origin,
+                                aspect: wgpu::TextureAspect::All,
+                            },
+                            wgpu::Extent3d {
+                                width: scissor_w,
+                                height: scissor_h,
+                                depth_or_array_layers: 1,
+                            },
+                        );
+                        self.current_accum = 0;
+                    }
+
+                    for pass in 0..handler.pass_count() as usize {
+                        let src = self.current_accum;
+                        let dst = 1 - src;
+
+                        let is_last_pass = pass == handler.pass_count() as usize - 1;
+                        let dst_view = if is_last_layer && is_last_pass {
+                            wrote_to_cache = true;
+                            &self.composite_cache_view
+                        } else {
+                            self.current_accum = dst;
+                            &self.accum_views[dst]
+                        };
+
+                        {
+                            let mut rpass =
+                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                    label: Some("filter-pass"),
+                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                        view: dst_view,
+                                        resolve_target: None,
+                                        depth_slice: None,
+                                        ops: wgpu::Operations {
+                                            load: wgpu::LoadOp::Load,
+                                            store: wgpu::StoreOp::Store,
+                                        },
+                                    })],
+                                    ..Default::default()
+                                });
+                            rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
+                            rpass.set_pipeline(handler.pipeline());
+                            rpass.set_bind_group(0, &cache.bind_groups[pass][src], &[]);
+                            rpass.draw(0..3, 0..1);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !wrote_to_cache && start_layer < num_layers {
+            let origin = wgpu::Origin3d {
+                x: scissor_x,
+                y: scissor_y,
+                z: 0,
+            };
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.accum[self.current_accum],
+                    mip_level: 0,
+                    origin,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.composite_cache,
+                    mip_level: 0,
+                    origin,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: scissor_w,
+                    height: scissor_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        if start_layer < num_layers {
+            self.cache_valid_through = Some(num_layers.saturating_sub(1));
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        for dirty in doc.dirty.values_mut() {
+            dirty.clear();
+        }
+        self.needs_composite = false;
+        true
+    }
+
     /// Upload dirty tiles, composite changed layers, present.
     pub fn render(
         &mut self,
@@ -408,6 +705,8 @@ impl Compositor {
         surface_config: &wgpu::SurfaceConfiguration,
         doc: &mut Document,
     ) {
+        perf::time("render-total");
+
         // 1. Check if any dirty regions exist before scanning layers.
         let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
 
@@ -415,10 +714,12 @@ impl Compositor {
         // The browser compositor keeps displaying the last presented surface frame;
         // no surface acquisition, no command encoder, no GPU work at all.
         if !self.needs_composite && !has_dirty {
+            perf::time_end("render-total");
             return;
         }
 
         // 2. Upload dirty tiles for each dirty raster layer
+        perf::time("tile-upload");
         if has_dirty {
             for layer in &doc.layers {
                 if let Layer::Raster(raster) = layer {
@@ -463,6 +764,8 @@ impl Compositor {
             }
         }
 
+        perf::time_end("tile-upload");
+
         // Handle cache invalidation
         if let Some(lowest) = self.lowest_dirty_layer.take() {
             self.invalidate_cache_from(lowest);
@@ -474,6 +777,7 @@ impl Compositor {
             for dirty in doc.dirty.values_mut() {
                 dirty.clear();
             }
+            perf::time_end("render-total");
             return;
         }
 
@@ -490,7 +794,15 @@ impl Compositor {
         let (scissor_x, scissor_y, scissor_w, scissor_h) = dirty_rect
             .unwrap_or((0, 0, self.canvas_width, self.canvas_height));
 
+        #[cfg(feature = "profile")]
+        log::info!(
+            "scissor: ({scissor_x},{scissor_y} {scissor_w}x{scissor_h}), start_layer will be from cache_valid_through={:?}, layers={}",
+            self.cache_valid_through,
+            doc.layers.len(),
+        );
+
         // 4. Acquire surface — only when we actually have work to do.
+        perf::time("acquire-surface");
         let output = match surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost) => {
@@ -509,6 +821,7 @@ impl Compositor {
         let surface_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        perf::time_end("acquire-surface");
 
         // 5. Composite cache (P3): determine start point
         let start_layer = match self.cache_valid_through {
@@ -550,6 +863,7 @@ impl Compositor {
         // 6. Composite layers from start_layer to top.
         // `wrote_to_cache` tracks whether the final result landed in
         // composite_cache (true) or in accum[current_accum] (false).
+        perf::time("composite-layers");
         let num_layers = doc.layers.len();
         let mut wrote_to_cache = false;
 
@@ -721,7 +1035,10 @@ impl Compositor {
             self.cache_valid_through = Some(num_layers.saturating_sub(1));
         }
 
+        perf::time_end("composite-layers");
+
         // 6. Present: blit composite_cache to surface
+        perf::time("present");
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("present"),
@@ -741,13 +1058,18 @@ impl Compositor {
             rpass.draw(0..3, 0..1);
         }
 
+        perf::time_end("present");
+
+        perf::time("submit+present");
         queue.submit(std::iter::once(encoder.finish()));
         output.present();
+        perf::time_end("submit+present");
 
         // 7. Clear dirty regions, reset flag
         for dirty in doc.dirty.values_mut() {
             dirty.clear();
         }
         self.needs_composite = false;
+        perf::time_end("render-total");
     }
 }

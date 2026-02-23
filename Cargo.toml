@@ -30,6 +30,7 @@ web-sys = { version = "=0.3.77", features = [
     "Navigator",
     "Gpu",
     "OffscreenCanvas",
+    "console",
 ] }
 console_error_panic_hook = "0.1"
 console_log = "1"

@@ -1,5 +1,6 @@
 use darkly_core::layer::{FilterParams, FilterTypeId};
 use std::collections::HashMap;
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
 
 /// Cached GPU objects for a filter layer instance (P1).
@@ -25,6 +26,7 @@ pub trait FilterHandler {
     /// The bind group layout for this filter's shader.
     fn bind_group_layout(&self) -> &wgpu::BindGroupLayout;
     /// Deserialize filter params from a JS object.
+    #[cfg(target_arch = "wasm32")]
     fn create_params(&self, js: JsValue) -> Box<dyn FilterParams>;
     /// Create per-instance GPU state for a newly added filter layer.
     /// Called once at layer creation (P1).

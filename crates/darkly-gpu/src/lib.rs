@@ -1,3 +1,4 @@
+#[cfg(target_arch = "wasm32")]
 pub mod context;
 pub mod atlas;
 pub mod staging;
