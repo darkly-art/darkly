@@ -158,12 +158,13 @@ mod tests {
 
     #[test]
     fn tile_coords_for_pixel() {
+        let ts = TILE_SIZE as i32;
         assert_eq!(TileGrid::tile_coords_for_pixel(0, 0), (0, 0));
-        assert_eq!(TileGrid::tile_coords_for_pixel(63, 63), (0, 0));
-        assert_eq!(TileGrid::tile_coords_for_pixel(64, 0), (1, 0));
+        assert_eq!(TileGrid::tile_coords_for_pixel(ts - 1, ts - 1), (0, 0));
+        assert_eq!(TileGrid::tile_coords_for_pixel(ts, 0), (1, 0));
         assert_eq!(TileGrid::tile_coords_for_pixel(-1, -1), (-1, -1));
-        assert_eq!(TileGrid::tile_coords_for_pixel(-64, 0), (-1, 0));
-        assert_eq!(TileGrid::tile_coords_for_pixel(-65, 0), (-2, 0));
+        assert_eq!(TileGrid::tile_coords_for_pixel(-ts, 0), (-1, 0));
+        assert_eq!(TileGrid::tile_coords_for_pixel(-ts - 1, 0), (-2, 0));
     }
 
     #[test]

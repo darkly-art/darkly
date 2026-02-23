@@ -210,12 +210,14 @@ mod tests {
 
     #[test]
     fn fill_gradient_marks_dirty() {
-        let mut doc = Document::new(128, 128);
+        let ts = TILE_SIZE as u32;
+        let canvas = ts * 2; // use a canvas that's exactly 2 tiles wide/tall
+        let mut doc = Document::new(canvas, canvas);
         let id = doc.add_raster_layer();
         doc.fill_gradient(id);
 
         let dirty = doc.dirty.get(&id).unwrap();
-        assert_eq!(dirty.len(), 4); // 128/64 = 2 tiles each axis = 4 tiles
+        assert_eq!(dirty.len(), 4); // 2 tiles each axis = 4 tiles
 
         if let Some(Layer::Raster(r)) = doc.layer(id) {
             let tile = r.tiles.get(0, 0).unwrap();

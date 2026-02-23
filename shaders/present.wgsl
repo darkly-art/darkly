@@ -17,7 +17,10 @@ struct VertexOutput {
 @group(0) @binding(1) var t_sampler: sampler;
 
 @fragment fn fs_present(in: VertexOutput) -> @location(0) vec4f {
-    let color = textureSample(t_source, t_sampler, in.uv);
-    // Output with opaque alpha (surface doesn't need transparency)
+    // Derive UV from pixel position so that surface pixel (x,y) reads
+    // texture pixel (x,y). This avoids squishing when the composite cache
+    // is padded to tile boundaries and larger than the surface.
+    let uv = in.position.xy / vec2f(textureDimensions(t_source));
+    let color = textureSample(t_source, t_sampler, uv);
     return vec4f(color.rgb, 1.0);
 }

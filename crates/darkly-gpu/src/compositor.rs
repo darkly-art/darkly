@@ -96,6 +96,15 @@ impl Compositor {
         width: u32,
         height: u32,
     ) -> Self {
+        use darkly_core::tile::TILE_SIZE;
+
+        // Pad accumulator dimensions to tile boundaries so they match layer
+        // textures exactly. The composite shader samples both with the same
+        // UVs, so any size mismatch causes painting offset / wrapping.
+        let ts = TILE_SIZE as u32;
+        let padded_w = ((width + ts - 1) / ts) * ts;
+        let padded_h = ((height + ts - 1) / ts) * ts;
+
         // Use Rgba8Unorm for accumulators (linear color space for blending)
         let accum_format = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -103,8 +112,8 @@ impl Compositor {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
-                    width,
-                    height,
+                    width: padded_w,
+                    height: padded_h,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,

@@ -144,42 +144,54 @@ mod tests {
 
     #[test]
     fn dirty_pixel_rect_single_tile() {
+        let ts = TILE_SIZE as u32;
         let mut d = DirtyRegion::new();
         d.mark(1, 2);
         let rect = super::dirty_pixel_rect(std::iter::once(&d), 1920, 1080);
-        // Tile (1,2) → pixels (64, 128) to (128, 192) → (x=64, y=128, w=64, h=64)
-        assert_eq!(rect, Some((64, 128, 64, 64)));
+        assert_eq!(rect, Some((ts, 2 * ts, ts, ts.min(1080 - 2 * ts))));
     }
 
     #[test]
     fn dirty_pixel_rect_multiple_tiles() {
+        let ts = TILE_SIZE as u32;
         let mut d = DirtyRegion::new();
         d.mark(0, 0);
         d.mark(2, 1);
         let rect = super::dirty_pixel_rect(std::iter::once(&d), 1920, 1080);
-        // Tiles (0,0) to (2,1) → pixels (0, 0) to (192, 128) → (x=0, y=0, w=192, h=128)
-        assert_eq!(rect, Some((0, 0, 192, 128)));
+        assert_eq!(rect, Some((0, 0, (3 * ts).min(1920), (2 * ts).min(1080))));
     }
 
     #[test]
     fn dirty_pixel_rect_union_across_regions() {
+        let ts = TILE_SIZE as u32;
         let mut d1 = DirtyRegion::new();
         d1.mark(0, 0);
         let mut d2 = DirtyRegion::new();
         d2.mark(5, 3);
         let regions = [d1, d2];
         let rect = super::dirty_pixel_rect(regions.iter(), 1920, 1080);
-        // Union: tiles (0,0) to (5,3) → pixels (0, 0) to (384, 256) → (x=0, y=0, w=384, h=256)
-        assert_eq!(rect, Some((0, 0, 384, 256)));
+        assert_eq!(rect, Some((0, 0, (6 * ts).min(1920), (4 * ts).min(1080))));
     }
 
     #[test]
     fn dirty_pixel_rect_clamps_to_canvas() {
+        let ts = TILE_SIZE as u32;
+        // Pick a tile whose pixel range exceeds canvas height
+        let tx = (1920 / ts).saturating_sub(1);
+        let ty = 1080 / ts; // first tile row that extends past 1080
         let mut d = DirtyRegion::new();
-        d.mark(29, 16); // Tile (29,16) → pixel (1856, 1024) to (1920, 1088) — exceeds 1080
+        d.mark(tx as i32, ty as i32);
         let rect = super::dirty_pixel_rect(std::iter::once(&d), 1920, 1080);
-        // Clamped: (1856, 1024, 64, 56) — height clamped from 1088 to 1080
-        assert_eq!(rect, Some((1856, 1024, 64, 56)));
+        let px = tx * ts;
+        let py = ty * ts;
+        let expected_w = ((tx + 1) * ts).min(1920) - px;
+        let expected_h = ((ty + 1) * ts).min(1080) - py;
+        if py < 1080 && px < 1920 {
+            assert_eq!(rect, Some((px, py, expected_w, expected_h)));
+        } else {
+            // Tile is entirely outside the canvas
+            assert_eq!(rect, None);
+        }
     }
 
     #[test]
@@ -193,11 +205,11 @@ mod tests {
 
     #[test]
     fn dirty_pixel_rect_negative_tiles_clamped() {
+        let ts = TILE_SIZE as u32;
         let mut d = DirtyRegion::new();
-        d.mark(-1, -1); // Negative tile coords — clamp to 0
+        d.mark(-1, -1);
         d.mark(1, 1);
         let rect = super::dirty_pixel_rect(std::iter::once(&d), 1920, 1080);
-        // min clamped to (0,0), max tile (1,1) → (0, 0, 128, 128)
-        assert_eq!(rect, Some((0, 0, 128, 128)));
+        assert_eq!(rect, Some((0, 0, (2 * ts).min(1920), (2 * ts).min(1080))));
     }
 }
