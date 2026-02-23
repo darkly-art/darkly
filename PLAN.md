@@ -354,7 +354,7 @@ impl TileAtlas {
 
 For 1920×1080: ceil(1920/64)=30, ceil(1080/64)=17 → 30×17 = 510 tiles per layer. Atlas texture per layer: 1920×1088 (padded to tile boundary).
 
-Simple approach for Phase 1: one `Rgba8Unorm` texture per raster layer (sized to canvas dimensions padded to tile boundary). No complex atlas packing.
+Simple approach for Phase 1: one `Rgba8Unorm` texture per raster layer (sized to canvas dimensions padded to tile boundary). No complex atlas packing. Accumulator and composite cache textures are padded the same way so all textures sampled with the same UVs share identical dimensions.
 
 **`staging.rs`:**
 ```rust
@@ -464,7 +464,7 @@ impl Compositor {
    - **Raster:** set pre-built bind group for the current ping-pong direction, set pipeline, draw. Ping-pong.
    - **Filter:** look up pipeline from filter registry, set pre-built bind groups from filter cache, draw each pass. Ping-pong.
 6. Copy only the dirty rect from the final accumulator to `composite_cache` via `copy_texture_to_texture()` with scoped `origin` and `size`. Update `cache_valid_through`.
-7. Present: blit `composite_cache` to surface (fullscreen — the cache always contains the complete composited image).
+7. Present: blit `composite_cache` to surface. The present fragment shader derives UVs from `position.xy / textureDimensions(t_source)` since the cache is padded larger than the surface.
 8. Clear dirty regions, set `needs_composite = false`.
 
 **`blend.rs`:**
