@@ -10,7 +10,7 @@ The project is a new standalone Rust+WASM+Svelte codebase at `/mega/ARTEXP/darkl
 
 **Engineering principle:** The core engine does not need to be 100% implemented, but every part that is implemented must be implemented properly on the first iteration. No hacks, no hardcoding, no shortcuts in the engine. If we implement one filter, we build a proper modular filter system and register that one filter in it. If we implement one blend mode, we build a proper blend mode system. The frontend (TypeScript/Svelte) can hardcode and cut corners freely — Rust code cannot, including the WASM bridge. This applies to every system: tiles, layers, filters, compositing, undo, GPU resource management.
 
-**Modularity principle:** Generic systems must not contain domain-specific knowledge. The layer system must not know what filter types exist. The compositor render loop must not branch on filter type. Each filter is a self-contained module that implements a trait and registers itself — adding a new filter means creating a new file, not modifying existing ones. If an enum would need a new variant every time a module is added, use a trait object instead.
+**Modularity principle:** Each modular item (filter, tool, etc.) should have its module-specific code as close to a single file as possible. The layer system must not know what filter types exist. The compositor render loop must not branch on filter type. Each filter is a self-contained module that implements a single `Filter` trait — adding a new filter means creating one file, plus one match arm in a factory function and one field in `FilterPipelines`.
 
 ---
 
@@ -20,28 +20,25 @@ The project is a new standalone Rust+WASM+Svelte codebase at `/mega/ARTEXP/darkl
 darkly/
 ├── Cargo.toml                    # Workspace root
 ├── crates/
-│   ├── darkly-core/              # CPU-side: layers, tiles, undo, dirty tracking
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── tile.rs           # TileData, Tile (Arc COW), TileGrid
-│   │       ├── layer.rs          # RasterLayer, FilterLayer, Layer enum
-│   │       ├── document.rs       # Document: ordered layer stack + operations
-│   │       ├── dirty.rs          # DirtyRegion: per-layer dirty tile coords
-│   │       └── undo.rs           # COW undo/redo stack
-│   │
-│   └── darkly-gpu/               # GPU-side: wgpu context, atlas, compositor
+│   └── darkly/                   # Single crate: layers, tiles, undo, GPU
 │       ├── Cargo.toml
 │       └── src/
 │           ├── lib.rs
-│           ├── context.rs        # GpuContext: Device, Queue, Surface init
-│           ├── atlas.rs          # TileAtlas: GPU texture storage for tiles
-│           ├── staging.rs        # StagingRing: CPU→GPU tile upload buffers
-│           ├── compositor.rs     # Compositor: chained render passes
-│           ├── blend.rs          # Blend mode pipeline management
-│           ├── filter.rs         # FilterHandler trait, FilterRegistry, FilterLayerCache
-│           └── filters/
-│               └── noise.rs      # NoiseParams, NoiseHandler (self-contained filter module)
+│           ├── tile.rs           # TileData, Tile (Arc COW), TileGrid
+│           ├── layer.rs          # RasterLayer, FilterLayer, Layer enum
+│           ├── document.rs       # Document: ordered layer stack + operations
+│           ├── dirty.rs          # DirtyRegion: per-layer dirty tile coords
+│           ├── undo.rs           # COW undo/redo stack
+│           └── gpu/
+│               ├── mod.rs
+│               ├── context.rs    # GpuContext: Device, Queue, Surface init
+│               ├── atlas.rs      # LayerTexture: GPU texture per raster layer
+│               ├── staging.rs    # StagingRing: CPU→GPU tile upload buffers
+│               ├── compositor.rs # Compositor: chained render passes
+│               ├── blend.rs      # Blend mode pipeline management
+│               ├── filter.rs     # Filter trait, FilterPipelines, FilterLayerCache
+│               └── filters/
+│                   └── noise.rs  # Noise: self-contained filter (params + GPU)
 │
 ├── frontend/
 │   ├── package.json
@@ -135,14 +132,12 @@ There is one cache texture storing the full composite of all layers. Any dirty l
 Create the workspace, crate structure, frontend boilerplate, and build pipeline.
 
 **Workspace `Cargo.toml`:**
-- Members: `crates/darkly-core`, `crates/darkly-gpu`, `frontend/wasm`
+- Members: `crates/darkly`, `frontend/wasm`
 - Workspace dependencies: `wgpu`, `bytemuck`, `serde`, `wasm-bindgen`, `js-sys`, `web-sys`, `log`
 
-**`darkly-core/Cargo.toml`:** Pure Rust, no WASM deps. Depends on `bytemuck`, `serde`.
+**`crates/darkly/Cargo.toml`:** Depends on `wgpu`, `bytemuck`, `serde`, `log`. WASM-specific deps (`wasm-bindgen`, `js-sys`, `web-sys`) are behind `cfg(target_arch = "wasm32")`.
 
-**`darkly-gpu/Cargo.toml`:** Depends on `darkly-core`, `wgpu`, `bytemuck`. Feature-gate `web` for WASM-specific surface creation.
-
-**`frontend/wasm/Cargo.toml`:** `crate-type = ["cdylib"]`. Depends on `darkly-core`, `darkly-gpu`, `wasm-bindgen`, `serde-wasm-bindgen`, `js-sys`, `web-sys`, `wgpu`, `console_error_panic_hook`, `console_log`.
+**`frontend/wasm/Cargo.toml`:** `crate-type = ["cdylib"]`. Depends on `darkly`, `wgpu`, `wasm-bindgen`, `serde-wasm-bindgen`, `js-sys`, `web-sys`, `console_error_panic_hook`, `console_log`.
 
 **`frontend/wasm/.cargo/config.toml`:**
 ```toml
@@ -169,7 +164,7 @@ build-std = ["std", "panic_abort"]
 
 ---
 
-### Step 2: Tile system (`darkly-core`)
+### Step 2: Tile system
 
 **`tile.rs`:**
 ```rust
@@ -219,7 +214,7 @@ pub struct Memento {
 
 ---
 
-### Step 3: Layers, document, dirty tracking (`darkly-core`)
+### Step 3: Layers, document, dirty tracking
 
 **`layer.rs`:**
 ```rust
@@ -235,22 +230,9 @@ pub struct RasterLayer {
     pub visible: bool,
 }
 
-/// String identifier for a filter type (e.g., "noise", "blur").
-/// Each filter module defines its own constant. The layer system
-/// never interprets this — it's an opaque key for the filter registry.
-pub type FilterTypeId = &'static str;
-
-/// Trait for filter parameters. Implemented by each filter module.
-/// The layer system only sees this trait — never concrete param types.
-pub trait FilterParams: std::fmt::Debug + Send + Sync {
-    fn filter_type_id(&self) -> FilterTypeId;
-    fn clone_boxed(&self) -> Box<dyn FilterParams>;
-    fn as_any(&self) -> &dyn std::any::Any;
-}
-
 pub struct FilterLayer {
     pub id: LayerId,
-    pub params: Box<dyn FilterParams>,
+    pub filter: Box<dyn gpu::filter::Filter>,
     pub visible: bool,
 }
 
@@ -287,7 +269,7 @@ pub struct Document {
 impl Document {
     pub fn new(width: u32, height: u32) -> Self;
     pub fn add_raster_layer(&mut self) -> LayerId;
-    pub fn add_filter_layer(&mut self, params: Box<dyn FilterParams>) -> LayerId;
+    pub fn add_filter_layer(&mut self, filter: Box<dyn gpu::filter::Filter>) -> LayerId;
     pub fn paint_circle(&mut self, layer_id: LayerId, cx: f32, cy: f32, radius: f32, color: [u8; 4]);
     pub fn fill_gradient(&mut self, layer_id: LayerId); // demo helper
     pub fn layer(&self, id: LayerId) -> Option<&Layer>;
@@ -334,7 +316,7 @@ pub fn mark_affected_dirty(dirty: &mut HashMap<LayerId, DirtyRegion>,
 
 ---
 
-### Step 4: GPU context + surface (`darkly-gpu`)
+### Step 4: GPU context + surface
 
 **`context.rs`:**
 ```rust
@@ -358,7 +340,7 @@ Init sequence: `Instance::new(Backends::BROWSER_WEBGPU)` → `instance.create_su
 
 ---
 
-### Step 5: Tile atlas + staging ring (`darkly-gpu`)
+### Step 5: Tile atlas + staging ring
 
 **`atlas.rs`:**
 ```rust
@@ -408,7 +390,7 @@ impl StagingRing {
 
 ---
 
-### Step 6: Compositor — blend raster layers (`darkly-gpu`)
+### Step 6: Compositor — blend raster layers
 
 **`compositor.rs`:**
 ```rust
@@ -439,7 +421,7 @@ pub struct Compositor {
     filter_cache: HashMap<LayerId, FilterLayerCache>,
 
     blend_pipelines: BlendPipelines,
-    filter_registry: FilterRegistry,
+    filter_pipelines: FilterPipelines,
     present_pipeline: wgpu::RenderPipeline,
     present_bind_groups: [wgpu::BindGroup; 2],  // one per possible current_accum
 
@@ -560,132 +542,107 @@ fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
 
 ---
 
-### Step 7: Filter shader system (`darkly-gpu`)
+### Step 7: Filter shader system
 
-The filter system is a **modular registry** of GPU filter pipelines. Each filter type (noise, blur, sharpen, etc.) registers its pipeline and bind group layout once at init. Per-filter-layer instance state (uniform buffers, bind groups, textures) is cached in the compositor alongside raster layer caches (P1). Adding a new filter means writing a shader, implementing the `Filter` trait, and registering it — no changes to the compositor or the render loop.
+The filter system uses a single **`Filter` trait** that each filter implements. Each filter is a self-contained struct holding both its user-facing parameters and an `Arc` reference to the shared GPU pipeline for its type. There is no registry — the compositor calls methods directly on the filter trait object. Adding a new filter means writing one file (struct + `Filter` impl + shader), plus one match arm in a factory function and one field in `FilterPipelines`.
 
 Phase 1 ships one filter (noise overlay) to prove the system works end-to-end. The system itself is not noise-specific.
 
-**Noise params (defined in the noise filter module, NOT in `layer.rs`):**
+**`gpu/filter.rs` — unified trait and infrastructure:**
 ```rust
-// e.g., in darkly-gpu/src/filters/noise.rs
-pub const FILTER_TYPE: FilterTypeId = "noise";
-
-#[derive(Clone, Debug)]
-pub struct NoiseParams {
-    /// Strength of the noise effect (0.0–1.0).
-    pub amount: f32,
-    /// Size in pixels of each noise "cell". 1 = per-pixel noise,
-    /// 4 = each 4×4 block shares the same noise value (coarser grain).
-    pub resolution: u32,
+/// Shared GPU resources for a filter type (pipeline + bind group layout).
+/// Arc-wrapped so multiple filter instances of the same type share them.
+pub struct FilterPipeline {
+    pub pipeline: wgpu::RenderPipeline,
+    pub bind_group_layout: wgpu::BindGroupLayout,
 }
 
-impl FilterParams for NoiseParams {
-    fn filter_type_id(&self) -> FilterTypeId { FILTER_TYPE }
-    fn clone_boxed(&self) -> Box<dyn FilterParams> { Box::new(self.clone()) }
-    fn as_any(&self) -> &dyn Any { self }
-}
-```
-
-The `FilterParams` trait is defined in `layer.rs` (see Step 3). `layer.rs` has zero knowledge of `NoiseParams` or any other concrete filter type.
-
-**`filter.rs` — filter registry:**
-```rust
-/// Per-filter-type GPU resources + a factory for creating per-instance state.
-/// Implemented by each filter module, registered once at init.
-pub trait FilterHandler: Send + Sync {
-    /// Number of render passes this filter requires (noise = 1).
+/// Unified trait for filters. Each filter is one struct that holds both its
+/// user-facing parameters and an Arc to the shared GPU pipeline.
+pub trait Filter: std::fmt::Debug {
+    fn type_id(&self) -> &'static str;
+    fn clone_boxed(&self) -> Box<dyn Filter>;
     fn pass_count(&self) -> u32;
-    /// The pipeline for this filter's shader.
     fn pipeline(&self) -> &wgpu::RenderPipeline;
-    /// The bind group layout for this filter's shader.
     fn bind_group_layout(&self) -> &wgpu::BindGroupLayout;
-    /// Deserialize filter params from a JS object. Called by the WASM bridge
-    /// so it doesn't need to know concrete param types.
-    fn create_params(&self, js: wasm_bindgen::JsValue) -> Box<dyn FilterParams>;
-    /// Create per-instance GPU state (uniform buffers, bind groups, aux textures)
-    /// for a newly added filter layer. Called once at layer creation (P1).
-    fn create_instance(
-        &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        params: &dyn FilterParams,
-        accum_views: &[wgpu::TextureView; 2],
-        sampler: &wgpu::Sampler,
-        canvas_width: u32,
-        canvas_height: u32,
+    fn create_cache(
+        &self, device: &wgpu::Device, queue: &wgpu::Queue,
+        accum_views: &[wgpu::TextureView; 2], sampler: &wgpu::Sampler,
+        canvas_width: u32, canvas_height: u32,
     ) -> FilterLayerCache;
 }
 
-/// Registry of all available filter pipelines.
-/// Pure infrastructure — maps FilterTypeId to handlers, no per-instance state.
-pub struct FilterRegistry {
-    handlers: HashMap<FilterTypeId, Box<dyn FilterHandler>>,
-}
-
-impl FilterRegistry {
-    pub fn new() -> Self {
-        FilterRegistry { handlers: HashMap::new() }
-    }
-    pub fn register(&mut self, id: FilterTypeId, handler: Box<dyn FilterHandler>);
-    pub fn get(&self, id: FilterTypeId) -> Option<&dyn FilterHandler>;
-}
-```
-
-Registration happens at compositor init — each filter module provides a function that creates its handler:
-```rust
-// In Compositor::new():
-let mut filter_registry = FilterRegistry::new();
-filter_registry.register(
-    noise::FILTER_TYPE,
-    Box::new(noise::NoiseHandler::new(device, format)),
-);
-// Future: filter_registry.register(blur::FILTER_TYPE, ...);
-```
-
-The registry itself has no filter-specific code. Adding a new filter means writing a new module that implements `FilterHandler` and a single `register()` call.
-
-**Per-filter-layer GPU cache (in compositor):**
-
-The compositor manages per-filter-layer cached GPU objects the same way it manages per-raster-layer caches. When a filter layer is added, the compositor calls `handler.create_instance()` which returns a `FilterLayerCache`:
-
-```rust
 /// Cached GPU objects for a filter layer instance (P1).
-struct FilterLayerCache {
-    /// One uniform buffer per pass.
-    uniform_bufs: Vec<wgpu::Buffer>,
-    /// One bind group per pass, per ping-pong direction.
-    /// Indexed as bind_groups[pass_index][ping_pong_src].
-    bind_groups: Vec<[wgpu::BindGroup; 2]>,
-    /// Optional auxiliary textures (e.g., noise texture for noise filter).
-    aux_textures: Vec<wgpu::Texture>,
-    aux_views: Vec<wgpu::TextureView>,
+pub struct FilterLayerCache {
+    pub uniform_bufs: Vec<wgpu::Buffer>,
+    pub bind_groups: Vec<[wgpu::BindGroup; 2]>,
+    pub aux_textures: Vec<wgpu::Texture>,
+    pub aux_views: Vec<wgpu::TextureView>,
+}
+
+/// Lazily-initialized shared pipelines for all filter types. Lives on the Compositor.
+pub struct FilterPipelines {
+    noise: Option<Arc<FilterPipeline>>,
+}
+
+/// Create a filter from a JS type string and params object.
+/// This is the one dispatch point that maps strings to concrete types.
+pub fn create_filter(type_id: &str, js: JsValue, device: &wgpu::Device,
+                     format: wgpu::TextureFormat, pipelines: &mut FilterPipelines)
+                     -> Box<dyn Filter> {
+    match type_id {
+        "noise" => Box::new(noise::Noise::from_js(js, pipelines.noise(device, format))),
+        _ => panic!("Unknown filter type: {type_id}"),
+    }
 }
 ```
 
-This lives in the compositor's cache alongside raster caches, keyed by `LayerId`. The filter registry provides the handler; the handler's `create_instance()` builds instance state. The compositor stores it but never inspects it.
+**Noise filter (`gpu/filters/noise.rs`) — single file, single struct:**
+```rust
+#[derive(Clone, Debug)]
+pub struct Noise {
+    pub amount: f32,
+    pub resolution: u32,
+    shared: Arc<FilterPipeline>,
+}
 
-**Noise texture generation (inside `NoiseHandler::create_instance`):**
+impl Filter for Noise {
+    fn type_id(&self) -> &'static str { "noise" }
+    fn clone_boxed(&self) -> Box<dyn Filter> { Box::new(self.clone()) }
+    fn pass_count(&self) -> u32 { 1 }
+    fn pipeline(&self) -> &wgpu::RenderPipeline { &self.shared.pipeline }
+    fn bind_group_layout(&self) -> &wgpu::BindGroupLayout { &self.shared.bind_group_layout }
+    fn create_cache(&self, device, queue, accum_views, sampler, w, h) -> FilterLayerCache {
+        // Use self.amount, self.resolution directly — no downcast needed.
+        // Creates uniform buffer, noise texture, bind groups.
+    }
+}
 
-When a noise filter layer is created, the handler downcasts `&dyn FilterParams` to `&NoiseParams` via `as_any()`, then:
+/// Create the shared pipeline + bind group layout for noise filters.
+pub fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> FilterPipeline;
+```
+
+Each `Noise` instance holds its own `amount` and `resolution` parameters plus an `Arc` to the shared pipeline. Cloning for undo clones the params and bumps the Arc refcount. No registry lookup, no downcast, no `as_any` boilerplate.
+
+**Noise texture generation (inside `Noise::create_cache`):**
+
+When a noise filter layer is created, `create_cache` uses `self.amount` and `self.resolution` directly (no downcast), then:
 
 1. Computes the noise texture dimensions: `ceil(canvas_width / resolution) × ceil(canvas_height / resolution)`.
-2. Fills with random `u8` values (one channel — luminance noise) using a simple PRNG seeded from the layer ID.
+2. Fills with random `u8` values (one channel — luminance noise) using a simple xorshift PRNG.
 3. Uploads to a `R8Unorm` GPU texture via `queue.write_texture()`.
 4. Stores the texture in the returned `FilterLayerCache::aux_textures`.
 
-The noise texture is static — generated once at layer creation. It does not change per-frame. The shader samples this texture and uses it to modulate the input image. All of this logic lives in the noise module — the compositor just calls `handler.create_instance()` generically.
+The noise texture is static — generated once at layer creation. It does not change per-frame. The shader samples this texture and uses it to modulate the input image.
 
 **Compositor render loop — generic filter dispatch:**
 
 ```rust
-Layer::Filter(filter) => {
-    let type_id = filter.params.filter_type_id();
-    let handler = filter_registry.get(type_id).unwrap();
-    let cache = &filter_layer_cache[&filter.id];
-    for pass in 0..handler.pass_count() {
+Layer::Filter(fl) => {
+    let cache = &filter_cache[&fl.id];
+    for pass in 0..fl.filter.pass_count() {
         let mut rpass = encoder.begin_render_pass(...);
-        rpass.set_pipeline(handler.pipeline());
+        rpass.set_pipeline(fl.filter.pipeline());
         rpass.set_bind_group(0, &cache.bind_groups[pass][current_accum], &[]);
         rpass.draw(0..3, 0..1);
         // ping-pong between accumulators
@@ -693,7 +650,7 @@ Layer::Filter(filter) => {
 }
 ```
 
-No `match` on filter type in the render loop — the registry trait objects and cached bind groups handle dispatch generically. The compositor doesn't know or care what kind of filter it's running.
+No `match` on filter type in the render loop — the `Filter` trait object and cached bind groups handle dispatch generically. The compositor doesn't know or care what kind of filter it's running.
 
 **Noise shader (`filters/noise.wgsl`):**
 
@@ -755,7 +712,7 @@ impl DarklyHandle {
     pub fn render(&mut self);
     pub fn add_raster_layer(&mut self) -> u64;
     /// Accepts a filter type string and a JsValue object of params.
-    /// Delegates to the filter registry to deserialize params generically.
+    /// Delegates to gpu::filter::create_filter() to construct the filter.
     pub fn add_filter_layer(&mut self, filter_type: &str, params: JsValue) -> u64;
     pub fn set_opacity(&mut self, layer_id: u64, opacity: f32);
     pub fn set_blend_mode(&mut self, layer_id: u64, mode: u32);

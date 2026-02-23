@@ -1,17 +1,16 @@
-use crate::atlas::LayerTexture;
-use crate::blend::BlendPipelines;
-use crate::filter::{FilterLayerCache, FilterRegistry};
-use crate::filters::noise;
-use crate::staging::StagingRing;
-use darkly_core::dirty::dirty_pixel_rect;
-use darkly_core::document::Document;
-use darkly_core::tile::TileData;
+use crate::gpu::atlas::LayerTexture;
+use crate::gpu::blend::BlendPipelines;
+use crate::gpu::filter::{FilterLayerCache, FilterPipelines};
+use crate::gpu::staging::StagingRing;
+use crate::dirty::dirty_pixel_rect;
+use crate::document::Document;
+use crate::tile::TileData;
 use std::sync::LazyLock;
 
 /// Blank (fully transparent) tile data uploaded when a tile has been removed
 /// from the grid (e.g. by undo) but the GPU texture still has stale data.
 static BLANK_TILE: LazyLock<TileData> = LazyLock::new(TileData::default);
-use darkly_core::layer::{BlendMode, Layer, LayerId};
+use crate::layer::{BlendMode, Layer, LayerId};
 use std::collections::HashMap;
 
 /// Timing helpers — compile to no-ops unless `cfg(feature = "profile")`.
@@ -77,7 +76,7 @@ pub struct Compositor {
     filter_cache: HashMap<LayerId, FilterLayerCache>,
 
     blend_pipelines: BlendPipelines,
-    filter_registry: FilterRegistry,
+    filter_pipelines: FilterPipelines,
 
     present_pipeline: wgpu::RenderPipeline,
     /// Present bind group that reads from composite_cache directly.
@@ -102,7 +101,7 @@ impl Compositor {
         width: u32,
         height: u32,
     ) -> Self {
-        use darkly_core::tile::TILE_SIZE;
+        use crate::tile::TILE_SIZE;
 
         // Pad accumulator dimensions to tile boundaries so they match layer
         // textures exactly. The composite shader samples both with the same
@@ -152,12 +151,7 @@ impl Compositor {
 
         let blend_pipelines = BlendPipelines::new(device, accum_format);
 
-        // Filter registry — register all filter types
-        let mut filter_registry = FilterRegistry::new();
-        filter_registry.register(
-            noise::FILTER_TYPE,
-            Box::new(noise::NoiseHandler::new(device, accum_format)),
-        );
+        let filter_pipelines = FilterPipelines::new();
 
         // Present pipeline: blit accumulator to surface
         let present_bind_group_layout =
@@ -193,7 +187,7 @@ impl Compositor {
         let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("present-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../shaders/present.wgsl").into(),
+                include_str!("../../../../shaders/present.wgsl").into(),
             ),
         });
 
@@ -255,7 +249,7 @@ impl Compositor {
             raster_cache: HashMap::new(),
             filter_cache: HashMap::new(),
             blend_pipelines,
-            filter_registry,
+            filter_pipelines,
             present_pipeline,
             present_cache_bind_group,
             staging,
@@ -362,22 +356,15 @@ impl Compositor {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layer_id: LayerId,
-        params: &dyn darkly_core::layer::FilterParams,
+        filter: &dyn crate::gpu::filter::Filter,
     ) {
         if self.filter_cache.contains_key(&layer_id) {
             return;
         }
 
-        let type_id = params.filter_type_id();
-        let handler = self
-            .filter_registry
-            .get(type_id)
-            .unwrap_or_else(|| panic!("Unknown filter type: {type_id}"));
-
-        let cache = handler.create_instance(
+        let cache = filter.create_cache(
             device,
             queue,
-            params,
             &self.accum_views,
             &self.sampler,
             self.canvas_width,
@@ -418,9 +405,13 @@ impl Compositor {
         }
     }
 
-    /// Access the filter registry for param creation.
-    pub fn filter_registry(&self) -> &FilterRegistry {
-        &self.filter_registry
+    /// Access filter pipelines for creating new filter instances.
+    pub fn filter_pipelines_mut(&mut self) -> &mut FilterPipelines {
+        &mut self.filter_pipelines
+    }
+
+    pub fn accum_format(&self) -> wgpu::TextureFormat {
+        wgpu::TextureFormat::Rgba8Unorm
     }
 
     /// Upload dirty tiles and composite changed layers (no surface present).
@@ -592,13 +583,8 @@ impl Compositor {
                         rpass.draw(0..3, 0..1);
                     }
                 }
-                Layer::Filter(filter) => {
-                    let type_id = filter.params.filter_type_id();
-                    let handler = match self.filter_registry.get(type_id) {
-                        Some(h) => h,
-                        None => continue,
-                    };
-                    let cache = match self.filter_cache.get(&filter.id) {
+                Layer::Filter(fl) => {
+                    let cache = match self.filter_cache.get(&fl.id) {
                         Some(c) => c,
                         None => continue,
                     };
@@ -632,11 +618,11 @@ impl Compositor {
                         self.current_accum = 0;
                     }
 
-                    for pass in 0..handler.pass_count() as usize {
+                    for pass in 0..fl.filter.pass_count() as usize {
                         let src = self.current_accum;
                         let dst = 1 - src;
 
-                        let is_last_pass = pass == handler.pass_count() as usize - 1;
+                        let is_last_pass = pass == fl.filter.pass_count() as usize - 1;
                         let dst_view = if is_last_layer && is_last_pass {
                             wrote_to_cache = true;
                             &self.composite_cache_view
@@ -661,7 +647,7 @@ impl Compositor {
                                     ..Default::default()
                                 });
                             rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-                            rpass.set_pipeline(handler.pipeline());
+                            rpass.set_pipeline(fl.filter.pipeline());
                             rpass.set_bind_group(0, &cache.bind_groups[pass][src], &[]);
                             rpass.draw(0..3, 0..1);
                         }
@@ -944,13 +930,8 @@ impl Compositor {
                         rpass.draw(0..3, 0..1);
                     }
                 }
-                Layer::Filter(filter) => {
-                    let type_id = filter.params.filter_type_id();
-                    let handler = match self.filter_registry.get(type_id) {
-                        Some(h) => h,
-                        None => continue,
-                    };
-                    let cache = match self.filter_cache.get(&filter.id) {
+                Layer::Filter(fl) => {
+                    let cache = match self.filter_cache.get(&fl.id) {
                         Some(c) => c,
                         None => continue,
                     };
@@ -987,11 +968,11 @@ impl Compositor {
                         self.current_accum = 0;
                     }
 
-                    for pass in 0..handler.pass_count() as usize {
+                    for pass in 0..fl.filter.pass_count() as usize {
                         let src = self.current_accum;
                         let dst = 1 - src;
 
-                        let is_last_pass = pass == handler.pass_count() as usize - 1;
+                        let is_last_pass = pass == fl.filter.pass_count() as usize - 1;
                         let dst_view = if is_last_layer && is_last_pass {
                             // Last pass of last layer: render directly to cache.
                             wrote_to_cache = true;
@@ -1017,7 +998,7 @@ impl Compositor {
                                     ..Default::default()
                                 });
                             rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-                            rpass.set_pipeline(handler.pipeline());
+                            rpass.set_pipeline(fl.filter.pipeline());
                             rpass.set_bind_group(0, &cache.bind_groups[pass][src], &[]);
                             rpass.draw(0..3, 0..1);
                         }

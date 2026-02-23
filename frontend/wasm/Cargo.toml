@@ -7,11 +7,10 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [features]
-profile = ["darkly-gpu/profile"]
+profile = ["darkly/profile"]
 
 [dependencies]
-darkly-core = { workspace = true }
-darkly-gpu = { workspace = true }
+darkly = { workspace = true }
 wgpu = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }

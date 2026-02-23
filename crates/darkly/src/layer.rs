@@ -1,5 +1,5 @@
+use crate::gpu::filter::Filter;
 use crate::tile::TileGrid;
-use std::any::Any;
 
 pub type LayerId = u64;
 
@@ -24,19 +24,6 @@ impl BlendMode {
     }
 }
 
-/// String identifier for a filter type (e.g., "noise", "blur").
-/// Each filter module defines its own constant. The layer system
-/// never interprets this — it's an opaque key for the filter registry.
-pub type FilterTypeId = &'static str;
-
-/// Trait for filter parameters. Implemented by each filter module.
-/// The layer system only sees this trait — never concrete param types.
-pub trait FilterParams: std::fmt::Debug + Send + Sync {
-    fn filter_type_id(&self) -> FilterTypeId;
-    fn clone_boxed(&self) -> Box<dyn FilterParams>;
-    fn as_any(&self) -> &dyn Any;
-}
-
 pub struct RasterLayer {
     pub id: LayerId,
     pub tiles: TileGrid,
@@ -59,7 +46,7 @@ impl RasterLayer {
 
 pub struct FilterLayer {
     pub id: LayerId,
-    pub params: Box<dyn FilterParams>,
+    pub filter: Box<dyn Filter>,
     pub visible: bool,
 }
 

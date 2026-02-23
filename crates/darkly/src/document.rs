@@ -37,11 +37,11 @@ impl Document {
         id
     }
 
-    pub fn add_filter_layer(&mut self, params: Box<dyn FilterParams>) -> LayerId {
+    pub fn add_filter_layer(&mut self, filter: Box<dyn crate::gpu::filter::Filter>) -> LayerId {
         let id = self.alloc_id();
         let layer = FilterLayer {
             id,
-            params,
+            filter,
             visible: true,
         };
         self.layers.push(Layer::Filter(layer));

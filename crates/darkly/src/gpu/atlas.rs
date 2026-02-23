@@ -1,4 +1,4 @@
-use darkly_core::tile::TILE_SIZE;
+use crate::tile::TILE_SIZE;
 
 /// GPU-side texture storage for a single raster layer.
 /// One Rgba8Unorm texture per layer, sized to canvas dimensions padded to tile boundary.

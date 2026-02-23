@@ -1,15 +1,13 @@
 [workspace]
 members = [
-    "crates/darkly-core",
-    "crates/darkly-gpu",
+    "crates/darkly",
     "frontend/wasm",
 ]
 resolver = "2"
 
 [workspace.dependencies]
 # Local crates
-darkly-core = { path = "crates/darkly-core" }
-darkly-gpu = { path = "crates/darkly-gpu" }
+darkly = { path = "crates/darkly" }
 
 # GPU
 wgpu = { version = "27.0", features = ["webgpu"] }

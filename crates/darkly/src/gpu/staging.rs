@@ -1,4 +1,4 @@
-use darkly_core::tile::{TILE_SIZE, TileData};
+use crate::tile::{TILE_SIZE, TileData};
 
 /// Handles CPU→GPU tile uploads via queue.write_texture.
 pub struct StagingRing;

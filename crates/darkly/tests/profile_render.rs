@@ -1,14 +1,14 @@
 //! Headless profiling test for the compositor render pipeline.
 //!
-//! Run with: cargo test -p darkly-gpu --test profile_render -- --nocapture
+//! Run with: cargo test -p darkly --test profile_render -- --nocapture
 //!
 //! This exercises the full pipeline (paint → dirty → upload → composite → submit)
 //! on native wgpu (software backend) and prints per-phase timing.
 
-use darkly_core::document::Document;
-use darkly_core::layer::{FilterParams, Layer};
-use darkly_gpu::compositor::Compositor;
-use darkly_gpu::filters::noise::NoiseParams;
+use darkly::document::Document;
+use darkly::layer::Layer;
+use darkly::gpu::compositor::Compositor;
+use darkly::gpu::filters::noise::Noise;
 use std::time::Instant;
 
 /// Request a headless wgpu device (no window, no surface).
@@ -104,13 +104,12 @@ fn profile_render_pipeline() {
     compositor.ensure_raster_layer(&device, &queue, bg_id);
     doc.fill_gradient(bg_id);
 
-    let noise_params = NoiseParams {
-        amount: 0.3,
-        resolution: 2,
-    };
-    let noise_id = doc.add_filter_layer(noise_params.clone_boxed());
+    let accum_format = compositor.accum_format();
+    let noise_pipeline = compositor.filter_pipelines_mut().noise(&device, accum_format);
+    let noise = Noise::new(0.3, 2, noise_pipeline);
+    let noise_id = doc.add_filter_layer(Box::new(noise));
     if let Some(Layer::Filter(f)) = doc.layer(noise_id) {
-        compositor.ensure_filter_layer(&device, &queue, noise_id, f.params.as_ref());
+        compositor.ensure_filter_layer(&device, &queue, noise_id, f.filter.as_ref());
     }
 
     let paint_id = doc.add_raster_layer();
