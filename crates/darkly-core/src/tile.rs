@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub const TILE_SIZE: usize = 64;
@@ -70,16 +70,51 @@ impl Tile {
     }
 }
 
+/// A sparse record of tile states captured before modification during a transaction.
+/// Only stores the first pre-write state per tile — subsequent writes to the same
+/// tile within the same transaction are ignored (the memento already has the original).
+#[derive(Clone)]
+pub struct Memento {
+    /// Old tile data for tiles that existed before the write.
+    /// `None` value means the tile did not exist (was created during this transaction).
+    tiles: HashMap<(i32, i32), Option<Arc<TileData>>>,
+}
+
+impl Memento {
+    pub fn new() -> Self {
+        Memento {
+            tiles: HashMap::new(),
+        }
+    }
+
+    /// The set of tile coordinates affected by this memento.
+    pub fn affected_tiles(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        self.tiles.keys().copied()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.tiles.is_empty()
+    }
+}
+
 /// Sparse tile grid. Key = (tile_x, tile_y) in tile coordinates.
+///
+/// When a transaction is active (via `begin_transaction`), the grid automatically
+/// captures pre-write tile state into a `Memento` whenever a tile is accessed for
+/// writing. This is the Krita-style recording hook: paint operations are completely
+/// unaware of undo — the grid intercepts writes transparently.
 #[derive(Clone)]
 pub struct TileGrid {
     tiles: HashMap<(i32, i32), Tile>,
+    /// Active recording memento. When `Some`, tile writes are recorded.
+    recording: Option<Memento>,
 }
 
 impl TileGrid {
     pub fn new() -> Self {
         TileGrid {
             tiles: HashMap::new(),
+            recording: None,
         }
     }
 
@@ -87,14 +122,86 @@ impl TileGrid {
         self.tiles.get(&(tx, ty))
     }
 
-    /// Get a tile, creating an empty one if it doesn't exist.
+    /// Get a tile for writing, creating an empty one if it doesn't exist.
+    /// If a transaction is active, the pre-write state is automatically recorded.
     pub fn get_or_create(&mut self, tx: i32, ty: i32) -> &mut Tile {
+        if let Some(ref mut memento) = self.recording {
+            let key = (tx, ty);
+            // Only record the first access per tile per transaction.
+            memento.tiles.entry(key).or_insert_with(|| {
+                // Capture the old state: Some(arc) if tile existed, None if new.
+                self.tiles.get(&key).map(|t| Arc::clone(&t.data))
+            });
+        }
         self.tiles.entry((tx, ty)).or_insert_with(Tile::empty)
     }
 
-    /// Snapshot the entire grid — cheap because tiles use Arc.
-    pub fn snapshot(&self) -> TileGrid {
-        self.clone()
+    /// Start recording tile changes. Panics if a transaction is already active.
+    pub fn begin_transaction(&mut self) {
+        assert!(
+            self.recording.is_none(),
+            "begin_transaction called while a transaction is already active"
+        );
+        self.recording = Some(Memento::new());
+    }
+
+    /// Finish recording and return the memento of changed tiles.
+    /// Returns `None` if no tiles were written during the transaction.
+    pub fn commit_transaction(&mut self) -> Option<Memento> {
+        let memento = self.recording.take().expect(
+            "commit_transaction called without an active transaction",
+        );
+        if memento.is_empty() {
+            None
+        } else {
+            Some(memento)
+        }
+    }
+
+    /// Discard the active transaction without producing a memento.
+    pub fn rollback_transaction(&mut self) {
+        self.recording = None;
+    }
+
+    /// Returns true if a transaction is currently active.
+    pub fn is_recording(&self) -> bool {
+        self.recording.is_some()
+    }
+
+    /// Apply a memento in reverse: restore old tile states and return a forward
+    /// memento that can redo the operation. Also returns the set of tile coords
+    /// that were affected (for dirty marking).
+    pub fn rollback(&mut self, memento: &Memento) -> (Memento, HashSet<(i32, i32)>) {
+        let mut forward = Memento::new();
+        let mut affected = HashSet::new();
+
+        for (&key, old_data) in &memento.tiles {
+            // Capture current state for the forward (redo) memento.
+            let current = self.tiles.get(&key).map(|t| Arc::clone(&t.data));
+            forward.tiles.insert(key, current);
+
+            // Restore old state.
+            match old_data {
+                Some(arc) => {
+                    // Tile existed before — restore it.
+                    self.tiles.insert(key, Tile { data: Arc::clone(arc) });
+                }
+                None => {
+                    // Tile didn't exist before — remove it.
+                    self.tiles.remove(&key);
+                }
+            }
+            affected.insert(key);
+        }
+
+        (forward, affected)
+    }
+
+    /// Apply a forward memento (redo). Same mechanics as rollback but using
+    /// the forward memento produced by a previous rollback.
+    pub fn rollforward(&mut self, memento: &Memento) -> (Memento, HashSet<(i32, i32)>) {
+        // Structurally identical to rollback — the memento format is symmetric.
+        self.rollback(memento)
     }
 
     /// Convert pixel coordinates to tile coordinates.
@@ -168,13 +275,68 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_is_cow() {
+    fn transaction_records_changed_tiles() {
+        let mut grid = TileGrid::new();
+        // Pre-existing tile.
+        grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[1, 2, 3, 4]);
+
+        grid.begin_transaction();
+        // Modify existing tile.
+        grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[10, 20, 30, 40]);
+        // Create new tile.
+        grid.get_or_create(1, 0).write().pixel_mut(0, 0).copy_from_slice(&[50, 60, 70, 80]);
+
+        let memento = grid.commit_transaction().unwrap();
+        let affected: HashSet<_> = memento.affected_tiles().collect();
+        assert!(affected.contains(&(0, 0)));
+        assert!(affected.contains(&(1, 0)));
+        assert_eq!(affected.len(), 2);
+    }
+
+    #[test]
+    fn transaction_only_records_first_write() {
         let mut grid = TileGrid::new();
         grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[1, 2, 3, 4]);
-        let snap = grid.snapshot();
-        // Modify original — snapshot should be unaffected
-        grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[5, 6, 7, 8]);
-        assert_eq!(snap.get(0, 0).unwrap().data().pixel(0, 0), &[1, 2, 3, 4]);
-        assert_eq!(grid.get(0, 0).unwrap().data().pixel(0, 0), &[5, 6, 7, 8]);
+
+        grid.begin_transaction();
+        // Write twice to the same tile.
+        grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[10, 20, 30, 40]);
+        grid.get_or_create(0, 0).write().pixel_mut(1, 0).copy_from_slice(&[99, 99, 99, 99]);
+        let memento = grid.commit_transaction().unwrap();
+
+        // Rollback should restore to state before the transaction (original pixel).
+        let (_, _) = grid.rollback(&memento);
+        assert_eq!(grid.get(0, 0).unwrap().data().pixel(0, 0), &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn rollback_restores_old_state() {
+        let mut grid = TileGrid::new();
+        grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[1, 2, 3, 4]);
+
+        grid.begin_transaction();
+        grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[10, 20, 30, 40]);
+        grid.get_or_create(1, 0).write().pixel_mut(0, 0).copy_from_slice(&[50, 60, 70, 80]);
+        let memento = grid.commit_transaction().unwrap();
+
+        let (forward, affected) = grid.rollback(&memento);
+        // Old tile restored.
+        assert_eq!(grid.get(0, 0).unwrap().data().pixel(0, 0), &[1, 2, 3, 4]);
+        // New tile removed.
+        assert!(grid.get(1, 0).is_none());
+        assert_eq!(affected.len(), 2);
+
+        // Rollforward (redo) brings the changes back.
+        let (_, _) = grid.rollforward(&forward);
+        assert_eq!(grid.get(0, 0).unwrap().data().pixel(0, 0), &[10, 20, 30, 40]);
+        assert_eq!(grid.get(1, 0).unwrap().data().pixel(0, 0), &[50, 60, 70, 80]);
+    }
+
+    #[test]
+    fn empty_transaction_returns_none() {
+        let mut grid = TileGrid::new();
+        grid.begin_transaction();
+        // No writes.
+        assert!(grid.commit_transaction().is_none());
     }
 }

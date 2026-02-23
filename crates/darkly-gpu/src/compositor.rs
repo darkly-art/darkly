@@ -5,6 +5,12 @@ use crate::filters::noise;
 use crate::staging::StagingRing;
 use darkly_core::dirty::dirty_pixel_rect;
 use darkly_core::document::Document;
+use darkly_core::tile::TileData;
+use std::sync::LazyLock;
+
+/// Blank (fully transparent) tile data uploaded when a tile has been removed
+/// from the grid (e.g. by undo) but the GPU texture still has stale data.
+static BLANK_TILE: LazyLock<TileData> = LazyLock::new(TileData::default);
 use darkly_core::layer::{BlendMode, Layer, LayerId};
 use std::collections::HashMap;
 
@@ -386,20 +392,11 @@ impl Compositor {
         self.needs_composite = true;
     }
 
-    /// Invalidate the composite cache from the given layer index upward.
-    fn invalidate_cache_from(&mut self, layer_index: usize) {
-        match self.cache_valid_through {
-            Some(valid) if valid >= layer_index => {
-                // Cache is only valid through below the dirty layer
-                self.cache_valid_through = if layer_index > 0 {
-                    Some(layer_index - 1)
-                } else {
-                    None
-                };
-            }
-            None => {} // Already fully invalid
-            _ => {}    // Cache is valid below the dirty layer, fine
-        }
+    /// Invalidate the composite cache.
+    /// There is only one cache texture which stores the full composite of all
+    /// layers, so any dirty layer means the entire cache is stale.
+    fn invalidate_cache_from(&mut self, _layer_index: usize) {
+        self.cache_valid_through = None;
     }
 
     /// Update a raster layer's uniforms (called when opacity or blend mode changes).
@@ -459,15 +456,22 @@ impl Compositor {
                         if tx < 0 || ty < 0 {
                             continue;
                         }
-                        if let Some(tile) = raster.tiles.get(tx, ty) {
-                            self.staging.upload_tile(
-                                queue,
-                                tile.data(),
-                                &layer_tex.texture,
-                                tx as u32,
-                                ty as u32,
-                            );
+                        if tx as u32 >= layer_tex.width_in_tiles
+                            || ty as u32 >= layer_tex.height_in_tiles
+                        {
+                            continue;
                         }
+                        let tile_data = match raster.tiles.get(tx, ty) {
+                            Some(tile) => tile.data(),
+                            None => &BLANK_TILE,
+                        };
+                        self.staging.upload_tile(
+                            queue,
+                            tile_data,
+                            &layer_tex.texture,
+                            tx as u32,
+                            ty as u32,
+                        );
                     }
 
                     if let Some(idx) = doc.layer_index(raster.id) {
@@ -746,15 +750,24 @@ impl Compositor {
                         if tx < 0 || ty < 0 {
                             continue;
                         }
-                        if let Some(tile) = raster.tiles.get(tx, ty) {
-                            self.staging.upload_tile(
-                                queue,
-                                tile.data(),
-                                &layer_tex.texture,
-                                tx as u32,
-                                ty as u32,
-                            );
+                        if tx as u32 >= layer_tex.width_in_tiles
+                            || ty as u32 >= layer_tex.height_in_tiles
+                        {
+                            continue;
                         }
+                        let tile_data = match raster.tiles.get(tx, ty) {
+                            Some(tile) => tile.data(),
+                            // Tile was removed (e.g. by undo) — upload blank to
+                            // clear the stale GPU data.
+                            None => &BLANK_TILE,
+                        };
+                        self.staging.upload_tile(
+                            queue,
+                            tile_data,
+                            &layer_tex.texture,
+                            tx as u32,
+                            ty as u32,
+                        );
                     }
 
                     // Note the lowest dirty layer for cache invalidation

@@ -118,14 +118,13 @@ Both are required. Skipping layers without scissoring still processes every pixe
 **Why this matters:** When the user paints a 24px brush dab on the top layer of a 1920×1080 canvas, the dirty rect is ~128×64 pixels (2 tiles). Instead of processing 2,073,600 pixels across every layer, the compositor processes ~8,192 pixels across 1 layer. On software wgpu (no hardware GPU), this is the difference between ~56 MB/frame and ~32 KB/frame of CPU pixel processing — a ~1700× reduction.
 
 **Cache invalidation:**
-- Tile upload to layer N → invalidate from layer N upward
-- Layer property change (opacity, blend mode) → invalidate from that layer upward
-- Layer added/removed/reordered → invalidate entirely
+
+There is one cache texture storing the full composite of all layers. Any dirty layer means full invalidation (`cache_valid_through = None`). Partial invalidation would require per-layer intermediate textures (Phase 2).
+
+- Tile upload / undo / redo → full invalidation
+- Layer property change (opacity, blend mode) → full invalidation
+- Layer added/removed/reordered → full invalidation
 - Canvas resize → recreate the texture
-
-Filter layers propagate naturally — if a layer below a filter changes, the cache is invalidated from that layer, so the filter re-runs. If only a layer above the filter changes, the filter result is preserved in the cache.
-
-*(Reference: Krita's projection system — each layer has a cached `projection()`. Layers below the dirty one are tagged `N_BELOW_FILTHY` and skip recalculation entirely, using the cached result. Krita composites only dirty rects tile-by-tile on CPU; the GPU equivalent is scissor-rect clipping.)*
 
 ---
 
@@ -190,16 +189,29 @@ impl Tile {
 }
 
 /// Sparse tile grid. Key = (tile_x, tile_y) in tile coordinates.
+/// Sparse tile grid with built-in transaction recording for undo.
+/// When a transaction is active, `get_or_create()` transparently captures
+/// pre-write tile state into a `Memento`. Paint tools never know about undo.
 pub struct TileGrid {
-    pub tiles: HashMap<(i32, i32), Tile>,
+    tiles: HashMap<(i32, i32), Tile>,
+    recording: Option<Memento>,  // active transaction
 }
 
 impl TileGrid {
     pub fn new() -> Self;
     pub fn get(&self, tx: i32, ty: i32) -> Option<&Tile>;
     pub fn get_or_create(&mut self, tx: i32, ty: i32) -> &mut Tile;
-    pub fn snapshot(&self) -> TileGrid; // Clone — just Arc increments
-    pub fn tile_coords_for_pixel(x: u32, y: u32) -> (i32, i32);
+    pub fn begin_transaction(&mut self);               // start recording
+    pub fn commit_transaction(&mut self) -> Option<Memento>; // stop, return diff
+    pub fn rollback(&mut self, memento: &Memento) -> (Memento, HashSet<(i32,i32)>);
+    pub fn rollforward(&mut self, memento: &Memento) -> (Memento, HashSet<(i32,i32)>);
+    pub fn tile_coords_for_pixel(x: i32, y: i32) -> (i32, i32);
+}
+
+/// Sparse record of pre-write tile states. Only stores the first access
+/// per tile per transaction. `None` = tile was newly created (didn't exist before).
+pub struct Memento {
+    tiles: HashMap<(i32, i32), Option<Arc<TileData>>>,
 }
 ```
 
@@ -280,30 +292,45 @@ impl Document {
     pub fn fill_gradient(&mut self, layer_id: LayerId); // demo helper
     pub fn layer(&self, id: LayerId) -> Option<&Layer>;
     pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer>;
+    pub fn layer_index(&self, id: LayerId) -> Option<usize>;
+    pub fn begin_transaction(&mut self, layer_id: LayerId);
+    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<UndoStep>;
 }
 ```
 
 `paint_circle`: iterates tiles touched by the circle's bounding box, calls `tile.write()` on each, sets pixels within radius, marks tiles dirty.
 
-**`undo.rs`:**
+**`undo.rs` — Krita-style tile memento undo:**
+
+The undo system uses sparse tile mementos, NOT full grid clones. Recording is driven by the frontend (mousedown → `begin_transaction`, mouseup → `commit_transaction`), but paint tools are completely unaware — `TileGrid::get_or_create()` transparently captures pre-write state during an active transaction.
+
 ```rust
-pub struct UndoSnapshot {
-    pub tiles: HashMap<LayerId, TileGrid>,  // COW clones
+pub struct UndoStep {
+    mementos: HashMap<LayerId, Memento>,  // sparse diffs, not full clones
 }
 
 pub struct UndoStack {
-    snapshots: Vec<UndoSnapshot>,
-    cursor: usize,
+    undo_steps: Vec<UndoStep>,
+    redo_steps: Vec<RedoStep>,
+    max_steps: usize,
 }
 
 impl UndoStack {
-    pub fn push(&mut self, doc: &Document);  // snapshot all layer TileGrids
-    pub fn undo(&mut self, doc: &mut Document);
-    pub fn redo(&mut self, doc: &mut Document);
+    pub fn push(&mut self, step: UndoStep);  // clears redo history
+    pub fn undo(&mut self, doc: &mut Document) -> Option<HashMap<LayerId, HashSet<(i32,i32)>>>;
+    pub fn redo(&mut self, doc: &mut Document) -> Option<HashMap<LayerId, HashSet<(i32,i32)>>>;
 }
+
+/// Mark affected tiles dirty so the compositor re-uploads them.
+pub fn mark_affected_dirty(dirty: &mut HashMap<LayerId, DirtyRegion>,
+                           affected: &HashMap<LayerId, HashSet<(i32, i32)>>);
 ```
 
-**Verification:** Unit tests — create document, paint, verify dirty tracking, undo/redo.
+`rollback()` and `rollforward()` are symmetric — both swap tile `Arc` pointers and produce the inverse memento for the opposite direction.
+
+**Critical:** `rollback()` may **remove tiles** from the grid (when the memento says `None` — tile didn't exist before the stroke). The GPU compositor must handle this; see Step 6 pitfalls.
+
+**Verification:** Unit tests — create document, paint, verify dirty tracking, undo/redo. Must include a test for semi-transparent dab on empty layer: undo must make the tile blank (not just change alpha).
 
 ---
 
@@ -456,6 +483,8 @@ impl Compositor {
 
 **Render pipeline per frame:**
 1. Upload dirty tiles for each dirty raster layer via staging ring → layer texture. If any tiles were uploaded, note the lowest dirty layer index and set `needs_composite = true`.
+   - **Pitfall — removed tiles:** Undo can remove tiles from the grid (tile didn't exist before the stroke). When a dirty tile coordinate has no tile in the grid, upload a static blank (transparent) `TileData` to clear stale GPU data. Without this, undone strokes remain visible on the GPU texture.
+   - **Pitfall — out-of-bounds tiles:** Painting near canvas edges creates tiles at coordinates beyond the GPU texture dimensions. Skip tiles where `tx >= layer_tex.width_in_tiles` or `ty >= layer_tex.height_in_tiles` to avoid WebGPU write-out-of-bounds errors.
 2. **Dirty gate (P2):** if `!needs_composite`, return immediately (no surface acquisition, no GPU work).
 3. **Compute dirty bounding rect (P3):** Union all `DirtyRegion::bounding_rect()` across dirty layers into a single pixel-coordinate rect, expanded to tile boundaries. This is the scissor rect for all compositing passes.
 4. **Composite cache (P3):** if `cache_valid_through` is set and >= 0, start compositing from `cache_valid_through + 1` instead of layer 0. The first blend pass reads from the cached composite texture (via a pre-built bind group) instead of a cleared accumulator.
@@ -730,15 +759,19 @@ impl DarklyHandle {
     pub fn add_filter_layer(&mut self, filter_type: &str, params: JsValue) -> u64;
     pub fn set_opacity(&mut self, layer_id: u64, opacity: f32);
     pub fn set_blend_mode(&mut self, layer_id: u64, mode: u32);
-    pub fn undo(&mut self);
-    pub fn redo(&mut self);
-    pub fn snapshot(&mut self); // push undo snapshot
+    pub fn snapshot(&mut self, layer_id: u64); // begin_transaction (called on mousedown)
+    pub fn commit(&mut self);                 // commit_transaction + push undo (called on mouseup)
+    pub fn undo(&mut self);                   // rollback + mark dirty + mark_dirty()
+    pub fn redo(&mut self);                   // rollforward + mark dirty + mark_dirty()
 }
 ```
 
 **`frontend/src/App.svelte`:**
 - On mount: call `initEditor(canvas)` from `editor.ts`
-- Mouse move with button down → `handle.paint(activeLayerId, x, y, brushRadius, ...color)`
+- `mousedown` → `handle.snapshot(paintLayerId)` then `handle.paint(...)` (begins transaction)
+- `mousemove` with button down → `handle.paint(...)` (recording happens transparently)
+- `mouseup` → `handle.commit()` (ends transaction, pushes to undo stack)
+- `keydown` Ctrl+Z → `handle.undo()`, Ctrl+Shift+Z → `handle.redo()`
 - `requestAnimationFrame` loop → `handle.render()` (compositor handles dirty gate internally per P2 — idle frames are near-free)
 - On mount after init: hardcode demo setup:
   ```ts

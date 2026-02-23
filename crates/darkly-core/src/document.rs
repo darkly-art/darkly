@@ -1,6 +1,7 @@
 use crate::dirty::DirtyRegion;
 use crate::layer::*;
 use crate::tile::{TILE_SIZE, TileGrid};
+use crate::undo::UndoStep;
 use std::collections::HashMap;
 
 pub struct Document {
@@ -146,6 +147,25 @@ impl Document {
                 }
             }
         }
+    }
+
+    /// Begin recording tile changes on a raster layer for undo.
+    pub fn begin_transaction(&mut self, layer_id: LayerId) {
+        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
+            r.tiles.begin_transaction();
+        }
+    }
+
+    /// Commit the active transaction and return an UndoStep if any tiles changed.
+    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<UndoStep> {
+        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
+            if let Some(memento) = r.tiles.commit_transaction() {
+                let mut mementos = HashMap::new();
+                mementos.insert(layer_id, memento);
+                return Some(UndoStep::new(mementos));
+            }
+        }
+        None
     }
 
     /// Fill a raster layer with a horizontal gradient (demo helper).
