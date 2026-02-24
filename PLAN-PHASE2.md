@@ -341,12 +341,19 @@ export const PROJECT_DEFAULTS: ProjectConfig = {
 
 // ─── User config (global, persists across documents) ───
 
+export interface NavModifiers {
+    /** Key code held to enter navigation mode (e.g. 'Space') */
+    trigger: string;
+    /** Modifier key for rotate while trigger is held (e.g. 'Shift') */
+    rotate: 'Shift' | 'Ctrl' | 'Alt';
+    /** Modifier key for zoom while trigger is held (e.g. 'Ctrl') */
+    zoom: 'Shift' | 'Ctrl' | 'Alt';
+}
+
 export interface HotkeyMap {
     // Canvas navigation (modifier+drag combos handled by navigation state machine,
-    // not tinykeys — but listed here for preset customization)
-    panModifier: string;
-    rotateModifier: string;
-    zoomModifier: string;
+    // not tinykeys)
+    nav: NavModifiers;
 
     // Color
     resetColors: string;
@@ -402,9 +409,11 @@ export const USER_DEFAULTS: UserConfig = {
         rightSidebarWidth: 260,
     },
     hotkeys: {
-        panModifier: 'Space',
-        rotateModifier: 'Shift+Space',
-        zoomModifier: 'Ctrl+Space',
+        nav: {
+            trigger: 'Space',
+            rotate: 'Shift',
+            zoom: 'Ctrl',
+        },
         resetColors: 'KeyD',
         swapColors: 'KeyX',
         undo: '$mod+KeyZ',
@@ -881,18 +890,20 @@ pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> Vec<f32> {
 
 ### Step 4: Canvas navigation state machine
 
-Handle Space+drag (pan), Shift+Space+drag (rotate), Ctrl+Space+drag (zoom) as a proper state machine in the frontend.
+Handle Space+drag (pan), Shift+Space+drag (rotate), Ctrl+Space+drag (zoom) as a proper state machine in the frontend. The trigger key and modifier keys are read from `user.resolved.hotkeys.nav` so presets can remap them.
 
 **`frontend/src/canvas/navigation.svelte.ts`:**
 
 See `frontend/src/canvas/navigation.svelte.ts` for the implementation. Key design decisions:
 
+- **Config-driven modifiers.** The navigation state machine reads `hotkeys.nav.trigger` for the held key (default `'Space'`), `hotkeys.nav.zoom` for the zoom modifier (default `'Ctrl'`), and `hotkeys.nav.rotate` for the rotate modifier (default `'Shift'`). A single `hasModifier(e, mod)` helper maps the config string to `e.ctrlKey`/`e.shiftKey`/`e.altKey`. No string parsing needed — the schema types the modifiers as `'Shift' | 'Ctrl' | 'Alt'`.
 - **Rotation is Krita-style angular**, not linear pixel mapping. On pointer down, the angle from the canvas center to the cursor is measured with `atan2()`. On move, the new angle is measured and the rotation delta is the difference. This feels like physically grabbing and spinning the canvas.
 - **Rotation pivot must account for pan.** The view transform rotates around the canvas center, which appears on screen at `element_center + pan`. The angular rotation gesture must measure angles from this same point — `rect.left + rect.width/2 + panX`, not just `rect.left + rect.width/2`. Using the raw element center causes the rotation pivot to drift after panning.
 - **Zoom uses vertical drag** (dy), not horizontal. Drag up = zoom out, drag down = zoom in. Exponential scaling (`Math.pow(2, -dy / 150)`).
 - **Pan is straightforward** 1:1 CSS pixel mapping of dx/dy.
 - **`onPointerDown` accepts the canvas element** so rotation can compute the canvas center for the angular measurement.
-- **Scroll zoom is cursor-centered**: adjusts pan so the point under the cursor stays fixed after zoom.
+- **Scroll zoom is cursor-centered**: adjusts pan so the point under the cursor stays fixed after zoom. The scroll handler checks `hasModifier(e, nav.zoom)` (Ctrl by default).
+- **Mode-aware cursor.** A reactive `cursor` getter on `NavigationState` returns the appropriate CSS cursor: `grab` (space held, ready to pan), `grabbing` (panning), `zoom-in` (zooming), and a custom SVG data URI with circular arrows for rotation. Default is `crosshair`. The canvas binds it via `style:cursor={nav.cursor}`.
 
 **`frontend/src/canvas/CanvasView.svelte`:**
 
@@ -900,8 +911,11 @@ The current `App.svelte` canvas+mouse logic moves here. Pointer event flow:
 
 1. Navigation state machine gets first chance (`nav.onPointerDown(e)`)
 2. If navigation consumed the event, skip tool dispatch
-3. Otherwise, transform screen coords → canvas coords via `handle.screen_to_canvas()`
-4. Dispatch to active tool's `onPointerDown(ctx, e, canvasX, canvasY)`
+3. Otherwise, `setPointerCapture(e.pointerId)` so the stroke continues even if the cursor leaves the element
+4. Transform screen coords → canvas coords via `handle.screen_to_canvas()`
+5. Dispatch to active tool's `onPointerDown(ctx, e, canvasX, canvasY)`
+
+**Initial fit-to-view:** After initialization, compute a zoom that fits the document in the viewport without scaling up: `Math.min(canvas.width / DOC_WIDTH, canvas.height / DOC_HEIGHT, 1)`. This ensures the full canvas is visible on load regardless of document aspect ratio.
 
 View transform is updated on every `$effect` that watches `app.panX`, `app.panY`, `app.zoom`, `app.rotation`. Pan values (CSS pixels) are scaled by `devicePixelRatio` to buffer space:
 
@@ -927,7 +941,7 @@ function cssToBuffer(cssLocalX: number, cssLocalY: number) {
 }
 ```
 
-**Verification:** Space+drag pans the canvas. Shift+Space+drag rotates. Ctrl+Space+drag zooms. Ctrl+scroll zooms. Painting still works correctly after transform.
+**Verification:** Canvas fits the viewport on load (scaled down for large documents, never scaled up). Space+drag pans. Shift+Space+drag rotates. Ctrl+Space+drag zooms. Ctrl+scroll zooms. All navigation keys respect config (changing preset changes navigation bindings). Painting still works correctly after transform.
 
 ---
 
@@ -1569,7 +1583,7 @@ Refactor `App.svelte` from a monolithic canvas component into a three-column lay
 | 1 | Config system: project/user split, presets, reactive stores, hotkeys | Both stores resolve; presets swap user config; localStorage persists |
 | 2 | AppState singleton | Colors, active tool, view state reactive |
 | 3 | View transform (Rust + shader) | `set_view_transform()` pans/zooms/rotates the canvas |
-| 4 | Navigation state machine | Space+drag pans, Shift+Space rotates, Ctrl+Space zooms |
+| 4 | Navigation state machine + fit-to-view | Canvas fits viewport on load; Space+drag pans, Shift+Space rotates, Ctrl+Space zooms; nav keys read from config |
 | 5a | Rust: `ToolOp` trait + `tools/` self-contained modules + build.rs registry | Each tool op applies correctly; unit tests for each op |
 | 5b | WASM: stroke lifecycle (begin/stroke_to/end) | Stroke → undo transaction; round-trips from TS work |
 | 5c | TS: 5 tool gesture interpreters | Brush/eraser/fill/gradient/picker respond to pointer events |
@@ -1614,30 +1628,6 @@ fn set_layer_name(&mut self, layer_id: u64, name: &str);
 fn set_layer_visible(&mut self, layer_id: u64, visible: bool);
 fn set_group_collapsed(&mut self, group_id: u64, collapsed: bool);
 ```
-
-## Lessons Learned (Implementation Notes)
-
-### Viewport should be dynamic, not hardcoded
-
-The original plan hardcoded the canvas buffer and GPU surface to a fixed 1920×1080 resolution, with `object-fit: contain` CSS scaling the element to fit. This created a widescreen viewport that didn't fill the window, required letterbox offset math in coordinate transforms, and meant the GPU was rendering at a fixed resolution regardless of the actual display.
-
-**Fix:** Size the canvas buffer to match its CSS layout at `devicePixelRatio`. Use a `ResizeObserver` to call `handle.resize()` when the element size changes. The GPU surface config in `context.rs` reads `canvas.width()`/`canvas.height()` from the element instead of hardcoded values. This eliminates all letterboxing math and makes the viewport fill its container.
-
-**Key detail:** In `context.rs`, the canvas element is moved into `SurfaceTarget::Canvas(canvas)`, so you must read `canvas.width()`/`canvas.height()` *before* the move.
-
-### Rotation should be angular (Krita-style), not linear
-
-The original plan used a linear mapping: horizontal pixels dragged → rotation angle. This feels disconnected — the canvas doesn't follow your hand.
-
-**Fix (from Krita's `kis_rotate_canvas_action.cpp`):** Use `atan2()` to measure the angle from the canvas center to the cursor at drag start and on each move. The rotation is the angular difference. This feels like physically grabbing and spinning the canvas. The center point is computed from the canvas element's bounding rect on pointer down.
-
-### Zoom and rotate should use vertical axis
-
-Both zoom (Ctrl+Space+drag) and rotate (Shift+Space+drag) originally used horizontal drag (dx). Vertical drag (dy) is more natural for both — it matches the "scrub up/down" convention used in most creative tools.
-
-### Painting should use pointer capture, not pointerleave
-
-The original plan used `onpointerleave` to end strokes when the cursor left the canvas. This means any accidental slip off the edge kills your stroke. Using `setPointerCapture(e.pointerId)` on pointer down tells the browser to keep delivering events to the canvas until the button is released, regardless of cursor position.
 
 ## Key Reference Files
 

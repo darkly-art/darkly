@@ -25,12 +25,19 @@ export const PROJECT_DEFAULTS: ProjectConfig = {
 
 // --- User config (global, persists across documents) ---
 
+export interface NavModifiers {
+    /** Key code held to enter navigation mode (e.g. 'Space') */
+    trigger: string;
+    /** Modifier key for rotate while trigger is held (e.g. 'Shift') */
+    rotate: 'Shift' | 'Ctrl' | 'Alt';
+    /** Modifier key for zoom while trigger is held (e.g. 'Ctrl') */
+    zoom: 'Shift' | 'Ctrl' | 'Alt';
+}
+
 export interface HotkeyMap {
     // Canvas navigation (modifier+drag combos handled by navigation state machine,
-    // not tinykeys -- but listed here for preset customization)
-    panModifier: string;
-    rotateModifier: string;
-    zoomModifier: string;
+    // not tinykeys)
+    nav: NavModifiers;
 
     // Color
     resetColors: string;
@@ -86,9 +93,11 @@ export const USER_DEFAULTS: UserConfig = {
         rightSidebarWidth: 260,
     },
     hotkeys: {
-        panModifier: 'Space',
-        rotateModifier: 'Shift+Space',
-        zoomModifier: 'Ctrl+Space',
+        nav: {
+            trigger: 'Space',
+            rotate: 'Shift',
+            zoom: 'Ctrl',
+        },
         resetColors: 'KeyD',
         swapColors: 'KeyX',
         undo: '$mod+KeyZ',

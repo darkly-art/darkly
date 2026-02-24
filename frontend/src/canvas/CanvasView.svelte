@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { initEditor } from '../editor';
+    import { initEditor, DOC_WIDTH, DOC_HEIGHT } from '../editor';
     import { app } from '../state/app.svelte';
     import { nav } from './navigation.svelte';
     import { toolRegistry } from '../tools/registry';
@@ -43,6 +43,11 @@
             // Observe element resizes to keep GPU surface in sync
             const ro = new ResizeObserver(() => syncCanvasSize());
             ro.observe(canvas);
+
+            // Fit canvas to view: scale down if needed, but never scale up
+            const dprRect = { w: canvas.width, h: canvas.height };
+            const fitZoom = Math.min(dprRect.w / DOC_WIDTH, dprRect.h / DOC_HEIGHT, 1);
+            app.zoom = fitZoom;
 
             // Start render loop
             requestAnimationFrame(renderLoop);
@@ -153,6 +158,7 @@
 <div class="canvas-container">
     <canvas
         bind:this={canvas}
+        style:cursor={nav.cursor}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
@@ -176,6 +182,5 @@
         width: 100%;
         height: 100%;
         object-fit: contain;
-        cursor: crosshair;
     }
 </style>

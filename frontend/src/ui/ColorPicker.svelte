@@ -138,7 +138,7 @@
     }
 </script>
 
-<div class="color-picker" onclick={(e: MouseEvent) => e.stopPropagation()} onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') onclose(); }} role="dialog">
+<div class="color-picker" onclick={(e: MouseEvent) => e.stopPropagation()} onkeydown={(e: KeyboardEvent) => { if (e.key === 'Escape') onclose(); }} role="dialog" tabindex="-1">
     <div class="picker-body">
         <canvas
             bind:this={svCanvas}
