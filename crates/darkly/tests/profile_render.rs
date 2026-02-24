@@ -105,7 +105,7 @@ fn profile_render_pipeline() {
     doc.fill_gradient(bg_id);
 
     let accum_format = compositor.accum_format();
-    let noise_pipeline = compositor.filter_pipelines_mut().noise(&device, accum_format);
+    let noise_pipeline = compositor.filter_registry_mut().pipeline("noise", &device, accum_format);
     let noise = Noise::new(0.3, 2, noise_pipeline);
     let noise_id = doc.add_filter_layer(Box::new(noise));
     if let Some(Layer::Filter(f)) = doc.layer(noise_id) {

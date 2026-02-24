@@ -1,7 +1,16 @@
-use crate::gpu::filter::{Filter, FilterLayerCache, FilterPipeline};
+use crate::gpu::filter::{Filter, FilterLayerCache, FilterPipeline, FilterRegistration};
 use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
+
+pub fn register() -> FilterRegistration {
+    FilterRegistration {
+        type_id: "noise",
+        create_pipeline,
+        #[cfg(target_arch = "wasm32")]
+        from_js: |js, shared| Box::new(Noise::from_js(js, shared)),
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Noise {

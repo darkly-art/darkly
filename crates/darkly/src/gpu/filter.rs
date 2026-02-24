@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
@@ -47,43 +48,80 @@ pub trait Filter: std::fmt::Debug {
     ) -> FilterLayerCache;
 }
 
-/// Create a filter from a JS type string and params object.
-/// This is the one dispatch point that maps strings to concrete types.
-#[cfg(target_arch = "wasm32")]
-pub fn create_filter(
-    type_id: &str,
-    js: JsValue,
-    device: &wgpu::Device,
-    format: wgpu::TextureFormat,
-    pipelines: &mut FilterPipelines,
-) -> Box<dyn Filter> {
-    use super::filters::noise;
-    match type_id {
-        "noise" => Box::new(noise::Noise::from_js(js, pipelines.noise(device, format))),
-        _ => panic!("Unknown filter type: {type_id}"),
-    }
+/// What each filter module returns from its `register()` function.
+/// Contains everything needed to create instances of that filter type.
+pub struct FilterRegistration {
+    pub type_id: &'static str,
+    pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> FilterPipeline,
+    #[cfg(target_arch = "wasm32")]
+    pub from_js: fn(JsValue, Arc<FilterPipeline>) -> Box<dyn Filter>,
 }
 
-/// Lazily-initialized shared pipelines for all filter types.
-/// Lives on the Compositor.
-pub struct FilterPipelines {
-    noise: Option<Arc<FilterPipeline>>,
+/// Auto-discovered filter registry with lazy pipeline caching.
+/// Built from the generated `filters::registrations()` at construction time.
+/// Pipelines are only created when a filter of that type is first used.
+pub struct FilterRegistry {
+    entries: HashMap<&'static str, RegistryEntry>,
 }
 
-impl FilterPipelines {
+struct RegistryEntry {
+    create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> FilterPipeline,
+    #[cfg(target_arch = "wasm32")]
+    from_js: fn(JsValue, Arc<FilterPipeline>) -> Box<dyn Filter>,
+    cached_pipeline: Option<Arc<FilterPipeline>>,
+}
+
+impl FilterRegistry {
     pub fn new() -> Self {
-        FilterPipelines { noise: None }
+        let mut entries = HashMap::new();
+        for reg in super::filters::registrations() {
+            entries.insert(
+                reg.type_id,
+                RegistryEntry {
+                    create_pipeline: reg.create_pipeline,
+                    #[cfg(target_arch = "wasm32")]
+                    from_js: reg.from_js,
+                    cached_pipeline: None,
+                },
+            );
+        }
+        FilterRegistry { entries }
     }
 
-    pub fn noise(
+    /// Get or create the shared pipeline for a filter type.
+    pub fn pipeline(
         &mut self,
+        type_id: &str,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
     ) -> Arc<FilterPipeline> {
-        self.noise
-            .get_or_insert_with(|| {
-                Arc::new(super::filters::noise::create_pipeline(device, format))
-            })
+        let entry = self
+            .entries
+            .get_mut(type_id)
+            .unwrap_or_else(|| panic!("Unknown filter type: {type_id}"));
+        entry
+            .cached_pipeline
+            .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
             .clone()
+    }
+
+    /// Create a filter instance from a JS type string and params object.
+    #[cfg(target_arch = "wasm32")]
+    pub fn create_filter(
+        &mut self,
+        type_id: &str,
+        js: JsValue,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+    ) -> Box<dyn Filter> {
+        let entry = self
+            .entries
+            .get_mut(type_id)
+            .unwrap_or_else(|| panic!("Unknown filter type: {type_id}"));
+        let pipeline = entry
+            .cached_pipeline
+            .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
+            .clone();
+        (entry.from_js)(js, pipeline)
     }
 }

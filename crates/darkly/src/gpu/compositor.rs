@@ -1,6 +1,6 @@
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
-use crate::gpu::filter::{FilterLayerCache, FilterPipelines};
+use crate::gpu::filter::{FilterLayerCache, FilterRegistry};
 use crate::gpu::staging::StagingRing;
 use crate::dirty::dirty_pixel_rect;
 use crate::document::Document;
@@ -76,7 +76,7 @@ pub struct Compositor {
     filter_cache: HashMap<LayerId, FilterLayerCache>,
 
     blend_pipelines: BlendPipelines,
-    filter_pipelines: FilterPipelines,
+    filter_registry: FilterRegistry,
 
     present_pipeline: wgpu::RenderPipeline,
     /// Present bind group that reads from composite_cache directly.
@@ -151,7 +151,7 @@ impl Compositor {
 
         let blend_pipelines = BlendPipelines::new(device, accum_format);
 
-        let filter_pipelines = FilterPipelines::new();
+        let filter_registry = FilterRegistry::new();
 
         // Present pipeline: blit accumulator to surface
         let present_bind_group_layout =
@@ -249,7 +249,7 @@ impl Compositor {
             raster_cache: HashMap::new(),
             filter_cache: HashMap::new(),
             blend_pipelines,
-            filter_pipelines,
+            filter_registry,
             present_pipeline,
             present_cache_bind_group,
             staging,
@@ -405,9 +405,9 @@ impl Compositor {
         }
     }
 
-    /// Access filter pipelines for creating new filter instances.
-    pub fn filter_pipelines_mut(&mut self) -> &mut FilterPipelines {
-        &mut self.filter_pipelines
+    /// Access filter registry for creating new filter instances.
+    pub fn filter_registry_mut(&mut self) -> &mut FilterRegistry {
+        &mut self.filter_registry
     }
 
     pub fn accum_format(&self) -> wgpu::TextureFormat {

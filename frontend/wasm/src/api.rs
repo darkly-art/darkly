@@ -48,12 +48,11 @@ impl DarklyHandle {
     /// `params` is a JS object with filter-specific parameters.
     pub fn add_filter_layer(&mut self, filter_type: &str, params: JsValue) -> u64 {
         let format = self.compositor.accum_format();
-        let filter = darkly::gpu::filter::create_filter(
+        let filter = self.compositor.filter_registry_mut().create_filter(
             filter_type,
             params,
             &self.gpu.device,
             format,
-            self.compositor.filter_pipelines_mut(),
         );
 
         let id = self.doc.add_filter_layer(filter.clone_boxed());
