@@ -9,7 +9,7 @@ Phase 1 established the core engine: tiled raster layers, GPU compositing with d
 **Phase 2 scope:**
 - Left sidebar: color picker + tool buttons
 - Right sidebar: layer panel with groups, reordering via drag-and-drop
-- Canvas navigation: pan (Space+drag), rotate (Shift+Space+drag), zoom (Ctrl+Space+drag)
+- Canvas navigation: pan (two-finger scroll or Space+drag), rotate (Shift+Space+drag), zoom (ctrl+scroll or Ctrl+Space+drag)
 - Modular tool system with per-tool configuration (brush, fill, gradient, eraser, color picker)
 - Configuration system with presets (Krita default, Photoshop, GIMP hotkey mappings)
 - Layer groups with passthrough compositing mode
