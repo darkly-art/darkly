@@ -53,11 +53,12 @@ class NavigationState {
         this.startRotation = app.rotation;
         this.startZoom = app.zoom;
 
-        // For Krita-style angular rotation: measure angle from canvas center
+        // For Krita-style angular rotation: measure angle from the on-screen
+        // position of the canvas center, which is element-center + pan.
         if (this.mode === 'rotate' && canvasEl) {
             const rect = canvasEl.getBoundingClientRect();
-            this.centerX = rect.left + rect.width / 2;
-            this.centerY = rect.top + rect.height / 2;
+            this.centerX = rect.left + rect.width / 2 + app.panX;
+            this.centerY = rect.top + rect.height / 2 + app.panY;
             this.startAngle = Math.atan2(
                 e.clientY - this.centerY,
                 e.clientX - this.centerX,

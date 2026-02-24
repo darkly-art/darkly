@@ -854,7 +854,7 @@ pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> Vec<f32> {
 }
 ```
 
-**Coordinate space note:** The present shader operates in buffer-pixel space (e.g. 1920×1080), while browser mouse events are in CSS-pixel space. The `set_view_transform` call must receive `screen_w`/`screen_h` as the **buffer** dimensions (`CANVAS_WIDTH`/`CANVAS_HEIGHT`), not `canvas.clientWidth`/`clientHeight`. Pan values stored in CSS pixels must be scaled by `1/displayScale` before passing to the GPU, where `displayScale = min(clientWidth/CANVAS_WIDTH, clientHeight/CANVAS_HEIGHT)`. Similarly, `screen_to_canvas` expects buffer-pixel coordinates, so CSS-local mouse positions must be converted through a `cssToBuffer` helper that accounts for `object-fit:contain` letterbox offsets.
+**Coordinate space note:** The canvas buffer is sized to match its CSS layout at `devicePixelRatio` (not a fixed resolution like 1920×1080). A `ResizeObserver` keeps the buffer and GPU surface in sync with the element size via `handle.resize()`. The `set_view_transform` call receives `canvas.width`/`canvas.height` (the actual buffer dimensions). Pan values stored in CSS pixels are scaled by `devicePixelRatio` before passing to the GPU. The `cssToBuffer` helper simply multiplies by DPR — no letterbox offset math needed since the buffer matches the element 1:1.
 
 **Verification:** Call `set_view_transform` with non-identity values. Canvas appears panned/zoomed/rotated. Painting still works correctly (mouse coordinates inverse-transformed). View-only changes (no painting) skip compositing and only re-present.
 
@@ -866,111 +866,13 @@ Handle Space+drag (pan), Shift+Space+drag (rotate), Ctrl+Space+drag (zoom) as a 
 
 **`frontend/src/canvas/navigation.svelte.ts`:**
 
-```typescript
-import { app } from '../state/app.svelte';
+See `frontend/src/canvas/navigation.svelte.ts` for the implementation. Key design decisions:
 
-type NavMode = 'none' | 'pan' | 'rotate' | 'zoom';
-
-class NavigationState {
-    mode = $state<NavMode>('none');
-    private startX = 0;
-    private startY = 0;
-    private startPanX = 0;
-    private startPanY = 0;
-    private startRotation = 0;
-    private startZoom = 0;
-
-    /** Track which modifier keys are currently held */
-    spaceHeld = $state(false);
-
-    get isNavigating(): boolean {
-        return this.mode !== 'none';
-    }
-
-    onKeyDown(e: KeyboardEvent) {
-        if (e.code === 'Space' && !e.repeat) {
-            e.preventDefault();     // prevent page scroll
-            this.spaceHeld = true;
-        }
-    }
-
-    onKeyUp(e: KeyboardEvent) {
-        if (e.code === 'Space') {
-            this.spaceHeld = false;
-            this.mode = 'none';
-        }
-    }
-
-    onPointerDown(e: PointerEvent): boolean {
-        if (!this.spaceHeld) return false;
-
-        if (e.ctrlKey) {
-            this.mode = 'zoom';
-        } else if (e.shiftKey) {
-            this.mode = 'rotate';
-        } else {
-            this.mode = 'pan';
-        }
-
-        this.startX = e.clientX;
-        this.startY = e.clientY;
-        this.startPanX = app.panX;
-        this.startPanY = app.panY;
-        this.startRotation = app.rotation;
-        this.startZoom = app.zoom;
-        return true; // consumed the event — don't dispatch to tool
-    }
-
-    onPointerMove(e: PointerEvent) {
-        if (this.mode === 'none') return;
-
-        const dx = e.clientX - this.startX;
-        const dy = e.clientY - this.startY;
-
-        switch (this.mode) {
-            case 'pan':
-                app.panX = this.startPanX + dx;
-                app.panY = this.startPanY + dy;
-                break;
-            case 'rotate':
-                // Horizontal drag = rotation. 400px drag = full 360°.
-                app.rotation = this.startRotation + (dx / 400) * Math.PI * 2;
-                break;
-            case 'zoom':
-                // Drag right = zoom in, drag left = zoom out. Exponential scaling.
-                app.zoom = this.startZoom * Math.pow(2, dx / 300);
-                break;
-        }
-    }
-
-    onPointerUp() {
-        this.mode = 'none';
-    }
-
-    onWheel(e: WheelEvent, canvasEl: HTMLCanvasElement) {
-        // Pinch-to-zoom / Ctrl+scroll = zoom centered on cursor
-        if (e.ctrlKey) {
-            e.preventDefault();
-            const factor = Math.pow(1.001, -e.deltaY);
-            const newZoom = Math.max(0.01, Math.min(100, app.zoom * factor));
-
-            // Keep the canvas point under the cursor fixed by adjusting pan.
-            const rect = canvasEl.getBoundingClientRect();
-            const cursorX = e.clientX - rect.left;
-            const cursorY = e.clientY - rect.top;
-            const pivotX = rect.width / 2 + app.panX;
-            const pivotY = rect.height / 2 + app.panY;
-            const ratio = 1 - newZoom / app.zoom;
-
-            app.panX += (cursorX - pivotX) * ratio;
-            app.panY += (cursorY - pivotY) * ratio;
-            app.zoom = newZoom;
-        }
-    }
-}
-
-export const nav = new NavigationState();
-```
+- **Rotation is Krita-style angular**, not linear pixel mapping. On pointer down, the angle from the canvas center to the cursor is measured with `atan2()`. On move, the new angle is measured and the rotation delta is the difference. This feels like physically grabbing and spinning the canvas.
+- **Zoom uses vertical drag** (dy), not horizontal. Drag up = zoom out, drag down = zoom in. Exponential scaling (`Math.pow(2, -dy / 150)`).
+- **Pan is straightforward** 1:1 CSS pixel mapping of dx/dy.
+- **`onPointerDown` accepts the canvas element** so rotation can compute the canvas center for the angular measurement.
+- **Scroll zoom is cursor-centered**: adjusts pan so the point under the cursor stays fixed after zoom.
 
 **`frontend/src/canvas/CanvasView.svelte`:**
 
@@ -981,56 +883,27 @@ The current `App.svelte` canvas+mouse logic moves here. Pointer event flow:
 3. Otherwise, transform screen coords → canvas coords via `handle.screen_to_canvas()`
 4. Dispatch to active tool's `onPointerDown(ctx, e, canvasX, canvasY)`
 
-View transform is updated on every `$effect` that watches `app.panX`, `app.panY`, `app.zoom`, `app.rotation`. Pan values (CSS pixels) are scaled to buffer pixels before sending to the GPU:
+View transform is updated on every `$effect` that watches `app.panX`, `app.panY`, `app.zoom`, `app.rotation`. Pan values (CSS pixels) are scaled by `devicePixelRatio` to buffer space:
 
 ```typescript
 $effect(() => {
     if (app.handle && canvas) {
-        const rect = canvas.getBoundingClientRect();
-        const displayScale = Math.min(
-            rect.width / CANVAS_WIDTH,
-            rect.height / CANVAS_HEIGHT,
-        );
+        const dpr = window.devicePixelRatio || 1;
         app.handle.set_view_transform(
-            app.panX / displayScale, app.panY / displayScale,
+            app.panX * dpr, app.panY * dpr,
             app.zoom, app.rotation,
-            CANVAS_WIDTH, CANVAS_HEIGHT,
+            canvas.width, canvas.height,
         );
     }
 });
 ```
 
-A `cssToBuffer` helper converts CSS-local mouse coordinates to buffer-pixel coordinates, accounting for `object-fit:contain` letterbox offsets:
+`cssToBuffer` simply scales by DPR (no letterbox math — the buffer matches the element):
 
 ```typescript
 function cssToBuffer(cssLocalX: number, cssLocalY: number) {
-    const rect = canvas.getBoundingClientRect();
-    const displayScale = Math.min(
-        rect.width / CANVAS_WIDTH,
-        rect.height / CANVAS_HEIGHT,
-    );
-    const renderedW = CANVAS_WIDTH * displayScale;
-    const renderedH = CANVAS_HEIGHT * displayScale;
-    const offsetX = (rect.width - renderedW) / 2;
-    const offsetY = (rect.height - renderedH) / 2;
-    return {
-        x: (cssLocalX - offsetX) / displayScale,
-        y: (cssLocalY - offsetY) / displayScale,
-    };
-}
-```
-
-All `screen_to_canvas` calls go through `cssToBuffer` first:
-
-```typescript
-function getCanvasCoords(e: PointerEvent): { x: number; y: number } {
-    const rect = canvas.getBoundingClientRect();
-    const buf = cssToBuffer(e.clientX - rect.left, e.clientY - rect.top);
-    if (app.handle) {
-        const result = app.handle.screen_to_canvas(buf.x, buf.y);
-        return { x: result[0], y: result[1] };
-    }
-    return { x: buf.x, y: buf.y };
+    const dpr = window.devicePixelRatio || 1;
+    return { x: cssLocalX * dpr, y: cssLocalY * dpr };
 }
 ```
 
@@ -1719,6 +1592,30 @@ fn set_layer_visible(&mut self, layer_id: u64, visible: bool);
 fn set_group_collapsed(&mut self, group_id: u64, collapsed: bool);
 ```
 
+## Lessons Learned (Implementation Notes)
+
+### Viewport should be dynamic, not hardcoded
+
+The original plan hardcoded the canvas buffer and GPU surface to a fixed 1920×1080 resolution, with `object-fit: contain` CSS scaling the element to fit. This created a widescreen viewport that didn't fill the window, required letterbox offset math in coordinate transforms, and meant the GPU was rendering at a fixed resolution regardless of the actual display.
+
+**Fix:** Size the canvas buffer to match its CSS layout at `devicePixelRatio`. Use a `ResizeObserver` to call `handle.resize()` when the element size changes. The GPU surface config in `context.rs` reads `canvas.width()`/`canvas.height()` from the element instead of hardcoded values. This eliminates all letterboxing math and makes the viewport fill its container.
+
+**Key detail:** In `context.rs`, the canvas element is moved into `SurfaceTarget::Canvas(canvas)`, so you must read `canvas.width()`/`canvas.height()` *before* the move.
+
+### Rotation should be angular (Krita-style), not linear
+
+The original plan used a linear mapping: horizontal pixels dragged → rotation angle. This feels disconnected — the canvas doesn't follow your hand.
+
+**Fix (from Krita's `kis_rotate_canvas_action.cpp`):** Use `atan2()` to measure the angle from the canvas center to the cursor at drag start and on each move. The rotation is the angular difference. This feels like physically grabbing and spinning the canvas. The center point is computed from the canvas element's bounding rect on pointer down.
+
+### Zoom and rotate should use vertical axis
+
+Both zoom (Ctrl+Space+drag) and rotate (Shift+Space+drag) originally used horizontal drag (dx). Vertical drag (dy) is more natural for both — it matches the "scrub up/down" convention used in most creative tools.
+
+### Painting should use pointer capture, not pointerleave
+
+The original plan used `onpointerleave` to end strokes when the cursor left the canvas. This means any accidental slip off the edge kills your stroke. Using `setPointerCapture(e.pointerId)` on pointer down tells the browser to keep delivering events to the canvas until the button is released, regardless of cursor position.
+
 ## Key Reference Files
 
 - Krita tool architecture analysis: `KRITA-TOOL-ARCHITECTURE.md`
@@ -1726,3 +1623,4 @@ fn set_group_collapsed(&mut self, group_id: u64, collapsed: bool);
 - Krita input profile (canvas nav): `krita/krita/data/input/kritadefault.profile`
 - Krita tool actions: `krita/plugins/tools/tools.action`
 - Krita main actions: `krita/krita/krita.action`
+- Krita rotation implementation: `krita/libs/ui/input/kis_rotate_canvas_action.cpp`

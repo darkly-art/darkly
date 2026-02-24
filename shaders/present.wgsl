@@ -29,15 +29,17 @@ struct ViewTransform {
     let canvas_x = view.row0.x * screen_pos.x + view.row1.x * screen_pos.y + view.row2.x;
     let canvas_y = view.row0.y * screen_pos.x + view.row1.y * screen_pos.y + view.row2.y;
 
-    let dims = vec2f(textureDimensions(t_source));
-    let uv = vec2f(canvas_x, canvas_y) / dims;
-
-    // Clamp UV to [0,1] for the sample (textureSample requires uniform control flow)
+    // Sample using the padded texture size so texels map 1:1 to canvas pixels.
+    let tex_dims = vec2f(textureDimensions(t_source));
+    let uv = vec2f(canvas_x, canvas_y) / tex_dims;
     let clamped_uv = clamp(uv, vec2f(0.0), vec2f(1.0));
     let color = textureSample(t_source, t_sampler, clamped_uv);
 
-    // Out-of-bounds -> workspace background color
-    let oob = uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
+    // OOB check uses actual canvas dimensions (unpadded) so the tile
+    // padding area shows as workspace background, not black.
+    let canvas_dims = vec2f(view.row0.z, view.row1.z);
+    let oob = canvas_x < 0.0 || canvas_x > canvas_dims.x
+           || canvas_y < 0.0 || canvas_y > canvas_dims.y;
     let bg = vec4f(0.11, 0.11, 0.11, 1.0);
     return select(vec4f(color.rgb, 1.0), bg, oob);
 }

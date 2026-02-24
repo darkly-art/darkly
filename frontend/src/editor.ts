@@ -6,12 +6,15 @@ import { MIN_SIZE, MAX_SIZE, SIZE_STEP } from './tools/brush.svelte';
 
 let initialized = false;
 
+export const DOC_WIDTH = 900;
+export const DOC_HEIGHT = 1600;
+
 export async function initEditor(canvas: HTMLCanvasElement): Promise<DarklyHandle> {
     if (!initialized) {
         await init();
         initialized = true;
     }
-    const handle = await DarklyHandle.create(canvas);
+    const handle = await DarklyHandle.create(canvas, DOC_WIDTH, DOC_HEIGHT);
 
     // Register hotkeys once editor is ready
     initHotkeys();

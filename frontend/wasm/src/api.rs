@@ -21,13 +21,12 @@ pub struct DarklyHandle {
 #[wasm_bindgen]
 impl DarklyHandle {
     /// Create a new Darkly editor instance, initializing GPU and document.
-    pub async fn create(canvas: web_sys::HtmlCanvasElement) -> DarklyHandle {
-        let width = canvas.width();
-        let height = canvas.height();
-
+    /// `doc_width`/`doc_height` set the document (canvas) dimensions;
+    /// the viewport size comes from the HTML canvas element.
+    pub async fn create(canvas: web_sys::HtmlCanvasElement, doc_width: u32, doc_height: u32) -> DarklyHandle {
         let gpu = GpuContext::new(canvas).await;
-        let compositor = Compositor::new(&gpu.device, &gpu.queue, gpu.surface_format(), width, height);
-        let doc = Document::new(width, height);
+        let compositor = Compositor::new(&gpu.device, &gpu.queue, gpu.surface_format(), doc_width, doc_height);
+        let doc = Document::new(doc_width, doc_height);
         let undo_stack = UndoStack::new(50);
 
         DarklyHandle {

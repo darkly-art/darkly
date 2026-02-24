@@ -5,9 +5,9 @@
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ViewTransform {
     /// Inverse view matrix (screen -> canvas), stored as 3 vec4s for std140.
-    /// Row 0: [m00, m01, 0, 0]
-    /// Row 1: [m10, m11, 0, 0]
-    /// Row 2: [tx,  ty,  1, 0]
+    /// Row 0: [m00, m01, canvas_w, 0]
+    /// Row 1: [m10, m11, canvas_h, 0]
+    /// Row 2: [tx,  ty,  1,        0]
     pub matrix: [[f32; 4]; 3],
 }
 
@@ -15,8 +15,8 @@ impl ViewTransform {
     pub fn identity() -> Self {
         ViewTransform {
             matrix: [
-                [1.0, 0.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0, 0.0],
+                [1.0, 0.0, 1.0, 0.0],
+                [0.0, 1.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0, 0.0],
             ],
         }
@@ -55,9 +55,9 @@ impl ViewTransform {
 
         ViewTransform {
             matrix: [
-                [m00, m01, 0.0, 0.0],
-                [m10, m11, 0.0, 0.0],
-                [tx,  ty,  1.0, 0.0],
+                [m00, m01, canvas_w, 0.0],
+                [m10, m11, canvas_h, 0.0],
+                [tx,  ty,  1.0,      0.0],
             ],
         }
     }
