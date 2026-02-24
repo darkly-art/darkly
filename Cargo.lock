@@ -184,6 +184,7 @@ dependencies = [
  "darkly",
  "js-sys",
  "log",
+ "serde",
  "serde-wasm-bindgen",
  "wasm-bindgen",
  "wasm-bindgen-futures",

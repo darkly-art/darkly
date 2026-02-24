@@ -2,6 +2,7 @@ use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
 use crate::gpu::filter::{FilterLayerCache, FilterRegistry};
 use crate::gpu::staging::StagingRing;
+use crate::gpu::view::ViewTransform;
 use crate::dirty::dirty_pixel_rect;
 use crate::document::Document;
 use crate::tile::TileData;
@@ -79,14 +80,19 @@ pub struct Compositor {
     filter_registry: FilterRegistry,
 
     present_pipeline: wgpu::RenderPipeline,
+    _present_bind_group_layout: wgpu::BindGroupLayout,
     /// Present bind group that reads from composite_cache directly.
     present_cache_bind_group: wgpu::BindGroup,
+    /// View transform uniform buffer for the present shader.
+    view_uniform_buf: wgpu::Buffer,
 
     staging: StagingRing,
     sampler: wgpu::Sampler,
 
     /// Dirty gate — false means nothing changed, skip compositing (P2).
     needs_composite: bool,
+    /// When only the view transform changes, skip compositing and only re-present.
+    needs_present: bool,
     /// Track lowest dirty layer index for cache invalidation.
     lowest_dirty_layer: Option<usize>,
 
@@ -97,6 +103,7 @@ pub struct Compositor {
 impl Compositor {
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         width: u32,
         height: u32,
@@ -153,8 +160,18 @@ impl Compositor {
 
         let filter_registry = FilterRegistry::new();
 
+        // View transform uniform buffer (present shader binding 2)
+        let view_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("view-transform-uniform"),
+            size: std::mem::size_of::<ViewTransform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let identity = ViewTransform::identity();
+        queue.write_buffer(&view_uniform_buf, 0, bytemuck::bytes_of(&identity));
+
         // Present pipeline: blit accumulator to surface
-        let present_bind_group_layout =
+        let _present_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("present-bgl"),
                 entries: &[
@@ -174,13 +191,23 @@ impl Compositor {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
         let present_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("present-pipeline-layout"),
-                bind_group_layouts: &[&present_bind_group_layout],
+                bind_group_layouts: &[&_present_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
@@ -223,7 +250,7 @@ impl Compositor {
         // Present bind group that reads from composite cache
         let present_cache_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("present-bg-cache"),
-            layout: &present_bind_group_layout,
+            layout: &_present_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -232,6 +259,10 @@ impl Compositor {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: view_uniform_buf.as_entire_binding(),
                 },
             ],
         });
@@ -251,10 +282,13 @@ impl Compositor {
             blend_pipelines,
             filter_registry,
             present_pipeline,
+            _present_bind_group_layout,
             present_cache_bind_group,
+            view_uniform_buf,
             staging,
             sampler,
             needs_composite: true,
+            needs_present: false,
             lowest_dirty_layer: None,
             canvas_width: width,
             canvas_height: height,
@@ -377,6 +411,17 @@ impl Compositor {
     /// Mark that recompositing is needed.
     pub fn mark_dirty(&mut self) {
         self.needs_composite = true;
+    }
+
+    /// Mark that only the present pass needs to re-run (view transform changed).
+    /// Skips compositing when there are no dirty tiles or layer changes.
+    pub fn mark_needs_present(&mut self) {
+        self.needs_present = true;
+    }
+
+    /// Update the view transform uniform buffer.
+    pub fn update_view_transform(&self, queue: &wgpu::Queue, transform: &ViewTransform) {
+        queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(transform));
     }
 
     /// Invalidate the composite cache.
@@ -709,10 +754,13 @@ impl Compositor {
         // 1. Check if any dirty regions exist before scanning layers.
         let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
 
-        // P2: Dirty gate — if nothing changed and no dirty tiles, skip entirely.
-        // The browser compositor keeps displaying the last presented surface frame;
-        // no surface acquisition, no command encoder, no GPU work at all.
+        // P2: Dirty gate — if nothing changed and no dirty tiles, check view-only present.
         if !self.needs_composite && !has_dirty {
+            if self.needs_present {
+                // View transform changed but no compositing needed — re-present only.
+                self.present_only(device, queue, surface, surface_config);
+                self.needs_present = false;
+            }
             perf::time_end("render-total");
             return;
         }
@@ -1073,6 +1121,55 @@ impl Compositor {
             dirty.clear();
         }
         self.needs_composite = false;
+        self.needs_present = false;
         perf::time_end("render-total");
+    }
+
+    /// Re-present the composite cache to the surface without recompositing.
+    /// Used when only the view transform changed.
+    fn present_only(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        surface: &wgpu::Surface,
+        surface_config: &wgpu::SurfaceConfiguration,
+    ) {
+        let output = match surface.get_current_texture() {
+            Ok(output) => output,
+            Err(wgpu::SurfaceError::Lost) => {
+                surface.configure(device, surface_config);
+                return;
+            }
+            Err(_) => return,
+        };
+        let surface_view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("present-only"),
+        });
+
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("present"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &surface_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_pipeline(&self.present_pipeline);
+            rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        queue.submit(std::iter::once(encoder.finish()));
+        output.present();
     }
 }

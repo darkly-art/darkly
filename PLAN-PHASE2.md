@@ -591,7 +591,7 @@ export const user = new UserStore();
 **`frontend/src/config/hotkeys.svelte.ts` — Hotkey registration:**
 
 ```typescript
-import tinykeys from 'tinykeys';
+import { tinykeys } from 'tinykeys';
 import { user } from './store.svelte';
 
 let cleanup: (() => void) | null = null;
@@ -659,7 +659,7 @@ class AppState {
     activeToolId = $state<string>('brush');
 
     // Active layer
-    activeLayerId = $state<bigint | null>(null);
+    activeLayerId = $state<number | null>(null);
 
     // Tool runtime state — working values adjusted while painting.
     // Serialized with the project so reopening a doc restores tool state.
@@ -816,13 +816,14 @@ struct ViewTransform {
     let dims = vec2f(textureDimensions(t_source));
     let uv = vec2f(canvas_x, canvas_y) / dims;
 
-    // Out-of-bounds → workspace background color
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) {
-        return vec4f(0.11, 0.11, 0.11, 1.0);
-    }
+    // textureSample requires uniform control flow — sample unconditionally with clamped UVs,
+    // then select between canvas color and workspace background.
+    let clamped_uv = clamp(uv, vec2f(0.0), vec2f(1.0));
+    let color = textureSample(t_source, t_sampler, clamped_uv);
 
-    let color = textureSample(t_source, t_sampler, uv);
-    return vec4f(color.rgb, 1.0);
+    let oob = uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
+    let bg = vec4f(0.11, 0.11, 0.11, 1.0);
+    return select(vec4f(color.rgb, 1.0), bg, oob);
 }
 ```
 
@@ -852,6 +853,8 @@ pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> Vec<f32> {
     vec![cx, cy]
 }
 ```
+
+**Coordinate space note:** The present shader operates in buffer-pixel space (e.g. 1920×1080), while browser mouse events are in CSS-pixel space. The `set_view_transform` call must receive `screen_w`/`screen_h` as the **buffer** dimensions (`CANVAS_WIDTH`/`CANVAS_HEIGHT`), not `canvas.clientWidth`/`clientHeight`. Pan values stored in CSS pixels must be scaled by `1/displayScale` before passing to the GPU, where `displayScale = min(clientWidth/CANVAS_WIDTH, clientHeight/CANVAS_HEIGHT)`. Similarly, `screen_to_canvas` expects buffer-pixel coordinates, so CSS-local mouse positions must be converted through a `cssToBuffer` helper that accounts for `object-fit:contain` letterbox offsets.
 
 **Verification:** Call `set_view_transform` with non-identity values. Canvas appears panned/zoomed/rotated. Painting still works correctly (mouse coordinates inverse-transformed). View-only changes (no painting) skip compositing and only re-present.
 
@@ -944,12 +947,24 @@ class NavigationState {
         this.mode = 'none';
     }
 
-    onWheel(e: WheelEvent) {
-        // Pinch-to-zoom / Ctrl+scroll = zoom
+    onWheel(e: WheelEvent, canvasEl: HTMLCanvasElement) {
+        // Pinch-to-zoom / Ctrl+scroll = zoom centered on cursor
         if (e.ctrlKey) {
             e.preventDefault();
             const factor = Math.pow(1.001, -e.deltaY);
-            app.zoom = Math.max(0.01, Math.min(100, app.zoom * factor));
+            const newZoom = Math.max(0.01, Math.min(100, app.zoom * factor));
+
+            // Keep the canvas point under the cursor fixed by adjusting pan.
+            const rect = canvasEl.getBoundingClientRect();
+            const cursorX = e.clientX - rect.left;
+            const cursorY = e.clientY - rect.top;
+            const pivotX = rect.width / 2 + app.panX;
+            const pivotY = rect.height / 2 + app.panY;
+            const ratio = 1 - newZoom / app.zoom;
+
+            app.panX += (cursorX - pivotX) * ratio;
+            app.panY += (cursorY - pivotY) * ratio;
+            app.zoom = newZoom;
         }
     }
 }
@@ -966,17 +981,57 @@ The current `App.svelte` canvas+mouse logic moves here. Pointer event flow:
 3. Otherwise, transform screen coords → canvas coords via `handle.screen_to_canvas()`
 4. Dispatch to active tool's `onPointerDown(ctx, e, canvasX, canvasY)`
 
-View transform is updated on every `$effect` that watches `app.panX`, `app.panY`, `app.zoom`, `app.rotation`:
+View transform is updated on every `$effect` that watches `app.panX`, `app.panY`, `app.zoom`, `app.rotation`. Pan values (CSS pixels) are scaled to buffer pixels before sending to the GPU:
 
 ```typescript
 $effect(() => {
-    if (app.handle) {
+    if (app.handle && canvas) {
+        const rect = canvas.getBoundingClientRect();
+        const displayScale = Math.min(
+            rect.width / CANVAS_WIDTH,
+            rect.height / CANVAS_HEIGHT,
+        );
         app.handle.set_view_transform(
-            app.panX, app.panY, app.zoom, app.rotation,
-            canvas.width, canvas.height
+            app.panX / displayScale, app.panY / displayScale,
+            app.zoom, app.rotation,
+            CANVAS_WIDTH, CANVAS_HEIGHT,
         );
     }
 });
+```
+
+A `cssToBuffer` helper converts CSS-local mouse coordinates to buffer-pixel coordinates, accounting for `object-fit:contain` letterbox offsets:
+
+```typescript
+function cssToBuffer(cssLocalX: number, cssLocalY: number) {
+    const rect = canvas.getBoundingClientRect();
+    const displayScale = Math.min(
+        rect.width / CANVAS_WIDTH,
+        rect.height / CANVAS_HEIGHT,
+    );
+    const renderedW = CANVAS_WIDTH * displayScale;
+    const renderedH = CANVAS_HEIGHT * displayScale;
+    const offsetX = (rect.width - renderedW) / 2;
+    const offsetY = (rect.height - renderedH) / 2;
+    return {
+        x: (cssLocalX - offsetX) / displayScale,
+        y: (cssLocalY - offsetY) / displayScale,
+    };
+}
+```
+
+All `screen_to_canvas` calls go through `cssToBuffer` first:
+
+```typescript
+function getCanvasCoords(e: PointerEvent): { x: number; y: number } {
+    const rect = canvas.getBoundingClientRect();
+    const buf = cssToBuffer(e.clientX - rect.left, e.clientY - rect.top);
+    if (app.handle) {
+        const result = app.handle.screen_to_canvas(buf.x, buf.y);
+        return { x: result[0], y: result[1] };
+    }
+    return { x: buf.x, y: buf.y };
+}
 ```
 
 **Verification:** Space+drag pans the canvas. Shift+Space+drag rotates. Ctrl+Space+drag zooms. Ctrl+scroll zooms. Painting still works correctly after transform.
@@ -1221,7 +1276,8 @@ export const brushTool: Tool = {
         const layerId = app.activeLayerId;
         if (!layerId) return;
 
-        ctx.handle.begin_stroke(layerId);
+        // wasm-bindgen maps Rust u64 to JS BigInt — convert at the WASM boundary
+        ctx.handle.begin_stroke(BigInt(layerId));
 
         const c = app.foreground;
         const alpha = Math.round(c.a * app.brushOpacity);

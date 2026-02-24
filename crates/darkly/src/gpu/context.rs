@@ -7,6 +7,9 @@ pub struct GpuContext {
 
 impl GpuContext {
     pub async fn new(canvas: web_sys::HtmlCanvasElement) -> Self {
+        let initial_width = canvas.width();
+        let initial_height = canvas.height();
+
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..Default::default()
@@ -48,8 +51,8 @@ impl GpuContext {
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width: 1920,
-            height: 1080,
+            width: initial_width,
+            height: initial_height,
             present_mode: wgpu::PresentMode::Fifo,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],

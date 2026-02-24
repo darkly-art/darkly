@@ -26,6 +26,7 @@ impl BlendMode {
 
 pub struct RasterLayer {
     pub id: LayerId,
+    pub name: String,
     pub tiles: TileGrid,
     pub opacity: f32,
     pub blend_mode: BlendMode,
@@ -36,6 +37,7 @@ impl RasterLayer {
     pub fn new(id: LayerId) -> Self {
         RasterLayer {
             id,
+            name: format!("Layer {id}"),
             tiles: TileGrid::new(),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
@@ -48,6 +50,54 @@ pub struct FilterLayer {
     pub id: LayerId,
     pub filter: Box<dyn Filter>,
     pub visible: bool,
+}
+
+pub struct LayerGroup {
+    pub id: LayerId,
+    pub name: String,
+    pub children: Vec<LayerNode>,
+    pub opacity: f32,
+    pub blend_mode: BlendMode,
+    pub visible: bool,
+    pub passthrough: bool,  // true = passthrough (default), false = normal group
+    pub collapsed: bool,    // UI state: whether the group is visually collapsed
+}
+
+impl LayerGroup {
+    pub fn new(id: LayerId) -> Self {
+        LayerGroup {
+            id,
+            name: format!("Group {id}"),
+            children: Vec::new(),
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal,
+            visible: true,
+            passthrough: true,
+            collapsed: false,
+        }
+    }
+}
+
+/// A node in the layer tree. Either a leaf layer or a group containing children.
+pub enum LayerNode {
+    Layer(Layer),
+    Group(LayerGroup),
+}
+
+impl LayerNode {
+    pub fn id(&self) -> LayerId {
+        match self {
+            LayerNode::Layer(l) => l.id(),
+            LayerNode::Group(g) => g.id,
+        }
+    }
+
+    pub fn visible(&self) -> bool {
+        match self {
+            LayerNode::Layer(l) => l.visible(),
+            LayerNode::Group(g) => g.visible,
+        }
+    }
 }
 
 pub enum Layer {

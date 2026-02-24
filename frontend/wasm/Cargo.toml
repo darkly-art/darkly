@@ -15,6 +15,7 @@ wgpu = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 serde-wasm-bindgen = { workspace = true }
+serde = { workspace = true }
 js-sys = { workspace = true }
 web-sys = { workspace = true }
 log = { workspace = true }
