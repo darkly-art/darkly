@@ -706,9 +706,12 @@ Add a view transform to the present pipeline so the canvas can be panned, zoomed
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ViewTransform {
     /// Inverse view matrix (screen → canvas), stored as 3 vec4s for std140.
-    /// Row 0: [m00, m01, 0, 0]
-    /// Row 1: [m10, m11, 0, 0]
-    /// Row 2: [tx,  ty,  1, 0]
+    /// The third element of rows 0 and 1 carries the unpadded canvas
+    /// dimensions — the present shader needs these for its OOB check
+    /// (see "tile-padded textures" note below).
+    /// Row 0: [m00, m01, canvas_w, 0]
+    /// Row 1: [m10, m11, canvas_h, 0]
+    /// Row 2: [tx,  ty,  1,        0]
     pub matrix: [[f32; 4]; 3],
 }
 
@@ -756,9 +759,9 @@ impl ViewTransform {
 
         ViewTransform {
             matrix: [
-                [m00, m01, 0.0, 0.0],
-                [m10, m11, 0.0, 0.0],
-                [tx,  ty,  1.0, 0.0],
+                [m00, m01, canvas_w, 0.0],
+                [m10, m11, canvas_h, 0.0],
+                [tx,  ty,  1.0,      0.0],
             ],
         }
     }
@@ -782,6 +785,8 @@ Add a `view_uniform_buf: wgpu::Buffer` created once in `Compositor::new()`. The 
 When only the view transform changes (no dirty tiles, no layer property changes), the compositor should skip offscreen compositing and only re-run the present pass. Add a `needs_present: bool` flag separate from `needs_composite`. The `update_view_transform` method sets `needs_present = true` without setting `needs_composite`. The render loop checks: if `!needs_composite && needs_present`, skip all tile upload and compositing, and only run the present pass from the existing `composite_cache`.
 
 **Updated `shaders/present.wgsl`:**
+
+**Tile-padded textures vs canvas dimensions:** Layer textures and accum buffers are padded to tile boundaries (e.g. a 900px-wide canvas becomes a 960px texture at TILE_SIZE=64). The present shader must handle two different "sizes": the padded texture size for UV sampling (so texels map 1:1 to canvas pixels), and the actual canvas dimensions for the OOB check (so the padding area shows workspace background, not black). The canvas dimensions are packed into the ViewTransform uniform (row0.z = canvas_w, row1.z = canvas_h). Using `textureDimensions()` alone for both would show a black bar in the padding region; using canvas dims alone for both would stretch the image.
 
 ```wgsl
 struct VertexOutput {
@@ -813,15 +818,17 @@ struct ViewTransform {
     let canvas_x = view.row0.x * screen_pos.x + view.row1.x * screen_pos.y + view.row2.x;
     let canvas_y = view.row0.y * screen_pos.x + view.row1.y * screen_pos.y + view.row2.y;
 
-    let dims = vec2f(textureDimensions(t_source));
-    let uv = vec2f(canvas_x, canvas_y) / dims;
-
-    // textureSample requires uniform control flow — sample unconditionally with clamped UVs,
-    // then select between canvas color and workspace background.
+    // Sample using the padded texture size so texels map 1:1 to canvas pixels.
+    let tex_dims = vec2f(textureDimensions(t_source));
+    let uv = vec2f(canvas_x, canvas_y) / tex_dims;
     let clamped_uv = clamp(uv, vec2f(0.0), vec2f(1.0));
     let color = textureSample(t_source, t_sampler, clamped_uv);
 
-    let oob = uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0;
+    // OOB check uses actual canvas dimensions (unpadded) so the tile
+    // padding area shows as workspace background, not black.
+    let canvas_dims = vec2f(view.row0.z, view.row1.z);
+    let oob = canvas_x < 0.0 || canvas_x > canvas_dims.x
+           || canvas_y < 0.0 || canvas_y > canvas_dims.y;
     let bg = vec4f(0.11, 0.11, 0.11, 1.0);
     return select(vec4f(color.rgb, 1.0), bg, oob);
 }
@@ -829,7 +836,19 @@ struct ViewTransform {
 
 **WASM bridge additions (`api.rs`):**
 
+**Document size is decoupled from viewport:** `DarklyHandle::create` accepts explicit `doc_width`/`doc_height` parameters for the document dimensions. The viewport size comes from the HTML canvas element (sized to CSS layout × DPR via `ResizeObserver`). The document dimensions are passed to `Document::new()` and `Compositor::new()`, while the viewport dimensions only affect the GPU surface. This means the document can be any aspect ratio (e.g. 900×1600 portrait) regardless of the browser window shape.
+
 ```rust
+/// Create a new Darkly editor instance, initializing GPU and document.
+/// `doc_width`/`doc_height` set the document (canvas) dimensions;
+/// the viewport size comes from the HTML canvas element.
+pub async fn create(canvas: web_sys::HtmlCanvasElement, doc_width: u32, doc_height: u32) -> DarklyHandle {
+    let gpu = GpuContext::new(canvas).await;
+    let compositor = Compositor::new(&gpu.device, &gpu.queue, gpu.surface_format(), doc_width, doc_height);
+    let doc = Document::new(doc_width, doc_height);
+    // ...
+}
+
 /// Update the canvas view transform (pan, zoom, rotation).
 pub fn set_view_transform(
     &mut self,
@@ -869,6 +888,7 @@ Handle Space+drag (pan), Shift+Space+drag (rotate), Ctrl+Space+drag (zoom) as a 
 See `frontend/src/canvas/navigation.svelte.ts` for the implementation. Key design decisions:
 
 - **Rotation is Krita-style angular**, not linear pixel mapping. On pointer down, the angle from the canvas center to the cursor is measured with `atan2()`. On move, the new angle is measured and the rotation delta is the difference. This feels like physically grabbing and spinning the canvas.
+- **Rotation pivot must account for pan.** The view transform rotates around the canvas center, which appears on screen at `element_center + pan`. The angular rotation gesture must measure angles from this same point — `rect.left + rect.width/2 + panX`, not just `rect.left + rect.width/2`. Using the raw element center causes the rotation pivot to drift after panning.
 - **Zoom uses vertical drag** (dy), not horizontal. Drag up = zoom out, drag down = zoom in. Exponential scaling (`Math.pow(2, -dy / 150)`).
 - **Pan is straightforward** 1:1 CSS pixel mapping of dx/dy.
 - **`onPointerDown` accepts the canvas element** so rotation can compute the canvas center for the angular measurement.
@@ -1569,6 +1589,9 @@ Refactor `App.svelte` from a monolithic canvas component into a three-column lay
 ## WASM Bridge — New Methods
 
 ```rust
+// Construction — doc dimensions are decoupled from viewport
+async fn create(canvas: HtmlCanvasElement, doc_width: u32, doc_height: u32) -> DarklyHandle;
+
 // Stroke lifecycle (replaces ad-hoc paint/snapshot/commit)
 fn begin_stroke(&mut self, layer_id: u64);              // opens undo transaction
 fn stroke_to(&mut self, op_type: &str, params: &JsValue); // dispatches via ToolRegistry
