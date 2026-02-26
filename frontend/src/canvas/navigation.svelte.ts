@@ -122,25 +122,127 @@ class NavigationState {
         this.mode = 'none';
     }
 
+    // --- Touch gesture handling ---
+
+    /** Active touch pointers for multi-finger gesture detection. */
+    private touches = new Map<number, { x: number; y: number }>();
+
+    /** Set when 2+ fingers are detected; stays true until all fingers lift. */
+    private touchGestureOccurred = false;
+
+    /** Whether a multi-finger touch gesture is in progress. */
+    get isTouchGesture(): boolean {
+        return this.touchGestureOccurred;
+    }
+
+    /**
+     * Track a touch pointer down. Returns true if a two-finger gesture is
+     * now active (event should not be dispatched to tools).
+     */
+    onTouchPointerDown(e: PointerEvent): boolean {
+        this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (this.touches.size >= 2) {
+            this.touchGestureOccurred = true;
+        }
+        return this.touchGestureOccurred;
+    }
+
+    /**
+     * Update a touch pointer position and, if two fingers are active,
+     * apply the incremental pan/zoom/rotation gesture.
+     */
+    onTouchPointerMove(e: PointerEvent, canvasEl: HTMLCanvasElement) {
+        if (!this.touches.has(e.pointerId)) return;
+
+        if (this.touches.size < 2) {
+            // Not in gesture — just keep position current for when/if a
+            // second finger arrives.
+            this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            return;
+        }
+
+        // Snapshot previous two-finger state
+        const entries = [...this.touches.entries()];
+        const [id1, prev1] = entries[0];
+        const [, prev2] = entries[1];
+        const prevCx = (prev1.x + prev2.x) / 2;
+        const prevCy = (prev1.y + prev2.y) / 2;
+        const prevDist = Math.hypot(prev2.x - prev1.x, prev2.y - prev1.y);
+        const prevAngle = Math.atan2(prev2.y - prev1.y, prev2.x - prev1.x);
+
+        // Update the moved pointer
+        this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+        // Compute current two-finger state
+        const cur1 = this.touches.get(id1)!;
+        const cur2 = this.touches.get(entries[1][0])!;
+        const curCx = (cur1.x + cur2.x) / 2;
+        const curCy = (cur1.y + cur2.y) / 2;
+        const curDist = Math.hypot(cur2.x - cur1.x, cur2.y - cur1.y);
+        const curAngle = Math.atan2(cur2.y - cur1.y, cur2.x - cur1.x);
+
+        // Pan: delta of midpoints
+        app.panX += curCx - prevCx;
+        app.panY += curCy - prevCy;
+
+        // Zoom: centered on gesture midpoint
+        if (prevDist > 1) {
+            const zoomFactor = curDist / prevDist;
+            const newZoom = Math.max(0.01, Math.min(100, app.zoom * zoomFactor));
+
+            const rect = canvasEl.getBoundingClientRect();
+            const cursorX = curCx - rect.left;
+            const cursorY = curCy - rect.top;
+            const pivotX = rect.width / 2 + app.panX;
+            const pivotY = rect.height / 2 + app.panY;
+            const ratio = 1 - newZoom / app.zoom;
+            app.panX += (cursorX - pivotX) * ratio;
+            app.panY += (cursorY - pivotY) * ratio;
+            app.zoom = newZoom;
+        }
+
+        // Rotation: angular delta
+        app.rotation -= curAngle - prevAngle;
+    }
+
+    onTouchPointerUp(e: PointerEvent) {
+        this.touches.delete(e.pointerId);
+        if (this.touches.size === 0) {
+            this.touchGestureOccurred = false;
+        }
+    }
+
+    // --- Wheel handling (scroll + zoom) ---
+
     onWheel(e: WheelEvent, canvasEl: HTMLCanvasElement) {
-        // Scroll zoom uses the same modifier as drag zoom (Ctrl by default).
-        if (!hasModifier(e, user.resolved.hotkeys.nav.zoom)) return;
-
         e.preventDefault();
-        const factor = Math.pow(1.001, -e.deltaY);
-        const newZoom = Math.max(0.01, Math.min(100, app.zoom * factor));
 
-        // Zoom centered on cursor: keep the point under the cursor fixed.
-        const rect = canvasEl.getBoundingClientRect();
-        const cursorX = e.clientX - rect.left;
-        const cursorY = e.clientY - rect.top;
-        const pivotX = rect.width / 2 + app.panX;
-        const pivotY = rect.height / 2 + app.panY;
-        const ratio = 1 - newZoom / app.zoom;
+        // Normalize for different deltaMode values (lines vs pixels)
+        const scale = e.deltaMode === 1 ? 16 : 1;
+        const deltaX = e.deltaX * scale;
+        const deltaY = e.deltaY * scale;
 
-        app.panX += (cursorX - pivotX) * ratio;
-        app.panY += (cursorY - pivotY) * ratio;
-        app.zoom = newZoom;
+        if (hasModifier(e, user.resolved.hotkeys.nav.zoom)) {
+            // Zoom (Ctrl+scroll, or trackpad pinch which fires ctrlKey=true)
+            const factor = Math.pow(1.001, -deltaY);
+            const newZoom = Math.max(0.01, Math.min(100, app.zoom * factor));
+
+            // Zoom centered on cursor: keep the point under the cursor fixed.
+            const rect = canvasEl.getBoundingClientRect();
+            const cursorX = e.clientX - rect.left;
+            const cursorY = e.clientY - rect.top;
+            const pivotX = rect.width / 2 + app.panX;
+            const pivotY = rect.height / 2 + app.panY;
+            const ratio = 1 - newZoom / app.zoom;
+
+            app.panX += (cursorX - pivotX) * ratio;
+            app.panY += (cursorY - pivotY) * ratio;
+            app.zoom = newZoom;
+        } else {
+            // Pan (two-finger scroll on trackpad, or mouse scroll wheel)
+            app.panX -= deltaX;
+            app.panY -= deltaY;
+        }
     }
 }
 

@@ -99,7 +99,21 @@
     }
 
     function onPointerDown(e: PointerEvent) {
-        // Navigation gets first chance
+        // Touch: always capture and track for gesture detection
+        if (e.pointerType === 'touch') {
+            canvas.setPointerCapture(e.pointerId);
+            if (nav.onTouchPointerDown(e)) {
+                // Two-finger gesture started — end any in-progress tool stroke
+                const ctx = getToolContext();
+                if (ctx) {
+                    const tool = toolRegistry.get(app.activeToolId);
+                    tool?.onPointerUp(ctx, e);
+                }
+                return;
+            }
+        }
+
+        // Navigation gets first chance (space+drag)
         if (nav.onPointerDown(e, canvas)) return;
 
         canvas.setPointerCapture(e.pointerId);
@@ -112,6 +126,12 @@
     }
 
     function onPointerMove(e: PointerEvent) {
+        // Touch gesture: update position and apply gesture transform
+        if (e.pointerType === 'touch') {
+            nav.onTouchPointerMove(e, canvas);
+            if (nav.isTouchGesture) return;
+        }
+
         if (nav.isNavigating) {
             nav.onPointerMove(e);
             return;
@@ -125,6 +145,13 @@
     }
 
     function onPointerUp(e: PointerEvent) {
+        // Touch: clean up gesture state; skip tool dispatch if gesture occurred
+        if (e.pointerType === 'touch') {
+            const wasGesture = nav.isTouchGesture;
+            nav.onTouchPointerUp(e);
+            if (wasGesture) return;
+        }
+
         if (nav.isNavigating) {
             nav.onPointerUp();
             return;
@@ -183,5 +210,6 @@
         width: 100%;
         height: 100%;
         object-fit: contain;
+        touch-action: none;
     }
 </style>
