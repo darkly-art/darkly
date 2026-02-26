@@ -1,7 +1,6 @@
 use crate::dirty::DirtyRegion;
 use crate::layer::*;
-use crate::tile::{TILE_SIZE, TileGrid};
-use crate::undo::UndoStep;
+use crate::tile::{Memento, TILE_SIZE, TileGrid};
 use std::collections::HashMap;
 
 pub enum MoveTarget {
@@ -195,6 +194,24 @@ fn collect_all_ids(node: &LayerNode, out: &mut Vec<LayerId>) {
     }
 }
 
+/// Recursively collect all raster layer IDs under a node.
+fn collect_raster_ids(node: &LayerNode, out: &mut Vec<LayerId>) {
+    match node {
+        LayerNode::Layer(Layer::Raster(r)) => out.push(r.id),
+        LayerNode::Group(g) => {
+            for child in &g.children {
+                collect_raster_ids(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Find the index of a node within its immediate parent container.
+fn position_in(nodes: &[LayerNode], id: LayerId) -> Option<usize> {
+    nodes.iter().position(|n| n.id() == id)
+}
+
 impl Document {
     pub fn new(width: u32, height: u32) -> Self {
         Document {
@@ -299,6 +316,69 @@ impl Document {
 
     pub fn parent_of(&self, id: LayerId) -> Option<LayerId> {
         find_parent_of(&self.layers, id)
+    }
+
+    /// Index of a node within its parent container (root list or group children).
+    pub fn position_in_parent(&self, id: LayerId) -> Option<usize> {
+        let parent = self.parent_of(id);
+        match parent {
+            Some(pid) => {
+                if let Some(LayerNode::Group(g)) = find_node_in(&self.layers, pid) {
+                    position_in(&g.children, id)
+                } else {
+                    None
+                }
+            }
+            None => position_in(&self.layers, id),
+        }
+    }
+
+    /// Detach a node from the tree for undo purposes.
+    /// Removes the node and cleans up dirty regions, returning the detached node.
+    pub fn detach_for_undo(&mut self, id: LayerId) -> Option<LayerNode> {
+        let node = detach_node(&mut self.layers, id)?;
+        let mut ids = Vec::new();
+        collect_all_ids(&node, &mut ids);
+        for removed_id in ids {
+            self.dirty.remove(&removed_id);
+        }
+        Some(node)
+    }
+
+    /// Reinsert a previously detached node at a specific position.
+    /// Sets up dirty regions and marks all tiles dirty for GPU upload.
+    pub fn reinsert_node(&mut self, node: LayerNode, parent: Option<LayerId>, position: usize) {
+        // Collect raster layer IDs before we move the node into the tree.
+        let mut raster_ids = Vec::new();
+        collect_raster_ids(&node, &mut raster_ids);
+
+        // Insert into the tree.
+        match parent {
+            Some(pid) => {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, pid) {
+                    let pos = position.min(g.children.len());
+                    g.children.insert(pos, node);
+                } else {
+                    // Parent gone (shouldn't happen) — insert at root.
+                    let pos = position.min(self.layers.len());
+                    self.layers.insert(pos, node);
+                }
+            }
+            None => {
+                let pos = position.min(self.layers.len());
+                self.layers.insert(pos, node);
+            }
+        }
+
+        // Set up dirty regions and mark all existing tiles for upload.
+        for &id in &raster_ids {
+            let dirty = self.dirty.entry(id).or_insert_with(DirtyRegion::new);
+            if let Some(Layer::Raster(r)) = find_layer_in(&self.layers, id) {
+                for ((tx, ty), _) in r.tiles.iter() {
+                    dirty.mark(tx, ty);
+                }
+            }
+        }
     }
 
     /// Move a node to a new position in the tree.
@@ -646,13 +726,13 @@ impl Document {
         }
     }
 
-    /// Commit the active transaction and return an UndoStep if any tiles changed.
-    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<UndoStep> {
+    /// Commit the active transaction and return per-layer mementos if any tiles changed.
+    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<HashMap<LayerId, Memento>> {
         if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
             if let Some(memento) = r.tiles.commit_transaction() {
                 let mut mementos = HashMap::new();
                 mementos.insert(layer_id, memento);
-                return Some(UndoStep::new(mementos));
+                return Some(mementos);
             }
         }
         None

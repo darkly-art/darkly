@@ -3,19 +3,14 @@
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
 
-    let layerTree = $state<any[]>([]);
-
-    export function refreshTree() {
-        if (app.handle) {
-            const tree = app.handle.layer_tree();
-            layerTree = Array.isArray(tree) ? tree : [];
-        }
+    function refresh() {
+        app.refreshLayerTree();
     }
 
     // Refresh whenever handle becomes available
     $effect(() => {
         if (app.handle) {
-            refreshTree();
+            refresh();
         }
     });
 
@@ -23,7 +18,7 @@
         if (app.handle) {
             const id = app.handle.add_raster_layer();
             app.activeLayerId = Number(id);
-            refreshTree();
+            refresh();
         }
     }
 
@@ -31,7 +26,7 @@
         if (app.handle) {
             const id = app.handle.add_group();
             app.activeLayerId = Number(id);
-            refreshTree();
+            refresh();
         }
     }
 
@@ -39,7 +34,7 @@
         if (app.handle && app.activeLayerId !== null) {
             app.handle.remove_layer(BigInt(app.activeLayerId));
             app.activeLayerId = null;
-            refreshTree();
+            refresh();
         }
     }
 
@@ -60,15 +55,15 @@
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="layer-list" ondragover={onDragOver} ondrop={onDrop}>
-        {#each layerTree as node (node.id)}
+        {#each app.layerTree as node (node.id)}
             {#if node.type === 'group'}
-                <LayerGroup group={node} onupdate={refreshTree} />
+                <LayerGroup group={node} onupdate={refresh} />
             {:else}
-                <LayerItem layer={node} onupdate={refreshTree} />
+                <LayerItem layer={node} onupdate={refresh} />
             {/if}
         {/each}
 
-        {#if layerTree.length === 0}
+        {#if app.layerTree.length === 0}
             <div class="empty-message">No layers</div>
         {/if}
     </div>

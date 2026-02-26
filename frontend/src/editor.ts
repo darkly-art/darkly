@@ -30,8 +30,8 @@ function initHotkeys() {
     }
 
     registerHotkeys({
-        undo:            () => app.handle?.undo(),
-        redo:            () => app.handle?.redo(),
+        undo:            () => { app.handle?.undo(); app.refreshLayerTree(); },
+        redo:            () => { app.handle?.redo(); app.refreshLayerTree(); },
         resetColors:     () => app.resetColors(),
         swapColors:      () => app.swapColors(),
         ...toolActions,

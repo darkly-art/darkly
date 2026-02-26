@@ -24,6 +24,9 @@ class AppState {
     fillAll = $state(false);
     gradientType = $state<'linear' | 'radial'>('linear');
 
+    // Layer tree (read from WASM, refreshed after mutations/undo/redo).
+    layerTree = $state<any[]>([]);
+
     // View transform (controlled by canvas navigation)
     panX = $state(0);
     panY = $state(0);
@@ -39,6 +42,13 @@ class AppState {
     resetColors() {
         this.foreground = { r: 0, g: 0, b: 0, a: 255 };
         this.background = { r: 255, g: 255, b: 255, a: 255 };
+    }
+
+    refreshLayerTree() {
+        if (this.handle) {
+            const tree = this.handle.layer_tree();
+            this.layerTree = Array.isArray(tree) ? tree : [];
+        }
     }
 }
 

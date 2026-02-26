@@ -1,6 +1,10 @@
 use darkly::document::{Document, MoveTarget};
-use darkly::layer::{Layer, LayerNode};
-use darkly::undo::{UndoStack, mark_affected_dirty};
+use darkly::layer::{BlendMode, Layer, LayerNode};
+use darkly::undo::{
+    UndoStack, TileAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
+    PropertyAction, mark_affected_dirty,
+};
+use darkly::undo::property::Property;
 use darkly::gpu::compositor::Compositor;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::view::ViewTransform;
@@ -84,6 +88,11 @@ impl DarklyHandle {
         let id = self.doc.add_raster_layer();
         self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
         self.compositor.mark_dirty();
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
+
         id
     }
 
@@ -92,12 +101,23 @@ impl DarklyHandle {
         let id = self.doc.add_raster_layer_in(Some(group_id));
         self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
         self.compositor.mark_dirty();
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
+
         id
     }
 
     /// Add a new empty group and return its ID.
     pub fn add_group(&mut self) -> u64 {
-        self.doc.add_group()
+        let id = self.doc.add_group();
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
+
+        id
     }
 
     /// Add a filter layer. `filter_type` is the filter type string (e.g., "noise").
@@ -123,6 +143,11 @@ impl DarklyHandle {
         }
 
         self.compositor.mark_dirty();
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
+
         id
     }
 
@@ -201,8 +226,8 @@ impl DarklyHandle {
     /// End the current stroke. Commits the undo transaction.
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
-            if let Some(step) = self.doc.commit_transaction(layer_id) {
-                self.undo_stack.push(step);
+            if let Some(mementos) = self.doc.commit_transaction(layer_id) {
+                self.undo_stack.push(Box::new(TileAction::new(mementos)));
             }
         }
     }
@@ -261,57 +286,118 @@ impl DarklyHandle {
         );
     }
 
-    /// Set opacity for a layer.
+    /// Set opacity for a layer or group (undoable).
     pub fn set_opacity(&mut self, layer_id: u64, opacity: f32) {
-        if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-            r.opacity = opacity;
+        // Capture old value before mutation.
+        let old_opacity = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Raster(r))) => r.opacity,
+            Some(LayerNode::Group(g)) => g.opacity,
+            _ => return,
+        };
+
+        // Apply.
+        match self.doc.find_node_mut(layer_id) {
+            Some(LayerNode::Layer(Layer::Raster(r))) => r.opacity = opacity,
+            Some(LayerNode::Group(g)) => g.opacity = opacity,
+            _ => return,
+        }
+
+        if let Some(Layer::Raster(r)) = self.doc.layer(layer_id) {
             self.compositor.update_raster_uniforms(
-                &self.gpu.queue,
-                layer_id,
-                opacity,
-                r.blend_mode,
+                &self.gpu.queue, layer_id, r.opacity, r.blend_mode,
             );
-            self.compositor.mark_dirty();
         }
+        self.compositor.mark_dirty();
+
+        self.undo_stack.push(Box::new(PropertyAction::new(
+            layer_id,
+            Property::Opacity(old_opacity),
+            Property::Opacity(opacity),
+        )));
     }
 
-    /// Set blend mode for a layer.
+    /// Set blend mode for a layer or group (undoable).
     pub fn set_blend_mode(&mut self, layer_id: u64, mode: u32) {
-        if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-            let blend_mode = darkly::layer::BlendMode::from_u32(mode);
-            r.blend_mode = blend_mode;
-            self.compositor
-                .update_raster_uniforms(&self.gpu.queue, layer_id, r.opacity, blend_mode);
-            self.compositor.mark_dirty();
+        let blend_mode = BlendMode::from_u32(mode);
+
+        // Capture old value.
+        let old_mode = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Raster(r))) => r.blend_mode,
+            Some(LayerNode::Group(g)) => g.blend_mode,
+            _ => return,
+        };
+
+        // Apply.
+        match self.doc.find_node_mut(layer_id) {
+            Some(LayerNode::Layer(Layer::Raster(r))) => r.blend_mode = blend_mode,
+            Some(LayerNode::Group(g)) => g.blend_mode = blend_mode,
+            _ => return,
         }
+
+        if let Some(Layer::Raster(r)) = self.doc.layer(layer_id) {
+            self.compositor.update_raster_uniforms(
+                &self.gpu.queue, layer_id, r.opacity, r.blend_mode,
+            );
+        }
+        self.compositor.mark_dirty();
+
+        self.undo_stack.push(Box::new(PropertyAction::new(
+            layer_id,
+            Property::BlendMode(old_mode),
+            Property::BlendMode(blend_mode),
+        )));
     }
 
-    /// Set visibility for a layer or group.
+    /// Set visibility for a layer or group (undoable).
     pub fn set_layer_visible(&mut self, layer_id: u64, visible: bool) {
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
-            match node {
-                LayerNode::Layer(l) => match l {
-                    Layer::Raster(r) => r.visible = visible,
-                    Layer::Filter(f) => f.visible = visible,
-                },
-                LayerNode::Group(g) => g.visible = visible,
-            }
-            self.compositor.mark_dirty();
+        // Capture old value.
+        let old_visible = match self.doc.find_node(layer_id) {
+            Some(n) => n.visible(),
+            None => return,
+        };
+
+        // Apply.
+        match self.doc.find_node_mut(layer_id) {
+            Some(LayerNode::Layer(l)) => match l {
+                Layer::Raster(r) => r.visible = visible,
+                Layer::Filter(f) => f.visible = visible,
+            },
+            Some(LayerNode::Group(g)) => g.visible = visible,
+            None => return,
         }
+        self.compositor.mark_dirty();
+
+        self.undo_stack.push(Box::new(PropertyAction::new(
+            layer_id,
+            Property::Visible(old_visible),
+            Property::Visible(visible),
+        )));
     }
 
-    /// Set layer or group name.
+    /// Set layer or group name (undoable).
     pub fn set_layer_name(&mut self, layer_id: u64, name: &str) {
-        if let Some(node) = self.doc.find_node_mut(layer_id) {
-            match node {
-                LayerNode::Layer(Layer::Raster(r)) => r.name = name.to_string(),
-                LayerNode::Group(g) => g.name = name.to_string(),
-                _ => {}
-            }
+        // Capture old value.
+        let old_name = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Raster(r))) => r.name.clone(),
+            Some(LayerNode::Group(g)) => g.name.clone(),
+            _ => return,
+        };
+
+        // Apply.
+        match self.doc.find_node_mut(layer_id) {
+            Some(LayerNode::Layer(Layer::Raster(r))) => r.name = name.to_string(),
+            Some(LayerNode::Group(g)) => g.name = name.to_string(),
+            _ => return,
         }
+
+        self.undo_stack.push(Box::new(PropertyAction::new(
+            layer_id,
+            Property::Name(old_name),
+            Property::Name(name.to_string()),
+        )));
     }
 
-    /// Set group collapsed state (UI only).
+    /// Set group collapsed state (UI only, not undoable).
     pub fn set_group_collapsed(&mut self, group_id: u64, collapsed: bool) {
         if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
             g.collapsed = collapsed;
@@ -328,7 +414,7 @@ impl DarklyHandle {
         arr.into()
     }
 
-    /// Move a layer or group to a new position.
+    /// Move a layer or group to a new position (undoable).
     /// `target_type`: "before", "after", "into_top", "into_bottom"
     pub fn move_layer(&mut self, layer_id: u64, target_type: &str, target_id: u64) {
         let target = match target_type {
@@ -338,28 +424,53 @@ impl DarklyHandle {
             "into_bottom" => MoveTarget::IntoGroupBottom(target_id),
             _ => return,
         };
+
+        // Capture old position before move.
+        let old_parent = self.doc.parent_of(layer_id);
+        let old_pos = match self.doc.position_in_parent(layer_id) {
+            Some(p) => p,
+            None => return,
+        };
+
         self.doc.move_layer(layer_id, target);
+
+        // Capture new position after move.
+        let new_parent = self.doc.parent_of(layer_id);
+        let new_pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
+
         self.compositor.mark_dirty();
+
+        self.undo_stack.push(Box::new(LayerMoveAction::new(
+            layer_id, old_parent, old_pos, new_parent, new_pos,
+        )));
     }
 
-    /// Remove a layer or group (and all children).
+    /// Remove a layer or group and all children (undoable).
     pub fn remove_layer(&mut self, layer_id: u64) {
-        self.doc.remove_node(layer_id);
+        let parent = self.doc.parent_of(layer_id);
+        let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
+
+        if let Some(node) = self.doc.detach_for_undo(layer_id) {
+            self.undo_stack.push(Box::new(LayerRemoveAction::new(node, parent, pos)));
+        }
+
         self.compositor.mark_dirty();
     }
 
-    /// Undo the last stroke.
+    /// Undo the last action.
     pub fn undo(&mut self) {
         if let Some(affected) = self.undo_stack.undo(&mut self.doc) {
             mark_affected_dirty(&mut self.doc.dirty, &affected);
+            self.sync_compositor_layers();
             self.compositor.mark_dirty();
         }
     }
 
-    /// Redo the last undone stroke.
+    /// Redo the last undone action.
     pub fn redo(&mut self) {
         if let Some(affected) = self.undo_stack.redo(&mut self.doc) {
             mark_affected_dirty(&mut self.doc.dirty, &affected);
+            self.sync_compositor_layers();
             self.compositor.mark_dirty();
         }
     }
@@ -368,5 +479,18 @@ impl DarklyHandle {
     pub fn resize(&mut self, width: u32, height: u32) {
         self.gpu.resize(width, height);
         self.compositor.mark_needs_present();
+    }
+
+    // --- Internal helpers ---
+
+    /// Sync compositor state with document after undo/redo.
+    /// Ensures GPU resources exist for all layers and uniforms are up to date.
+    fn sync_compositor_layers(&mut self) {
+        for raster in self.doc.all_raster_layers() {
+            self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, raster.id);
+            self.compositor.update_raster_uniforms(
+                &self.gpu.queue, raster.id, raster.opacity, raster.blend_mode,
+            );
+        }
     }
 }
