@@ -1,6 +1,8 @@
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
-use crate::gpu::filter::{FilterLayerCache, FilterRegistry};
+use crate::gpu::effect::{self, EffectCache, EffectPipeline};
+use crate::gpu::filter::FilterRegistry;
+use crate::gpu::veil::{Veil, VeilRegistry};
 use crate::gpu::staging::StagingRing;
 use crate::gpu::view::ViewTransform;
 use crate::dirty::dirty_pixel_rect;
@@ -54,6 +56,13 @@ struct BlendUniforms {
     _pad1: f32,
 }
 
+/// A veil in the chain, with visibility state and GPU cache.
+struct VeilEntry {
+    veil: Box<dyn Veil>,
+    cache: EffectCache,
+    visible: bool,
+}
+
 pub struct Compositor {
     /// Two accumulator textures for ping-pong rendering.
     accum: [wgpu::Texture; 2],
@@ -74,7 +83,7 @@ pub struct Compositor {
     /// Pre-built GPU objects per raster layer (P1).
     raster_cache: HashMap<LayerId, RasterLayerCache>,
     /// Pre-built GPU objects per filter layer (P1).
-    filter_cache: HashMap<LayerId, FilterLayerCache>,
+    filter_cache: HashMap<LayerId, EffectCache>,
 
     blend_pipelines: BlendPipelines,
     filter_registry: FilterRegistry,
@@ -98,6 +107,21 @@ pub struct Compositor {
 
     canvas_width: u32,
     canvas_height: u32,
+
+    // --- Veils (viewport-level post-processing) ---
+    veil_registry: VeilRegistry,
+    veil_entries: Vec<VeilEntry>,
+    /// Screen-sized ping-pong textures for veil chain.
+    /// Created lazily when the first veil is added.
+    veil_textures: Option<[wgpu::Texture; 2]>,
+    veil_views: Option<[wgpu::TextureView; 2]>,
+    /// Blit pipeline for final veil output → surface.
+    blit_pipeline: EffectPipeline,
+    /// Bind groups for blitting veil_textures[0] or [1] to surface.
+    veil_blit_bind_groups: Option<[wgpu::BindGroup; 2]>,
+    /// Current viewport dimensions (updated on resize).
+    viewport_width: u32,
+    viewport_height: u32,
 }
 
 impl Compositor {
@@ -269,6 +293,9 @@ impl Compositor {
 
         let staging = StagingRing::new();
 
+        let veil_registry = VeilRegistry::new();
+        let blit_pipeline = effect::create_blit_pipeline(device, surface_format, "blit-to-surface");
+
         Compositor {
             accum: [accum0, accum1],
             accum_views: [accum_view0, accum_view1],
@@ -292,6 +319,14 @@ impl Compositor {
             lowest_dirty_layer: None,
             canvas_width: width,
             canvas_height: height,
+            veil_registry,
+            veil_entries: Vec::new(),
+            veil_textures: None,
+            veil_views: None,
+            blit_pipeline,
+            veil_blit_bind_groups: None,
+            viewport_width: 0,
+            viewport_height: 0,
         }
     }
 
@@ -458,6 +493,243 @@ impl Compositor {
 
     pub fn accum_format(&self) -> wgpu::TextureFormat {
         wgpu::TextureFormat::Rgba8Unorm
+    }
+
+    // --- Veil management ---
+
+    /// Access veil registry for creating new veil instances.
+    pub fn veil_registry_mut(&mut self) -> &mut VeilRegistry {
+        &mut self.veil_registry
+    }
+
+    /// Add a veil to the chain. Creates GPU resources immediately.
+    pub fn add_veil(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, veil: Box<dyn Veil>) {
+        self.ensure_veil_textures(device);
+        let views = self.veil_views.as_ref().unwrap();
+        let cache = veil.create_cache(
+            device,
+            queue,
+            views,
+            &self.sampler,
+            self.viewport_width,
+            self.viewport_height,
+        );
+        self.veil_entries.push(VeilEntry { veil, cache, visible: true });
+        self.needs_present = true;
+    }
+
+    /// Remove a veil by index.
+    pub fn remove_veil(&mut self, index: usize) {
+        if index < self.veil_entries.len() {
+            self.veil_entries.remove(index);
+            self.needs_present = true;
+        }
+    }
+
+    /// Remove all veils.
+    pub fn clear_veils(&mut self) {
+        self.veil_entries.clear();
+        self.needs_present = true;
+    }
+
+    /// Toggle veil visibility.
+    pub fn set_veil_visible(&mut self, index: usize, visible: bool) {
+        if let Some(entry) = self.veil_entries.get_mut(index) {
+            entry.visible = visible;
+            self.needs_present = true;
+        }
+    }
+
+    /// Move a veil from one position to another.
+    pub fn move_veil(&mut self, from: usize, to: usize) {
+        if from >= self.veil_entries.len() || to >= self.veil_entries.len() {
+            return;
+        }
+        let entry = self.veil_entries.remove(from);
+        self.veil_entries.insert(to, entry);
+        self.needs_present = true;
+    }
+
+    /// Number of veils in the chain.
+    pub fn veil_count(&self) -> usize {
+        self.veil_entries.len()
+    }
+
+    /// Get veil type_id and visibility at index.
+    pub fn veil_info(&self, index: usize) -> Option<(&str, bool)> {
+        self.veil_entries.get(index).map(|e| (e.veil.type_id(), e.visible))
+    }
+
+    /// Update viewport dimensions. Recreates veil textures and caches if needed.
+    pub fn resize_viewport(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) {
+        if self.viewport_width == width && self.viewport_height == height {
+            return;
+        }
+        self.viewport_width = width;
+        self.viewport_height = height;
+
+        if !self.veil_entries.is_empty() {
+            self.recreate_veil_resources(device, queue);
+        }
+    }
+
+    /// Ensure screen-sized veil textures exist at the current viewport dimensions.
+    fn ensure_veil_textures(&mut self, device: &wgpu::Device) {
+        let w = self.viewport_width;
+        let h = self.viewport_height;
+        if w == 0 || h == 0 {
+            return;
+        }
+
+        // Check if existing textures match current viewport size.
+        if self.veil_textures.is_some() {
+            // Already created — check if resize is needed via veil_blit_bind_groups presence.
+            // Actual resize is handled by recreate_veil_resources.
+            return;
+        }
+
+        let format = self.accum_format();
+        let make_veil_tex = |label: &str| -> (wgpu::Texture, wgpu::TextureView) {
+            let tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            (tex, view)
+        };
+
+        let (t0, v0) = make_veil_tex("veil-0");
+        let (t1, v1) = make_veil_tex("veil-1");
+
+        // Blit bind groups for presenting veil output to surface.
+        let blit_bg: [wgpu::BindGroup; 2] = [
+            effect::create_blit_bind_group(device, &self.blit_pipeline.bind_group_layout, &v0, &self.sampler, "veil-blit-0"),
+            effect::create_blit_bind_group(device, &self.blit_pipeline.bind_group_layout, &v1, &self.sampler, "veil-blit-1"),
+        ];
+
+        self.veil_textures = Some([t0, t1]);
+        self.veil_views = Some([v0, v1]);
+        self.veil_blit_bind_groups = Some(blit_bg);
+    }
+
+    /// Recreate veil textures, blit bind groups, and all veil caches.
+    /// Called when viewport dimensions change while veils are active.
+    fn recreate_veil_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        // Drop existing resources.
+        self.veil_textures = None;
+        self.veil_views = None;
+        self.veil_blit_bind_groups = None;
+
+        self.ensure_veil_textures(device);
+
+        // Rebuild all veil caches with new views.
+        let views = self.veil_views.as_ref().unwrap();
+        for entry in &mut self.veil_entries {
+            entry.cache = entry.veil.create_cache(
+                device,
+                queue,
+                views,
+                &self.sampler,
+                self.viewport_width,
+                self.viewport_height,
+            );
+        }
+    }
+
+    /// Run the present pass, veil chain, and final blit to surface.
+    /// Factored out for use by both `render()` and `present_only()`.
+    fn present_and_veils(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_view: &wgpu::TextureView,
+    ) {
+        let any_visible = self.veil_entries.iter().any(|e| e.visible);
+        if !any_visible {
+            // No veils — present directly to surface (original path).
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("present"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: surface_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_pipeline(&self.present_pipeline);
+            rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+            return;
+        }
+
+        let veil_views = self.veil_views.as_ref().unwrap();
+
+        // Step 1: Present composite_cache → veil_textures[0] (with view transform).
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("present-to-veil"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &veil_views[0],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_pipeline(&self.present_pipeline);
+            rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+
+        // Step 2: Run visible veils with ping-pong.
+        let mut current_veil_src = 0usize;
+        for entry in &self.veil_entries {
+            if !entry.visible {
+                continue;
+            }
+            let (veil, cache) = (&entry.veil, &entry.cache);
+            let dst = 1 - current_veil_src;
+            veil.encode(encoder, cache, current_veil_src, &veil_views[dst]);
+            current_veil_src = dst;
+        }
+
+        // Step 3: Blit final veil output → surface.
+        let blit_bgs = self.veil_blit_bind_groups.as_ref().unwrap();
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("veil-blit-to-surface"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: surface_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_pipeline(&self.blit_pipeline.pipeline);
+            rpass.set_bind_group(0, &blit_bgs[current_veil_src], &[]);
+            rpass.draw(0..3, 0..1);
+        }
     }
 
     /// Upload dirty tiles and composite changed layers (no surface present).
@@ -1087,27 +1359,9 @@ impl Compositor {
 
         perf::time_end("composite-layers");
 
-        // 6. Present: blit composite_cache to surface
+        // 6. Present (+ veils if any): composite_cache → [veils] → surface
         perf::time("present");
-        {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("present"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            rpass.set_pipeline(&self.present_pipeline);
-            rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
-            rpass.draw(0..3, 0..1);
-        }
-
+        self.present_and_veils(&mut encoder, &surface_view);
         perf::time_end("present");
 
         perf::time("submit+present");
@@ -1127,7 +1381,7 @@ impl Compositor {
     /// Re-present the composite cache to the surface without recompositing.
     /// Used when only the view transform changed.
     fn present_only(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface: &wgpu::Surface,
@@ -1149,24 +1403,7 @@ impl Compositor {
             label: Some("present-only"),
         });
 
-        {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("present"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            rpass.set_pipeline(&self.present_pipeline);
-            rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
-            rpass.draw(0..3, 0..1);
-        }
+        self.present_and_veils(&mut encoder, &surface_view);
 
         queue.submit(std::iter::once(encoder.finish()));
         output.present();

@@ -484,7 +484,59 @@ impl DarklyHandle {
     /// Resize the canvas surface. Call when the viewport dimensions change.
     pub fn resize(&mut self, width: u32, height: u32) {
         self.gpu.resize(width, height);
+        self.compositor.resize_viewport(&self.gpu.device, &self.gpu.queue, width, height);
         self.compositor.mark_needs_present();
+    }
+
+    // --- Veils (viewport-level post-processing) ---
+
+    /// Add a veil. `veil_type` is the veil type string (e.g., "pixelate").
+    /// `params` is a JS object with veil-specific parameters.
+    pub fn add_veil(&mut self, veil_type: &str, params: JsValue) {
+        let format = self.compositor.accum_format();
+        let veil = self.compositor.veil_registry_mut().create_veil(
+            veil_type,
+            params,
+            &self.gpu.device,
+            format,
+        );
+        self.compositor.add_veil(&self.gpu.device, &self.gpu.queue, veil);
+    }
+
+    /// Remove a veil by index in the veil chain.
+    pub fn remove_veil(&mut self, index: u32) {
+        self.compositor.remove_veil(index as usize);
+    }
+
+    /// Remove all veils.
+    pub fn clear_veils(&mut self) {
+        self.compositor.clear_veils();
+    }
+
+    /// Toggle veil visibility.
+    pub fn set_veil_visible(&mut self, index: u32, visible: bool) {
+        self.compositor.set_veil_visible(index as usize, visible);
+    }
+
+    /// Move a veil from one index to another.
+    pub fn move_veil(&mut self, from: u32, to: u32) {
+        self.compositor.move_veil(from as usize, to as usize);
+    }
+
+    /// Get the veil list as a JS array for the UI.
+    /// Each element: { type: string, visible: bool, index: number }
+    pub fn veil_list(&self) -> JsValue {
+        let arr = js_sys::Array::new();
+        for i in 0..self.compositor.veil_count() {
+            if let Some((type_id, visible)) = self.compositor.veil_info(i) {
+                let obj = js_sys::Object::new();
+                js_sys::Reflect::set(&obj, &"type".into(), &JsValue::from_str(type_id)).ok();
+                js_sys::Reflect::set(&obj, &"visible".into(), &JsValue::from(visible)).ok();
+                js_sys::Reflect::set(&obj, &"index".into(), &JsValue::from(i as f64)).ok();
+                arr.push(&obj);
+            }
+        }
+        arr.into()
     }
 
     // --- Internal helpers ---

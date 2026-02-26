@@ -1,8 +1,10 @@
 <script lang="ts">
+    import VeilPanel from './veils/VeilPanel.svelte';
     import LayerPanel from './layers/LayerPanel.svelte';
 </script>
 
 <div class="right-sidebar">
+    <VeilPanel />
     <LayerPanel />
 </div>
 

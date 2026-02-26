@@ -22,6 +22,10 @@ The project uses a `build.rs` script that scans module directories and auto-gene
 
 This same pattern applies to all modular systems in the project.
 
+## DRY Principle
+
+Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. Extract shared logic into a common abstraction rather than duplicating the pattern. This applies across modules, across layers (Rust, WASM bridge, JS), and across systems. When you notice structural similarity, unify it.
+
 ## Engineering Principle
 
 Every system that is implemented must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. It's okay to take a step back from the current task, in order to do things right. This relates directly to the modularity principle above.
