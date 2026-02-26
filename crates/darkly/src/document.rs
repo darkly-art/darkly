@@ -4,12 +4,195 @@ use crate::tile::{TILE_SIZE, TileGrid};
 use crate::undo::UndoStep;
 use std::collections::HashMap;
 
+pub enum MoveTarget {
+    Before(LayerId),
+    After(LayerId),
+    IntoGroupTop(LayerId),
+    IntoGroupBottom(LayerId),
+}
+
 pub struct Document {
-    pub layers: Vec<Layer>,
+    pub layers: Vec<LayerNode>,
     pub width: u32,
     pub height: u32,
     pub dirty: HashMap<LayerId, DirtyRegion>,
     next_id: LayerId,
+}
+
+// --- Tree traversal helpers (free functions for borrow-splitting) ---
+
+fn find_layer_in<'a>(nodes: &'a [LayerNode], id: LayerId) -> Option<&'a Layer> {
+    for node in nodes {
+        match node {
+            LayerNode::Layer(l) if l.id() == id => return Some(l),
+            LayerNode::Group(g) => {
+                if let Some(l) = find_layer_in(&g.children, id) {
+                    return Some(l);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn find_layer_in_mut<'a>(nodes: &'a mut [LayerNode], id: LayerId) -> Option<&'a mut Layer> {
+    for node in nodes {
+        match node {
+            LayerNode::Layer(l) if l.id() == id => return Some(l),
+            LayerNode::Group(g) => {
+                if let Some(l) = find_layer_in_mut(&mut g.children, id) {
+                    return Some(l);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn find_node_in<'a>(nodes: &'a [LayerNode], id: LayerId) -> Option<&'a LayerNode> {
+    for node in nodes {
+        if node.id() == id {
+            return Some(node);
+        }
+        if let LayerNode::Group(g) = node {
+            if let Some(n) = find_node_in(&g.children, id) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+fn find_node_in_mut<'a>(nodes: &'a mut [LayerNode], id: LayerId) -> Option<&'a mut LayerNode> {
+    for node in nodes {
+        if node.id() == id {
+            return Some(node);
+        }
+        if let LayerNode::Group(g) = node {
+            if let Some(n) = find_node_in_mut(&mut g.children, id) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+fn find_raster_in_mut<'a>(nodes: &'a mut [LayerNode], id: LayerId) -> Option<&'a mut RasterLayer> {
+    for node in nodes {
+        match node {
+            LayerNode::Layer(Layer::Raster(r)) if r.id == id => return Some(r),
+            LayerNode::Group(g) => {
+                if let Some(r) = find_raster_in_mut(&mut g.children, id) {
+                    return Some(r);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn detach_node(nodes: &mut Vec<LayerNode>, id: LayerId) -> Option<LayerNode> {
+    if let Some(pos) = nodes.iter().position(|n| n.id() == id) {
+        return Some(nodes.remove(pos));
+    }
+    for node in nodes.iter_mut() {
+        if let LayerNode::Group(g) = node {
+            if let Some(n) = detach_node(&mut g.children, id) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// Find the position path of a node in the tree. Returns the path of indices.
+fn find_position(nodes: &[LayerNode], id: LayerId) -> Option<Vec<usize>> {
+    for (i, node) in nodes.iter().enumerate() {
+        if node.id() == id {
+            return Some(vec![i]);
+        }
+        if let LayerNode::Group(g) = node {
+            if let Some(mut path) = find_position(&g.children, id) {
+                path.insert(0, i);
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Get mutable reference to the container (Vec<LayerNode>) at a path.
+/// Path should have at least one element; the last element is the index within the container.
+fn container_at_path<'a>(nodes: &'a mut Vec<LayerNode>, path: &[usize]) -> &'a mut Vec<LayerNode> {
+    if path.len() <= 1 {
+        return nodes;
+    }
+    // Check if the node at path[0] is a group before borrowing mutably
+    let is_group = matches!(&nodes[path[0]], LayerNode::Group(_));
+    if is_group {
+        match &mut nodes[path[0]] {
+            LayerNode::Group(g) => container_at_path(&mut g.children, &path[1..]),
+            _ => unreachable!(),
+        }
+    } else {
+        nodes
+    }
+}
+
+fn flatten_nodes<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a Layer>) {
+    for node in nodes {
+        match node {
+            LayerNode::Layer(l) => out.push(l),
+            LayerNode::Group(g) => {
+                if !g.visible {
+                    continue;
+                }
+                // Passthrough groups: children composited directly into parent.
+                // Normal groups: TODO — needs isolated compositing buffer.
+                // For now, flatten children in both modes.
+                flatten_nodes(&g.children, out);
+            }
+        }
+    }
+}
+
+fn collect_raster_layers<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a RasterLayer>) {
+    for node in nodes {
+        match node {
+            LayerNode::Layer(Layer::Raster(r)) => out.push(r),
+            LayerNode::Group(g) => collect_raster_layers(&g.children, out),
+            _ => {}
+        }
+    }
+}
+
+fn find_parent_of(nodes: &[LayerNode], id: LayerId) -> Option<LayerId> {
+    for node in nodes {
+        if let LayerNode::Group(g) = node {
+            for child in &g.children {
+                if child.id() == id {
+                    return Some(g.id);
+                }
+            }
+            if let Some(parent) = find_parent_of(&g.children, id) {
+                return Some(parent);
+            }
+        }
+    }
+    None
+}
+
+/// Recursively collect all IDs under a node (including the node itself).
+fn collect_all_ids(node: &LayerNode, out: &mut Vec<LayerId>) {
+    out.push(node.id());
+    if let LayerNode::Group(g) = node {
+        for child in &g.children {
+            collect_all_ids(child, out);
+        }
+    }
 }
 
 impl Document {
@@ -29,11 +212,32 @@ impl Document {
         id
     }
 
+    /// Add a new raster layer at the root top.
     pub fn add_raster_layer(&mut self) -> LayerId {
         let id = self.alloc_id();
         let layer = RasterLayer::new(id);
-        self.layers.push(Layer::Raster(layer));
+        self.layers.push(LayerNode::Layer(Layer::Raster(layer)));
         self.dirty.insert(id, DirtyRegion::new());
+        id
+    }
+
+    /// Add a new raster layer inside a group (or at root if parent is None).
+    pub fn add_raster_layer_in(&mut self, parent: Option<LayerId>) -> LayerId {
+        let id = self.alloc_id();
+        let layer = RasterLayer::new(id);
+        let node = LayerNode::Layer(Layer::Raster(layer));
+        self.dirty.insert(id, DirtyRegion::new());
+
+        match parent {
+            Some(group_id) => {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, group_id) {
+                    g.children.push(node);
+                } else {
+                    self.layers.push(node);
+                }
+            }
+            None => self.layers.push(node),
+        }
         id
     }
 
@@ -44,44 +248,126 @@ impl Document {
             filter,
             visible: true,
         };
-        self.layers.push(Layer::Filter(layer));
+        self.layers.push(LayerNode::Layer(Layer::Filter(layer)));
+        id
+    }
+
+    /// Add a new empty group at the root top.
+    pub fn add_group(&mut self) -> LayerId {
+        let id = self.alloc_id();
+        let group = LayerGroup::new(id);
+        self.layers.push(LayerNode::Group(group));
         id
     }
 
     /// Flatten the layer tree into display order (bottom-to-top) for compositing.
-    /// In Phase 2 (flat list only), this simply returns references to all layers.
-    /// When layer groups are added, this will recursively flatten the tree,
-    /// respecting group visibility (hidden groups skip all children).
+    /// Hidden groups exclude all children. Passthrough groups flatten children directly.
     pub fn flat_layers(&self) -> Vec<&Layer> {
-        self.layers.iter().collect()
+        let mut out = Vec::new();
+        flatten_nodes(&self.layers, &mut out);
+        out
+    }
+
+    /// Get all raster layers in the tree (regardless of visibility).
+    /// Used for tile upload — we keep GPU textures in sync even for hidden layers.
+    pub fn all_raster_layers(&self) -> Vec<&RasterLayer> {
+        let mut out = Vec::new();
+        collect_raster_layers(&self.layers, &mut out);
+        out
+    }
+
+    /// Compute the flat (display order) index of a layer by id.
+    pub fn flat_layer_index(&self, id: LayerId) -> Option<usize> {
+        self.flat_layers().iter().position(|l| l.id() == id)
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        self.layers.iter().find(|l| l.id() == id)
+        find_layer_in(&self.layers, id)
     }
 
     pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
-        self.layers.iter_mut().find(|l| l.id() == id)
+        find_layer_in_mut(&mut self.layers, id)
     }
 
-    /// Find the index of a layer by id.
-    pub fn layer_index(&self, id: LayerId) -> Option<usize> {
-        self.layers.iter().position(|l| l.id() == id)
+    pub fn find_node(&self, id: LayerId) -> Option<&LayerNode> {
+        find_node_in(&self.layers, id)
+    }
+
+    pub fn find_node_mut(&mut self, id: LayerId) -> Option<&mut LayerNode> {
+        find_node_in_mut(&mut self.layers, id)
+    }
+
+    pub fn parent_of(&self, id: LayerId) -> Option<LayerId> {
+        find_parent_of(&self.layers, id)
+    }
+
+    /// Move a node to a new position in the tree.
+    pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
+        let node = match detach_node(&mut self.layers, layer_id) {
+            Some(n) => n,
+            None => return,
+        };
+        self.insert_node(node, target);
+    }
+
+    fn insert_node(&mut self, node: LayerNode, target: MoveTarget) {
+        match target {
+            MoveTarget::Before(ref_id) => {
+                if let Some(path) = find_position(&self.layers, ref_id) {
+                    let idx = *path.last().unwrap();
+                    let container = container_at_path(&mut self.layers, &path);
+                    container.insert(idx, node);
+                } else {
+                    self.layers.push(node);
+                }
+            }
+            MoveTarget::After(ref_id) => {
+                if let Some(path) = find_position(&self.layers, ref_id) {
+                    let idx = *path.last().unwrap();
+                    let container = container_at_path(&mut self.layers, &path);
+                    container.insert(idx + 1, node);
+                } else {
+                    self.layers.push(node);
+                }
+            }
+            MoveTarget::IntoGroupTop(group_id) => {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, group_id) {
+                    g.children.push(node);
+                } else {
+                    self.layers.push(node);
+                }
+            }
+            MoveTarget::IntoGroupBottom(group_id) => {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, group_id) {
+                    g.children.insert(0, node);
+                } else {
+                    self.layers.push(node);
+                }
+            }
+        }
+    }
+
+    /// Remove a node (layer or group) from the tree. Also removes dirty regions.
+    pub fn remove_node(&mut self, id: LayerId) {
+        if let Some(node) = detach_node(&mut self.layers, id) {
+            let mut ids = Vec::new();
+            collect_all_ids(&node, &mut ids);
+            for removed_id in ids {
+                self.dirty.remove(&removed_id);
+            }
+        }
     }
 
     /// Get a mutable reference to the raster layer's tiles and the dirty region simultaneously.
+    /// Uses borrow splitting: layers and dirty are separate fields.
     fn raster_tiles_and_dirty<'a>(
-        layers: &'a mut Vec<Layer>,
+        layers: &'a mut Vec<LayerNode>,
         dirty: &'a mut HashMap<LayerId, DirtyRegion>,
         layer_id: LayerId,
     ) -> Option<(&'a mut TileGrid, &'a mut DirtyRegion)> {
-        let layer = layers.iter_mut().find(|l| l.id() == layer_id)?;
-        let tiles = match layer {
-            Layer::Raster(r) => &mut r.tiles,
-            _ => return None,
-        };
+        let raster = find_raster_in_mut(layers, layer_id)?;
         let dirty_region = dirty.get_mut(&layer_id)?;
-        Some((tiles, dirty_region))
+        Some((&mut raster.tiles, dirty_region))
     }
 
     /// Paint a filled circle on a raster layer.
@@ -435,18 +721,94 @@ mod tests {
     #[test]
     fn fill_gradient_marks_dirty() {
         let ts = TILE_SIZE as u32;
-        let canvas = ts * 2; // use a canvas that's exactly 2 tiles wide/tall
+        let canvas = ts * 2;
         let mut doc = Document::new(canvas, canvas);
         let id = doc.add_raster_layer();
         doc.fill_gradient(id);
 
         let dirty = doc.dirty.get(&id).unwrap();
-        assert_eq!(dirty.len(), 4); // 2 tiles each axis = 4 tiles
+        assert_eq!(dirty.len(), 4);
 
         if let Some(Layer::Raster(r)) = doc.layer(id) {
             let tile = r.tiles.get(0, 0).unwrap();
             let px = tile.data().pixel(0, 0);
             assert_eq!(px[3], 255);
         }
+    }
+
+    #[test]
+    fn flat_layers_respects_group_visibility() {
+        let mut doc = Document::new(256, 256);
+        let l1 = doc.add_raster_layer();
+        let g1 = doc.add_group();
+        let l2 = doc.add_raster_layer_in(Some(g1));
+
+        // Both layers visible
+        let flat = doc.flat_layers();
+        assert_eq!(flat.len(), 2);
+        assert_eq!(flat[0].id(), l1);
+        assert_eq!(flat[1].id(), l2);
+
+        // Hide the group — its children should be excluded
+        if let Some(LayerNode::Group(g)) = doc.find_node_mut(g1) {
+            g.visible = false;
+        }
+        let flat = doc.flat_layers();
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].id(), l1);
+    }
+
+    #[test]
+    fn move_layer_between_groups() {
+        let mut doc = Document::new(256, 256);
+        let l1 = doc.add_raster_layer();
+        let g1 = doc.add_group();
+        let l2 = doc.add_raster_layer_in(Some(g1));
+
+        // l2 is inside g1. Move it to root before l1.
+        doc.move_layer(l2, MoveTarget::Before(l1));
+        let flat = doc.flat_layers();
+        assert_eq!(flat[0].id(), l2);
+        assert_eq!(flat[1].id(), l1);
+    }
+
+    #[test]
+    fn nested_groups_flatten_correctly() {
+        let mut doc = Document::new(256, 256);
+        let l1 = doc.add_raster_layer(); // root
+        let g1 = doc.add_group();        // root group
+        let l2 = doc.add_raster_layer_in(Some(g1)); // inside g1
+
+        let flat = doc.flat_layers();
+        assert_eq!(flat.len(), 2);
+        assert_eq!(flat[0].id(), l1);
+        assert_eq!(flat[1].id(), l2);
+    }
+
+    #[test]
+    fn remove_group_removes_children_dirty() {
+        let mut doc = Document::new(256, 256);
+        let g1 = doc.add_group();
+        let l1 = doc.add_raster_layer_in(Some(g1));
+
+        assert!(doc.dirty.contains_key(&l1));
+        doc.remove_node(g1);
+        assert!(!doc.dirty.contains_key(&l1));
+        assert!(doc.flat_layers().is_empty());
+    }
+
+    #[test]
+    fn detach_insert_roundtrip() {
+        let mut doc = Document::new(256, 256);
+        let l1 = doc.add_raster_layer();
+        let l2 = doc.add_raster_layer();
+        let l3 = doc.add_raster_layer();
+
+        // Move l1 to after l3 (top)
+        doc.move_layer(l1, MoveTarget::After(l3));
+        let flat = doc.flat_layers();
+        assert_eq!(flat[0].id(), l2);
+        assert_eq!(flat[1].id(), l3);
+        assert_eq!(flat[2].id(), l1);
     }
 }

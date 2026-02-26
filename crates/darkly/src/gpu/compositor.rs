@@ -477,52 +477,50 @@ impl Compositor {
 
         // 2. Upload dirty tiles for each dirty raster layer
         if has_dirty {
-            for layer in &doc.layers {
-                if let Layer::Raster(raster) = layer {
-                    let dirty = match doc.dirty.get(&raster.id) {
-                        Some(d) if !d.is_empty() => d,
-                        _ => continue,
-                    };
+            for raster in doc.all_raster_layers() {
+                let dirty = match doc.dirty.get(&raster.id) {
+                    Some(d) if !d.is_empty() => d,
+                    _ => continue,
+                };
 
-                    let layer_tex = match self.layer_textures.get(&raster.id) {
-                        Some(t) => t,
-                        None => continue,
-                    };
+                let layer_tex = match self.layer_textures.get(&raster.id) {
+                    Some(t) => t,
+                    None => continue,
+                };
 
-                    for (tx, ty) in dirty.iter() {
-                        if tx < 0 || ty < 0 {
-                            continue;
-                        }
-                        if tx as u32 >= layer_tex.width_in_tiles
-                            || ty as u32 >= layer_tex.height_in_tiles
-                        {
-                            continue;
-                        }
-                        let tile_data = match raster.tiles.get(tx, ty) {
-                            Some(tile) => tile.data(),
-                            None => &BLANK_TILE,
-                        };
-                        self.staging.upload_tile(
-                            queue,
-                            tile_data,
-                            &layer_tex.texture,
-                            tx as u32,
-                            ty as u32,
-                        );
+                for (tx, ty) in dirty.iter() {
+                    if tx < 0 || ty < 0 {
+                        continue;
                     }
-
-                    if let Some(idx) = doc.layer_index(raster.id) {
-                        match self.lowest_dirty_layer {
-                            Some(current) => {
-                                if idx < current {
-                                    self.lowest_dirty_layer = Some(idx);
-                                }
-                            }
-                            None => self.lowest_dirty_layer = Some(idx),
-                        }
+                    if tx as u32 >= layer_tex.width_in_tiles
+                        || ty as u32 >= layer_tex.height_in_tiles
+                    {
+                        continue;
                     }
-                    self.needs_composite = true;
+                    let tile_data = match raster.tiles.get(tx, ty) {
+                        Some(tile) => tile.data(),
+                        None => &BLANK_TILE,
+                    };
+                    self.staging.upload_tile(
+                        queue,
+                        tile_data,
+                        &layer_tex.texture,
+                        tx as u32,
+                        ty as u32,
+                    );
                 }
+
+                if let Some(idx) = doc.flat_layer_index(raster.id) {
+                    match self.lowest_dirty_layer {
+                        Some(current) => {
+                            if idx < current {
+                                self.lowest_dirty_layer = Some(idx);
+                            }
+                        }
+                        None => self.lowest_dirty_layer = Some(idx),
+                    }
+                }
+                self.needs_composite = true;
             }
         }
 
@@ -575,11 +573,12 @@ impl Compositor {
             self.current_accum = 0;
         }
 
-        let num_layers = doc.layers.len();
+        let flat = doc.flat_layers();
+        let num_layers = flat.len();
         let mut wrote_to_cache = false;
 
         for layer_idx in start_layer..num_layers {
-            let layer = &doc.layers[layer_idx];
+            let layer = flat[layer_idx];
             if !layer.visible() {
                 continue;
             }
@@ -769,55 +768,53 @@ impl Compositor {
         // 2. Upload dirty tiles for each dirty raster layer
         perf::time("tile-upload");
         if has_dirty {
-            for layer in &doc.layers {
-                if let Layer::Raster(raster) = layer {
-                    let dirty = match doc.dirty.get(&raster.id) {
-                        Some(d) if !d.is_empty() => d,
-                        _ => continue,
-                    };
+            for raster in doc.all_raster_layers() {
+                let dirty = match doc.dirty.get(&raster.id) {
+                    Some(d) if !d.is_empty() => d,
+                    _ => continue,
+                };
 
-                    let layer_tex = match self.layer_textures.get(&raster.id) {
-                        Some(t) => t,
-                        None => continue,
-                    };
+                let layer_tex = match self.layer_textures.get(&raster.id) {
+                    Some(t) => t,
+                    None => continue,
+                };
 
-                    for (tx, ty) in dirty.iter() {
-                        if tx < 0 || ty < 0 {
-                            continue;
-                        }
-                        if tx as u32 >= layer_tex.width_in_tiles
-                            || ty as u32 >= layer_tex.height_in_tiles
-                        {
-                            continue;
-                        }
-                        let tile_data = match raster.tiles.get(tx, ty) {
-                            Some(tile) => tile.data(),
-                            // Tile was removed (e.g. by undo) — upload blank to
-                            // clear the stale GPU data.
-                            None => &BLANK_TILE,
-                        };
-                        self.staging.upload_tile(
-                            queue,
-                            tile_data,
-                            &layer_tex.texture,
-                            tx as u32,
-                            ty as u32,
-                        );
+                for (tx, ty) in dirty.iter() {
+                    if tx < 0 || ty < 0 {
+                        continue;
                     }
-
-                    // Note the lowest dirty layer for cache invalidation
-                    if let Some(idx) = doc.layer_index(raster.id) {
-                        match self.lowest_dirty_layer {
-                            Some(current) => {
-                                if idx < current {
-                                    self.lowest_dirty_layer = Some(idx);
-                                }
-                            }
-                            None => self.lowest_dirty_layer = Some(idx),
-                        }
+                    if tx as u32 >= layer_tex.width_in_tiles
+                        || ty as u32 >= layer_tex.height_in_tiles
+                    {
+                        continue;
                     }
-                    self.needs_composite = true;
+                    let tile_data = match raster.tiles.get(tx, ty) {
+                        Some(tile) => tile.data(),
+                        // Tile was removed (e.g. by undo) — upload blank to
+                        // clear the stale GPU data.
+                        None => &BLANK_TILE,
+                    };
+                    self.staging.upload_tile(
+                        queue,
+                        tile_data,
+                        &layer_tex.texture,
+                        tx as u32,
+                        ty as u32,
+                    );
                 }
+
+                // Note the lowest dirty layer for cache invalidation
+                if let Some(idx) = doc.flat_layer_index(raster.id) {
+                    match self.lowest_dirty_layer {
+                        Some(current) => {
+                            if idx < current {
+                                self.lowest_dirty_layer = Some(idx);
+                            }
+                        }
+                        None => self.lowest_dirty_layer = Some(idx),
+                    }
+                }
+                self.needs_composite = true;
             }
         }
 
@@ -853,9 +850,9 @@ impl Compositor {
 
         #[cfg(feature = "profile")]
         log::info!(
-            "scissor: ({scissor_x},{scissor_y} {scissor_w}x{scissor_h}), start_layer will be from cache_valid_through={:?}, layers={}",
+            "scissor: ({scissor_x},{scissor_y} {scissor_w}x{scissor_h}), start_layer will be from cache_valid_through={:?}, flat_layers={}",
             self.cache_valid_through,
-            doc.layers.len(),
+            doc.flat_layers().len(),
         );
 
         // 4. Acquire surface — only when we actually have work to do.
@@ -921,11 +918,12 @@ impl Compositor {
         // `wrote_to_cache` tracks whether the final result landed in
         // composite_cache (true) or in accum[current_accum] (false).
         perf::time("composite-layers");
-        let num_layers = doc.layers.len();
+        let flat = doc.flat_layers();
+        let num_layers = flat.len();
         let mut wrote_to_cache = false;
 
         for layer_idx in start_layer..num_layers {
-            let layer = &doc.layers[layer_idx];
+            let layer = flat[layer_idx];
             if !layer.visible() {
                 continue;
             }

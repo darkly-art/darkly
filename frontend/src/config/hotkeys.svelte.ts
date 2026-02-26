@@ -18,6 +18,8 @@ export function registerHotkeys(actions: Record<string, () => void>) {
         const key = (hotkeys as any)[action];
         if (key && typeof key === 'string') {
             bindings[key] = (e: KeyboardEvent) => {
+                const tag = (e.target as HTMLElement)?.tagName;
+                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
                 e.preventDefault();
                 handler();
             };

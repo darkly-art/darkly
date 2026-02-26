@@ -1,6 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import LayerItem from './LayerItem.svelte';
+    import LayerGroup from './LayerGroup.svelte';
 
     let layerTree = $state<any[]>([]);
 
@@ -26,6 +27,14 @@
         }
     }
 
+    function addGroup() {
+        if (app.handle) {
+            const id = app.handle.add_group();
+            app.activeLayerId = Number(id);
+            refreshTree();
+        }
+    }
+
     function removeLayer() {
         if (app.handle && app.activeLayerId !== null) {
             app.handle.remove_layer(BigInt(app.activeLayerId));
@@ -34,14 +43,13 @@
         }
     }
 
-    function onDrop(e: DragEvent, targetId: number, position: 'before' | 'after') {
+    function onDragOver(e: DragEvent) {
         e.preventDefault();
-        const draggedId = e.dataTransfer?.getData('text/plain');
-        if (!draggedId || !app.handle) return;
+    }
 
-        // For now, simple reorder within the flat layer list
-        // Full tree reorder requires the move_layer WASM API
-        refreshTree();
+    function onDrop(e: DragEvent) {
+        e.preventDefault();
+        // Handled by individual items/groups
     }
 </script>
 
@@ -50,9 +58,14 @@
         <span>Layers</span>
     </div>
 
-    <div class="layer-list">
-        {#each layerTree as layer (layer.id)}
-            <LayerItem {layer} onupdate={refreshTree} />
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div class="layer-list" ondragover={onDragOver} ondrop={onDrop}>
+        {#each layerTree as node (node.id)}
+            {#if node.type === 'group'}
+                <LayerGroup group={node} onupdate={refreshTree} />
+            {:else}
+                <LayerItem layer={node} onupdate={refreshTree} />
+            {/if}
         {/each}
 
         {#if layerTree.length === 0}
@@ -62,6 +75,7 @@
 
     <div class="panel-actions">
         <button class="action-btn" onclick={addLayer} title="Add layer">+</button>
+        <button class="action-btn" onclick={addGroup} title="Add group">&#x1F4C1;</button>
         <button class="action-btn" onclick={removeLayer} title="Delete layer">&#x1F5D1;</button>
     </div>
 </div>

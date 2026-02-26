@@ -1,5 +1,5 @@
-use darkly::document::Document;
-use darkly::layer::Layer;
+use darkly::document::{Document, MoveTarget};
+use darkly::layer::{Layer, LayerNode};
 use darkly::undo::{UndoStack, mark_affected_dirty};
 use darkly::gpu::compositor::Compositor;
 use darkly::gpu::context::GpuContext;
@@ -16,6 +16,46 @@ pub struct DarklyHandle {
     active_stroke_layer: Option<u64>,
     /// Current view transform (cached for screen_to_canvas).
     view_transform: ViewTransform,
+}
+
+/// Convert a LayerNode to a JS object for the UI.
+fn node_to_js(node: &LayerNode) -> js_sys::Object {
+    let obj = js_sys::Object::new();
+    match node {
+        LayerNode::Layer(layer) => match layer {
+            Layer::Raster(r) => {
+                js_sys::Reflect::set(&obj, &"type".into(), &"raster".into()).ok();
+                js_sys::Reflect::set(&obj, &"id".into(), &JsValue::from(r.id as f64)).ok();
+                js_sys::Reflect::set(&obj, &"name".into(), &JsValue::from_str(&r.name)).ok();
+                js_sys::Reflect::set(&obj, &"visible".into(), &JsValue::from(r.visible)).ok();
+                js_sys::Reflect::set(&obj, &"opacity".into(), &JsValue::from(r.opacity as f64)).ok();
+                js_sys::Reflect::set(&obj, &"blendMode".into(), &JsValue::from(r.blend_mode as u32)).ok();
+            }
+            Layer::Filter(f) => {
+                js_sys::Reflect::set(&obj, &"type".into(), &"filter".into()).ok();
+                js_sys::Reflect::set(&obj, &"id".into(), &JsValue::from(f.id as f64)).ok();
+                js_sys::Reflect::set(&obj, &"name".into(), &JsValue::from_str(f.filter.type_id())).ok();
+                js_sys::Reflect::set(&obj, &"visible".into(), &JsValue::from(f.visible)).ok();
+            }
+        },
+        LayerNode::Group(g) => {
+            js_sys::Reflect::set(&obj, &"type".into(), &"group".into()).ok();
+            js_sys::Reflect::set(&obj, &"id".into(), &JsValue::from(g.id as f64)).ok();
+            js_sys::Reflect::set(&obj, &"name".into(), &JsValue::from_str(&g.name)).ok();
+            js_sys::Reflect::set(&obj, &"visible".into(), &JsValue::from(g.visible)).ok();
+            js_sys::Reflect::set(&obj, &"collapsed".into(), &JsValue::from(g.collapsed)).ok();
+            js_sys::Reflect::set(&obj, &"passthrough".into(), &JsValue::from(g.passthrough)).ok();
+            js_sys::Reflect::set(&obj, &"opacity".into(), &JsValue::from(g.opacity as f64)).ok();
+            js_sys::Reflect::set(&obj, &"blendMode".into(), &JsValue::from(g.blend_mode as u32)).ok();
+            // Recursively build children array (top-to-bottom display order = reversed)
+            let children = js_sys::Array::new();
+            for child in g.children.iter().rev() {
+                children.push(&node_to_js(child));
+            }
+            js_sys::Reflect::set(&obj, &"children".into(), &children).ok();
+        }
+    }
+    obj
 }
 
 #[wasm_bindgen]
@@ -45,6 +85,19 @@ impl DarklyHandle {
         self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
         self.compositor.mark_dirty();
         id
+    }
+
+    /// Add a new raster layer inside a group and return its ID.
+    pub fn add_raster_layer_in(&mut self, group_id: u64) -> u64 {
+        let id = self.doc.add_raster_layer_in(Some(group_id));
+        self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
+        self.compositor.mark_dirty();
+        id
+    }
+
+    /// Add a new empty group and return its ID.
+    pub fn add_group(&mut self) -> u64 {
+        self.doc.add_group()
     }
 
     /// Add a filter layer. `filter_type` is the filter type string (e.g., "noise").
@@ -233,47 +286,65 @@ impl DarklyHandle {
         }
     }
 
-    /// Set visibility for a layer.
+    /// Set visibility for a layer or group.
     pub fn set_layer_visible(&mut self, layer_id: u64, visible: bool) {
-        if let Some(layer) = self.doc.layer_mut(layer_id) {
-            match layer {
-                Layer::Raster(r) => r.visible = visible,
-                Layer::Filter(f) => f.visible = visible,
+        if let Some(node) = self.doc.find_node_mut(layer_id) {
+            match node {
+                LayerNode::Layer(l) => match l {
+                    Layer::Raster(r) => r.visible = visible,
+                    Layer::Filter(f) => f.visible = visible,
+                },
+                LayerNode::Group(g) => g.visible = visible,
             }
             self.compositor.mark_dirty();
         }
     }
 
+    /// Set layer or group name.
+    pub fn set_layer_name(&mut self, layer_id: u64, name: &str) {
+        if let Some(node) = self.doc.find_node_mut(layer_id) {
+            match node {
+                LayerNode::Layer(Layer::Raster(r)) => r.name = name.to_string(),
+                LayerNode::Group(g) => g.name = name.to_string(),
+                _ => {}
+            }
+        }
+    }
+
+    /// Set group collapsed state (UI only).
+    pub fn set_group_collapsed(&mut self, group_id: u64, collapsed: bool) {
+        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
+            g.collapsed = collapsed;
+        }
+    }
+
     /// Get the layer tree as a JS array for the UI.
+    /// Returned in top-to-bottom display order (reversed from internal bottom-to-top).
     pub fn layer_tree(&self) -> JsValue {
         let arr = js_sys::Array::new();
-        // Return in top-to-bottom display order (reversed from internal bottom-to-top)
-        for layer in self.doc.layers.iter().rev() {
-            let obj = js_sys::Object::new();
-            match layer {
-                Layer::Raster(r) => {
-                    js_sys::Reflect::set(&obj, &"type".into(), &"raster".into()).ok();
-                    js_sys::Reflect::set(&obj, &"id".into(), &JsValue::from(r.id as f64)).ok();
-                    js_sys::Reflect::set(&obj, &"name".into(), &JsValue::from_str(&r.name)).ok();
-                    js_sys::Reflect::set(&obj, &"visible".into(), &JsValue::from(r.visible)).ok();
-                    js_sys::Reflect::set(&obj, &"opacity".into(), &JsValue::from(r.opacity as f64)).ok();
-                    js_sys::Reflect::set(&obj, &"blendMode".into(), &JsValue::from(r.blend_mode as u32)).ok();
-                }
-                Layer::Filter(f) => {
-                    js_sys::Reflect::set(&obj, &"type".into(), &"filter".into()).ok();
-                    js_sys::Reflect::set(&obj, &"id".into(), &JsValue::from(f.id as f64)).ok();
-                    js_sys::Reflect::set(&obj, &"name".into(), &JsValue::from_str(f.filter.type_id())).ok();
-                    js_sys::Reflect::set(&obj, &"visible".into(), &JsValue::from(f.visible)).ok();
-                }
-            }
-            arr.push(&obj);
+        for node in self.doc.layers.iter().rev() {
+            arr.push(&node_to_js(node));
         }
         arr.into()
     }
 
-    /// Remove a layer.
+    /// Move a layer or group to a new position.
+    /// `target_type`: "before", "after", "into_top", "into_bottom"
+    pub fn move_layer(&mut self, layer_id: u64, target_type: &str, target_id: u64) {
+        let target = match target_type {
+            "before" => MoveTarget::Before(target_id),
+            "after" => MoveTarget::After(target_id),
+            "into_top" => MoveTarget::IntoGroupTop(target_id),
+            "into_bottom" => MoveTarget::IntoGroupBottom(target_id),
+            _ => return,
+        };
+        self.doc.move_layer(layer_id, target);
+        self.compositor.mark_dirty();
+    }
+
+    /// Remove a layer or group (and all children).
     pub fn remove_layer(&mut self, layer_id: u64) {
-        self.doc.layers.retain(|l| l.id() != layer_id);
+        self.doc.remove_node(layer_id);
         self.compositor.mark_dirty();
     }
 
