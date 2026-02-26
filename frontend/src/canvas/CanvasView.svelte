@@ -9,6 +9,7 @@
     let canvas: HTMLCanvasElement;
 
     function syncCanvasSize() {
+        if (!canvas) return;
         const dpr = window.devicePixelRatio || 1;
         const rect = canvas.getBoundingClientRect();
         const w = Math.round(rect.width * dpr);
