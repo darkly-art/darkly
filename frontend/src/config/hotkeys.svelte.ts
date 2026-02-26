@@ -18,8 +18,11 @@ export function registerHotkeys(actions: Record<string, () => void>) {
         const key = (hotkeys as any)[action];
         if (key && typeof key === 'string') {
             bindings[key] = (e: KeyboardEvent) => {
-                const tag = (e.target as HTMLElement)?.tagName;
-                if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+                const el = e.target as HTMLElement;
+                const tag = el?.tagName;
+                // Allow hotkeys through range sliders — they don't need text input.
+                if (tag === 'INPUT' && (el as HTMLInputElement).type !== 'range') return;
+                if (tag === 'TEXTAREA' || tag === 'SELECT') return;
                 e.preventDefault();
                 handler();
             };

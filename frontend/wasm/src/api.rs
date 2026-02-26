@@ -310,11 +310,11 @@ impl DarklyHandle {
         }
         self.compositor.mark_dirty();
 
-        self.undo_stack.push(Box::new(PropertyAction::new(
+        self.undo_stack.coalesce_property(PropertyAction::new(
             layer_id,
             Property::Opacity(old_opacity),
             Property::Opacity(opacity),
-        )));
+        ));
     }
 
     /// Set blend mode for a layer or group (undoable).

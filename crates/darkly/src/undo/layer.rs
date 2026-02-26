@@ -40,6 +40,8 @@ impl UndoAction for LayerAddAction {
         }
         HashMap::new()
     }
+
+
 }
 
 /// Undo action for removing a layer/group.
@@ -96,6 +98,8 @@ impl UndoAction for LayerRemoveAction {
         }
         HashMap::new()
     }
+
+
 }
 
 /// Undo action for moving a layer/group to a new position.
@@ -143,4 +147,6 @@ impl UndoAction for LayerMoveAction {
         }
         HashMap::new()
     }
+
+
 }

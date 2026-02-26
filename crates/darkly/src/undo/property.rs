@@ -4,6 +4,7 @@ use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
 use std::collections::{HashMap, HashSet};
 
 /// A layer property value that can be saved and restored.
+#[derive(Clone)]
 pub enum Property {
     Opacity(f32),
     BlendMode(BlendMode),
@@ -14,6 +15,11 @@ pub enum Property {
 }
 
 impl Property {
+    /// Returns true if both values are the same property kind (e.g. both Opacity).
+    pub fn same_kind(&self, other: &Property) -> bool {
+        std::mem::discriminant(self) == std::mem::discriminant(other)
+    }
+
     /// Apply this property value to the layer/group in the document.
     fn apply(&self, doc: &mut Document, layer_id: LayerId) {
         match self {
@@ -75,6 +81,18 @@ impl PropertyAction {
             new_value,
         }
     }
+
+    /// Try to coalesce another PropertyAction into this one.
+    /// Succeeds if both target the same layer and same property kind,
+    /// in which case we keep our `old_value` and take their `new_value`.
+    pub fn try_coalesce(&mut self, other: &PropertyAction) -> bool {
+        if self.layer_id == other.layer_id && self.new_value.same_kind(&other.new_value) {
+            self.new_value = other.new_value.clone();
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl UndoAction for PropertyAction {
@@ -86,5 +104,9 @@ impl UndoAction for PropertyAction {
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         self.new_value.apply(doc, self.layer_id);
         HashMap::new()
+    }
+
+    fn try_coalesce_property(&mut self, other: &PropertyAction) -> bool {
+        self.try_coalesce(other)
     }
 }
