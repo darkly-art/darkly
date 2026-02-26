@@ -522,6 +522,9 @@ impl Compositor {
     pub fn remove_veil(&mut self, index: usize) {
         if index < self.veil_entries.len() {
             self.veil_entries.remove(index);
+            if self.veil_entries.is_empty() {
+                self.drop_veil_textures();
+            }
             self.needs_present = true;
         }
     }
@@ -529,7 +532,17 @@ impl Compositor {
     /// Remove all veils.
     pub fn clear_veils(&mut self) {
         self.veil_entries.clear();
+        self.drop_veil_textures();
         self.needs_present = true;
+    }
+
+    /// Drop veil textures and associated bind groups.
+    /// Called when the last veil is removed so stale resources
+    /// never outlive the veils that used them.
+    fn drop_veil_textures(&mut self) {
+        self.veil_textures = None;
+        self.veil_views = None;
+        self.veil_blit_bind_groups = None;
     }
 
     /// Toggle veil visibility.
@@ -626,11 +639,7 @@ impl Compositor {
     /// Recreate veil textures, blit bind groups, and all veil caches.
     /// Called when viewport dimensions change while veils are active.
     fn recreate_veil_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        // Drop existing resources.
-        self.veil_textures = None;
-        self.veil_views = None;
-        self.veil_blit_bind_groups = None;
-
+        self.drop_veil_textures();
         self.ensure_veil_textures(device);
 
         // Rebuild all veil caches with new views.
