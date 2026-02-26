@@ -30,6 +30,7 @@
 
         try {
             const handle = await initEditor(canvas);
+            handle.resize(canvas.width, canvas.height);
             app.handle = handle;
 
             // Demo setup: gradient background + noise filter + paint layer

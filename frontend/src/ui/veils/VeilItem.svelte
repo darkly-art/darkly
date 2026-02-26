@@ -16,6 +16,14 @@
         }
     }
 
+    function remove(e: MouseEvent) {
+        e.stopPropagation();
+        if (app.handle) {
+            app.handle.remove_veil(veil.index);
+            onupdate();
+        }
+    }
+
     function onDragStart(e: DragEvent) {
         e.dataTransfer?.setData('application/x-veil', String(veil.index));
         if (e.dataTransfer) {
@@ -83,6 +91,14 @@
     </button>
 
     <span class="veil-name">{veil.type}</span>
+
+    <button
+        class="remove-btn"
+        onclick={remove}
+        title="Remove veil"
+    >
+        &times;
+    </button>
 </div>
 
 <style>
@@ -142,4 +158,17 @@
         text-overflow: ellipsis;
         white-space: nowrap;
     }
+
+    .remove-btn {
+        background: none;
+        border: none;
+        color: #555;
+        cursor: pointer;
+        padding: 0;
+        font-size: 14px;
+        width: 18px;
+        text-align: center;
+        line-height: 1;
+    }
+    .remove-btn:hover { color: #e44; }
 </style>
