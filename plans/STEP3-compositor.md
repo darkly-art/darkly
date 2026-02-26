@@ -32,6 +32,8 @@ The compositor tracks a `needs_composite` flag. If no tiles were uploaded and no
 
 **Never** call `surface.get_current_texture()`, `device.create_command_encoder()`, or `queue.submit()` when nothing has changed.
 
+**Bug fix (mark_dirty must invalidate cache):** `mark_dirty()` must set **both** `needs_composite = true` **and** `cache_valid_through = None`. Without cache invalidation, non-tile-dirty events (layer deletion, filter layer removal) pass the dirty gate but the compositor resumes from a stale cache that still contains the deleted layer's effect. The visual artifact only clears when a tile paint forces a full recomposite.
+
 ### P3: Only composite dirty layers within the dirty rect
 
 - **Vertically (layers):** Skip all layers below the lowest dirty layer using the cached composite texture.

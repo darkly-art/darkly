@@ -411,6 +411,7 @@ impl Compositor {
     /// Mark that recompositing is needed.
     pub fn mark_dirty(&mut self) {
         self.needs_composite = true;
+        self.cache_valid_through = None;
     }
 
     /// Mark that only the present pass needs to re-run (view transform changed).

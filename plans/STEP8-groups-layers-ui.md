@@ -95,7 +95,7 @@ impl Document {
 
 Change compositor to call `doc.flat_layers()` instead of iterating `doc.layers` directly. All existing compositing logic (ping-pong, scissor, cache) works unchanged on the flat list.
 
-Cache invalidation: any structural change (move, add/remove group, visibility toggle, reorder) -> full cache invalidation.
+Cache invalidation: any structural change (move, add/remove group, visibility toggle, reorder) -> full cache invalidation. This is handled by `mark_dirty()` which sets both `needs_composite = true` and `cache_valid_through = None` (see STEP3 bug fix note — both flags are required for non-tile-dirty events like filter layer deletion to take immediate visual effect).
 
 ### Unit tests
 
