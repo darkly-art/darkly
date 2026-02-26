@@ -24,4 +24,4 @@ This same pattern applies to all modular systems in the project.
 
 ## Engineering Principle
 
-Every system that is implemented must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. This relates directly to the modularity principle above.
+Every system that is implemented must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. It's okay to take a step back from the current task, in order to do things right. This relates directly to the modularity principle above.
