@@ -27,6 +27,9 @@ class AppState {
     // Layer tree (read from WASM, refreshed after mutations/undo/redo).
     layerTree = $state<any[]>([]);
 
+    // Veil list (read from WASM, refreshed after mutations).
+    veilList = $state<any[]>([]);
+
     // View transform (controlled by canvas navigation)
     panX = $state(0);
     panY = $state(0);
@@ -48,6 +51,13 @@ class AppState {
         if (this.handle) {
             const tree = this.handle.layer_tree();
             this.layerTree = Array.isArray(tree) ? tree : [];
+        }
+    }
+
+    refreshVeilList() {
+        if (this.handle) {
+            const list = this.handle.veil_list();
+            this.veilList = Array.isArray(list) ? list : [];
         }
     }
 }

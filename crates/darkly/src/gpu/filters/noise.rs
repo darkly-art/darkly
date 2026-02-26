@@ -1,4 +1,5 @@
-use crate::gpu::filter::{Filter, FilterLayerCache, FilterPipeline, FilterRegistration};
+use crate::gpu::effect::{EffectCache, EffectPipeline};
+use crate::gpu::filter::{Filter, FilterRegistration};
 use std::sync::Arc;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::JsValue;
@@ -16,11 +17,11 @@ pub fn register() -> FilterRegistration {
 pub struct Noise {
     pub amount: f32,
     pub resolution: u32,
-    shared: Arc<FilterPipeline>,
+    shared: Arc<EffectPipeline>,
 }
 
 impl Noise {
-    pub fn new(amount: f32, resolution: u32, shared: Arc<FilterPipeline>) -> Self {
+    pub fn new(amount: f32, resolution: u32, shared: Arc<EffectPipeline>) -> Self {
         Noise {
             amount,
             resolution,
@@ -29,7 +30,7 @@ impl Noise {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn from_js(js: JsValue, shared: Arc<FilterPipeline>) -> Self {
+    pub fn from_js(js: JsValue, shared: Arc<EffectPipeline>) -> Self {
         let amount = js_sys::Reflect::get(&js, &"amount".into())
             .ok()
             .and_then(|v| v.as_f64())
@@ -175,7 +176,7 @@ impl Filter for Noise {
         sampler: &wgpu::Sampler,
         canvas_width: u32,
         canvas_height: u32,
-    ) -> FilterLayerCache {
+    ) -> EffectCache {
         let uniforms = NoiseUniforms {
             amount: self.amount,
             resolution: self.resolution as f32,
@@ -224,7 +225,7 @@ impl Filter for Noise {
             })
         });
 
-        FilterLayerCache {
+        EffectCache {
             uniform_bufs: vec![uniform_buf],
             bind_groups: vec![bind_groups],
             aux_textures: vec![noise_tex],
@@ -234,7 +235,7 @@ impl Filter for Noise {
 }
 
 /// Create the shared pipeline + bind group layout for noise filters.
-pub fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> FilterPipeline {
+pub fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
     let bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("noise-bgl"),
@@ -320,7 +321,7 @@ pub fn create_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> Fi
         cache: None,
     });
 
-    FilterPipeline {
+    EffectPipeline {
         pipeline,
         bind_group_layout,
     }

@@ -10,6 +10,11 @@ fn main() {
         "crate::gpu::filter::FilterRegistration",
     );
 
+    generate_registry(
+        &src.join("gpu/veils"),
+        "crate::gpu::veil::VeilRegistration",
+    );
+
     // Future: uncomment as these directories are created.
     // generate_registry(&src.join("tools"), "crate::tool::ToolRegistration");
 }
