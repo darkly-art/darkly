@@ -1,0 +1,45 @@
+use crate::tile::TILE_SIZE;
+
+/// GPU-side texture storage for a single raster layer.
+/// One Rgba8Unorm texture per layer, sized to canvas dimensions padded to tile boundary.
+pub struct LayerTexture {
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+    pub width_in_tiles: u32,
+    pub height_in_tiles: u32,
+}
+
+impl LayerTexture {
+    pub fn new(device: &wgpu::Device, canvas_width: u32, canvas_height: u32) -> Self {
+        let width_in_tiles = (canvas_width + TILE_SIZE as u32 - 1) / TILE_SIZE as u32;
+        let height_in_tiles = (canvas_height + TILE_SIZE as u32 - 1) / TILE_SIZE as u32;
+        let tex_width = width_in_tiles * TILE_SIZE as u32;
+        let tex_height = height_in_tiles * TILE_SIZE as u32;
+
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("layer-texture"),
+            size: wgpu::Extent3d {
+                width: tex_width,
+                height: tex_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        LayerTexture {
+            texture,
+            view,
+            width_in_tiles,
+            height_in_tiles,
+        }
+    }
+}

@@ -1,0 +1,21 @@
+[package]
+name = "darkly"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+profile = []
+
+[dependencies]
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+serde = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { workspace = true }
+
+[dev-dependencies]
+pollster = "0.4"

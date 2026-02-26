@@ -1,0 +1,46 @@
+import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import type { Component } from 'svelte';
+
+export interface ToolContext {
+    handle: DarklyHandle;
+    screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number };
+}
+
+export interface Tool {
+    readonly id: string;
+    readonly name: string;
+    readonly icon: string;
+
+    /** Key name in HotkeyMap that activates this tool (e.g. 'brushTool').
+     *  Used by hotkey registration to wire up tool switching automatically. */
+    readonly hotkeyAction: string;
+
+    /** Optional Svelte component for tool-specific options panel */
+    readonly optionsComponent?: Component;
+
+    onActivate?(ctx: ToolContext): void;
+    onDeactivate?(ctx: ToolContext): void;
+    onPointerDown(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
+    onPointerMove(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
+    onPointerUp(ctx: ToolContext, e: PointerEvent): void;
+}
+
+class ToolRegistry {
+    private tools = new Map<string, Tool>();
+    private order: string[] = [];
+
+    register(tool: Tool) {
+        this.tools.set(tool.id, tool);
+        this.order.push(tool.id);
+    }
+
+    get(id: string): Tool | undefined {
+        return this.tools.get(id);
+    }
+
+    all(): Tool[] {
+        return this.order.map(id => this.tools.get(id)!);
+    }
+}
+
+export const toolRegistry = new ToolRegistry();
