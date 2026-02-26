@@ -2,6 +2,7 @@
     import LeftSidebar from './ui/LeftSidebar.svelte';
     import CanvasView from './canvas/CanvasView.svelte';
     import RightSidebar from './ui/RightSidebar.svelte';
+    import Toast from './ui/Toast.svelte';
     // Register all tools
     import './tools/index';
     // Initialize hotkeys
@@ -13,6 +14,7 @@
     <CanvasView />
     <RightSidebar />
 </div>
+<Toast />
 
 <style>
     :global(body) {

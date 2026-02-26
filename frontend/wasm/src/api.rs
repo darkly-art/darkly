@@ -9,6 +9,7 @@ use darkly::gpu::compositor::Compositor;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::view::ViewTransform;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsError;
 
 #[wasm_bindgen]
 pub struct DarklyHandle {
@@ -446,7 +447,11 @@ impl DarklyHandle {
     }
 
     /// Remove a layer or group and all children (undoable).
-    pub fn remove_layer(&mut self, layer_id: u64) {
+    pub fn remove_layer(&mut self, layer_id: u64) -> Result<(), JsError> {
+        if self.doc.node_count() <= 1 {
+            return Err(JsError::new("Cannot delete the last layer"));
+        }
+
         let parent = self.doc.parent_of(layer_id);
         let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
 
@@ -455,6 +460,7 @@ impl DarklyHandle {
         }
 
         self.compositor.mark_dirty();
+        Ok(())
     }
 
     /// Undo the last action.

@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { toast } from '../../state/toast.svelte';
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
 
@@ -32,9 +33,13 @@
 
     function removeLayer() {
         if (app.handle && app.activeLayerId !== null) {
-            app.handle.remove_layer(BigInt(app.activeLayerId));
-            app.activeLayerId = null;
-            refresh();
+            try {
+                app.handle.remove_layer(BigInt(app.activeLayerId));
+                app.activeLayerId = null;
+                refresh();
+            } catch (e: any) {
+                toast.show('error', e.message ?? String(e));
+            }
         }
     }
 

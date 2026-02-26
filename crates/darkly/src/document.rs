@@ -195,6 +195,17 @@ fn collect_all_ids(node: &LayerNode, out: &mut Vec<LayerId>) {
 }
 
 /// Recursively collect all raster layer IDs under a node.
+fn count_nodes(nodes: &[LayerNode]) -> usize {
+    let mut count = 0;
+    for node in nodes {
+        count += 1;
+        if let LayerNode::Group(g) = node {
+            count += count_nodes(&g.children);
+        }
+    }
+    count
+}
+
 fn collect_raster_ids(node: &LayerNode, out: &mut Vec<LayerId>) {
     match node {
         LayerNode::Layer(Layer::Raster(r)) => out.push(r.id),
@@ -294,6 +305,11 @@ impl Document {
     }
 
     /// Compute the flat (display order) index of a layer by id.
+    /// Count all nodes (layers + groups) in the tree.
+    pub fn node_count(&self) -> usize {
+        count_nodes(&self.layers)
+    }
+
     pub fn flat_layer_index(&self, id: LayerId) -> Option<usize> {
         self.flat_layers().iter().position(|l| l.id() == id)
     }
