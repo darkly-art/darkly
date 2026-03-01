@@ -1,12 +1,27 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
 
+    interface VeilParam {
+        name: string;
+        kind: 'float' | 'int' | 'bool';
+        min?: number;
+        max?: number;
+        default: number | boolean;
+        value: number | boolean;
+    }
+
     let { veil, onupdate }: {
-        veil: { type: string; visible: boolean; index: number };
+        veil: { type: string; visible: boolean; index: number; params: VeilParam[] };
         onupdate: () => void;
     } = $props();
 
+    let expanded = $state(false);
     let dropPos = $state<'none' | 'above' | 'below'>('none');
+    let draggable = $state(true);
+
+    function toggleExpand() {
+        if (veil.params.length > 0) expanded = !expanded;
+    }
 
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
@@ -22,6 +37,29 @@
             app.handle.remove_veil(veil.index);
             onupdate();
         }
+    }
+
+    function onParamChange() {
+        if (!app.handle) return;
+        const params: Record<string, number | boolean> = {};
+        for (const p of veil.params) {
+            params[p.name] = p.value;
+        }
+        app.handle.update_veil(veil.index, params);
+        onupdate();
+    }
+
+    function onSliderInput(param: VeilParam, e: Event) {
+        const target = e.target as HTMLInputElement;
+        param.value = param.kind === 'int'
+            ? parseInt(target.value, 10)
+            : parseFloat(target.value);
+        onParamChange();
+    }
+
+    function onBoolChange(param: VeilParam, e: Event) {
+        param.value = (e.target as HTMLInputElement).checked;
+        onParamChange();
     }
 
     function onDragStart(e: DragEvent) {
@@ -74,46 +112,78 @@
     class="veil-item"
     class:drop-above={dropPos === 'above'}
     class:drop-below={dropPos === 'below'}
-    draggable="true"
+    draggable={draggable ? 'true' : 'false'}
     ondragstart={onDragStart}
     ondragover={onDragOver}
     ondragleave={onDragLeave}
     ondrop={onDrop}
     ondragend={() => { dropPos = 'none'; }}
 >
-    <button
-        class="vis-btn"
-        class:hidden={!veil.visible}
-        onclick={toggleVisibility}
-        title="Toggle visibility"
-    >
-        {veil.visible ? '\u{1F441}' : '\u{2014}'}
-    </button>
+    <!-- svelte-ignore a11y_click_events_have_key_events -->
+    <div class="veil-header" onclick={toggleExpand}>
+        <button
+            class="vis-btn"
+            class:hidden={!veil.visible}
+            onclick={toggleVisibility}
+            title="Toggle visibility"
+        >
+            {veil.visible ? '\u{1F441}' : '\u{2014}'}
+        </button>
 
-    <span class="veil-name">{veil.type}</span>
+        <span class="veil-name">{veil.type}</span>
 
-    <button
-        class="remove-btn"
-        onclick={remove}
-        title="Remove veil"
-    >
-        &times;
-    </button>
+        {#if veil.params.length > 0}
+            <span class="expand-indicator">{expanded ? '\u25B4' : '\u25BE'}</span>
+        {/if}
+
+        <button
+            class="remove-btn"
+            onclick={remove}
+            title="Remove veil"
+        >
+            &times;
+        </button>
+    </div>
+
+    {#if expanded && veil.params.length > 0}
+        <div class="veil-params">
+            {#each veil.params as param}
+                <div class="param-row">
+                    <label class="param-label">{param.name}</label>
+                    {#if param.kind === 'float' || param.kind === 'int'}
+                        <input
+                            type="range"
+                            class="param-slider"
+                            min={param.min}
+                            max={param.max}
+                            step={param.kind === 'int' ? 1 : ((param.max! - param.min!) / 100)}
+                            value={param.value}
+                            oninput={(e) => onSliderInput(param, e)}
+                            onclick={(e) => e.stopPropagation()}
+                            onpointerdown={() => { draggable = false; }}
+                            onpointerup={() => { draggable = true; }}
+                        />
+                        <span class="param-value">
+                            {param.kind === 'int' ? param.value : (param.value as number).toFixed(1)}
+                        </span>
+                    {:else if param.kind === 'bool'}
+                        <input
+                            type="checkbox"
+                            class="param-checkbox"
+                            checked={param.value as boolean}
+                            onchange={(e) => onBoolChange(param, e)}
+                            onclick={(e) => e.stopPropagation()}
+                        />
+                    {/if}
+                </div>
+            {/each}
+        </div>
+    {/if}
 </div>
 
 <style>
     .veil-item {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 8px;
-        min-height: 24px;
         position: relative;
-        cursor: grab;
-    }
-
-    .veil-item:hover {
-        background: #2a2a2a;
     }
 
     .veil-item.drop-above::before {
@@ -138,6 +208,19 @@
         pointer-events: none;
     }
 
+    .veil-header {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 4px 8px;
+        min-height: 24px;
+        cursor: pointer;
+    }
+
+    .veil-header:hover {
+        background: #2a2a2a;
+    }
+
     .vis-btn {
         background: none;
         border: none;
@@ -159,6 +242,12 @@
         white-space: nowrap;
     }
 
+    .expand-indicator {
+        font-size: 10px;
+        color: #666;
+        margin-right: 2px;
+    }
+
     .remove-btn {
         background: none;
         border: none;
@@ -171,4 +260,40 @@
         line-height: 1;
     }
     .remove-btn:hover { color: #e44; }
+
+    .veil-params {
+        padding: 4px 8px 8px 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .param-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+    }
+
+    .param-label {
+        font-size: 11px;
+        color: #999;
+        min-width: 40px;
+    }
+
+    .param-slider {
+        flex: 1;
+        height: 12px;
+        accent-color: #6a6aff;
+    }
+
+    .param-value {
+        font-size: 10px;
+        color: #777;
+        min-width: 28px;
+        text-align: right;
+    }
+
+    .param-checkbox {
+        accent-color: #6a6aff;
+    }
 </style>

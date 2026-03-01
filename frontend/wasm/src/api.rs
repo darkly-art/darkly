@@ -7,6 +7,7 @@ use darkly::undo::{
 use darkly::undo::property::Property;
 use darkly::gpu::compositor::Compositor;
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::veil::{ParamDef, ParamValue};
 use darkly::gpu::view::ViewTransform;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsError;
@@ -61,6 +62,42 @@ fn node_to_js(node: &LayerNode) -> js_sys::Object {
         }
     }
     obj
+}
+
+/// Serialize a `ParamDef` + optional current `ParamValue` to a JS object.
+fn param_def_to_js(def: &ParamDef, value: Option<&ParamValue>) -> js_sys::Object {
+    let p = js_sys::Object::new();
+    match def {
+        ParamDef::Float { name, min, max, default } => {
+            js_sys::Reflect::set(&p, &"name".into(), &JsValue::from_str(name)).ok();
+            js_sys::Reflect::set(&p, &"kind".into(), &JsValue::from_str("float")).ok();
+            js_sys::Reflect::set(&p, &"min".into(), &JsValue::from(*min as f64)).ok();
+            js_sys::Reflect::set(&p, &"max".into(), &JsValue::from(*max as f64)).ok();
+            js_sys::Reflect::set(&p, &"default".into(), &JsValue::from(*default as f64)).ok();
+            if let Some(ParamValue::Float(v)) = value {
+                js_sys::Reflect::set(&p, &"value".into(), &JsValue::from(*v as f64)).ok();
+            }
+        }
+        ParamDef::Int { name, min, max, default } => {
+            js_sys::Reflect::set(&p, &"name".into(), &JsValue::from_str(name)).ok();
+            js_sys::Reflect::set(&p, &"kind".into(), &JsValue::from_str("int")).ok();
+            js_sys::Reflect::set(&p, &"min".into(), &JsValue::from(*min as f64)).ok();
+            js_sys::Reflect::set(&p, &"max".into(), &JsValue::from(*max as f64)).ok();
+            js_sys::Reflect::set(&p, &"default".into(), &JsValue::from(*default as f64)).ok();
+            if let Some(ParamValue::Int(v)) = value {
+                js_sys::Reflect::set(&p, &"value".into(), &JsValue::from(*v as f64)).ok();
+            }
+        }
+        ParamDef::Bool { name, default } => {
+            js_sys::Reflect::set(&p, &"name".into(), &JsValue::from_str(name)).ok();
+            js_sys::Reflect::set(&p, &"kind".into(), &JsValue::from_str("bool")).ok();
+            js_sys::Reflect::set(&p, &"default".into(), &JsValue::from(*default)).ok();
+            if let Some(ParamValue::Bool(v)) = value {
+                js_sys::Reflect::set(&p, &"value".into(), &JsValue::from(*v)).ok();
+            }
+        }
+    }
+    p
 }
 
 #[wasm_bindgen]
@@ -523,8 +560,26 @@ impl DarklyHandle {
         self.compositor.move_veil(from as usize, to as usize);
     }
 
+    /// Update a veil's parameters. Replaces the veil at the given index
+    /// with a new instance created from `params`, preserving visibility.
+    pub fn update_veil(&mut self, index: u32, params: JsValue) {
+        let idx = index as usize;
+        // type_id() returns &'static str, so the binding outlives the borrow.
+        let type_id: &'static str = match self.compositor.veil_type_id(idx) {
+            Some(t) => t,
+            None => return,
+        };
+        let format = self.compositor.accum_format();
+        let new_veil = self.compositor.veil_registry_mut().create_veil(
+            type_id, params, &self.gpu.device, format,
+        );
+        self.compositor.update_veil(
+            &self.gpu.device, &self.gpu.queue, idx, new_veil,
+        );
+    }
+
     /// Get the veil list as a JS array for the UI.
-    /// Each element: { type: string, visible: bool, index: number }
+    /// Each element: { type, visible, index, params: [{ name, kind, min?, max?, default, value }] }
     pub fn veil_list(&self) -> JsValue {
         let arr = js_sys::Array::new();
         for i in 0..self.compositor.veil_count() {
@@ -533,6 +588,16 @@ impl DarklyHandle {
                 js_sys::Reflect::set(&obj, &"type".into(), &JsValue::from_str(type_id)).ok();
                 js_sys::Reflect::set(&obj, &"visible".into(), &JsValue::from(visible)).ok();
                 js_sys::Reflect::set(&obj, &"index".into(), &JsValue::from(i as f64)).ok();
+
+                // Attach parameter definitions with current values.
+                let param_defs = self.compositor.veil_registry().param_defs(type_id);
+                let values = self.compositor.veil_param_values(i).unwrap_or_default();
+                let params_arr = js_sys::Array::new();
+                for (j, def) in param_defs.iter().enumerate() {
+                    params_arr.push(&param_def_to_js(def, values.get(j)));
+                }
+                js_sys::Reflect::set(&obj, &"params".into(), &params_arr).ok();
+
                 arr.push(&obj);
             }
         }

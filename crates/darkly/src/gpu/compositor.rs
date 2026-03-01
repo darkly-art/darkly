@@ -2,7 +2,7 @@ use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
 use crate::gpu::effect::{self, EffectCache, EffectPipeline};
 use crate::gpu::filter::FilterRegistry;
-use crate::gpu::veil::{Veil, VeilRegistry};
+use crate::gpu::veil::{ParamValue, Veil, VeilRegistry};
 use crate::gpu::staging::StagingRing;
 use crate::gpu::view::ViewTransform;
 use crate::dirty::dirty_pixel_rect;
@@ -571,6 +571,45 @@ impl Compositor {
     /// Get veil type_id and visibility at index.
     pub fn veil_info(&self, index: usize) -> Option<(&str, bool)> {
         self.veil_entries.get(index).map(|e| (e.veil.type_id(), e.visible))
+    }
+
+    /// Get the type_id of the veil at index.
+    pub fn veil_type_id(&self, index: usize) -> Option<&'static str> {
+        self.veil_entries.get(index).map(|e| e.veil.type_id())
+    }
+
+    /// Get the current parameter values of the veil at index.
+    pub fn veil_param_values(&self, index: usize) -> Option<Vec<ParamValue>> {
+        self.veil_entries.get(index).map(|e| e.veil.param_values())
+    }
+
+    /// Access the veil registry (immutable) for reading param defs.
+    pub fn veil_registry(&self) -> &VeilRegistry {
+        &self.veil_registry
+    }
+
+    /// Replace the veil at `index` with a new instance, preserving visibility.
+    /// Used when parameters change — veil params affect GPU resources,
+    /// so recreation is required.
+    pub fn update_veil(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        index: usize,
+        new_veil: Box<dyn Veil>,
+    ) {
+        if index >= self.veil_entries.len() {
+            return;
+        }
+        self.ensure_veil_textures(device);
+        let views = self.veil_views.as_ref().unwrap();
+        let cache = new_veil.create_cache(
+            device, queue, views, &self.sampler,
+            self.viewport_width, self.viewport_height,
+        );
+        let visible = self.veil_entries[index].visible;
+        self.veil_entries[index] = VeilEntry { veil: new_veil, cache, visible };
+        self.needs_present = true;
     }
 
     /// Update viewport dimensions. Recreates veil textures and caches if needed.

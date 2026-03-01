@@ -5,6 +5,27 @@ use wasm_bindgen::JsValue;
 
 pub use super::effect::{EffectCache, EffectPipeline};
 
+// ---------------------------------------------------------------------------
+// Parameter system — typed schema + runtime values for veil configuration.
+// ---------------------------------------------------------------------------
+
+/// Schema definition for a single veil parameter.
+/// Each veil module defines a `const` array of these.
+#[derive(Clone, Debug)]
+pub enum ParamDef {
+    Float { name: &'static str, min: f32, max: f32, default: f32 },
+    Int   { name: &'static str, min: i32, max: i32, default: i32 },
+    Bool  { name: &'static str, default: bool },
+}
+
+/// A concrete runtime parameter value, read from a veil instance.
+#[derive(Clone, Debug)]
+pub enum ParamValue {
+    Float(f32),
+    Int(i32),
+    Bool(bool),
+}
+
 /// Viewport-level post-processing effect ("veil").
 /// Veils run on the fully-presented image at screen resolution,
 /// after the view transform has been applied. They are ephemeral
@@ -16,6 +37,10 @@ pub use super::effect::{EffectCache, EffectPipeline};
 pub trait Veil: std::fmt::Debug {
     fn type_id(&self) -> &'static str;
     fn clone_boxed(&self) -> Box<dyn Veil>;
+
+    /// Return the current parameter values, in the same order as the
+    /// type's `ParamDef` array in `VeilRegistration`.
+    fn param_values(&self) -> Vec<ParamValue>;
 
     /// Create GPU resources for this veil instance.
     /// `ping_pong_views` are the screen-sized veil textures used for chaining.
@@ -45,6 +70,7 @@ pub trait Veil: std::fmt::Debug {
 /// What each veil module returns from its `register()` function.
 pub struct VeilRegistration {
     pub type_id: &'static str,
+    pub params: &'static [ParamDef],
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     #[cfg(target_arch = "wasm32")]
     pub from_js: fn(JsValue, Arc<EffectPipeline>) -> Box<dyn Veil>,
@@ -57,6 +83,7 @@ pub struct VeilRegistry {
 
 struct RegistryEntry {
     create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
+    params: &'static [ParamDef],
     #[cfg(target_arch = "wasm32")]
     from_js: fn(JsValue, Arc<EffectPipeline>) -> Box<dyn Veil>,
     cached_pipeline: Option<Arc<EffectPipeline>>,
@@ -70,6 +97,7 @@ impl VeilRegistry {
                 reg.type_id,
                 RegistryEntry {
                     create_pipeline: reg.create_pipeline,
+                    params: reg.params,
                     #[cfg(target_arch = "wasm32")]
                     from_js: reg.from_js,
                     cached_pipeline: None,
@@ -77,6 +105,14 @@ impl VeilRegistry {
             );
         }
         VeilRegistry { entries }
+    }
+
+    /// Get the static parameter definitions for a veil type.
+    pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
+        self.entries
+            .get(type_id)
+            .map(|e| e.params)
+            .unwrap_or(&[])
     }
 
     /// Get or create the shared pipeline for a veil type.
