@@ -1,5 +1,6 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
 import type { Component } from 'svelte';
+import type { ToolOverlayData } from '../canvas/overlay';
 
 export interface ToolContext {
     handle: DarklyHandle;
@@ -23,6 +24,18 @@ export interface Tool {
     onPointerDown(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
     onPointerMove(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
     onPointerUp(ctx: ToolContext, e: PointerEvent): void;
+
+    /** Handle a key event. Return true if the tool consumed it. */
+    onKeyDown?(e: KeyboardEvent): boolean;
+
+    /** Return overlay shapes to render on top of the canvas.
+     *  Called reactively — return null to hide the overlay. */
+    getOverlay?(): ToolOverlayData | null;
+
+    /** Called by the system to dismiss the tool's overlay (e.g. on any
+     *  unhandled key press). Tools that show overlays should clear their
+     *  placement state here. */
+    dismissOverlay?(): void;
 }
 
 class ToolRegistry {

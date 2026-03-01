@@ -5,8 +5,10 @@
     import { nav } from './navigation.svelte';
     import { toolRegistry } from '../tools/registry';
     import type { ToolContext } from '../tools/registry';
+    import { screenToCanvas } from './coordinates';
+    import ToolOverlay from './ToolOverlay.svelte';
 
-    let canvas: HTMLCanvasElement;
+    let canvas = $state<HTMLCanvasElement>(undefined!);
 
     function syncCanvasSize() {
         if (!canvas) return;
@@ -65,38 +67,24 @@
         requestAnimationFrame(renderLoop);
     }
 
-    /**
-     * Convert CSS-local coordinates (relative to canvas element) to buffer
-     * pixel coordinates. Since the canvas buffer matches the element size
-     * at device pixel ratio, just scale by DPR.
-     */
-    function cssToBuffer(cssLocalX: number, cssLocalY: number) {
-        const dpr = window.devicePixelRatio || 1;
-        return { x: cssLocalX * dpr, y: cssLocalY * dpr };
-    }
-
     function getToolContext(): ToolContext | null {
         if (!app.handle) return null;
         return {
             handle: app.handle,
-            screenToCanvas(screenX: number, screenY: number) {
-                const rect = canvas.getBoundingClientRect();
-                const buf = cssToBuffer(screenX - rect.left, screenY - rect.top);
-                const result = app.handle!.screen_to_canvas(buf.x, buf.y);
-                return { x: result[0], y: result[1] };
+            screenToCanvas(sx: number, sy: number) {
+                return screenToCanvas(sx, sy, canvas);
             }
         };
     }
 
     function getCanvasCoords(e: PointerEvent): { x: number; y: number } {
-        const rect = canvas.getBoundingClientRect();
-        const buf = cssToBuffer(e.clientX - rect.left, e.clientY - rect.top);
         if (app.handle) {
-            const result = app.handle.screen_to_canvas(buf.x, buf.y);
-            return { x: result[0], y: result[1] };
+            return screenToCanvas(e.clientX, e.clientY, canvas);
         }
         // Fallback when no view transform
-        return { x: buf.x, y: buf.y };
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        return { x: (e.clientX - rect.left) * dpr, y: (e.clientY - rect.top) * dpr };
     }
 
     function onPointerDown(e: PointerEvent) {
@@ -164,6 +152,28 @@
         tool?.onPointerUp(ctx, e);
     }
 
+    const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
+
+    function onKeyDown(e: KeyboardEvent) {
+        nav.onKeyDown(e);
+        // Don't dismiss overlay for navigation or bare modifier keys
+        if (nav.spaceHeld || MODIFIER_KEYS.has(e.key)) return;
+        const tool = toolRegistry.get(app.activeToolId);
+        if (tool?.onKeyDown?.(e)) return;
+        tool?.dismissOverlay?.();
+    }
+
+    // Dismiss tool overlay when the active layer changes.
+    let prevLayerId = app.activeLayerId;
+    $effect(() => {
+        const id = app.activeLayerId;
+        if (id !== prevLayerId) {
+            prevLayerId = id;
+            const tool = toolRegistry.get(app.activeToolId);
+            tool?.dismissOverlay?.();
+        }
+    });
+
     // Sync view transform whenever pan/zoom/rotation changes.
     // Pan is stored in CSS pixels; the shader operates in buffer pixels.
     // Scale pan by DPR to convert to buffer space.
@@ -180,7 +190,7 @@
 </script>
 
 <svelte:window
-    onkeydown={(e: KeyboardEvent) => nav.onKeyDown(e)}
+    onkeydown={onKeyDown}
     onkeyup={(e: KeyboardEvent) => nav.onKeyUp(e)}
 />
 
@@ -193,6 +203,9 @@
         onpointerup={onPointerUp}
         onwheel={(e: WheelEvent) => nav.onWheel(e, canvas)}
     ></canvas>
+    {#if canvas}
+        <ToolOverlay canvasEl={canvas} />
+    {/if}
 </div>
 
 <style>
