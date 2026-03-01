@@ -19,6 +19,13 @@
         }
     }
 
+    function addRainyGlass() {
+        if (app.handle) {
+            app.handle.add_veil('rainy_glass', { speed: 1.0, rain_amount: 0.7 });
+            refresh();
+        }
+    }
+
     function onDragOver(e: DragEvent) {
         e.preventDefault();
     }
@@ -46,6 +53,7 @@
 
     <div class="panel-actions">
         <button class="action-btn" onclick={addPixelate} title="Add pixelate veil">+ pixelate</button>
+        <button class="action-btn" onclick={addRainyGlass} title="Add rainy glass veil">+ rainy glass</button>
     </div>
 </div>
 

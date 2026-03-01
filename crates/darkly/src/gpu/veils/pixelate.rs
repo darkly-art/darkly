@@ -221,6 +221,7 @@ impl Veil for Pixelate {
             bind_groups,
             aux_textures,
             aux_views,
+            aux_pipelines: vec![],
         }
     }
 

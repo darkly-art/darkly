@@ -230,6 +230,7 @@ impl Filter for Noise {
             bind_groups: vec![bind_groups],
             aux_textures: vec![noise_tex],
             aux_views: vec![noise_view],
+            aux_pipelines: vec![],
         }
     }
 }

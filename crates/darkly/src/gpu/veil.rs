@@ -54,6 +54,19 @@ pub trait Veil: std::fmt::Debug {
         viewport_height: u32,
     ) -> EffectCache;
 
+    /// Whether this veil uses time-based animation.
+    /// When true (and speed > 0 and visible), the compositor drives
+    /// continuous re-rendering via `needs_present`.
+    fn needs_animation(&self) -> bool {
+        false
+    }
+
+    /// Called each frame with the delta time (seconds since last frame).
+    /// Animated veils should multiply `dt` by their speed param,
+    /// accumulate into their internal time, and write to the uniform buffer.
+    /// Default is a no-op for non-animated veils.
+    fn update_time(&mut self, _queue: &wgpu::Queue, _cache: &EffectCache, _dt: f32) {}
+
     /// Encode all render passes into the command encoder.
     /// The veil reads from `ping_pong[src_idx]` (via pre-built bind groups)
     /// and must write its final output to `dst_view`.

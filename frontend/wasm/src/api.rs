@@ -314,7 +314,9 @@ impl DarklyHandle {
     // --- Layer operations ---
 
     /// Render the current frame. Handles dirty checking internally (P2).
-    pub fn render(&mut self) {
+    /// `time_secs` is the current wall-clock time in seconds (e.g. performance.now() / 1000).
+    pub fn render(&mut self, time_secs: f32) {
+        self.compositor.update_veil_time(&self.gpu.queue, time_secs);
         self.compositor.render(
             &self.gpu.device,
             &self.gpu.queue,

@@ -23,6 +23,10 @@ pub struct EffectCache {
     /// Optional auxiliary textures (e.g., noise texture, intermediate render targets).
     pub aux_textures: Vec<wgpu::Texture>,
     pub aux_views: Vec<wgpu::TextureView>,
+    /// Optional auxiliary pipelines (e.g., blit pipeline for upscale passes).
+    /// Veils that render at a lower internal resolution use this for the
+    /// upscale blit back to viewport size.
+    pub aux_pipelines: Vec<wgpu::RenderPipeline>,
 }
 
 /// Build a render pipeline from a passthrough blit shader.

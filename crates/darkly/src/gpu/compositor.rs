@@ -122,6 +122,8 @@ pub struct Compositor {
     /// Current viewport dimensions (updated on resize).
     viewport_width: u32,
     viewport_height: u32,
+    /// Last wall-clock time (seconds) passed to `update_veil_time`.
+    last_time: f32,
 }
 
 impl Compositor {
@@ -327,6 +329,7 @@ impl Compositor {
             veil_blit_bind_groups: None,
             viewport_width: 0,
             viewport_height: 0,
+            last_time: 0.0,
         }
     }
 
@@ -453,6 +456,33 @@ impl Compositor {
     /// Skips compositing when there are no dirty tiles or layer changes.
     pub fn mark_needs_present(&mut self) {
         self.needs_present = true;
+    }
+
+    /// Advance veil animation time. Computes delta from the previous call,
+    /// updates each animated veil's internal time, and conditionally sets
+    /// `needs_present` only when a visible animated veil has speed > 0.
+    pub fn update_veil_time(&mut self, queue: &wgpu::Queue, wall_time: f32) {
+        let dt = if self.last_time > 0.0 {
+            (wall_time - self.last_time).max(0.0)
+        } else {
+            0.0
+        };
+        self.last_time = wall_time;
+
+        if dt == 0.0 {
+            return;
+        }
+
+        let mut any_animating = false;
+        for entry in &mut self.veil_entries {
+            if entry.visible && entry.veil.needs_animation() {
+                entry.veil.update_time(queue, &entry.cache, dt);
+                any_animating = true;
+            }
+        }
+        if any_animating {
+            self.needs_present = true;
+        }
     }
 
     /// Update the view transform uniform buffer.

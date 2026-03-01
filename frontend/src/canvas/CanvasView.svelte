@@ -60,7 +60,7 @@
 
     function renderLoop() {
         if (app.handle) {
-            app.handle.render();
+            app.handle.render(performance.now() / 1000.0);
         }
         requestAnimationFrame(renderLoop);
     }
