@@ -98,7 +98,9 @@
 
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
         const ratio = (e.clientY - rect.top) / rect.height;
-        let to = ratio < 0.5 ? veil.index : veil.index + 1;
+        // UI list is reversed from internal order (top-of-list = highest index),
+        // so "above" in the UI = after in internal order, matching layer convention.
+        let to = ratio < 0.5 ? veil.index + 1 : veil.index;
         // Adjust for removal shifting indices
         if (from < to) to--;
 
