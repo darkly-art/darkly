@@ -15,6 +15,8 @@
     },
     "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^5.0.0",
+        "@vitejs/plugin-basic-ssl": "^2.1.4",
+        "@webgpu/types": "^0.1.69",
         "svelte": "^5.0.0",
         "typescript": "^5.7.0",
         "vite": "^6.0.0"

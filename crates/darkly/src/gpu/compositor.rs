@@ -89,6 +89,8 @@ pub struct Compositor {
     filter_registry: FilterRegistry,
 
     present_pipeline: wgpu::RenderPipeline,
+    /// Present pipeline targeting the accum format (Rgba8Unorm) for veil input.
+    present_to_veil_pipeline: wgpu::RenderPipeline,
     _present_bind_group_layout: wgpu::BindGroupLayout,
     /// Present bind group that reads from composite_cache directly.
     present_cache_bind_group: wgpu::BindGroup,
@@ -276,6 +278,37 @@ impl Compositor {
             cache: None,
         });
 
+        let accum_format = wgpu::TextureFormat::Rgba8Unorm;
+        let present_to_veil_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("present-to-veil-pipeline"),
+                layout: Some(&present_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &present_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &present_shader,
+                    entry_point: Some("fs_present"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: accum_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+
         // Present bind group that reads from composite cache
         let present_cache_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("present-bg-cache"),
@@ -314,6 +347,7 @@ impl Compositor {
             blend_pipelines,
             filter_registry,
             present_pipeline,
+            present_to_veil_pipeline,
             _present_bind_group_layout,
             present_cache_bind_group,
             view_uniform_buf,
@@ -791,7 +825,7 @@ impl Compositor {
                 })],
                 ..Default::default()
             });
-            rpass.set_pipeline(&self.present_pipeline);
+            rpass.set_pipeline(&self.present_to_veil_pipeline);
             rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
             rpass.draw(0..3, 0..1);
         }
