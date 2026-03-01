@@ -20,12 +20,20 @@ struct VertexOutput {
 struct Params {
     time: f32,
     rain_amount: f32,
-    resolution: vec2f,
+    resolution_x: f32,
+    resolution_y: f32,
+    direction: f32,
 }
 
 @group(0) @binding(0) var t_input: texture_2d<f32>;
 @group(0) @binding(1) var t_sampler: sampler;
 @group(0) @binding(2) var<uniform> params: Params;
+
+fn rotate2d(v: vec2f, angle: f32) -> vec2f {
+    let c = cos(angle);
+    let s = sin(angle);
+    return vec2f(v.x * c - v.y * s, v.x * s + v.y * c);
+}
 
 // --- Noise / hash functions ---
 
@@ -120,15 +128,17 @@ fn Drops(uv: vec2f, t: f32, l0: f32, l1: f32, l2: f32) -> vec2f {
 }
 
 @fragment fn fs_rainy_glass(in: VertexOutput) -> @location(0) vec4f {
-    let res = params.resolution;
-    let aspect = res.x / res.y;
+    let aspect = params.resolution_x / params.resolution_y;
+    let dir = params.direction;
 
-    // Map UVs to centered coordinates scaled by aspect ratio
+    // Map UVs to centered coordinates scaled by aspect ratio,
+    // then rotate into rain-space so the pattern falls in the
+    // configured direction.
     var uv = (in.uv - 0.5) * vec2f(aspect, 1.0);
-    let UV = in.uv;
-    let T = params.time;
+    uv = rotate2d(uv, dir);
 
-    let t = T * 0.2;
+    let UV = in.uv;
+    let t = params.time * 0.2;
 
     let rainAmount = params.rain_amount;
 
@@ -138,11 +148,14 @@ fn Drops(uv: vec2f, t: f32, l0: f32, l1: f32, l2: f32) -> vec2f {
 
     let c = Drops(uv, t, staticDrops, layer1, layer2);
 
-    // Compute normals from the drop pattern
+    // Compute normals from the drop pattern (in rain-space)
     let e = vec2f(0.001, 0.0);
     let cx = Drops(uv + e, t, staticDrops, layer1, layer2).x;
     let cy = Drops(uv + e.yx, t, staticDrops, layer1, layer2).x;
-    let n = vec2f(cx - c.x, cy - c.x);
+    let n_rain = vec2f(cx - c.x, cy - c.x);
+
+    // Rotate normals back to screen-space for correct distortion
+    let n = rotate2d(n_rain, -dir);
 
     // Sample input with distortion from rain normals
     let col = textureSample(t_input, t_sampler, UV + n);

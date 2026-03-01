@@ -21,7 +21,7 @@
 
     function addRainyGlass() {
         if (app.handle) {
-            app.handle.add_veil('rainy_glass', { speed: 1.0, rain_amount: 0.7 });
+            app.handle.add_veil('rainy_glass', { speed: 1.0, rain_amount: 0.7, direction: 0.0 });
             refresh();
         }
     }

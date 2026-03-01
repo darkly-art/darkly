@@ -7,12 +7,13 @@ use wasm_bindgen::JsValue;
 /// Fixed computational budget in pixels. The internal render resolution
 /// is derived from this so that landscape and portrait viewports produce
 /// roughly equal GPU load. sqrt(130_000) ~ 360, so a square viewport
-/// renders at ~360x360. A 16:9 landscape renders at ~640x360.
+/// renders at ~360x360. A 16:9 landscape renders at ~480x270.
 const PIXEL_BUDGET: f32 = 130_000.0;
 
 const PARAMS: &[ParamDef] = &[
     ParamDef::Float { name: "speed",       min: 0.0, max: 3.0, default: 1.0 },
     ParamDef::Float { name: "rain_amount", min: 0.0, max: 1.0, default: 0.7 },
+    ParamDef::Float { name: "direction",   min: 0.0, max: 360.0, default: 0.0 },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -25,7 +26,9 @@ pub fn register() -> VeilRegistration {
     }
 }
 
-/// GPU uniforms for the rainy glass shader, 16-byte aligned.
+/// GPU uniforms for the rainy glass shader.
+/// All f32 fields — no vec2/vec4 members, so Rust repr(C) and WGSL
+/// layouts match without padding.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct RainyGlassUniforms {
@@ -33,12 +36,16 @@ struct RainyGlassUniforms {
     rain_amount: f32,
     resolution_x: f32,
     resolution_y: f32,
+    /// Rain direction in radians. 0 = down (after Y-flip compensation).
+    direction: f32,
 }
 
 #[derive(Clone, Debug)]
 pub struct RainyGlass {
     pub speed: f32,
     pub rain_amount: f32,
+    /// Rain direction in degrees (0 = down, 90 = right, 180 = up, 270 = left).
+    pub direction: f32,
     /// Accumulated effective time (speed-scaled).
     time: f32,
     shared: Arc<EffectPipeline>,
@@ -54,10 +61,11 @@ fn internal_dimensions(viewport_width: u32, viewport_height: u32) -> (u32, u32) 
 }
 
 impl RainyGlass {
-    pub fn new(speed: f32, rain_amount: f32, shared: Arc<EffectPipeline>) -> Self {
+    pub fn new(speed: f32, rain_amount: f32, direction: f32, shared: Arc<EffectPipeline>) -> Self {
         RainyGlass {
             speed,
             rain_amount,
+            direction,
             time: 0.0,
             shared,
         }
@@ -73,7 +81,11 @@ impl RainyGlass {
             .ok()
             .and_then(|v| v.as_f64())
             .unwrap_or(0.7) as f32;
-        RainyGlass::new(speed, rain_amount, shared)
+        let direction = js_sys::Reflect::get(&js, &"direction".into())
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+        RainyGlass::new(speed, rain_amount, direction, shared)
     }
 }
 
@@ -90,6 +102,7 @@ impl Veil for RainyGlass {
         vec![
             ParamValue::Float(self.speed),
             ParamValue::Float(self.rain_amount),
+            ParamValue::Float(self.direction),
         ]
     }
 
@@ -114,13 +127,21 @@ impl Veil for RainyGlass {
         viewport_height: u32,
     ) -> EffectCache {
         let (iw, ih) = internal_dimensions(viewport_width, viewport_height);
+        log::info!(
+            "rainy_glass: viewport {}x{} -> internal {}x{} ({} pixels)",
+            viewport_width, viewport_height, iw, ih, iw * ih,
+        );
 
         // --- Uniforms ---
+        // Convert direction to radians and add π to compensate for our
+        // Y-flip (vertex shader does 1-uv.y) vs Shadertoy's Y-up convention.
+        let dir_rad = self.direction.to_radians() + std::f32::consts::PI;
         let uniforms = RainyGlassUniforms {
             time: self.time,
             rain_amount: self.rain_amount,
             resolution_x: iw as f32,
             resolution_y: ih as f32,
+            direction: dir_rad,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rainy-glass-uniforms"),

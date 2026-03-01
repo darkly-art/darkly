@@ -70,6 +70,12 @@ export interface UserConfig {
         leftSidebarWidth: number;
         rightSidebarWidth: number;
     };
+    animation: {
+        /** Target framerate for animated veils (e.g. 24 for cinematic).
+         *  TODO: Currently hardcoded in compositor.rs (ANIM_FRAME_INTERVAL).
+         *  Needs a Rust config bridge so the compositor can read this value. */
+        fps: number;
+    };
     hotkeys: HotkeyMap;
 }
 
@@ -91,6 +97,9 @@ export const USER_DEFAULTS: UserConfig = {
     ui: {
         leftSidebarWidth: 48,
         rightSidebarWidth: 260,
+    },
+    animation: {
+        fps: 24,
     },
     hotkeys: {
         nav: {
