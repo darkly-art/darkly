@@ -150,8 +150,8 @@
     {#if expanded && veil.params.length > 0}
         <div class="veil-params">
             {#each veil.params as param}
-                <div class="param-row">
-                    <label class="param-label">{param.name}</label>
+                <label class="param-row">
+                    <span class="param-label">{param.name}</span>
                     {#if param.kind === 'float' || param.kind === 'int'}
                         <input
                             type="range"
@@ -177,7 +177,7 @@
                             onclick={(e) => e.stopPropagation()}
                         />
                     {/if}
-                </div>
+                </label>
             {/each}
         </div>
     {/if}

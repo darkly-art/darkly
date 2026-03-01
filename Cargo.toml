@@ -10,7 +10,7 @@ resolver = "2"
 darkly = { path = "crates/darkly" }
 
 # GPU
-wgpu = { version = "27.0", features = ["webgpu"] }
+wgpu = { version = "28.0", features = ["webgpu"] }
 
 # Data
 bytemuck = { version = "1.13", features = ["derive"] }

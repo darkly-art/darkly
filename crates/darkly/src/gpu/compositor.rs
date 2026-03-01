@@ -237,7 +237,7 @@ impl Compositor {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("present-pipeline-layout"),
                 bind_group_layouts: &[&_present_bind_group_layout],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         let present_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -272,7 +272,7 @@ impl Compositor {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
