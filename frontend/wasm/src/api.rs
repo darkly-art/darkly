@@ -581,10 +581,13 @@ impl DarklyHandle {
     }
 
     /// Get the veil list as a JS array for the UI.
+    /// Returned in top-to-bottom display order (reversed from internal render order),
+    /// matching the layer tree convention: top-of-list = visually on top.
     /// Each element: { type, visible, index, params: [{ name, kind, min?, max?, default, value }] }
     pub fn veil_list(&self) -> JsValue {
         let arr = js_sys::Array::new();
-        for i in 0..self.compositor.veil_count() {
+        let count = self.compositor.veil_count();
+        for i in (0..count).rev() {
             if let Some((type_id, visible)) = self.compositor.veil_info(i) {
                 let obj = js_sys::Object::new();
                 js_sys::Reflect::set(&obj, &"type".into(), &JsValue::from_str(type_id)).ok();
