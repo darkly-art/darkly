@@ -14,6 +14,7 @@ const PARAMS: &[ParamDef] = &[
     ParamDef::Float { name: "speed",       min: 0.0, max: 3.0, default: 1.0 },
     ParamDef::Float { name: "rain_amount", min: 0.0, max: 1.0, default: 0.7 },
     ParamDef::Float { name: "direction",   min: 0.0, max: 360.0, default: 0.0 },
+    ParamDef::Float { name: "fog_amount",  min: 0.0, max: 1.0, default: 0.0 },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -38,6 +39,8 @@ struct RainyGlassUniforms {
     resolution_y: f32,
     /// Rain direction in radians. 0 = down (after Y-flip compensation).
     direction: f32,
+    /// 0 = clear glass, 1 = fully foggy. Drops and trails cut through.
+    fog_amount: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +49,8 @@ pub struct RainyGlass {
     pub rain_amount: f32,
     /// Rain direction in degrees (0 = down, 90 = right, 180 = up, 270 = left).
     pub direction: f32,
+    /// 0 = clear glass (default), 1 = fully foggy. Drops and trails cut through.
+    pub fog_amount: f32,
     /// Accumulated effective time (speed-scaled).
     time: f32,
     shared: Arc<EffectPipeline>,
@@ -61,11 +66,12 @@ fn internal_dimensions(viewport_width: u32, viewport_height: u32) -> (u32, u32) 
 }
 
 impl RainyGlass {
-    pub fn new(speed: f32, rain_amount: f32, direction: f32, shared: Arc<EffectPipeline>) -> Self {
+    pub fn new(speed: f32, rain_amount: f32, direction: f32, fog_amount: f32, shared: Arc<EffectPipeline>) -> Self {
         RainyGlass {
             speed,
             rain_amount,
             direction,
+            fog_amount,
             time: 0.0,
             shared,
         }
@@ -85,7 +91,11 @@ impl RainyGlass {
             .ok()
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) as f32;
-        RainyGlass::new(speed, rain_amount, direction, shared)
+        let fog_amount = js_sys::Reflect::get(&js, &"fog_amount".into())
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) as f32;
+        RainyGlass::new(speed, rain_amount, direction, fog_amount, shared)
     }
 }
 
@@ -103,6 +113,7 @@ impl Veil for RainyGlass {
             ParamValue::Float(self.speed),
             ParamValue::Float(self.rain_amount),
             ParamValue::Float(self.direction),
+            ParamValue::Float(self.fog_amount),
         ]
     }
 
@@ -142,6 +153,7 @@ impl Veil for RainyGlass {
             resolution_x: iw as f32,
             resolution_y: ih as f32,
             direction: dir_rad,
+            fog_amount: self.fog_amount,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rainy-glass-uniforms"),

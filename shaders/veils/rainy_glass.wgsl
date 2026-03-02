@@ -23,6 +23,7 @@ struct Params {
     resolution_x: f32,
     resolution_y: f32,
     direction: f32,
+    fog_amount: f32,
 }
 
 @group(0) @binding(0) var t_input: texture_2d<f32>;
@@ -127,6 +128,35 @@ fn Drops(uv: vec2f, t: f32, l0: f32, l1: f32, l2: f32) -> vec2f {
     return vec2f(c, max(m1.y * l0, m2.y * l1));
 }
 
+// 13-tap poisson-disk blur approximating the LOD-based fog from the
+// original Shadertoy "Heartfelt" shader. When radius is 0 all samples
+// collapse to the same texel — effectively a no-op.
+fn sample_fog(uv: vec2f, radius: f32, aspect: f32) -> vec3f {
+    let offsets = array<vec2f, 12>(
+        vec2f(-0.326, -0.406),
+        vec2f(-0.840, -0.074),
+        vec2f(-0.696,  0.457),
+        vec2f(-0.203,  0.621),
+        vec2f( 0.962, -0.195),
+        vec2f( 0.473, -0.480),
+        vec2f( 0.519,  0.767),
+        vec2f( 0.185, -0.893),
+        vec2f( 0.507,  0.064),
+        vec2f( 0.896,  0.412),
+        vec2f(-0.322, -0.933),
+        vec2f(-0.792, -0.598),
+    );
+
+    // Correct for aspect ratio so the blur is circular in screen-space.
+    let r = vec2f(radius / aspect, radius);
+
+    var col = textureSampleLevel(t_input, t_sampler, uv, 0.0).rgb;
+    for (var i = 0u; i < 12u; i++) {
+        col += textureSampleLevel(t_input, t_sampler, uv + offsets[i] * r, 0.0).rgb;
+    }
+    return col / 13.0;
+}
+
 @fragment fn fs_rainy_glass(in: VertexOutput) -> @location(0) vec4f {
     let aspect = params.resolution_x / params.resolution_y;
     let dir = params.direction;
@@ -157,8 +187,18 @@ fn Drops(uv: vec2f, t: f32, l0: f32, l1: f32, l2: f32) -> vec2f {
     // Rotate normals back to screen-space for correct distortion
     let n = rotate2d(n_rain, -dir);
 
-    // Sample input with distortion from rain normals
-    let col = textureSample(t_input, t_sampler, UV + n);
+    // Fog: blur the background proportional to fog_amount. Drops see
+    // through clearly (minBlur) while the rest of the glass is foggy
+    // (maxBlur). Trails cut through the fog where drops have passed.
+    let fog = params.fog_amount;
+    let maxBlur = fog * 6.0;
+    let minBlur = fog * 2.0;
+    let focus = max(0.0, mix(maxBlur - c.y, minBlur, smoothstep(0.1, 0.2, c.x)));
+    // Exponential radius mapping to match the original's textureLod behavior
+    // where each LOD level doubles the blur. This makes the perceptual
+    // difference between foggy regions and trail-cleared regions much larger.
+    let blur_radius = (pow(2.0, focus) - 1.0) / 2048.0;
+    let col = sample_fog(UV + n, blur_radius, aspect);
 
-    return col;
+    return vec4f(col, 1.0);
 }
