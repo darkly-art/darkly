@@ -38,10 +38,27 @@ fn rotate2d(v: vec2f, angle: f32) -> vec2f {
 
 // --- Noise / hash functions ---
 
-fn N13(p: f32) -> vec3f {
-    var p3 = fract(vec3f(p) * vec3f(0.1031, 0.11369, 0.13787));
-    p3 += dot(p3, p3.yzx + 19.19);
-    return fract(vec3f((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y, (p3.y + p3.z) * p3.x));
+fn hash_u32(n: u32) -> u32 {
+    var x = n;
+    x ^= x >> 16u;
+    x *= 0x45d9f3bu;
+    x ^= x >> 16u;
+    x *= 0x45d9f3bu;
+    x ^= x >> 16u;
+    return x;
+}
+
+fn N13(ix: f32, iy: f32) -> vec3f {
+    let h = hash_u32(
+        (bitcast<u32>(i32(ix)) * 73856093u) ^
+        (bitcast<u32>(i32(iy)) * 19349663u)
+    );
+    let h2 = hash_u32(h + 1u);
+    return vec3f(
+        f32(h & 0xFFFFu) / 65535.0,
+        f32((h >> 16u) & 0xFFFFu) / 65535.0,
+        f32(h2 & 0xFFFFu) / 65535.0,
+    );
 }
 
 fn N1(t: f32) -> f32 {
@@ -67,7 +84,7 @@ fn DropLayer2(uv_in: vec2f, t: f32) -> vec2f {
     uv.y += colShift;
 
     id = floor(uv * grid);
-    let n = N13(id.x * 35.2 + id.y * 2376.1);
+    let n = N13(id.x, id.y);
     let st = fract(uv * grid) - vec2f(0.5, 0.0);
 
     var x = n.x - 0.5;
@@ -107,7 +124,7 @@ fn StaticDrops(uv_in: vec2f, t: f32) -> f32 {
 
     let id = floor(uv_scaled);
     let uv = fract(uv_scaled) - 0.5;
-    let n = N13(id.x * 107.45 + id.y * 3543.654);
+    let n = N13(id.x, id.y);
     let p = (n.xy - 0.5) * 0.7;
     let d = length(uv - p);
 
