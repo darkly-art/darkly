@@ -499,9 +499,9 @@ impl Compositor {
     /// Advance veil animation time. Computes delta from the previous call,
     /// updates each animated veil's internal time, and conditionally sets
     /// `needs_present` only when enough time has elapsed for a new frame.
-    /// Animated veils run at 24fps to reduce GPU/CPU overhead.
+    /// Animated veils run at a configurable FPS to reduce GPU/CPU overhead.
     pub fn update_veil_time(&mut self, queue: &wgpu::Queue, wall_time: f32) {
-        const ANIM_FRAME_INTERVAL: f32 = 1.0 / 24.0;
+        let anim_frame_interval = 1.0 / crate::config::get_f64("animation.fps") as f32;
 
         let dt = if self.last_time > 0.0 {
             (wall_time - self.last_time).max(0.0)
@@ -523,7 +523,7 @@ impl Compositor {
         }
 
         self.anim_accum += dt;
-        if self.anim_accum < ANIM_FRAME_INTERVAL {
+        if self.anim_accum < anim_frame_interval {
             return;
         }
 

@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { initEditor, DOC_WIDTH, DOC_HEIGHT } from '../editor';
+    import { initEditor } from '../editor';
+    import { config } from '../config/store.svelte';
     import { app } from '../state/app.svelte';
     import { nav } from './navigation.svelte';
     import { toolRegistry } from '../tools/registry';
@@ -52,7 +53,9 @@
 
             // Fit canvas to view: scale down if needed, but never scale up
             const dprRect = { w: canvas.width, h: canvas.height };
-            const fitZoom = Math.min(dprRect.w / DOC_WIDTH, dprRect.h / DOC_HEIGHT, 1);
+            const docW = config.get('canvas.width') as number;
+            const docH = config.get('canvas.height') as number;
+            const fitZoom = Math.min(dprRect.w / docW, dprRect.h / docH, 1);
             app.zoom = fitZoom;
 
             // Start render loop

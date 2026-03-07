@@ -2,8 +2,6 @@ import type { Tool, ToolContext } from './registry';
 import type { ToolOverlayData } from '../canvas/overlay';
 import { app } from '../state/app.svelte';
 
-export const GRADIENT_HOTKEY = 'KeyG';
-
 // --- Reactive overlay state ---
 
 let startX = $state(0);

@@ -1,5 +1,5 @@
 import { app } from '../state/app.svelte';
-import { user } from '../config/store.svelte';
+import { config } from '../config/store.svelte';
 
 type NavMode = 'none' | 'pan' | 'rotate' | 'zoom';
 
@@ -8,7 +8,7 @@ const ROTATE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="2
 const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(ROTATE_SVG)}") 12 12, auto`;
 
 /** Map modifier name to the corresponding PointerEvent/WheelEvent flag. */
-function hasModifier(e: PointerEvent | WheelEvent, mod: 'Shift' | 'Ctrl' | 'Alt'): boolean {
+function hasModifier(e: PointerEvent | WheelEvent, mod: string): boolean {
     if (mod === 'Shift') return e.shiftKey;
     if (mod === 'Ctrl') return e.ctrlKey;
     return e.altKey;
@@ -43,14 +43,14 @@ class NavigationState {
     }
 
     onKeyDown(e: KeyboardEvent) {
-        if (e.code === user.resolved.hotkeys.nav.trigger && !e.repeat) {
+        if (e.code === config.get('hotkeys.nav.trigger') && !e.repeat) {
             e.preventDefault();
             this.spaceHeld = true;
         }
     }
 
     onKeyUp(e: KeyboardEvent) {
-        if (e.code === user.resolved.hotkeys.nav.trigger) {
+        if (e.code === config.get('hotkeys.nav.trigger')) {
             this.spaceHeld = false;
             this.mode = 'none';
         }
@@ -59,7 +59,8 @@ class NavigationState {
     onPointerDown(e: PointerEvent, canvasEl?: HTMLCanvasElement): boolean {
         if (!this.spaceHeld) return false;
 
-        const { zoom, rotate } = user.resolved.hotkeys.nav;
+        const zoom = config.get('hotkeys.nav.zoom') as string;
+        const rotate = config.get('hotkeys.nav.rotate') as string;
 
         if (hasModifier(e, zoom)) {
             this.mode = 'zoom';
@@ -222,7 +223,7 @@ class NavigationState {
         const deltaX = e.deltaX * scale;
         const deltaY = e.deltaY * scale;
 
-        if (hasModifier(e, user.resolved.hotkeys.nav.zoom)) {
+        if (hasModifier(e, config.get('hotkeys.nav.zoom') as string)) {
             // Zoom (Ctrl+scroll, or trackpad pinch which fires ctrlKey=true)
             const factor = Math.pow(1.001, -deltaY);
             const newZoom = Math.max(0.01, Math.min(100, app.zoom * factor));

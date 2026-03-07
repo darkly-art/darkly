@@ -10,7 +10,7 @@
  */
 
 import { app } from '../state/app.svelte';
-import { DOC_WIDTH, DOC_HEIGHT } from '../editor';
+import { config } from '../config/store.svelte';
 
 /**
  * Convert canvas coordinates to screen CSS coordinates (relative to the
@@ -31,8 +31,8 @@ export function canvasToScreen(
     const cos_r = Math.cos(app.rotation);
     const sin_r = Math.sin(app.rotation);
 
-    const dx = cx - DOC_WIDTH / 2;
-    const dy = cy - DOC_HEIGHT / 2;
+    const dx = cx - (config.get('canvas.width') as number) / 2;
+    const dy = cy - (config.get('canvas.height') as number) / 2;
 
     const buf_x = app.zoom * (cos_r * dx + sin_r * dy)
                   + canvasEl.width / 2 + app.panX * dpr;

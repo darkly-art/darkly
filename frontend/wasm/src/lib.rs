@@ -1,6 +1,7 @@
 use wasm_bindgen::prelude::*;
 
 pub mod api;
+pub mod config_bridge;
 
 #[wasm_bindgen(start)]
 pub fn start() {

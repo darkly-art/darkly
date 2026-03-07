@@ -1,21 +1,22 @@
 import { tinykeys } from 'tinykeys';
-import { user } from './store.svelte';
+import { config } from './store.svelte';
 
 let cleanup: (() => void) | null = null;
 
 /**
- * Register all hotkeys from the resolved user config.
+ * Register all hotkeys from the Rust config.
  * Call on init and whenever the preset changes.
- * `actions` maps HotkeyMap key names to handler functions.
+ * `actions` maps hotkey action names to handler functions.
+ * Action names correspond to config keys under "hotkeys." (e.g., "brushTool"
+ * reads from config key "hotkeys.brushTool").
  */
 export function registerHotkeys(actions: Record<string, () => void>) {
     cleanup?.();
 
-    const hotkeys = user.resolved.hotkeys;
     const bindings: Record<string, (e: KeyboardEvent) => void> = {};
 
     for (const [action, handler] of Object.entries(actions)) {
-        const key = (hotkeys as any)[action];
+        const key = config.get(`hotkeys.${action}`) as string | undefined;
         if (key && typeof key === 'string') {
             bindings[key] = (e: KeyboardEvent) => {
                 const el = e.target as HTMLElement;

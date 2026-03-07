@@ -1,4 +1,5 @@
 import init, { DarklyHandle } from '../wasm/pkg/darkly_wasm';
+import { config } from './config/store.svelte';
 import { registerHotkeys } from './config/hotkeys.svelte';
 import { app } from './state/app.svelte';
 import { toolRegistry } from './tools/registry';
@@ -6,15 +7,16 @@ import { MIN_SIZE, MAX_SIZE, SIZE_STEP } from './tools/brush.svelte';
 
 let initialized = false;
 
-export const DOC_WIDTH = 900;
-export const DOC_HEIGHT = 1600;
-
 export async function initEditor(canvas: HTMLCanvasElement): Promise<DarklyHandle> {
     if (!initialized) {
         await init();
+        config.init();
         initialized = true;
     }
-    const handle = await DarklyHandle.create(canvas, DOC_WIDTH, DOC_HEIGHT);
+
+    const docWidth = config.get('canvas.width') as number;
+    const docHeight = config.get('canvas.height') as number;
+    const handle = await DarklyHandle.create(canvas, docWidth, docHeight);
 
     // Register hotkeys once editor is ready
     initHotkeys();

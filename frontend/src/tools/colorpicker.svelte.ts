@@ -1,8 +1,6 @@
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
 
-export const COLORPICKER_HOTKEY = 'KeyP';
-
 export const colorPickerTool: Tool = {
     id: 'colorpicker',
     name: 'Color Picker',

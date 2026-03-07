@@ -1,8 +1,6 @@
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
 
-export const ERASER_HOTKEY = 'KeyE';
-
 export const eraserTool: Tool = {
     id: 'eraser',
     name: 'Eraser',

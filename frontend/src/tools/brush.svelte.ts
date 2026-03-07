@@ -1,15 +1,11 @@
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
 
-// --- Constants & hotkey (hotkey imported by schema.ts) ---
-
 export const MIN_SIZE = 1;
 export const MAX_SIZE = 500;
 export const SIZE_STEP = 4;
 export const INITIAL_SIZE = 24;
 export const INITIAL_OPACITY = 1.0;
-
-export const BRUSH_HOTKEY = 'KeyB';
 
 // --- Gesture interpreter ---
 

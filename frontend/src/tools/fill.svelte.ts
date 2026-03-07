@@ -1,8 +1,6 @@
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
 
-export const FILL_HOTKEY = 'KeyF';
-
 export const fillTool: Tool = {
     id: 'fill',
     name: 'Fill',
