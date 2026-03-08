@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsValue;
 
 pub use super::effect::{EffectCache, EffectPipeline};
+use super::params::{ParamDef, ParamValue};
 
 /// Unified trait for filters. Each filter is one struct that holds both its
 /// user-facing parameters and an Arc to the shared GPU pipeline.
@@ -28,9 +27,9 @@ pub trait Filter: std::fmt::Debug {
 /// Contains everything needed to create instances of that filter type.
 pub struct FilterRegistration {
     pub type_id: &'static str,
+    pub params: &'static [ParamDef],
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
-    #[cfg(target_arch = "wasm32")]
-    pub from_js: fn(JsValue, Arc<EffectPipeline>) -> Box<dyn Filter>,
+    pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Filter>,
 }
 
 /// Auto-discovered filter registry with lazy pipeline caching.
@@ -42,8 +41,8 @@ pub struct FilterRegistry {
 
 struct RegistryEntry {
     create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
-    #[cfg(target_arch = "wasm32")]
-    from_js: fn(JsValue, Arc<EffectPipeline>) -> Box<dyn Filter>,
+    params: &'static [ParamDef],
+    from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Filter>,
     cached_pipeline: Option<Arc<EffectPipeline>>,
 }
 
@@ -55,13 +54,21 @@ impl FilterRegistry {
                 reg.type_id,
                 RegistryEntry {
                     create_pipeline: reg.create_pipeline,
-                    #[cfg(target_arch = "wasm32")]
-                    from_js: reg.from_js,
+                    params: reg.params,
+                    from_params: reg.from_params,
                     cached_pipeline: None,
                 },
             );
         }
         FilterRegistry { entries }
+    }
+
+    /// Get the static parameter definitions for a filter type.
+    pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
+        self.entries
+            .get(type_id)
+            .map(|e| e.params)
+            .unwrap_or(&[])
     }
 
     /// Get or create the shared pipeline for a filter type.
@@ -81,12 +88,11 @@ impl FilterRegistry {
             .clone()
     }
 
-    /// Create a filter instance from a JS type string and params object.
-    #[cfg(target_arch = "wasm32")]
+    /// Create a filter instance from a type string and parameter values.
     pub fn create_filter(
         &mut self,
         type_id: &str,
-        js: JsValue,
+        params: &[ParamValue],
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
     ) -> Box<dyn Filter> {
@@ -98,6 +104,6 @@ impl FilterRegistry {
             .cached_pipeline
             .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
             .clone();
-        (entry.from_js)(js, pipeline)
+        (entry.from_params)(params, pipeline)
     }
 }

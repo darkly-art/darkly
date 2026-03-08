@@ -172,12 +172,9 @@ name = "darkly"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
- "js-sys",
  "log",
  "pollster",
  "serde",
- "wasm-bindgen",
- "web-sys",
  "wgpu",
 ]
 

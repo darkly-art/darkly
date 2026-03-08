@@ -1,30 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsValue;
 
 pub use super::effect::{EffectCache, EffectPipeline};
-
-// ---------------------------------------------------------------------------
-// Parameter system — typed schema + runtime values for veil configuration.
-// ---------------------------------------------------------------------------
-
-/// Schema definition for a single veil parameter.
-/// Each veil module defines a `const` array of these.
-#[derive(Clone, Debug)]
-pub enum ParamDef {
-    Float { name: &'static str, min: f32, max: f32, default: f32 },
-    Int   { name: &'static str, min: i32, max: i32, default: i32 },
-    Bool  { name: &'static str, default: bool },
-}
-
-/// A concrete runtime parameter value, read from a veil instance.
-#[derive(Clone, Debug)]
-pub enum ParamValue {
-    Float(f32),
-    Int(i32),
-    Bool(bool),
-}
+pub use super::params::{ParamDef, ParamValue};
 
 /// Viewport-level post-processing effect ("veil").
 /// Veils run on the fully-presented image at screen resolution,
@@ -85,8 +63,7 @@ pub struct VeilRegistration {
     pub type_id: &'static str,
     pub params: &'static [ParamDef],
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
-    #[cfg(target_arch = "wasm32")]
-    pub from_js: fn(JsValue, Arc<EffectPipeline>) -> Box<dyn Veil>,
+    pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
 }
 
 /// Auto-discovered veil registry with lazy pipeline caching.
@@ -97,8 +74,7 @@ pub struct VeilRegistry {
 struct RegistryEntry {
     create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     params: &'static [ParamDef],
-    #[cfg(target_arch = "wasm32")]
-    from_js: fn(JsValue, Arc<EffectPipeline>) -> Box<dyn Veil>,
+    from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
     cached_pipeline: Option<Arc<EffectPipeline>>,
 }
 
@@ -111,8 +87,7 @@ impl VeilRegistry {
                 RegistryEntry {
                     create_pipeline: reg.create_pipeline,
                     params: reg.params,
-                    #[cfg(target_arch = "wasm32")]
-                    from_js: reg.from_js,
+                    from_params: reg.from_params,
                     cached_pipeline: None,
                 },
             );
@@ -145,12 +120,11 @@ impl VeilRegistry {
             .clone()
     }
 
-    /// Create a veil instance from a JS type string and params object.
-    #[cfg(target_arch = "wasm32")]
+    /// Create a veil instance from a type string and parameter values.
     pub fn create_veil(
         &mut self,
         type_id: &str,
-        js: JsValue,
+        params: &[ParamValue],
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
     ) -> Box<dyn Veil> {
@@ -162,6 +136,6 @@ impl VeilRegistry {
             .cached_pipeline
             .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
             .clone();
-        (entry.from_js)(js, pipeline)
+        (entry.from_params)(params, pipeline)
     }
 }

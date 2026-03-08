@@ -20,10 +20,10 @@ use std::collections::HashMap;
 #[cfg(feature = "profile")]
 mod perf {
     pub fn time(label: &str) {
-        web_sys::console::time_with_label(label);
+        log::trace!("[perf] {label} start");
     }
     pub fn time_end(label: &str) {
-        web_sys::console::time_end_with_label(label);
+        log::trace!("[perf] {label} end");
     }
 }
 #[cfg(not(feature = "profile"))]
@@ -568,6 +568,11 @@ impl Compositor {
             };
             queue.write_buffer(&cache.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         }
+    }
+
+    /// Access filter registry (immutable) for reading param defs.
+    pub fn filter_registry(&self) -> &FilterRegistry {
+        &self.filter_registry
     }
 
     /// Access filter registry for creating new filter instances.
