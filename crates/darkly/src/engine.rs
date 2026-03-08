@@ -409,7 +409,7 @@ impl DarklyEngine {
     // --- Rendering ---
 
     pub fn render(&mut self, time_secs: f32) {
-        self.compositor.update_veil_time(&self.gpu.queue, time_secs);
+        self.compositor.veil_chain_mut().update_time(&self.gpu.queue, time_secs);
         self.compositor.render(
             &self.gpu.device,
             &self.gpu.queue,
@@ -421,7 +421,7 @@ impl DarklyEngine {
 
     pub fn resize(&mut self, width: u32, height: u32) {
         self.gpu.resize(width, height);
-        self.compositor.resize_viewport(&self.gpu.device, &self.gpu.queue, width, height);
+        self.compositor.veil_chain_mut().resize(&self.gpu.device, &self.gpu.queue, width, height);
         self.compositor.mark_needs_present();
     }
 
@@ -446,41 +446,41 @@ impl DarklyEngine {
     // --- Veils ---
 
     pub fn add_veil(&mut self, veil_type: &str, params: &[ParamValue]) {
-        let format = self.compositor.accum_format();
-        let veil = self.compositor.veil_registry_mut().create_veil(
+        let chain = self.compositor.veil_chain_mut();
+        let format = chain.accum_format();
+        let veil = chain.registry_mut().create_veil(
             veil_type, params, &self.gpu.device, format,
         );
-        self.compositor.add_veil(&self.gpu.device, &self.gpu.queue, veil);
+        chain.add_veil(&self.gpu.device, &self.gpu.queue, veil);
     }
 
     pub fn remove_veil(&mut self, index: usize) {
-        self.compositor.remove_veil(index);
+        self.compositor.veil_chain_mut().remove_veil(index);
     }
 
     pub fn clear_veils(&mut self) {
-        self.compositor.clear_veils();
+        self.compositor.veil_chain_mut().clear_veils();
     }
 
     pub fn set_veil_visible(&mut self, index: usize, visible: bool) {
-        self.compositor.set_veil_visible(index, visible);
+        self.compositor.veil_chain_mut().set_veil_visible(index, visible);
     }
 
     pub fn move_veil(&mut self, from: usize, to: usize) {
-        self.compositor.move_veil(from, to);
+        self.compositor.veil_chain_mut().move_veil(from, to);
     }
 
     pub fn update_veil(&mut self, index: usize, params: &[ParamValue]) {
-        let type_id: &'static str = match self.compositor.veil_type_id(index) {
+        let type_id: &'static str = match self.compositor.veil_chain().type_id(index) {
             Some(t) => t,
             None => return,
         };
-        let format = self.compositor.accum_format();
-        let new_veil = self.compositor.veil_registry_mut().create_veil(
+        let chain = self.compositor.veil_chain_mut();
+        let format = chain.accum_format();
+        let new_veil = chain.registry_mut().create_veil(
             type_id, params, &self.gpu.device, format,
         );
-        self.compositor.update_veil(
-            &self.gpu.device, &self.gpu.queue, index, new_veil,
-        );
+        chain.update_veil(&self.gpu.device, &self.gpu.queue, index, new_veil);
     }
 
     // --- Queries ---
@@ -490,12 +490,13 @@ impl DarklyEngine {
     }
 
     pub fn veil_list(&self) -> Vec<VeilInfo> {
-        let count = self.compositor.veil_count();
+        let chain = self.compositor.veil_chain();
+        let count = chain.count();
         let mut list = Vec::with_capacity(count);
         for i in (0..count).rev() {
-            if let Some((type_id, visible)) = self.compositor.veil_info(i) {
-                let param_defs = self.compositor.veil_registry().param_defs(type_id);
-                let values = self.compositor.veil_param_values(i).unwrap_or_default();
+            if let Some((type_id, visible)) = chain.info(i) {
+                let param_defs = chain.registry().param_defs(type_id);
+                let values = chain.param_values(i).unwrap_or_default();
                 let params = param_defs.iter().enumerate().map(|(j, def)| {
                     ParamInfo::from_def(def, values.get(j))
                 }).collect();
@@ -517,7 +518,7 @@ impl DarklyEngine {
 
     /// Get the parameter definitions for a veil type.
     pub fn veil_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.compositor.veil_registry().param_defs(type_id)
+        self.compositor.veil_chain().registry().param_defs(type_id)
     }
 
     // --- Internal helpers ---

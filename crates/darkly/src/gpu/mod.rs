@@ -8,5 +8,6 @@ pub mod params;
 pub mod filter;
 pub mod filters;
 pub mod veil;
+pub mod veil_chain;
 pub mod veils;
 pub mod view;
