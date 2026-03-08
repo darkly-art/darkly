@@ -120,10 +120,6 @@ impl Veil for RainyGlass {
         viewport_height: u32,
     ) -> EffectCache {
         let (iw, ih) = internal_dimensions(viewport_width, viewport_height);
-        log::info!(
-            "rainy_glass: viewport {}x{} -> internal {}x{} ({} pixels)",
-            viewport_width, viewport_height, iw, ih, iw * ih,
-        );
 
         // --- Uniforms ---
         // Convert direction to radians and add π to compensate for our

@@ -38,11 +38,44 @@ pub struct VeilInfo {
     pub params: Vec<ParamInfo>,
 }
 
+/// Flat serialization-friendly view of a parameter definition + current value.
+/// Avoids nesting a tagged enum (ParamDef) which serde_wasm_bindgen can't handle.
 #[derive(serde::Serialize)]
 pub struct ParamInfo {
-    pub def: ParamDef,
+    pub kind: &'static str,
+    pub name: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    pub default: ParamValue,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<ParamValue>,
+}
+
+impl ParamInfo {
+    pub fn from_def(def: &ParamDef, value: Option<&ParamValue>) -> Self {
+        match def {
+            ParamDef::Float { name, min, max, default } => ParamInfo {
+                kind: "float", name,
+                min: Some(*min as f64), max: Some(*max as f64),
+                default: ParamValue::Float(*default),
+                value: value.cloned(),
+            },
+            ParamDef::Int { name, min, max, default } => ParamInfo {
+                kind: "int", name,
+                min: Some(*min as f64), max: Some(*max as f64),
+                default: ParamValue::Int(*default),
+                value: value.cloned(),
+            },
+            ParamDef::Bool { name, default } => ParamInfo {
+                kind: "bool", name,
+                min: None, max: None,
+                default: ParamValue::Bool(*default),
+                value: value.cloned(),
+            },
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -464,10 +497,7 @@ impl DarklyEngine {
                 let param_defs = self.compositor.veil_registry().param_defs(type_id);
                 let values = self.compositor.veil_param_values(i).unwrap_or_default();
                 let params = param_defs.iter().enumerate().map(|(j, def)| {
-                    ParamInfo {
-                        def: def.clone(),
-                        value: values.get(j).cloned(),
-                    }
+                    ParamInfo::from_def(def, values.get(j))
                 }).collect();
                 list.push(VeilInfo {
                     type_id: type_id.to_string(),
@@ -528,5 +558,69 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
             blend_mode: g.blend_mode as u32,
             children: g.children.iter().rev().map(node_to_layer_info).collect(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu::params::{ParamDef, ParamValue};
+
+    #[test]
+    fn param_info_serializes_flat() {
+        let def = ParamDef::Float { name: "speed", min: 0.0, max: 10.0, default: 1.0 };
+        let info = ParamInfo::from_def(&def, Some(&ParamValue::Float(2.5)));
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["kind"], "float");
+        assert_eq!(json["name"], "speed");
+        assert_eq!(json["min"], 0.0);
+        assert_eq!(json["max"], 10.0);
+        assert_eq!(json["default"], 1.0);
+        assert_eq!(json["value"], 2.5);
+    }
+
+    #[test]
+    fn param_info_bool_omits_min_max() {
+        let def = ParamDef::Bool { name: "soft", default: true };
+        let info = ParamInfo::from_def(&def, None);
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["kind"], "bool");
+        assert_eq!(json["name"], "soft");
+        assert_eq!(json["default"], true);
+        assert!(json.get("min").is_none());
+        assert!(json.get("max").is_none());
+        assert!(json.get("value").is_none());
+    }
+
+    #[test]
+    fn veil_info_serializes_correctly() {
+        let info = VeilInfo {
+            type_id: "pixelate".into(),
+            visible: true,
+            index: 0,
+            params: vec![
+                ParamInfo::from_def(
+                    &ParamDef::Int { name: "scale", min: 1, max: 32, default: 2 },
+                    Some(&ParamValue::Int(4)),
+                ),
+                ParamInfo::from_def(
+                    &ParamDef::Bool { name: "soft", default: true },
+                    Some(&ParamValue::Bool(false)),
+                ),
+            ],
+        };
+        let json = serde_json::to_value(&info).unwrap();
+        assert_eq!(json["type"], "pixelate");
+        assert_eq!(json["visible"], true);
+        assert_eq!(json["index"], 0);
+
+        let params = json["params"].as_array().unwrap();
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0]["kind"], "int");
+        assert_eq!(params[0]["name"], "scale");
+        assert_eq!(params[0]["value"], 4);
+        assert_eq!(params[1]["kind"], "bool");
+        assert_eq!(params[1]["name"], "soft");
+        assert_eq!(params[1]["value"], false);
     }
 }

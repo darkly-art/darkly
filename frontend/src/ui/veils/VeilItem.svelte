@@ -1,16 +1,12 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
 
-    interface ParamDef {
+    interface VeilParam {
         kind: 'float' | 'int' | 'bool';
         name: string;
         min?: number;
         max?: number;
         default: number | boolean;
-    }
-
-    interface VeilParam {
-        def: ParamDef;
         value?: number | boolean;
     }
 
@@ -47,7 +43,7 @@
         if (!app.handle) return;
         const params: Record<string, number | boolean> = {};
         for (const p of veil.params) {
-            params[p.def.name] = p.value ?? p.def.default;
+            params[p.name] = p.value ?? p.default;
         }
         app.handle.update_veil(veil.index, params);
         onupdate();
@@ -55,7 +51,7 @@
 
     function onSliderInput(param: VeilParam, e: Event) {
         const target = e.target as HTMLInputElement;
-        param.value = param.def.kind === 'int'
+        param.value = param.kind === 'int'
             ? parseInt(target.value, 10)
             : parseFloat(target.value);
         onParamChange();
@@ -155,28 +151,28 @@
         <div class="veil-params">
             {#each veil.params as param}
                 <label class="param-row">
-                    <span class="param-label">{param.def.name}</span>
-                    {#if param.def.kind === 'float' || param.def.kind === 'int'}
+                    <span class="param-label">{param.name}</span>
+                    {#if param.kind === 'float' || param.kind === 'int'}
                         <input
                             type="range"
                             class="param-slider"
-                            min={param.def.min}
-                            max={param.def.max}
-                            step={param.def.kind === 'int' ? 1 : ((param.def.max! - param.def.min!) / 100)}
-                            value={param.value ?? param.def.default}
+                            min={param.min}
+                            max={param.max}
+                            step={param.kind === 'int' ? 1 : ((param.max! - param.min!) / 100)}
+                            value={param.value ?? param.default}
                             oninput={(e) => onSliderInput(param, e)}
                             onclick={(e) => e.stopPropagation()}
                             onpointerdown={() => { draggable = false; }}
                             onpointerup={() => { draggable = true; }}
                         />
                         <span class="param-value">
-                            {param.def.kind === 'int' ? (param.value ?? param.def.default) : ((param.value ?? param.def.default) as number).toFixed(1)}
+                            {param.kind === 'int' ? (param.value ?? param.default) : ((param.value ?? param.default) as number).toFixed(1)}
                         </span>
-                    {:else if param.def.kind === 'bool'}
+                    {:else if param.kind === 'bool'}
                         <input
                             type="checkbox"
                             class="param-checkbox"
-                            checked={(param.value ?? param.def.default) as boolean}
+                            checked={(param.value ?? param.default) as boolean}
                             onchange={(e) => onBoolChange(param, e)}
                             onclick={(e) => e.stopPropagation()}
                         />
