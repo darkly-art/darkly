@@ -59,49 +59,50 @@ impl DarklyHandle {
     }
 
     // --- Layer CRUD (pass-through) ---
+    // IDs use f64 because JS has no u64 — any JS-facing backend needs this.
 
-    pub fn add_raster_layer(&mut self) -> u64 { self.0.add_raster_layer() }
-    pub fn add_raster_layer_in(&mut self, group_id: u64) -> u64 { self.0.add_raster_layer_in(group_id) }
-    pub fn add_group(&mut self) -> u64 { self.0.add_group() }
+    pub fn add_raster_layer(&mut self) -> f64 { self.0.add_raster_layer() as f64 }
+    pub fn add_raster_layer_in(&mut self, group_id: f64) -> f64 { self.0.add_raster_layer_in(group_id as u64) as f64 }
+    pub fn add_group(&mut self) -> f64 { self.0.add_group() as f64 }
 
-    pub fn add_filter_layer(&mut self, filter_type: &str, params: JsValue) -> u64 {
+    pub fn add_filter_layer(&mut self, filter_type: &str, params: JsValue) -> f64 {
         let pv = js_to_param_values(&params, self.0.filter_param_defs(filter_type));
-        self.0.add_filter_layer(filter_type, &pv)
+        self.0.add_filter_layer(filter_type, &pv) as f64
     }
 
-    pub fn remove_layer(&mut self, layer_id: u64) -> Result<(), JsError> {
-        self.0.remove_layer(layer_id).map_err(|e| JsError::new(&e))
+    pub fn remove_layer(&mut self, layer_id: f64) -> Result<(), JsError> {
+        self.0.remove_layer(layer_id as u64).map_err(|e| JsError::new(&e))
     }
 
-    pub fn move_layer(&mut self, layer_id: u64, target_type: &str, target_id: u64) {
+    pub fn move_layer(&mut self, layer_id: f64, target_type: &str, target_id: f64) {
         let target = match target_type {
-            "before" => MoveTarget::Before(target_id),
-            "after" => MoveTarget::After(target_id),
-            "into_top" => MoveTarget::IntoGroupTop(target_id),
-            "into_bottom" => MoveTarget::IntoGroupBottom(target_id),
+            "before" => MoveTarget::Before(target_id as u64),
+            "after" => MoveTarget::After(target_id as u64),
+            "into_top" => MoveTarget::IntoGroupTop(target_id as u64),
+            "into_bottom" => MoveTarget::IntoGroupBottom(target_id as u64),
             _ => return,
         };
-        self.0.move_layer(layer_id, target)
+        self.0.move_layer(layer_id as u64, target)
     }
 
     // --- Layer properties (pass-through) ---
 
-    pub fn set_opacity(&mut self, layer_id: u64, opacity: f32) { self.0.set_opacity(layer_id, opacity) }
-    pub fn set_blend_mode(&mut self, layer_id: u64, mode: u32) { self.0.set_blend_mode(layer_id, mode) }
-    pub fn set_layer_visible(&mut self, layer_id: u64, visible: bool) { self.0.set_layer_visible(layer_id, visible) }
-    pub fn set_layer_name(&mut self, layer_id: u64, name: &str) { self.0.set_layer_name(layer_id, name) }
-    pub fn set_group_collapsed(&mut self, group_id: u64, collapsed: bool) { self.0.set_group_collapsed(group_id, collapsed) }
+    pub fn set_opacity(&mut self, layer_id: f64, opacity: f32) { self.0.set_opacity(layer_id as u64, opacity) }
+    pub fn set_blend_mode(&mut self, layer_id: f64, mode: u32) { self.0.set_blend_mode(layer_id as u64, mode) }
+    pub fn set_layer_visible(&mut self, layer_id: f64, visible: bool) { self.0.set_layer_visible(layer_id as u64, visible) }
+    pub fn set_layer_name(&mut self, layer_id: f64, name: &str) { self.0.set_layer_name(layer_id as u64, name) }
+    pub fn set_group_collapsed(&mut self, group_id: f64, collapsed: bool) { self.0.set_group_collapsed(group_id as u64, collapsed) }
 
     // --- Painting (pass-through) ---
 
-    pub fn paint(&mut self, layer_id: u64, x: f32, y: f32, radius: f32, r: u8, g: u8, b: u8, a: u8) {
-        self.0.paint(layer_id, x, y, radius, r, g, b, a)
+    pub fn paint(&mut self, layer_id: f64, x: f32, y: f32, radius: f32, r: u8, g: u8, b: u8, a: u8) {
+        self.0.paint(layer_id as u64, x, y, radius, r, g, b, a)
     }
-    pub fn fill_gradient(&mut self, layer_id: u64) { self.0.fill_gradient(layer_id) }
+    pub fn fill_gradient(&mut self, layer_id: f64) { self.0.fill_gradient(layer_id as u64) }
 
     // --- Stroke lifecycle ---
 
-    pub fn begin_stroke(&mut self, layer_id: u64) { self.0.begin_stroke(layer_id) }
+    pub fn begin_stroke(&mut self, layer_id: f64) { self.0.begin_stroke(layer_id as u64) }
 
     pub fn stroke_to(&mut self, op_type: &str, params: JsValue) {
         // Inject the discriminator tag expected by serde's tagged enum.
@@ -114,7 +115,7 @@ impl DarklyHandle {
     pub fn end_stroke(&mut self) { self.0.end_stroke() }
 
     // Legacy compat
-    pub fn snapshot(&mut self, layer_id: u64) { self.0.begin_stroke(layer_id) }
+    pub fn snapshot(&mut self, layer_id: f64) { self.0.begin_stroke(layer_id as u64) }
     pub fn commit(&mut self) { self.0.end_stroke() }
 
     // --- View transform ---

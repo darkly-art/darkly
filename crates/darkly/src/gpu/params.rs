@@ -16,3 +16,46 @@ pub enum ParamValue {
     Int(i32),
     Bool(bool),
 }
+
+/// Convert a JSON object of `{ "name": value, ... }` into `Vec<ParamValue>`
+/// using `ParamDef` metadata.
+///
+/// This is the platform-agnostic version of parameter conversion. Any
+/// non-WASM bridge (Tauri IPC, CEF IPC, napi-rs, tests) can use this
+/// directly instead of reimplementing the same logic with its own types.
+pub fn param_values_from_json(obj: &serde_json::Value, defs: &[ParamDef]) -> Vec<ParamValue> {
+    let map = match obj.as_object() {
+        Some(m) => m,
+        None => return defs.iter().map(|d| d.default_value()).collect(),
+    };
+    defs.iter().map(|def| match def {
+        ParamDef::Float { name, default, .. } => {
+            let v = map.get(*name)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(*default as f64) as f32;
+            ParamValue::Float(v)
+        }
+        ParamDef::Int { name, default, .. } => {
+            let v = map.get(*name)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(*default as f64) as i32;
+            ParamValue::Int(v)
+        }
+        ParamDef::Bool { name, default } => {
+            let v = map.get(*name)
+                .and_then(|v| v.as_bool())
+                .unwrap_or(*default);
+            ParamValue::Bool(v)
+        }
+    }).collect()
+}
+
+impl ParamDef {
+    pub fn default_value(&self) -> ParamValue {
+        match self {
+            ParamDef::Float { default, .. } => ParamValue::Float(*default),
+            ParamDef::Int { default, .. } => ParamValue::Int(*default),
+            ParamDef::Bool { default, .. } => ParamValue::Bool(*default),
+        }
+    }
+}

@@ -18,12 +18,12 @@ use crate::gpu::view::ViewTransform;
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum LayerInfo {
     #[serde(rename_all = "camelCase")]
-    Raster { id: u64, name: String, visible: bool, opacity: f32, blend_mode: u32 },
+    Raster { id: f64, name: String, visible: bool, opacity: f32, blend_mode: u32 },
     #[serde(rename_all = "camelCase")]
-    Filter { id: u64, name: String, visible: bool },
+    Filter { id: f64, name: String, visible: bool },
     #[serde(rename_all = "camelCase")]
     Group {
-        id: u64, name: String, visible: bool, collapsed: bool, passthrough: bool,
+        id: f64, name: String, visible: bool, collapsed: bool, passthrough: bool,
         opacity: f32, blend_mode: u32, children: Vec<LayerInfo>,
     },
 }
@@ -507,20 +507,20 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
     match node {
         LayerNode::Layer(layer) => match layer {
             Layer::Raster(r) => LayerInfo::Raster {
-                id: r.id,
+                id: r.id as f64,
                 name: r.name.clone(),
                 visible: r.visible,
                 opacity: r.opacity,
                 blend_mode: r.blend_mode as u32,
             },
             Layer::Filter(f) => LayerInfo::Filter {
-                id: f.id,
+                id: f.id as f64,
                 name: f.filter.type_id().to_string(),
                 visible: f.visible,
             },
         },
         LayerNode::Group(g) => LayerInfo::Group {
-            id: g.id,
+            id: g.id as f64,
             name: g.name.clone(),
             visible: g.visible,
             collapsed: g.collapsed,

@@ -18,7 +18,7 @@
     function addLayer() {
         if (app.handle) {
             const id = app.handle.add_raster_layer();
-            app.activeLayerId = Number(id);
+            app.activeLayerId = id;
             refresh();
         }
     }
@@ -26,7 +26,7 @@
     function addGroup() {
         if (app.handle) {
             const id = app.handle.add_group();
-            app.activeLayerId = Number(id);
+            app.activeLayerId = id;
             refresh();
         }
     }
@@ -34,7 +34,7 @@
     function removeLayer() {
         if (app.handle && app.activeLayerId !== null) {
             try {
-                app.handle.remove_layer(BigInt(app.activeLayerId));
+                app.handle.remove_layer(app.activeLayerId);
                 app.activeLayerId = null;
                 refresh();
             } catch (e: any) {

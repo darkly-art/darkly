@@ -1149,7 +1149,40 @@ impl Compositor {
         true
     }
 
-    /// Upload dirty tiles, composite changed layers, present.
+    /// Composite layers if needed, then present to an arbitrary texture view.
+    ///
+    /// This is the backend-agnostic rendering entry point. Any frontend
+    /// (WASM surface, native window, CEF hole-punch, headless test) can
+    /// provide a `TextureView` and get the composited + veiled result.
+    pub fn render_to_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target_view: &wgpu::TextureView,
+        doc: &mut Document,
+    ) {
+        let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
+        if !self.needs_composite && !has_dirty && !self.needs_present {
+            return;
+        }
+
+        if self.needs_composite || has_dirty {
+            self.render_offscreen(device, queue, doc);
+        }
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("present-to-view"),
+        });
+        self.present_and_veils(&mut encoder, target_view);
+        queue.submit(std::iter::once(encoder.finish()));
+
+        self.needs_present = false;
+    }
+
+    /// Upload dirty tiles, composite changed layers, present to a surface.
+    ///
+    /// Convenience wrapper around `render_to_view` that handles surface
+    /// acquisition and presentation. Used by the WASM frontend.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -1160,389 +1193,52 @@ impl Compositor {
     ) {
         perf::time("render-total");
 
-        // 1. Check if any dirty regions exist before scanning layers.
         let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
-
-        // P2: Dirty gate — if nothing changed and no dirty tiles, check view-only present.
-        if !self.needs_composite && !has_dirty {
-            if self.needs_present {
-                // View transform changed but no compositing needed — re-present only.
-                self.present_only(device, queue, surface, surface_config);
-                self.needs_present = false;
-            }
+        if !self.needs_composite && !has_dirty && !self.needs_present {
             perf::time_end("render-total");
             return;
         }
 
-        // 2. Upload dirty tiles for each dirty raster layer
-        perf::time("tile-upload");
-        if has_dirty {
-            for raster in doc.all_raster_layers() {
-                let dirty = match doc.dirty.get(&raster.id) {
-                    Some(d) if !d.is_empty() => d,
-                    _ => continue,
-                };
-
-                let layer_tex = match self.layer_textures.get(&raster.id) {
-                    Some(t) => t,
-                    None => continue,
-                };
-
-                for (tx, ty) in dirty.iter() {
-                    if tx < 0 || ty < 0 {
-                        continue;
-                    }
-                    if tx as u32 >= layer_tex.width_in_tiles
-                        || ty as u32 >= layer_tex.height_in_tiles
-                    {
-                        continue;
-                    }
-                    let tile_data = match raster.tiles.get(tx, ty) {
-                        Some(tile) => tile.data(),
-                        // Tile was removed (e.g. by undo) — upload blank to
-                        // clear the stale GPU data.
-                        None => &BLANK_TILE,
-                    };
-                    self.staging.upload_tile(
-                        queue,
-                        tile_data,
-                        &layer_tex.texture,
-                        tx as u32,
-                        ty as u32,
-                    );
-                }
-
-                // Note the lowest dirty layer for cache invalidation
-                if let Some(idx) = doc.flat_layer_index(raster.id) {
-                    match self.lowest_dirty_layer {
-                        Some(current) => {
-                            if idx < current {
-                                self.lowest_dirty_layer = Some(idx);
-                            }
-                        }
-                        None => self.lowest_dirty_layer = Some(idx),
-                    }
-                }
-                self.needs_composite = true;
-            }
+        // Composite layers into composite_cache if needed.
+        if self.needs_composite || has_dirty {
+            perf::time("offscreen");
+            self.render_offscreen(device, queue, doc);
+            perf::time_end("offscreen");
         }
 
-        perf::time_end("tile-upload");
-
-        // Handle cache invalidation
-        if let Some(lowest) = self.lowest_dirty_layer.take() {
-            self.invalidate_cache_from(lowest);
-        }
-
-        // After tile upload, re-check: if still nothing to composite, bail out.
-        if !self.needs_composite {
-            // Clear empty dirty regions and return — no GPU work.
-            for dirty in doc.dirty.values_mut() {
-                dirty.clear();
-            }
-            perf::time_end("render-total");
-            return;
-        }
-
-        // 3. Compute dirty bounding rect (P3) — union of all dirty regions in pixel coords.
-        // This rect limits all compositing passes via scissor and scoped texture copies.
-        let dirty_rect = dirty_pixel_rect(
-            doc.dirty.values(),
-            self.canvas_width,
-            self.canvas_height,
-        );
-
-        // If needs_composite was set by a non-tile-dirty source (e.g. layer property change,
-        // undo/redo), we need a full-canvas rect since there's no tile-level dirty info.
-        let (scissor_x, scissor_y, scissor_w, scissor_h) = dirty_rect
-            .unwrap_or((0, 0, self.canvas_width, self.canvas_height));
-
-        #[cfg(feature = "profile")]
-        log::info!(
-            "scissor: ({scissor_x},{scissor_y} {scissor_w}x{scissor_h}), start_layer will be from cache_valid_through={:?}, flat_layers={}",
-            self.cache_valid_through,
-            doc.flat_layers().len(),
-        );
-
-        // 4. Acquire surface — only when we actually have work to do.
-        perf::time("acquire-surface");
+        // Acquire surface and present composite_cache → veils → surface.
         let output = match surface.get_current_texture() {
             Ok(output) => output,
             Err(wgpu::SurfaceError::Lost) => {
                 surface.configure(device, surface_config);
+                perf::time_end("render-total");
                 return;
             }
             Err(wgpu::SurfaceError::OutOfMemory) => {
                 log::error!("Out of GPU memory");
+                perf::time_end("render-total");
                 return;
             }
             Err(e) => {
                 log::warn!("Surface error: {e:?}");
+                perf::time_end("render-total");
                 return;
             }
         };
         let surface_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        perf::time_end("acquire-surface");
 
-        // 5. Composite cache (P3): determine start point
-        let start_layer = match self.cache_valid_through {
-            Some(valid_through) => valid_through + 1,
-            None => 0,
-        };
-        let resuming_from_cache = start_layer > 0;
-        // Track whether the first layer after cache resume still needs the
-        // cache_source_bind_group (reads from composite_cache instead of accum).
-        let mut use_cache_source = resuming_from_cache;
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("composite"),
-        });
-
-        if !resuming_from_cache {
-            // Clear accumulator[0] for fresh composite (fullscreen — first frame or full invalidation)
-            {
-                let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("clear-accum"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.accum_views[0],
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    ..Default::default()
-                });
-            }
-            self.current_accum = 0;
-        }
-        // When resuming from cache, we DON'T copy cache→accum.
-        // Instead, the first blend pass uses cache_source_bind_group which
-        // reads directly from composite_cache. This saves one fullscreen copy.
-
-        // 6. Composite layers from start_layer to top.
-        // `wrote_to_cache` tracks whether the final result landed in
-        // composite_cache (true) or in accum[current_accum] (false).
-        perf::time("composite-layers");
-        let flat = doc.flat_layers();
-        let num_layers = flat.len();
-        let mut wrote_to_cache = false;
-
-        for layer_idx in start_layer..num_layers {
-            let layer = flat[layer_idx];
-            if !layer.visible() {
-                continue;
-            }
-
-            let is_last_layer = layer_idx == num_layers - 1;
-
-            match layer {
-                Layer::Raster(raster) => {
-                    let cache = match self.raster_cache.get(&raster.id) {
-                        Some(c) => c,
-                        None => continue,
-                    };
-
-                    let (dst_view, bind_group) = if use_cache_source {
-                        // First layer after cache resume: read from cache texture.
-                        // MUST write to accum (not cache) to avoid read-write hazard.
-                        use_cache_source = false;
-                        let dst = 0;
-                        self.current_accum = dst;
-                        (&self.accum_views[dst], &cache.cache_source_bind_group)
-                    } else if is_last_layer {
-                        // Last layer, not reading from cache: render directly to
-                        // composite_cache to skip the post-loop copy.
-                        wrote_to_cache = true;
-                        let src = self.current_accum;
-                        (&self.composite_cache_view, &cache.bind_groups[src])
-                    } else {
-                        let src = self.current_accum;
-                        let dst = 1 - src;
-                        self.current_accum = dst;
-                        (&self.accum_views[dst], &cache.bind_groups[src])
-                    };
-
-                    {
-                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("blend-raster"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: dst_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            ..Default::default()
-                        });
-                        rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-                        rpass.set_pipeline(self.blend_pipelines.pipeline());
-                        rpass.set_bind_group(0, bind_group, &[]);
-                        rpass.draw(0..3, 0..1);
-                    }
-                }
-                Layer::Filter(fl) => {
-                    let cache = match self.filter_cache.get(&fl.id) {
-                        Some(c) => c,
-                        None => continue,
-                    };
-
-                    // For filters resuming from cache, we need to copy cache→accum
-                    // since filter bind groups only reference accum views.
-                    // Scope the copy to the dirty rect only.
-                    if use_cache_source {
-                        use_cache_source = false;
-                        let origin = wgpu::Origin3d {
-                            x: scissor_x,
-                            y: scissor_y,
-                            z: 0,
-                        };
-                        encoder.copy_texture_to_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &self.composite_cache,
-                                mip_level: 0,
-                                origin,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &self.accum[0],
-                                mip_level: 0,
-                                origin,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::Extent3d {
-                                width: scissor_w,
-                                height: scissor_h,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                        self.current_accum = 0;
-                    }
-
-                    for pass in 0..fl.filter.pass_count() as usize {
-                        let src = self.current_accum;
-                        let dst = 1 - src;
-
-                        let is_last_pass = pass == fl.filter.pass_count() as usize - 1;
-                        let dst_view = if is_last_layer && is_last_pass {
-                            // Last pass of last layer: render directly to cache.
-                            wrote_to_cache = true;
-                            &self.composite_cache_view
-                        } else {
-                            self.current_accum = dst;
-                            &self.accum_views[dst]
-                        };
-
-                        {
-                            let mut rpass =
-                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("filter-pass"),
-                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: dst_view,
-                                        resolve_target: None,
-                                        depth_slice: None,
-                                        ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
-                                            store: wgpu::StoreOp::Store,
-                                        },
-                                    })],
-                                    ..Default::default()
-                                });
-                            rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-                            rpass.set_pipeline(fl.filter.pipeline());
-                            rpass.set_bind_group(0, &cache.bind_groups[pass][src], &[]);
-                            rpass.draw(0..3, 0..1);
-                        }
-                    }
-                }
-            }
-        }
-
-        // If the final result is in an accumulator, copy only the dirty rect to the cache.
-        if !wrote_to_cache && start_layer < num_layers {
-            let origin = wgpu::Origin3d {
-                x: scissor_x,
-                y: scissor_y,
-                z: 0,
-            };
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.accum[self.current_accum],
-                    mip_level: 0,
-                    origin,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.composite_cache,
-                    mip_level: 0,
-                    origin,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: scissor_w,
-                    height: scissor_h,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-        if start_layer < num_layers {
-            self.cache_valid_through = Some(num_layers.saturating_sub(1));
-        }
-
-        perf::time_end("composite-layers");
-
-        // 6. Present (+ veils if any): composite_cache → [veils] → surface
         perf::time("present");
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("present"),
+        });
         self.present_and_veils(&mut encoder, &surface_view);
+        queue.submit(std::iter::once(encoder.finish()));
+        output.present();
         perf::time_end("present");
 
-        perf::time("submit+present");
-        queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        perf::time_end("submit+present");
-
-        // 7. Clear dirty regions, reset flag
-        for dirty in doc.dirty.values_mut() {
-            dirty.clear();
-        }
-        self.needs_composite = false;
         self.needs_present = false;
         perf::time_end("render-total");
-    }
-
-    /// Re-present the composite cache to the surface without recompositing.
-    /// Used when only the view transform changed.
-    fn present_only(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        surface: &wgpu::Surface,
-        surface_config: &wgpu::SurfaceConfiguration,
-    ) {
-        let output = match surface.get_current_texture() {
-            Ok(output) => output,
-            Err(wgpu::SurfaceError::Lost) => {
-                surface.configure(device, surface_config);
-                return;
-            }
-            Err(_) => return,
-        };
-        let surface_view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("present-only"),
-        });
-
-        self.present_and_veils(&mut encoder, &surface_view);
-
-        queue.submit(std::iter::once(encoder.finish()));
-        output.present();
     }
 }

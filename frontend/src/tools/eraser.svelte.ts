@@ -11,7 +11,7 @@ export const eraserTool: Tool = {
         const layerId = app.activeLayerId;
         if (!layerId) return;
 
-        ctx.handle.begin_stroke(BigInt(layerId));
+        ctx.handle.begin_stroke(layerId);
 
         ctx.handle.stroke_to('erase_circle', {
             x: cx, y: cy, radius: app.brushSize,
