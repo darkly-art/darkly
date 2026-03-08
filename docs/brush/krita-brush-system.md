@@ -1,5 +1,48 @@
 # Krita Brush System — Deep Dive
 
+## Artist Sentiment & Pain Points
+
+### What Artists Love
+
+- **Customization depth** — 16 brush engines with massive parameter control, far beyond what you'd expect from FOSS
+- **Natural media emulation** — oils, watercolor, charcoal feel more "traditional" than Photoshop to many artists
+- **Default preset quality** — ships with 100+ pro presets; David Revoy's community packs are widely beloved
+- **Brush editor UX** — described as "simple and easy" vs Photoshop's "intimidating" editor
+- **Free** — professional-grade brush tools accessible to everyone
+
+### Top Pain Points (ranked by community frequency)
+
+1. **Performance at scale** — large canvas (8K+) with large brushes (500px+) lags badly, especially Color Smudge. GPU acceleration is the #1 request but devs say "all signs point to no" for at least 2 years (blocked on Qt6 port)
+2. **Per-stroke texture mode is missing** — Krita only does per-dab texture. This is the single most-cited blocker for porting Photoshop/CSP brushes
+3. **Fragmented "snowflake" engines** — 16 isolated engines with inconsistent feature parity. Artists want a composable/stackable system (apply blur + smudge + texture in one stroke). 3DCoat's modular engine is cited as inspiration
+4. **Brush smoothing/stabilizer is weak** — trails CSP and SAI significantly. Weighted mode is inconsistent, stabilizer overshoots, and it "stabilizes but doesn't actually smooth"
+5. **Stroke-start delay** — large brush tips (2048px+) caused up to 1s delays from redundant pyramid regeneration (fixed in 5.0 but left a lasting reputation)
+
+### ABR Import — Barely Functional
+
+A major pain point that surprises users constantly:
+
+- **Only brush tips are imported** — all dynamics, parameters, presets, patterns, and texture settings are silently discarded. Users must manually recreate every preset from scratch
+- **Modern ABR versions often fail** — Krita handles PS 7.x era formats but struggles with newer versions. Users resort to third-party tools like abrMate to downconvert
+- **Confusing UX** — after import, "nothing happens" — tips appear in the brush editor (F5) but NOT in the preset docker, causing massive confusion
+- **A draft MR exists** (#2539, Dec 2025) for improved ABR import with descriptor parsing and auto-preset creation, but it's not merged
+- **Heavily attempted, rarely successful** — one of the most common support topics on krita-artists.org, precisely because artists coming from Photoshop expect their ABR collections to work and hit a wall
+
+See [ABR Format — Reverse Engineering Analysis](brush/abr-format.md) for a deep dive into the format, what has been reverse-engineered, and how GIMP/Krita/community parsers compare.
+
+### Other Notable Issues
+
+- **8-bit build-up mode bug** — painting at 1% opacity never reaches 100% due to rounding errors (works in 16-bit)
+- **Tag/preset management fragility** — deleted tags reappear, no drag-and-drop reorder (a community plugin was built just to fix this)
+- **No Procreate/CSP brush import** — only community converter tools exist
+- **Pressure sensitivity config hell** — WinTab vs Windows Ink conflicts are the most common support topic overall
+
+### Key Takeaway
+
+Krita's brushes are deeply loved for depth and natural media quality but architecturally fragmented. The system is CPU-bound with no GPU path, ABR import is essentially broken (tips only, no presets), and the stabilizer trails commercial competitors. The community's dream — a composable GPU-accelerated universal engine — would be a ground-up rethinking that Krita's team hasn't committed to.
+
+---
+
 ## Overview
 
 Krita's brush system is a layered architecture with four main subsystems:
