@@ -40,7 +40,6 @@ pub struct VeilInfo {
 
 #[derive(serde::Serialize)]
 pub struct ParamInfo {
-    #[serde(flatten)]
     pub def: ParamDef,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<ParamValue>,
