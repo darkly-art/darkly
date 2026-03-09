@@ -23,6 +23,7 @@
             canvas.width = w;
             canvas.height = h;
             app.handle?.resize(w, h);
+            app.requestFrame();
         }
     }
 
@@ -58,8 +59,8 @@
             const fitZoom = Math.min(dprRect.w / docW, dprRect.h / docH, 1);
             app.zoom = fitZoom;
 
-            // Start render loop
-            requestAnimationFrame(renderLoop);
+            // Kick the first frame
+            app.requestFrame();
 
             // Check GPU status and notify user
             checkGpu().then(result => {
@@ -71,12 +72,6 @@
         }
     });
 
-    function renderLoop() {
-        if (app.handle) {
-            app.handle.render(performance.now() / 1000.0);
-        }
-        requestAnimationFrame(renderLoop);
-    }
 
     function getToolContext(): ToolContext | null {
         if (!app.handle) return null;
@@ -123,6 +118,7 @@
         const pos = getCanvasCoords(e);
         const tool = toolRegistry.get(app.activeToolId);
         tool?.onPointerDown(ctx, e, pos.x, pos.y);
+        app.requestFrame();
     }
 
     function onPointerMove(e: PointerEvent) {
@@ -142,6 +138,7 @@
         const pos = getCanvasCoords(e);
         const tool = toolRegistry.get(app.activeToolId);
         tool?.onPointerMove(ctx, e, pos.x, pos.y);
+        app.requestFrame();
     }
 
     function onPointerUp(e: PointerEvent) {
@@ -161,6 +158,7 @@
         if (!ctx) return;
         const tool = toolRegistry.get(app.activeToolId);
         tool?.onPointerUp(ctx, e);
+        app.requestFrame();
     }
 
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
@@ -172,6 +170,7 @@
         const tool = toolRegistry.get(app.activeToolId);
         if (tool?.onKeyDown?.(e)) return;
         tool?.dismissOverlay?.();
+        app.requestFrame();
     }
 
     // Dismiss tool overlay when the active layer changes.
@@ -196,6 +195,7 @@
                 app.zoom, app.rotation,
                 canvas.width, canvas.height,
             );
+            app.requestFrame();
         }
     });
 </script>
@@ -212,7 +212,7 @@
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
-        onwheel={(e: WheelEvent) => nav.onWheel(e, canvas)}
+        onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); app.requestFrame(); }}
     ></canvas>
     {#if canvas}
         <ToolOverlay canvasEl={canvas} />

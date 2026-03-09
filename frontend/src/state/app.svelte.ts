@@ -60,6 +60,22 @@ class AppState {
             this.veilList = Array.isArray(list) ? list : [];
         }
     }
+
+    // --- Demand-driven rendering ---
+
+    private _framePending = false;
+
+    /** Schedule a render frame if one isn't already pending. */
+    requestFrame() {
+        if (this._framePending) return;
+        this._framePending = true;
+        requestAnimationFrame((ts) => {
+            this._framePending = false;
+            if (!this.handle) return;
+            const needsMore = this.handle.render(ts / 1000.0);
+            if (needsMore) this.requestFrame();
+        });
+    }
 }
 
 export const app = new AppState();

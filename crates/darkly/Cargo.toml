@@ -19,3 +19,4 @@ web-sys = { workspace = true }
 
 [dev-dependencies]
 pollster = "0.4"
+naga = { version = "28.0", features = ["wgsl-in"] }

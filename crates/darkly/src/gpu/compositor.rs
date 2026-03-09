@@ -2,6 +2,7 @@ use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
 use crate::gpu::effect::{self, EffectCache, EffectPipeline};
 use crate::gpu::filter::FilterRegistry;
+use crate::gpu::overlay::{OverlayPrimitive, ToolOverlay};
 use crate::gpu::veil::{ParamValue, Veil, VeilRegistry};
 use crate::gpu::staging::StagingRing;
 use crate::gpu::view::ViewTransform;
@@ -129,6 +130,11 @@ pub struct Compositor {
     /// Time accumulated since the last animation render. Used to throttle
     /// animated veils to a cinematic framerate instead of 60fps.
     anim_accum: f32,
+
+    // --- Tool Overlay ---
+    tool_overlay: ToolOverlay,
+    /// Cached view transform for overlay forward matrix computation.
+    cached_view_transform: ViewTransform,
 }
 
 impl Compositor {
@@ -334,6 +340,8 @@ impl Compositor {
         let veil_registry = VeilRegistry::new();
         let blit_pipeline = effect::create_blit_pipeline(device, surface_format, "blit-to-surface");
 
+        let tool_overlay = ToolOverlay::new(device, surface_format);
+
         Compositor {
             accum: [accum0, accum1],
             accum_views: [accum_view0, accum_view1],
@@ -368,6 +376,8 @@ impl Compositor {
             viewport_height: 0,
             last_time: 0.0,
             anim_accum: 0.0,
+            tool_overlay,
+            cached_view_transform: identity,
         }
     }
 
@@ -514,6 +524,12 @@ impl Compositor {
             return;
         }
 
+        // Update overlay animation time only when dashed lines are animating.
+        if self.tool_overlay.needs_animation() {
+            self.tool_overlay.update_time(dt);
+            self.needs_present = true;
+        }
+
         let has_animating = self
             .veil_entries
             .iter()
@@ -539,9 +555,16 @@ impl Compositor {
         self.needs_present = true;
     }
 
+    /// Returns true if any animations need continuous frames (veils or overlay).
+    pub fn needs_animation(&self) -> bool {
+        self.tool_overlay.needs_animation()
+            || self.veil_entries.iter().any(|e| e.visible && e.veil.needs_animation())
+    }
+
     /// Update the view transform uniform buffer.
-    pub fn update_view_transform(&self, queue: &wgpu::Queue, transform: &ViewTransform) {
+    pub fn update_view_transform(&mut self, queue: &wgpu::Queue, transform: &ViewTransform) {
         queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(transform));
+        self.cached_view_transform = *transform;
     }
 
     /// Invalidate the composite cache.
@@ -777,6 +800,30 @@ impl Compositor {
                 self.viewport_height,
             );
         }
+    }
+
+    // --- Tool Overlay ---
+
+    /// Replace the current overlay primitives.
+    pub fn set_overlay_primitives(&mut self, prims: Vec<OverlayPrimitive>) {
+        self.tool_overlay.set_primitives(prims);
+        self.needs_present = true;
+    }
+
+    /// Clear all overlay primitives.
+    pub fn clear_overlay(&mut self) {
+        self.tool_overlay.clear_primitives();
+        self.needs_present = true;
+    }
+
+    /// Advance overlay animation time.
+    pub fn update_overlay_time(&mut self, dt: f32) {
+        self.tool_overlay.update_time(dt);
+    }
+
+    /// CPU-side hit test on overlay primitives.
+    pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> Option<usize> {
+        self.tool_overlay.hit_test(screen_x, screen_y)
     }
 
     /// Run the present pass, veil chain, and final blit to surface.
@@ -1496,12 +1543,22 @@ impl Compositor {
         self.present_and_veils(&mut encoder, &surface_view);
         perf::time_end("present");
 
+        // 7. Tool overlay (on top of surface)
+        if self.tool_overlay.has_content() {
+            let vt = self.cached_view_transform;
+            let vw = self.viewport_width;
+            let vh = self.viewport_height;
+            self.tool_overlay.encode(
+                device, queue, &mut encoder, &output.texture, &surface_view, &vt, vw, vh,
+            );
+        }
+
         perf::time("submit+present");
         queue.submit(std::iter::once(encoder.finish()));
         output.present();
         perf::time_end("submit+present");
 
-        // 7. Clear dirty regions, reset flag
+        // 8. Clear dirty regions, reset flag
         for dirty in doc.dirty.values_mut() {
             dirty.clear();
         }
@@ -1536,6 +1593,15 @@ impl Compositor {
         });
 
         self.present_and_veils(&mut encoder, &surface_view);
+
+        if self.tool_overlay.has_content() {
+            let vt = self.cached_view_transform;
+            let vw = self.viewport_width;
+            let vh = self.viewport_height;
+            self.tool_overlay.encode(
+                device, queue, &mut encoder, &output.texture, &surface_view, &vt, vw, vh,
+            );
+        }
 
         queue.submit(std::iter::once(encoder.finish()));
         output.present();

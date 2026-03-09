@@ -7,6 +7,7 @@ use darkly::undo::{
 use darkly::undo::property::Property;
 use darkly::gpu::compositor::Compositor;
 use darkly::gpu::context::GpuContext;
+use darkly::gpu::overlay::OverlayPrimitive;
 use darkly::gpu::veil::{ParamDef, ParamValue};
 use darkly::gpu::view::ViewTransform;
 use wasm_bindgen::prelude::*;
@@ -313,9 +314,9 @@ impl DarklyHandle {
 
     // --- Layer operations ---
 
-    /// Render the current frame. Handles dirty checking internally (P2).
+    /// Render the current frame. Returns true if animations need another frame.
     /// `time_secs` is the current wall-clock time in seconds (e.g. performance.now() / 1000).
-    pub fn render(&mut self, time_secs: f32) {
+    pub fn render(&mut self, time_secs: f32) -> bool {
         self.compositor.update_veil_time(&self.gpu.queue, time_secs);
         self.compositor.render(
             &self.gpu.device,
@@ -324,6 +325,7 @@ impl DarklyHandle {
             &self.gpu.surface_config,
             &mut self.doc,
         );
+        self.compositor.needs_animation()
     }
 
     /// Set opacity for a layer or group (undoable).
@@ -609,6 +611,40 @@ impl DarklyHandle {
         arr.into()
     }
 
+    // --- Tool Overlay ---
+
+    /// Set overlay primitives from a JS array of primitive objects.
+    /// Each object: { kind, flags, p0: [x,y], p1: [x,y], color?: [r,g,b,a],
+    ///   thickness?, dashLen?, dashOffset?, cornerRadius? }
+    pub fn set_overlay(&mut self, primitives: JsValue) {
+        let arr: js_sys::Array = match primitives.dyn_into() {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+        let mut prims = Vec::with_capacity(arr.length() as usize);
+        for i in 0..arr.length() {
+            let obj = arr.get(i);
+            if let Some(p) = js_to_overlay_primitive(&obj) {
+                prims.push(p);
+            }
+        }
+        self.compositor.set_overlay_primitives(prims);
+    }
+
+    /// Clear all overlay primitives.
+    pub fn clear_overlay(&mut self) {
+        self.compositor.clear_overlay();
+    }
+
+    /// Hit-test overlay primitives at screen coordinates.
+    /// Returns the index of the hit primitive, or -1 if none.
+    pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> i32 {
+        match self.compositor.overlay_hit_test(screen_x, screen_y) {
+            Some(i) => i as i32,
+            None => -1,
+        }
+    }
+
     // --- Internal helpers ---
 
     /// Sync compositor state with document after undo/redo.
@@ -621,4 +657,68 @@ impl DarklyHandle {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// JS ↔ OverlayPrimitive conversion
+// ---------------------------------------------------------------------------
+
+fn js_f32(obj: &JsValue, key: &str) -> Option<f32> {
+    js_sys::Reflect::get(obj, &JsValue::from_str(key))
+        .ok()
+        .and_then(|v| v.as_f64())
+        .map(|v| v as f32)
+}
+
+fn js_u32(obj: &JsValue, key: &str) -> Option<u32> {
+    js_sys::Reflect::get(obj, &JsValue::from_str(key))
+        .ok()
+        .and_then(|v| v.as_f64())
+        .map(|v| v as u32)
+}
+
+fn js_f32_pair(obj: &JsValue, key: &str) -> Option<[f32; 2]> {
+    let arr: js_sys::Array = js_sys::Reflect::get(obj, &JsValue::from_str(key))
+        .ok()?
+        .dyn_into()
+        .ok()?;
+    Some([arr.get(0).as_f64()? as f32, arr.get(1).as_f64()? as f32])
+}
+
+fn js_f32_quad(obj: &JsValue, key: &str) -> Option<[f32; 4]> {
+    let arr: js_sys::Array = js_sys::Reflect::get(obj, &JsValue::from_str(key))
+        .ok()?
+        .dyn_into()
+        .ok()?;
+    Some([
+        arr.get(0).as_f64()? as f32,
+        arr.get(1).as_f64()? as f32,
+        arr.get(2).as_f64()? as f32,
+        arr.get(3).as_f64()? as f32,
+    ])
+}
+
+fn js_to_overlay_primitive(obj: &JsValue) -> Option<OverlayPrimitive> {
+    let kind = js_u32(obj, "kind")?;
+    let flags = js_u32(obj, "flags").unwrap_or(0);
+    let p0 = js_f32_pair(obj, "p0")?;
+    let p1 = js_f32_pair(obj, "p1")?;
+    let color = js_f32_quad(obj, "color").unwrap_or([1.0, 1.0, 1.0, 1.0]);
+    let thickness = js_f32(obj, "thickness").unwrap_or(1.0);
+    let dash_len = js_f32(obj, "dashLen").unwrap_or(0.0);
+    let dash_offset = js_f32(obj, "dashOffset").unwrap_or(0.0);
+    let corner_radius = js_f32(obj, "cornerRadius").unwrap_or(0.0);
+
+    Some(OverlayPrimitive {
+        color,
+        p0,
+        p1,
+        thickness,
+        dash_len,
+        dash_offset,
+        corner_radius,
+        kind,
+        flags,
+        _pad: [0; 2],
+    })
 }

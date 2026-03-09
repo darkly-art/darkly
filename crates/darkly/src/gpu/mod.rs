@@ -10,3 +10,4 @@ pub mod filters;
 pub mod veil;
 pub mod veils;
 pub mod view;
+pub mod overlay;
