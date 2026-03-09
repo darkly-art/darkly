@@ -18,6 +18,9 @@ class ConfigStore {
     /** Bumped on every mutation to trigger Svelte reactivity. */
     #version = $state(0);
 
+    /** Whether WASM has been initialized and config is ready. */
+    #ready = false;
+
     /** User overrides tracked for localStorage persistence. */
     #userOverrides: Record<string, any> = {};
 
@@ -54,12 +57,14 @@ class ConfigStore {
             config_set(key, value);
         }
 
+        this.#ready = true;
         this.#version++;
     }
 
-    /** Read a config value by dot-path key. */
+    /** Read a config value by dot-path key. Returns undefined before init(). */
     get(key: string): any {
         void this.#version;
+        if (!this.#ready) return undefined;
         return config_get(key);
     }
 

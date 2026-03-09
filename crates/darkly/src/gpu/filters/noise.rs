@@ -1,15 +1,23 @@
 use crate::gpu::effect::{EffectCache, EffectPipeline};
 use crate::gpu::filter::{Filter, FilterRegistration};
+use crate::gpu::params::{ParamDef, ParamValue};
 use std::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsValue;
+
+const PARAMS: &[ParamDef] = &[
+    ParamDef::Float { name: "amount", min: 0.0, max: 1.0, default: 0.5 },
+    ParamDef::Int { name: "resolution", min: 1, max: 8, default: 1 },
+];
 
 pub fn register() -> FilterRegistration {
     FilterRegistration {
         type_id: "noise",
+        params: PARAMS,
         create_pipeline,
-        #[cfg(target_arch = "wasm32")]
-        from_js: |js, shared| Box::new(Noise::from_js(js, shared)),
+        from_params: |params, shared| {
+            let amount = match params.get(0) { Some(ParamValue::Float(v)) => *v, _ => 0.5 };
+            let resolution = match params.get(1) { Some(ParamValue::Int(v)) => *v as u32, _ => 1 };
+            Box::new(Noise::new(amount, resolution, shared))
+        },
     }
 }
 
@@ -27,19 +35,6 @@ impl Noise {
             resolution,
             shared,
         }
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn from_js(js: JsValue, shared: Arc<EffectPipeline>) -> Self {
-        let amount = js_sys::Reflect::get(&js, &"amount".into())
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.5) as f32;
-        let resolution = js_sys::Reflect::get(&js, &"resolution".into())
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as u32;
-        Noise::new(amount, resolution, shared)
     }
 
     fn generate_noise_texture(

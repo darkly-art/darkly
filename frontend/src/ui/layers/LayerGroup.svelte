@@ -21,7 +21,7 @@
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
         if (app.handle) {
-            app.handle.set_layer_visible(BigInt(group.id), !group.visible);
+            app.handle.set_layer_visible(group.id, !group.visible);
             onupdate();
         }
     }
@@ -29,7 +29,7 @@
     function toggleCollapsed(e: MouseEvent) {
         e.stopPropagation();
         if (app.handle) {
-            app.handle.set_group_collapsed(BigInt(group.id), !group.collapsed);
+            app.handle.set_group_collapsed(group.id, !group.collapsed);
             onupdate();
         }
     }
@@ -46,7 +46,7 @@
     function finishRename() {
         editing = false;
         if (app.handle && editInput) {
-            app.handle.set_layer_name(BigInt(group.id), editInput.value);
+            app.handle.set_layer_name(group.id, editInput.value);
             onupdate();
         }
     }
@@ -90,11 +90,11 @@
         if (id === group.id) return;
 
         if (pos === 'above') {
-            app.handle.move_layer(BigInt(id), 'after', BigInt(group.id));
+            app.handle.move_layer(id, 'after', group.id);
         } else if (pos === 'below') {
-            app.handle.move_layer(BigInt(id), 'before', BigInt(group.id));
+            app.handle.move_layer(id, 'before', group.id);
         } else {
-            app.handle.move_layer(BigInt(id), 'into_top', BigInt(group.id));
+            app.handle.move_layer(id, 'into_top', group.id);
         }
         onupdate();
     }

@@ -24,7 +24,7 @@ function applyGradient() {
     const c = app.foreground;
     const bg = app.background;
 
-    app.handle.begin_stroke(BigInt(layerId));
+    app.handle.begin_stroke(layerId);
     app.handle.stroke_to('linear_gradient', {
         x0: startX, y0: startY,
         x1: endX, y1: endY,

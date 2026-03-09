@@ -45,7 +45,7 @@
             handle.add_filter_layer("noise", { amount: 0.3, resolution: 2 });
 
             const paintLayerId = handle.add_raster_layer();
-            app.activeLayerId = Number(paintLayerId);
+            app.activeLayerId = paintLayerId;
 
             // Observe element resizes to keep GPU surface in sync
             const ro = new ResizeObserver(() => syncCanvasSize());

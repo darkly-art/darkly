@@ -1,8 +1,6 @@
 use crate::gpu::effect::{create_blit_pipeline, EffectCache, EffectPipeline};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsValue;
 
 const PARAMS: &[ParamDef] = &[
     ParamDef::Int  { name: "scale", min: 1, max: 6, default: 2 },
@@ -14,8 +12,11 @@ pub fn register() -> VeilRegistration {
         type_id: "pixelate",
         params: PARAMS,
         create_pipeline: create_pixelate_pipeline,
-        #[cfg(target_arch = "wasm32")]
-        from_js: |js, shared| Box::new(Pixelate::from_js(js, shared)),
+        from_params: |params, shared| {
+            let scale = match params.get(0) { Some(ParamValue::Int(v)) => *v as u32, _ => 2 };
+            let soft = match params.get(1) { Some(ParamValue::Bool(v)) => *v, _ => true };
+            Box::new(Pixelate::new(scale, soft, shared))
+        },
     }
 }
 
@@ -40,19 +41,6 @@ impl Pixelate {
 
     fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.shared.bind_group_layout
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn from_js(js: JsValue, shared: Arc<EffectPipeline>) -> Self {
-        let scale = js_sys::Reflect::get(&js, &"scale".into())
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(2.0) as u32;
-        let soft = js_sys::Reflect::get(&js, &"soft".into())
-            .ok()
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        Pixelate::new(scale, soft, shared)
     }
 
     /// The scale value IS the number of 2x halving passes.

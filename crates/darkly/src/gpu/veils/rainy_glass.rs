@@ -1,8 +1,6 @@
 use crate::gpu::effect::{create_blit_pipeline, EffectCache, EffectPipeline};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen::JsValue;
 
 /// Fixed computational budget in pixels. The internal render resolution
 /// is derived from this so that landscape and portrait viewports produce
@@ -22,8 +20,13 @@ pub fn register() -> VeilRegistration {
         type_id: "rainy_glass",
         params: PARAMS,
         create_pipeline: create_rainy_glass_pipeline,
-        #[cfg(target_arch = "wasm32")]
-        from_js: |js, shared| Box::new(RainyGlass::from_js(js, shared)),
+        from_params: |params, shared| {
+            let speed = match params.get(0) { Some(ParamValue::Float(v)) => *v, _ => 1.0 };
+            let rain_amount = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 0.7 };
+            let direction = match params.get(2) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
+            let fog_amount = match params.get(3) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
+            Box::new(RainyGlass::new(speed, rain_amount, direction, fog_amount, shared))
+        },
     }
 }
 
@@ -76,27 +79,6 @@ impl RainyGlass {
             shared,
         }
     }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn from_js(js: JsValue, shared: Arc<EffectPipeline>) -> Self {
-        let speed = js_sys::Reflect::get(&js, &"speed".into())
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(1.0) as f32;
-        let rain_amount = js_sys::Reflect::get(&js, &"rain_amount".into())
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.7) as f32;
-        let direction = js_sys::Reflect::get(&js, &"direction".into())
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-        let fog_amount = js_sys::Reflect::get(&js, &"fog_amount".into())
-            .ok()
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) as f32;
-        RainyGlass::new(speed, rain_amount, direction, fog_amount, shared)
-    }
 }
 
 impl Veil for RainyGlass {
@@ -138,10 +120,6 @@ impl Veil for RainyGlass {
         viewport_height: u32,
     ) -> EffectCache {
         let (iw, ih) = internal_dimensions(viewport_width, viewport_height);
-        log::info!(
-            "rainy_glass: viewport {}x{} -> internal {}x{} ({} pixels)",
-            viewport_width, viewport_height, iw, ih, iw * ih,
-        );
 
         // --- Uniforms ---
         // Convert direction to radians and add π to compensate for our
