@@ -6,20 +6,20 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    pub async fn new(canvas: web_sys::HtmlCanvasElement) -> Self {
-        let initial_width = canvas.width();
-        let initial_height = canvas.height();
-
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::BROWSER_WEBGPU,
-            ..Default::default()
-        });
-
-        let surface_target = wgpu::SurfaceTarget::Canvas(canvas);
-        let surface = instance
-            .create_surface(surface_target)
-            .expect("Failed to create surface");
-
+    /// Create a GPU context from a pre-built instance and surface.
+    ///
+    /// The caller is responsible for platform-specific instance and surface
+    /// creation (e.g. from an HTML canvas or a native window handle).
+    /// `limits` controls device capability requirements (e.g.
+    /// `Limits::downlevel_webgl2_defaults()` for WASM,
+    /// `Limits::default()` for native).
+    pub async fn new(
+        instance: wgpu::Instance,
+        surface: wgpu::Surface<'static>,
+        limits: wgpu::Limits,
+        initial_width: u32,
+        initial_height: u32,
+    ) -> Self {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
@@ -33,8 +33,7 @@ impl GpuContext {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("darkly-device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
+                required_limits: limits.using_resolution(adapter.limits()),
                 ..Default::default()
             })
             .await

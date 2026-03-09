@@ -15,7 +15,7 @@
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
         if (app.handle) {
-            app.handle.set_layer_visible(BigInt(layer.id), !layer.visible);
+            app.handle.set_layer_visible(layer.id, !layer.visible);
             onupdate();
         }
     }
@@ -33,7 +33,7 @@
     function finishRename() {
         editing = false;
         if (app.handle && editInput) {
-            app.handle.set_layer_name(BigInt(layer.id), editInput.value);
+            app.handle.set_layer_name(layer.id, editInput.value);
             onupdate();
         }
     }
@@ -41,7 +41,7 @@
     function onOpacityChange(e: Event) {
         const value = parseFloat((e.target as HTMLInputElement).value);
         if (app.handle) {
-            app.handle.set_opacity(BigInt(layer.id), value);
+            app.handle.set_opacity(layer.id, value);
             onupdate();
         }
     }
@@ -84,9 +84,9 @@
         const ratio = (e.clientY - rect.top) / rect.height;
 
         if (ratio < 0.5) {
-            app.handle.move_layer(BigInt(id), 'after', BigInt(layer.id));
+            app.handle.move_layer(id, 'after', layer.id);
         } else {
-            app.handle.move_layer(BigInt(id), 'before', BigInt(layer.id));
+            app.handle.move_layer(id, 'before', layer.id);
         }
         onupdate();
     }

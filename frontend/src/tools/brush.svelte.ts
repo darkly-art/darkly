@@ -19,7 +19,7 @@ export const brushTool: Tool = {
         const layerId = app.activeLayerId;
         if (!layerId) return;
 
-        ctx.handle.begin_stroke(BigInt(layerId));
+        ctx.handle.begin_stroke(layerId);
 
         const c = app.foreground;
         const alpha = Math.round(c.a * app.brushOpacity);

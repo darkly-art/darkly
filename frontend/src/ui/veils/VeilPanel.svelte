@@ -4,6 +4,7 @@
 
     function refresh() {
         app.refreshVeilList();
+        app.requestFrame();
     }
 
     $effect(() => {

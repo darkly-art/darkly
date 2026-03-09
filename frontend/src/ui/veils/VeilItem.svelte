@@ -2,12 +2,12 @@
     import { app } from '../../state/app.svelte';
 
     interface VeilParam {
-        name: string;
         kind: 'float' | 'int' | 'bool';
+        name: string;
         min?: number;
         max?: number;
         default: number | boolean;
-        value: number | boolean;
+        value?: number | boolean;
     }
 
     let { veil, onupdate }: {
@@ -43,7 +43,7 @@
         if (!app.handle) return;
         const params: Record<string, number | boolean> = {};
         for (const p of veil.params) {
-            params[p.name] = p.value;
+            params[p.name] = p.value ?? p.default;
         }
         app.handle.update_veil(veil.index, params);
         onupdate();
@@ -159,20 +159,20 @@
                             min={param.min}
                             max={param.max}
                             step={param.kind === 'int' ? 1 : ((param.max! - param.min!) / 100)}
-                            value={param.value}
+                            value={param.value ?? param.default}
                             oninput={(e) => onSliderInput(param, e)}
                             onclick={(e) => e.stopPropagation()}
                             onpointerdown={() => { draggable = false; }}
                             onpointerup={() => { draggable = true; }}
                         />
                         <span class="param-value">
-                            {param.kind === 'int' ? param.value : (param.value as number).toFixed(1)}
+                            {param.kind === 'int' ? (param.value ?? param.default) : ((param.value ?? param.default) as number).toFixed(1)}
                         </span>
                     {:else if param.kind === 'bool'}
                         <input
                             type="checkbox"
                             class="param-checkbox"
-                            checked={param.value as boolean}
+                            checked={(param.value ?? param.default) as boolean}
                             onchange={(e) => onBoolChange(param, e)}
                             onclick={(e) => e.stopPropagation()}
                         />

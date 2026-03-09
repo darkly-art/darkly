@@ -1,6 +1,7 @@
 pub mod config;
 pub mod dirty;
 pub mod document;
+pub mod engine;
 pub mod layer;
 pub mod mask;
 pub mod tile;
