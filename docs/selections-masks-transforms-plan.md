@@ -73,8 +73,64 @@ impl AlphaMask {
     pub fn invert(&mut self);
     pub fn sample(&self, px: i32, py: i32) -> f32;
     pub fn bounding_rect(&self) -> Option<(i32, i32, i32, i32)>; // tile coords of non-empty
+    pub fn rasterize(&mut self, bounds, sdf_fn, antialias, feather); // SDF → coverage → tiles
+    pub fn feather(&mut self, radius: f32);                          // separable Gaussian blur
 }
 ```
+
+### Shared SDF & Rasterization Infrastructure
+
+A shared `sdf` module provides pure signed distance functions used by both the GPU overlay (WGSL) and CPU mask rasterization (Rust). The same mathematical formulas appear in both contexts — one is the source of truth for the other.
+
+```rust
+// crates/darkly/src/sdf.rs — pure SDF functions
+
+/// Unsigned distance from point to line segment.
+pub fn sdf_segment(px, py, ax, ay, bx, by) -> f32;
+
+/// Signed distance to filled circle (negative inside).
+pub fn sdf_circle(px, py, cx, cy, r) -> f32;
+
+/// Signed distance to filled axis-aligned rectangle (negative inside).
+pub fn sdf_rect(px, py, cx, cy, half_w, half_h) -> f32;
+
+/// Signed distance to filled rounded rectangle (negative inside).
+pub fn sdf_rounded_rect(px, py, cx, cy, half_w, half_h, corner_r) -> f32;
+
+/// Signed distance to filled ellipse (negative inside).
+/// Uses implicit surface approximation — exact on boundary, accurate within ±1px.
+pub fn sdf_ellipse(px, py, cx, cy, rx, ry) -> f32;
+
+/// Signed distance to filled polygon (negative inside).
+/// Uses winding-number edge-following (Inigo Quilez algorithm).
+pub fn sdf_polygon(px, py, vertices: &[[f32; 2]]) -> f32;
+
+/// Convert SDF to alpha coverage.
+///   antialias=true:  smoothstep over 1px transition (same as overlay shader)
+///   antialias=false: binary 0/1 at boundary
+///   feather > 0:     smoothstep over feather-width transition
+pub fn sdf_coverage(sdf, antialias, feather) -> f32;
+```
+
+**Antialiasing** is a property of the SDF→coverage conversion, not the SDF itself. The coverage function provides three modes:
+
+- **Hard edge** (`antialias=false, feather=0`): binary 0/1. For pixel art and precise masking.
+- **Antialiased** (`antialias=true, feather=0`): `smoothstep` over 1px. Identical to the overlay shader's approach. Produces analytically exact subpixel coverage — no supersampling needed.
+- **Feathered** (`feather > 0`): `smoothstep` over `feather` pixels. Tool-level feathering is free during rasterization — just widen the SDF transition band, no separate blur pass needed for geometric selections.
+
+`AlphaMask::rasterize()` iterates tiles within the shape's bounding rect (plus margin for AA/feather), evaluates the SDF at each pixel center, converts to coverage, and writes non-zero values. Selection tools provide the SDF as a closure:
+
+```rust
+// Rectangle selection tool
+mask.rasterize(bounds, |px, py| sdf::sdf_rect(px, py, cx, cy, hw, hh), antialias, feather);
+
+// Ellipse selection tool
+mask.rasterize(bounds, |px, py| sdf::sdf_ellipse(px, py, cx, cy, rx, ry), antialias, feather);
+```
+
+**Standalone feathering** (`AlphaMask::feather()`) handles non-geometric masks — hand-painted masks, magic wand results, or "feather existing selection" menu actions. These don't have an SDF, so a separable Gaussian blur on f32 tiles is the right approach: horizontal pass then vertical pass, O(r) per pixel via 1D kernel.
+
+The overlay system's CPU hit-test code (`overlay.rs`) is refactored to use the shared SDF functions from `sdf.rs`, eliminating the duplicated `cpu_sdf` / `sdf_line_cpu` implementations.
 
 ### Files
 
@@ -85,6 +141,8 @@ impl AlphaMask {
 - **Modify:** `frontend/wasm/src/api.rs` — update any direct `layers` access (API surface unchanged)
 - **Modify:** `crates/darkly/src/tile.rs` — make generic (`TileStore<F>`, `Tile<F>`, `Memento<F>`)
 - **Create:** `crates/darkly/src/mask.rs` — `AlphaMask` boolean ops and utilities (no shape rasterization)
+- **Create:** `crates/darkly/src/sdf.rs` — shared SDF functions, coverage conversion
+- **Modify:** `crates/darkly/src/gpu/overlay.rs` — refactor `cpu_sdf` to use shared `sdf.rs` functions
 - **Modify:** `crates/darkly/src/undo/tile.rs` — make `TileAction` generic over format, or add `MaskAction`
 
 ---
@@ -319,6 +377,8 @@ This lives in the tile write path, not in individual tools. Every tool gets sele
 
 When the selection changes, extract the contour polyline from the `AlphaMask` on the CPU (Krita does this asynchronously via `KisUpdateOutlineJob`; we do it synchronously since masks are small). The contour is submitted as overlay dashed-line primitives with `dash_offset` animated by a timer. The overlay system renders them as ordinary geometry — it doesn't know they're marching ants.
 
+**Threshold for soft selections:** Antialiased and feathered masks have no single crisp boundary. The contour extraction thresholds at 0.5 — pixels with coverage > 0.5 are "inside" for marching ants purposes. This matches standard practice (Krita, Photoshop).
+
 ### Rectangle Select Tool
 
 First tool, follows the auto-discovery pattern:
@@ -331,9 +391,13 @@ pub fn register() -> ToolRegistration { ... }
 The tool:
 1. Receives mouse down/move/up events
 2. Computes rectangle in canvas coordinates
-3. Rasterizes the rectangle into a temporary `AlphaMask` using shared rasterization infrastructure, then applies it to the document selection via boolean ops (or replace)
+3. Rasterizes the rectangle into a temporary `AlphaMask` via `mask.rasterize(bounds, |px, py| sdf::sdf_rect(...), antialias, feather)`, then applies it to the document selection via boolean ops (or replace)
 4. Submits overlay primitives for the selection rectangle preview during drag
 5. After mouse up, selection is committed and marching ants appear
+
+Tool options (same for all selection tools):
+- **Anti-aliased** (bool, default true): smooth 1px edge transition vs binary. Disabled automatically when feather > 0 (feathering subsumes AA). For pixel art or precise masking, uncheck.
+- **Feather** (f32, default 0): smooth transition radius in pixels. Applied during SDF rasterization — no separate blur pass needed for geometric selections.
 
 Boolean modifiers:
 - No modifier: replace selection

@@ -4,6 +4,7 @@ pub mod document;
 pub mod engine;
 pub mod layer;
 pub mod mask;
+pub mod sdf;
 pub mod tile;
 pub mod undo;
 pub mod gpu;

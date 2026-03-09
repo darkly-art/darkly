@@ -454,49 +454,29 @@ fn forward_from_inverse(vt: &ViewTransform) -> [[f32; 4]; 3] {
 }
 
 // ---------------------------------------------------------------------------
-// CPU-side SDF for hit testing (screen-space primitives only)
+// CPU-side SDF for hit testing — delegates to shared sdf module
 // ---------------------------------------------------------------------------
 
 fn cpu_sdf(prim: &OverlayPrimitive, p: [f32; 2]) -> f32 {
+    use crate::sdf;
     match prim.kind {
-        KIND_LINE | KIND_DASHED_LINE => sdf_line_cpu(p, prim.p0, prim.p1),
+        KIND_LINE | KIND_DASHED_LINE => {
+            sdf::sdf_segment(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0], prim.p1[1])
+        }
         KIND_CIRCLE => {
-            let dx = p[0] - prim.p0[0];
-            let dy = p[1] - prim.p0[1];
-            (dx.hypot(dy) - prim.p1[0]).abs()
+            sdf::sdf_circle(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0]).abs()
         }
         KIND_FILLED_CIRCLE => {
-            let dx = p[0] - prim.p0[0];
-            let dy = p[1] - prim.p0[1];
-            dx.hypot(dy) - prim.p1[0]
+            sdf::sdf_circle(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0])
         }
         KIND_RECT | KIND_FILLED_RECT => {
             let cx = (prim.p0[0] + prim.p1[0]) * 0.5;
             let cy = (prim.p0[1] + prim.p1[1]) * 0.5;
-            let hx = (prim.p1[0] - prim.p0[0]) * 0.5 - prim.corner_radius;
-            let hy = (prim.p1[1] - prim.p0[1]) * 0.5 - prim.corner_radius;
-            let dx = (p[0] - cx).abs() - hx;
-            let dy = (p[1] - cy).abs() - hy;
-            let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt();
-            let inside = dx.max(dy).min(0.0);
-            let d = outside + inside - prim.corner_radius;
+            let hw = (prim.p1[0] - prim.p0[0]) * 0.5;
+            let hh = (prim.p1[1] - prim.p0[1]) * 0.5;
+            let d = sdf::sdf_rounded_rect(p[0], p[1], cx, cy, hw, hh, prim.corner_radius);
             if prim.kind == KIND_RECT { d.abs() } else { d }
         }
         _ => f32::MAX,
     }
-}
-
-fn sdf_line_cpu(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
-    let pax = p[0] - a[0];
-    let pay = p[1] - a[1];
-    let bax = b[0] - a[0];
-    let bay = b[1] - a[1];
-    let dot_ba = bax * bax + bay * bay;
-    if dot_ba < 1e-12 {
-        return pax.hypot(pay);
-    }
-    let t = ((pax * bax + pay * bay) / dot_ba).clamp(0.0, 1.0);
-    let dx = pax - bax * t;
-    let dy = pay - bay * t;
-    dx.hypot(dy)
 }
