@@ -77,6 +77,13 @@ fn maybe_transform(p: vec2f, flags: u32) -> vec2f {
     return p;
 }
 
+fn maybe_scale(r: f32, flags: u32) -> f32 {
+    if (flags & FLAG_CANVAS_SPACE) != 0u {
+        return r * length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
+    }
+    return r;
+}
+
 // ---------------------------------------------------------------------------
 // Vertex shader — generates bounding quad per instance
 // ---------------------------------------------------------------------------
@@ -94,8 +101,10 @@ struct VertexOutput {
     let prim = prims[iid];
 
     // Transform endpoints to screen space if needed.
+    // For circles, p1 holds a radius (not a position), so scale it instead.
     let p0 = maybe_transform(prim.p0, prim.flags);
-    let p1 = maybe_transform(prim.p1, prim.flags);
+    var p1 = maybe_transform(prim.p1, prim.flags);
+    let scaled_radius = maybe_scale(prim.p1.x, prim.flags);
 
     // Compute tight bounding box + thickness/AA margin.
     let margin = prim.thickness + 2.0;
@@ -105,12 +114,12 @@ struct VertexOutput {
 
     switch prim.kind {
         case KIND_CIRCLE: {
-            let r = p1.x + margin;
+            let r = scaled_radius + margin;
             lo = p0 - vec2f(r);
             hi = p0 + vec2f(r);
         }
         case KIND_FILLED_CIRCLE: {
-            let r = p1.x + margin;
+            let r = scaled_radius + margin;
             lo = p0 - vec2f(r);
             hi = p0 + vec2f(r);
         }
@@ -184,6 +193,7 @@ fn line_param(p: vec2f, a: vec2f, b: vec2f) -> f32 {
 fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
     let p0 = maybe_transform(prim.p0, prim.flags);
     let p1 = maybe_transform(prim.p1, prim.flags);
+    let scaled_radius = maybe_scale(prim.p1.x, prim.flags);
 
     let half_t = prim.thickness * 0.5;
 
@@ -193,7 +203,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
             dist = sdf_line_segment(screen_pos, p0, p1) - half_t;
         }
         case KIND_CIRCLE: {
-            dist = sdf_circle(screen_pos, p0, p1.x) - half_t;
+            dist = sdf_circle(screen_pos, p0, scaled_radius) - half_t;
         }
         case KIND_RECT: {
             let inner = abs(sdf_rect(screen_pos, p0, p1, prim.corner_radius));
@@ -215,7 +225,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
             dist = sdf_rect(screen_pos, p0, p1, prim.corner_radius);
         }
         case KIND_FILLED_CIRCLE: {
-            dist = sdf_filled_circle(screen_pos, p0, p1.x);
+            dist = sdf_filled_circle(screen_pos, p0, scaled_radius);
         }
         default: {
             dist = 1e6;
