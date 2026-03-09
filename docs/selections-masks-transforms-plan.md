@@ -60,18 +60,18 @@ pub type AlphaMask = TileStore<AlphaF32>;
 
 ### AlphaMask Operations
 
-On `AlphaMask` specifically (not generic):
+On `AlphaMask` specifically — boolean composition and queries only. Shape rasterization
+does NOT live here; selection tools use shared rasterization infrastructure to write
+into masks, just as paint tools write into layers. The mask is a transparent paint target.
 
 ```rust
 impl AlphaMask {
     pub fn boolean_add(&mut self, other: &AlphaMask);      // min(1.0, a + b)
     pub fn boolean_subtract(&mut self, other: &AlphaMask);  // max(0.0, a - b)
     pub fn boolean_intersect(&mut self, other: &AlphaMask); // min(a, b)
-    pub fn fill_rect(&mut self, x, y, w, h, value: f32);
-    pub fn fill_ellipse(&mut self, cx, cy, rx, ry, value: f32);
-    pub fn fill_polygon(&mut self, points: &[(f32, f32)], value: f32);
     pub fn clear(&mut self);
     pub fn invert(&mut self);
+    pub fn sample(&self, px: i32, py: i32) -> f32;
     pub fn bounding_rect(&self) -> Option<(i32, i32, i32, i32)>; // tile coords of non-empty
 }
 ```
@@ -84,7 +84,7 @@ impl AlphaMask {
 - **Modify:** `crates/darkly/src/engine.rs` — update layer operations to go through root group
 - **Modify:** `frontend/wasm/src/api.rs` — update any direct `layers` access (API surface unchanged)
 - **Modify:** `crates/darkly/src/tile.rs` — make generic (`TileStore<F>`, `Tile<F>`, `Memento<F>`)
-- **Create:** `crates/darkly/src/mask.rs` — `AlphaF32` format, `AlphaMask` type alias, boolean/fill ops
+- **Create:** `crates/darkly/src/mask.rs` — `AlphaMask` boolean ops and utilities (no shape rasterization)
 - **Modify:** `crates/darkly/src/undo/tile.rs` — make `TileAction` generic over format, or add `MaskAction`
 
 ---
@@ -331,7 +331,7 @@ pub fn register() -> ToolRegistration { ... }
 The tool:
 1. Receives mouse down/move/up events
 2. Computes rectangle in canvas coordinates
-3. Calls `document.selection_fill_rect(x, y, w, h, 1.0)` (or boolean variant)
+3. Rasterizes the rectangle into a temporary `AlphaMask` using shared rasterization infrastructure, then applies it to the document selection via boolean ops (or replace)
 4. Submits overlay primitives for the selection rectangle preview during drag
 5. After mouse up, selection is committed and marching ants appear
 
@@ -362,9 +362,11 @@ Selection changes are undoable. `SelectionAction` wraps a `Memento<AlphaF32>` �
 
 Each is a standalone file in `crates/darkly/src/tools/`, auto-discovered by `build.rs`.
 
-- **Ellipse select:** `AlphaMask::fill_ellipse()` — same boolean modifiers as rect
-- **Lasso select:** `AlphaMask::fill_polygon()` — scanline rasterization of closed polygon
+- **Ellipse select:** Rasterizes an ellipse into a temporary mask using shared rasterization, then applies via boolean ops — same modifiers as rect
+- **Lasso select:** Rasterizes a closed polygon (scanline fill) into a temporary mask, then applies via boolean ops
 - **Magic wand:** Flood fill variant that writes to the selection `AlphaMask` instead of the layer. Tolerance-based, samples from composite cache (GPU readback needed here — same technique as color picker)
+
+The rasterization infrastructure (rect fill, ellipse fill, polygon scanline) is shared across tools and paint targets. Selection tools use it to write into `AlphaMask`; paint tools use it to write into `TileGrid`. The mask itself has no knowledge of shapes.
 
 ### Files
 
