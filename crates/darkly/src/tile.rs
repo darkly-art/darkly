@@ -4,22 +4,48 @@ use std::sync::Arc;
 pub const TILE_SIZE: usize = 64;
 pub const TILE_BYTES: usize = TILE_SIZE * TILE_SIZE * 4; // RGBA u8
 
+// ---------------------------------------------------------------------------
+// TileFormat trait — parameterizes the tile storage over pixel format
+// ---------------------------------------------------------------------------
+
+/// Marker trait for tile data formats. Each format defines its own data array type.
+pub trait TileFormat: 'static + Send + Sync {
+    /// The raw data array stored per tile. Must be a plain, bytemuck-safe type.
+    type Data: Clone + Default + Send + Sync + 'static;
+}
+
+/// RGBA u8 format (4 bytes per pixel, 16 KB per tile).
+#[derive(Clone, Copy)]
+pub struct Rgba;
+impl TileFormat for Rgba {
+    type Data = RgbaData;
+}
+
+/// Single-channel f32 format (4 bytes per pixel, 16 KB per tile).
+#[derive(Clone, Copy)]
+pub struct AlphaF32;
+impl TileFormat for AlphaF32 {
+    type Data = AlphaF32Data;
+}
+
+// ---------------------------------------------------------------------------
+// Tile data types
+// ---------------------------------------------------------------------------
+
 #[derive(Clone)]
 #[repr(transparent)]
-pub struct TileData(pub [u8; TILE_BYTES]);
+pub struct RgbaData(pub [u8; TILE_BYTES]);
 
-// SAFETY: TileData is a plain [u8; N] wrapper with repr(transparent).
-// Note: TileData is too large for Copy/Pod, so we only implement Zeroable.
-// For bytemuck::bytes_of we access the inner array directly.
-unsafe impl bytemuck::Zeroable for TileData {}
+// SAFETY: RgbaData is a plain [u8; N] wrapper with repr(transparent).
+unsafe impl bytemuck::Zeroable for RgbaData {}
 
-impl Default for TileData {
+impl Default for RgbaData {
     fn default() -> Self {
-        TileData([0u8; TILE_BYTES])
+        RgbaData([0u8; TILE_BYTES])
     }
 }
 
-impl TileData {
+impl RgbaData {
     /// Get a mutable reference to the pixel at (x, y) within the tile.
     /// x, y are in tile-local coordinates (0..TILE_SIZE).
     pub fn pixel_mut(&mut self, x: usize, y: usize) -> &mut [u8; 4] {
@@ -36,51 +62,115 @@ impl TileData {
     }
 }
 
-/// A single tile with COW (copy-on-write) semantics via Arc.
+pub const MASK_TILE_PIXELS: usize = TILE_SIZE * TILE_SIZE;
+
 #[derive(Clone)]
-pub struct Tile {
-    data: Arc<TileData>,
+#[repr(transparent)]
+pub struct AlphaF32Data(pub [f32; MASK_TILE_PIXELS]);
+
+// SAFETY: AlphaF32Data is a plain [f32; N] wrapper with repr(transparent).
+unsafe impl bytemuck::Zeroable for AlphaF32Data {}
+
+impl Default for AlphaF32Data {
+    fn default() -> Self {
+        AlphaF32Data([0.0f32; MASK_TILE_PIXELS])
+    }
 }
 
-impl Tile {
-    /// Create a new empty (transparent) tile. All empty tiles share the same Arc.
-    pub fn empty() -> Self {
-        use std::sync::LazyLock;
-        static EMPTY: LazyLock<Arc<TileData>> = LazyLock::new(|| Arc::new(TileData::default()));
+impl AlphaF32Data {
+    /// Get the value at (x, y) within the tile.
+    pub fn get(&self, x: usize, y: usize) -> f32 {
+        debug_assert!(x < TILE_SIZE && y < TILE_SIZE);
+        self.0[y * TILE_SIZE + x]
+    }
+
+    /// Set the value at (x, y) within the tile.
+    pub fn set(&mut self, x: usize, y: usize, value: f32) {
+        debug_assert!(x < TILE_SIZE && y < TILE_SIZE);
+        self.0[y * TILE_SIZE + x] = value;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tile<F> — a single tile with COW semantics
+// ---------------------------------------------------------------------------
+
+/// A single tile with COW (copy-on-write) semantics via Arc.
+#[derive(Clone)]
+pub struct Tile<F: TileFormat> {
+    data: Arc<F::Data>,
+}
+
+impl<F: TileFormat> Tile<F> {
+    /// Create a new empty (zero-initialized) tile.
+    pub fn new_empty() -> Self {
         Tile {
-            data: Arc::clone(&EMPTY),
+            data: Arc::new(F::Data::default()),
         }
     }
 
     /// Get a read-only reference to the tile data.
-    pub fn data(&self) -> &TileData {
+    pub fn data(&self) -> &F::Data {
         &self.data
     }
 
     /// Get a mutable reference with COW semantics.
-    /// If this is the only reference, returns the existing data.
-    /// Otherwise, clones the data first.
-    pub fn write(&mut self) -> &mut TileData {
+    pub fn write(&mut self) -> &mut F::Data {
         Arc::make_mut(&mut self.data)
     }
 
-    /// Returns true if this tile's data is shared with other tiles (i.e., not unique).
+    /// Returns true if this tile's data is shared with other tiles.
     pub fn is_shared(&self) -> bool {
         Arc::strong_count(&self.data) > 1
     }
+
+    /// Get a reference to the underlying Arc (for memento capture).
+    pub(crate) fn arc(&self) -> &Arc<F::Data> {
+        &self.data
+    }
+
+    /// Construct from a raw Arc (for memento restore).
+    pub(crate) fn from_arc(data: Arc<F::Data>) -> Self {
+        Tile { data }
+    }
 }
+
+// Shared empty tile singleton for Rgba (the common case).
+impl Tile<Rgba> {
+    /// Create a new empty (transparent) tile. All empty tiles share the same Arc.
+    pub fn empty() -> Self {
+        use std::sync::LazyLock;
+        static EMPTY: LazyLock<Arc<RgbaData>> = LazyLock::new(|| Arc::new(RgbaData::default()));
+        Tile {
+            data: Arc::clone(&EMPTY),
+        }
+    }
+}
+
+// Shared empty tile singleton for AlphaF32.
+impl Tile<AlphaF32> {
+    /// Create a new empty (zero) mask tile. All empty tiles share the same Arc.
+    pub fn empty() -> Self {
+        use std::sync::LazyLock;
+        static EMPTY: LazyLock<Arc<AlphaF32Data>> =
+            LazyLock::new(|| Arc::new(AlphaF32Data::default()));
+        Tile {
+            data: Arc::clone(&EMPTY),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Memento<F> — snapshot of tile states for undo
+// ---------------------------------------------------------------------------
 
 /// A sparse record of tile states captured before modification during a transaction.
-/// Only stores the first pre-write state per tile — subsequent writes to the same
-/// tile within the same transaction are ignored (the memento already has the original).
 #[derive(Clone)]
-pub struct Memento {
-    /// Old tile data for tiles that existed before the write.
-    /// `None` value means the tile did not exist (was created during this transaction).
-    tiles: HashMap<(i32, i32), Option<Arc<TileData>>>,
+pub struct Memento<F: TileFormat> {
+    tiles: HashMap<(i32, i32), Option<Arc<F::Data>>>,
 }
 
-impl Memento {
+impl<F: TileFormat> Memento<F> {
     pub fn new() -> Self {
         Memento {
             tiles: HashMap::new(),
@@ -97,6 +187,10 @@ impl Memento {
     }
 }
 
+// ---------------------------------------------------------------------------
+// TileStore<F> — sparse tile grid, generic over pixel format
+// ---------------------------------------------------------------------------
+
 /// Sparse tile grid. Key = (tile_x, tile_y) in tile coordinates.
 ///
 /// When a transaction is active (via `begin_transaction`), the grid automatically
@@ -104,36 +198,35 @@ impl Memento {
 /// writing. This is the Krita-style recording hook: paint operations are completely
 /// unaware of undo — the grid intercepts writes transparently.
 #[derive(Clone)]
-pub struct TileGrid {
-    tiles: HashMap<(i32, i32), Tile>,
+pub struct TileStore<F: TileFormat> {
+    tiles: HashMap<(i32, i32), Tile<F>>,
     /// Active recording memento. When `Some`, tile writes are recorded.
-    recording: Option<Memento>,
+    recording: Option<Memento<F>>,
 }
 
-impl TileGrid {
+impl<F: TileFormat> TileStore<F> {
     pub fn new() -> Self {
-        TileGrid {
+        TileStore {
             tiles: HashMap::new(),
             recording: None,
         }
     }
 
-    pub fn get(&self, tx: i32, ty: i32) -> Option<&Tile> {
+    pub fn get(&self, tx: i32, ty: i32) -> Option<&Tile<F>> {
         self.tiles.get(&(tx, ty))
     }
 
     /// Get a tile for writing, creating an empty one if it doesn't exist.
     /// If a transaction is active, the pre-write state is automatically recorded.
-    pub fn get_or_create(&mut self, tx: i32, ty: i32) -> &mut Tile {
+    pub fn get_or_create(&mut self, tx: i32, ty: i32) -> &mut Tile<F> {
         if let Some(ref mut memento) = self.recording {
             let key = (tx, ty);
-            // Only record the first access per tile per transaction.
+            let tiles = &self.tiles;
             memento.tiles.entry(key).or_insert_with(|| {
-                // Capture the old state: Some(arc) if tile existed, None if new.
-                self.tiles.get(&key).map(|t| Arc::clone(&t.data))
+                tiles.get(&key).map(|t| Arc::clone(t.arc()))
             });
         }
-        self.tiles.entry((tx, ty)).or_insert_with(Tile::empty)
+        self.tiles.entry((tx, ty)).or_insert_with(Tile::new_empty)
     }
 
     /// Start recording tile changes. Panics if a transaction is already active.
@@ -147,7 +240,7 @@ impl TileGrid {
 
     /// Finish recording and return the memento of changed tiles.
     /// Returns `None` if no tiles were written during the transaction.
-    pub fn commit_transaction(&mut self) -> Option<Memento> {
+    pub fn commit_transaction(&mut self) -> Option<Memento<F>> {
         let memento = self.recording.take().expect(
             "commit_transaction called without an active transaction",
         );
@@ -169,25 +262,20 @@ impl TileGrid {
     }
 
     /// Apply a memento in reverse: restore old tile states and return a forward
-    /// memento that can redo the operation. Also returns the set of tile coords
-    /// that were affected (for dirty marking).
-    pub fn rollback(&mut self, memento: &Memento) -> (Memento, HashSet<(i32, i32)>) {
+    /// memento that can redo the operation.
+    pub fn rollback(&mut self, memento: &Memento<F>) -> (Memento<F>, HashSet<(i32, i32)>) {
         let mut forward = Memento::new();
         let mut affected = HashSet::new();
 
         for (&key, old_data) in &memento.tiles {
-            // Capture current state for the forward (redo) memento.
-            let current = self.tiles.get(&key).map(|t| Arc::clone(&t.data));
+            let current = self.tiles.get(&key).map(|t| Arc::clone(t.arc()));
             forward.tiles.insert(key, current);
 
-            // Restore old state.
             match old_data {
                 Some(arc) => {
-                    // Tile existed before — restore it.
-                    self.tiles.insert(key, Tile { data: Arc::clone(arc) });
+                    self.tiles.insert(key, Tile::from_arc(Arc::clone(arc)));
                 }
                 None => {
-                    // Tile didn't exist before — remove it.
                     self.tiles.remove(&key);
                 }
             }
@@ -197,10 +285,8 @@ impl TileGrid {
         (forward, affected)
     }
 
-    /// Apply a forward memento (redo). Same mechanics as rollback but using
-    /// the forward memento produced by a previous rollback.
-    pub fn rollforward(&mut self, memento: &Memento) -> (Memento, HashSet<(i32, i32)>) {
-        // Structurally identical to rollback — the memento format is symmetric.
+    /// Apply a forward memento (redo). Same mechanics as rollback.
+    pub fn rollforward(&mut self, memento: &Memento<F>) -> (Memento<F>, HashSet<(i32, i32)>) {
         self.rollback(memento)
     }
 
@@ -210,7 +296,7 @@ impl TileGrid {
     }
 
     /// Iterate over all tiles.
-    pub fn iter(&self) -> impl Iterator<Item = ((i32, i32), &Tile)> {
+    pub fn iter(&self) -> impl Iterator<Item = ((i32, i32), &Tile<F>)> {
         self.tiles.iter().map(|(&k, v)| (k, v))
     }
 
@@ -224,11 +310,28 @@ impl TileGrid {
     }
 }
 
-impl Default for TileGrid {
+impl<F: TileFormat> Default for TileStore<F> {
     fn default() -> Self {
         Self::new()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Type aliases — backward-compatible names
+// ---------------------------------------------------------------------------
+
+/// The legacy name for RGBA tile data.
+pub type TileData = RgbaData;
+/// RGBA tile grid (layers).
+pub type TileGrid = TileStore<Rgba>;
+/// Single-channel f32 tile grid (masks, selections).
+pub type AlphaMask = TileStore<AlphaF32>;
+/// RGBA memento.
+pub type RgbaMemento = Memento<Rgba>;
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -236,19 +339,18 @@ mod tests {
 
     #[test]
     fn empty_tiles_share_arc() {
-        let t1 = Tile::empty();
-        let t2 = Tile::empty();
-        assert!(Arc::ptr_eq(&t1.data, &t2.data));
+        let t1 = Tile::<Rgba>::empty();
+        let t2 = Tile::<Rgba>::empty();
+        assert!(Arc::ptr_eq(t1.arc(), t2.arc()));
     }
 
     #[test]
     fn cow_clone_on_write() {
-        let t1 = Tile::empty();
+        let t1 = Tile::<Rgba>::empty();
         let mut t2 = t1.clone();
-        assert!(Arc::ptr_eq(&t1.data, &t2.data));
-        // Writing to t2 should decouple from t1
+        assert!(Arc::ptr_eq(t1.arc(), t2.arc()));
         t2.write().pixel_mut(0, 0).copy_from_slice(&[255, 0, 0, 255]);
-        assert!(!Arc::ptr_eq(&t1.data, &t2.data));
+        assert!(!Arc::ptr_eq(t1.arc(), t2.arc()));
         assert_eq!(t1.data().pixel(0, 0), &[0, 0, 0, 0]);
         assert_eq!(t2.data().pixel(0, 0), &[255, 0, 0, 255]);
     }
@@ -277,13 +379,10 @@ mod tests {
     #[test]
     fn transaction_records_changed_tiles() {
         let mut grid = TileGrid::new();
-        // Pre-existing tile.
         grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[1, 2, 3, 4]);
 
         grid.begin_transaction();
-        // Modify existing tile.
         grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[10, 20, 30, 40]);
-        // Create new tile.
         grid.get_or_create(1, 0).write().pixel_mut(0, 0).copy_from_slice(&[50, 60, 70, 80]);
 
         let memento = grid.commit_transaction().unwrap();
@@ -299,12 +398,10 @@ mod tests {
         grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[1, 2, 3, 4]);
 
         grid.begin_transaction();
-        // Write twice to the same tile.
         grid.get_or_create(0, 0).write().pixel_mut(0, 0).copy_from_slice(&[10, 20, 30, 40]);
         grid.get_or_create(0, 0).write().pixel_mut(1, 0).copy_from_slice(&[99, 99, 99, 99]);
         let memento = grid.commit_transaction().unwrap();
 
-        // Rollback should restore to state before the transaction (original pixel).
         let (_, _) = grid.rollback(&memento);
         assert_eq!(grid.get(0, 0).unwrap().data().pixel(0, 0), &[1, 2, 3, 4]);
     }
@@ -320,13 +417,10 @@ mod tests {
         let memento = grid.commit_transaction().unwrap();
 
         let (forward, affected) = grid.rollback(&memento);
-        // Old tile restored.
         assert_eq!(grid.get(0, 0).unwrap().data().pixel(0, 0), &[1, 2, 3, 4]);
-        // New tile removed.
         assert!(grid.get(1, 0).is_none());
         assert_eq!(affected.len(), 2);
 
-        // Rollforward (redo) brings the changes back.
         let (_, _) = grid.rollforward(&forward);
         assert_eq!(grid.get(0, 0).unwrap().data().pixel(0, 0), &[10, 20, 30, 40]);
         assert_eq!(grid.get(1, 0).unwrap().data().pixel(0, 0), &[50, 60, 70, 80]);
@@ -336,7 +430,47 @@ mod tests {
     fn empty_transaction_returns_none() {
         let mut grid = TileGrid::new();
         grid.begin_transaction();
-        // No writes.
         assert!(grid.commit_transaction().is_none());
+    }
+
+    // --- AlphaMask tests ---
+
+    #[test]
+    fn alpha_mask_empty_tiles_share_arc() {
+        let t1 = Tile::<AlphaF32>::empty();
+        let t2 = Tile::<AlphaF32>::empty();
+        assert!(Arc::ptr_eq(t1.arc(), t2.arc()));
+    }
+
+    #[test]
+    fn alpha_mask_cow() {
+        let t1 = Tile::<AlphaF32>::empty();
+        let mut t2 = t1.clone();
+        t2.write().set(0, 0, 1.0);
+        assert!(!Arc::ptr_eq(t1.arc(), t2.arc()));
+        assert_eq!(t1.data().get(0, 0), 0.0);
+        assert_eq!(t2.data().get(0, 0), 1.0);
+    }
+
+    #[test]
+    fn alpha_mask_transaction() {
+        let mut mask = AlphaMask::new();
+        mask.get_or_create(0, 0).write().set(5, 5, 0.5);
+
+        mask.begin_transaction();
+        mask.get_or_create(0, 0).write().set(5, 5, 1.0);
+        mask.get_or_create(1, 0).write().set(0, 0, 0.75);
+        let memento = mask.commit_transaction().unwrap();
+
+        assert_eq!(mask.get(0, 0).unwrap().data().get(5, 5), 1.0);
+        assert_eq!(mask.get(1, 0).unwrap().data().get(0, 0), 0.75);
+
+        let (forward, _) = mask.rollback(&memento);
+        assert_eq!(mask.get(0, 0).unwrap().data().get(5, 5), 0.5);
+        assert!(mask.get(1, 0).is_none());
+
+        let (_, _) = mask.rollforward(&forward);
+        assert_eq!(mask.get(0, 0).unwrap().data().get(5, 5), 1.0);
+        assert_eq!(mask.get(1, 0).unwrap().data().get(0, 0), 0.75);
     }
 }

@@ -1,7 +1,7 @@
 use super::UndoAction;
 use crate::document::Document;
 use crate::layer::{Layer, LayerId};
-use crate::tile::Memento;
+use crate::tile::{Memento, Rgba};
 use std::collections::{HashMap, HashSet};
 
 /// Undo action for tile (paint) operations.
@@ -10,11 +10,11 @@ use std::collections::{HashMap, HashSet};
 /// internal mementos hold the forward state (for redo). After `redo()`, they
 /// hold the backward state (for undo) again.
 pub struct TileAction {
-    mementos: HashMap<LayerId, Memento>,
+    mementos: HashMap<LayerId, Memento<Rgba>>,
 }
 
 impl TileAction {
-    pub fn new(mementos: HashMap<LayerId, Memento>) -> Self {
+    pub fn new(mementos: HashMap<LayerId, Memento<Rgba>>) -> Self {
         TileAction { mementos }
     }
 }

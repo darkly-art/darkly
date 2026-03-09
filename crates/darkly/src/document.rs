@@ -1,6 +1,6 @@
 use crate::dirty::DirtyRegion;
 use crate::layer::*;
-use crate::tile::{Memento, TILE_SIZE, TileGrid};
+use crate::tile::{Memento, Rgba, TILE_SIZE, TileGrid};
 use std::collections::HashMap;
 
 pub enum MoveTarget {
@@ -10,8 +10,13 @@ pub enum MoveTarget {
     IntoGroupBottom(LayerId),
 }
 
+/// Well-known ID for the implicit root group.
+pub const ROOT_ID: LayerId = 0;
+
 pub struct Document {
-    pub layers: Vec<LayerNode>,
+    /// The root of the layer tree. All layers live inside this group.
+    /// The root group itself is never exposed to the UI — only its children are.
+    pub root: LayerGroup,
     pub width: u32,
     pub height: u32,
     pub dirty: HashMap<LayerId, DirtyRegion>,
@@ -226,7 +231,7 @@ fn position_in(nodes: &[LayerNode], id: LayerId) -> Option<usize> {
 impl Document {
     pub fn new(width: u32, height: u32) -> Self {
         Document {
-            layers: Vec::new(),
+            root: LayerGroup::new(ROOT_ID),
             width,
             height,
             dirty: HashMap::new(),
@@ -244,7 +249,7 @@ impl Document {
     pub fn add_raster_layer(&mut self) -> LayerId {
         let id = self.alloc_id();
         let layer = RasterLayer::new(id);
-        self.layers.push(LayerNode::Layer(Layer::Raster(layer)));
+        self.root.children.push(LayerNode::Layer(Layer::Raster(layer)));
         self.dirty.insert(id, DirtyRegion::new());
         id
     }
@@ -258,13 +263,13 @@ impl Document {
 
         match parent {
             Some(group_id) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, group_id) {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, group_id) {
                     g.children.push(node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
-            None => self.layers.push(node),
+            None => self.root.children.push(node),
         }
         id
     }
@@ -276,7 +281,7 @@ impl Document {
             filter,
             visible: true,
         };
-        self.layers.push(LayerNode::Layer(Layer::Filter(layer)));
+        self.root.children.push(LayerNode::Layer(Layer::Filter(layer)));
         id
     }
 
@@ -284,7 +289,7 @@ impl Document {
     pub fn add_group(&mut self) -> LayerId {
         let id = self.alloc_id();
         let group = LayerGroup::new(id);
-        self.layers.push(LayerNode::Group(group));
+        self.root.children.push(LayerNode::Group(group));
         id
     }
 
@@ -292,7 +297,7 @@ impl Document {
     /// Hidden groups exclude all children. Passthrough groups flatten children directly.
     pub fn flat_layers(&self) -> Vec<&Layer> {
         let mut out = Vec::new();
-        flatten_nodes(&self.layers, &mut out);
+        flatten_nodes(&self.root.children, &mut out);
         out
     }
 
@@ -300,14 +305,14 @@ impl Document {
     /// Used for tile upload — we keep GPU textures in sync even for hidden layers.
     pub fn all_raster_layers(&self) -> Vec<&RasterLayer> {
         let mut out = Vec::new();
-        collect_raster_layers(&self.layers, &mut out);
+        collect_raster_layers(&self.root.children, &mut out);
         out
     }
 
     /// Compute the flat (display order) index of a layer by id.
     /// Count all nodes (layers + groups) in the tree.
     pub fn node_count(&self) -> usize {
-        count_nodes(&self.layers)
+        count_nodes(&self.root.children)
     }
 
     pub fn flat_layer_index(&self, id: LayerId) -> Option<usize> {
@@ -315,23 +320,23 @@ impl Document {
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        find_layer_in(&self.layers, id)
+        find_layer_in(&self.root.children, id)
     }
 
     pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
-        find_layer_in_mut(&mut self.layers, id)
+        find_layer_in_mut(&mut self.root.children, id)
     }
 
     pub fn find_node(&self, id: LayerId) -> Option<&LayerNode> {
-        find_node_in(&self.layers, id)
+        find_node_in(&self.root.children, id)
     }
 
     pub fn find_node_mut(&mut self, id: LayerId) -> Option<&mut LayerNode> {
-        find_node_in_mut(&mut self.layers, id)
+        find_node_in_mut(&mut self.root.children, id)
     }
 
     pub fn parent_of(&self, id: LayerId) -> Option<LayerId> {
-        find_parent_of(&self.layers, id)
+        find_parent_of(&self.root.children, id)
     }
 
     /// Index of a node within its parent container (root list or group children).
@@ -339,20 +344,20 @@ impl Document {
         let parent = self.parent_of(id);
         match parent {
             Some(pid) => {
-                if let Some(LayerNode::Group(g)) = find_node_in(&self.layers, pid) {
+                if let Some(LayerNode::Group(g)) = find_node_in(&self.root.children, pid) {
                     position_in(&g.children, id)
                 } else {
                     None
                 }
             }
-            None => position_in(&self.layers, id),
+            None => position_in(&self.root.children, id),
         }
     }
 
     /// Detach a node from the tree for undo purposes.
     /// Removes the node and cleans up dirty regions, returning the detached node.
     pub fn detach_for_undo(&mut self, id: LayerId) -> Option<LayerNode> {
-        let node = detach_node(&mut self.layers, id)?;
+        let node = detach_node(&mut self.root.children, id)?;
         let mut ids = Vec::new();
         collect_all_ids(&node, &mut ids);
         for removed_id in ids {
@@ -371,25 +376,25 @@ impl Document {
         // Insert into the tree.
         match parent {
             Some(pid) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, pid) {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, pid) {
                     let pos = position.min(g.children.len());
                     g.children.insert(pos, node);
                 } else {
                     // Parent gone (shouldn't happen) — insert at root.
-                    let pos = position.min(self.layers.len());
-                    self.layers.insert(pos, node);
+                    let pos = position.min(self.root.children.len());
+                    self.root.children.insert(pos, node);
                 }
             }
             None => {
-                let pos = position.min(self.layers.len());
-                self.layers.insert(pos, node);
+                let pos = position.min(self.root.children.len());
+                self.root.children.insert(pos, node);
             }
         }
 
         // Set up dirty regions and mark all existing tiles for upload.
         for &id in &raster_ids {
             let dirty = self.dirty.entry(id).or_insert_with(DirtyRegion::new);
-            if let Some(Layer::Raster(r)) = find_layer_in(&self.layers, id) {
+            if let Some(Layer::Raster(r)) = find_layer_in(&self.root.children, id) {
                 for ((tx, ty), _) in r.tiles.iter() {
                     dirty.mark(tx, ty);
                 }
@@ -399,7 +404,7 @@ impl Document {
 
     /// Move a node to a new position in the tree.
     pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
-        let node = match detach_node(&mut self.layers, layer_id) {
+        let node = match detach_node(&mut self.root.children, layer_id) {
             Some(n) => n,
             None => return,
         };
@@ -409,35 +414,35 @@ impl Document {
     fn insert_node(&mut self, node: LayerNode, target: MoveTarget) {
         match target {
             MoveTarget::Before(ref_id) => {
-                if let Some(path) = find_position(&self.layers, ref_id) {
+                if let Some(path) = find_position(&self.root.children, ref_id) {
                     let idx = *path.last().unwrap();
-                    let container = container_at_path(&mut self.layers, &path);
+                    let container = container_at_path(&mut self.root.children, &path);
                     container.insert(idx, node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
             MoveTarget::After(ref_id) => {
-                if let Some(path) = find_position(&self.layers, ref_id) {
+                if let Some(path) = find_position(&self.root.children, ref_id) {
                     let idx = *path.last().unwrap();
-                    let container = container_at_path(&mut self.layers, &path);
+                    let container = container_at_path(&mut self.root.children, &path);
                     container.insert(idx + 1, node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
             MoveTarget::IntoGroupTop(group_id) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, group_id) {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, group_id) {
                     g.children.push(node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
             MoveTarget::IntoGroupBottom(group_id) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, group_id) {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, group_id) {
                     g.children.insert(0, node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
         }
@@ -445,7 +450,7 @@ impl Document {
 
     /// Remove a node (layer or group) from the tree. Also removes dirty regions.
     pub fn remove_node(&mut self, id: LayerId) {
-        if let Some(node) = detach_node(&mut self.layers, id) {
+        if let Some(node) = detach_node(&mut self.root.children, id) {
             let mut ids = Vec::new();
             collect_all_ids(&node, &mut ids);
             for removed_id in ids {
@@ -476,7 +481,7 @@ impl Document {
         color: [u8; 4],
     ) {
         let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
+            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
                 Some(v) => v,
                 None => return,
             };
@@ -548,7 +553,7 @@ impl Document {
         radius: f32,
     ) {
         let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
+            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
                 Some(v) => v,
                 None => return,
             };
@@ -612,7 +617,7 @@ impl Document {
         }
 
         let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
+            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
                 Some(v) => v,
                 None => return,
             };
@@ -691,7 +696,7 @@ impl Document {
         let height = self.height;
 
         let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
+            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
                 Some(v) => v,
                 None => return,
             };
@@ -743,7 +748,7 @@ impl Document {
     }
 
     /// Commit the active transaction and return per-layer mementos if any tiles changed.
-    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<HashMap<LayerId, Memento>> {
+    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<HashMap<LayerId, Memento<Rgba>>> {
         if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
             if let Some(memento) = r.tiles.commit_transaction() {
                 let mut mementos = HashMap::new();
@@ -760,7 +765,7 @@ impl Document {
         let height = self.height;
 
         let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
+            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
                 Some(v) => v,
                 None => return,
             };

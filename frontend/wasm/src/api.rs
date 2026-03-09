@@ -448,7 +448,7 @@ impl DarklyHandle {
     /// Returned in top-to-bottom display order (reversed from internal bottom-to-top).
     pub fn layer_tree(&self) -> JsValue {
         let arr = js_sys::Array::new();
-        for node in self.doc.layers.iter().rev() {
+        for node in self.doc.root.children.iter().rev() {
             arr.push(&node_to_js(node));
         }
         arr.into()
