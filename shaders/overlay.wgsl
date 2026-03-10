@@ -215,7 +215,7 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
             // Dash pattern: if in gap, discard.
             if prim.dash_len > 0.0 && dist < 1.0 {
                 let t = line_param(screen_pos, p0, p1);
-                let phase = (t + prim.dash_offset) % prim.dash_len;
+                let phase = (t + prim.dash_offset + u.time * 10.0) % prim.dash_len;
                 if phase > prim.dash_len * 0.5 {
                     dist = 1.0; // in gap
                 }

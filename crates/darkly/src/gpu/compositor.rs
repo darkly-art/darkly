@@ -490,9 +490,11 @@ impl Compositor {
         self.last_anim_time = wall_time;
 
         // Update overlay animation time only when dashed lines are animating.
+        // update_time returns true at ~10fps to avoid excessive GPU work.
         if dt > 0.0 && self.tool_overlay.needs_animation() {
-            self.tool_overlay.update_time(dt);
-            self.needs_present = true;
+            if self.tool_overlay.update_time(dt) {
+                self.needs_present = true;
+            }
         }
 
         // Update veil chain animations.

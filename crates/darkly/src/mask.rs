@@ -435,8 +435,98 @@ impl AlphaMask {
             }
         }
 
-        segments
+        merge_collinear(segments)
     }
+}
+
+/// Merge collinear adjacent segments to reduce primitive count.
+///
+/// Separates segments into horizontal (same Y), vertical (same X), and diagonal.
+/// Horizontal/vertical groups are sorted and merged when endpoints touch.
+/// A 200×200 rectangle goes from ~800 segments to ~4.
+fn merge_collinear(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32; 2])> {
+    use std::collections::BTreeMap;
+
+    // Quantize coordinate to integer key for grouping (f32 bits as i32).
+    fn key(v: f32) -> i32 { v.to_bits() as i32 }
+
+    // Group by (coordinate, reversed) to preserve winding direction from
+    // marching squares. This ensures the dash animation marches consistently
+    // around the contour (clockwise).
+    // Horizontal segments: a[1] == b[1]; reversed = a[0] > b[0] (right-to-left)
+    // Vertical segments: a[0] == b[0]; reversed = a[1] > b[1] (bottom-to-top)
+    let mut horiz: BTreeMap<(i32, bool), Vec<(f32, f32)>> = BTreeMap::new();
+    let mut vert: BTreeMap<(i32, bool), Vec<(f32, f32)>> = BTreeMap::new();
+    let mut other: Vec<([f32; 2], [f32; 2])> = Vec::new();
+
+    for (a, b) in segments {
+        if a[1] == b[1] {
+            let reversed = a[0] > b[0];
+            let (lo, hi) = if reversed { (b[0], a[0]) } else { (a[0], b[0]) };
+            horiz.entry((key(a[1]), reversed)).or_default().push((lo, hi));
+        } else if a[0] == b[0] {
+            let reversed = a[1] > b[1];
+            let (lo, hi) = if reversed { (b[1], a[1]) } else { (a[1], b[1]) };
+            vert.entry((key(a[0]), reversed)).or_default().push((lo, hi));
+        } else {
+            other.push((a, b));
+        }
+    }
+
+    let mut result = Vec::new();
+
+    // Merge horizontal spans, preserving direction.
+    for ((y_bits, reversed), mut spans) in horiz {
+        let y = f32::from_bits(y_bits as u32);
+        spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let (mut lo, mut hi) = spans[0];
+        for &(s_lo, s_hi) in &spans[1..] {
+            if s_lo == hi {
+                hi = s_hi;
+            } else {
+                if reversed {
+                    result.push(([hi, y], [lo, y]));
+                } else {
+                    result.push(([lo, y], [hi, y]));
+                }
+                lo = s_lo;
+                hi = s_hi;
+            }
+        }
+        if reversed {
+            result.push(([hi, y], [lo, y]));
+        } else {
+            result.push(([lo, y], [hi, y]));
+        }
+    }
+
+    // Merge vertical spans, preserving direction.
+    for ((x_bits, reversed), mut spans) in vert {
+        let x = f32::from_bits(x_bits as u32);
+        spans.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        let (mut lo, mut hi) = spans[0];
+        for &(s_lo, s_hi) in &spans[1..] {
+            if s_lo == hi {
+                hi = s_hi;
+            } else {
+                if reversed {
+                    result.push(([x, hi], [x, lo]));
+                } else {
+                    result.push(([x, lo], [x, hi]));
+                }
+                lo = s_lo;
+                hi = s_hi;
+            }
+        }
+        if reversed {
+            result.push(([x, hi], [x, lo]));
+        } else {
+            result.push(([x, lo], [x, hi]));
+        }
+    }
+
+    result.extend(other);
+    result
 }
 
 /// Linear interpolation for contour edge crossing.

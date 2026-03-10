@@ -81,6 +81,7 @@ pub struct ToolOverlay {
     surface_format: wgpu::TextureFormat,
     primitives: Vec<OverlayPrimitive>,
     time: f32,
+    last_anim_frame: f32,
 }
 
 impl ToolOverlay {
@@ -261,6 +262,7 @@ impl ToolOverlay {
             surface_format,
             primitives: Vec::new(),
             time: 0.0,
+            last_anim_frame: 0.0,
         }
     }
 
@@ -284,9 +286,16 @@ impl ToolOverlay {
         self.primitives.iter().any(|p| p.kind == KIND_DASHED_LINE && p.dash_len > 0.0)
     }
 
-    /// Advance animation time.
-    pub fn update_time(&mut self, dt: f32) {
+    /// Advance animation time. Returns true when enough time has elapsed
+    /// since the last animation frame (~10fps) to warrant a re-render.
+    pub fn update_time(&mut self, dt: f32) -> bool {
+        const ANIM_INTERVAL: f32 = 0.1; // ~10fps
         self.time += dt;
+        if self.time - self.last_anim_frame >= ANIM_INTERVAL {
+            self.last_anim_frame = self.time;
+            return true;
+        }
+        false
     }
 
     /// Ensure the snapshot texture exists at the given viewport size.

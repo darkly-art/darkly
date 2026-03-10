@@ -10,7 +10,7 @@ use crate::undo::property::Property;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::overlay::{
-    OverlayPrimitive, KIND_DASHED_LINE, FLAG_CANVAS_SPACE, FLAG_INVERT_COLOR,
+    OverlayPrimitive, KIND_DASHED_LINE, FLAG_CANVAS_SPACE,
 };
 use crate::gpu::params::{ParamDef, ParamValue};
 use crate::gpu::view::ViewTransform;
@@ -642,16 +642,29 @@ impl DarklyEngine {
 
         if let Some(sel) = &self.doc.selection {
             let segments = sel.contour_segments(0.5);
-            for (a, b) in segments {
-                let mut prim = OverlayPrimitive::new(
+            for (a, b) in &segments {
+                // Black background line (slightly thicker, solid)
+                let mut bg = OverlayPrimitive::new(
                     KIND_DASHED_LINE,
-                    FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR,
-                    a,
-                    b,
+                    FLAG_CANVAS_SPACE,
+                    *a, *b,
                 );
-                prim.thickness = 1.0;
-                prim.dash_len = 8.0;
-                self.selection_overlay.push(prim);
+                bg.color = [0.0, 0.0, 0.0, 1.0];
+                bg.thickness = 1.5;
+                bg.dash_len = 0.0; // solid
+                self.selection_overlay.push(bg);
+            }
+            for (a, b) in &segments {
+                // White foreground dashes
+                let mut fg = OverlayPrimitive::new(
+                    KIND_DASHED_LINE,
+                    FLAG_CANVAS_SPACE,
+                    *a, *b,
+                );
+                fg.color = [1.0, 1.0, 1.0, 1.0];
+                fg.thickness = 1.0;
+                fg.dash_len = 8.0;
+                self.selection_overlay.push(fg);
             }
         }
 
