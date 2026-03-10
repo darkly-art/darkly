@@ -4,13 +4,14 @@
 // The vertex shader generates a tight bounding quad per instance.
 // The fragment shader evaluates that single primitive's SDF.
 //
-// For FLAG_INVERT_COLOR primitives, the shader samples a snapshot of the
-// surface to determine background brightness. Luminance > 0.5 → black,
-// ≤ 0.5 → white. This guarantees maximum contrast on any background.
+// Two pipelines share this shader, both using standard alpha blending:
+//   - Solid pipeline (fs_solid): outputs premultiplied color directly.
+//   - Invert pipeline (fs_invert): samples a snapshot of the surface, computes
+//     greyscale luminance, thresholds at 0.5 → white on dark, black on light.
 //
 // Pipeline position: drawn on top of the final surface (after present+veils)
-// using LoadOp::Load. The snapshot texture is a copy of the surface taken
-// just before the overlay pass.
+// using LoadOp::Load. The snapshot is a GPU-to-GPU copy taken just before the
+// overlay pass, only when inverted primitives are present.
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -27,7 +28,7 @@ struct OverlayUniforms {
 
 // 64 bytes, std430-aligned.
 struct OverlayPrimitive {
-    color: vec4f,         //  0: solid color (ignored if invert flag)
+    color: vec4f,         //  0: solid color (ignored for invert primitives)
     p0: vec2f,            // 16: start / center / top-left
     p1: vec2f,            // 24: end / size / bottom-right
     thickness: f32,       // 32: stroke width in screen px
@@ -35,7 +36,7 @@ struct OverlayPrimitive {
     dash_offset: f32,     // 40: animated offset for marching
     corner_radius: f32,   // 44: rounded rect radius
     kind: u32,            // 48: primitive type
-    flags: u32,           // 52: bit0=canvas_space, bit1=invert_color
+    flags: u32,           // 52: bit0=canvas_space
     _pad0: u32,           // 56
     _pad1: u32,           // 60
 }
@@ -57,7 +58,6 @@ const KIND_FILLED_RECT: u32   = 4u;
 const KIND_FILLED_CIRCLE: u32 = 5u;
 
 const FLAG_CANVAS_SPACE: u32  = 1u;
-const FLAG_INVERT_COLOR: u32  = 2u;
 
 // ---------------------------------------------------------------------------
 // Coordinate transforms
@@ -237,26 +237,34 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Fragment
+// Fragment — solid pipeline (standard alpha blending)
 // ---------------------------------------------------------------------------
 
-@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+@fragment fn fs_solid(in: VertexOutput) -> @location(0) vec4f {
     let prim = prims[in.prim_idx];
     let alpha = eval_prim(prim, in.screen_pos);
     if alpha < 0.001 { discard; }
 
-    // Sample snapshot unconditionally (textureSampleLevel is OK in non-uniform flow).
+    let a = prim.color.a * alpha;
+    return vec4f(prim.color.rgb * a, a);
+}
+
+// ---------------------------------------------------------------------------
+// Fragment — invert pipeline (snapshot-based luminance threshold)
+//
+// Samples the surface snapshot, computes greyscale luminance, thresholds
+// at 0.5: dark background → white overlay, light background → black overlay.
+// ---------------------------------------------------------------------------
+
+@fragment fn fs_invert(in: VertexOutput) -> @location(0) vec4f {
+    let prim = prims[in.prim_idx];
+    let alpha = eval_prim(prim, in.screen_pos);
+    if alpha < 0.001 { discard; }
+
     let uv = in.screen_pos / u.screen_size;
     let bg = textureSampleLevel(t_snapshot, t_sampler, uv, 0.0).rgb;
-
-    var rgb: vec3f;
-    if (prim.flags & FLAG_INVERT_COLOR) != 0u {
-        let lum = dot(bg, vec3f(0.2126, 0.7152, 0.0722));
-        // Threshold: dark background → white, light background → black.
-        rgb = select(vec3f(0.0), vec3f(1.0), lum <= 0.5);
-    } else {
-        rgb = prim.color.rgb;
-    }
+    let lum = dot(bg, vec3f(0.2126, 0.7152, 0.0722));
+    let rgb = select(vec3f(0.0), vec3f(1.0), lum < 0.5);
 
     let a = prim.color.a * alpha;
     return vec4f(rgb * a, a);
