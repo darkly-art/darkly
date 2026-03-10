@@ -578,6 +578,20 @@ impl DarklyEngine {
         self.update_selection_overlay();
     }
 
+    pub fn select_ellipse(
+        &mut self,
+        x: f32, y: f32, w: f32, h: f32,
+        mode: SelectionMode,
+        antialias: bool,
+        feather: f32,
+    ) {
+        let old_sel = self.doc.selection.clone();
+        let mask = crate::tools::ellipse_select::rasterize(x, y, w, h, antialias, feather);
+        self.doc.apply_selection(mask, mode);
+        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
+        self.update_selection_overlay();
+    }
+
     pub fn clear_selection(&mut self) {
         if self.doc.selection.is_none() {
             return;

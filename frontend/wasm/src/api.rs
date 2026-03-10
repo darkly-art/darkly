@@ -9,6 +9,15 @@ use wasm_bindgen::JsError;
 #[wasm_bindgen]
 pub struct DarklyHandle(DarklyEngine);
 
+fn parse_selection_mode(mode: &str) -> darkly::document::SelectionMode {
+    match mode {
+        "add" => darkly::document::SelectionMode::Add,
+        "subtract" => darkly::document::SelectionMode::Subtract,
+        "intersect" => darkly::document::SelectionMode::Intersect,
+        _ => darkly::document::SelectionMode::Replace,
+    }
+}
+
 /// Convert a JS params object to a `Vec<ParamValue>` using `ParamDef` metadata.
 fn js_to_param_values(js: &JsValue, defs: &[ParamDef]) -> Vec<ParamValue> {
     defs.iter().map(|def| match def {
@@ -152,13 +161,11 @@ impl DarklyHandle {
     // --- Selection ---
 
     pub fn select_rect(&mut self, x: f32, y: f32, w: f32, h: f32, mode: &str, antialias: bool, feather: f32) {
-        let mode = match mode {
-            "add" => darkly::document::SelectionMode::Add,
-            "subtract" => darkly::document::SelectionMode::Subtract,
-            "intersect" => darkly::document::SelectionMode::Intersect,
-            _ => darkly::document::SelectionMode::Replace,
-        };
-        self.0.select_rect(x, y, w, h, mode, antialias, feather)
+        self.0.select_rect(x, y, w, h, parse_selection_mode(mode), antialias, feather)
+    }
+
+    pub fn select_ellipse(&mut self, x: f32, y: f32, w: f32, h: f32, mode: &str, antialias: bool, feather: f32) {
+        self.0.select_ellipse(x, y, w, h, parse_selection_mode(mode), antialias, feather)
     }
 
     pub fn clear_selection(&mut self) { self.0.clear_selection() }

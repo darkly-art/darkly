@@ -10,6 +10,7 @@ pub const KIND_RECT: u32 = 2;
 pub const KIND_DASHED_LINE: u32 = 3;
 pub const KIND_FILLED_RECT: u32 = 4;
 pub const KIND_FILLED_CIRCLE: u32 = 5;
+pub const KIND_ELLIPSE: u32 = 6;
 
 pub const FLAG_CANVAS_SPACE: u32 = 1;
 pub const FLAG_INVERT_COLOR: u32 = 2;
@@ -594,6 +595,10 @@ fn cpu_sdf(prim: &OverlayPrimitive, p: [f32; 2]) -> f32 {
             let hh = (prim.p1[1] - prim.p0[1]) * 0.5;
             let d = sdf::sdf_rounded_rect(p[0], p[1], cx, cy, hw, hh, prim.corner_radius);
             if prim.kind == KIND_RECT { d.abs() } else { d }
+        }
+        KIND_ELLIPSE => {
+            // p0 = center, p1 = [rx, ry]
+            sdf::sdf_ellipse(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0], prim.p1[1]).abs()
         }
         _ => f32::MAX,
     }

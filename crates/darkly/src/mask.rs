@@ -539,7 +539,149 @@ fn merge_collinear(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32; 
     }
 
     result.extend(other);
+    simplify_segments(result)
+}
+
+/// Chain independent segments into polylines, then simplify with
+/// Ramer-Douglas-Peucker. Reduces curved contours (ellipses, polygons)
+/// from hundreds of segments to tens while preserving shape within ±1px.
+fn simplify_segments(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32; 2])> {
+    if segments.len() <= 32 {
+        return segments;
+    }
+
+    // Build adjacency: endpoint → list of segment indices.
+    // Quantize coordinates to avoid f32 precision issues.
+    use std::collections::HashMap;
+
+    fn qkey(p: [f32; 2]) -> (i64, i64) {
+        ((p[0] * 1024.0) as i64, (p[1] * 1024.0) as i64)
+    }
+
+    let mut adj: HashMap<(i64, i64), Vec<(usize, bool)>> = HashMap::new();
+    for (i, (a, b)) in segments.iter().enumerate() {
+        adj.entry(qkey(*a)).or_default().push((i, false)); // false = start
+        adj.entry(qkey(*b)).or_default().push((i, true));  // true = end
+    }
+
+    // Chain segments into polylines via greedy traversal.
+    let mut used = vec![false; segments.len()];
+    let mut chains: Vec<Vec<[f32; 2]>> = Vec::new();
+
+    for start_idx in 0..segments.len() {
+        if used[start_idx] {
+            continue;
+        }
+        used[start_idx] = true;
+        let (a, b) = segments[start_idx];
+        let mut chain = vec![a, b];
+
+        // Extend forward from the last point.
+        loop {
+            let tail = *chain.last().unwrap();
+            let key = qkey(tail);
+            let next = adj.get(&key).and_then(|neighbors| {
+                neighbors.iter().find(|&&(idx, _)| !used[idx])
+            });
+            match next {
+                Some(&(idx, is_end)) => {
+                    used[idx] = true;
+                    let (sa, sb) = segments[idx];
+                    if is_end {
+                        // tail matches segment end → traverse backward
+                        chain.push(sa);
+                    } else {
+                        // tail matches segment start → traverse forward
+                        chain.push(sb);
+                    }
+                }
+                None => break,
+            }
+        }
+
+        // Extend backward from the first point.
+        loop {
+            let head = chain[0];
+            let key = qkey(head);
+            let next = adj.get(&key).and_then(|neighbors| {
+                neighbors.iter().find(|&&(idx, _)| !used[idx])
+            });
+            match next {
+                Some(&(idx, is_end)) => {
+                    used[idx] = true;
+                    let (sa, sb) = segments[idx];
+                    if is_end {
+                        chain.insert(0, sa);
+                    } else {
+                        chain.insert(0, sb);
+                    }
+                }
+                None => break,
+            }
+        }
+
+        chains.push(chain);
+    }
+
+    // Simplify each chain with Ramer-Douglas-Peucker (epsilon = 1.0 px).
+    let mut result = Vec::new();
+    for chain in &chains {
+        let simplified = rdp_simplify(chain, 1.0);
+        for w in simplified.windows(2) {
+            result.push((w[0], w[1]));
+        }
+    }
+
     result
+}
+
+/// Ramer-Douglas-Peucker polyline simplification.
+/// Removes points that deviate less than `epsilon` from the line between
+/// their neighbors. Preserves endpoints and sharp corners.
+fn rdp_simplify(points: &[[f32; 2]], epsilon: f32) -> Vec<[f32; 2]> {
+    if points.len() <= 2 {
+        return points.to_vec();
+    }
+
+    // Find the point farthest from the line between first and last.
+    let first = points[0];
+    let last = points[points.len() - 1];
+    let mut max_dist = 0.0f32;
+    let mut max_idx = 0;
+
+    for (i, p) in points.iter().enumerate().skip(1).take(points.len() - 2) {
+        let d = point_to_line_dist(*p, first, last);
+        if d > max_dist {
+            max_dist = d;
+            max_idx = i;
+        }
+    }
+
+    if max_dist > epsilon {
+        // Recurse on both halves.
+        let mut left = rdp_simplify(&points[..=max_idx], epsilon);
+        let right = rdp_simplify(&points[max_idx..], epsilon);
+        left.pop(); // Remove duplicate at split point.
+        left.extend(right);
+        left
+    } else {
+        // All intermediate points are within epsilon — keep only endpoints.
+        vec![first, last]
+    }
+}
+
+/// Perpendicular distance from point `p` to line segment `a`–`b`.
+fn point_to_line_dist(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < 1e-12 {
+        let ex = p[0] - a[0];
+        let ey = p[1] - a[1];
+        return (ex * ex + ey * ey).sqrt();
+    }
+    // Signed area of triangle / base length = perpendicular distance.
+    ((p[0] - a[0]) * dy - (p[1] - a[1]) * dx).abs() / len_sq.sqrt()
 }
 
 /// Linear interpolation for contour edge crossing.

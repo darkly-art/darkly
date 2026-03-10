@@ -59,6 +59,7 @@ const KIND_RECT: u32          = 2u;
 const KIND_DASHED_LINE: u32   = 3u;
 const KIND_FILLED_RECT: u32   = 4u;
 const KIND_FILLED_CIRCLE: u32 = 5u;
+const KIND_ELLIPSE: u32       = 6u;
 
 const FLAG_CANVAS_SPACE: u32  = 1u;
 
@@ -133,6 +134,22 @@ struct VertexOutput {
             lo = p0 - vec2f(r);
             hi = p0 + vec2f(r);
         }
+        case KIND_ELLIPSE: {
+            // p0 = center, p1 = [rx, ry]
+            if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
+                let center = prim.p0;
+                let radii = prim.p1;
+                let c0 = canvas_to_screen(center + vec2f(-radii.x, -radii.y));
+                let c1 = canvas_to_screen(center + vec2f( radii.x, -radii.y));
+                let c2 = canvas_to_screen(center + vec2f(-radii.x,  radii.y));
+                let c3 = canvas_to_screen(center + vec2f( radii.x,  radii.y));
+                lo = min(min(c0, c1), min(c2, c3)) - vec2f(margin);
+                hi = max(max(c0, c1), max(c2, c3)) + vec2f(margin);
+            } else {
+                lo = p0 - p1 - vec2f(margin);
+                hi = p0 + p1 + vec2f(margin);
+            }
+        }
         case KIND_RECT, KIND_FILLED_RECT: {
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
                 // Canvas-space rect: transform all 4 corners for correct AABB.
@@ -192,6 +209,15 @@ fn sdf_circle(p: vec2f, center: vec2f, radius: f32) -> f32 {
 
 fn sdf_filled_circle(p: vec2f, center: vec2f, radius: f32) -> f32 {
     return length(p - center) - radius;
+}
+
+fn sdf_ellipse(p: vec2f, center: vec2f, radii: vec2f) -> f32 {
+    let d = p - center;
+    let f = dot(d * d, 1.0 / (radii * radii)) - 1.0;
+    let g = 2.0 * d / (radii * radii);
+    let grad_len = length(g);
+    if grad_len < 1e-12 { return -min(radii.x, radii.y); }
+    return f / grad_len;
 }
 
 fn sdf_rect(p: vec2f, tl: vec2f, br: vec2f, corner_r: f32) -> f32 {
@@ -264,6 +290,17 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
         }
         case KIND_FILLED_CIRCLE: {
             dist = sdf_filled_circle(screen_pos, p0, scaled_radius);
+        }
+        case KIND_ELLIPSE: {
+            // p0 = center, p1 = [rx, ry] — stroked ellipse outline
+            if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
+                let cp = screen_to_canvas(screen_pos);
+                let canvas_d = sdf_ellipse(cp, prim.p0, prim.p1);
+                let zoom = length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
+                dist = abs(canvas_d) * zoom - half_t;
+            } else {
+                dist = abs(sdf_ellipse(screen_pos, p0, p1)) - half_t;
+            }
         }
         default: {
             dist = 1e6;

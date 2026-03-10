@@ -2,12 +2,14 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::tool::ToolRegistration`.
 
+pub mod ellipse_select;
 pub mod rect_select;
 
 use crate::tool::ToolRegistration;
 
 pub fn registrations() -> Vec<ToolRegistration> {
     vec![
+        ellipse_select::register(),
         rect_select::register(),
     ]
 }

@@ -6,7 +6,13 @@
 
 **Root cause**: Treating the overlay system (designed for a handful of transient tool-feedback primitives) as a general-purpose vector renderer for hundreds of persistent contour segments.
 
-**Fix**: Scrapped the invert overlay approach entirely. Used black and white marching ants instead (like Krita) — two passes of solid-color dashed lines, no background sampling, no texture copy. Also merged collinear contour segments to reduce primitive count.
+**Fix (visual)**: Scrapped `FLAG_INVERT_COLOR` for marching ants entirely. Used black and white solid-color dashed lines instead (like Krita) — no background sampling, no `copy_texture_to_texture`. Note: tool previews during drag can still use `FLAG_INVERT_COLOR` safely since they're transient (1 primitive, cleared on pointer up).
+
+**Fix (primitive count)**: Two-stage reduction in `mask.rs`:
+1. `merge_collinear()` — merges exactly horizontal/vertical segments. Handles rectangles: ~800 → ~4.
+2. `simplify_segments()` — chains remaining diagonal segments into polylines via endpoint adjacency, then applies Ramer-Douglas-Peucker (epsilon=1px). Handles curves (ellipses, polygons): ~400 → ~20-30.
+
+Both stages run only when the selection changes (not per-frame). Stage 2 is skipped when ≤32 segments (fast path for rectangles after stage 1).
 
 ## 2. Overlay render pass overhead for persistent primitives
 
