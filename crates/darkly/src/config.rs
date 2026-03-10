@@ -32,6 +32,9 @@ fn preset_krita() -> HashMap<String, ConfigValue> {
         ("hotkeys.fillTool", "KeyF"),
         ("hotkeys.gradientTool", "KeyG"),
         ("hotkeys.colorPickerTool", "KeyP"),
+        ("hotkeys.rectSelectTool", "KeyR"),
+        ("hotkeys.clearSelection", "$mod+Shift+KeyA"),
+        ("hotkeys.invertSelection", "$mod+Shift+KeyI"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -45,6 +48,9 @@ fn preset_photoshop() -> HashMap<String, ConfigValue> {
         ("hotkeys.fillTool", "KeyG"),
         ("hotkeys.gradientTool", "Shift+KeyG"),
         ("hotkeys.colorPickerTool", "KeyI"),
+        ("hotkeys.rectSelectTool", "KeyM"),
+        ("hotkeys.clearSelection", "$mod+KeyD"),
+        ("hotkeys.invertSelection", "$mod+Shift+KeyI"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -58,6 +64,9 @@ fn preset_gimp() -> HashMap<String, ConfigValue> {
         ("hotkeys.fillTool", "Shift+KeyB"),
         ("hotkeys.gradientTool", "KeyG"),
         ("hotkeys.colorPickerTool", "KeyO"),
+        ("hotkeys.rectSelectTool", "KeyR"),
+        ("hotkeys.clearSelection", "$mod+Shift+KeyA"),
+        ("hotkeys.invertSelection", "$mod+KeyI"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -134,6 +143,12 @@ impl Config {
         d!("hotkeys.fillTool",        str "KeyF");
         d!("hotkeys.gradientTool",    str "KeyG");
         d!("hotkeys.colorPickerTool", str "KeyP");
+        d!("hotkeys.rectSelectTool",  str "KeyR");
+
+        // Hotkeys — selection (default follows Krita)
+        d!("hotkeys.selectAll",       str "$mod+KeyA");
+        d!("hotkeys.clearSelection",  str "$mod+Shift+KeyA");
+        d!("hotkeys.invertSelection", str "$mod+Shift+KeyI");
 
         // Hotkeys — brush controls
         d!("hotkeys.brushSizeUp",   str "BracketRight");

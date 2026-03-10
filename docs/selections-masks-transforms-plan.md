@@ -174,82 +174,49 @@ We use **instanced rendering** with zero vertex buffers. The primitive storage b
 composite_cache → [present] → [veils] → surface → [TOOL OVERLAY on top]
 ```
 
-The overlay renders **after** present+veils have already written to the surface. It uses `LoadOp::Load` (preserving the canvas content) and draws geometry on top with blend modes. No input texture needed — the overlay doesn't read from the canvas, it just draws on top of it.
+The overlay renders **after** present+veils have already written to the surface. It uses `LoadOp::Load` (preserving the canvas content) and draws geometry on top. Present+veils always run their normal path regardless of whether overlay is active.
 
-This is simpler than the previous design which tried to replace the final blit. Present+veils always run their normal path regardless of whether overlay is active.
+### Inversion via snapshot-based luminance threshold
 
-### Inversion via blend mode (Krita's approach)
+Two pipelines sharing the same shader, both using standard premultiplied alpha blending:
 
-Two pipelines with different blend states, sharing the same shader:
+**Solid pipeline** (`fs_solid`) — outputs premultiplied color directly from the primitive's `color` field.
 
-**Solid pipeline** — standard alpha blending:
-```
-result = src.a * src.rgb + (1 - src.a) * dst.rgb
-```
+**Invert pipeline** (`fs_invert`) — samples a snapshot of the surface (GPU-to-GPU copy taken just before the overlay pass), computes greyscale luminance, and thresholds at 0.5: white on dark backgrounds, black on light backgrounds. Always greyscale output.
 
-**Invert pipeline** — subtraction blend (same as Krita's `GL_FUNC_SUBTRACT`):
-```
-result.rgb = src.rgb - dst.rgb * src.rgb = src.rgb * (1 - dst.rgb)
-```
-Fragment outputs premultiplied white `(alpha, alpha, alpha, alpha)`. On white background → black, on black → white, on mid-gray → proportional contrast. No texture readback needed.
+Why not pure blend math? A subtraction blend (`src * (1 - dst)`) can invert per-channel without reading the framebuffer, but it produces complementary colors (cyan on red, magenta on green) rather than greyscale, and transitions gradually rather than with a hard threshold. The luminance threshold requires a cross-channel dot product and a step function, which the fixed-function blend unit cannot express — it only does per-channel multiply/add/subtract. The snapshot gives the fragment shader access to the existing canvas pixel so it can do the math itself.
 
-```rust
-// wgpu blend state for inversion
-BlendState {
-    color: BlendComponent {
-        src_factor: BlendFactor::One,
-        dst_factor: BlendFactor::Src,    // dst_factor = source color per-channel
-        operation: BlendOperation::Subtract,
-    },
-    alpha: BlendComponent {
-        src_factor: BlendFactor::One,
-        dst_factor: BlendFactor::One,
-        operation: BlendOperation::Add,
-    },
-}
-```
+The snapshot copy is cheap (GPU-to-GPU memcpy, microseconds) and is skipped entirely when no inverted primitives are present. Memory cost is one viewport-sized texture (~8MB at 1920×1080).
 
 ### Shader (`shaders/overlay.wgsl`)
 
-Bindings — minimal, no input texture:
+Bindings:
 ```wgsl
 @group(0) @binding(0) var<uniform> u: OverlayUniforms;
 @group(0) @binding(1) var<storage, read> prims: array<OverlayPrimitive>;
+@group(0) @binding(2) var t_snapshot: texture_2d<f32>;  // surface copy for invert
+@group(0) @binding(3) var t_sampler: sampler;
 ```
 
-Vertex shader — generates bounding quad per instance:
+Two fragment entry points:
 ```wgsl
-@vertex fn vs_main(
-    @builtin(vertex_index) vid: u32,     // 0..5 (two triangles)
-    @builtin(instance_index) iid: u32,   // primitive index
-) -> VertexOutput {
-    let prim = prims[iid];
-    // Transform canvas-space coords to screen-space if needed
-    let p0 = maybe_canvas_to_screen(prim.p0, prim.flags);
-    let p1 = maybe_canvas_to_screen(prim.p1, prim.flags);
-    // Compute tight bounding box + thickness margin
-    let bbox = compute_bbox(prim.kind, p0, p1, prim.thickness);
-    // Emit quad corner from vertex index
-    let screen_pos = quad_corner(bbox, vid);
-    // Screen pixels → NDC
-    out.position = vec4f(screen_pos / u.screen_size * 2.0 - 1.0, 0.0, 1.0);
-    out.position.y = -out.position.y;
-    out.screen_pos = screen_pos;
-    out.prim_idx = iid;  // flat interpolation
+@fragment fn fs_solid(in: VertexOutput) -> @location(0) vec4f {
+    let alpha = eval_prim(prim, in.screen_pos);
+    let a = prim.color.a * alpha;
+    return vec4f(prim.color.rgb * a, a);  // premultiplied color
+}
+
+@fragment fn fs_invert(in: VertexOutput) -> @location(0) vec4f {
+    let alpha = eval_prim(prim, in.screen_pos);
+    let bg = textureSampleLevel(t_snapshot, t_sampler, uv, 0.0).rgb;
+    let lum = dot(bg, vec3f(0.2126, 0.7152, 0.0722));
+    let rgb = select(vec3f(0.0), vec3f(1.0), lum < 0.5);
+    let a = prim.color.a * alpha;
+    return vec4f(rgb * a, a);  // greyscale threshold
 }
 ```
 
-Fragment shader — evaluates ONE primitive's SDF:
-```wgsl
-@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    let prim = prims[in.prim_idx];
-    let alpha = eval_sdf(prim, in.screen_pos);  // single primitive, not a loop
-    // Solid pipeline: return vec4(color.rgb, color.a * alpha)
-    // Invert pipeline: return vec4(alpha, alpha, alpha, alpha)  (premultiplied white)
-}
-```
-
-Two entry points (`fs_solid`, `fs_invert`) or one entry point that always outputs appropriately for its pipeline. Since primitives are sorted by blend mode before drawing, each draw call uses one pipeline.
+Primitives are sorted by `FLAG_INVERT_COLOR` before upload — solid first, then inverted. `encode()` issues up to two draw calls, one per pipeline.
 
 ### Data structures (unchanged public API)
 
@@ -333,8 +300,8 @@ CPU-side SDF evaluation on the primitive list. No GPU involvement.
 
 ### Files
 
-- **Rewrite:** `crates/darkly/src/gpu/overlay.rs` — instanced geometry renderer, two blend pipelines, sorted draw calls
-- **Rewrite:** `shaders/overlay.wgsl` — vertex shader generates bounding quads, fragment evaluates single-primitive SDF
+- **Rewrite:** `crates/darkly/src/gpu/overlay.rs` — instanced geometry renderer, two pipelines (solid + invert with snapshot), sorted draw calls
+- **Rewrite:** `shaders/overlay.wgsl` — vertex shader generates bounding quads, `fs_solid` and `fs_invert` entry points
 - **Modify:** `crates/darkly/src/gpu/compositor.rs` — move overlay call after `present_and_veils`, remove overlay branching from `present_and_veils`
 - **No change:** `crates/darkly/src/engine.rs`, `frontend/wasm/src/api.rs` — public API is identical
 - **Migrate (later):** `frontend/src/tools/gradient.svelte.ts` — migrate from SVG to GPU overlay after system is verified working

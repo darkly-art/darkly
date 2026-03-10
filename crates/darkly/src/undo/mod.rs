@@ -1,10 +1,12 @@
 mod tile;
 mod layer;
 pub mod property;
+mod selection;
 
 pub use tile::TileAction;
 pub use layer::{LayerAddAction, LayerRemoveAction, LayerMoveAction};
 pub use property::PropertyAction;
+pub use selection::SelectionAction;
 
 use crate::dirty::DirtyRegion;
 use crate::document::Document;

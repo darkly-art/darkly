@@ -36,6 +36,9 @@ function initHotkeys() {
         redo:            () => { app.handle?.redo(); app.refreshLayerTree(); },
         resetColors:     () => app.resetColors(),
         swapColors:      () => app.swapColors(),
+        selectAll:       () => app.handle?.select_all(),
+        clearSelection:  () => app.handle?.clear_selection(),
+        invertSelection: () => app.handle?.invert_selection(),
         ...toolActions,
         brushSizeUp:     () => {
             app.brushSize = Math.min(app.brushSize + SIZE_STEP, MAX_SIZE);

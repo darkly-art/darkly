@@ -149,6 +149,23 @@ impl DarklyHandle {
     pub fn undo(&mut self) { self.0.undo() }
     pub fn redo(&mut self) { self.0.redo() }
 
+    // --- Selection ---
+
+    pub fn select_rect(&mut self, x: f32, y: f32, w: f32, h: f32, mode: &str, antialias: bool, feather: f32) {
+        let mode = match mode {
+            "add" => darkly::document::SelectionMode::Add,
+            "subtract" => darkly::document::SelectionMode::Subtract,
+            "intersect" => darkly::document::SelectionMode::Intersect,
+            _ => darkly::document::SelectionMode::Replace,
+        };
+        self.0.select_rect(x, y, w, h, mode, antialias, feather)
+    }
+
+    pub fn clear_selection(&mut self) { self.0.clear_selection() }
+    pub fn select_all(&mut self) { self.0.select_all() }
+    pub fn invert_selection(&mut self) { self.0.invert_selection() }
+    pub fn has_selection(&self) -> bool { self.0.has_selection() }
+
     // --- Veils ---
 
     pub fn add_veil(&mut self, veil_type: &str, params: JsValue) {

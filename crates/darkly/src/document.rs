@@ -1,7 +1,15 @@
 use crate::dirty::DirtyRegion;
 use crate::layer::*;
-use crate::tile::{Memento, Rgba, TILE_SIZE, TileGrid};
+use crate::paint::PaintTarget;
+use crate::tile::{AlphaMask, Memento, Rgba, TILE_SIZE, TileGrid};
 use std::collections::HashMap;
+
+pub enum SelectionMode {
+    Replace,
+    Add,
+    Subtract,
+    Intersect,
+}
 
 pub enum MoveTarget {
     Before(LayerId),
@@ -20,6 +28,7 @@ pub struct Document {
     pub width: u32,
     pub height: u32,
     pub dirty: HashMap<LayerId, DirtyRegion>,
+    pub selection: Option<AlphaMask>,
     next_id: LayerId,
 }
 
@@ -235,6 +244,7 @@ impl Document {
             width,
             height,
             dirty: HashMap::new(),
+            selection: None,
             next_id: 1,
         }
     }
@@ -459,8 +469,23 @@ impl Document {
         }
     }
 
+    /// Borrow-split to get a PaintTarget for the given raster layer.
+    /// Selection masking is applied internally by PaintTarget.
+    /// Takes individual fields to avoid conflicting borrows on &mut self.
+    fn make_paint_target<'a>(
+        layers: &'a mut Vec<LayerNode>,
+        dirty: &'a mut HashMap<LayerId, DirtyRegion>,
+        selection: Option<&'a AlphaMask>,
+        layer_id: LayerId,
+    ) -> Option<PaintTarget<'a>> {
+        let raster = find_raster_in_mut(layers, layer_id)?;
+        let dirty_region = dirty.get_mut(&layer_id)?;
+        Some(PaintTarget::new(&mut raster.tiles, dirty_region, selection))
+    }
+
     /// Get a mutable reference to the raster layer's tiles and the dirty region simultaneously.
     /// Uses borrow splitting: layers and dirty are separate fields.
+    /// Used by operations that need raw tile access without selection masking (e.g. fill_gradient).
     fn raster_tiles_and_dirty<'a>(
         layers: &'a mut Vec<LayerNode>,
         dirty: &'a mut HashMap<LayerId, DirtyRegion>,
@@ -480,11 +505,12 @@ impl Document {
         radius: f32,
         color: [u8; 4],
     ) {
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
+        let mut target = match Self::make_paint_target(
+            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+        ) {
+            Some(t) => t,
+            None => return,
+        };
 
         let r2 = radius * radius;
         let x_min = (cx - radius).floor() as i32;
@@ -492,53 +518,14 @@ impl Document {
         let y_min = (cy - radius).floor() as i32;
         let y_max = (cy + radius).ceil() as i32;
 
-        let (tx_min, ty_min) = TileGrid::tile_coords_for_pixel(x_min, y_min);
-        let (tx_max, ty_max) = TileGrid::tile_coords_for_pixel(x_max, y_max);
-
-        let tile_size = TILE_SIZE as i32;
-
-        for ty in ty_min..=ty_max {
-            for tx in tx_min..=tx_max {
-                let tile_px_x = tx * tile_size;
-                let tile_px_y = ty * tile_size;
-
-                let mut touched = false;
-                let tile = tiles.get_or_create(tx, ty);
-                let data = tile.write();
-
-                let lx_start = (x_min - tile_px_x).max(0) as usize;
-                let lx_end = ((x_max - tile_px_x).min(tile_size) as usize).min(TILE_SIZE);
-                let ly_start = (y_min - tile_px_y).max(0) as usize;
-                let ly_end = ((y_max - tile_px_y).min(tile_size) as usize).min(TILE_SIZE);
-
-                for ly in ly_start..ly_end {
-                    for lx in lx_start..lx_end {
-                        let px = (tile_px_x + lx as i32) as f32 + 0.5;
-                        let py = (tile_px_y + ly as i32) as f32 + 0.5;
-                        let dx = px - cx;
-                        let dy = py - cy;
-                        if dx * dx + dy * dy <= r2 {
-                            let dst = data.pixel_mut(lx, ly);
-                            let src_a = color[3] as f32 / 255.0;
-                            let dst_a = dst[3] as f32 / 255.0;
-                            let out_a = src_a + dst_a * (1.0 - src_a);
-                            if out_a > 0.0 {
-                                for c in 0..3 {
-                                    let src_c = color[c] as f32 / 255.0;
-                                    let dst_c = dst[c] as f32 / 255.0;
-                                    let out_c =
-                                        (src_c * src_a + dst_c * dst_a * (1.0 - src_a)) / out_a;
-                                    dst[c] = (out_c * 255.0).round() as u8;
-                                }
-                                dst[3] = (out_a * 255.0).round() as u8;
-                            }
-                            touched = true;
-                        }
-                    }
-                }
-
-                if touched {
-                    dirty.mark(tx, ty);
+        for py in y_min..y_max {
+            for px in x_min..x_max {
+                let fpx = px as f32 + 0.5;
+                let fpy = py as f32 + 0.5;
+                let dx = fpx - cx;
+                let dy = fpy - cy;
+                if dx * dx + dy * dy <= r2 {
+                    target.composite(px, py, color);
                 }
             }
         }
@@ -552,11 +539,12 @@ impl Document {
         cy: f32,
         radius: f32,
     ) {
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
+        let mut target = match Self::make_paint_target(
+            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+        ) {
+            Some(t) => t,
+            None => return,
+        };
 
         let r2 = radius * radius;
         let x_min = (cx - radius).floor() as i32;
@@ -564,40 +552,14 @@ impl Document {
         let y_min = (cy - radius).floor() as i32;
         let y_max = (cy + radius).ceil() as i32;
 
-        let (tx_min, ty_min) = TileGrid::tile_coords_for_pixel(x_min, y_min);
-        let (tx_max, ty_max) = TileGrid::tile_coords_for_pixel(x_max, y_max);
-
-        let tile_size = TILE_SIZE as i32;
-
-        for ty in ty_min..=ty_max {
-            for tx in tx_min..=tx_max {
-                let tile_px_x = tx * tile_size;
-                let tile_px_y = ty * tile_size;
-
-                let mut touched = false;
-                let tile = tiles.get_or_create(tx, ty);
-                let data = tile.write();
-
-                let lx_start = (x_min - tile_px_x).max(0) as usize;
-                let lx_end = ((x_max - tile_px_x).min(tile_size) as usize).min(TILE_SIZE);
-                let ly_start = (y_min - tile_px_y).max(0) as usize;
-                let ly_end = ((y_max - tile_px_y).min(tile_size) as usize).min(TILE_SIZE);
-
-                for ly in ly_start..ly_end {
-                    for lx in lx_start..lx_end {
-                        let px = (tile_px_x + lx as i32) as f32 + 0.5;
-                        let py = (tile_px_y + ly as i32) as f32 + 0.5;
-                        let dx = px - cx;
-                        let dy = py - cy;
-                        if dx * dx + dy * dy <= r2 {
-                            data.pixel_mut(lx, ly).copy_from_slice(&[0, 0, 0, 0]);
-                            touched = true;
-                        }
-                    }
-                }
-
-                if touched {
-                    dirty.mark(tx, ty);
+        for py in y_min..y_max {
+            for px in x_min..x_max {
+                let fpx = px as f32 + 0.5;
+                let fpy = py as f32 + 0.5;
+                let dx = fpx - cx;
+                let dy = fpy - cy;
+                if dx * dx + dy * dy <= r2 {
+                    target.erase(px, py, 1.0);
                 }
             }
         }
@@ -616,11 +578,12 @@ impl Document {
             return;
         }
 
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
+        let mut target = match Self::make_paint_target(
+            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+        ) {
+            Some(t) => t,
+            None => return,
+        };
 
         let tile_size = TILE_SIZE as i32;
 
@@ -629,7 +592,7 @@ impl Document {
         let slx = (seed_x - stx * tile_size) as usize;
         let sly = (seed_y - sty * tile_size) as usize;
 
-        let target_color = match tiles.get(stx, sty) {
+        let target_color = match target.tiles.get(stx, sty) {
             Some(t) => *t.data().pixel(slx, sly),
             None => [0, 0, 0, 0],
         };
@@ -663,7 +626,7 @@ impl Document {
             let lx = (x - tx * tile_size) as usize;
             let ly = (y - ty_coord * tile_size) as usize;
 
-            let current = match tiles.get(tx, ty_coord) {
+            let current = match target.tiles.get(tx, ty_coord) {
                 Some(t) => *t.data().pixel(lx, ly),
                 None => [0, 0, 0, 0],
             };
@@ -672,9 +635,7 @@ impl Document {
                 continue;
             }
 
-            let tile = tiles.get_or_create(tx, ty_coord);
-            tile.write().pixel_mut(lx, ly).copy_from_slice(&color);
-            dirty.mark(tx, ty_coord);
+            target.replace(x, y, color);
 
             stack.push((x + 1, y));
             stack.push((x - 1, y));
@@ -695,11 +656,12 @@ impl Document {
         let width = self.width;
         let height = self.height;
 
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
+        let mut target = match Self::make_paint_target(
+            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+        ) {
+            Some(t) => t,
+            None => return,
+        };
 
         let dx = x1 - x0;
         let dy = y1 - y0;
@@ -708,34 +670,20 @@ impl Document {
             return;
         }
 
-        let tile_size = TILE_SIZE as i32;
-        let tiles_x = (width as i32 + tile_size - 1) / tile_size;
-        let tiles_y = (height as i32 + tile_size - 1) / tile_size;
+        for py in 0..height as i32 {
+            for px in 0..width as i32 {
+                let fpx = px as f32 + 0.5;
+                let fpy = py as f32 + 0.5;
 
-        for ty in 0..tiles_y {
-            for tx in 0..tiles_x {
-                let tile = tiles.get_or_create(tx, ty);
-                let data = tile.write();
-                for ly in 0..TILE_SIZE {
-                    for lx in 0..TILE_SIZE {
-                        let px = (tx * tile_size + lx as i32) as f32 + 0.5;
-                        let py = (ty * tile_size + ly as i32) as f32 + 0.5;
-                        if px >= width as f32 || py >= height as f32 {
-                            continue;
-                        }
+                let t = ((fpx - x0) * dx + (fpy - y0) * dy) / len2;
+                let t = t.clamp(0.0, 1.0);
 
-                        let t = ((px - x0) * dx + (py - y0) * dy) / len2;
-                        let t = t.clamp(0.0, 1.0);
+                let r = (color0[0] as f32 * (1.0 - t) + color1[0] as f32 * t) as u8;
+                let g = (color0[1] as f32 * (1.0 - t) + color1[1] as f32 * t) as u8;
+                let b = (color0[2] as f32 * (1.0 - t) + color1[2] as f32 * t) as u8;
+                let a = (color0[3] as f32 * (1.0 - t) + color1[3] as f32 * t) as u8;
 
-                        let r = (color0[0] as f32 * (1.0 - t) + color1[0] as f32 * t) as u8;
-                        let g = (color0[1] as f32 * (1.0 - t) + color1[1] as f32 * t) as u8;
-                        let b = (color0[2] as f32 * (1.0 - t) + color1[2] as f32 * t) as u8;
-                        let a = (color0[3] as f32 * (1.0 - t) + color1[3] as f32 * t) as u8;
-
-                        data.pixel_mut(lx, ly).copy_from_slice(&[r, g, b, a]);
-                    }
-                }
-                dirty.mark(tx, ty);
+                target.replace(px, py, [r, g, b, a]);
             }
         }
     }
@@ -757,6 +705,32 @@ impl Document {
             }
         }
         None
+    }
+
+    /// Apply a shape mask to the document selection using the given mode.
+    pub fn apply_selection(&mut self, shape_mask: AlphaMask, mode: SelectionMode) {
+        match mode {
+            SelectionMode::Replace => {
+                self.selection = Some(shape_mask);
+            }
+            SelectionMode::Add => {
+                match &mut self.selection {
+                    Some(sel) => sel.boolean_add(&shape_mask),
+                    None => self.selection = Some(shape_mask),
+                }
+            }
+            SelectionMode::Subtract => {
+                if let Some(sel) = &mut self.selection {
+                    sel.boolean_subtract(&shape_mask);
+                }
+            }
+            SelectionMode::Intersect => {
+                match &mut self.selection {
+                    Some(sel) => sel.boolean_intersect(&shape_mask),
+                    None => {} // intersect with nothing = nothing
+                }
+            }
+        }
     }
 
     /// Fill a raster layer with a horizontal gradient (demo helper).

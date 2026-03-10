@@ -359,6 +359,98 @@ impl AlphaMask {
 }
 
 // ---------------------------------------------------------------------------
+// Contour extraction (marching squares)
+// ---------------------------------------------------------------------------
+
+impl AlphaMask {
+    /// Extract contour line segments from the mask at the given threshold.
+    ///
+    /// Uses marching squares on the pixel grid: for each 2×2 block, classify
+    /// corners as inside (> threshold) or outside (≤ threshold) and emit edge
+    /// segments based on the 16 possible configurations. Returns segments in
+    /// canvas pixel coordinates.
+    ///
+    /// The contour is recomputed only when the selection changes (infrequent).
+    pub fn contour_segments(&self, threshold: f32) -> Vec<([f32; 2], [f32; 2])> {
+        let Some((tx_min, ty_min, tx_max, ty_max)) = self.bounding_rect() else {
+            return Vec::new();
+        };
+
+        let ts = TILE_SIZE as i32;
+        // Pixel range: one extra pixel on each side for the 2×2 block boundary
+        let px_min = tx_min * ts - 1;
+        let py_min = ty_min * ts - 1;
+        let px_max = (tx_max + 1) * ts;
+        let py_max = (ty_max + 1) * ts;
+
+        let mut segments = Vec::new();
+
+        for py in py_min..py_max {
+            for px in px_min..px_max {
+                // 2×2 block corners: TL=(px,py), TR=(px+1,py), BL=(px,py+1), BR=(px+1,py+1)
+                let tl = self.sample(px, py) > threshold;
+                let tr = self.sample(px + 1, py) > threshold;
+                let bl = self.sample(px, py + 1) > threshold;
+                let br = self.sample(px + 1, py + 1) > threshold;
+
+                let index = (tl as u8) | ((tr as u8) << 1) | ((bl as u8) << 2) | ((br as u8) << 3);
+
+                // Skip empty (0) and full (15)
+                if index == 0 || index == 15 {
+                    continue;
+                }
+
+                let x = px as f32;
+                let y = py as f32;
+
+                // Interpolation along edges for smoother contours
+                let top = lerp_edge(self.sample(px, py), self.sample(px + 1, py), threshold);
+                let bottom = lerp_edge(self.sample(px, py + 1), self.sample(px + 1, py + 1), threshold);
+                let left = lerp_edge(self.sample(px, py), self.sample(px, py + 1), threshold);
+                let right = lerp_edge(self.sample(px + 1, py), self.sample(px + 1, py + 1), threshold);
+
+                let t = [x + top, y];       // top edge
+                let b = [x + bottom, y + 1.0]; // bottom edge
+                let l = [x, y + left];      // left edge
+                let r = [x + 1.0, y + right]; // right edge
+
+                // Marching squares lookup — emit 1 or 2 segments per cell.
+                match index {
+                    1  => segments.push((l, t)),       // TL inside
+                    2  => segments.push((t, r)),       // TR inside
+                    3  => segments.push((l, r)),       // TL+TR inside
+                    4  => segments.push((b, l)),       // BL inside
+                    5  => segments.push((b, t)),       // TL+BL inside
+                    6  => { segments.push((t, r)); segments.push((b, l)); } // TR+BL (saddle)
+                    7  => segments.push((b, r)),       // TL+TR+BL inside
+                    8  => segments.push((r, b)),       // BR inside
+                    9  => { segments.push((l, t)); segments.push((r, b)); } // TL+BR (saddle)
+                    10 => segments.push((t, b)),       // TR+BR inside
+                    11 => segments.push((l, b)),       // TL+TR+BR inside
+                    12 => segments.push((r, l)),       // BL+BR inside
+                    13 => segments.push((r, t)),       // TL+BL+BR inside
+                    14 => segments.push((t, l)),       // TR+BL+BR inside
+                    _  => unreachable!(),
+                }
+            }
+        }
+
+        segments
+    }
+}
+
+/// Linear interpolation for contour edge crossing.
+/// Returns position [0,1] along the edge where the threshold is crossed.
+fn lerp_edge(v0: f32, v1: f32, threshold: f32) -> f32 {
+    let dv = v1 - v0;
+    if dv.abs() < 1e-6 {
+        0.5
+    } else {
+        ((threshold - v0) / dv).clamp(0.0, 1.0)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
@@ -643,5 +735,30 @@ mod tests {
         let mut mask = AlphaMask::new();
         mask.feather(5.0); // should not panic
         assert!(mask.is_empty());
+    }
+
+    // --- contour_segments ---
+
+    #[test]
+    fn contour_empty_mask() {
+        let mask = AlphaMask::new();
+        assert!(mask.contour_segments(0.5).is_empty());
+    }
+
+    #[test]
+    fn contour_rect_produces_segments() {
+        let mut mask = AlphaMask::new();
+        mask.fill_rect_test(10, 10, 20, 20, 1.0);
+        let segs = mask.contour_segments(0.5);
+        // A 20×20 rectangle should produce boundary segments
+        assert!(!segs.is_empty(), "contour should produce segments for a filled rect");
+        // Segments should be near the boundary (x=10, x=30, y=10, y=30)
+        for (a, b) in &segs {
+            let near_boundary =
+                (a[0] >= 9.0 && a[0] <= 31.0) && (a[1] >= 9.0 && a[1] <= 31.0)
+                && (b[0] >= 9.0 && b[0] <= 31.0) && (b[1] >= 9.0 && b[1] <= 31.0);
+            assert!(near_boundary, "segment [{},{}]-[{},{}] should be near boundary",
+                a[0], a[1], b[0], b[1]);
+        }
     }
 }

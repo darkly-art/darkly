@@ -1,13 +1,17 @@
-use crate::document::{Document, MoveTarget};
+use crate::document::{Document, MoveTarget, SelectionMode};
 use crate::layer::{BlendMode, Layer, LayerNode};
+use crate::sdf;
+use crate::tile::AlphaMask;
 use crate::undo::{
     UndoStack, TileAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
-    PropertyAction, mark_affected_dirty,
+    PropertyAction, SelectionAction, mark_affected_dirty,
 };
 use crate::undo::property::Property;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
-use crate::gpu::overlay::OverlayPrimitive;
+use crate::gpu::overlay::{
+    OverlayPrimitive, KIND_DASHED_LINE, FLAG_CANVAS_SPACE, FLAG_INVERT_COLOR,
+};
 use crate::gpu::params::{ParamDef, ParamValue};
 use crate::gpu::view::ViewTransform;
 
@@ -103,6 +107,10 @@ pub struct DarklyEngine {
     undo_stack: UndoStack,
     active_stroke_layer: Option<u64>,
     view_transform: ViewTransform,
+    /// Persistent marching ants overlay (regenerated when selection changes).
+    selection_overlay: Vec<OverlayPrimitive>,
+    /// Transient tool overlay (set/cleared by the active tool).
+    tool_overlay: Vec<OverlayPrimitive>,
 }
 
 impl DarklyEngine {
@@ -121,6 +129,8 @@ impl DarklyEngine {
             undo_stack,
             active_stroke_layer: None,
             view_transform: ViewTransform::identity(),
+            selection_overlay: Vec::new(),
+            tool_overlay: Vec::new(),
         }
     }
 
@@ -435,6 +445,7 @@ impl DarklyEngine {
             mark_affected_dirty(&mut self.doc.dirty, &affected);
             self.sync_compositor_layers();
             self.compositor.mark_dirty();
+            self.update_selection_overlay();
         }
     }
 
@@ -443,6 +454,7 @@ impl DarklyEngine {
             mark_affected_dirty(&mut self.doc.dirty, &affected);
             self.sync_compositor_layers();
             self.compositor.mark_dirty();
+            self.update_selection_overlay();
         }
     }
 
@@ -527,15 +539,123 @@ impl DarklyEngine {
     // --- Tool Overlay ---
 
     pub fn set_overlay_primitives(&mut self, prims: Vec<OverlayPrimitive>) {
-        self.compositor.set_overlay_primitives(prims);
+        self.tool_overlay = prims;
+        self.push_merged_overlay();
     }
 
     pub fn clear_overlay(&mut self) {
-        self.compositor.clear_overlay();
+        self.tool_overlay.clear();
+        self.push_merged_overlay();
     }
 
     pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> Option<usize> {
         self.compositor.overlay_hit_test(screen_x, screen_y)
+    }
+
+    /// Merge selection_overlay + tool_overlay and push to compositor.
+    fn push_merged_overlay(&mut self) {
+        let mut merged = Vec::with_capacity(self.selection_overlay.len() + self.tool_overlay.len());
+        merged.extend_from_slice(&self.selection_overlay);
+        merged.extend_from_slice(&self.tool_overlay);
+        if merged.is_empty() {
+            self.compositor.clear_overlay();
+        } else {
+            self.compositor.set_overlay_primitives(merged);
+        }
+    }
+
+    // --- Selection ---
+
+    pub fn select_rect(
+        &mut self,
+        x: f32, y: f32, w: f32, h: f32,
+        mode: SelectionMode,
+        antialias: bool,
+        feather: f32,
+    ) {
+        let old_sel = self.doc.selection.clone();
+
+        let cx = x + w * 0.5;
+        let cy = y + h * 0.5;
+        let half_w = w * 0.5;
+        let half_h = h * 0.5;
+
+        let mut mask = AlphaMask::new();
+        mask.rasterize(
+            (x as i32, y as i32, w.ceil() as i32, h.ceil() as i32),
+            |px, py| sdf::sdf_rect(px, py, cx, cy, half_w, half_h),
+            antialias,
+            feather,
+        );
+
+        self.doc.apply_selection(mask, mode);
+        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
+        self.update_selection_overlay();
+    }
+
+    pub fn clear_selection(&mut self) {
+        if self.doc.selection.is_none() {
+            return;
+        }
+        let old_sel = self.doc.selection.clone();
+        self.doc.selection = None;
+        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
+        self.update_selection_overlay();
+    }
+
+    pub fn select_all(&mut self) {
+        let old_sel = self.doc.selection.clone();
+        let mut mask = AlphaMask::new();
+        mask.rasterize(
+            (0, 0, self.doc.width as i32, self.doc.height as i32),
+            |px, py| sdf::sdf_rect(
+                px, py,
+                self.doc.width as f32 * 0.5,
+                self.doc.height as f32 * 0.5,
+                self.doc.width as f32 * 0.5,
+                self.doc.height as f32 * 0.5,
+            ),
+            false,
+            0.0,
+        );
+        self.doc.selection = Some(mask);
+        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
+        self.update_selection_overlay();
+    }
+
+    pub fn invert_selection(&mut self) {
+        let old_sel = self.doc.selection.clone();
+        if let Some(sel) = &mut self.doc.selection {
+            sel.invert();
+        }
+        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
+        self.update_selection_overlay();
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.doc.selection.is_some()
+    }
+
+    /// Regenerate marching ants overlay from the current selection.
+    fn update_selection_overlay(&mut self) {
+        self.selection_overlay.clear();
+
+        if let Some(sel) = &self.doc.selection {
+            let segments = sel.contour_segments(0.5);
+            for (a, b) in segments {
+                let mut prim = OverlayPrimitive::new(
+                    KIND_DASHED_LINE,
+                    FLAG_CANVAS_SPACE | FLAG_INVERT_COLOR,
+                    a,
+                    b,
+                );
+                prim.thickness = 1.0;
+                prim.dash_len = 8.0;
+                self.selection_overlay.push(prim);
+            }
+        }
+
+        self.push_merged_overlay();
     }
 
     // --- Internal helpers ---
