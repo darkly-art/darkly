@@ -110,8 +110,13 @@ pub struct Compositor {
     tool_overlay: ToolOverlay,
     /// Cached view transform for overlay forward matrix computation.
     cached_view_transform: ViewTransform,
-    /// Last wall-clock time for overlay animation dt computation.
-    last_anim_time: f32,
+
+    // --- Frame Scheduler ---
+    /// Monotonic frame counter, incremented on each rAF tick.
+    /// Systems fire when `frame_count % divisor == 0`.
+    frame_count: u64,
+    /// Last wall-clock time for dt computation.
+    last_wall_time: f32,
 }
 
 impl Compositor {
@@ -350,7 +355,8 @@ impl Compositor {
             veil_chain,
             tool_overlay,
             cached_view_transform: identity,
-            last_anim_time: 0.0,
+            frame_count: 0,
+            last_wall_time: 0.0,
         }
     }
 
@@ -479,26 +485,49 @@ impl Compositor {
         self.needs_present = true;
     }
 
-    /// Update all animations (veils + overlay). Called once per frame.
+    /// Unified frame scheduler. Called once per rAF tick.
+    ///
+    /// Systems fire at fractional rates of the master clock (rAF rate):
+    /// - Veils: every `veil_divisor`-th frame (default 2 = 50% = 30fps at 60hz)
+    /// - Overlay: every `overlay_divisor`-th frame (default 4 = 25% = 15fps at 60hz)
+    ///
+    /// Integer divisors guarantee alignment — a divisor-4 tick always coincides
+    /// with a divisor-2 tick, so systems never force extra frame renders.
     pub fn update_animations(&mut self, queue: &wgpu::Queue, wall_time: f32) {
-        // Compute dt for overlay before handing wall_time to the veil chain.
-        let dt = if self.last_anim_time > 0.0 {
-            (wall_time - self.last_anim_time).max(0.0)
+        let dt = if self.last_wall_time > 0.0 {
+            (wall_time - self.last_wall_time).max(0.0)
         } else {
             0.0
         };
-        self.last_anim_time = wall_time;
+        self.last_wall_time = wall_time;
+        self.frame_count += 1;
 
-        // Update overlay animation time only when dashed lines are animating.
-        // update_time returns true at ~10fps to avoid excessive GPU work.
-        if dt > 0.0 && self.tool_overlay.needs_animation() {
-            if self.tool_overlay.update_time(dt) {
-                self.needs_present = true;
-            }
+        if dt == 0.0 {
+            return;
         }
 
-        // Update veil chain animations.
-        self.veil_chain.update_time(queue, wall_time);
+        let veil_divisor = crate::config::get_i64("animation.veil_divisor") as u64;
+        let overlay_divisor = crate::config::get_i64("animation.overlay_divisor") as u64;
+
+        let veil_fires = veil_divisor > 0
+            && self.veil_chain.needs_animation()
+            && self.frame_count % veil_divisor == 0;
+
+        let overlay_fires = overlay_divisor > 0
+            && self.tool_overlay.needs_animation()
+            && self.frame_count % overlay_divisor == 0;
+
+        if veil_fires {
+            self.veil_chain.update_veils(queue, dt * veil_divisor as f32);
+        }
+
+        if overlay_fires {
+            self.tool_overlay.advance_time(dt * overlay_divisor as f32);
+        }
+
+        if veil_fires || overlay_fires {
+            self.needs_present = true;
+        }
     }
 
     /// Returns true if any animations need continuous frames (veils or overlay).
@@ -577,7 +606,7 @@ impl Compositor {
 
     /// Advance overlay animation time.
     pub fn update_overlay_time(&mut self, dt: f32) {
-        self.tool_overlay.update_time(dt);
+        self.tool_overlay.advance_time(dt);
     }
 
     /// CPU-side hit test on overlay primitives.

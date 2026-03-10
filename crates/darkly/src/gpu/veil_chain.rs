@@ -23,12 +23,9 @@ pub struct VeilChain {
     /// Current viewport dimensions (updated on resize).
     viewport_width: u32,
     viewport_height: u32,
-    /// Last wall-clock time (seconds) passed to `update_time`.
-    last_time: f32,
-    /// Time accumulated since the last animation render. Used to throttle
-    /// animated veils to a cinematic framerate instead of 60fps.
-    anim_accum: f32,
     accum_format: wgpu::TextureFormat,
+    /// Set when structural changes occur (add/remove/visibility/reorder).
+    /// Animation-driven re-renders are handled by the compositor's frame scheduler.
     needs_present: bool,
 }
 
@@ -53,8 +50,6 @@ impl VeilChain {
             sampler,
             viewport_width: 0,
             viewport_height: 0,
-            last_time: 0.0,
-            anim_accum: 0.0,
             accum_format,
             needs_present: false,
         }
@@ -220,47 +215,15 @@ impl VeilChain {
 
     // --- Animation ---
 
-    /// Advance veil animation time. Computes delta from the previous call,
-    /// updates each animated veil's internal time, and conditionally sets
-    /// `needs_present` only when enough time has elapsed for a new frame.
-    /// Animated veils run at a configurable FPS to reduce GPU/CPU overhead.
-    pub fn update_time(&mut self, queue: &wgpu::Queue, wall_time: f32) {
-        let anim_frame_interval = 1.0 / crate::config::get_f64("animation.fps") as f32;
-
-        let dt = if self.last_time > 0.0 {
-            (wall_time - self.last_time).max(0.0)
-        } else {
-            0.0
-        };
-        self.last_time = wall_time;
-
-        if dt == 0.0 {
-            return;
-        }
-
-        let has_animating = self
-            .entries
-            .iter()
-            .any(|e| e.visible && e.veil.needs_animation());
-        if !has_animating {
-            return;
-        }
-
-        self.anim_accum += dt;
-        if self.anim_accum < anim_frame_interval {
-            return;
-        }
-
-        // Consume the accumulated time and update veils with the full delta.
-        let anim_dt = self.anim_accum;
-        self.anim_accum = 0.0;
-
+    /// Update all animated veils with the given delta time.
+    /// Called by the compositor's frame scheduler on veil-scheduled frames.
+    /// No throttle — the frame scheduler handles rate limiting.
+    pub fn update_veils(&mut self, queue: &wgpu::Queue, dt: f32) {
         for entry in &mut self.entries {
             if entry.visible && entry.veil.needs_animation() {
-                entry.veil.update_time(queue, &entry.cache, anim_dt);
+                entry.veil.update_time(queue, &entry.cache, dt);
             }
         }
-        self.needs_present = true;
     }
 
     // --- Viewport ---

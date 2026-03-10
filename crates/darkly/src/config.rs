@@ -121,8 +121,10 @@ impl Config {
         d!("ui.leftSidebarWidth",  int 48);
         d!("ui.rightSidebarWidth", int 260);
 
-        // Animation
-        d!("animation.fps", int 24);
+        // Animation — frame scheduler divisors (fraction of master rAF rate).
+        // Divisor 1 = every frame (100%), 2 = every other frame (50%), 4 = every 4th (25%).
+        d!("animation.veil_divisor", int 2);
+        d!("animation.overlay_divisor", int 4);
 
         // Hotkeys — navigation
         d!("hotkeys.nav.trigger", str "Space");
@@ -285,17 +287,18 @@ mod tests {
 
     #[test]
     fn defaults_are_set() {
-        assert_eq!(get_i64("animation.fps"), 24);
+        assert_eq!(get_i64("animation.veil_divisor"), 2);
+        assert_eq!(get_i64("animation.overlay_divisor"), 4);
         assert_eq!(get_str("hotkeys.nav.trigger"), "Space");
         assert_eq!(get_i64("canvas.width"), 1920);
     }
 
     #[test]
     fn user_override_wins() {
-        set("animation.fps", ConfigValue::Int(30));
-        assert_eq!(get_i64("animation.fps"), 30);
-        reset("animation.fps");
-        assert_eq!(get_i64("animation.fps"), 24);
+        set("animation.veil_divisor", ConfigValue::Int(1));
+        assert_eq!(get_i64("animation.veil_divisor"), 1);
+        reset("animation.veil_divisor");
+        assert_eq!(get_i64("animation.veil_divisor"), 2);
     }
 
     #[test]
@@ -319,15 +322,15 @@ mod tests {
 
     #[test]
     fn reset_all_clears_overrides() {
-        set("animation.fps", ConfigValue::Int(60));
+        set("animation.veil_divisor", ConfigValue::Int(1));
         set("canvas.width", ConfigValue::Int(3840));
         reset_all();
-        assert_eq!(get_i64("animation.fps"), 24);
+        assert_eq!(get_i64("animation.veil_divisor"), 2);
         assert_eq!(get_i64("canvas.width"), 1920);
     }
 
     #[test]
     fn get_f64_coerces_int() {
-        assert_eq!(get_f64("animation.fps"), 24.0);
+        assert_eq!(get_f64("animation.veil_divisor"), 2.0);
     }
 }

@@ -85,7 +85,6 @@ pub struct ToolOverlay {
     surface_format: wgpu::TextureFormat,
     primitives: Vec<OverlayPrimitive>,
     time: f32,
-    last_anim_frame: f32,
     /// Cached bind group from prepare(), valid until next prepare() call.
     bind_group: Option<wgpu::BindGroup>,
     /// Partition counts set by prepare().
@@ -282,7 +281,6 @@ impl ToolOverlay {
             surface_format,
             primitives: Vec::new(),
             time: 0.0,
-            last_anim_frame: 0.0,
             bind_group: None,
             solid_count: 0,
             invert_count: 0,
@@ -297,6 +295,8 @@ impl ToolOverlay {
     /// Clear all overlay primitives.
     pub fn clear_primitives(&mut self) {
         self.primitives.clear();
+        self.solid_count = 0;
+        self.invert_count = 0;
     }
 
     /// Returns true if the overlay has content to render.
@@ -314,16 +314,11 @@ impl ToolOverlay {
         self.primitives.iter().any(|p| p.kind == KIND_DASHED_LINE && p.dash_len > 0.0)
     }
 
-    /// Advance animation time. Returns true when enough time has elapsed
-    /// since the last animation frame (~10fps) to warrant a re-render.
-    pub fn update_time(&mut self, dt: f32) -> bool {
-        const ANIM_INTERVAL: f32 = 0.1; // ~10fps
+    /// Advance overlay animation time by the given delta.
+    /// Called by the compositor's frame scheduler on overlay-scheduled frames.
+    /// No throttle — the frame scheduler handles rate limiting.
+    pub fn advance_time(&mut self, dt: f32) {
         self.time += dt;
-        if self.time - self.last_anim_frame >= ANIM_INTERVAL {
-            self.last_anim_frame = self.time;
-            return true;
-        }
-        false
     }
 
     /// Ensure the snapshot texture exists at the given viewport size.
@@ -456,8 +451,6 @@ impl ToolOverlay {
     /// Call after prepare(). Does not create a render pass — the caller
     /// provides one (e.g. the final present or veil-blit pass).
     pub fn draw_solid<'a>(&'a self, rpass: &mut wgpu::RenderPass<'a>) {
-        // TEST 1: skip draw to isolate GPU vs CPU overhead. Remove after profiling.
-        return;
         if self.solid_count == 0 {
             return;
         }
