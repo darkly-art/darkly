@@ -51,7 +51,7 @@ impl OverlayPrimitive {
     }
 }
 
-/// 48-byte uniform block (must match shader).
+/// Uniform block for overlay rendering (must match shader).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct OverlayUniforms {
@@ -61,6 +61,9 @@ struct OverlayUniforms {
     fwd_row0: [f32; 4],
     fwd_row1: [f32; 4],
     fwd_row2: [f32; 4],
+    inv_row0: [f32; 4],
+    inv_row1: [f32; 4],
+    inv_row2: [f32; 4],
 }
 
 // ---------------------------------------------------------------------------
@@ -396,6 +399,7 @@ impl ToolOverlay {
 
         // Upload uniforms.
         let fwd = forward_from_inverse(view_transform);
+        let inv = &view_transform.matrix;
         let uniforms = OverlayUniforms {
             screen_size: [viewport_w as f32, viewport_h as f32],
             time: self.time,
@@ -403,6 +407,9 @@ impl ToolOverlay {
             fwd_row0: fwd[0],
             fwd_row1: fwd[1],
             fwd_row2: fwd[2],
+            inv_row0: inv[0],
+            inv_row1: inv[1],
+            inv_row2: inv[2],
         };
         queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 

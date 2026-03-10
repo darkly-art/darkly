@@ -24,6 +24,9 @@ struct OverlayUniforms {
     fwd_row0: vec4f,  // canvas → screen transform
     fwd_row1: vec4f,
     fwd_row2: vec4f,
+    inv_row0: vec4f,  // screen → canvas transform
+    inv_row1: vec4f,
+    inv_row2: vec4f,
 }
 
 // 64 bytes, std430-aligned.
@@ -67,6 +70,13 @@ fn canvas_to_screen(p: vec2f) -> vec2f {
     return vec2f(
         u.fwd_row0.x * p.x + u.fwd_row0.y * p.y + u.fwd_row2.x,
         u.fwd_row1.x * p.x + u.fwd_row1.y * p.y + u.fwd_row2.y,
+    );
+}
+
+fn screen_to_canvas(p: vec2f) -> vec2f {
+    return vec2f(
+        u.inv_row0.x * p.x + u.inv_row1.x * p.y + u.inv_row2.x,
+        u.inv_row0.y * p.x + u.inv_row1.y * p.y + u.inv_row2.y,
     );
 }
 
@@ -123,8 +133,22 @@ struct VertexOutput {
             lo = p0 - vec2f(r);
             hi = p0 + vec2f(r);
         }
+        case KIND_RECT, KIND_FILLED_RECT: {
+            if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
+                // Canvas-space rect: transform all 4 corners for correct AABB.
+                let c0 = canvas_to_screen(prim.p0);
+                let c1 = canvas_to_screen(vec2f(prim.p1.x, prim.p0.y));
+                let c2 = canvas_to_screen(vec2f(prim.p0.x, prim.p1.y));
+                let c3 = canvas_to_screen(prim.p1);
+                lo = min(min(c0, c1), min(c2, c3)) - vec2f(margin);
+                hi = max(max(c0, c1), max(c2, c3)) + vec2f(margin);
+            } else {
+                lo = min(p0, p1) - vec2f(margin);
+                hi = max(p0, p1) + vec2f(margin);
+            }
+        }
         default: {
-            // Lines and rects: AABB of the two endpoints.
+            // Lines: AABB of the two endpoints.
             lo = min(p0, p1) - vec2f(margin);
             hi = max(p0, p1) + vec2f(margin);
         }
@@ -206,8 +230,15 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
             dist = sdf_circle(screen_pos, p0, scaled_radius) - half_t;
         }
         case KIND_RECT: {
-            let inner = abs(sdf_rect(screen_pos, p0, p1, prim.corner_radius));
-            dist = inner - half_t;
+            if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
+                // Evaluate SDF in canvas space for correct rotation.
+                let cp = screen_to_canvas(screen_pos);
+                let canvas_d = sdf_rect(cp, prim.p0, prim.p1, prim.corner_radius);
+                let zoom = length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
+                dist = abs(canvas_d) * zoom - half_t;
+            } else {
+                dist = abs(sdf_rect(screen_pos, p0, p1, prim.corner_radius)) - half_t;
+            }
         }
         case KIND_DASHED_LINE: {
             let seg_dist = sdf_line_segment(screen_pos, p0, p1);
@@ -222,7 +253,14 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
             }
         }
         case KIND_FILLED_RECT: {
-            dist = sdf_rect(screen_pos, p0, p1, prim.corner_radius);
+            if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
+                let cp = screen_to_canvas(screen_pos);
+                let canvas_d = sdf_rect(cp, prim.p0, prim.p1, prim.corner_radius);
+                let zoom = length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
+                dist = canvas_d * zoom;
+            } else {
+                dist = sdf_rect(screen_pos, p0, p1, prim.corner_radius);
+            }
         }
         case KIND_FILLED_CIRCLE: {
             dist = sdf_filled_circle(screen_pos, p0, scaled_radius);
