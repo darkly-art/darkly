@@ -83,7 +83,20 @@ impl AlphaMask {
     }
 
     /// Invert all existing tiles: `value = 1.0 - value`.
-    pub fn invert(&mut self) {
+    /// Invert the mask within the given canvas bounds (pixels).
+    /// Creates tiles for the full canvas extent so the inverted "outside"
+    /// region is correctly filled with 1.0.
+    pub fn invert(&mut self, canvas_w: u32, canvas_h: u32) {
+        let ts = TILE_SIZE as i32;
+        // Ensure tiles exist for the entire canvas.
+        let tx_max = ((canvas_w as i32) - 1).div_euclid(ts);
+        let ty_max = ((canvas_h as i32) - 1).div_euclid(ts);
+        for ty in 0..=ty_max {
+            for tx in 0..=tx_max {
+                self.get_or_create(tx, ty);
+            }
+        }
+        // Now invert all tiles (existing + newly created).
         let keys: Vec<(i32, i32)> = self.iter().map(|(k, _)| k).collect();
         for (tx, ty) in keys {
             let tile = self.get_or_create(tx, ty);
@@ -623,9 +636,13 @@ mod tests {
     fn invert() {
         let mut mask = AlphaMask::new();
         mask.fill_rect_test(0, 0, 10, 10, 0.75);
-        mask.invert();
+        // Canvas is 64×64 — invert should fill the full canvas extent.
+        mask.invert(64, 64);
 
+        // Inside the original rect: 1.0 - 0.75 = 0.25.
         assert!((mask.sample(5, 5) - 0.25).abs() < 1e-6);
+        // Outside the original rect but inside canvas: 1.0 - 0.0 = 1.0.
+        assert!((mask.sample(32, 32) - 1.0).abs() < 1e-6);
     }
 
     #[test]

@@ -626,7 +626,7 @@ impl DarklyEngine {
     pub fn invert_selection(&mut self) {
         let old_sel = self.doc.selection.clone();
         if let Some(sel) = &mut self.doc.selection {
-            sel.invert();
+            sel.invert(self.doc.width, self.doc.height);
         }
         self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
         self.update_selection_overlay();
