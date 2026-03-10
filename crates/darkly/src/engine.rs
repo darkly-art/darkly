@@ -1,7 +1,5 @@
 use crate::document::{Document, MoveTarget, SelectionMode};
 use crate::layer::{BlendMode, Layer, LayerNode};
-use crate::sdf;
-use crate::tile::AlphaMask;
 use crate::undo::{
     UndoStack, TileAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
     PropertyAction, SelectionAction, mark_affected_dirty,
@@ -574,20 +572,7 @@ impl DarklyEngine {
         feather: f32,
     ) {
         let old_sel = self.doc.selection.clone();
-
-        let cx = x + w * 0.5;
-        let cy = y + h * 0.5;
-        let half_w = w * 0.5;
-        let half_h = h * 0.5;
-
-        let mut mask = AlphaMask::new();
-        mask.rasterize(
-            (x as i32, y as i32, w.ceil() as i32, h.ceil() as i32),
-            |px, py| sdf::sdf_rect(px, py, cx, cy, half_w, half_h),
-            antialias,
-            feather,
-        );
-
+        let mask = crate::tools::rect_select::rasterize(x, y, w, h, antialias, feather);
         self.doc.apply_selection(mask, mode);
         self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
         self.update_selection_overlay();
@@ -605,18 +590,8 @@ impl DarklyEngine {
 
     pub fn select_all(&mut self) {
         let old_sel = self.doc.selection.clone();
-        let mut mask = AlphaMask::new();
-        mask.rasterize(
-            (0, 0, self.doc.width as i32, self.doc.height as i32),
-            |px, py| sdf::sdf_rect(
-                px, py,
-                self.doc.width as f32 * 0.5,
-                self.doc.height as f32 * 0.5,
-                self.doc.width as f32 * 0.5,
-                self.doc.height as f32 * 0.5,
-            ),
-            false,
-            0.0,
+        let mask = crate::tools::rect_select::rasterize(
+            0.0, 0.0, self.doc.width as f32, self.doc.height as f32, false, 0.0,
         );
         self.doc.selection = Some(mask);
         self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));

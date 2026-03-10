@@ -15,8 +15,7 @@ fn main() {
         "crate::gpu::veil::VeilRegistration",
     );
 
-    // Future: uncomment as these directories are created.
-    // generate_registry(&src.join("tools"), "crate::tool::ToolRegistration");
+    generate_registry(&src.join("tools"), "crate::tool::ToolRegistration");
 }
 
 /// Scan a directory for .rs module files (excluding mod.rs) and generate
