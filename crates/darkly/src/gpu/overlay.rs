@@ -75,6 +75,10 @@ pub struct ToolOverlay {
     prim_buf: wgpu::Buffer,
     prim_capacity: usize,
     sampler: wgpu::Sampler,
+    /// 1×1 dummy texture — bound when no invert primitives are present,
+    /// avoiding allocation of a viewport-sized snapshot texture.
+    dummy_view: wgpu::TextureView,
+    /// Viewport-sized snapshot for invert primitives (allocated on demand).
     snapshot: Option<wgpu::Texture>,
     snapshot_view: Option<wgpu::TextureView>,
     snapshot_size: (u32, u32),
@@ -82,6 +86,11 @@ pub struct ToolOverlay {
     primitives: Vec<OverlayPrimitive>,
     time: f32,
     last_anim_frame: f32,
+    /// Cached bind group from prepare(), valid until next prepare() call.
+    bind_group: Option<wgpu::BindGroup>,
+    /// Partition counts set by prepare().
+    solid_count: u32,
+    invert_count: u32,
 }
 
 impl ToolOverlay {
@@ -158,9 +167,6 @@ impl ToolOverlay {
         };
 
         // Both pipelines use standard premultiplied alpha blending.
-        // The invert pipeline computes its output color in the shader
-        // (via snapshot sampling + luminance threshold), so it doesn't
-        // need a special blend mode.
         let alpha_blend = wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::One,
@@ -248,6 +254,19 @@ impl ToolOverlay {
             ..Default::default()
         });
 
+        // 1×1 dummy texture — always available for solid-only bind groups.
+        let dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("overlay-dummy"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: surface_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
         ToolOverlay {
             solid_pipeline,
             invert_pipeline,
@@ -256,6 +275,7 @@ impl ToolOverlay {
             prim_buf,
             prim_capacity: initial_cap,
             sampler,
+            dummy_view,
             snapshot: None,
             snapshot_view: None,
             snapshot_size: (0, 0),
@@ -263,6 +283,9 @@ impl ToolOverlay {
             primitives: Vec::new(),
             time: 0.0,
             last_anim_frame: 0.0,
+            bind_group: None,
+            solid_count: 0,
+            invert_count: 0,
         }
     }
 
@@ -279,6 +302,11 @@ impl ToolOverlay {
     /// Returns true if the overlay has content to render.
     pub fn has_content(&self) -> bool {
         !self.primitives.is_empty()
+    }
+
+    /// Returns true if any primitive uses the invert pipeline.
+    pub fn has_invert(&self) -> bool {
+        self.invert_count > 0
     }
 
     /// Returns true if any primitive is animating (dashed lines).
@@ -323,51 +351,37 @@ impl ToolOverlay {
         self.snapshot_size = (w, h);
     }
 
-    /// Encode the overlay render pass. Partitions primitives into solid and
-    /// inverted, uploads the storage buffer once, and issues up to two draw
-    /// calls with the appropriate pipeline. The snapshot copy only happens
-    /// when there are inverted primitives.
-    pub fn encode(
+    // -----------------------------------------------------------------------
+    // Split rendering: prepare() → draw_solid() / encode_invert()
+    //
+    // Solid primitives are drawn inside the caller's render pass (no extra
+    // LoadOp::Load). Invert primitives (if any) get their own pass with a
+    // snapshot copy, same as before.
+    // -----------------------------------------------------------------------
+
+    /// CPU-side work: partition, upload buffers, build bind group.
+    /// Must be called once per frame before draw_solid() or encode_invert().
+    pub fn prepare(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
-        surface_texture: &wgpu::Texture,
-        surface_view: &wgpu::TextureView,
         view_transform: &ViewTransform,
         viewport_w: u32,
         viewport_h: u32,
     ) {
         if self.primitives.is_empty() {
+            self.solid_count = 0;
+            self.invert_count = 0;
+            self.bind_group = None;
             return;
         }
 
-        // Partition: solid primitives first, then inverted.
-        let solid_count = self.primitives.iter()
+        // Partition: solid first, inverted second.
+        self.primitives.sort_by_key(|p| p.flags & FLAG_INVERT_COLOR);
+        self.solid_count = self.primitives.iter()
             .filter(|p| p.flags & FLAG_INVERT_COLOR == 0)
             .count() as u32;
-        let total_count = self.primitives.len() as u32;
-        let invert_count = total_count - solid_count;
-
-        // Sort in-place: solid first, inverted second.
-        self.primitives.sort_by_key(|p| p.flags & FLAG_INVERT_COLOR);
-
-        // Ensure snapshot texture exists (both pipelines share the bind group
-        // layout, so the texture must always be bound even if fs_solid ignores it).
-        self.ensure_snapshot(device, viewport_w, viewport_h);
-
-        // Copy surface → snapshot only when we have inverted primitives.
-        if invert_count > 0 {
-            encoder.copy_texture_to_texture(
-                surface_texture.as_image_copy(),
-                self.snapshot.as_ref().unwrap().as_image_copy(),
-                wgpu::Extent3d {
-                    width: viewport_w,
-                    height: viewport_h,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
+        self.invert_count = self.primitives.len() as u32 - self.solid_count;
 
         // Grow primitive buffer if needed.
         let count = self.primitives.len();
@@ -382,13 +396,11 @@ impl ToolOverlay {
             self.prim_capacity = new_cap;
         }
 
-        // Upload primitives (sorted: solid first, then inverted).
+        // Upload primitives.
         queue.write_buffer(&self.prim_buf, 0, bytemuck::cast_slice(&self.primitives));
 
-        // Compute forward transform (canvas → screen) from the stored inverse.
-        let fwd = forward_from_inverse(view_transform);
-
         // Upload uniforms.
+        let fwd = forward_from_inverse(view_transform);
         let uniforms = OverlayUniforms {
             screen_size: [viewport_w as f32, viewport_h as f32],
             time: self.time,
@@ -399,11 +411,16 @@ impl ToolOverlay {
         };
         queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
-        // Build bind group. The snapshot is always bound (layout requires it);
-        // fs_solid simply ignores it.
-        let snapshot_view = self.snapshot_view.as_ref().unwrap();
+        // Choose texture view: dummy for solid-only, real snapshot for invert.
+        let tex_view = if self.invert_count > 0 {
+            self.ensure_snapshot(device, viewport_w, viewport_h);
+            self.snapshot_view.as_ref().unwrap()
+        } else {
+            &self.dummy_view
+        };
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        // Build bind group.
+        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("overlay-bg"),
             layout: &self.bind_group_layout,
             entries: &[
@@ -425,18 +442,62 @@ impl ToolOverlay {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: wgpu::BindingResource::TextureView(snapshot_view),
+                    resource: wgpu::BindingResource::TextureView(tex_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
-        });
+        }));
+    }
 
-        // Render pass: draw on top of existing surface content.
+    /// Draw solid overlay primitives into an existing render pass.
+    /// Call after prepare(). Does not create a render pass — the caller
+    /// provides one (e.g. the final present or veil-blit pass).
+    pub fn draw_solid<'a>(&'a self, rpass: &mut wgpu::RenderPass<'a>) {
+        // TEST 1: skip draw to isolate GPU vs CPU overhead. Remove after profiling.
+        return;
+        if self.solid_count == 0 {
+            return;
+        }
+        let bg = self.bind_group.as_ref().expect("prepare() must be called before draw_solid()");
+        rpass.set_pipeline(&self.solid_pipeline);
+        rpass.set_bind_group(0, bg, &[]);
+        rpass.draw(0..6, 0..self.solid_count);
+    }
+
+    /// Encode a separate render pass for invert primitives.
+    /// Copies the current surface to the snapshot texture and draws invert
+    /// primitives on top. Only call when has_invert() is true.
+    pub fn encode_invert(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_texture: &wgpu::Texture,
+        surface_view: &wgpu::TextureView,
+        viewport_w: u32,
+        viewport_h: u32,
+    ) {
+        if self.invert_count == 0 {
+            return;
+        }
+
+        let bg = self.bind_group.as_ref().expect("prepare() must be called before encode_invert()");
+
+        // Copy surface → snapshot so fs_invert can sample the background.
+        encoder.copy_texture_to_texture(
+            surface_texture.as_image_copy(),
+            self.snapshot.as_ref().unwrap().as_image_copy(),
+            wgpu::Extent3d {
+                width: viewport_w,
+                height: viewport_h,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // Separate render pass for invert primitives.
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("tool-overlay"),
+            label: Some("tool-overlay-invert"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: surface_view,
                 resolve_target: None,
@@ -449,19 +510,9 @@ impl ToolOverlay {
             ..Default::default()
         });
 
-        rpass.set_bind_group(0, &bind_group, &[]);
-
-        // Draw solid primitives (instances 0..solid_count).
-        if solid_count > 0 {
-            rpass.set_pipeline(&self.solid_pipeline);
-            rpass.draw(0..6, 0..solid_count);
-        }
-
-        // Draw inverted primitives (instances solid_count..total_count).
-        if invert_count > 0 {
-            rpass.set_pipeline(&self.invert_pipeline);
-            rpass.draw(0..6, solid_count..total_count);
-        }
+        rpass.set_pipeline(&self.invert_pipeline);
+        rpass.set_bind_group(0, bg, &[]);
+        rpass.draw(0..6, self.solid_count..(self.solid_count + self.invert_count));
     }
 
     /// CPU-side hit test: returns the index of the first primitive hit at the

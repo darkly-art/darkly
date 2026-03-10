@@ -586,6 +586,8 @@ impl Compositor {
     }
 
     /// Run the present pass, veil chain, and final blit to surface.
+    /// Solid overlay primitives are drawn at the end of the final render
+    /// pass (present or veil-blit) to avoid a separate LoadOp::Load pass.
     fn present_and_veils(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -609,6 +611,8 @@ impl Compositor {
             rpass.set_pipeline(&self.present_pipeline);
             rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
             rpass.draw(0..3, 0..1);
+            // Draw solid overlay primitives in the same pass.
+            self.tool_overlay.draw_solid(&mut rpass);
             return;
         }
 
@@ -617,6 +621,7 @@ impl Compositor {
             surface_view,
             &self.present_to_veil_pipeline,
             &self.present_cache_bind_group,
+            &self.tool_overlay,
         );
     }
 
@@ -987,15 +992,26 @@ impl Compositor {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("present"),
         });
-        self.present_and_veils(&mut encoder, &surface_view);
 
-        // Tool overlay (on top of surface, after veils)
+        // Prepare overlay CPU-side work (upload, bind group) before render passes.
         if self.tool_overlay.has_content() {
             let vt = self.cached_view_transform;
             let vw = self.veil_chain.viewport_size().0;
             let vh = self.veil_chain.viewport_size().1;
-            self.tool_overlay.encode(
-                device, queue, &mut encoder, &output.texture, &surface_view, &vt, vw, vh,
+            self.tool_overlay.prepare(device, queue, &vt, vw, vh);
+        }
+
+        // Present + veils. Solid overlay primitives are drawn at the end
+        // of the final pass (no separate LoadOp::Load pass needed).
+        self.present_and_veils(&mut encoder, &surface_view);
+
+        // Invert overlay primitives (if any) need a separate pass with
+        // snapshot copy. This path is only hit by overlay_debug/rect_select.
+        if self.tool_overlay.has_invert() {
+            let vw = self.veil_chain.viewport_size().0;
+            let vh = self.veil_chain.viewport_size().1;
+            self.tool_overlay.encode_invert(
+                &mut encoder, &output.texture, &surface_view, vw, vh,
             );
         }
 

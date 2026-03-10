@@ -294,6 +294,7 @@ impl VeilChain {
         surface_view: &wgpu::TextureView,
         present_pipeline: &wgpu::RenderPipeline,
         present_bind_group: &wgpu::BindGroup,
+        overlay: &crate::gpu::overlay::ToolOverlay,
     ) {
         let veil_views = self.views.as_ref().unwrap();
 
@@ -330,7 +331,8 @@ impl VeilChain {
             current_src = dst;
         }
 
-        // Step 3: Blit final veil output → surface.
+        // Step 3: Blit final veil output → surface, with solid overlay in
+        // the same pass (avoids a separate LoadOp::Load render pass).
         let blit_bgs = self.blit_bind_groups.as_ref().unwrap();
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -349,6 +351,8 @@ impl VeilChain {
             rpass.set_pipeline(&self.blit_pipeline.pipeline);
             rpass.set_bind_group(0, &blit_bgs[current_src], &[]);
             rpass.draw(0..3, 0..1);
+            // Draw solid overlay primitives in the same pass.
+            overlay.draw_solid(&mut rpass);
         }
     }
 
