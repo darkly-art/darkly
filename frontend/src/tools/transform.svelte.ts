@@ -276,8 +276,8 @@ function buildOverlay(): ToolOverlayData | null {
     const edgeX = tr[0] - tl[0];
     const edgeY = tr[1] - tl[1];
     const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY);
-    const perpX = edgeLen > 0.01 ? -edgeY / edgeLen : 0;
-    const perpY = edgeLen > 0.01 ? edgeX / edgeLen : -1;
+    const perpX = edgeLen > 0.01 ? edgeY / edgeLen : 0;
+    const perpY = edgeLen > 0.01 ? -edgeX / edgeLen : -1;
     const armCanvas = ROTATION_ARM_LENGTH / (app.zoom || 1);
     const rotPos: [number, number] = [tm[0] + perpX * armCanvas, tm[1] + perpY * armCanvas];
 
@@ -349,7 +349,12 @@ export const transformTool: Tool = {
 
     onPointerDown(_ctx, _e, cx, cy) {
         if (!active) {
-            syncFromRust();
+            if (app.handle && app.activeLayerId != null) {
+                if (!app.handle.has_floating()) {
+                    app.handle.begin_transform(app.activeLayerId);
+                }
+                syncFromRust();
+            }
             if (!active) return;
         }
         beginDrag(Handle.Body, cx, cy);

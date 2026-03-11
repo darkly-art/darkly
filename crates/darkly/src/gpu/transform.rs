@@ -676,8 +676,42 @@ impl TransformPass {
 // Utility: build source tiles + dimensions from an ImageClip
 // ---------------------------------------------------------------------------
 
+/// Compute tight pixel bounds around non-transparent content in a tile grid.
+/// Returns `(min_x, min_y, width, height)` or `None` if fully transparent.
+fn tight_pixel_bounds(tiles: &TileGrid) -> Option<(i32, i32, u32, u32)> {
+    let ts = TILE_SIZE as i32;
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+
+    for ((tx, ty), tile) in tiles.iter() {
+        let base_x = tx * ts;
+        let base_y = ty * ts;
+        let data = tile.data();
+        for ly in 0..TILE_SIZE {
+            for lx in 0..TILE_SIZE {
+                if data.pixel(lx, ly)[3] > 0 {
+                    let cx = base_x + lx as i32;
+                    let cy = base_y + ly as i32;
+                    min_x = min_x.min(cx);
+                    min_y = min_y.min(cy);
+                    max_x = max_x.max(cx);
+                    max_y = max_y.max(cy);
+                }
+            }
+        }
+    }
+
+    if min_x > max_x {
+        return None;
+    }
+    Some((min_x, min_y, (max_x - min_x + 1) as u32, (max_y - min_y + 1) as u32))
+}
+
 /// Extract source tiles, origin, and dimensions from an ImageClip for
-/// creating a FloatingContent.
+/// creating a FloatingContent. Uses tight pixel bounds instead of
+/// tile-aligned bounds so the bounding box matches the actual content.
 pub fn source_from_clip(
     clip: &crate::clipboard::ImageClip,
 ) -> (TileGrid, (i32, i32), u32, u32) {
@@ -687,6 +721,12 @@ pub fn source_from_clip(
         let dst = tiles.get_or_create(tx, ty);
         *dst.write() = src_tile.data().clone();
     }
-    let (x, y, w, h) = clip.bounds;
-    (tiles, (x, y), w, h)
+    // Use tight bounds around actual non-transparent pixels
+    match tight_pixel_bounds(&tiles) {
+        Some((x, y, w, h)) => (tiles, (x, y), w, h),
+        None => {
+            let (x, y, w, h) = clip.bounds;
+            (tiles, (x, y), w, h)
+        }
+    }
 }

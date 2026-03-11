@@ -117,6 +117,11 @@ pub struct Compositor {
 
     canvas_width: u32,
     canvas_height: u32,
+    /// Padded (tile-aligned) render target dimensions — used for shader UV
+    /// computations in the transform pass, which must match the actual
+    /// accumulator texture size.
+    padded_width: u32,
+    padded_height: u32,
 
     veil_chain: VeilChain,
 
@@ -406,6 +411,8 @@ impl Compositor {
             lowest_dirty_layer: None,
             canvas_width: width,
             canvas_height: height,
+            padded_width: padded_w,
+            padded_height: padded_h,
             veil_chain,
             transform_pass,
             tool_overlay,
@@ -772,8 +779,8 @@ impl Compositor {
             source_origin,
             source_width,
             source_height,
-            self.canvas_width,
-            self.canvas_height,
+            self.padded_width,
+            self.padded_height,
             target_layer,
             target_is_mask,
         );
@@ -795,8 +802,8 @@ impl Compositor {
             source_origin,
             source_width,
             source_height,
-            self.canvas_width,
-            self.canvas_height,
+            self.padded_width,
+            self.padded_height,
         );
         self.mark_dirty();
     }

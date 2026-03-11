@@ -1199,15 +1199,29 @@ impl DarklyEngine {
             }
         }
 
+        // Compute dirty bounds before consuming fc.
+        let (min_x, min_y, max_x, max_y) = fc.transformed_bounds();
+
         if let Some(memento) = self.doc.commit_transaction(layer_id) {
-            self.undo_stack.push(Box::new(TileAction::new(memento)));
+            let rasterize_action: Box<dyn crate::undo::UndoAction> =
+                Box::new(TileAction::new(memento));
+            match fc.mode {
+                FloatingMode::Transform { cancel_undo } => {
+                    // Compound: [clear, rasterize] — undo reverses both in one step.
+                    self.undo_stack.push(Box::new(
+                        crate::undo::CompoundAction::new(vec![cancel_undo, rasterize_action]),
+                    ));
+                }
+                FloatingMode::Paste => {
+                    self.undo_stack.push(rasterize_action);
+                }
+            }
         }
 
         // Restore mask editing state
         self.editing_mask_layer = was_editing_mask;
 
         // Mark dirty
-        let (min_x, min_y, max_x, max_y) = fc.transformed_bounds();
         let w = (max_x - min_x).max(0) as u32;
         let h = (max_y - min_y).max(0) as u32;
         self.mark_bounds_dirty(layer_id, is_mask, (min_x, min_y), w, h);

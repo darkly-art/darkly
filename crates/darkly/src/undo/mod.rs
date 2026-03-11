@@ -3,12 +3,14 @@ mod layer;
 mod mask;
 pub mod property;
 mod selection;
+mod compound;
 
 pub use tile::TileAction;
 pub use layer::{LayerAddAction, LayerRemoveAction, LayerMoveAction};
 pub use mask::MaskPropertyAction;
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
+pub use compound::CompoundAction;
 
 use crate::dirty::DirtyRegion;
 use crate::document::Document;
