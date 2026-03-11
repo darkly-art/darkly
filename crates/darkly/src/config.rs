@@ -61,6 +61,7 @@ fn preset_photoshop() -> HashMap<String, ConfigValue> {
         ("hotkeys.clearSelectionContents", "Delete"),
         ("hotkeys.isolateLayer", ""),
         ("bindings.layerEye.alt+click", "isolateLayer"),
+        ("bindings.maskThumb.alt+click", "isolateMask"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))

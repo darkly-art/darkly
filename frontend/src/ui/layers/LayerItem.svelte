@@ -63,6 +63,11 @@
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
+        if (dispatchBinding('maskThumb', e, { layerId: layer.id }, config)) {
+            onupdate();
+            return;
+        }
+        // Default: plain click toggles mask editing mode
         app.activeLayerId = layer.id;
         if (!isEditingMask) {
             app.editingMaskLayerId = layer.id;

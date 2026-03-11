@@ -230,7 +230,20 @@ export function registerActions() {
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.handle) return;
-            toggleIsolation(layerId);
+            toggleIsolation(layerId, false);
+        },
+    });
+
+    actions.register({
+        id: 'isolateMask',
+        displayName: 'Isolate Mask',
+        category: 'layers',
+        description: 'Solo this layer and show its mask as grayscale. Press again to restore.',
+        accepts: ['layerId'],
+        handler: (ctx) => {
+            const layerId = ctx.layerId ?? app.activeLayerId;
+            if (layerId == null || !app.handle) return;
+            toggleIsolation(layerId, true);
         },
     });
 }
@@ -245,7 +258,8 @@ interface IsolationSnapshot {
 
 let isolationState: IsolationSnapshot | null = null;
 
-function toggleIsolation(targetId: number) {
+/** @param showMask - force mask view (isolateMask action or keyboard isolate while editing mask) */
+function toggleIsolation(targetId: number, showMask: boolean) {
     const handle = app.handle;
     if (!handle) return;
 
@@ -271,9 +285,11 @@ function toggleIsolation(targetId: number) {
             handle.set_layer_visible(layer.id, keepVisible.has(layer.id));
         }
 
-        // If editing a mask, also enable show_mask so the mask renders as grayscale
+        // Show mask as grayscale if requested (explicit isolateMask action,
+        // or keyboard isolateLayer while editing a mask)
         let showMaskLayerId: number | null = null;
-        if (app.editingMaskLayerId === targetId) {
+        const wantMask = showMask || app.editingMaskLayerId === targetId;
+        if (wantMask) {
             const layer = findLayer(app.layerTree, targetId);
             if (layer?.hasMask && !layer.showMask) {
                 handle.set_show_mask(targetId, true);
