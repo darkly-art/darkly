@@ -566,6 +566,9 @@ impl Document {
     }
 
     /// Flood fill from a seed point with a color, using tolerance-based matching.
+    ///
+    /// Uses the shared scanline flood fill to compute the fill region as a mask,
+    /// then applies the color to all masked pixels via the paint target.
     pub fn flood_fill(
         &mut self,
         layer_id: LayerId,
@@ -578,6 +581,32 @@ impl Document {
             return;
         }
 
+        // Compute the fill region first (reads from tiles, produces a mask).
+        let tiles = match find_layer_in(&self.root.children, layer_id) {
+            Some(Layer::Raster(r)) => &r.tiles,
+            _ => return,
+        };
+
+        // Early exit if seed pixel already has the fill color.
+        let (stx, sty) = TileGrid::tile_coords_for_pixel(seed_x, seed_y);
+        let ts = TILE_SIZE as i32;
+        let slx = (seed_x - stx * ts) as usize;
+        let sly = (seed_y - sty * ts) as usize;
+        let target_color = match tiles.get(stx, sty) {
+            Some(t) => *t.data().pixel(slx, sly),
+            None => [0, 0, 0, 0],
+        };
+        if target_color == color {
+            return;
+        }
+
+        let fill_mask = AlphaMask::flood_fill(
+            tiles, seed_x, seed_y,
+            self.width as i32, self.height as i32,
+            tolerance,
+        );
+
+        // Apply the fill color to all masked pixels.
         let mut target = match Self::make_paint_target(
             &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
         ) {
@@ -585,62 +614,17 @@ impl Document {
             None => return,
         };
 
-        let tile_size = TILE_SIZE as i32;
-
-        // Read the target color at seed
-        let (stx, sty) = TileGrid::tile_coords_for_pixel(seed_x, seed_y);
-        let slx = (seed_x - stx * tile_size) as usize;
-        let sly = (seed_y - sty * tile_size) as usize;
-
-        let target_color = match target.tiles.get(stx, sty) {
-            Some(t) => *t.data().pixel(slx, sly),
-            None => [0, 0, 0, 0],
-        };
-
-        if target_color == color {
-            return;
-        }
-
-        let tol = tolerance as i16;
-        let matches = |px: &[u8; 4]| -> bool {
-            (px[0] as i16 - target_color[0] as i16).abs() <= tol
-                && (px[1] as i16 - target_color[1] as i16).abs() <= tol
-                && (px[2] as i16 - target_color[2] as i16).abs() <= tol
-                && (px[3] as i16 - target_color[3] as i16).abs() <= tol
-        };
-
-        let w = self.width as i32;
-        let h = self.height as i32;
-        let mut visited = std::collections::HashSet::new();
-        let mut stack = vec![(seed_x, seed_y)];
-
-        while let Some((x, y)) = stack.pop() {
-            if x < 0 || y < 0 || x >= w || y >= h {
-                continue;
+        for ((tx, ty), mask_tile) in fill_mask.iter() {
+            let base_x = tx * ts;
+            let base_y = ty * ts;
+            let data = mask_tile.data();
+            for ly in 0..TILE_SIZE {
+                for lx in 0..TILE_SIZE {
+                    if data.get(lx, ly) > 0.0 {
+                        target.replace(base_x + lx as i32, base_y + ly as i32, color);
+                    }
+                }
             }
-            if !visited.insert((x, y)) {
-                continue;
-            }
-
-            let (tx, ty_coord) = TileGrid::tile_coords_for_pixel(x, y);
-            let lx = (x - tx * tile_size) as usize;
-            let ly = (y - ty_coord * tile_size) as usize;
-
-            let current = match target.tiles.get(tx, ty_coord) {
-                Some(t) => *t.data().pixel(lx, ly),
-                None => [0, 0, 0, 0],
-            };
-
-            if !matches(&current) {
-                continue;
-            }
-
-            target.replace(x, y, color);
-
-            stack.push((x + 1, y));
-            stack.push((x - 1, y));
-            stack.push((x, y + 1));
-            stack.push((x, y - 1));
         }
     }
 

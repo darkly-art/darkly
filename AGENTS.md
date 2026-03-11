@@ -26,6 +26,24 @@ This same pattern applies to all modular systems in the project.
 
 Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. Extract shared logic into a common abstraction rather than duplicating the pattern. This applies across modules, across layers (Rust, WASM bridge, JS), and across systems. When you notice structural similarity, unify it.
 
+## Prior Art Principle
+
+Before deciding on an implementation approach — even when the solution seems obvious — research how established editors handle it. Krita and GIMP source code are checked out under `gimp/` and `krita/` in the project root specifically for this purpose. Read the relevant source, understand the algorithm and data structures they chose, and base our design on that understanding. These are mature codebases with decades of real-world usage; they've already hit and solved the edge cases we'd discover the hard way.
+
+Our implementation will often differ in specifics (e.g. GPU-centric pipelines, tile format differences, Rust idioms), but the core algorithm and architectural decisions should be informed by prior art, not invented from scratch.
+
+## Performance Principle
+
+Performance is king. If a feature can't be fast, it doesn't ship. There is almost always a fast way to do something — find it before writing the naive version. Think about data access patterns, per-frame costs, and batch granularity up front, not after the profiler screams.
+
+Past lessons that illustrate the pattern:
+
+- **Flood fill** was doing per-pixel HashMap lookups across a tiled image (~8M hash ops). Fix: batch at the tile level — one lookup per tile, direct array indexing within. Orders of magnitude faster.
+- **Selection overlay** generated one GPU primitive per boundary pixel (~800 instances for a rectangle). Fix: merge collinear segments and simplify polylines once when the selection changes — down to ~4-30 primitives.
+- **Animation scheduling** had independent per-system timers that forced extra frame renders. Fix: a single master clock with integer divisors so slower systems' ticks always align with faster ones — zero extra renders.
+
+See `gpu-perf-lessons-learned.md` for full details. The specifics vary but the theme is the same: the naive approach has a hidden multiplier, and there's a structural fix that eliminates it.
+
 ## Engineering Principle
 
 Every system that is implemented must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. It's okay to take a step back from the current task, in order to do things right. This relates directly to the modularity principle above.
