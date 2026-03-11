@@ -628,6 +628,35 @@ impl Document {
         }
     }
 
+    /// Clear (erase to transparent) all pixels within the current selection on a raster layer.
+    /// Iterates only over tiles where the selection mask exists, for efficiency.
+    pub fn clear_selection_contents(&mut self, layer_id: LayerId) {
+        if self.selection.is_none() {
+            return;
+        }
+
+        let ts = TILE_SIZE as i32;
+        let tile_keys: Vec<(i32, i32)> = self.selection.as_ref().unwrap()
+            .iter().map(|((tx, ty), _)| (tx, ty)).collect();
+
+        let mut target = match Self::make_paint_target(
+            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+        ) {
+            Some(t) => t,
+            None => return,
+        };
+
+        for (tx, ty) in tile_keys {
+            let base_x = tx * ts;
+            let base_y = ty * ts;
+            for ly in 0..TILE_SIZE {
+                for lx in 0..TILE_SIZE {
+                    target.erase(base_x + lx as i32, base_y + ly as i32, 1.0);
+                }
+            }
+        }
+    }
+
     /// Draw a linear gradient between two points on a raster layer.
     pub fn linear_gradient(
         &mut self,

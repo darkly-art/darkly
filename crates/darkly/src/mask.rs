@@ -988,7 +988,7 @@ impl AlphaMask {
 
 #[cfg(test)]
 mod tests {
-    use crate::tile::AlphaMask;
+    use crate::tile::{AlphaMask, TileGrid, TILE_SIZE};
 
     #[test]
     fn boolean_add() {
@@ -1208,6 +1208,175 @@ mod tests {
         // Well outside
         assert_eq!(mask.sample(95, 30), 0.0);
         assert_eq!(mask.sample(50, 55), 0.0);
+    }
+
+    // --- flood_fill ---
+
+    /// Helper: paint a solid-color rectangle onto a TileGrid.
+    fn paint_rect(grid: &mut TileGrid, x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
+        let ts = TILE_SIZE as i32;
+        for py in y..y + h {
+            for px in x..x + w {
+                let (tx, ty) = TileGrid::tile_coords_for_pixel(px, py);
+                let lx = (px - tx * ts) as usize;
+                let ly = (py - ty * ts) as usize;
+                *grid.get_or_create(tx, ty).write().pixel_mut(lx, ly) = color;
+            }
+        }
+    }
+
+    #[test]
+    fn flood_fill_solid_rect() {
+        let mut grid = TileGrid::new();
+        paint_rect(&mut grid, 10, 10, 30, 20, [255, 0, 0, 255]);
+
+        let mask = AlphaMask::flood_fill(&grid, 20, 15, 128, 128, 0);
+
+        // Inside the rect
+        assert_eq!(mask.sample(10, 10), 1.0);
+        assert_eq!(mask.sample(25, 20), 1.0);
+        assert_eq!(mask.sample(39, 29), 1.0);
+        // Outside
+        assert_eq!(mask.sample(9, 15), 0.0);
+        assert_eq!(mask.sample(40, 15), 0.0);
+        assert_eq!(mask.sample(20, 9), 0.0);
+        assert_eq!(mask.sample(20, 30), 0.0);
+    }
+
+    #[test]
+    fn flood_fill_empty_canvas() {
+        let grid = TileGrid::new();
+        // Seed color is [0,0,0,0] — matches all empty tiles.
+        let mask = AlphaMask::flood_fill(&grid, 0, 0, 128, 128, 0);
+
+        // Entire canvas should be filled.
+        assert_eq!(mask.sample(0, 0), 1.0);
+        assert_eq!(mask.sample(64, 64), 1.0);
+        assert_eq!(mask.sample(127, 127), 1.0);
+    }
+
+    #[test]
+    fn flood_fill_seed_out_of_bounds() {
+        let grid = TileGrid::new();
+
+        // Negative coords
+        let mask = AlphaMask::flood_fill(&grid, -1, 0, 64, 64, 0);
+        assert!(mask.is_empty());
+
+        // Beyond canvas
+        let mask = AlphaMask::flood_fill(&grid, 64, 0, 64, 64, 0);
+        assert!(mask.is_empty());
+
+        let mask = AlphaMask::flood_fill(&grid, 0, 64, 64, 64, 0);
+        assert!(mask.is_empty());
+    }
+
+    #[test]
+    fn flood_fill_tolerance() {
+        let mut grid = TileGrid::new();
+        // Left half: red
+        paint_rect(&mut grid, 0, 0, 32, 32, [200, 0, 0, 255]);
+        // Right half: slightly different red (delta=10 on R channel)
+        paint_rect(&mut grid, 32, 0, 32, 32, [210, 0, 0, 255]);
+
+        // tolerance=0: only exact matches
+        let mask = AlphaMask::flood_fill(&grid, 16, 16, 64, 64, 0);
+        assert_eq!(mask.sample(16, 16), 1.0); // left half
+        assert_eq!(mask.sample(48, 16), 0.0); // right half excluded
+
+        // tolerance=10: both halves match
+        let mask = AlphaMask::flood_fill(&grid, 16, 16, 64, 64, 10);
+        assert_eq!(mask.sample(16, 16), 1.0);
+        assert_eq!(mask.sample(48, 16), 1.0);
+    }
+
+    #[test]
+    fn flood_fill_cross_tile_boundary() {
+        let mut grid = TileGrid::new();
+        // Horizontal stripe across 3 tiles (192px wide, 10px tall)
+        paint_rect(&mut grid, 0, 30, 192, 10, [0, 255, 0, 255]);
+
+        let mask = AlphaMask::flood_fill(&grid, 96, 35, 256, 64, 0);
+
+        // Check points in each tile column
+        assert_eq!(mask.sample(10, 35), 1.0);  // tile 0
+        assert_eq!(mask.sample(96, 35), 1.0);  // tile 1
+        assert_eq!(mask.sample(150, 35), 1.0); // tile 2
+        // Outside the stripe
+        assert_eq!(mask.sample(96, 29), 0.0);
+        assert_eq!(mask.sample(96, 40), 0.0);
+    }
+
+    #[test]
+    fn flood_fill_diagonal_does_not_leak() {
+        let mut grid = TileGrid::new();
+        // Two 1px regions touching only diagonally:
+        //   A at (10,10), B at (11,11)
+        // Background is [0,0,0,0], paint both pixels the same color.
+        let color = [100, 100, 100, 255];
+        paint_rect(&mut grid, 10, 10, 1, 1, color);
+        paint_rect(&mut grid, 11, 11, 1, 1, color);
+
+        // Seed on A — should NOT reach B (4-connected)
+        let mask = AlphaMask::flood_fill(&grid, 10, 10, 64, 64, 0);
+        assert_eq!(mask.sample(10, 10), 1.0);
+        assert_eq!(mask.sample(11, 11), 0.0);
+    }
+
+    #[test]
+    fn flood_fill_single_pixel_island() {
+        let mut grid = TileGrid::new();
+        // Fill a 20x20 area with one color
+        paint_rect(&mut grid, 0, 0, 20, 20, [50, 50, 50, 255]);
+        // Place a single different-color pixel in the middle
+        paint_rect(&mut grid, 10, 10, 1, 1, [200, 200, 200, 255]);
+
+        // Seed on the background color
+        let mask = AlphaMask::flood_fill(&grid, 0, 0, 64, 64, 0);
+
+        // The background fills
+        assert_eq!(mask.sample(5, 5), 1.0);
+        assert_eq!(mask.sample(15, 15), 1.0);
+        // The island pixel is excluded
+        assert_eq!(mask.sample(10, 10), 0.0);
+    }
+
+    #[test]
+    fn flood_fill_soft_circle_on_empty_canvas() {
+        // Soft-edged circle on transparent canvas: the fill must stay
+        // inside the circle and not leak through antialiased edges.
+        let mut grid = TileGrid::new();
+        let cx = 64.0_f32;
+        let cy = 64.0_f32;
+        let r = 30.0_f32;
+
+        for py in 30..100 {
+            for px in 30..100 {
+                let dx = px as f32 + 0.5 - cx;
+                let dy = py as f32 + 0.5 - cy;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist > r + 1.0 {
+                    continue;
+                }
+                let alpha = if dist < r - 1.0 {
+                    255u8
+                } else {
+                    ((1.0 - (dist - (r - 1.0)) / 2.0).clamp(0.0, 1.0) * 255.0) as u8
+                };
+                let (tx, ty) = TileGrid::tile_coords_for_pixel(px, py);
+                let ts = TILE_SIZE as i32;
+                let lx = (px - tx * ts) as usize;
+                let ly = (py - ty * ts) as usize;
+                *grid.get_or_create(tx, ty).write().pixel_mut(lx, ly) = [0, 0, 0, alpha];
+            }
+        }
+
+        let mask = AlphaMask::flood_fill(&grid, 64, 64, 256, 256, 15);
+
+        assert_eq!(mask.sample(64, 64), 1.0, "circle center should be selected");
+        assert_eq!(mask.sample(50, 64), 1.0, "inside circle should be selected");
+        assert_eq!(mask.sample(0, 0), 0.0, "transparent bg top-left");
+        assert_eq!(mask.sample(200, 200), 0.0, "transparent bg far away");
     }
 
     // --- feather ---

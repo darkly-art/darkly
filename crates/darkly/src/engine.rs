@@ -659,6 +659,17 @@ impl DarklyEngine {
         self.update_selection_overlay();
     }
 
+    pub fn clear_selection_contents(&mut self, layer_id: u64) {
+        if self.doc.selection.is_none() {
+            return;
+        }
+        self.doc.begin_transaction(layer_id);
+        self.doc.clear_selection_contents(layer_id);
+        if let Some(mementos) = self.doc.commit_transaction(layer_id) {
+            self.undo_stack.push(Box::new(TileAction::new(mementos)));
+        }
+    }
+
     pub fn has_selection(&self) -> bool {
         self.doc.selection.is_some()
     }

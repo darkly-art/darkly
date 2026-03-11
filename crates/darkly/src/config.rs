@@ -38,6 +38,7 @@ fn preset_krita() -> HashMap<String, ConfigValue> {
         ("hotkeys.magicWandTool", "KeyW"),
         ("hotkeys.clearSelection", "$mod+Shift+KeyA"),
         ("hotkeys.invertSelection", "$mod+Shift+KeyI"),
+        ("hotkeys.clearSelectionContents", "Delete"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -57,6 +58,7 @@ fn preset_photoshop() -> HashMap<String, ConfigValue> {
         ("hotkeys.magicWandTool", "KeyW"),
         ("hotkeys.clearSelection", "$mod+KeyD"),
         ("hotkeys.invertSelection", "$mod+Shift+KeyI"),
+        ("hotkeys.clearSelectionContents", "Delete"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -76,6 +78,7 @@ fn preset_gimp() -> HashMap<String, ConfigValue> {
         ("hotkeys.magicWandTool", "KeyU"),
         ("hotkeys.clearSelection", "$mod+Shift+KeyA"),
         ("hotkeys.invertSelection", "$mod+KeyI"),
+        ("hotkeys.clearSelectionContents", "Delete"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -160,9 +163,10 @@ impl Config {
         d!("hotkeys.magicWandTool",     str "KeyW");
 
         // Hotkeys — selection (default follows Krita)
-        d!("hotkeys.selectAll",       str "$mod+KeyA");
-        d!("hotkeys.clearSelection",  str "$mod+Shift+KeyA");
-        d!("hotkeys.invertSelection", str "$mod+Shift+KeyI");
+        d!("hotkeys.selectAll",               str "$mod+KeyA");
+        d!("hotkeys.clearSelection",          str "$mod+Shift+KeyA");
+        d!("hotkeys.invertSelection",         str "$mod+Shift+KeyI");
+        d!("hotkeys.clearSelectionContents",  str "Delete");
 
         // Hotkeys — brush controls
         d!("hotkeys.brushSizeUp",   str "BracketRight");

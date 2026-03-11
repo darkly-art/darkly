@@ -38,6 +38,11 @@ function initHotkeys() {
         swapColors:      () => app.swapColors(),
         selectAll:       () => app.handle?.select_all(),
         clearSelection:  () => app.handle?.clear_selection(),
+        clearSelectionContents: () => {
+            if (app.activeLayerId != null) {
+                app.handle?.clear_selection_contents(app.activeLayerId);
+            }
+        },
         invertSelection: () => app.handle?.invert_selection(),
         ...toolActions,
         brushSizeUp:     () => {

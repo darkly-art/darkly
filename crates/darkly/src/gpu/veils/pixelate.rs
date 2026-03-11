@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
     ParamDef::Int  { name: "scale", min: 1, max: 6, default: 2 },
-    ParamDef::Bool { name: "soft",  default: true },
+    ParamDef::Bool { name: "soft",  default: false },
 ];
 
 pub fn register() -> VeilRegistration {

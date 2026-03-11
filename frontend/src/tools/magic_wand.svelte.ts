@@ -22,10 +22,7 @@ export const magicWandTool: Tool = {
     icon: '✦',
     hotkeyAction: 'magicWandTool',
 
-    onPointerDown() {},
-    onPointerMove() {},
-
-    onPointerUp(_ctx, e, cx, cy) {
+    onPointerDown(_ctx, e, cx, cy) {
         if (!app.handle || app.activeLayerId == null) return;
 
         const mode = selectionMode(e);
@@ -37,6 +34,8 @@ export const magicWandTool: Tool = {
             mode,
         );
     },
+    onPointerMove() {},
+    onPointerUp() {},
 
     onKeyDown(e) {
         if (e.key === 'Escape') {

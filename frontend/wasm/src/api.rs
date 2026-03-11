@@ -178,6 +178,7 @@ impl DarklyHandle {
     }
 
     pub fn clear_selection(&mut self) { self.0.clear_selection() }
+    pub fn clear_selection_contents(&mut self, layer_id: f64) { self.0.clear_selection_contents(layer_id as u64) }
     pub fn select_all(&mut self) { self.0.select_all() }
     pub fn invert_selection(&mut self) { self.0.invert_selection() }
     pub fn has_selection(&self) -> bool { self.0.has_selection() }
