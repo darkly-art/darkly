@@ -59,6 +59,8 @@ fn preset_photoshop() -> HashMap<String, ConfigValue> {
         ("hotkeys.clearSelection", "$mod+KeyD"),
         ("hotkeys.invertSelection", "$mod+Shift+KeyI"),
         ("hotkeys.clearSelectionContents", "Delete"),
+        ("hotkeys.isolateLayer", ""),
+        ("bindings.layerEye.alt+click", "isolateLayer"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -182,8 +184,15 @@ impl Config {
         // Hotkeys — brush controls
         d!("hotkeys.brushSizeUp",   str "BracketRight");
         d!("hotkeys.brushSizeDown", str "BracketLeft");
-        d!("hotkeys.opacityUp",     str "KeyO");
-        d!("hotkeys.opacityDown",   str "KeyI");
+
+        // Hotkeys — layers
+        d!("hotkeys.isolateLayer",  str "KeyI");
+
+        // UI bindings — modifier+click on UI elements → action name (empty = no action)
+        d!("bindings.layerEye.alt+click",       str "");
+        d!("bindings.layerEye.ctrl+click",      str "");
+        d!("bindings.layerThumb.alt+click",     str "");
+        d!("bindings.maskThumb.ctrl+click",     str "");
 
         Config {
             defaults,

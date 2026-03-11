@@ -27,6 +27,9 @@ class ConfigStore {
     /** Currently active preset name. */
     activePresetName = $state('Krita');
 
+    /** True if no preset has ever been chosen (first launch). */
+    needsPresetChoice = $state(false);
+
     /** All available presets, populated on init. */
     presets = $state<Preset[]>([]);
 
@@ -42,6 +45,10 @@ class ConfigStore {
             name,
             description: PRESET_DESCRIPTIONS[name] ?? '',
         }));
+
+        // Check if this is a first launch (no preset ever saved)
+        // this.needsPresetChoice = !this.#hasSavedPreset();
+        this.needsPresetChoice = true;
 
         // Load saved state from localStorage
         const savedPreset = this.#loadPresetName();
@@ -113,6 +120,14 @@ class ConfigStore {
     }
 
     // --- localStorage helpers ---
+
+    #hasSavedPreset(): boolean {
+        try {
+            return localStorage.getItem(PRESET_KEY) !== null;
+        } catch {
+            return false;
+        }
+    }
 
     #loadPresetName(): string {
         try {

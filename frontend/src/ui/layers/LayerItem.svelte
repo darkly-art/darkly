@@ -1,6 +1,9 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import { getLayerThumbnail, getMaskThumbnail, THUMB_SIZE } from './thumbnails';
+    import { dispatchBinding } from '../../actions/triggers';
+    import { actions } from '../../actions/registry';
+    import { config } from '../../config/store.svelte';
 
     let { layer, depth = 0, onupdate }: {
         layer: {
@@ -29,10 +32,13 @@
 
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (app.handle) {
-            app.handle.set_layer_visible(layer.id, !layer.visible);
+        if (dispatchBinding('layerEye', e, { layerId: layer.id }, config)) {
             onupdate();
+            return;
         }
+        // Default: plain click toggles visibility
+        actions.dispatch('toggleVisibility', { layerId: layer.id });
+        onupdate();
     }
 
     function setActive() {
