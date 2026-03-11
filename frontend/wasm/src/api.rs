@@ -75,11 +75,6 @@ impl DarklyHandle {
     pub fn add_raster_layer_in(&mut self, group_id: f64) -> f64 { self.0.add_raster_layer_in(group_id as u64) as f64 }
     pub fn add_group(&mut self) -> f64 { self.0.add_group() as f64 }
 
-    pub fn add_filter_layer(&mut self, filter_type: &str, params: JsValue) -> f64 {
-        let pv = js_to_param_values(&params, self.0.filter_param_defs(filter_type));
-        self.0.add_filter_layer(filter_type, &pv) as f64
-    }
-
     pub fn remove_layer(&mut self, layer_id: f64) -> Result<(), JsError> {
         self.0.remove_layer(layer_id as u64).map_err(|e| JsError::new(&e))
     }
@@ -102,6 +97,7 @@ impl DarklyHandle {
     pub fn set_layer_visible(&mut self, layer_id: f64, visible: bool) { self.0.set_layer_visible(layer_id as u64, visible) }
     pub fn set_layer_name(&mut self, layer_id: f64, name: &str) { self.0.set_layer_name(layer_id as u64, name) }
     pub fn set_group_collapsed(&mut self, group_id: f64, collapsed: bool) { self.0.set_group_collapsed(group_id as u64, collapsed) }
+    pub fn set_group_passthrough(&mut self, group_id: f64, passthrough: bool) { self.0.set_group_passthrough(group_id as u64, passthrough) }
 
     // --- Layer Masks (pass-through) ---
 

@@ -40,7 +40,6 @@ impl Property {
             Property::Visible(v) => {
                 match doc.find_node_mut(layer_id) {
                     Some(LayerNode::Layer(Layer::Raster(r))) => r.visible = *v,
-                    Some(LayerNode::Layer(Layer::Filter(f))) => f.visible = *v,
                     Some(LayerNode::Group(g)) => g.visible = *v,
                     _ => {}
                 }

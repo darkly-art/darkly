@@ -6,11 +6,6 @@ fn main() {
     let src = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("src");
 
     generate_registry(
-        &src.join("gpu/filters"),
-        "crate::gpu::filter::FilterRegistration",
-    );
-
-    generate_registry(
         &src.join("gpu/veils"),
         "crate::gpu::veil::VeilRegistration",
     );

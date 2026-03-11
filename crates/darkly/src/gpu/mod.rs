@@ -5,8 +5,6 @@ pub mod compositor;
 pub mod blend;
 pub mod effect;
 pub mod params;
-pub mod filter;
-pub mod filters;
 pub mod veil;
 pub mod veil_chain;
 pub mod veils;

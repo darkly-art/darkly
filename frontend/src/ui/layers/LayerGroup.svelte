@@ -134,6 +134,21 @@
             {group.collapsed ? '\u25B6' : '\u25BC'}
         </button>
 
+        <button
+            class="passthrough-btn"
+            class:normal={!group.passthrough}
+            onclick={(e: MouseEvent) => {
+                e.stopPropagation();
+                if (app.handle) {
+                    app.handle.set_group_passthrough(group.id, !group.passthrough);
+                    onupdate();
+                }
+            }}
+            title={group.passthrough ? 'Passthrough (click for Normal)' : 'Normal (click for Passthrough)'}
+        >
+            {group.passthrough ? 'P' : 'N'}
+        </button>
+
         {#if editing}
             <input
                 class="name-input"
@@ -219,6 +234,22 @@
         font-size: 8px;
         width: 14px;
         text-align: center;
+    }
+
+    .passthrough-btn {
+        background: none;
+        border: 1px solid #555;
+        border-radius: 2px;
+        color: #888;
+        cursor: pointer;
+        padding: 0 3px;
+        font-size: 9px;
+        font-weight: 600;
+        line-height: 14px;
+    }
+    .passthrough-btn.normal {
+        color: #8a6aff;
+        border-color: #8a6aff;
     }
 
     .vis-btn {

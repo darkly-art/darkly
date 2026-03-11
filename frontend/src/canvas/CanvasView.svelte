@@ -39,11 +39,9 @@
             handle.resize(canvas.width, canvas.height);
             app.handle = handle;
 
-            // Demo setup: gradient background + noise filter + paint layer
+            // Demo setup: gradient background + paint layer
             const bg = handle.add_raster_layer();
             handle.fill_gradient(bg);
-
-            handle.add_filter_layer("noise", { amount: 0.3, resolution: 2 });
 
             const paintLayerId = handle.add_raster_layer();
             app.activeLayerId = paintLayerId;

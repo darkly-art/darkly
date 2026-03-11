@@ -1,13 +1,11 @@
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
-use crate::gpu::effect::EffectCache;
-use crate::gpu::filter::FilterRegistry;
 use crate::gpu::overlay::{OverlayPrimitive, ToolOverlay};
 use crate::gpu::staging::StagingRing;
 use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::ViewTransform;
 use crate::dirty::dirty_pixel_rect;
-use crate::document::Document;
+use crate::document::{Document, ROOT_ID};
 use crate::tile::{TileData, TILE_SIZE as TILE_SIZE_USIZE};
 use std::sync::LazyLock;
 
@@ -19,7 +17,7 @@ static BLANK_TILE: LazyLock<TileData> = LazyLock::new(TileData::default);
 static FULL_MASK_TILE: LazyLock<[u8; TILE_SIZE_USIZE * TILE_SIZE_USIZE]> =
     LazyLock::new(|| [255u8; TILE_SIZE_USIZE * TILE_SIZE_USIZE]);
 
-use crate::layer::{BlendMode, Layer, LayerId};
+use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
 use std::collections::HashMap;
 
 /// Timing helpers — compile to no-ops unless `cfg(feature = "profile")`.
@@ -40,16 +38,36 @@ mod perf {
     pub fn time_end(_: &str) {}
 }
 
-/// Pre-built GPU objects for a raster layer (P1 — created once, never per-frame).
+/// A pair of accumulator textures for ping-pong compositing within a group.
+struct AccumPair {
+    textures: [wgpu::Texture; 2],
+    views: [wgpu::TextureView; 2],
+}
+
+/// GPU state for a non-passthrough group (including root).
+/// Every group that composites its children to an isolated buffer owns one.
+struct GroupState {
+    /// Ping-pong accumulator pair for compositing children.
+    accum: AccumPair,
+    /// Tracks which accumulator is the current "source" (last written).
+    current_accum: usize,
+    /// Cached final composite result of this group's children.
+    composite_cache: wgpu::Texture,
+    composite_cache_view: wgpu::TextureView,
+    /// Child index through which the cache is valid.
+    /// None = cache is empty, must composite from scratch.
+    cache_valid_through: Option<usize>,
+    /// Uniform buffer holding opacity, blend_mode, show_mask for blending
+    /// this group's result into its parent.
+    uniform_buf: wgpu::Buffer,
+    /// Mask bind group for blending this group into parent.
+    mask_bind_group: wgpu::BindGroup,
+}
+
+/// Pre-built GPU objects for a raster layer.
 struct RasterLayerCache {
     /// Uniform buffer holding opacity + blend_mode + show_mask.
     uniform_buf: wgpu::Buffer,
-    /// Bind groups for both ping-pong directions (group 0).
-    /// bind_groups[src_accum_index]
-    bind_groups: [wgpu::BindGroup; 2],
-    /// Bind group that reads from the composite cache as background (group 0).
-    /// Used when resuming compositing from the cache (avoids cache→accum copy).
-    cache_source_bind_group: wgpu::BindGroup,
     /// Mask bind group (group 1). Points to real mask texture or 1x1 white fallback.
     mask_bind_group: wgpu::BindGroup,
 }
@@ -65,42 +83,31 @@ struct BlendUniforms {
 }
 
 pub struct Compositor {
-    /// Two accumulator textures for ping-pong rendering.
-    accum: [wgpu::Texture; 2],
-    accum_views: [wgpu::TextureView; 2],
-    current_accum: usize,
-
-    /// Cached composite result (GPU-resident). Stores the final composited
-    /// image so we can re-composite from a dirty layer upward (P3).
-    composite_cache: wgpu::Texture,
-    composite_cache_view: wgpu::TextureView,
-    /// Index of the lowest layer that the cache is valid through.
-    /// None = cache is empty, must composite from scratch.
-    cache_valid_through: Option<usize>,
+    /// Per-group GPU state. Every non-passthrough group (including root)
+    /// owns a GroupState with its own accumulators and composite cache.
+    /// Root's state lives at group_state[ROOT_ID].
+    group_state: HashMap<LayerId, GroupState>,
 
     /// Per-layer GPU textures (one per raster layer).
     layer_textures: HashMap<LayerId, LayerTexture>,
 
-    /// Per-layer mask GPU textures (R8Unorm, one per layer with a mask).
+    /// Per-layer/group mask GPU textures (R8Unorm, one per entity with a mask).
     mask_textures: HashMap<LayerId, LayerTexture>,
     /// Default 1x1 white mask texture (mask_alpha=1.0 = no effect).
     default_mask_view: wgpu::TextureView,
     /// Default mask bind group using the 1x1 white texture.
     default_mask_bind_group: wgpu::BindGroup,
 
-    /// Pre-built GPU objects per raster layer (P1).
+    /// Pre-built GPU objects per raster layer.
     raster_cache: HashMap<LayerId, RasterLayerCache>,
-    /// Pre-built GPU objects per filter layer (P1).
-    filter_cache: HashMap<LayerId, EffectCache>,
 
     blend_pipelines: BlendPipelines,
-    filter_registry: FilterRegistry,
 
     present_pipeline: wgpu::RenderPipeline,
     /// Present pipeline targeting the accum format (Rgba8Unorm) for veil input.
     present_to_veil_pipeline: wgpu::RenderPipeline,
     _present_bind_group_layout: wgpu::BindGroupLayout,
-    /// Present bind group that reads from composite_cache directly.
+    /// Present bind group that reads from root's composite_cache.
     present_cache_bind_group: wgpu::BindGroup,
     /// View transform uniform buffer for the present shader.
     view_uniform_buf: wgpu::Buffer,
@@ -108,12 +115,10 @@ pub struct Compositor {
     staging: StagingRing,
     sampler: wgpu::Sampler,
 
-    /// Dirty gate — false means nothing changed, skip compositing (P2).
+    /// Dirty gate — false means nothing changed, skip compositing.
     needs_composite: bool,
     /// When only the view transform changes, skip compositing and only re-present.
     needs_present: bool,
-    /// Track lowest dirty layer index for cache invalidation.
-    lowest_dirty_layer: Option<usize>,
 
     canvas_width: u32,
     canvas_height: u32,
@@ -142,6 +147,75 @@ pub struct Compositor {
 }
 
 impl Compositor {
+    /// Create an accumulator texture at padded canvas dimensions.
+    fn make_accum_texture(
+        device: &wgpu::Device,
+        padded_w: u32,
+        padded_h: u32,
+        label: &str,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: padded_w,
+                height: padded_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    /// Create a GroupState (accum pair + composite cache + uniforms).
+    fn create_group_state(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        padded_w: u32,
+        padded_h: u32,
+        default_mask_bind_group: &wgpu::BindGroup,
+        group_id: LayerId,
+    ) -> GroupState {
+        let (a0, v0) = Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id}-0"));
+        let (a1, v1) = Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id}-1"));
+        let (cache, cache_view) = Self::make_accum_texture(device, padded_w, padded_h, &format!("cache-{group_id}"));
+
+        let uniforms = BlendUniforms {
+            opacity: 1.0,
+            blend_mode: BlendMode::Normal as u32,
+            show_mask: 0,
+            _pad1: 0.0,
+        };
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("group-uniforms-{group_id}")),
+            size: std::mem::size_of::<BlendUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        GroupState {
+            accum: AccumPair {
+                textures: [a0, a1],
+                views: [v0, v1],
+            },
+            current_accum: 0,
+            composite_cache: cache,
+            composite_cache_view: cache_view,
+            cache_valid_through: None,
+            uniform_buf,
+            mask_bind_group: default_mask_bind_group.clone(),
+        }
+    }
+
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -160,33 +234,6 @@ impl Compositor {
 
         // Use Rgba8Unorm for accumulators (linear color space for blending)
         let accum_format = wgpu::TextureFormat::Rgba8Unorm;
-
-        let make_accum = |label: &str| -> (wgpu::Texture, wgpu::TextureView) {
-            let tex = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: padded_w,
-                    height: padded_h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: accum_format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            (tex, view)
-        };
-
-        let (accum0, accum_view0) = make_accum("accum-0");
-        let (accum1, accum_view1) = make_accum("accum-1");
-
-        let (composite_cache, composite_cache_view) = make_accum("composite-cache");
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("darkly-sampler"),
@@ -230,8 +277,6 @@ impl Compositor {
                 resource: wgpu::BindingResource::TextureView(&default_mask_view),
             }],
         });
-
-        let filter_registry = FilterRegistry::new();
 
         // View transform uniform buffer (present shader binding 2)
         let view_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -351,14 +396,19 @@ impl Compositor {
                 cache: None,
             });
 
-        // Present bind group that reads from composite cache
+        // Create root GroupState (root is always a non-passthrough group)
+        let root_state = Self::create_group_state(
+            device, queue, padded_w, padded_h, &default_mask_bind_group, ROOT_ID,
+        );
+
+        // Present bind group reads from root's composite cache
         let present_cache_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("present-bg-cache"),
             layout: &_present_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&composite_cache_view),
+                    resource: wgpu::BindingResource::TextureView(&root_state.composite_cache_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -370,6 +420,9 @@ impl Compositor {
                 },
             ],
         });
+
+        let mut group_state = HashMap::new();
+        group_state.insert(ROOT_ID, root_state);
 
         let staging = StagingRing::new();
 
@@ -385,20 +438,13 @@ impl Compositor {
         let transform_pass = crate::gpu::transform::TransformPass::new(device, accum_format);
 
         Compositor {
-            accum: [accum0, accum1],
-            accum_views: [accum_view0, accum_view1],
-            current_accum: 0,
-            composite_cache,
-            composite_cache_view,
-            cache_valid_through: None,
+            group_state,
             layer_textures: HashMap::new(),
             mask_textures: HashMap::new(),
             default_mask_view,
             default_mask_bind_group,
             raster_cache: HashMap::new(),
-            filter_cache: HashMap::new(),
             blend_pipelines,
-            filter_registry,
             present_pipeline,
             present_to_veil_pipeline,
             _present_bind_group_layout,
@@ -408,7 +454,6 @@ impl Compositor {
             sampler,
             needs_composite: true,
             needs_present: false,
-            lowest_dirty_layer: None,
             canvas_width: width,
             canvas_height: height,
             padded_width: padded_w,
@@ -422,8 +467,8 @@ impl Compositor {
         }
     }
 
-    /// Create GPU texture + uniform buffer + bind groups for a new raster layer.
-    /// Called once when a layer is added, never in the render loop (P1).
+    /// Create GPU texture + uniform buffer for a new raster layer.
+    /// Called once when a layer is added, never in the render loop.
     pub fn ensure_raster_layer(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, layer_id: LayerId) {
         if self.layer_textures.contains_key(&layer_id) {
             return;
@@ -444,105 +489,59 @@ impl Compositor {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
-        // Write initial uniforms
         queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
-        // Create bind groups for both ping-pong directions
-        let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("blend-bg-{layer_id}-{i}")),
-                layout: &self.blend_pipelines.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&self.accum_views[i]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&layer_tex.view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: uniform_buf.as_entire_binding(),
-                    },
-                ],
-            })
-        });
-
-        // Bind group that reads from the composite cache as background source.
-        // Used when this is the first layer after a cache resume, avoiding
-        // a fullscreen cache→accum texture copy.
-        let cache_source_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(&format!("blend-bg-{layer_id}-cache")),
-            layout: &self.blend_pipelines.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&self.composite_cache_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&layer_tex.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: uniform_buf.as_entire_binding(),
-                },
-            ],
-        });
-
-        // Default mask bind group (1x1 white — no masking effect)
         let mask_bind_group = self.default_mask_bind_group.clone();
 
         self.raster_cache.insert(
             layer_id,
             RasterLayerCache {
                 uniform_buf,
-                bind_groups,
-                cache_source_bind_group,
                 mask_bind_group,
             },
         );
         self.layer_textures.insert(layer_id, layer_tex);
     }
 
-    /// Create GPU objects for a new filter layer.
-    pub fn ensure_filter_layer(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        layer_id: LayerId,
-        filter: &dyn crate::gpu::filter::Filter,
-    ) {
-        if self.filter_cache.contains_key(&layer_id) {
+    /// Ensure a non-passthrough group has GPU state allocated.
+    /// Called when a group is created or switches from passthrough to normal.
+    pub fn ensure_group_state(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, group_id: LayerId) {
+        if self.group_state.contains_key(&group_id) {
             return;
         }
-
-        let cache = filter.create_cache(
-            device,
-            queue,
-            &self.accum_views,
-            &self.sampler,
-            self.canvas_width,
-            self.canvas_height,
+        let gs = Self::create_group_state(
+            device, queue, self.padded_width, self.padded_height,
+            &self.default_mask_bind_group, group_id,
         );
+        self.group_state.insert(group_id, gs);
+    }
 
-        self.filter_cache.insert(layer_id, cache);
+    /// Update a group's blend uniforms (opacity, blend_mode).
+    pub fn update_group_uniforms(
+        &mut self,
+        queue: &wgpu::Queue,
+        group_id: LayerId,
+        opacity: f32,
+        blend_mode: BlendMode,
+    ) {
+        if let Some(gs) = self.group_state.get(&group_id) {
+            let uniforms = BlendUniforms {
+                opacity,
+                blend_mode: blend_mode as u32,
+                show_mask: 0,
+                _pad1: 0.0,
+            };
+            queue.write_buffer(&gs.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        }
     }
 
     /// Mark that recompositing is needed.
     pub fn mark_dirty(&mut self) {
         self.needs_composite = true;
-        self.cache_valid_through = None;
+        // Invalidate all group caches
+        for gs in self.group_state.values_mut() {
+            gs.cache_valid_through = None;
+        }
     }
 
     /// Mark that only the present pass needs to re-run (view transform changed).
@@ -606,13 +605,6 @@ impl Compositor {
     pub fn update_view_transform(&mut self, queue: &wgpu::Queue, transform: &ViewTransform) {
         queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(transform));
         self.cached_view_transform = *transform;
-    }
-
-    /// Invalidate the composite cache.
-    /// There is only one cache texture which stores the full composite of all
-    /// layers, so any dirty layer means the entire cache is stale.
-    fn invalidate_cache_from(&mut self, _layer_index: usize) {
-        self.cache_valid_through = None;
     }
 
     /// Update a raster layer's uniforms (called when opacity, blend mode, or show_mask changes).
@@ -708,16 +700,6 @@ impl Compositor {
         }
     }
 
-    /// Access filter registry (immutable) for reading param defs.
-    pub fn filter_registry(&self) -> &FilterRegistry {
-        &self.filter_registry
-    }
-
-    /// Access filter registry for creating new filter instances.
-    pub fn filter_registry_mut(&mut self) -> &mut FilterRegistry {
-        &mut self.filter_registry
-    }
-
     pub fn accum_format(&self) -> wgpu::TextureFormat {
         wgpu::TextureFormat::Rgba8Unorm
     }
@@ -769,12 +751,13 @@ impl Compositor {
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
+        let root = self.group_state.get(&ROOT_ID).expect("root GroupState missing");
         self.transform_pass.set_floating_content(
             device,
             queue,
             &self.sampler,
-            &self.accum_views,
-            &self.composite_cache_view,
+            &root.accum.views,
+            &root.composite_cache_view,
             source_tiles,
             source_origin,
             source_width,
@@ -910,16 +893,6 @@ impl Compositor {
                     );
                 }
 
-                if let Some(idx) = doc.flat_layer_index(raster.id) {
-                    match self.lowest_dirty_layer {
-                        Some(current) => {
-                            if idx < current {
-                                self.lowest_dirty_layer = Some(idx);
-                            }
-                        }
-                        None => self.lowest_dirty_layer = Some(idx),
-                    }
-                }
                 self.needs_composite = true;
             }
         }
@@ -1011,19 +984,8 @@ impl Compositor {
                     );
                 }
 
-                if let Some(idx) = doc.flat_layer_index(raster.id) {
-                    match self.lowest_dirty_layer {
-                        Some(current) if idx < current => self.lowest_dirty_layer = Some(idx),
-                        None => self.lowest_dirty_layer = Some(idx),
-                        _ => {}
-                    }
-                }
                 self.needs_composite = true;
             }
-        }
-
-        if let Some(lowest) = self.lowest_dirty_layer.take() {
-            self.invalidate_cache_from(lowest);
         }
 
         if !self.needs_composite {
@@ -1036,249 +998,17 @@ impl Compositor {
             return false;
         }
 
-        let dirty_rect = dirty_pixel_rect(
+        let scissor = dirty_pixel_rect(
             doc.dirty.values(),
             self.canvas_width,
             self.canvas_height,
-        );
-        let (scissor_x, scissor_y, scissor_w, scissor_h) = dirty_rect
-            .unwrap_or((0, 0, self.canvas_width, self.canvas_height));
-
-        let start_layer = match self.cache_valid_through {
-            Some(valid_through) => valid_through + 1,
-            None => 0,
-        };
-        let resuming_from_cache = start_layer > 0;
-        let mut use_cache_source = resuming_from_cache;
+        ).unwrap_or((0, 0, self.canvas_width, self.canvas_height));
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("composite"),
         });
 
-        if !resuming_from_cache {
-            {
-                let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("clear-accum"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &self.accum_views[0],
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    ..Default::default()
-                });
-            }
-            self.current_accum = 0;
-        }
-
-        let flat = doc.flat_layers();
-        let num_layers = flat.len();
-        let mut wrote_to_cache = false;
-
-        for layer_idx in start_layer..num_layers {
-            let layer = flat[layer_idx];
-            if !layer.visible() {
-                continue;
-            }
-
-            let is_last_layer = layer_idx == num_layers - 1;
-
-            match layer {
-                Layer::Raster(raster) => {
-                    let cache = match self.raster_cache.get(&raster.id) {
-                        Some(c) => c,
-                        None => continue,
-                    };
-
-                    // Check if floating content targets this layer — if so,
-                    // there's one more pass coming, so don't write to cache yet.
-                    let has_floating = self.transform_pass.targets_layer(raster.id);
-                    let is_raster_last = is_last_layer && !has_floating;
-
-                    let (dst_view, bind_group) = if use_cache_source {
-                        use_cache_source = false;
-                        let dst = 0;
-                        self.current_accum = dst;
-                        (&self.accum_views[dst], &cache.cache_source_bind_group)
-                    } else if is_raster_last {
-                        wrote_to_cache = true;
-                        let src = self.current_accum;
-                        (&self.composite_cache_view, &cache.bind_groups[src])
-                    } else {
-                        let src = self.current_accum;
-                        let dst = 1 - src;
-                        self.current_accum = dst;
-                        (&self.accum_views[dst], &cache.bind_groups[src])
-                    };
-
-                    {
-                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("blend-raster"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: dst_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            ..Default::default()
-                        });
-                        rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-                        rpass.set_pipeline(self.blend_pipelines.pipeline());
-                        rpass.set_bind_group(0, bind_group, &[]);
-                        rpass.set_bind_group(1, &cache.mask_bind_group, &[]);
-                        rpass.draw(0..3, 0..1);
-                    }
-
-                    // Floating content pass: composite transformed source on
-                    // top of the layer we just blended.
-                    if let Some(ts) = &self.transform_pass.active {
-                        if ts.target_layer == raster.id {
-                            let src = self.current_accum;
-                            let fc_dst_view = if is_last_layer {
-                                wrote_to_cache = true;
-                                &self.composite_cache_view
-                            } else {
-                                let dst = 1 - src;
-                                self.current_accum = dst;
-                                &self.accum_views[dst]
-                            };
-
-                            {
-                                let mut rpass = encoder.begin_render_pass(
-                                    &wgpu::RenderPassDescriptor {
-                                        label: Some("transform-blend"),
-                                        color_attachments: &[Some(
-                                            wgpu::RenderPassColorAttachment {
-                                                view: fc_dst_view,
-                                                resolve_target: None,
-                                                depth_slice: None,
-                                                ops: wgpu::Operations {
-                                                    load: wgpu::LoadOp::Load,
-                                                    store: wgpu::StoreOp::Store,
-                                                },
-                                            },
-                                        )],
-                                        ..Default::default()
-                                    },
-                                );
-                                rpass.set_scissor_rect(
-                                    scissor_x, scissor_y, scissor_w, scissor_h,
-                                );
-                                rpass.set_pipeline(&self.transform_pass.pipeline);
-                                rpass.set_bind_group(0, &ts.bind_groups[src], &[]);
-                                rpass.draw(0..3, 0..1);
-                            }
-                        }
-                    }
-                }
-                Layer::Filter(fl) => {
-                    let cache = match self.filter_cache.get(&fl.id) {
-                        Some(c) => c,
-                        None => continue,
-                    };
-
-                    if use_cache_source {
-                        use_cache_source = false;
-                        let origin = wgpu::Origin3d {
-                            x: scissor_x,
-                            y: scissor_y,
-                            z: 0,
-                        };
-                        encoder.copy_texture_to_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &self.composite_cache,
-                                mip_level: 0,
-                                origin,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::TexelCopyTextureInfo {
-                                texture: &self.accum[0],
-                                mip_level: 0,
-                                origin,
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::Extent3d {
-                                width: scissor_w,
-                                height: scissor_h,
-                                depth_or_array_layers: 1,
-                            },
-                        );
-                        self.current_accum = 0;
-                    }
-
-                    for pass in 0..fl.filter.pass_count() as usize {
-                        let src = self.current_accum;
-                        let dst = 1 - src;
-
-                        let is_last_pass = pass == fl.filter.pass_count() as usize - 1;
-                        let dst_view = if is_last_layer && is_last_pass {
-                            wrote_to_cache = true;
-                            &self.composite_cache_view
-                        } else {
-                            self.current_accum = dst;
-                            &self.accum_views[dst]
-                        };
-
-                        {
-                            let mut rpass =
-                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("filter-pass"),
-                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: dst_view,
-                                        resolve_target: None,
-                                        depth_slice: None,
-                                        ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
-                                            store: wgpu::StoreOp::Store,
-                                        },
-                                    })],
-                                    ..Default::default()
-                                });
-                            rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-                            rpass.set_pipeline(fl.filter.pipeline());
-                            rpass.set_bind_group(0, &cache.bind_groups[pass][src], &[]);
-                            rpass.draw(0..3, 0..1);
-                        }
-                    }
-                }
-            }
-        }
-
-        if !wrote_to_cache && start_layer < num_layers {
-            let origin = wgpu::Origin3d {
-                x: scissor_x,
-                y: scissor_y,
-                z: 0,
-            };
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.accum[self.current_accum],
-                    mip_level: 0,
-                    origin,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.composite_cache,
-                    mip_level: 0,
-                    origin,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: scissor_w,
-                    height: scissor_h,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-        if start_layer < num_layers {
-            self.cache_valid_through = Some(num_layers.saturating_sub(1));
-        }
+        self.compose_group(&mut encoder, device, ROOT_ID, &doc.root.children, scissor);
 
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -1290,6 +1020,259 @@ impl Compositor {
         }
         self.needs_composite = false;
         true
+    }
+
+    /// Create a dynamic blend bind group for compositing a layer into a group.
+    fn create_blend_bind_group(
+        &self,
+        device: &wgpu::Device,
+        bg_view: &wgpu::TextureView,
+        layer_view: &wgpu::TextureView,
+        uniform_buf: &wgpu::Buffer,
+        label: &str,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &self.blend_pipelines.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(bg_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(layer_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        })
+    }
+
+    /// Recursively composite a group's children into its GroupState.
+    ///
+    /// For passthrough groups, children are inlined into the parent's accum
+    /// (same as the old flat loop). For normal groups, children composite
+    /// into the group's own accum pair, then the result is blended into the
+    /// parent.
+    fn compose_group(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        group_id: LayerId,
+        children: &[LayerNode],
+        scissor: (u32, u32, u32, u32),
+    ) {
+        let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
+
+        // Reset group's accum state for a fresh composite.
+        {
+            let gs = self.group_state.get_mut(&group_id).expect("GroupState missing");
+            gs.current_accum = 0;
+            gs.cache_valid_through = None;
+            let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear-accum"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &gs.accum.views[0],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+
+        // Inline children into this group's accumulators.
+        self.compose_children(encoder, device, group_id, children, scissor);
+
+        // Copy final accum to this group's composite cache.
+        let gs = self.group_state.get(&group_id).expect("GroupState missing");
+        let src_accum = gs.current_accum;
+        let origin = wgpu::Origin3d { x: scissor_x, y: scissor_y, z: 0 };
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &gs.accum.textures[src_accum],
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &gs.composite_cache,
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: scissor_w,
+                height: scissor_h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Composite a list of children into the parent group's accumulators.
+    /// Handles passthrough groups by recursing with the same parent group_id.
+    fn compose_children(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        parent_group: LayerId,
+        children: &[LayerNode],
+        scissor: (u32, u32, u32, u32),
+    ) {
+        let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
+
+        for node in children {
+            if !node.visible() {
+                continue;
+            }
+            match node {
+                LayerNode::Layer(Layer::Raster(raster)) => {
+                    let layer_view = match self.layer_textures.get(&raster.id) {
+                        Some(t) => &t.view,
+                        None => continue,
+                    };
+                    let (uniform_buf_ptr, mask_bg) = match self.raster_cache.get(&raster.id) {
+                        Some(c) => (&c.uniform_buf, &c.mask_bind_group),
+                        None => continue,
+                    };
+
+                    // Ping-pong: read from current accum, write to the other.
+                    let gs = self.group_state.get_mut(&parent_group).unwrap();
+                    let src = gs.current_accum;
+                    let dst = 1 - src;
+                    gs.current_accum = dst;
+
+                    let bind_group = self.create_blend_bind_group(
+                        device,
+                        &self.group_state[&parent_group].accum.views[src],
+                        layer_view,
+                        uniform_buf_ptr,
+                        "blend-raster",
+                    );
+
+                    {
+                        let gs = &self.group_state[&parent_group];
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("blend-raster"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &gs.accum.views[dst],
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            ..Default::default()
+                        });
+                        rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
+                        rpass.set_pipeline(self.blend_pipelines.pipeline());
+                        rpass.set_bind_group(0, &bind_group, &[]);
+                        rpass.set_bind_group(1, mask_bg, &[]);
+                        rpass.draw(0..3, 0..1);
+                    }
+
+                    // Floating content pass: composite transformed source on
+                    // top of the layer we just blended.
+                    if let Some(ts) = &self.transform_pass.active {
+                        if ts.target_layer == raster.id {
+                            let gs = self.group_state.get_mut(&parent_group).unwrap();
+                            let src = gs.current_accum;
+                            let dst = 1 - src;
+                            gs.current_accum = dst;
+
+                            let gs = &self.group_state[&parent_group];
+                            let mut rpass = encoder.begin_render_pass(
+                                &wgpu::RenderPassDescriptor {
+                                    label: Some("transform-blend"),
+                                    color_attachments: &[Some(
+                                        wgpu::RenderPassColorAttachment {
+                                            view: &gs.accum.views[dst],
+                                            resolve_target: None,
+                                            depth_slice: None,
+                                            ops: wgpu::Operations {
+                                                load: wgpu::LoadOp::Load,
+                                                store: wgpu::StoreOp::Store,
+                                            },
+                                        },
+                                    )],
+                                    ..Default::default()
+                                },
+                            );
+                            rpass.set_scissor_rect(
+                                scissor_x, scissor_y, scissor_w, scissor_h,
+                            );
+                            rpass.set_pipeline(&self.transform_pass.pipeline);
+                            rpass.set_bind_group(0, &ts.bind_groups[src], &[]);
+                            rpass.draw(0..3, 0..1);
+                        }
+                    }
+                }
+
+                LayerNode::Group(g) => {
+                    if g.passthrough {
+                        // Passthrough: inline children into same parent accumulators.
+                        self.compose_children(encoder, device, parent_group, &g.children, scissor);
+                    } else {
+                        // Normal group: composite into its own isolated buffer,
+                        // then blend the result into the parent.
+                        // GroupState must be pre-created via ensure_group_state().
+                        if !self.group_state.contains_key(&g.id) {
+                            continue;
+                        }
+                        self.compose_group(encoder, device, g.id, &g.children, scissor);
+
+                        // Blend group's composite cache into parent's accumulators.
+                        let gs_parent = self.group_state.get_mut(&parent_group).unwrap();
+                        let src = gs_parent.current_accum;
+                        let dst = 1 - src;
+                        gs_parent.current_accum = dst;
+
+                        let gs_child = &self.group_state[&g.id];
+                        let bind_group = self.create_blend_bind_group(
+                            device,
+                            &self.group_state[&parent_group].accum.views[src],
+                            &gs_child.composite_cache_view,
+                            &gs_child.uniform_buf,
+                            "blend-group",
+                        );
+
+                        let gs_parent = &self.group_state[&parent_group];
+                        let gs_child = &self.group_state[&g.id];
+                        {
+                            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("blend-group"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &gs_parent.accum.views[dst],
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                ..Default::default()
+                            });
+                            rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
+                            rpass.set_pipeline(self.blend_pipelines.pipeline());
+                            rpass.set_bind_group(0, &bind_group, &[]);
+                            rpass.set_bind_group(1, &gs_child.mask_bind_group, &[]);
+                            rpass.draw(0..3, 0..1);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Composite layers if needed, then present to an arbitrary texture view.

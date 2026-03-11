@@ -29,8 +29,6 @@ pub enum LayerInfo {
         has_mask: bool, mask_enabled: bool, show_mask: bool,
     },
     #[serde(rename_all = "camelCase")]
-    Filter { id: f64, name: String, visible: bool },
-    #[serde(rename_all = "camelCase")]
     Group {
         id: f64, name: String, visible: bool, collapsed: bool, passthrough: bool,
         opacity: f32, blend_mode: u32, children: Vec<LayerInfo>,
@@ -195,29 +193,6 @@ impl DarklyEngine {
         id
     }
 
-    pub fn add_filter_layer(&mut self, filter_type: &str, params: &[ParamValue]) -> u64 {
-        let format = self.compositor.accum_format();
-        let filter = self.compositor.filter_registry_mut().create_filter(
-            filter_type, params, &self.gpu.device, format,
-        );
-
-        let id = self.doc.add_filter_layer(filter.clone_boxed());
-
-        if let Some(Layer::Filter(f)) = self.doc.layer(id) {
-            self.compositor.ensure_filter_layer(
-                &self.gpu.device, &self.gpu.queue, id, f.filter.as_ref(),
-            );
-        }
-
-        self.compositor.mark_dirty();
-
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
-
-        id
-    }
-
     pub fn remove_layer(&mut self, layer_id: u64) -> Result<(), String> {
         if self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());
@@ -272,6 +247,12 @@ impl DarklyEngine {
             self.compositor.update_raster_uniforms(
                 &self.gpu.queue, layer_id, r.opacity, r.blend_mode,
             );
+        } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
+            if !g.passthrough {
+                self.compositor.update_group_uniforms(
+                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode,
+                );
+            }
         }
         self.compositor.mark_dirty();
 
@@ -301,6 +282,12 @@ impl DarklyEngine {
             self.compositor.update_raster_uniforms(
                 &self.gpu.queue, layer_id, r.opacity, r.blend_mode,
             );
+        } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
+            if !g.passthrough {
+                self.compositor.update_group_uniforms(
+                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode,
+                );
+            }
         }
         self.compositor.mark_dirty();
 
@@ -318,12 +305,9 @@ impl DarklyEngine {
         };
 
         match self.doc.find_node_mut(layer_id) {
-            Some(LayerNode::Layer(l)) => match l {
-                Layer::Raster(r) => r.visible = visible,
-                Layer::Filter(f) => f.visible = visible,
-            },
+            Some(LayerNode::Layer(Layer::Raster(r))) => r.visible = visible,
             Some(LayerNode::Group(g)) => g.visible = visible,
-            None => return,
+            _ => return,
         }
         self.compositor.mark_dirty();
 
@@ -358,6 +342,30 @@ impl DarklyEngine {
         if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
             g.collapsed = collapsed;
         }
+    }
+
+    pub fn set_group_passthrough(&mut self, group_id: u64, passthrough: bool) {
+        let old = match self.doc.find_node(group_id) {
+            Some(LayerNode::Group(g)) => g.passthrough,
+            _ => return,
+        };
+        if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
+            g.passthrough = passthrough;
+        }
+        if !passthrough {
+            self.compositor.ensure_group_state(&self.gpu.device, &self.gpu.queue, group_id);
+            if let Some(LayerNode::Group(g)) = self.doc.find_node(group_id) {
+                self.compositor.update_group_uniforms(
+                    &self.gpu.queue, group_id, g.opacity, g.blend_mode,
+                );
+            }
+        }
+        self.compositor.mark_dirty();
+        self.undo_stack.push(Box::new(PropertyAction::new(
+            group_id,
+            Property::Passthrough(old),
+            Property::Passthrough(passthrough),
+        )));
     }
 
     // --- Layer Masks ---
@@ -471,7 +479,7 @@ impl DarklyEngine {
 
         // Mark all mask tiles dirty for upload
         let mask_coords: Vec<(i32, i32)> = self.doc.layer(layer_id)
-            .and_then(|l| match l { Layer::Raster(r) => r.mask.as_ref(), _ => None })
+            .and_then(|l| match l { Layer::Raster(r) => r.mask.as_ref() })
             .map(|m| m.iter().map(|((tx, ty), _)| (tx, ty)).collect())
             .unwrap_or_default();
         let dirty = self.doc.mask_dirty.entry(layer_id).or_default();
@@ -729,11 +737,6 @@ impl DarklyEngine {
         list
     }
 
-    /// Get the parameter definitions for a filter type.
-    pub fn filter_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.compositor.filter_registry().param_defs(type_id)
-    }
-
     /// Get the parameter definitions for a veil type.
     pub fn veil_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.compositor.veil_chain().registry().param_defs(type_id)
@@ -961,7 +964,7 @@ impl DarklyEngine {
 
         // Mark all written tiles dirty for GPU upload.
         let tile_keys: Vec<(i32, i32)> = self.doc.layer(id)
-            .and_then(|l| match l { Layer::Raster(r) => Some(r), _ => None })
+            .and_then(|l| match l { Layer::Raster(r) => Some(r) })
             .map(|r| r.tiles.iter().map(|(k, _)| k).collect())
             .unwrap_or_default();
         let dirty = self.doc.dirty.entry(id).or_default();
@@ -1358,6 +1361,17 @@ impl DarklyEngine {
                 }
             }
         }
+
+        // Sync non-passthrough group state
+        let groups: Vec<(u64, f32, BlendMode)> = self.doc.all_groups()
+            .iter()
+            .filter(|g| !g.passthrough)
+            .map(|g| (g.id, g.opacity, g.blend_mode))
+            .collect();
+        for (id, opacity, blend_mode) in groups {
+            self.compositor.ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
+            self.compositor.update_group_uniforms(&self.gpu.queue, id, opacity, blend_mode);
+        }
     }
 }
 
@@ -1373,11 +1387,6 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
                 has_mask: r.mask.is_some(),
                 mask_enabled: r.mask_enabled,
                 show_mask: r.show_mask,
-            },
-            Layer::Filter(f) => LayerInfo::Filter {
-                id: f.id as f64,
-                name: f.filter.type_id().to_string(),
-                visible: f.visible,
             },
         },
         LayerNode::Group(g) => LayerInfo::Group {

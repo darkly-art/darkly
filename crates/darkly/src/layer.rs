@@ -1,4 +1,3 @@
-use crate::gpu::filter::Filter;
 use crate::tile::{AlphaMask, TileGrid};
 
 pub type LayerId = u64;
@@ -53,12 +52,6 @@ impl RasterLayer {
             show_mask: false,
         }
     }
-}
-
-pub struct FilterLayer {
-    pub id: LayerId,
-    pub filter: Box<dyn Filter>,
-    pub visible: bool,
 }
 
 pub struct LayerGroup {
@@ -118,21 +111,18 @@ impl LayerNode {
 
 pub enum Layer {
     Raster(RasterLayer),
-    Filter(FilterLayer),
 }
 
 impl Layer {
     pub fn id(&self) -> LayerId {
         match self {
             Layer::Raster(r) => r.id,
-            Layer::Filter(f) => f.id,
         }
     }
 
     pub fn visible(&self) -> bool {
         match self {
             Layer::Raster(r) => r.visible,
-            Layer::Filter(f) => f.visible,
         }
     }
 }

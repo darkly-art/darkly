@@ -190,7 +190,15 @@ fn collect_raster_layers<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a RasterLay
         match node {
             LayerNode::Layer(Layer::Raster(r)) => out.push(r),
             LayerNode::Group(g) => collect_raster_layers(&g.children, out),
-            _ => {}
+        }
+    }
+}
+
+fn collect_groups<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a LayerGroup>) {
+    for node in nodes {
+        if let LayerNode::Group(g) = node {
+            out.push(g);
+            collect_groups(&g.children, out);
         }
     }
 }
@@ -241,7 +249,6 @@ fn collect_raster_ids(node: &LayerNode, out: &mut Vec<LayerId>) {
                 collect_raster_ids(child, out);
             }
         }
-        _ => {}
     }
 }
 
@@ -299,17 +306,6 @@ impl Document {
         id
     }
 
-    pub fn add_filter_layer(&mut self, filter: Box<dyn crate::gpu::filter::Filter>) -> LayerId {
-        let id = self.alloc_id();
-        let layer = FilterLayer {
-            id,
-            filter,
-            visible: true,
-        };
-        self.root.children.push(LayerNode::Layer(Layer::Filter(layer)));
-        id
-    }
-
     /// Add a new empty group at the root top.
     pub fn add_group(&mut self) -> LayerId {
         let id = self.alloc_id();
@@ -331,6 +327,12 @@ impl Document {
     pub fn all_raster_layers(&self) -> Vec<&RasterLayer> {
         let mut out = Vec::new();
         collect_raster_layers(&self.root.children, &mut out);
+        out
+    }
+
+    pub fn all_groups(&self) -> Vec<&LayerGroup> {
+        let mut out = Vec::new();
+        collect_groups(&self.root.children, &mut out);
         out
     }
 
