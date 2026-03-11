@@ -1,7 +1,7 @@
 use crate::dirty::DirtyRegion;
 use crate::layer::*;
-use crate::paint::PaintTarget;
-use crate::tile::{AlphaMask, Memento, Rgba, TILE_SIZE, TileGrid};
+use crate::paint::{MaskPaintTarget, PaintTarget};
+use crate::tile::{AlphaF32, AlphaMask, Memento, Rgba, TILE_SIZE, TileGrid};
 use std::collections::HashMap;
 
 pub enum SelectionMode {
@@ -28,6 +28,8 @@ pub struct Document {
     pub width: u32,
     pub height: u32,
     pub dirty: HashMap<LayerId, DirtyRegion>,
+    /// Dirty regions for layer mask tiles (separate from layer tile dirty).
+    pub mask_dirty: HashMap<LayerId, DirtyRegion>,
     pub selection: Option<AlphaMask>,
     next_id: LayerId,
 }
@@ -244,6 +246,7 @@ impl Document {
             width,
             height,
             dirty: HashMap::new(),
+            mask_dirty: HashMap::new(),
             selection: None,
             next_id: 1,
         }
@@ -744,6 +747,189 @@ impl Document {
                 }
             }
         }
+    }
+
+    // --- Layer Mask Operations ---
+
+    /// Add a white (reveal-all) mask to a raster layer. Returns the previous mask state.
+    pub fn add_mask(&mut self, layer_id: LayerId) -> Option<AlphaMask> {
+        let raster = find_raster_in_mut(&mut self.root.children, layer_id)?;
+        let old = raster.mask.take();
+        raster.mask = Some(AlphaMask::new()); // empty store; get_or_create_full provides 1.0 default
+        raster.mask_enabled = true;
+        raster.show_mask = false;
+        self.mask_dirty.entry(layer_id).or_insert_with(DirtyRegion::new);
+        old
+    }
+
+    /// Remove the mask from a raster layer. Returns the removed mask.
+    pub fn remove_mask(&mut self, layer_id: LayerId) -> Option<AlphaMask> {
+        let raster = find_raster_in_mut(&mut self.root.children, layer_id)?;
+        let old = raster.mask.take();
+        raster.mask_enabled = true;
+        raster.show_mask = false;
+        self.mask_dirty.remove(&layer_id);
+        old
+    }
+
+    pub fn set_mask_enabled(&mut self, layer_id: LayerId, enabled: bool) {
+        if let Some(LayerNode::Layer(Layer::Raster(r))) = find_node_in_mut(&mut self.root.children, layer_id) {
+            r.mask_enabled = enabled;
+        }
+    }
+
+    pub fn set_show_mask(&mut self, layer_id: LayerId, show: bool) {
+        if let Some(LayerNode::Layer(Layer::Raster(r))) = find_node_in_mut(&mut self.root.children, layer_id) {
+            r.show_mask = show;
+        }
+    }
+
+    /// Begin recording mask tile changes for undo.
+    pub fn begin_mask_transaction(&mut self, layer_id: LayerId) {
+        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
+            if let Some(mask) = &mut r.mask {
+                mask.begin_transaction();
+            }
+        }
+    }
+
+    /// Commit mask transaction and return the memento if tiles changed.
+    pub fn commit_mask_transaction(&mut self, layer_id: LayerId) -> Option<Memento<AlphaF32>> {
+        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
+            if let Some(mask) = &mut r.mask {
+                return mask.commit_transaction();
+            }
+        }
+        None
+    }
+
+    /// Borrow-split to get a MaskPaintTarget for the given layer's mask.
+    fn make_mask_paint_target<'a>(
+        layers: &'a mut Vec<LayerNode>,
+        mask_dirty: &'a mut HashMap<LayerId, DirtyRegion>,
+        selection: Option<&'a AlphaMask>,
+        layer_id: LayerId,
+    ) -> Option<MaskPaintTarget<'a>> {
+        let raster = find_raster_in_mut(layers, layer_id)?;
+        let mask = raster.mask.as_mut()?;
+        let dirty_region = mask_dirty.get_mut(&layer_id)?;
+        Some(MaskPaintTarget::new(mask, dirty_region, selection))
+    }
+
+    /// Paint a circle on the layer mask (value=0.0 for black/hide, 1.0 for white/reveal).
+    pub fn paint_mask_circle(
+        &mut self,
+        layer_id: LayerId,
+        cx: f32, cy: f32, radius: f32,
+        value: f32,
+    ) {
+        let mut target = match Self::make_mask_paint_target(
+            &mut self.root.children, &mut self.mask_dirty, self.selection.as_ref(), layer_id,
+        ) {
+            Some(t) => t,
+            None => return,
+        };
+
+        let r2 = radius * radius;
+        let x_min = (cx - radius).floor() as i32;
+        let x_max = (cx + radius).ceil() as i32;
+        let y_min = (cy - radius).floor() as i32;
+        let y_max = (cy + radius).ceil() as i32;
+
+        for py in y_min..y_max {
+            for px in x_min..x_max {
+                let fpx = px as f32 + 0.5;
+                let fpy = py as f32 + 0.5;
+                let dx = fpx - cx;
+                let dy = fpy - cy;
+                if dx * dx + dy * dy <= r2 {
+                    target.paint(px, py, value, 1.0);
+                }
+            }
+        }
+    }
+
+    /// Erase a circle on the layer mask (blend toward 0.0 = hide).
+    pub fn erase_mask_circle(
+        &mut self,
+        layer_id: LayerId,
+        cx: f32, cy: f32, radius: f32,
+    ) {
+        self.paint_mask_circle(layer_id, cx, cy, radius, 0.0);
+    }
+
+    /// Convert the current selection to a layer mask (replaces existing mask).
+    pub fn selection_to_mask(&mut self, layer_id: LayerId) {
+        let sel = match &self.selection {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
+            r.mask = Some(sel);
+            r.mask_enabled = true;
+            r.show_mask = false;
+            self.mask_dirty.entry(layer_id).or_insert_with(DirtyRegion::new);
+        }
+    }
+
+    /// Convert a layer mask to a selection (replaces current selection).
+    pub fn mask_to_selection(&mut self, layer_id: LayerId) {
+        let mask_clone = match self.layer(layer_id) {
+            Some(Layer::Raster(r)) => r.mask.clone(),
+            _ => None,
+        };
+        if let Some(mask) = mask_clone {
+            self.selection = Some(mask);
+        }
+    }
+
+    /// Destructively apply the mask to the layer's alpha channel, then remove the mask.
+    /// Each pixel's alpha is multiplied by the mask value.
+    pub fn apply_mask_destructive(&mut self, layer_id: LayerId) {
+        // First, collect the mask tile data we need
+        let mask_tiles: Vec<((i32, i32), Vec<f32>)> = match self.layer(layer_id) {
+            Some(Layer::Raster(r)) => match &r.mask {
+                Some(mask) => mask.iter().map(|((tx, ty), tile)| {
+                    ((tx, ty), tile.data().0.to_vec())
+                }).collect(),
+                None => return,
+            },
+            _ => return,
+        };
+
+        let raster = match find_raster_in_mut(&mut self.root.children, layer_id) {
+            Some(r) => r,
+            None => return,
+        };
+
+        let dirty = self.dirty.entry(layer_id).or_insert_with(DirtyRegion::new);
+
+        // Multiply layer alpha by mask value for tiles that exist in the mask
+        for ((tx, ty), mask_data) in &mask_tiles {
+            if let Some(tile) = raster.tiles.get(tx.clone(), ty.clone()) {
+                let _ = tile; // just check existence
+            } else {
+                continue; // no layer tile = nothing to multiply
+            }
+            let layer_tile = raster.tiles.get_or_create(*tx, *ty);
+            let data = layer_tile.write();
+            for ly in 0..TILE_SIZE {
+                for lx in 0..TILE_SIZE {
+                    let mask_val = mask_data[ly * TILE_SIZE + lx];
+                    if mask_val < 1.0 {
+                        let px = data.pixel_mut(lx, ly);
+                        px[3] = (px[3] as f32 * mask_val).round() as u8;
+                    }
+                }
+            }
+            dirty.mark(*tx, *ty);
+        }
+
+        // Remove the mask
+        raster.mask = None;
+        raster.mask_enabled = true;
+        raster.show_mask = false;
+        self.mask_dirty.remove(&layer_id);
     }
 
     /// Fill a raster layer with a horizontal gradient (demo helper).

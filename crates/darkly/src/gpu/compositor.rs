@@ -8,12 +8,17 @@ use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::ViewTransform;
 use crate::dirty::dirty_pixel_rect;
 use crate::document::Document;
-use crate::tile::TileData;
+use crate::tile::{TileData, TILE_SIZE as TILE_SIZE_USIZE};
 use std::sync::LazyLock;
 
 /// Blank (fully transparent) tile data uploaded when a tile has been removed
 /// from the grid (e.g. by undo) but the GPU texture still has stale data.
 static BLANK_TILE: LazyLock<TileData> = LazyLock::new(TileData::default);
+
+/// Fully opaque (255) mask tile data for uploading full mask tiles.
+static FULL_MASK_TILE: LazyLock<[u8; TILE_SIZE_USIZE * TILE_SIZE_USIZE]> =
+    LazyLock::new(|| [255u8; TILE_SIZE_USIZE * TILE_SIZE_USIZE]);
+
 use crate::layer::{BlendMode, Layer, LayerId};
 use std::collections::HashMap;
 
@@ -37,14 +42,16 @@ mod perf {
 
 /// Pre-built GPU objects for a raster layer (P1 — created once, never per-frame).
 struct RasterLayerCache {
-    /// Uniform buffer holding opacity + blend_mode.
+    /// Uniform buffer holding opacity + blend_mode + show_mask.
     uniform_buf: wgpu::Buffer,
-    /// Bind groups for both ping-pong directions.
+    /// Bind groups for both ping-pong directions (group 0).
     /// bind_groups[src_accum_index]
     bind_groups: [wgpu::BindGroup; 2],
-    /// Bind group that reads from the composite cache as background.
+    /// Bind group that reads from the composite cache as background (group 0).
     /// Used when resuming compositing from the cache (avoids cache→accum copy).
     cache_source_bind_group: wgpu::BindGroup,
+    /// Mask bind group (group 1). Points to real mask texture or 1x1 white fallback.
+    mask_bind_group: wgpu::BindGroup,
 }
 
 /// Uniforms for raster layer compositing.
@@ -53,7 +60,7 @@ struct RasterLayerCache {
 struct BlendUniforms {
     opacity: f32,
     blend_mode: u32,
-    _pad0: f32,
+    show_mask: u32,
     _pad1: f32,
 }
 
@@ -73,6 +80,13 @@ pub struct Compositor {
 
     /// Per-layer GPU textures (one per raster layer).
     layer_textures: HashMap<LayerId, LayerTexture>,
+
+    /// Per-layer mask GPU textures (R8Unorm, one per layer with a mask).
+    mask_textures: HashMap<LayerId, LayerTexture>,
+    /// Default 1x1 white mask texture (mask_alpha=1.0 = no effect).
+    default_mask_view: wgpu::TextureView,
+    /// Default mask bind group using the 1x1 white texture.
+    default_mask_bind_group: wgpu::BindGroup,
 
     /// Pre-built GPU objects per raster layer (P1).
     raster_cache: HashMap<LayerId, RasterLayerCache>,
@@ -176,6 +190,38 @@ impl Compositor {
         });
 
         let blend_pipelines = BlendPipelines::new(device, accum_format);
+
+        // Create default 1x1 white mask texture (mask_alpha=1.0 = no effect)
+        let default_mask_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("default-mask-1x1"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &default_mask_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[255u8],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(1), rows_per_image: None },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let default_mask_view = default_mask_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let default_mask_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("default-mask-bg"),
+            layout: &blend_pipelines.mask_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&default_mask_view),
+            }],
+        });
 
         let filter_registry = FilterRegistry::new();
 
@@ -336,6 +382,9 @@ impl Compositor {
             composite_cache_view,
             cache_valid_through: None,
             layer_textures: HashMap::new(),
+            mask_textures: HashMap::new(),
+            default_mask_view,
+            default_mask_bind_group,
             raster_cache: HashMap::new(),
             filter_cache: HashMap::new(),
             blend_pipelines,
@@ -372,7 +421,7 @@ impl Compositor {
         let uniforms = BlendUniforms {
             opacity: 1.0,
             blend_mode: BlendMode::Normal as u32,
-            _pad0: 0.0,
+            show_mask: 0,
             _pad1: 0.0,
         };
 
@@ -438,12 +487,16 @@ impl Compositor {
             ],
         });
 
+        // Default mask bind group (1x1 white — no masking effect)
+        let mask_bind_group = self.default_mask_bind_group.clone();
+
         self.raster_cache.insert(
             layer_id,
             RasterLayerCache {
                 uniform_buf,
                 bind_groups,
                 cache_source_bind_group,
+                mask_bind_group,
             },
         );
         self.layer_textures.insert(layer_id, layer_tex);
@@ -549,7 +602,7 @@ impl Compositor {
         self.cache_valid_through = None;
     }
 
-    /// Update a raster layer's uniforms (called when opacity or blend mode changes).
+    /// Update a raster layer's uniforms (called when opacity, blend mode, or show_mask changes).
     pub fn update_raster_uniforms(
         &mut self,
         queue: &wgpu::Queue,
@@ -557,14 +610,86 @@ impl Compositor {
         opacity: f32,
         blend_mode: BlendMode,
     ) {
+        self.update_raster_uniforms_full(queue, layer_id, opacity, blend_mode, false);
+    }
+
+    /// Update a raster layer's uniforms including the show_mask flag.
+    pub fn update_raster_uniforms_full(
+        &mut self,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        opacity: f32,
+        blend_mode: BlendMode,
+        show_mask: bool,
+    ) {
         if let Some(cache) = self.raster_cache.get(&layer_id) {
             let uniforms = BlendUniforms {
                 opacity,
                 blend_mode: blend_mode as u32,
-                _pad0: 0.0,
+                show_mask: show_mask as u32,
                 _pad1: 0.0,
             };
             queue.write_buffer(&cache.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        }
+    }
+
+    /// Create or remove the mask GPU texture for a layer.
+    /// Rebuilds the mask bind group to point to the real texture or the default fallback.
+    pub fn set_layer_mask(
+        &mut self,
+        device: &wgpu::Device,
+        layer_id: LayerId,
+        has_mask: bool,
+    ) {
+        if has_mask {
+            if !self.mask_textures.contains_key(&layer_id) {
+                let mask_tex = LayerTexture::new_mask(device, self.canvas_width, self.canvas_height);
+                let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("mask-bg-{layer_id}")),
+                    layout: &self.blend_pipelines.mask_bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&mask_tex.view),
+                    }],
+                });
+                self.mask_textures.insert(layer_id, mask_tex);
+                if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
+                    cache.mask_bind_group = mask_bg;
+                }
+            }
+        } else {
+            self.mask_textures.remove(&layer_id);
+            if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
+                cache.mask_bind_group = self.default_mask_bind_group.clone();
+            }
+        }
+    }
+
+    /// Update the mask bind group to use real or default texture based on mask_enabled/show_mask.
+    /// GIMP optimization: dormant masks (exists but disabled and not shown) use the default.
+    pub fn update_mask_binding(
+        &mut self,
+        device: &wgpu::Device,
+        layer_id: LayerId,
+        mask_enabled: bool,
+        show_mask: bool,
+    ) {
+        let use_real = (mask_enabled || show_mask) && self.mask_textures.contains_key(&layer_id);
+        let view = if use_real {
+            &self.mask_textures[&layer_id].view
+        } else {
+            &self.default_mask_view
+        };
+        let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("mask-bg-{layer_id}")),
+            layout: &self.blend_pipelines.mask_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            }],
+        });
+        if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
+            cache.mask_bind_group = mask_bg;
         }
     }
 
@@ -664,8 +789,9 @@ impl Compositor {
     ) -> bool {
         // 1. Check if any dirty regions exist before scanning layers.
         let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
+        let has_mask_dirty = doc.mask_dirty.values().any(|d| !d.is_empty());
 
-        if !self.needs_composite && !has_dirty {
+        if !self.needs_composite && !has_dirty && !has_mask_dirty {
             return false;
         }
 
@@ -718,12 +844,113 @@ impl Compositor {
             }
         }
 
+        // 2b. Upload dirty mask tiles (f32→u8 conversion, R8Unorm format).
+        // Only upload when mask_enabled || show_mask (GIMP's dormant mask optimization).
+        if has_mask_dirty {
+            for raster in doc.all_raster_layers() {
+                let mask_active = raster.mask_enabled || raster.show_mask;
+                if !mask_active {
+                    continue;
+                }
+
+                let dirty = match doc.mask_dirty.get(&raster.id) {
+                    Some(d) if !d.is_empty() => d,
+                    _ => continue,
+                };
+
+                let mask_tex = match self.mask_textures.get(&raster.id) {
+                    Some(t) => t,
+                    None => continue,
+                };
+
+                let mask = match &raster.mask {
+                    Some(m) => m,
+                    None => continue,
+                };
+
+                let ts = TILE_SIZE_USIZE;
+                for (tx, ty) in dirty.iter() {
+                    if tx < 0 || ty < 0 {
+                        continue;
+                    }
+                    if tx as u32 >= mask_tex.width_in_tiles
+                        || ty as u32 >= mask_tex.height_in_tiles
+                    {
+                        continue;
+                    }
+
+                    // Convert f32 mask tile to u8 for R8Unorm upload
+                    let u8_data: &[u8] = match mask.get(tx, ty) {
+                        Some(tile) => {
+                            // Convert f32 → u8 into a temporary buffer
+                            // We use a thread-local buffer to avoid allocation per tile
+                            thread_local! {
+                                static BUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(
+                                    vec![0u8; 64 * 64]
+                                );
+                            }
+                            BUF.with(|buf| {
+                                let mut buf = buf.borrow_mut();
+                                let data = tile.data();
+                                for i in 0..(ts * ts) {
+                                    buf[i] = (data.0[i].clamp(0.0, 1.0) * 255.0) as u8;
+                                }
+                                // SAFETY: The buf lives in the thread-local and we immediately
+                                // use it for the queue write below. The borrow is released
+                                // after this closure returns.
+                                unsafe {
+                                    std::slice::from_raw_parts(buf.as_ptr(), ts * ts)
+                                }
+                            })
+                        }
+                        None => &*FULL_MASK_TILE,
+                    };
+
+                    queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &mask_tex.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d {
+                                x: tx as u32 * ts as u32,
+                                y: ty as u32 * ts as u32,
+                                z: 0,
+                            },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        u8_data,
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(ts as u32),
+                            rows_per_image: None,
+                        },
+                        wgpu::Extent3d {
+                            width: ts as u32,
+                            height: ts as u32,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+
+                if let Some(idx) = doc.flat_layer_index(raster.id) {
+                    match self.lowest_dirty_layer {
+                        Some(current) if idx < current => self.lowest_dirty_layer = Some(idx),
+                        None => self.lowest_dirty_layer = Some(idx),
+                        _ => {}
+                    }
+                }
+                self.needs_composite = true;
+            }
+        }
+
         if let Some(lowest) = self.lowest_dirty_layer.take() {
             self.invalidate_cache_from(lowest);
         }
 
         if !self.needs_composite {
             for dirty in doc.dirty.values_mut() {
+                dirty.clear();
+            }
+            for dirty in doc.mask_dirty.values_mut() {
                 dirty.clear();
             }
             return false;
@@ -819,6 +1046,7 @@ impl Compositor {
                         rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
                         rpass.set_pipeline(self.blend_pipelines.pipeline());
                         rpass.set_bind_group(0, bind_group, &[]);
+                        rpass.set_bind_group(1, &cache.mask_bind_group, &[]);
                         rpass.draw(0..3, 0..1);
                     }
                 }
@@ -930,6 +1158,9 @@ impl Compositor {
         for dirty in doc.dirty.values_mut() {
             dirty.clear();
         }
+        for dirty in doc.mask_dirty.values_mut() {
+            dirty.clear();
+        }
         self.needs_composite = false;
         true
     }
@@ -947,12 +1178,13 @@ impl Compositor {
         doc: &mut Document,
     ) {
         let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
+        let has_mask_dirty = doc.mask_dirty.values().any(|d| !d.is_empty());
         let veil_needs = self.veil_chain.needs_present();
-        if !self.needs_composite && !has_dirty && !self.needs_present && !veil_needs {
+        if !self.needs_composite && !has_dirty && !has_mask_dirty && !self.needs_present && !veil_needs {
             return;
         }
 
-        if self.needs_composite || has_dirty {
+        if self.needs_composite || has_dirty || has_mask_dirty {
             self.render_offscreen(device, queue, doc);
         }
 
@@ -981,14 +1213,15 @@ impl Compositor {
         perf::time("render-total");
 
         let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
+        let has_mask_dirty = doc.mask_dirty.values().any(|d| !d.is_empty());
         let veil_needs = self.veil_chain.needs_present();
-        if !self.needs_composite && !has_dirty && !self.needs_present && !veil_needs {
+        if !self.needs_composite && !has_dirty && !has_mask_dirty && !self.needs_present && !veil_needs {
             perf::time_end("render-total");
             return;
         }
 
         // Composite layers into composite_cache if needed.
-        if self.needs_composite || has_dirty {
+        if self.needs_composite || has_dirty || has_mask_dirty {
             perf::time("offscreen");
             self.render_offscreen(device, queue, doc);
             perf::time_end("offscreen");
@@ -1035,7 +1268,7 @@ impl Compositor {
         self.present_and_veils(&mut encoder, &surface_view);
 
         // Invert overlay primitives (if any) need a separate pass with
-        // snapshot copy. This path is only hit by overlay_debug/rect_select.
+        // snapshot copy. This path is only hit by rect_select.
         if self.tool_overlay.has_invert() {
             let vw = self.veil_chain.viewport_size().0;
             let vh = self.veil_chain.viewport_size().1;

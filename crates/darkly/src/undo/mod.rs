@@ -1,10 +1,12 @@
 mod tile;
 mod layer;
+mod mask;
 pub mod property;
 mod selection;
 
 pub use tile::TileAction;
 pub use layer::{LayerAddAction, LayerRemoveAction, LayerMoveAction};
+pub use mask::{MaskTileAction, MaskPropertyAction};
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
 

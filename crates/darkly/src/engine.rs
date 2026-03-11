@@ -2,7 +2,7 @@ use crate::document::{Document, MoveTarget, SelectionMode};
 use crate::layer::{BlendMode, Layer, LayerNode};
 use crate::undo::{
     UndoStack, TileAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
-    PropertyAction, SelectionAction, mark_affected_dirty,
+    MaskTileAction, MaskPropertyAction, PropertyAction, SelectionAction, mark_affected_dirty,
 };
 use crate::undo::property::Property;
 use crate::gpu::compositor::Compositor;
@@ -21,7 +21,10 @@ use crate::gpu::view::ViewTransform;
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum LayerInfo {
     #[serde(rename_all = "camelCase")]
-    Raster { id: f64, name: String, visible: bool, opacity: f32, blend_mode: u32 },
+    Raster {
+        id: f64, name: String, visible: bool, opacity: f32, blend_mode: u32,
+        has_mask: bool, mask_enabled: bool, show_mask: bool,
+    },
     #[serde(rename_all = "camelCase")]
     Filter { id: f64, name: String, visible: bool },
     #[serde(rename_all = "camelCase")]
@@ -104,6 +107,9 @@ pub struct DarklyEngine {
     gpu: GpuContext,
     undo_stack: UndoStack,
     active_stroke_layer: Option<u64>,
+    /// Which layer has mask editing active (GIMP's `edit_mask` flag).
+    /// When set, strokes are routed to the mask instead of the layer.
+    editing_mask_layer: Option<u64>,
     view_transform: ViewTransform,
     /// Persistent marching ants overlay (regenerated when selection changes).
     selection_overlay: Vec<OverlayPrimitive>,
@@ -126,6 +132,7 @@ impl DarklyEngine {
             gpu,
             undo_stack,
             active_stroke_layer: None,
+            editing_mask_layer: None,
             view_transform: ViewTransform::identity(),
             selection_overlay: Vec::new(),
             tool_overlay: Vec::new(),
@@ -333,6 +340,157 @@ impl DarklyEngine {
         }
     }
 
+    // --- Layer Masks ---
+
+    pub fn add_mask(&mut self, layer_id: u64) {
+        // Snapshot old state for undo
+        let (old_mask, old_enabled, old_show) = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => (r.mask.clone(), r.mask_enabled, r.show_mask),
+            _ => return,
+        };
+
+        self.doc.add_mask(layer_id);
+        self.compositor.set_layer_mask(&self.gpu.device, layer_id, true);
+        self.sync_mask_state(layer_id);
+        self.compositor.mark_dirty();
+
+        self.undo_stack.push(Box::new(MaskPropertyAction::new(
+            layer_id, old_mask, old_enabled, old_show,
+        )));
+    }
+
+    pub fn remove_mask(&mut self, layer_id: u64) {
+        let (old_mask, old_enabled, old_show) = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => (r.mask.clone(), r.mask_enabled, r.show_mask),
+            _ => return,
+        };
+
+        self.doc.remove_mask(layer_id);
+        self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
+        self.compositor.set_layer_mask(&self.gpu.device, layer_id, false);
+        self.sync_mask_state(layer_id);
+        self.compositor.mark_dirty();
+
+        self.undo_stack.push(Box::new(MaskPropertyAction::new(
+            layer_id, old_mask, old_enabled, old_show,
+        )));
+    }
+
+    pub fn apply_mask(&mut self, layer_id: u64) {
+        let (old_mask, old_enabled, old_show) = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => (r.mask.clone(), r.mask_enabled, r.show_mask),
+            _ => return,
+        };
+        if old_mask.is_none() {
+            return;
+        }
+
+        // Record layer tile state before destructive bake
+        self.doc.begin_transaction(layer_id);
+        self.doc.apply_mask_destructive(layer_id);
+        let tile_memento = self.doc.commit_transaction(layer_id);
+
+        self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
+        self.compositor.set_layer_mask(&self.gpu.device, layer_id, false);
+        self.sync_mask_state(layer_id);
+        self.compositor.mark_dirty();
+
+        // Push tile action first (for the alpha bake), then mask property action
+        if let Some(mementos) = tile_memento {
+            self.undo_stack.push(Box::new(TileAction::new(mementos)));
+        }
+        self.undo_stack.push(Box::new(MaskPropertyAction::new(
+            layer_id, old_mask, old_enabled, old_show,
+        )));
+    }
+
+    pub fn set_mask_enabled(&mut self, layer_id: u64, enabled: bool) {
+        let old = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => r.mask_enabled,
+            _ => return,
+        };
+        self.doc.set_mask_enabled(layer_id, enabled);
+        self.sync_mask_state(layer_id);
+        self.compositor.mark_dirty();
+
+        self.undo_stack.push(Box::new(MaskPropertyAction::new(
+            layer_id, None, old, false,
+        )));
+    }
+
+    pub fn set_show_mask(&mut self, layer_id: u64, show: bool) {
+        let old = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => r.show_mask,
+            _ => return,
+        };
+        self.doc.set_show_mask(layer_id, show);
+        self.sync_mask_state(layer_id);
+        self.compositor.mark_dirty();
+
+        self.undo_stack.push(Box::new(MaskPropertyAction::new(
+            layer_id, None, false, old,
+        )));
+    }
+
+    pub fn set_editing_mask(&mut self, layer_id: u64, editing: bool) {
+        if editing {
+            self.editing_mask_layer = Some(layer_id);
+        } else if self.editing_mask_layer == Some(layer_id) {
+            self.editing_mask_layer = None;
+        }
+    }
+
+    pub fn selection_to_mask(&mut self, layer_id: u64) {
+        let (old_mask, old_enabled, old_show) = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => (r.mask.clone(), r.mask_enabled, r.show_mask),
+            _ => return,
+        };
+
+        self.doc.selection_to_mask(layer_id);
+        self.compositor.set_layer_mask(&self.gpu.device, layer_id, true);
+
+        // Mark all mask tiles dirty for upload
+        let mask_coords: Vec<(i32, i32)> = self.doc.layer(layer_id)
+            .and_then(|l| match l { Layer::Raster(r) => r.mask.as_ref(), _ => None })
+            .map(|m| m.iter().map(|((tx, ty), _)| (tx, ty)).collect())
+            .unwrap_or_default();
+        let dirty = self.doc.mask_dirty.entry(layer_id).or_default();
+        for (tx, ty) in mask_coords {
+            dirty.mark(tx, ty);
+        }
+
+        self.sync_mask_state(layer_id);
+        self.compositor.mark_dirty();
+
+        self.undo_stack.push(Box::new(MaskPropertyAction::new(
+            layer_id, old_mask, old_enabled, old_show,
+        )));
+    }
+
+    pub fn mask_to_selection(&mut self, layer_id: u64) {
+        let old_sel = self.doc.selection.clone();
+        self.doc.mask_to_selection(layer_id);
+        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
+        self.update_selection_overlay();
+    }
+
+    /// Sync compositor mask state (bind group + uniforms) for a layer.
+    fn sync_mask_state(&mut self, layer_id: u64) {
+        if let Some(Layer::Raster(r)) = self.doc.layer(layer_id) {
+            let has_mask = r.mask.is_some();
+            let mask_enabled = r.mask_enabled;
+            let show_mask = r.show_mask;
+
+            self.compositor.set_layer_mask(&self.gpu.device, layer_id, has_mask);
+            self.compositor.update_mask_binding(
+                &self.gpu.device, layer_id, mask_enabled, show_mask,
+            );
+            self.compositor.update_raster_uniforms_full(
+                &self.gpu.queue, layer_id, r.opacity, r.blend_mode, show_mask,
+            );
+        }
+    }
+
     // --- Painting ---
 
     pub fn paint(
@@ -349,9 +507,15 @@ impl DarklyEngine {
     }
 
     // --- Stroke lifecycle ---
+    // Following GIMP's edit_mask flag: when editing_mask_layer is set,
+    // strokes are routed to the mask instead of the layer.
 
     pub fn begin_stroke(&mut self, layer_id: u64) {
-        self.doc.begin_transaction(layer_id);
+        if self.editing_mask_layer == Some(layer_id) {
+            self.doc.begin_mask_transaction(layer_id);
+        } else {
+            self.doc.begin_transaction(layer_id);
+        }
         self.active_stroke_layer = Some(layer_id);
     }
 
@@ -361,29 +525,50 @@ impl DarklyEngine {
             None => return,
         };
 
-        match op {
-            StrokeOp::PaintCircle { x, y, radius, r, g, b, a } => {
-                self.doc.paint_circle(layer_id, x, y, radius, [r, g, b, a]);
+        if self.editing_mask_layer == Some(layer_id) {
+            // Route paint ops to mask
+            match op {
+                StrokeOp::PaintCircle { x, y, radius, r: _, g: _, b: _, a } => {
+                    // For mask painting: a > 128 paints white (reveal), a <= 128 paints black (hide)
+                    let value = if a > 128 { 1.0 } else { 0.0 };
+                    self.doc.paint_mask_circle(layer_id, x, y, radius, value);
+                }
+                StrokeOp::EraseCircle { x, y, radius } => {
+                    self.doc.erase_mask_circle(layer_id, x, y, radius);
+                }
+                _ => {} // Flood fill and gradient not supported on masks
             }
-            StrokeOp::EraseCircle { x, y, radius } => {
-                self.doc.erase_circle(layer_id, x, y, radius);
-            }
-            StrokeOp::FloodFill { x, y, r, g, b, a, tolerance } => {
-                self.doc.flood_fill(layer_id, x as i32, y as i32, [r, g, b, a], tolerance);
-            }
-            StrokeOp::LinearGradient { x0, y0, x1, y1, r0, g0, b0, a0, r1, g1, b1, a1 } => {
-                self.doc.linear_gradient(
-                    layer_id, x0, y0, x1, y1,
-                    [r0, g0, b0, a0], [r1, g1, b1, a1],
-                );
+        } else {
+            match op {
+                StrokeOp::PaintCircle { x, y, radius, r, g, b, a } => {
+                    self.doc.paint_circle(layer_id, x, y, radius, [r, g, b, a]);
+                }
+                StrokeOp::EraseCircle { x, y, radius } => {
+                    self.doc.erase_circle(layer_id, x, y, radius);
+                }
+                StrokeOp::FloodFill { x, y, r, g, b, a, tolerance } => {
+                    self.doc.flood_fill(layer_id, x as i32, y as i32, [r, g, b, a], tolerance);
+                }
+                StrokeOp::LinearGradient { x0, y0, x1, y1, r0, g0, b0, a0, r1, g1, b1, a1 } => {
+                    self.doc.linear_gradient(
+                        layer_id, x0, y0, x1, y1,
+                        [r0, g0, b0, a0], [r1, g1, b1, a1],
+                    );
+                }
             }
         }
     }
 
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
-            if let Some(mementos) = self.doc.commit_transaction(layer_id) {
-                self.undo_stack.push(Box::new(TileAction::new(mementos)));
+            if self.editing_mask_layer == Some(layer_id) {
+                if let Some(memento) = self.doc.commit_mask_transaction(layer_id) {
+                    self.undo_stack.push(Box::new(MaskTileAction::new(layer_id, memento)));
+                }
+            } else {
+                if let Some(mementos) = self.doc.commit_transaction(layer_id) {
+                    self.undo_stack.push(Box::new(TileAction::new(mementos)));
+                }
             }
         }
     }
@@ -712,11 +897,43 @@ impl DarklyEngine {
     // --- Internal helpers ---
 
     fn sync_compositor_layers(&mut self) {
-        for raster in self.doc.all_raster_layers() {
-            self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, raster.id);
-            self.compositor.update_raster_uniforms(
-                &self.gpu.queue, raster.id, raster.opacity, raster.blend_mode,
+        // Collect raster layer info first to avoid borrow conflicts with mask_dirty.
+        struct RasterInfo {
+            id: u64,
+            opacity: f32,
+            blend_mode: BlendMode,
+            show_mask: bool,
+            mask_enabled: bool,
+            has_mask: bool,
+            mask_coords: Vec<(i32, i32)>,
+        }
+        let infos: Vec<RasterInfo> = self.doc.all_raster_layers().into_iter().map(|r| {
+            let mask_coords: Vec<(i32, i32)> = r.mask.as_ref()
+                .map(|m| m.iter().map(|((tx, ty), _)| (tx, ty)).collect())
+                .unwrap_or_default();
+            RasterInfo {
+                id: r.id, opacity: r.opacity, blend_mode: r.blend_mode,
+                show_mask: r.show_mask, mask_enabled: r.mask_enabled,
+                has_mask: r.mask.is_some(), mask_coords,
+            }
+        }).collect();
+
+        for info in &infos {
+            self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, info.id);
+            self.compositor.update_raster_uniforms_full(
+                &self.gpu.queue, info.id, info.opacity, info.blend_mode, info.show_mask,
             );
+            self.compositor.set_layer_mask(&self.gpu.device, info.id, info.has_mask);
+            self.compositor.update_mask_binding(
+                &self.gpu.device, info.id, info.mask_enabled, info.show_mask,
+            );
+            // Mark all mask tiles dirty for re-upload after undo/redo
+            if !info.mask_coords.is_empty() {
+                let dirty = self.doc.mask_dirty.entry(info.id).or_default();
+                for &(tx, ty) in &info.mask_coords {
+                    dirty.mark(tx, ty);
+                }
+            }
         }
     }
 }
@@ -730,6 +947,9 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
                 visible: r.visible,
                 opacity: r.opacity,
                 blend_mode: r.blend_mode as u32,
+                has_mask: r.mask.is_some(),
+                mask_enabled: r.mask_enabled,
+                show_mask: r.show_mask,
             },
             Layer::Filter(f) => LayerInfo::Filter {
                 id: f.id as f64,

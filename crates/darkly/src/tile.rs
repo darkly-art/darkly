@@ -158,6 +158,17 @@ impl Tile<AlphaF32> {
             data: Arc::clone(&EMPTY),
         }
     }
+
+    /// Create a fully opaque (1.0) mask tile. All full tiles share the same Arc.
+    /// Used as the default for layer masks (white = reveal all).
+    pub fn full() -> Self {
+        use std::sync::LazyLock;
+        static FULL: LazyLock<Arc<AlphaF32Data>> =
+            LazyLock::new(|| Arc::new(AlphaF32Data([1.0f32; MASK_TILE_PIXELS])));
+        Tile {
+            data: Arc::clone(&FULL),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +318,21 @@ impl<F: TileFormat> TileStore<F> {
 
     pub fn is_empty(&self) -> bool {
         self.tiles.is_empty()
+    }
+}
+
+impl TileStore<AlphaF32> {
+    /// Get a tile for writing, creating a **full** (1.0) one if it doesn't exist.
+    /// Used for layer mask painting where the default is white (reveal all).
+    pub fn get_or_create_full(&mut self, tx: i32, ty: i32) -> &mut Tile<AlphaF32> {
+        if let Some(ref mut memento) = self.recording {
+            let key = (tx, ty);
+            let tiles = &self.tiles;
+            memento.tiles.entry(key).or_insert_with(|| {
+                tiles.get(&key).map(|t| Arc::clone(t.arc()))
+            });
+        }
+        self.tiles.entry((tx, ty)).or_insert_with(Tile::full)
     }
 }
 

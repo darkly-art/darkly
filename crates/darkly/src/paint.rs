@@ -119,6 +119,59 @@ impl<'a> PaintTarget<'a> {
     }
 }
 
+/// Paint target for layer masks. The mask is a single-channel f32 surface
+/// where white (1.0) = reveal and black (0.0) = hide. Uses `get_or_create_full()`
+/// so new tiles default to 1.0 (GIMP/Krita convention).
+pub struct MaskPaintTarget<'a> {
+    pub mask: &'a mut AlphaMask,
+    pub dirty: &'a mut DirtyRegion,
+    selection: Option<&'a AlphaMask>,
+}
+
+impl<'a> MaskPaintTarget<'a> {
+    pub fn new(
+        mask: &'a mut AlphaMask,
+        dirty: &'a mut DirtyRegion,
+        selection: Option<&'a AlphaMask>,
+    ) -> Self {
+        MaskPaintTarget { mask, dirty, selection }
+    }
+
+    fn coverage(&self, px: i32, py: i32) -> f32 {
+        match self.selection {
+            Some(sel) => sel.sample(px, py),
+            None => 1.0,
+        }
+    }
+
+    /// Paint toward `value` at (px, py) with the given strength.
+    /// strength=1.0 fully replaces with `value`.
+    pub fn paint(&mut self, px: i32, py: i32, value: f32, strength: f32) {
+        let cov = self.coverage(px, py);
+        if cov <= 0.0 {
+            return;
+        }
+
+        let tile_size = TILE_SIZE as i32;
+        let (tx, ty) = AlphaMask::tile_coords_for_pixel(px, py);
+        let lx = (px - tx * tile_size) as usize;
+        let ly = (py - ty * tile_size) as usize;
+
+        let tile = self.mask.get_or_create_full(tx, ty);
+        let data = tile.write();
+        let current = data.get(lx, ly);
+        let factor = strength * cov;
+        data.set(lx, ly, current + (value - current) * factor);
+
+        self.dirty.mark(tx, ty);
+    }
+
+    /// Erase (blend toward 0.0 = hide) at (px, py).
+    pub fn erase(&mut self, px: i32, py: i32, strength: f32) {
+        self.paint(px, py, 0.0, strength);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

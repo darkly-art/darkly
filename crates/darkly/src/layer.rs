@@ -1,5 +1,5 @@
 use crate::gpu::filter::Filter;
-use crate::tile::TileGrid;
+use crate::tile::{AlphaMask, TileGrid};
 
 pub type LayerId = u64;
 
@@ -31,6 +31,12 @@ pub struct RasterLayer {
     pub opacity: f32,
     pub blend_mode: BlendMode,
     pub visible: bool,
+    /// Optional layer mask (white=reveal, black=hide). Modulates alpha during compositing.
+    pub mask: Option<AlphaMask>,
+    /// Whether the mask affects compositing (GIMP's `apply_mask`).
+    pub mask_enabled: bool,
+    /// Display the mask as grayscale instead of layer content.
+    pub show_mask: bool,
 }
 
 impl RasterLayer {
@@ -42,6 +48,9 @@ impl RasterLayer {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             visible: true,
+            mask: None,
+            mask_enabled: true,
+            show_mask: false,
         }
     }
 }
@@ -61,6 +70,10 @@ pub struct LayerGroup {
     pub visible: bool,
     pub passthrough: bool,  // true = passthrough (default), false = normal group
     pub collapsed: bool,    // UI state: whether the group is visually collapsed
+    /// Optional group mask (data only — GPU compositing deferred until group isolation).
+    pub mask: Option<AlphaMask>,
+    pub mask_enabled: bool,
+    pub show_mask: bool,
 }
 
 impl LayerGroup {
@@ -74,6 +87,9 @@ impl LayerGroup {
             visible: true,
             passthrough: true,
             collapsed: false,
+            mask: None,
+            mask_enabled: true,
+            show_mask: false,
         }
     }
 }

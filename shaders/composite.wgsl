@@ -1,4 +1,5 @@
 // Tile compositing: sample background accumulator + layer, apply blend mode.
+// Group 0: layer blend inputs. Group 1: layer mask texture.
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -20,10 +21,14 @@ struct VertexOutput {
 struct Uniforms {
     opacity: f32,
     blend_mode: u32,
-    _pad0: f32,
+    show_mask: u32,
     _pad1: f32,
 }
 @group(0) @binding(3) var<uniform> uniforms: Uniforms;
+
+// Mask texture in a separate bind group — avoids rebuilding group 0 on mask change.
+// When no mask is present, a 1x1 white fallback texture is bound (mask_alpha=1.0).
+@group(1) @binding(0) var t_mask: texture_2d<f32>;
 
 fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
     let fg_pre = fg.rgb * fg.a;
@@ -61,7 +66,15 @@ fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let bg = textureSample(t_bg, t_sampler, in.uv);
+
+    let mask_alpha = textureSample(t_mask, t_sampler, in.uv).r;
+
+    // Show mask as grayscale (GIMP's show_mask mode)
+    if (uniforms.show_mask != 0u) {
+        return vec4f(mask_alpha, mask_alpha, mask_alpha, 1.0);
+    }
+
     var fg = textureSample(t_layer, t_sampler, in.uv);
-    fg = vec4f(fg.rgb, fg.a * uniforms.opacity);
+    fg = vec4f(fg.rgb, fg.a * uniforms.opacity * mask_alpha);
     return blend(fg, bg, uniforms.blend_mode);
 }

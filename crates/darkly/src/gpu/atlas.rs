@@ -11,13 +11,28 @@ pub struct LayerTexture {
 
 impl LayerTexture {
     pub fn new(device: &wgpu::Device, canvas_width: u32, canvas_height: u32) -> Self {
+        Self::with_format(device, canvas_width, canvas_height, wgpu::TextureFormat::Rgba8Unorm, "layer-texture")
+    }
+
+    /// Create an R8Unorm mask texture (single-channel, 4x less memory than Rgba8Unorm).
+    pub fn new_mask(device: &wgpu::Device, canvas_width: u32, canvas_height: u32) -> Self {
+        Self::with_format(device, canvas_width, canvas_height, wgpu::TextureFormat::R8Unorm, "mask-texture")
+    }
+
+    fn with_format(
+        device: &wgpu::Device,
+        canvas_width: u32,
+        canvas_height: u32,
+        format: wgpu::TextureFormat,
+        label: &str,
+    ) -> Self {
         let width_in_tiles = (canvas_width + TILE_SIZE as u32 - 1) / TILE_SIZE as u32;
         let height_in_tiles = (canvas_height + TILE_SIZE as u32 - 1) / TILE_SIZE as u32;
         let tex_width = width_in_tiles * TILE_SIZE as u32;
         let tex_height = height_in_tiles * TILE_SIZE as u32;
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("layer-texture"),
+            label: Some(label),
             size: wgpu::Extent3d {
                 width: tex_width,
                 height: tex_height,
@@ -26,7 +41,7 @@ impl LayerTexture {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,

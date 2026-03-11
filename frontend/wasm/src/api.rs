@@ -103,6 +103,17 @@ impl DarklyHandle {
     pub fn set_layer_name(&mut self, layer_id: f64, name: &str) { self.0.set_layer_name(layer_id as u64, name) }
     pub fn set_group_collapsed(&mut self, group_id: f64, collapsed: bool) { self.0.set_group_collapsed(group_id as u64, collapsed) }
 
+    // --- Layer Masks (pass-through) ---
+
+    pub fn add_mask(&mut self, layer_id: f64) { self.0.add_mask(layer_id as u64) }
+    pub fn remove_mask(&mut self, layer_id: f64) { self.0.remove_mask(layer_id as u64) }
+    pub fn apply_mask(&mut self, layer_id: f64) { self.0.apply_mask(layer_id as u64) }
+    pub fn set_mask_enabled(&mut self, layer_id: f64, enabled: bool) { self.0.set_mask_enabled(layer_id as u64, enabled) }
+    pub fn set_show_mask(&mut self, layer_id: f64, show: bool) { self.0.set_show_mask(layer_id as u64, show) }
+    pub fn set_editing_mask(&mut self, layer_id: f64, editing: bool) { self.0.set_editing_mask(layer_id as u64, editing) }
+    pub fn selection_to_mask(&mut self, layer_id: f64) { self.0.selection_to_mask(layer_id as u64) }
+    pub fn mask_to_selection(&mut self, layer_id: f64) { self.0.mask_to_selection(layer_id as u64) }
+
     // --- Painting (pass-through) ---
 
     pub fn paint(&mut self, layer_id: f64, x: f32, y: f32, radius: f32, r: u8, g: u8, b: u8, a: u8) {

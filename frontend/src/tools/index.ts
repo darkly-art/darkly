@@ -8,7 +8,6 @@ import { rectSelectTool } from './rect_select.svelte';
 import { ellipseSelectTool } from './ellipse_select.svelte';
 import { lassoSelectTool } from './lasso_select.svelte';
 import { magicWandTool } from './magic_wand.svelte';
-import { overlayDebugTool } from './overlay_debug.svelte';
 
 toolRegistry.register(brushTool);
 toolRegistry.register(eraserTool);
@@ -19,4 +18,3 @@ toolRegistry.register(rectSelectTool);
 toolRegistry.register(ellipseSelectTool);
 toolRegistry.register(lassoSelectTool);
 toolRegistry.register(magicWandTool);
-toolRegistry.register(overlayDebugTool);
