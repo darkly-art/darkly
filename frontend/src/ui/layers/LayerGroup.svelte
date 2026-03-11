@@ -121,10 +121,6 @@
         ondragend={() => { dropPos = 'none'; }}
         style:padding-left="{8 + depth * 16}px"
     >
-        <button class="collapse-btn" onclick={toggleCollapsed}>
-            {group.collapsed ? '\u25B6' : '\u25BC'}
-        </button>
-
         <button
             class="vis-btn"
             class:hidden={!group.visible}
@@ -132,6 +128,10 @@
             title="Toggle visibility"
         >
             {group.visible ? '\u{1F441}' : '\u{2014}'}
+        </button>
+
+        <button class="collapse-btn" onclick={toggleCollapsed}>
+            {group.collapsed ? '\u25B6' : '\u25BC'}
         </button>
 
         {#if editing}
