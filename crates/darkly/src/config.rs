@@ -34,6 +34,8 @@ fn preset_krita() -> HashMap<String, ConfigValue> {
         ("hotkeys.colorPickerTool", "KeyP"),
         ("hotkeys.rectSelectTool", "KeyR"),
         ("hotkeys.ellipseSelectTool", "Shift+KeyR"),
+        ("hotkeys.lassoSelectTool", "KeyL"),
+        ("hotkeys.magicWandTool", "KeyW"),
         ("hotkeys.clearSelection", "$mod+Shift+KeyA"),
         ("hotkeys.invertSelection", "$mod+Shift+KeyI"),
     ]
@@ -51,6 +53,8 @@ fn preset_photoshop() -> HashMap<String, ConfigValue> {
         ("hotkeys.colorPickerTool", "KeyI"),
         ("hotkeys.rectSelectTool", "KeyM"),
         ("hotkeys.ellipseSelectTool", "Shift+KeyM"),
+        ("hotkeys.lassoSelectTool", "KeyL"),
+        ("hotkeys.magicWandTool", "KeyW"),
         ("hotkeys.clearSelection", "$mod+KeyD"),
         ("hotkeys.invertSelection", "$mod+Shift+KeyI"),
     ]
@@ -68,6 +72,8 @@ fn preset_gimp() -> HashMap<String, ConfigValue> {
         ("hotkeys.colorPickerTool", "KeyO"),
         ("hotkeys.rectSelectTool", "KeyR"),
         ("hotkeys.ellipseSelectTool", "KeyE"),
+        ("hotkeys.lassoSelectTool", "KeyF"),
+        ("hotkeys.magicWandTool", "KeyU"),
         ("hotkeys.clearSelection", "$mod+Shift+KeyA"),
         ("hotkeys.invertSelection", "$mod+KeyI"),
     ]
@@ -150,6 +156,8 @@ impl Config {
         d!("hotkeys.colorPickerTool", str "KeyP");
         d!("hotkeys.rectSelectTool",    str "KeyR");
         d!("hotkeys.ellipseSelectTool", str "KeyJ");
+        d!("hotkeys.lassoSelectTool",   str "KeyL");
+        d!("hotkeys.magicWandTool",     str "KeyW");
 
         // Hotkeys — selection (default follows Krita)
         d!("hotkeys.selectAll",       str "$mod+KeyA");

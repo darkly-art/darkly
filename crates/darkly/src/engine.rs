@@ -592,6 +592,44 @@ impl DarklyEngine {
         self.update_selection_overlay();
     }
 
+    pub fn select_lasso(
+        &mut self,
+        vertices: &[[f32; 2]],
+        mode: SelectionMode,
+        antialias: bool,
+        feather: f32,
+    ) {
+        let old_sel = self.doc.selection.clone();
+        let mask = crate::tools::lasso_select::rasterize(vertices, antialias, feather);
+        self.doc.apply_selection(mask, mode);
+        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
+        self.update_selection_overlay();
+    }
+
+    pub fn select_magic_wand(
+        &mut self,
+        layer_id: u64,
+        seed_x: i32,
+        seed_y: i32,
+        tolerance: u8,
+        mode: SelectionMode,
+    ) {
+        let source = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => &r.tiles,
+            _ => return,
+        };
+        let mask = crate::tools::magic_wand::rasterize(
+            source,
+            seed_x, seed_y,
+            self.doc.width as i32, self.doc.height as i32,
+            tolerance,
+        );
+        let old_sel = self.doc.selection.clone();
+        self.doc.apply_selection(mask, mode);
+        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
+        self.update_selection_overlay();
+    }
+
     pub fn clear_selection(&mut self) {
         if self.doc.selection.is_none() {
             return;

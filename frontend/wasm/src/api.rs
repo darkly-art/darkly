@@ -168,6 +168,15 @@ impl DarklyHandle {
         self.0.select_ellipse(x, y, w, h, parse_selection_mode(mode), antialias, feather)
     }
 
+    pub fn select_lasso(&mut self, vertices: JsValue, mode: &str, antialias: bool, feather: f32) {
+        let verts: Vec<[f32; 2]> = serde_wasm_bindgen::from_value(vertices).unwrap_or_default();
+        self.0.select_lasso(&verts, parse_selection_mode(mode), antialias, feather)
+    }
+
+    pub fn select_magic_wand(&mut self, layer_id: u64, seed_x: i32, seed_y: i32, tolerance: u8, mode: &str) {
+        self.0.select_magic_wand(layer_id, seed_x, seed_y, tolerance, parse_selection_mode(mode))
+    }
+
     pub fn clear_selection(&mut self) { self.0.clear_selection() }
     pub fn select_all(&mut self) { self.0.select_all() }
     pub fn invert_selection(&mut self) { self.0.invert_selection() }

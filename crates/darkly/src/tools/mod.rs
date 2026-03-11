@@ -3,6 +3,8 @@
 // that exports `pub fn register() -> crate::tool::ToolRegistration`.
 
 pub mod ellipse_select;
+pub mod lasso_select;
+pub mod magic_wand;
 pub mod rect_select;
 
 use crate::tool::ToolRegistration;
@@ -10,6 +12,8 @@ use crate::tool::ToolRegistration;
 pub fn registrations() -> Vec<ToolRegistration> {
     vec![
         ellipse_select::register(),
+        lasso_select::register(),
+        magic_wand::register(),
         rect_select::register(),
     ]
 }
