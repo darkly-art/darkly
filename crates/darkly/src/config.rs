@@ -162,6 +162,12 @@ impl Config {
         d!("hotkeys.lassoSelectTool",   str "KeyL");
         d!("hotkeys.magicWandTool",     str "KeyW");
 
+        // Hotkeys — clipboard (universal — same across all presets)
+        d!("hotkeys.copy",         str "$mod+KeyC");
+        d!("hotkeys.cut",          str "$mod+KeyX");
+        d!("hotkeys.paste",        str "$mod+KeyV");
+        d!("hotkeys.pasteInPlace", str "$mod+Shift+KeyV");
+
         // Hotkeys — selection (default follows Krita)
         d!("hotkeys.selectAll",               str "$mod+KeyA");
         d!("hotkeys.clearSelection",          str "$mod+Shift+KeyA");

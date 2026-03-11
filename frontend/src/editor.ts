@@ -1,4 +1,5 @@
 import init, { DarklyHandle } from '../wasm/pkg/darkly_wasm';
+import { copyToSystemClipboard, readImageFromClipboard } from './clipboard';
 import { config } from './config/store.svelte';
 import { registerHotkeys } from './config/hotkeys.svelte';
 import { app } from './state/app.svelte';
@@ -44,6 +45,49 @@ function initHotkeys() {
             }
         },
         invertSelection: () => app.handle?.invert_selection(),
+        copy: () => {
+            if (!app.handle || app.activeLayerId == null) return;
+            const result = app.handle.copy(app.activeLayerId);
+            if (result && result.rgba) {
+                copyToSystemClipboard(result.rgba, result.width, result.height);
+            }
+        },
+        cut: () => {
+            if (!app.handle || app.activeLayerId == null) return;
+            const result = app.handle.cut(app.activeLayerId);
+            if (result && result.rgba) {
+                copyToSystemClipboard(result.rgba, result.width, result.height);
+            }
+            app.requestFrame();
+        },
+        paste: () => {
+            if (!app.handle) return;
+            readImageFromClipboard().then(clip => {
+                if (!clip || !app.handle) return;
+                // Center the pasted image in the document.
+                const docW = config.get('canvas.width') as number;
+                const docH = config.get('canvas.height') as number;
+                const ox = Math.round((docW - clip.width) / 2);
+                const oy = Math.round((docH - clip.height) / 2);
+                const activeId = app.activeLayerId ?? -1;
+                const layerId = app.handle.paste_image(
+                    clip.width, clip.height, clip.rgba, ox, oy, activeId,
+                );
+                app.activeLayerId = layerId;
+                app.refreshLayerTree();
+                app.requestFrame();
+            });
+        },
+        pasteInPlace: () => {
+            if (!app.handle) return;
+            const activeId = app.activeLayerId ?? -1;
+            const layerId = app.handle.paste_in_place(activeId);
+            if (layerId >= 0) {
+                app.activeLayerId = layerId;
+                app.refreshLayerTree();
+                app.requestFrame();
+            }
+        },
         ...toolActions,
         brushSizeUp:     () => {
             app.brushSize = Math.min(app.brushSize + SIZE_STEP, MAX_SIZE);

@@ -1,3 +1,4 @@
+use crate::clipboard::{Clipboard, ImageClip};
 use crate::document::{Document, MoveTarget, SelectionMode};
 use crate::layer::{BlendMode, Layer, LayerNode};
 use crate::undo::{
@@ -98,6 +99,17 @@ pub enum StrokeOp {
     },
 }
 
+/// Data returned to the WASM bridge on copy/cut — always RGBA pixels regardless
+/// of the internal clipboard variant.
+#[derive(serde::Serialize)]
+pub struct ClipboardExport {
+    pub rgba: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub offset_x: i32,
+    pub offset_y: i32,
+}
+
 // ---------------------------------------------------------------------------
 // DarklyEngine — platform-agnostic editor core.
 // ---------------------------------------------------------------------------
@@ -116,6 +128,8 @@ pub struct DarklyEngine {
     selection_overlay: Vec<OverlayPrimitive>,
     /// Transient tool overlay (set/cleared by the active tool).
     tool_overlay: Vec<OverlayPrimitive>,
+    /// Internal clipboard — holds typed content for copy/paste within Darkly.
+    clipboard: Option<Clipboard>,
 }
 
 impl DarklyEngine {
@@ -137,6 +151,7 @@ impl DarklyEngine {
             view_transform: ViewTransform::identity(),
             selection_overlay: Vec::new(),
             tool_overlay: Vec::new(),
+            clipboard: None,
         }
     }
 
@@ -855,6 +870,112 @@ impl DarklyEngine {
 
     pub fn has_selection(&self) -> bool {
         self.doc.selection.is_some()
+    }
+
+    // --- Copy / Cut / Paste ---
+
+    /// Copy the active layer's content (masked by selection) into the internal
+    /// clipboard. Returns a `ClipboardExport` with raw RGBA bytes for the JS
+    /// side to push to the system clipboard as PNG.
+    pub fn copy(&mut self, layer_id: u64) -> Option<ClipboardExport> {
+        let layer = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => r,
+            _ => return None,
+        };
+
+        let clip = ImageClip::from_layer(
+            layer,
+            self.doc.selection.as_ref(),
+            self.doc.width,
+            self.doc.height,
+        )?;
+
+        let (rgba, width, height, offset_x, offset_y) = clip.to_rgba();
+        self.clipboard = Some(Clipboard::ImageData(clip));
+
+        Some(ClipboardExport { rgba, width, height, offset_x, offset_y })
+    }
+
+    /// Cut = copy + clear selection contents. Returns the same export as copy.
+    pub fn cut(&mut self, layer_id: u64) -> Option<ClipboardExport> {
+        let export = self.copy(layer_id)?;
+
+        // Clear the selected region (or entire layer if no selection).
+        if self.doc.selection.is_some() {
+            self.doc.begin_transaction(layer_id);
+            self.doc.clear_selection_contents(layer_id);
+            if let Some(memento) = self.doc.commit_transaction(layer_id) {
+                self.undo_stack.push(Box::new(TileAction::new(memento)));
+            }
+        } else {
+            // No selection — clear all layer tiles.
+            self.doc.begin_transaction(layer_id);
+            if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
+                // Touch each tile to record it in the transaction, then clear.
+                let keys: Vec<(i32, i32)> = r.tiles.iter().map(|(k, _)| k).collect();
+                for (tx, ty) in keys {
+                    r.tiles.get_or_create(tx, ty).write().0.fill(0);
+                }
+            }
+            if let Some(memento) = self.doc.commit_transaction(layer_id) {
+                self.undo_stack.push(Box::new(TileAction::new(memento)));
+            }
+        }
+
+        Some(export)
+    }
+
+    /// Paste raw RGBA bytes as a new layer. Used for both internal and external
+    /// clipboard content. Returns the new layer ID.
+    pub fn paste_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        offset_x: i32,
+        offset_y: i32,
+        active_layer_id: Option<u64>,
+    ) -> u64 {
+        let clip = ImageClip::from_rgba(width, height, rgba, offset_x, offset_y);
+
+        // Create a new layer and insert above the active layer.
+        let id = self.doc.add_raster_layer();
+        if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
+            r.name = "Pasted Layer".to_string();
+            clip.write_to_layer(&mut r.tiles, offset_x, offset_y);
+        }
+
+        // Mark all written tiles dirty for GPU upload.
+        let tile_keys: Vec<(i32, i32)> = self.doc.layer(id)
+            .and_then(|l| match l { Layer::Raster(r) => Some(r), _ => None })
+            .map(|r| r.tiles.iter().map(|(k, _)| k).collect())
+            .unwrap_or_default();
+        let dirty = self.doc.dirty.entry(id).or_default();
+        for (tx, ty) in tile_keys {
+            dirty.mark(tx, ty);
+        }
+
+        self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
+        self.compositor.mark_dirty();
+
+        // Position above active layer if specified.
+        if let Some(active_id) = active_layer_id {
+            self.doc.move_layer(id, MoveTarget::After(active_id));
+        }
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
+
+        id
+    }
+
+    /// Paste from the internal clipboard at its original position.
+    /// Returns the new layer ID, or None if clipboard is empty.
+    pub fn paste_in_place(&mut self, active_layer_id: Option<u64>) -> Option<u64> {
+        let clip = self.clipboard.as_ref()?.as_image()?;
+        let (rgba, width, height, offset_x, offset_y) = clip.to_rgba();
+        Some(self.paste_image(width, height, &rgba, offset_x, offset_y, active_layer_id))
     }
 
     /// Regenerate marching ants overlay from the current selection.

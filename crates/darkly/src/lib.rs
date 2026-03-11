@@ -1,3 +1,4 @@
+pub mod clipboard;
 pub mod config;
 pub mod dirty;
 pub mod document;

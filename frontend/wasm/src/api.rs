@@ -194,6 +194,48 @@ impl DarklyHandle {
     pub fn invert_selection(&mut self) { self.0.invert_selection() }
     pub fn has_selection(&self) -> bool { self.0.has_selection() }
 
+    // --- Copy / Cut / Paste ---
+
+    /// Copy active layer content (masked by selection).
+    /// Returns a JS object `{rgba, width, height, offsetX, offsetY}` or null.
+    pub fn copy(&mut self, layer_id: f64) -> JsValue {
+        match self.0.copy(layer_id as u64) {
+            Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
+            None => JsValue::NULL,
+        }
+    }
+
+    /// Cut = copy + clear. Returns the same object as copy, or null.
+    pub fn cut(&mut self, layer_id: f64) -> JsValue {
+        match self.0.cut(layer_id as u64) {
+            Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
+            None => JsValue::NULL,
+        }
+    }
+
+    /// Paste raw RGBA bytes as a new layer. Returns the new layer ID.
+    pub fn paste_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        offset_x: i32,
+        offset_y: i32,
+        active_layer_id: f64,
+    ) -> f64 {
+        let active = if active_layer_id >= 0.0 { Some(active_layer_id as u64) } else { None };
+        self.0.paste_image(width, height, rgba, offset_x, offset_y, active) as f64
+    }
+
+    /// Paste from internal clipboard at original position. Returns layer ID or -1.
+    pub fn paste_in_place(&mut self, active_layer_id: f64) -> f64 {
+        let active = if active_layer_id >= 0.0 { Some(active_layer_id as u64) } else { None };
+        match self.0.paste_in_place(active) {
+            Some(id) => id as f64,
+            None => -1.0,
+        }
+    }
+
     // --- Veils ---
 
     pub fn add_veil(&mut self, veil_type: &str, params: JsValue) {

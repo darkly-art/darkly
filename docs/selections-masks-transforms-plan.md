@@ -483,49 +483,42 @@ When the user targets a mask for painting, the engine redirects tile writes to `
 
 ---
 
-## Phase 6: Copy/Paste
+## Phase 6: Copy/Paste ✅
 
-**Goal:** Copy selected region, paste as new layer.
+**Goal:** Copy selected region, paste as new layer. Seamless system clipboard integration for external images (screenshots, web images) — zero prompts.
 
-### Design
+### Architecture
 
-```rust
-// In Engine
-clipboard: Option<ClipboardBuffer>,
+Two clipboard channels:
 
-pub struct ClipboardBuffer {
-    tiles: TileGrid,           // RGBA pixel data
-    offset: (i32, i32),        // canvas position hint for paste
-    width: u32, height: u32,   // bounds of copied region
-}
-```
+1. **Internal clipboard** — `Clipboard` enum holding typed content (extensible for future layer/group copying). Phase 6 implements `ImageData(ImageClip)` variant.
+2. **System clipboard** — PNG blob via browser `navigator.clipboard` API. Written on every Copy/Cut (async). Read on every Paste.
 
-### Copy
+All image decode/encode happens in JS via Canvas API (`createImageBitmap` + `OffscreenCanvas`) — handles any browser-supported format (PNG, JPEG, WebP, GIF, BMP, SVG, AVIF, ICO). Always sRGB RGBA8, no color profile ambiguity, no prompts.
 
-1. Flatten visible layers within selection bounds (merge composited output)
-2. For each tile in the merged result, multiply by selection alpha
-3. Store in `ClipboardBuffer` with position = selection bounding rect origin
+### Operations
 
-For "copy from active layer only" (non-merged): read directly from the active layer's tiles.
+- **Copy (Ctrl+C):** Reads active layer tiles within selection bounds (or entire layer if no selection), multiplies by selection alpha, stores in internal `Clipboard::ImageData` + pushes PNG to system clipboard via JS.
+- **Cut (Ctrl+X):** Copy + `clear_selection_contents` (already implemented/undoable).
+- **Paste (Ctrl+V):** JS reads system clipboard → decodes any image format via `createImageBitmap` → raw RGBA to WASM → creates new "Pasted Layer" above active layer at document center.
+- **Paste in Place (Ctrl+Shift+V):** Uses internal clipboard at original copy position.
+- **Copy Merged (Ctrl+Shift+C):** Deferred to Phase 8 (requires GPU readback for correct blend-mode compositing).
 
-### Paste
+### Undo
 
-1. Create new `RasterLayer` from clipboard tiles
-2. Position at clipboard offset (or center of viewport)
-3. Add to layer stack above active layer
-4. Select the new layer
-5. Auto-activate transform tool (so user can reposition)
-
-### Browser Clipboard
-
-JS-side: encode `ClipboardBuffer` as PNG blob via canvas, write to `navigator.clipboard`. On paste from external source: decode PNG, upload tiles via WASM bridge. This is decoupled from the Rust core.
+- Copy: no state change → no undo needed.
+- Cut: reuses existing `clear_selection_contents` transaction → already undoable.
+- Paste: `add_raster_layer` pushes `LayerAddAction` → undo removes pasted layer.
 
 ### Files
 
-- **Create:** `crates/darkly/src/clipboard.rs` — `ClipboardBuffer`, copy/paste logic
-- **Modify:** `crates/darkly/src/engine.rs` — copy/paste API
-- **Modify:** `frontend/wasm/src/api.rs` — copy/paste bridge
-- **Modify:** `frontend/src/` — keyboard shortcuts (Ctrl+C/V/X), browser clipboard integration
+- **Created:** `crates/darkly/src/clipboard.rs` — `Clipboard` enum, `ImageClip` struct, `from_layer`, `from_rgba`, `to_rgba`, `write_to_layer`
+- **Modified:** `crates/darkly/src/engine.rs` — `clipboard` field, `copy`, `cut`, `paste_image`, `paste_in_place`, `ClipboardExport`
+- **Modified:** `frontend/wasm/src/api.rs` — WASM bridge for copy/cut/paste_image/paste_in_place
+- **Created:** `frontend/src/clipboard.ts` — `copyToSystemClipboard`, `readImageFromClipboard` (OffscreenCanvas + Clipboard API)
+- **Modified:** `frontend/src/editor.ts` — hotkey wiring for copy/cut/paste/pasteInPlace
+- **Modified:** `crates/darkly/src/config.rs` — hotkey defaults for copy/cut/paste/pasteInPlace
+- **Modified:** `crates/darkly/src/lib.rs` — `pub mod clipboard`
 
 ---
 
