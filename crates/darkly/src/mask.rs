@@ -250,21 +250,23 @@ impl AlphaMask {
 }
 
 // ---------------------------------------------------------------------------
-// Scanline flood fill
+// Scanline flood fill — generic over PaintSurface
+//
+// All scanning and filling operates tile-by-tile: one HashMap lookup per tile
+// boundary crossing. Within a tile, pixels are accessed via direct array
+// indexing on the tile data. This matches Krita's numContiguousColumns()
+// optimization and is critical for performance on large fills.
 // ---------------------------------------------------------------------------
 
+use crate::paint::PaintSurface;
+
 impl AlphaMask {
-    /// Scanline flood fill from a seed point on `source` tiles.
+    /// Scanline flood fill from a seed point on any `PaintSurface`.
     ///
-    /// Returns a mask with 1.0 for all contiguous pixels whose color is within
-    /// `tolerance` of the seed pixel's color (per-channel Chebyshev distance).
-    ///
-    /// Uses the GIMP/Krita approach: scanline-based segment queue with the
-    /// output mask doubling as the visited tracker. All pixel access is batched
-    /// per tile (one HashMap lookup per tile boundary, not per pixel) following
-    /// Krita's `numContiguousColumns()` optimization.
-    pub fn flood_fill(
-        source: &TileGrid,
+    /// Returns a mask with 1.0 for all contiguous pixels whose native value
+    /// is within `tolerance` of the seed pixel's value.
+    pub fn flood_fill_on<S: PaintSurface>(
+        source: &S,
         seed_x: i32,
         seed_y: i32,
         canvas_w: i32,
@@ -277,26 +279,23 @@ impl AlphaMask {
             return mask;
         }
 
-        let seed_color = read_pixel(source, seed_x, seed_y);
+        let seed = source.read_seed(seed_x, seed_y);
         let tol = tolerance as i16;
 
-        // Find the initial horizontal segment containing the seed.
-        let (seg_start, seg_end) = find_segment(source, &seed_color, tol, seed_x, seed_y, canvas_w);
+        let (seg_start, seg_end) = find_segment::<S>(source, &seed, tol, seed_x, seed_y, canvas_w);
         fill_span(&mut mask, seg_start, seg_end, seed_y);
 
-        // Segment queue: (y, start, end). Start is inclusive, end is exclusive.
         let mut queue = std::collections::VecDeque::new();
         queue.push_back((seed_y, seg_start, seg_end));
 
         while let Some((y, start, end)) = queue.pop_front() {
-            // Scan the rows above and below this segment.
             for dy in [-1i32, 1] {
                 let ny = y + dy;
                 if ny < 0 || ny >= canvas_h {
                     continue;
                 }
-                scan_row(
-                    source, &seed_color, tol,
+                scan_row::<S>(
+                    source, &seed, tol,
                     &mut mask, &mut queue,
                     ny, start, end, canvas_w,
                 );
@@ -305,45 +304,71 @@ impl AlphaMask {
 
         mask
     }
-}
 
-// ---------------------------------------------------------------------------
-// Tile-aware flood fill helpers
-//
-// All scanning and filling operates tile-by-tile: one HashMap lookup per tile
-// boundary crossing. Within a tile, pixels are accessed via direct array
-// indexing on the tile data. This matches Krita's numContiguousColumns()
-// optimization and is critical for performance on large fills.
-// ---------------------------------------------------------------------------
-
-/// Read a single pixel from a TileGrid (used only for the seed point).
-fn read_pixel(source: &TileGrid, x: i32, y: i32) -> [u8; 4] {
-    let ts = TILE_SIZE as i32;
-    let (tx, ty) = TileGrid::tile_coords_for_pixel(x, y);
-    match source.get(tx, ty) {
-        Some(t) => *t.data().pixel((x - tx * ts) as usize, (y - ty * ts) as usize),
-        None => [0, 0, 0, 0],
+    /// Convenience: flood fill reading from a TileGrid via a temporary PaintTarget.
+    /// This is the legacy signature used by Document::flood_fill in non-mask mode.
+    pub fn flood_fill(
+        source: &TileGrid,
+        seed_x: i32,
+        seed_y: i32,
+        canvas_w: i32,
+        canvas_h: i32,
+        tolerance: u8,
+    ) -> AlphaMask {
+        // Construct a read-only view. The PaintTarget needs &mut but flood_fill_on
+        // only calls read methods (&self). We use a thin wrapper to avoid the
+        // &mut requirement.
+        Self::flood_fill_on(
+            &ReadOnlyTileGrid(source),
+            seed_x, seed_y, canvas_w, canvas_h, tolerance,
+        )
     }
 }
 
-/// Check if a pixel color matches the seed within tolerance.
-#[inline(always)]
-fn color_matches(px: &[u8; 4], seed: &[u8; 4], tol: i16) -> bool {
-    (px[0] as i16 - seed[0] as i16).abs() <= tol
-        && (px[1] as i16 - seed[1] as i16).abs() <= tol
-        && (px[2] as i16 - seed[2] as i16).abs() <= tol
-        && (px[3] as i16 - seed[3] as i16).abs() <= tol
-}
+/// Read-only wrapper around &TileGrid that implements PaintSurface for flood fill.
+/// Write methods panic — they should never be called during flood fill source reading.
+struct ReadOnlyTileGrid<'a>(&'a TileGrid);
 
-/// Empty pixel constant for tiles that don't exist.
-const EMPTY_PIXEL: [u8; 4] = [0, 0, 0, 0];
+impl PaintSurface for ReadOnlyTileGrid<'_> {
+    type Seed = [u8; 4];
+    type TileData = crate::tile::RgbaData;
+
+    fn read_seed(&self, x: i32, y: i32) -> [u8; 4] {
+        let ts = TILE_SIZE as i32;
+        let (tx, ty) = TileGrid::tile_coords_for_pixel(x, y);
+        match self.0.get(tx, ty) {
+            Some(t) => *t.data().pixel((x - tx * ts) as usize, (y - ty * ts) as usize),
+            None => [0, 0, 0, 0],
+        }
+    }
+
+    fn get_tile_data(&self, tx: i32, ty: i32) -> Option<&crate::tile::RgbaData> {
+        self.0.get(tx, ty).map(|t| t.data())
+    }
+
+    fn pixel_matches(data: &crate::tile::RgbaData, lx: usize, ly: usize, seed: &[u8; 4], tol: i16) -> bool {
+        let px = data.pixel(lx, ly);
+        (px[0] as i16 - seed[0] as i16).abs() <= tol
+            && (px[1] as i16 - seed[1] as i16).abs() <= tol
+            && (px[2] as i16 - seed[2] as i16).abs() <= tol
+            && (px[3] as i16 - seed[3] as i16).abs() <= tol
+    }
+
+    fn empty_matches(seed: &[u8; 4], tol: i16) -> bool {
+        Self::pixel_matches(&crate::tile::RgbaData::default(), 0, 0, seed, tol)
+    }
+
+    fn composite(&mut self, _: i32, _: i32, _: [u8; 4]) { unreachable!() }
+    fn erase(&mut self, _: i32, _: i32, _: f32) { unreachable!() }
+    fn replace(&mut self, _: i32, _: i32, _: [u8; 4]) { unreachable!() }
+}
 
 /// Scan left and right from `x` on row `y` to find the full contiguous
 /// matching segment. Tile-aware: one tile lookup per tile boundary.
 /// Returns (start_inclusive, end_exclusive).
-fn find_segment(
-    source: &TileGrid,
-    seed: &[u8; 4],
+fn find_segment<S: PaintSurface>(
+    source: &S,
+    seed: &S::Seed,
     tol: i16,
     x: i32,
     y: i32,
@@ -357,26 +382,22 @@ fn find_segment(
     let mut end = x;
     while end < canvas_w {
         let tx = end.div_euclid(ts);
-        let tile = source.get(tx, ty);
         let tile_end = ((tx + 1) * ts).min(canvas_w);
         let base = tx * ts;
 
-        match tile {
-            Some(t) => {
-                let data = t.data();
+        match source.get_tile_data(tx, ty) {
+            Some(data) => {
                 while end < tile_end {
-                    if !color_matches(data.pixel((end - base) as usize, ly), seed, tol) {
+                    if !S::pixel_matches(data, (end - base) as usize, ly, seed, tol) {
                         break;
                     }
                     end += 1;
                 }
             }
             None => {
-                // Empty tile: all pixels are [0,0,0,0].
-                if color_matches(&EMPTY_PIXEL, seed, tol) {
-                    end = tile_end; // entire tile matches
+                if S::empty_matches(seed, tol) {
+                    end = tile_end;
                 }
-                // else: end stays, loop breaks below
             }
         }
         if end < tile_end {
@@ -387,24 +408,21 @@ fn find_segment(
     // Scan left from x - 1.
     let mut start = x;
     while start > 0 {
-        let check = start - 1;
-        let tx = check.div_euclid(ts);
-        let tile = source.get(tx, ty);
+        let tx = (start - 1).div_euclid(ts);
         let tile_start = tx * ts;
         let base = tx * ts;
 
-        match tile {
-            Some(t) => {
-                let data = t.data();
+        match source.get_tile_data(tx, ty) {
+            Some(data) => {
                 while start > tile_start {
-                    if !color_matches(data.pixel((start - 1 - base) as usize, ly), seed, tol) {
+                    if !S::pixel_matches(data, (start - 1 - base) as usize, ly, seed, tol) {
                         break;
                     }
                     start -= 1;
                 }
             }
             None => {
-                if color_matches(&EMPTY_PIXEL, seed, tol) {
+                if S::empty_matches(seed, tol) {
                     start = tile_start;
                 }
             }
@@ -442,9 +460,9 @@ fn fill_span(mask: &mut AlphaMask, start: i32, end: i32, y: i32) {
 /// Scan row `ny` in the range [start, end), find un-visited matching
 /// sub-segments, extend them, fill, and push to queue.
 /// Tile-aware: reads source and mask tiles once per tile boundary.
-fn scan_row(
-    source: &TileGrid,
-    seed: &[u8; 4],
+fn scan_row<S: PaintSurface>(
+    source: &S,
+    seed: &S::Seed,
     tol: i16,
     mask: &mut AlphaMask,
     queue: &mut std::collections::VecDeque<(i32, i32, i32)>,
@@ -464,7 +482,7 @@ fn scan_row(
         let tile_end = ((tx + 1) * ts).min(end);
 
         // Look up both source and mask tiles once for this tile column.
-        let src_tile = source.get(tx, ty);
+        let src_tile = source.get_tile_data(tx, ty);
         let mask_tile = mask.get(tx, ty);
 
         while x < tile_end {
@@ -480,10 +498,10 @@ fn scan_row(
                 continue;
             }
 
-            // Check color match.
+            // Check pixel match.
             let matches = match src_tile {
-                Some(t) => color_matches(t.data().pixel(lx, ly), seed, tol),
-                None => color_matches(&EMPTY_PIXEL, seed, tol),
+                Some(data) => S::pixel_matches(data, lx, ly, seed, tol),
+                None => S::empty_matches(seed, tol),
             };
             if !matches {
                 x += 1;
@@ -491,25 +509,21 @@ fn scan_row(
             }
 
             // Found an unvisited matching pixel — extend to full segment.
-            let (seg_start, seg_end) = find_segment(source, seed, tol, x, ny, canvas_w);
+            let (seg_start, seg_end) = find_segment::<S>(source, seed, tol, x, ny, canvas_w);
             fill_span(mask, seg_start, seg_end, ny);
             queue.push_back((ny, seg_start, seg_end));
-            // Skip past this segment.
             x = seg_end;
 
             // After fill_span mutated the mask, our mask_tile ref is stale
-            // but that's fine: we skip past the filled segment, so we won't
-            // read from the stale ref for those pixels. When x crosses into
-            // a new tile column, the outer loop re-fetches the tile.
-            // If x is still in the same tile, we'll re-check below.
+            // but that's fine: we skip past the filled segment. If x is still
+            // in this tile column, re-enter to get fresh tile refs.
             break;
         }
 
         // If we broke out of the inner loop due to fill_span, re-fetch
         // the mask tile for the remaining pixels in this tile column.
         if x < tile_end && x > start {
-            // Re-enter with updated tile refs for remaining range.
-            scan_row(source, seed, tol, mask, queue, ny, x, tile_end, canvas_w);
+            scan_row::<S>(source, seed, tol, mask, queue, ny, x, tile_end, canvas_w);
             x = tile_end;
         }
     }

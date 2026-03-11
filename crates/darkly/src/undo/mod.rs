@@ -6,7 +6,7 @@ mod selection;
 
 pub use tile::TileAction;
 pub use layer::{LayerAddAction, LayerRemoveAction, LayerMoveAction};
-pub use mask::{MaskTileAction, MaskPropertyAction};
+pub use mask::MaskPropertyAction;
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
 

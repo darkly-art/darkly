@@ -1,8 +1,16 @@
 use crate::dirty::DirtyRegion;
 use crate::layer::*;
-use crate::paint::{MaskPaintTarget, PaintTarget};
+use crate::paint::{self, MaskPaintTarget, PaintTarget, Surface};
 use crate::tile::{AlphaF32, AlphaMask, Memento, Rgba, TILE_SIZE, TileGrid};
 use std::collections::HashMap;
+
+/// What kind of tile data was captured during a transaction.
+/// Returned by `commit_transaction` so the undo system can handle both
+/// layer tiles and mask tiles with one action type.
+pub enum TransactionMemento {
+    Tiles(HashMap<LayerId, Memento<Rgba>>),
+    Mask(LayerId, Memento<AlphaF32>),
+}
 
 pub enum SelectionMode {
     Replace,
@@ -31,6 +39,9 @@ pub struct Document {
     /// Dirty regions for layer mask tiles (separate from layer tile dirty).
     pub mask_dirty: HashMap<LayerId, DirtyRegion>,
     pub selection: Option<AlphaMask>,
+    /// Which layer (if any) is having its mask edited instead of its pixels.
+    /// Set by the engine before beginning a stroke, cleared after committing.
+    mask_editing: Option<LayerId>,
     next_id: LayerId,
 }
 
@@ -248,6 +259,7 @@ impl Document {
             dirty: HashMap::new(),
             mask_dirty: HashMap::new(),
             selection: None,
+            mask_editing: None,
             next_id: 1,
         }
     }
@@ -472,18 +484,26 @@ impl Document {
         }
     }
 
-    /// Borrow-split to get a PaintTarget for the given raster layer.
-    /// Selection masking is applied internally by PaintTarget.
-    /// Takes individual fields to avoid conflicting borrows on &mut self.
-    fn make_paint_target<'a>(
+    /// Borrow-split factory that returns a `Surface` — either layer tiles or mask,
+    /// depending on `mask_editing`. Callers never branch on surface type.
+    fn make_surface<'a>(
         layers: &'a mut Vec<LayerNode>,
         dirty: &'a mut HashMap<LayerId, DirtyRegion>,
+        mask_dirty: &'a mut HashMap<LayerId, DirtyRegion>,
         selection: Option<&'a AlphaMask>,
+        mask_editing: Option<LayerId>,
         layer_id: LayerId,
-    ) -> Option<PaintTarget<'a>> {
-        let raster = find_raster_in_mut(layers, layer_id)?;
-        let dirty_region = dirty.get_mut(&layer_id)?;
-        Some(PaintTarget::new(&mut raster.tiles, dirty_region, selection))
+    ) -> Option<Surface<'a>> {
+        if mask_editing == Some(layer_id) {
+            let raster = find_raster_in_mut(layers, layer_id)?;
+            let mask = raster.mask.as_mut()?;
+            let dirty_region = mask_dirty.get_mut(&layer_id)?;
+            Some(Surface::Mask(MaskPaintTarget::new(mask, dirty_region, selection)))
+        } else {
+            let raster = find_raster_in_mut(layers, layer_id)?;
+            let dirty_region = dirty.get_mut(&layer_id)?;
+            Some(Surface::Layer(PaintTarget::new(&mut raster.tiles, dirty_region, selection)))
+        }
     }
 
     /// Get a mutable reference to the raster layer's tiles and the dirty region simultaneously.
@@ -499,135 +519,38 @@ impl Document {
         Some((&mut raster.tiles, dirty_region))
     }
 
-    /// Paint a filled circle on a raster layer.
-    pub fn paint_circle(
-        &mut self,
-        layer_id: LayerId,
-        cx: f32,
-        cy: f32,
-        radius: f32,
-        color: [u8; 4],
-    ) {
-        let mut target = match Self::make_paint_target(
-            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+    /// Paint a filled circle on a raster layer (or its mask when mask_editing is set).
+    pub fn paint_circle(&mut self, layer_id: LayerId, cx: f32, cy: f32, radius: f32, color: [u8; 4]) {
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
+            self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
-            Some(t) => t,
-            None => return,
-        };
-
-        let r2 = radius * radius;
-        let x_min = (cx - radius).floor() as i32;
-        let x_max = (cx + radius).ceil() as i32;
-        let y_min = (cy - radius).floor() as i32;
-        let y_max = (cy + radius).ceil() as i32;
-
-        for py in y_min..y_max {
-            for px in x_min..x_max {
-                let fpx = px as f32 + 0.5;
-                let fpy = py as f32 + 0.5;
-                let dx = fpx - cx;
-                let dy = fpy - cy;
-                if dx * dx + dy * dy <= r2 {
-                    target.composite(px, py, color);
-                }
-            }
+            paint::paint_circle(&mut s, cx, cy, radius, color);
         }
     }
 
-    /// Erase a filled circle on a raster layer (set pixels to transparent).
-    pub fn erase_circle(
-        &mut self,
-        layer_id: LayerId,
-        cx: f32,
-        cy: f32,
-        radius: f32,
-    ) {
-        let mut target = match Self::make_paint_target(
-            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+    /// Erase a filled circle on a raster layer (or its mask when mask_editing is set).
+    pub fn erase_circle(&mut self, layer_id: LayerId, cx: f32, cy: f32, radius: f32) {
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
+            self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
-            Some(t) => t,
-            None => return,
-        };
-
-        let r2 = radius * radius;
-        let x_min = (cx - radius).floor() as i32;
-        let x_max = (cx + radius).ceil() as i32;
-        let y_min = (cy - radius).floor() as i32;
-        let y_max = (cy + radius).ceil() as i32;
-
-        for py in y_min..y_max {
-            for px in x_min..x_max {
-                let fpx = px as f32 + 0.5;
-                let fpy = py as f32 + 0.5;
-                let dx = fpx - cx;
-                let dy = fpy - cy;
-                if dx * dx + dy * dy <= r2 {
-                    target.erase(px, py, 1.0);
-                }
-            }
+            paint::erase_circle(&mut s, cx, cy, radius);
         }
     }
 
     /// Flood fill from a seed point with a color, using tolerance-based matching.
-    ///
-    /// Uses the shared scanline flood fill to compute the fill region as a mask,
-    /// then applies the color to all masked pixels via the paint target.
-    pub fn flood_fill(
-        &mut self,
-        layer_id: LayerId,
-        seed_x: i32,
-        seed_y: i32,
-        color: [u8; 4],
-        tolerance: u8,
-    ) {
+    pub fn flood_fill(&mut self, layer_id: LayerId, seed_x: i32, seed_y: i32, color: [u8; 4], tolerance: u8) {
         if seed_x < 0 || seed_y < 0 || seed_x >= self.width as i32 || seed_y >= self.height as i32 {
             return;
         }
-
-        // Compute the fill region first (reads from tiles, produces a mask).
-        let tiles = match find_layer_in(&self.root.children, layer_id) {
-            Some(Layer::Raster(r)) => &r.tiles,
-            _ => return,
-        };
-
-        // Early exit if seed pixel already has the fill color.
-        let (stx, sty) = TileGrid::tile_coords_for_pixel(seed_x, seed_y);
-        let ts = TILE_SIZE as i32;
-        let slx = (seed_x - stx * ts) as usize;
-        let sly = (seed_y - sty * ts) as usize;
-        let target_color = match tiles.get(stx, sty) {
-            Some(t) => *t.data().pixel(slx, sly),
-            None => [0, 0, 0, 0],
-        };
-        if target_color == color {
-            return;
-        }
-
-        let fill_mask = AlphaMask::flood_fill(
-            tiles, seed_x, seed_y,
-            self.width as i32, self.height as i32,
-            tolerance,
-        );
-
-        // Apply the fill color to all masked pixels.
-        let mut target = match Self::make_paint_target(
-            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+        let w = self.width as i32;
+        let h = self.height as i32;
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
+            self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
-            Some(t) => t,
-            None => return,
-        };
-
-        for ((tx, ty), mask_tile) in fill_mask.iter() {
-            let base_x = tx * ts;
-            let base_y = ty * ts;
-            let data = mask_tile.data();
-            for ly in 0..TILE_SIZE {
-                for lx in 0..TILE_SIZE {
-                    if data.get(lx, ly) > 0.0 {
-                        target.replace(base_x + lx as i32, base_y + ly as i32, color);
-                    }
-                }
-            }
+            paint::flood_fill(&mut s, seed_x, seed_y, w, h, color, tolerance);
         }
     }
 
@@ -642,10 +565,11 @@ impl Document {
         let tile_keys: Vec<(i32, i32)> = self.selection.as_ref().unwrap()
             .iter().map(|((tx, ty), _)| (tx, ty)).collect();
 
-        let mut target = match Self::make_paint_target(
-            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+        let mut surface = match Self::make_surface(
+            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
+            self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
-            Some(t) => t,
+            Some(s) => s,
             None => return,
         };
 
@@ -654,70 +578,61 @@ impl Document {
             let base_y = ty * ts;
             for ly in 0..TILE_SIZE {
                 for lx in 0..TILE_SIZE {
-                    target.erase(base_x + lx as i32, base_y + ly as i32, 1.0);
+                    surface.erase(base_x + lx as i32, base_y + ly as i32, 1.0);
                 }
             }
         }
     }
 
-    /// Draw a linear gradient between two points on a raster layer.
+    /// Draw a linear gradient between two points on a raster layer (or its mask).
     pub fn linear_gradient(
         &mut self,
         layer_id: LayerId,
-        x0: f32, y0: f32,
-        x1: f32, y1: f32,
-        color0: [u8; 4],
-        color1: [u8; 4],
+        x0: f32, y0: f32, x1: f32, y1: f32,
+        color0: [u8; 4], color1: [u8; 4],
     ) {
         let width = self.width;
         let height = self.height;
-
-        let mut target = match Self::make_paint_target(
-            &mut self.root.children, &mut self.dirty, self.selection.as_ref(), layer_id,
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
+            self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
-            Some(t) => t,
-            None => return,
-        };
-
-        let dx = x1 - x0;
-        let dy = y1 - y0;
-        let len2 = dx * dx + dy * dy;
-        if len2 < 0.001 {
-            return;
+            paint::linear_gradient(&mut s, x0, y0, x1, y1, color0, color1, width, height);
         }
+    }
 
-        for py in 0..height as i32 {
-            for px in 0..width as i32 {
-                let fpx = px as f32 + 0.5;
-                let fpy = py as f32 + 0.5;
-
-                let t = ((fpx - x0) * dx + (fpy - y0) * dy) / len2;
-                let t = t.clamp(0.0, 1.0);
-
-                let r = (color0[0] as f32 * (1.0 - t) + color1[0] as f32 * t) as u8;
-                let g = (color0[1] as f32 * (1.0 - t) + color1[1] as f32 * t) as u8;
-                let b = (color0[2] as f32 * (1.0 - t) + color1[2] as f32 * t) as u8;
-                let a = (color0[3] as f32 * (1.0 - t) + color1[3] as f32 * t) as u8;
-
-                target.replace(px, py, [r, g, b, a]);
+    /// Begin recording tile changes on a raster layer (or its mask) for undo.
+    /// Routes to the mask automatically when `mask_editing` is set.
+    pub fn begin_transaction(&mut self, layer_id: LayerId) {
+        let editing_mask = self.mask_editing == Some(layer_id);
+        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
+            if editing_mask {
+                if let Some(mask) = &mut r.mask {
+                    mask.begin_transaction();
+                }
+            } else {
+                r.tiles.begin_transaction();
             }
         }
     }
 
-    /// Begin recording tile changes on a raster layer for undo.
-    pub fn begin_transaction(&mut self, layer_id: LayerId) {
+    /// Commit the active transaction and return a memento for undo.
+    /// Returns the appropriate variant depending on whether we're editing
+    /// the mask or the layer tiles.
+    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<TransactionMemento> {
+        let editing_mask = self.mask_editing == Some(layer_id);
         if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
-            r.tiles.begin_transaction();
-        }
-    }
-
-    /// Commit the active transaction and return per-layer mementos if any tiles changed.
-    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<HashMap<LayerId, Memento<Rgba>>> {
-        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
-            if let Some(memento) = r.tiles.commit_transaction() {
-                let mut mementos = HashMap::new();
-                mementos.insert(layer_id, memento);
-                return Some(mementos);
+            if editing_mask {
+                if let Some(mask) = &mut r.mask {
+                    return mask.commit_transaction()
+                        .map(|m| TransactionMemento::Mask(layer_id, m));
+                }
+            } else {
+                if let Some(memento) = r.tiles.commit_transaction() {
+                    let mut mementos = HashMap::new();
+                    mementos.insert(layer_id, memento);
+                    return Some(TransactionMemento::Tiles(mementos));
+                }
             }
         }
         None
@@ -747,6 +662,11 @@ impl Document {
                 }
             }
         }
+    }
+
+    /// Tell the document which layer (if any) should route operations to its mask.
+    pub fn set_mask_editing(&mut self, layer_id: Option<LayerId>) {
+        self.mask_editing = layer_id;
     }
 
     // --- Layer Mask Operations ---
@@ -784,79 +704,7 @@ impl Document {
         }
     }
 
-    /// Begin recording mask tile changes for undo.
-    pub fn begin_mask_transaction(&mut self, layer_id: LayerId) {
-        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
-            if let Some(mask) = &mut r.mask {
-                mask.begin_transaction();
-            }
-        }
-    }
 
-    /// Commit mask transaction and return the memento if tiles changed.
-    pub fn commit_mask_transaction(&mut self, layer_id: LayerId) -> Option<Memento<AlphaF32>> {
-        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
-            if let Some(mask) = &mut r.mask {
-                return mask.commit_transaction();
-            }
-        }
-        None
-    }
-
-    /// Borrow-split to get a MaskPaintTarget for the given layer's mask.
-    fn make_mask_paint_target<'a>(
-        layers: &'a mut Vec<LayerNode>,
-        mask_dirty: &'a mut HashMap<LayerId, DirtyRegion>,
-        selection: Option<&'a AlphaMask>,
-        layer_id: LayerId,
-    ) -> Option<MaskPaintTarget<'a>> {
-        let raster = find_raster_in_mut(layers, layer_id)?;
-        let mask = raster.mask.as_mut()?;
-        let dirty_region = mask_dirty.get_mut(&layer_id)?;
-        Some(MaskPaintTarget::new(mask, dirty_region, selection))
-    }
-
-    /// Paint a circle on the layer mask (value=0.0 for black/hide, 1.0 for white/reveal).
-    pub fn paint_mask_circle(
-        &mut self,
-        layer_id: LayerId,
-        cx: f32, cy: f32, radius: f32,
-        value: f32,
-    ) {
-        let mut target = match Self::make_mask_paint_target(
-            &mut self.root.children, &mut self.mask_dirty, self.selection.as_ref(), layer_id,
-        ) {
-            Some(t) => t,
-            None => return,
-        };
-
-        let r2 = radius * radius;
-        let x_min = (cx - radius).floor() as i32;
-        let x_max = (cx + radius).ceil() as i32;
-        let y_min = (cy - radius).floor() as i32;
-        let y_max = (cy + radius).ceil() as i32;
-
-        for py in y_min..y_max {
-            for px in x_min..x_max {
-                let fpx = px as f32 + 0.5;
-                let fpy = py as f32 + 0.5;
-                let dx = fpx - cx;
-                let dy = fpy - cy;
-                if dx * dx + dy * dy <= r2 {
-                    target.paint(px, py, value, 1.0);
-                }
-            }
-        }
-    }
-
-    /// Erase a circle on the layer mask (blend toward 0.0 = hide).
-    pub fn erase_mask_circle(
-        &mut self,
-        layer_id: LayerId,
-        cx: f32, cy: f32, radius: f32,
-    ) {
-        self.paint_mask_circle(layer_id, cx, cy, radius, 0.0);
-    }
 
     /// Convert the current selection to a layer mask (replaces existing mask).
     pub fn selection_to_mask(&mut self, layer_id: LayerId) {

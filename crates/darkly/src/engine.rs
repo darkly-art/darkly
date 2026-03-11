@@ -2,7 +2,7 @@ use crate::document::{Document, MoveTarget, SelectionMode};
 use crate::layer::{BlendMode, Layer, LayerNode};
 use crate::undo::{
     UndoStack, TileAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
-    MaskTileAction, MaskPropertyAction, PropertyAction, SelectionAction, mark_affected_dirty,
+    MaskPropertyAction, PropertyAction, SelectionAction, mark_affected_dirty,
 };
 use crate::undo::property::Property;
 use crate::gpu::compositor::Compositor;
@@ -397,8 +397,8 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
 
         // Push tile action first (for the alpha bake), then mask property action
-        if let Some(mementos) = tile_memento {
-            self.undo_stack.push(Box::new(TileAction::new(mementos)));
+        if let Some(memento) = tile_memento {
+            self.undo_stack.push(Box::new(TileAction::new(memento)));
         }
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
             layer_id, old_mask, old_enabled, old_show,
@@ -512,11 +512,10 @@ impl DarklyEngine {
     // strokes are routed to the mask instead of the layer.
 
     pub fn begin_stroke(&mut self, layer_id: u64) {
-        if self.editing_mask_layer == Some(layer_id) {
-            self.doc.begin_mask_transaction(layer_id);
-        } else {
-            self.doc.begin_transaction(layer_id);
-        }
+        self.doc.set_mask_editing(
+            if self.editing_mask_layer == Some(layer_id) { Some(layer_id) } else { None }
+        );
+        self.doc.begin_transaction(layer_id);
         self.active_stroke_layer = Some(layer_id);
     }
 
@@ -525,52 +524,25 @@ impl DarklyEngine {
             Some(id) => id,
             None => return,
         };
-
-        if self.editing_mask_layer == Some(layer_id) {
-            // Route paint ops to mask
-            match op {
-                StrokeOp::PaintCircle { x, y, radius, r: _, g: _, b: _, a } => {
-                    // For mask painting: a > 128 paints white (reveal), a <= 128 paints black (hide)
-                    let value = if a > 128 { 1.0 } else { 0.0 };
-                    self.doc.paint_mask_circle(layer_id, x, y, radius, value);
-                }
-                StrokeOp::EraseCircle { x, y, radius } => {
-                    self.doc.erase_mask_circle(layer_id, x, y, radius);
-                }
-                _ => {} // Flood fill and gradient not supported on masks
-            }
-        } else {
-            match op {
-                StrokeOp::PaintCircle { x, y, radius, r, g, b, a } => {
-                    self.doc.paint_circle(layer_id, x, y, radius, [r, g, b, a]);
-                }
-                StrokeOp::EraseCircle { x, y, radius } => {
-                    self.doc.erase_circle(layer_id, x, y, radius);
-                }
-                StrokeOp::FloodFill { x, y, r, g, b, a, tolerance } => {
-                    self.doc.flood_fill(layer_id, x as i32, y as i32, [r, g, b, a], tolerance);
-                }
-                StrokeOp::LinearGradient { x0, y0, x1, y1, r0, g0, b0, a0, r1, g1, b1, a1 } => {
-                    self.doc.linear_gradient(
-                        layer_id, x0, y0, x1, y1,
-                        [r0, g0, b0, a0], [r1, g1, b1, a1],
-                    );
-                }
-            }
+        match op {
+            StrokeOp::PaintCircle { x, y, radius, r, g, b, a } =>
+                self.doc.paint_circle(layer_id, x, y, radius, [r, g, b, a]),
+            StrokeOp::EraseCircle { x, y, radius } =>
+                self.doc.erase_circle(layer_id, x, y, radius),
+            StrokeOp::FloodFill { x, y, r, g, b, a, tolerance } =>
+                self.doc.flood_fill(layer_id, x as i32, y as i32, [r, g, b, a], tolerance),
+            StrokeOp::LinearGradient { x0, y0, x1, y1, r0, g0, b0, a0, r1, g1, b1, a1 } =>
+                self.doc.linear_gradient(layer_id, x0, y0, x1, y1,
+                    [r0, g0, b0, a0], [r1, g1, b1, a1]),
         }
     }
 
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
-            if self.editing_mask_layer == Some(layer_id) {
-                if let Some(memento) = self.doc.commit_mask_transaction(layer_id) {
-                    self.undo_stack.push(Box::new(MaskTileAction::new(layer_id, memento)));
-                }
-            } else {
-                if let Some(mementos) = self.doc.commit_transaction(layer_id) {
-                    self.undo_stack.push(Box::new(TileAction::new(mementos)));
-                }
+            if let Some(memento) = self.doc.commit_transaction(layer_id) {
+                self.undo_stack.push(Box::new(TileAction::new(memento)));
             }
+            self.doc.set_mask_editing(None);
         }
     }
 
@@ -876,8 +848,8 @@ impl DarklyEngine {
         }
         self.doc.begin_transaction(layer_id);
         self.doc.clear_selection_contents(layer_id);
-        if let Some(mementos) = self.doc.commit_transaction(layer_id) {
-            self.undo_stack.push(Box::new(TileAction::new(mementos)));
+        if let Some(memento) = self.doc.commit_transaction(layer_id) {
+            self.undo_stack.push(Box::new(TileAction::new(memento)));
         }
     }
 
