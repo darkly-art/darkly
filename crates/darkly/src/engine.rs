@@ -12,6 +12,7 @@ use crate::gpu::overlay::{
 };
 use crate::gpu::params::{ParamDef, ParamValue};
 use crate::gpu::view::ViewTransform;
+use crate::tile::{AlphaMask, TileGrid, TILE_SIZE};
 
 // ---------------------------------------------------------------------------
 // Shared return types — serde-serializable for any FFI bridge.
@@ -350,7 +351,7 @@ impl DarklyEngine {
         };
 
         self.doc.add_mask(layer_id);
-        self.compositor.set_layer_mask(&self.gpu.device, layer_id, true);
+        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
@@ -367,7 +368,7 @@ impl DarklyEngine {
 
         self.doc.remove_mask(layer_id);
         self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
-        self.compositor.set_layer_mask(&self.gpu.device, layer_id, false);
+        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, false);
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
@@ -391,7 +392,7 @@ impl DarklyEngine {
         let tile_memento = self.doc.commit_transaction(layer_id);
 
         self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
-        self.compositor.set_layer_mask(&self.gpu.device, layer_id, false);
+        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, false);
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
@@ -447,7 +448,7 @@ impl DarklyEngine {
         };
 
         self.doc.selection_to_mask(layer_id);
-        self.compositor.set_layer_mask(&self.gpu.device, layer_id, true);
+        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
         // Mark all mask tiles dirty for upload
         let mask_coords: Vec<(i32, i32)> = self.doc.layer(layer_id)
@@ -481,7 +482,7 @@ impl DarklyEngine {
             let mask_enabled = r.mask_enabled;
             let show_mask = r.show_mask;
 
-            self.compositor.set_layer_mask(&self.gpu.device, layer_id, has_mask);
+            self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, has_mask);
             self.compositor.update_mask_binding(
                 &self.gpu.device, layer_id, mask_enabled, show_mask,
             );
@@ -598,6 +599,31 @@ impl DarklyEngine {
     pub fn pick_color(&self, _x: f32, _y: f32) -> [u8; 4] {
         // TODO: GPU readback from composite cache.
         [0, 0, 0, 255]
+    }
+
+    // --- Thumbnails ---
+
+    /// Generate an RGBA thumbnail of a layer's content.
+    /// Returns `width * height * 4` bytes (RGBA). Transparent areas show checkerboard.
+    pub fn layer_thumbnail(&self, layer_id: u64, width: u32, height: u32) -> Vec<u8> {
+        let tiles = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => &r.tiles,
+            _ => return vec![0u8; (width * height * 4) as usize],
+        };
+        generate_rgba_thumbnail(tiles, self.doc.width, self.doc.height, width, height)
+    }
+
+    /// Generate an RGBA thumbnail of a layer's mask (grayscale).
+    /// Returns empty vec if the layer has no mask.
+    pub fn mask_thumbnail(&self, layer_id: u64, width: u32, height: u32) -> Vec<u8> {
+        let mask = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => match &r.mask {
+                Some(m) => m,
+                None => return Vec::new(),
+            },
+            _ => return Vec::new(),
+        };
+        generate_mask_thumbnail(mask, self.doc.width, self.doc.height, width, height)
     }
 
     // --- Rendering ---
@@ -923,7 +949,7 @@ impl DarklyEngine {
             self.compositor.update_raster_uniforms_full(
                 &self.gpu.queue, info.id, info.opacity, info.blend_mode, info.show_mask,
             );
-            self.compositor.set_layer_mask(&self.gpu.device, info.id, info.has_mask);
+            self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, info.id, info.has_mask);
             self.compositor.update_mask_binding(
                 &self.gpu.device, info.id, info.mask_enabled, info.show_mask,
             );
@@ -968,6 +994,83 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
             children: g.children.iter().rev().map(node_to_layer_info).collect(),
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Thumbnail generation — CPU-side nearest-neighbor sampling from tile data
+// ---------------------------------------------------------------------------
+
+fn generate_rgba_thumbnail(
+    tiles: &TileGrid,
+    doc_w: u32, doc_h: u32,
+    thumb_w: u32, thumb_h: u32,
+) -> Vec<u8> {
+    let mut buf = vec![0u8; (thumb_w * thumb_h * 4) as usize];
+    let ts = TILE_SIZE as u32;
+
+    for oy in 0..thumb_h {
+        let cy = (oy * doc_h / thumb_h).min(doc_h - 1);
+        let ty = (cy / ts) as i32;
+        let ly = (cy % ts) as usize;
+
+        for ox in 0..thumb_w {
+            let cx = (ox * doc_w / thumb_w).min(doc_w - 1);
+            let tx = (cx / ts) as i32;
+            let lx = (cx % ts) as usize;
+
+            let off = ((oy * thumb_w + ox) * 4) as usize;
+
+            let (r, g, b, a) = if let Some(tile) = tiles.get(tx, ty) {
+                let p = tile.data().pixel(lx, ly);
+                (p[0], p[1], p[2], p[3])
+            } else {
+                (0, 0, 0, 0)
+            };
+
+            // Checkerboard behind transparent areas
+            let check = if ((ox / 4) + (oy / 4)) % 2 == 0 { 102u8 } else { 153u8 };
+            let af = a as f32 / 255.0;
+            buf[off]     = (r as f32 * af + check as f32 * (1.0 - af)) as u8;
+            buf[off + 1] = (g as f32 * af + check as f32 * (1.0 - af)) as u8;
+            buf[off + 2] = (b as f32 * af + check as f32 * (1.0 - af)) as u8;
+            buf[off + 3] = 255;
+        }
+    }
+    buf
+}
+
+fn generate_mask_thumbnail(
+    mask: &AlphaMask,
+    doc_w: u32, doc_h: u32,
+    thumb_w: u32, thumb_h: u32,
+) -> Vec<u8> {
+    let mut buf = vec![0u8; (thumb_w * thumb_h * 4) as usize];
+    let ts = TILE_SIZE as u32;
+
+    for oy in 0..thumb_h {
+        let cy = (oy * doc_h / thumb_h).min(doc_h - 1);
+        let ty = (cy / ts) as i32;
+        let ly = (cy % ts) as usize;
+
+        for ox in 0..thumb_w {
+            let cx = (ox * doc_w / thumb_w).min(doc_w - 1);
+            let tx = (cx / ts) as i32;
+            let lx = (cx % ts) as usize;
+
+            let v = if let Some(tile) = mask.get(tx, ty) {
+                (tile.data().get(lx, ly) * 255.0) as u8
+            } else {
+                255 // no tile = white (reveal all) — matches get_or_create_full() default
+            };
+
+            let off = ((oy * thumb_w + ox) * 4) as usize;
+            buf[off]     = v;
+            buf[off + 1] = v;
+            buf[off + 2] = v;
+            buf[off + 3] = 255;
+        }
+    }
+    buf
 }
 
 #[cfg(test)]

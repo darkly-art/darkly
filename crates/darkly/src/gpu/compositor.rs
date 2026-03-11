@@ -638,12 +638,14 @@ impl Compositor {
     pub fn set_layer_mask(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         layer_id: LayerId,
         has_mask: bool,
     ) {
         if has_mask {
             if !self.mask_textures.contains_key(&layer_id) {
-                let mask_tex = LayerTexture::new_mask(device, self.canvas_width, self.canvas_height);
+                // new_mask() initializes the texture to white (255 = reveal all).
+                let mask_tex = LayerTexture::new_mask(device, queue, self.canvas_width, self.canvas_height);
                 let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some(&format!("mask-bg-{layer_id}")),
                     layout: &self.blend_pipelines.mask_bind_group_layout,

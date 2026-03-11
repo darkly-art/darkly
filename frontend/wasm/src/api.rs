@@ -225,6 +225,15 @@ impl DarklyHandle {
         serde_wasm_bindgen::to_value(&self.0.veil_list()).unwrap()
     }
 
+    // --- Thumbnails ---
+
+    pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
+        self.0.layer_thumbnail(layer_id as u64, width, height)
+    }
+    pub fn mask_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
+        self.0.mask_thumbnail(layer_id as u64, width, height)
+    }
+
     // --- Tool Overlay ---
 
     /// Set overlay primitives from a JS array of primitive objects.

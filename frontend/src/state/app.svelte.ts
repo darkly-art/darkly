@@ -17,6 +17,9 @@ class AppState {
     // Active layer
     activeLayerId = $state<number | null>(null);
 
+    // Mask editing — which layer's mask is the current paint target (null = editing layer content)
+    editingMaskLayerId = $state<number | null>(null);
+
     // Tool runtime state -- working values adjusted while painting.
     brushSize = $state(24);
     brushOpacity = $state(1.0);
