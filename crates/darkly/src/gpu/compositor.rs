@@ -120,6 +120,9 @@ pub struct Compositor {
 
     veil_chain: VeilChain,
 
+    // --- Floating Content Transform ---
+    transform_pass: crate::gpu::transform::TransformPass,
+
     // --- Tool Overlay ---
     tool_overlay: ToolOverlay,
     /// Cached view transform for overlay forward matrix computation.
@@ -374,6 +377,8 @@ impl Compositor {
 
         let tool_overlay = ToolOverlay::new(device, surface_format);
 
+        let transform_pass = crate::gpu::transform::TransformPass::new(device, accum_format);
+
         Compositor {
             accum: [accum0, accum1],
             accum_views: [accum_view0, accum_view1],
@@ -402,6 +407,7 @@ impl Compositor {
             canvas_width: width,
             canvas_height: height,
             veil_chain,
+            transform_pass,
             tool_overlay,
             cached_view_transform: identity,
             frame_count: 0,
@@ -741,6 +747,71 @@ impl Compositor {
         self.tool_overlay.hit_test(screen_x, screen_y)
     }
 
+    // --- Floating Content (Transform) ---
+
+    /// Set up floating content for GPU preview. Uploads source tiles as a
+    /// texture and creates bind groups for compositing.
+    pub fn set_floating_content(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source_tiles: &crate::tile::TileGrid,
+        source_origin: (i32, i32),
+        source_width: u32,
+        source_height: u32,
+        target_layer: LayerId,
+        target_is_mask: bool,
+    ) {
+        self.transform_pass.set_floating_content(
+            device,
+            queue,
+            &self.sampler,
+            &self.accum_views,
+            &self.composite_cache_view,
+            source_tiles,
+            source_origin,
+            source_width,
+            source_height,
+            self.canvas_width,
+            self.canvas_height,
+            target_layer,
+            target_is_mask,
+        );
+        self.mark_dirty();
+    }
+
+    /// Update the floating content's affine transform matrix for real-time preview.
+    pub fn update_floating_matrix(
+        &mut self,
+        queue: &wgpu::Queue,
+        matrix: &crate::gpu::transform::Affine2D,
+        source_origin: (i32, i32),
+        source_width: u32,
+        source_height: u32,
+    ) {
+        self.transform_pass.update_matrix(
+            queue,
+            matrix,
+            source_origin,
+            source_width,
+            source_height,
+            self.canvas_width,
+            self.canvas_height,
+        );
+        self.mark_dirty();
+    }
+
+    /// Remove floating content GPU state.
+    pub fn clear_floating_content(&mut self) {
+        self.transform_pass.clear();
+        self.mark_dirty();
+    }
+
+    /// Check if floating content is active.
+    pub fn has_floating_content(&self) -> bool {
+        self.transform_pass.active.is_some()
+    }
+
     /// Run the present pass, veil chain, and final blit to surface.
     /// Solid overlay primitives are drawn at the end of the final render
     /// pass (present or veil-blit) to avoid a separate LoadOp::Load pass.
@@ -1015,12 +1086,17 @@ impl Compositor {
                         None => continue,
                     };
 
+                    // Check if floating content targets this layer — if so,
+                    // there's one more pass coming, so don't write to cache yet.
+                    let has_floating = self.transform_pass.targets_layer(raster.id);
+                    let is_raster_last = is_last_layer && !has_floating;
+
                     let (dst_view, bind_group) = if use_cache_source {
                         use_cache_source = false;
                         let dst = 0;
                         self.current_accum = dst;
                         (&self.accum_views[dst], &cache.cache_source_bind_group)
-                    } else if is_last_layer {
+                    } else if is_raster_last {
                         wrote_to_cache = true;
                         let src = self.current_accum;
                         (&self.composite_cache_view, &cache.bind_groups[src])
@@ -1050,6 +1126,48 @@ impl Compositor {
                         rpass.set_bind_group(0, bind_group, &[]);
                         rpass.set_bind_group(1, &cache.mask_bind_group, &[]);
                         rpass.draw(0..3, 0..1);
+                    }
+
+                    // Floating content pass: composite transformed source on
+                    // top of the layer we just blended.
+                    if let Some(ts) = &self.transform_pass.active {
+                        if ts.target_layer == raster.id {
+                            let src = self.current_accum;
+                            let fc_dst_view = if is_last_layer {
+                                wrote_to_cache = true;
+                                &self.composite_cache_view
+                            } else {
+                                let dst = 1 - src;
+                                self.current_accum = dst;
+                                &self.accum_views[dst]
+                            };
+
+                            {
+                                let mut rpass = encoder.begin_render_pass(
+                                    &wgpu::RenderPassDescriptor {
+                                        label: Some("transform-blend"),
+                                        color_attachments: &[Some(
+                                            wgpu::RenderPassColorAttachment {
+                                                view: fc_dst_view,
+                                                resolve_target: None,
+                                                depth_slice: None,
+                                                ops: wgpu::Operations {
+                                                    load: wgpu::LoadOp::Load,
+                                                    store: wgpu::StoreOp::Store,
+                                                },
+                                            },
+                                        )],
+                                        ..Default::default()
+                                    },
+                                );
+                                rpass.set_scissor_rect(
+                                    scissor_x, scissor_y, scissor_w, scissor_h,
+                                );
+                                rpass.set_pipeline(&self.transform_pass.pipeline);
+                                rpass.set_bind_group(0, &ts.bind_groups[src], &[]);
+                                rpass.draw(0..3, 0..1);
+                            }
+                        }
                     }
                 }
                 Layer::Filter(fl) => {

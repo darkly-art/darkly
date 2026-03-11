@@ -12,3 +12,4 @@ pub mod veil_chain;
 pub mod veils;
 pub mod view;
 pub mod overlay;
+pub mod transform;

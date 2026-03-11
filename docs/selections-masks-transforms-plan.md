@@ -522,95 +522,218 @@ All image decode/encode happens in JS via Canvas API (`createImageBitmap` + `Off
 
 ---
 
-## Phase 7: Interactive Transforms
+## Phase 7: Floating Content, Interactive Transforms & Paste-in-Place
 
-**Goal:** GPU-side preview of scale/rotate/skew/flip with transform handles rendered via the tool overlay.
+**Goal:** A unified floating content system for GPU-previewed transforms and paste-in-place. Paste-in-place (Ctrl+Shift+V) places content as a transformable floating preview on the current layer or mask — not as a new layer. Press Enter to commit, Escape to cancel. The transform tool extracts layer content into the same floating system. This consolidates the old Phases 7 and 8 into a single phase.
 
-### Design
+Ctrl+V behavior is unchanged (creates a new layer).
 
-When the user activates the transform tool on a layer:
+### Core Concept: FloatingContent
 
-1. **Snapshot:** The layer's current tiles are uploaded to a dedicated GPU texture (`transform_source`)
-2. **Clear layer:** The layer's tiles are temporarily cleared (or hidden from compositing)
-3. **Render transformed:** A transform shader renders `transform_source` through a matrix, writing to a temporary texture that the compositor blends in place of the original layer
-4. **Handles:** Transform bounding box + handles rendered via tool overlay primitives
+A `FloatingContent` holds source pixels (CPU tiles for commit + GPU texture for preview), an affine transform matrix, and a reference to the target layer/mask. Two entry points create one:
 
-Each frame, the user drags handles → JS computes new transform matrix → uploads matrix uniform → compositor renders transformed preview.
+1. **Paste-in-place (Ctrl+Shift+V)** — clipboard content → floating on current layer/mask at original copy position
+2. **Transform tool** — extract current layer/mask content → floating, clear originals
 
-### Transform Matrix
+Both share the same GPU preview pipeline, transform handles, commit, and cancel flow.
+
+### Data Structures
 
 ```rust
-pub struct InteractiveTransform {
-    source_texture: Texture,
-    source_bounds: (i32, i32, u32, u32),  // original position/size
-    matrix: [f32; 6],                       // 2D affine (2x3)
-    interpolation: Interpolation,           // Bilinear / Bicubic
+// crates/darkly/src/gpu/transform.rs
+
+pub struct FloatingContent {
+    // CPU-side source (for commit — avoids async GPU readback)
+    source_tiles: TileGrid,             // always RGBA, even for mask sources
+    source_origin: (i32, i32),          // pixel offset in document space
+
+    // GPU-side source (for real-time preview)
+    source_texture: wgpu::Texture,
+    source_view: wgpu::TextureView,
+    source_width: u32,
+    source_height: u32,
+
+    // Transform state
+    matrix: [f32; 6],                   // 2D affine (2×3), starts as identity
+    interpolation: Interpolation,
+
+    // Target
+    target_layer: LayerId,
+    target_is_mask: bool,
+
+    // Determines commit/cancel behavior
+    mode: FloatingMode,
+}
+
+pub enum FloatingMode {
+    /// Clipboard paste — commit composites INTO target. Cancel = no-op.
+    Paste,
+    /// Extracted from layer — commit writes transformed pixels.
+    /// Cancel restores original tiles from stored memento.
+    Transform { original_memento: TransactionMemento },
+}
+
+pub enum Interpolation { Bilinear, Bicubic }
+```
+
+### GPU Preview
+
+#### Transform-blend shader (`shaders/transform.wgsl`)
+
+A single-pass fullscreen-triangle fragment shader that reads the compositor accumulator as background, samples the source texture through the inverse affine matrix, and blends — no intermediate texture needed:
+
+```wgsl
+struct TransformBlendUniforms {
+    inv_matrix: mat3x3<f32>,       // inverse affine for source UV lookup
+    source_origin: vec2f,          // document-space pixel offset
+    source_size: vec2f,            // source texture dimensions
+    canvas_size: vec2f,            // full canvas dimensions
+    opacity: f32,
+    target_is_mask: u32,
+}
+
+@fragment fn fs_main(in: VertexOut) -> @location(0) vec4f {
+    let bg = textureLoad(t_bg, vec2i(in.position.xy), 0);
+    let canvas_pos = in.uv * u.canvas_size;
+    let local_pos = canvas_pos - u.source_origin;
+    let src_pos = (u.inv_matrix * vec3f(local_pos, 1.0)).xy;
+    let src_uv = src_pos / u.source_size;
+
+    if (any(src_uv < vec2f(0.0)) || any(src_uv >= vec2f(1.0))) {
+        return bg;
+    }
+
+    let fg = textureSampleLevel(t_source, s_source, src_uv, 0.0);
+    let a = fg.a * u.opacity;
+    // Normal blend (premultiplied alpha)
+    return vec4f(fg.rgb * u.opacity + bg.rgb * (1.0 - a), a + bg.a * (1.0 - a));
 }
 ```
 
-### Shader (`shaders/transform.wgsl`)
+Bilinear interpolation via the GPU sampler; bicubic deferred to a later enhancement.
 
-Samples `transform_source` with inverse-transformed UVs. Bilinear interpolation built-in via sampler; bicubic requires manual 4x4 tap.
+#### Compositor integration
 
-### Transform Handles via Overlay
-
-The transform tool submits overlay primitives:
-- 1 rect (bounding box, dashed, canvas-space)
-- 8 circles (corner + midpoint handles, screen-space — fixed size)
-- 1 circle (rotation handle, screen-space)
-- 1 line (rotation arm, canvas-space)
-
-All in inverted color. Hit testing determines which handle is grabbed.
-
-### Files
-
-- **Create:** `crates/darkly/src/gpu/transform.rs` — `InteractiveTransform`, GPU resources, shader integration
-- **Create:** `shaders/transform.wgsl` — affine transform sampling
-- **Modify:** `crates/darkly/src/gpu/compositor.rs` — render transform preview in layer's place
-- **Create:** `crates/darkly/src/tools/transform.rs` — transform tool (handle logic, matrix computation)
-- **Modify:** `frontend/wasm/src/api.rs` — transform API
-- **Create:** `frontend/src/tools/transform.svelte.ts` — transform tool UI
-
----
-
-## Phase 8: Transform Commit (GPU Readback)
-
-**Goal:** Rasterize the transformed result back to tiles.
-
-### Flow
-
-1. User confirms transform (Enter key or click away)
-2. Engine renders final transformed texture at full resolution
-3. `map_async` on a staging buffer to read pixels back to CPU
-4. Write pixels into layer tiles (new transaction for undo)
-5. Clean up transform GPU resources
-6. Mark affected tiles dirty
-
-### GPU Readback
+In `render_offscreen`, after compositing a raster layer, if that layer has floating content, insert an extra ping-pong blend pass using the transform-blend pipeline:
 
 ```rust
-// Render transformed texture at document resolution
-// Copy texture → staging buffer
-staging_buffer.slice(..).map_async(MapMode::Read, callback);
-device.poll(Maintain::Wait); // or async in WASM
-let data = staging_buffer.slice(..).get_mapped_range();
-// Write data into tiles
+Layer::Raster(raster) => {
+    // ... existing blend pass for the layer ...
+
+    // If this layer has floating content, composite it on top
+    if let Some(fc) = &self.floating_content {
+        if fc.target_layer == raster.id {
+            let src = self.current_accum;
+            let dst = if is_last_layer { /* cache */ } else { 1 - src };
+            self.current_accum = dst;
+            // render pass with transform_blend_pipeline + fc.bind_group
+        }
+    }
+}
 ```
 
-This is async on WebGPU. The engine enters a "committing transform" state where it awaits the readback before allowing further edits.
+For **transform mode**: the layer's tiles are cleared, so the first blend pass produces nothing visible. The floating pass renders the transformed content. Net visual: content appears transformed.
 
-### Undo
+For **paste mode**: the layer renders normally. The floating pass overlays pasted content on top. Net visual: existing layer + pasted content.
 
-The commit creates a `TileAction` with mementos of all affected tiles. Undoing restores the original tiles and re-enters transform mode (or just restores tiles).
+For **mask-targeted content**: when `show_mask` is active, the floating content renders as part of the mask grayscale visualization. When compositing normally, it's applied as additional mask data (multiplied into layer alpha).
+
+### Transform Handles (via tool overlay)
+
+When floating content is active, overlay primitives are submitted:
+- 1 dashed rect: bounding box (canvas-space, inverted color)
+- 4 filled circles: corner handles (screen-space, fixed 5px radius)
+- 4 filled circles: edge midpoint handles (screen-space, fixed 4px radius)
+- 1 filled circle: rotation handle above top-center (screen-space, 5px radius)
+- 1 line: rotation arm from top-center to rotation handle (canvas-space)
+
+All use `FLAG_INVERT_COLOR`. Hit testing determines which handle is grabbed.
+
+Handle interactions (in `crates/darkly/src/tools/transform.rs`):
+- **Corner drag**: scale from opposite corner as anchor
+- **Edge drag**: scale along one axis from opposite edge
+- **Rotation handle drag**: rotate around center
+- **Interior drag**: translate (move)
+- **Shift + rotation**: snap to 15° increments
+- **Shift + scale**: maintain aspect ratio
+
+Matrix computation: translate to anchor → scale/rotate → translate back.
+
+### Paste-in-Place Flow (Ctrl+Shift+V)
+
+1. JS reads internal clipboard; if none, tries system clipboard with stored offset
+2. WASM bridge calls `engine.paste_in_place_floating(active_layer_id)`
+3. Engine creates `FloatingContent`:
+   - Source = clipboard ImageClip tiles + bounds
+   - Target = current layer (or mask if `editing_mask_layer` is set)
+   - Mode = Paste, matrix = identity, origin = clipboard stored offset
+4. Compositor renders floating content overlaid on target layer
+5. Transform handles appear — user can move, scale, rotate
+6. Enter → commit, Escape → cancel
+
+### Transform Tool Flow
+
+1. User activates transform tool on a layer (or mask if editing mask)
+2. Engine creates `FloatingContent`:
+   - Clones source tiles within bounds (selection bounds or entire layer)
+   - Begins transaction, clears tiles within bounds, commits → stores memento
+   - Uploads source tiles to GPU texture
+   - Mode = Transform { original_memento }
+3. Compositor renders floating content where cleared tiles were
+4. Transform handles appear
+5. Enter → commit, Escape → cancel (restores original tiles via memento)
+
+### Commit Flow (Enter)
+
+CPU-side affine rasterization — source data is in `source_tiles`, no GPU readback needed:
+
+1. Compute output bounding box from transformed source corners
+2. For each pixel in output bounds: apply inverse matrix → bilinear sample from `source_tiles` → write to target
+   - **Paste mode**: Normal blend onto existing tiles/mask, respecting selection
+   - **Transform mode**: direct write (tiles were already cleared)
+   - **Mask target**: extract luminance (`0.2126*r + 0.7152*g + 0.0722*b`) from RGBA, write as f32 alpha
+3. Push `TileAction` with mementos of all affected tiles. Ctrl+Z restores pre-commit state.
+
+### Cancel Flow (Escape)
+
+- **Paste mode**: discard FloatingContent — target unchanged, no undo step.
+- **Transform mode**: undo the tile-clear via stored `original_memento`, restoring original tiles. No undo step.
+
+### Auto-Commit
+
+Floating content auto-commits when the user:
+- Switches active layer
+- Activates a different tool
+- Starts any paint/fill/erase operation
+- Triggers undo/redo
+
+### Mask ↔ Layer Cross-Paste
+
+**Copy from mask** (when `editing_mask_layer` is set):
+- `ImageClip::from_mask(mask, selection)` converts f32 alpha → grayscale RGBA: `[v, v, v, 255]` where `v = (alpha * 255).round()`
+- Stored in internal clipboard as normal RGBA ImageClip
+
+**Paste into mask** (commit-time conversion):
+- Luminance extraction: `alpha = 0.2126*r + 0.7152*g + 0.0722*b`
+- Written as f32 to AlphaMask tiles
+
+**Paste into layer** (from mask-sourced clipboard): grayscale RGBA composites normally.
 
 ### Files
 
-- **Modify:** `crates/darkly/src/gpu/transform.rs` — add commit/readback logic
-- **Modify:** `crates/darkly/src/engine.rs` — commit flow, async readback handling
+- **Create:** `crates/darkly/src/gpu/transform.rs` — `FloatingContent`, `FloatingMode`, GPU texture management, transform-blend pipeline, bind group, `rasterize_to()` CPU commit
+- **Create:** `shaders/transform.wgsl` — affine transform + blend fragment shader
+- **Create:** `crates/darkly/src/tools/transform.rs` — transform tool registration, handle hit-test, matrix computation
+- **Modify:** `crates/darkly/src/gpu/compositor.rs` — store `Option<FloatingContent>`, add transform-blend pass in `render_offscreen`, create pipeline in `new()`
+- **Modify:** `crates/darkly/src/engine.rs` — `floating_content` field, `paste_in_place_floating()`, `begin_transform()`, `commit_floating()`, `cancel_floating()`, auto-commit hooks, copy-from-mask
+- **Modify:** `crates/darkly/src/clipboard.rs` — `ImageClip::from_mask()` for mask→RGBA copy
+- **Modify:** `frontend/wasm/src/api.rs` — WASM bridge: floating paste, commit, cancel, update_transform_matrix, begin_transform
+- **Modify:** `frontend/src/editor.ts` — Ctrl+Shift+V → floating paste, Enter/Escape handlers, auto-commit triggers
+- **Modify:** `crates/darkly/src/config.rs` — transform tool hotkey, confirm/cancel hotkeys
 
 ---
 
-## Phase 9: Warp Transforms
+## Phase 8: Warp Transforms
 
 **Goal:** Mesh-based and displacement-based warping.
 
@@ -620,7 +743,7 @@ The commit creates a `TileAction` with mementos of all affected tiles. Undoing r
 - Each quad vertex has a position and UV
 - User drags control points → vertex positions change → mesh deforms
 - GPU renders the mesh with the source texture mapped via UVs
-- Same commit path as Phase 8
+- Same commit path as Phase 7
 
 The vertex buffer is uploaded each frame when dirty. The shader is a standard textured mesh shader with interpolation.
 
@@ -650,10 +773,12 @@ Phase 1 (AlphaMask) ──→ Phase 3 (Selection) ──→ Phase 4 (More Tools)
 Phase 2 (Tool Overlay) ──→ Phase 3 (marching ants)
                         └──→ Phase 7 (transform handles)
 
-Phase 7 (Transforms) ──→ Phase 8 (Commit) ──→ Phase 9 (Warp)
+Phase 6 (Copy/Paste) ──→ Phase 7 (floating paste-in-place)
+
+Phase 7 (Floating Content + Transforms) ──→ Phase 8 (Warp)
 ```
 
-Phases 1 and 2 can be built in parallel. After those, phases 3–6 are independently buildable. Phases 7–9 are sequential.
+Phases 1 and 2 can be built in parallel. After those, phases 3–6 are independently buildable. Phases 7–8 are sequential.
 
 ---
 
@@ -667,8 +792,7 @@ After each phase, verify:
 4. **Phase 4:** Visual — each selection tool produces correct mask shape.
 5. **Phase 5:** Visual — add mask to layer, paint on mask, verify transparency. Convert mask↔selection.
 6. **Phase 6:** Functional — copy selection, paste, verify new layer content matches.
-7. **Phase 7:** Visual — activate transform, drag handles, verify preview updates in real-time.
-8. **Phase 8:** Functional — commit transform, verify tiles contain transformed pixels, undo restores original.
-9. **Phase 9:** Visual — drag warp grid, verify mesh deformation. Liquify brush displaces pixels.
+7. **Phase 7:** Visual + Functional — paste-in-place shows floating preview at original position; transform handles work (move, scale, rotate); Enter commits to tiles with correct blending; Escape cancels cleanly; cross-paste between masks and layers converts correctly; undo restores pre-commit state; auto-commit triggers on layer switch/tool change.
+8. **Phase 8:** Visual — drag warp grid, verify mesh deformation. Liquify brush displaces pixels.
 
 Build verification: `cargo build --target wasm32-unknown-unknown` after each phase. Run `wasm-pack build` and test in browser.

@@ -79,14 +79,29 @@ function initHotkeys() {
             });
         },
         pasteInPlace: () => {
-            if (!app.handle) return;
-            const activeId = app.activeLayerId ?? -1;
-            const layerId = app.handle.paste_in_place(activeId);
-            if (layerId >= 0) {
-                app.activeLayerId = layerId;
-                app.refreshLayerTree();
+            if (!app.handle || app.activeLayerId == null) return;
+            const ok = app.handle.paste_in_place_floating(app.activeLayerId);
+            console.log('[pasteInPlace] floating created:', ok, 'layerId:', app.activeLayerId);
+            if (ok) {
+                // Switch to transform tool so the user sees handles.
+                // Directly activate it since the $effect may be deferred.
+                const prevTool = toolRegistry.get(app.activeToolId);
+                app.activeToolId = 'transform';
+                const ctx = { handle: app.handle, screenToCanvas: (_x: number, _y: number) => ({ x: 0, y: 0 }) };
+                prevTool?.onDeactivate?.(ctx);
+                toolRegistry.get('transform')?.onActivate?.(ctx);
                 app.requestFrame();
             }
+        },
+        commitFloating: () => {
+            if (!app.handle) return;
+            app.handle.commit_floating();
+            app.requestFrame();
+        },
+        cancelFloating: () => {
+            if (!app.handle) return;
+            app.handle.cancel_floating();
+            app.requestFrame();
         },
         ...toolActions,
         brushSizeUp:     () => {

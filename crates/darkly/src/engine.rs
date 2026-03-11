@@ -1,5 +1,6 @@
 use crate::clipboard::{Clipboard, ImageClip};
 use crate::document::{Document, MoveTarget, SelectionMode};
+use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY, source_from_clip};
 use crate::layer::{BlendMode, Layer, LayerNode};
 use crate::undo::{
     UndoStack, TileAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
@@ -130,6 +131,8 @@ pub struct DarklyEngine {
     tool_overlay: Vec<OverlayPrimitive>,
     /// Internal clipboard — holds typed content for copy/paste within Darkly.
     clipboard: Option<Clipboard>,
+    /// Active floating content (paste-in-place or interactive transform).
+    floating: Option<FloatingContent>,
 }
 
 impl DarklyEngine {
@@ -152,6 +155,7 @@ impl DarklyEngine {
             selection_overlay: Vec::new(),
             tool_overlay: Vec::new(),
             clipboard: None,
+            floating: None,
         }
     }
 
@@ -527,6 +531,7 @@ impl DarklyEngine {
     // strokes are routed to the mask instead of the layer.
 
     pub fn begin_stroke(&mut self, layer_id: u64) {
+        self.auto_commit_floating();
         self.doc.set_mask_editing(
             if self.editing_mask_layer == Some(layer_id) { Some(layer_id) } else { None }
         );
@@ -637,6 +642,7 @@ impl DarklyEngine {
     // --- Undo / Redo ---
 
     pub fn undo(&mut self) {
+        self.auto_commit_floating();
         if let Some(affected) = self.undo_stack.undo(&mut self.doc) {
             mark_affected_dirty(&mut self.doc.dirty, &affected);
             self.sync_compositor_layers();
@@ -646,6 +652,7 @@ impl DarklyEngine {
     }
 
     pub fn redo(&mut self) {
+        self.auto_commit_floating();
         if let Some(affected) = self.undo_stack.redo(&mut self.doc) {
             mark_affected_dirty(&mut self.doc.dirty, &affected);
             self.sync_compositor_layers();
@@ -858,6 +865,7 @@ impl DarklyEngine {
     }
 
     pub fn clear_selection_contents(&mut self, layer_id: u64) {
+        self.auto_commit_floating();
         if self.doc.selection.is_none() {
             return;
         }
@@ -883,12 +891,18 @@ impl DarklyEngine {
             _ => return None,
         };
 
-        let clip = ImageClip::from_layer(
-            layer,
-            self.doc.selection.as_ref(),
-            self.doc.width,
-            self.doc.height,
-        )?;
+        // When editing a mask, copy from the mask instead of the layer tiles.
+        let clip = if self.editing_mask_layer == Some(layer_id) {
+            let mask = layer.mask.as_ref()?;
+            ImageClip::from_mask(mask, self.doc.selection.as_ref())?
+        } else {
+            ImageClip::from_layer(
+                layer,
+                self.doc.selection.as_ref(),
+                self.doc.width,
+                self.doc.height,
+            )?
+        };
 
         let (rgba, width, height, offset_x, offset_y) = clip.to_rgba();
         self.clipboard = Some(Clipboard::ImageData(clip));
@@ -976,6 +990,282 @@ impl DarklyEngine {
         let clip = self.clipboard.as_ref()?.as_image()?;
         let (rgba, width, height, offset_x, offset_y) = clip.to_rgba();
         Some(self.paste_image(width, height, &rgba, offset_x, offset_y, active_layer_id))
+    }
+
+    // --- Floating Content (Phase 7) ---
+
+    /// Auto-commit any active floating content before performing other edits.
+    /// Call this before operations that would conflict with floating content
+    /// (layer switch, paint, undo, etc.).
+    pub fn auto_commit_floating(&mut self) {
+        if self.floating.is_some() {
+            self.commit_floating();
+        }
+    }
+
+    /// Check if there is active floating content.
+    pub fn has_floating(&self) -> bool {
+        self.floating.is_some()
+    }
+
+    /// Return floating content info for the frontend overlay:
+    /// (source_origin_x, source_origin_y, source_width, source_height, matrix[6]).
+    /// Returns None if no floating content is active.
+    pub fn floating_info(&self) -> Option<(f32, f32, f32, f32, Affine2D)> {
+        self.floating.as_ref().map(|fc| (
+            fc.source_origin.0 as f32,
+            fc.source_origin.1 as f32,
+            fc.source_width as f32,
+            fc.source_height as f32,
+            fc.matrix,
+        ))
+    }
+
+    /// Paste from the internal clipboard as floating content on the current
+    /// layer/mask. Returns true if floating content was created.
+    pub fn paste_in_place_floating(&mut self, layer_id: u64) -> bool {
+        // Auto-commit any existing floating content first.
+        self.auto_commit_floating();
+
+        let clip = match self.clipboard.as_ref().and_then(|c| c.as_image()) {
+            Some(c) => c,
+            None => return false,
+        };
+
+        let target_is_mask = self.editing_mask_layer == Some(layer_id);
+
+        // Clone source tiles and dimensions from clipboard
+        let (source_tiles, source_origin, source_width, source_height) = source_from_clip(clip);
+
+        // Upload to GPU for preview
+        self.compositor.set_floating_content(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &source_tiles,
+            source_origin,
+            source_width,
+            source_height,
+            layer_id,
+            target_is_mask,
+        );
+
+        self.floating = Some(FloatingContent {
+            source_tiles,
+            source_origin,
+            source_width,
+            source_height,
+            matrix: IDENTITY,
+            target_layer: layer_id,
+            target_is_mask,
+            mode: FloatingMode::Paste,
+        });
+
+        true
+    }
+
+    /// Begin an interactive transform on the current layer/mask content.
+    /// Returns true if floating content was created.
+    pub fn begin_transform(&mut self, layer_id: u64) -> bool {
+        self.auto_commit_floating();
+
+        let target_is_mask = self.editing_mask_layer == Some(layer_id);
+
+        let layer = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => r,
+            _ => return false,
+        };
+
+        // Clone the relevant tiles
+        let (source_tiles, source_origin, source_width, source_height) = if target_is_mask {
+            let mask = match &layer.mask {
+                Some(m) => m,
+                None => return false,
+            };
+            // Convert mask to RGBA for the floating content
+            let clip = match ImageClip::from_mask(mask, self.doc.selection.as_ref()) {
+                Some(c) => c,
+                None => return false,
+            };
+            source_from_clip(&clip)
+        } else {
+            let clip = match ImageClip::from_layer(
+                layer,
+                self.doc.selection.as_ref(),
+                self.doc.width,
+                self.doc.height,
+            ) {
+                Some(c) => c,
+                None => return false,
+            };
+            source_from_clip(&clip)
+        };
+
+        // Clear the source tiles (within a transaction for undo)
+        self.doc.begin_transaction(layer_id);
+        if target_is_mask {
+            if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
+                if let Some(mask) = &mut r.mask {
+                    clear_mask_in_bounds(mask, source_origin, source_width, source_height);
+                }
+            }
+        } else {
+            if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
+                clear_rgba_in_bounds(&mut r.tiles, source_origin, source_width, source_height);
+            }
+        }
+        let cancel_undo: Option<Box<dyn crate::undo::UndoAction>> =
+            self.doc.commit_transaction(layer_id)
+                .map(|m| Box::new(TileAction::new(m)) as Box<dyn crate::undo::UndoAction>);
+
+        // Mark cleared tiles dirty
+        self.mark_bounds_dirty(layer_id, target_is_mask, source_origin, source_width, source_height);
+
+        // Upload to GPU for preview
+        self.compositor.set_floating_content(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &source_tiles,
+            source_origin,
+            source_width,
+            source_height,
+            layer_id,
+            target_is_mask,
+        );
+
+        self.floating = Some(FloatingContent {
+            source_tiles,
+            source_origin,
+            source_width,
+            source_height,
+            matrix: IDENTITY,
+            target_layer: layer_id,
+            target_is_mask,
+            mode: match cancel_undo {
+                Some(action) => FloatingMode::Transform { cancel_undo: action },
+                None => FloatingMode::Paste, // No tiles were cleared, treat like paste
+            },
+        });
+
+        true
+    }
+
+    /// Update the floating content's transform matrix.
+    pub fn update_floating_matrix(&mut self, matrix: Affine2D) {
+        if let Some(fc) = &mut self.floating {
+            fc.matrix = matrix;
+            self.compositor.update_floating_matrix(
+                &self.gpu.queue,
+                &matrix,
+                fc.source_origin,
+                fc.source_width,
+                fc.source_height,
+            );
+        }
+    }
+
+    /// Commit floating content: rasterize transformed pixels into the target.
+    pub fn commit_floating(&mut self) {
+        let fc = match self.floating.take() {
+            Some(fc) => fc,
+            None => return,
+        };
+
+        let layer_id = fc.target_layer;
+        let is_mask = fc.target_is_mask;
+
+        // Temporarily route transaction to the correct surface
+        let was_editing_mask = self.editing_mask_layer;
+        if is_mask {
+            self.editing_mask_layer = Some(layer_id);
+        } else if self.editing_mask_layer == Some(layer_id) {
+            self.editing_mask_layer = None;
+        }
+
+        self.doc.begin_transaction(layer_id);
+
+        // Clone selection for use during rasterization (avoids borrow conflict
+        // with layer_mut).
+        let sel = self.doc.selection.clone();
+
+        if is_mask {
+            if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
+                if let Some(mask) = &mut r.mask {
+                    fc.rasterize_to_mask(mask, sel.as_ref());
+                }
+            }
+        } else {
+            if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
+                fc.rasterize_to_tiles(&mut r.tiles, sel.as_ref());
+            }
+        }
+
+        if let Some(memento) = self.doc.commit_transaction(layer_id) {
+            self.undo_stack.push(Box::new(TileAction::new(memento)));
+        }
+
+        // Restore mask editing state
+        self.editing_mask_layer = was_editing_mask;
+
+        // Mark dirty
+        let (min_x, min_y, max_x, max_y) = fc.transformed_bounds();
+        let w = (max_x - min_x).max(0) as u32;
+        let h = (max_y - min_y).max(0) as u32;
+        self.mark_bounds_dirty(layer_id, is_mask, (min_x, min_y), w, h);
+
+        // Clean up GPU state
+        self.compositor.clear_floating_content();
+    }
+
+    /// Cancel floating content: discard or restore original tiles.
+    pub fn cancel_floating(&mut self) {
+        let fc = match self.floating.take() {
+            Some(fc) => fc,
+            None => return,
+        };
+
+        match fc.mode {
+            FloatingMode::Paste => {
+                // No-op — target layer was never modified.
+            }
+            FloatingMode::Transform { mut cancel_undo } => {
+                // Restore the original tiles that were cleared.
+                let dirty = cancel_undo.undo(&mut self.doc);
+                for (layer_id, coords) in dirty {
+                    let entry = self.doc.dirty.entry(layer_id).or_default();
+                    for (tx, ty) in coords {
+                        entry.mark(tx, ty);
+                    }
+                }
+            }
+        }
+
+        self.compositor.clear_floating_content();
+    }
+
+    fn mark_bounds_dirty(
+        &mut self,
+        layer_id: u64,
+        is_mask: bool,
+        origin: (i32, i32),
+        width: u32,
+        height: u32,
+    ) {
+        let (ox, oy) = origin;
+        let tx_min = TileGrid::tile_coords_for_pixel(ox, 0).0;
+        let ty_min = TileGrid::tile_coords_for_pixel(0, oy).1;
+        let tx_max = TileGrid::tile_coords_for_pixel(ox + width as i32 - 1, 0).0;
+        let ty_max = TileGrid::tile_coords_for_pixel(0, oy + height as i32 - 1).1;
+
+        let dirty = if is_mask {
+            self.doc.mask_dirty.entry(layer_id).or_default()
+        } else {
+            self.doc.dirty.entry(layer_id).or_default()
+        };
+        for ty in ty_min..=ty_max {
+            for tx in tx_min..=tx_max {
+                dirty.mark(tx, ty);
+            }
+        }
     }
 
     /// Regenerate marching ants overlay from the current selection.
@@ -1227,5 +1517,77 @@ mod tests {
         assert_eq!(params[1]["kind"], "bool");
         assert_eq!(params[1]["name"], "soft");
         assert_eq!(params[1]["value"], false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Free helper functions for floating content (avoid borrow conflicts)
+// ---------------------------------------------------------------------------
+
+/// Clear RGBA tiles within a bounding region.
+fn clear_rgba_in_bounds(
+    tiles: &mut TileGrid,
+    origin: (i32, i32),
+    width: u32,
+    height: u32,
+) {
+    let ts = TILE_SIZE as i32;
+    let (ox, oy) = origin;
+    let tx_min = TileGrid::tile_coords_for_pixel(ox, 0).0;
+    let ty_min = TileGrid::tile_coords_for_pixel(0, oy).1;
+    let tx_max = TileGrid::tile_coords_for_pixel(ox + width as i32 - 1, 0).0;
+    let ty_max = TileGrid::tile_coords_for_pixel(0, oy + height as i32 - 1).1;
+
+    for ty in ty_min..=ty_max {
+        for tx in tx_min..=tx_max {
+            if tiles.get(tx, ty).is_some() {
+                let data = tiles.get_or_create(tx, ty).write();
+                for py in 0..TILE_SIZE {
+                    for px in 0..TILE_SIZE {
+                        let canvas_x = tx * ts + px as i32;
+                        let canvas_y = ty * ts + py as i32;
+                        if canvas_x >= ox && canvas_x < ox + width as i32
+                            && canvas_y >= oy && canvas_y < oy + height as i32
+                        {
+                            data.pixel_mut(px, py).copy_from_slice(&[0, 0, 0, 0]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Clear mask tiles within a bounding region.
+fn clear_mask_in_bounds(
+    mask: &mut AlphaMask,
+    origin: (i32, i32),
+    width: u32,
+    height: u32,
+) {
+    let ts = TILE_SIZE as i32;
+    let (ox, oy) = origin;
+    let tx_min = AlphaMask::tile_coords_for_pixel(ox, 0).0;
+    let ty_min = AlphaMask::tile_coords_for_pixel(0, oy).1;
+    let tx_max = AlphaMask::tile_coords_for_pixel(ox + width as i32 - 1, 0).0;
+    let ty_max = AlphaMask::tile_coords_for_pixel(0, oy + height as i32 - 1).1;
+
+    for ty in ty_min..=ty_max {
+        for tx in tx_min..=tx_max {
+            if mask.get(tx, ty).is_some() {
+                let data = mask.get_or_create(tx, ty).write();
+                for py in 0..TILE_SIZE {
+                    for px in 0..TILE_SIZE {
+                        let canvas_x = tx * ts + px as i32;
+                        let canvas_y = ty * ts + py as i32;
+                        if canvas_x >= ox && canvas_x < ox + width as i32
+                            && canvas_y >= oy && canvas_y < oy + height as i32
+                        {
+                            data.set(px, py, 0.0);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

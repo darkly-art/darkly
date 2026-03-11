@@ -236,6 +236,53 @@ impl DarklyHandle {
         }
     }
 
+    // --- Floating Content (Phase 7) ---
+
+    /// Paste from internal clipboard as floating content on the target layer.
+    /// Returns true if floating content was created.
+    pub fn paste_in_place_floating(&mut self, layer_id: f64) -> bool {
+        self.0.paste_in_place_floating(layer_id as u64)
+    }
+
+    /// Begin interactive transform on the target layer's content.
+    /// Returns true if floating content was created.
+    pub fn begin_transform(&mut self, layer_id: f64) -> bool {
+        self.0.begin_transform(layer_id as u64)
+    }
+
+    /// Update the floating content's affine transform matrix.
+    /// Matrix is [a, b, tx, c, d, ty] (2D affine, 6 floats).
+    pub fn update_floating_matrix(&mut self, matrix: &[f32]) {
+        if matrix.len() >= 6 {
+            let m = [matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]];
+            self.0.update_floating_matrix(m);
+        }
+    }
+
+    /// Commit floating content (rasterize into target layer/mask).
+    pub fn commit_floating(&mut self) {
+        self.0.commit_floating();
+    }
+
+    /// Cancel floating content (discard or restore original tiles).
+    pub fn cancel_floating(&mut self) {
+        self.0.cancel_floating();
+    }
+
+    /// Check if there is active floating content.
+    pub fn has_floating(&self) -> bool {
+        self.0.has_floating()
+    }
+
+    /// Return floating content info as a Float32Array of 10 values:
+    /// [origin_x, origin_y, width, height, m0, m1, m2, m3, m4, m5]
+    /// Returns null/undefined if no floating content is active.
+    pub fn floating_info(&self) -> Option<Box<[f32]>> {
+        self.0.floating_info().map(|(ox, oy, w, h, m)| {
+            vec![ox, oy, w, h, m[0], m[1], m[2], m[3], m[4], m[5]].into_boxed_slice()
+        })
+    }
+
     // --- Veils ---
 
     pub fn add_veil(&mut self, veil_type: &str, params: JsValue) {

@@ -166,6 +166,87 @@ impl ImageClip {
         })
     }
 
+    /// Extract pixels from a layer mask (AlphaMask), converting alpha → grayscale RGBA.
+    ///
+    /// Used for cross-format copy: copying from a mask stores grayscale RGBA so it
+    /// can be pasted into either a layer or another mask.
+    pub fn from_mask(
+        mask: &AlphaMask,
+        selection: Option<&AlphaMask>,
+    ) -> Option<Self> {
+        let ts = TILE_SIZE as i32;
+
+        let (tx_min, ty_min, tx_max, ty_max) = if let Some(sel) = selection {
+            sel.bounding_rect()?
+        } else {
+            mask.bounding_rect()?
+        };
+
+        let mut result = TileGrid::new();
+        let mut any_pixel = false;
+
+        for ty in ty_min..=ty_max {
+            for tx in tx_min..=tx_max {
+                let mask_tile = mask.get(tx, ty);
+                let sel_tile = selection.and_then(|s| s.get(tx, ty));
+
+                if selection.is_some() && sel_tile.is_none() {
+                    continue;
+                }
+
+                let mask_tile = match mask_tile {
+                    Some(t) => t,
+                    None => continue,
+                };
+
+                let src = mask_tile.data();
+                let dst_tile = result.get_or_create(tx, ty);
+                let dst = dst_tile.write();
+
+                for py in 0..TILE_SIZE {
+                    for px in 0..TILE_SIZE {
+                        let mut alpha_val = src.get(px, py);
+
+                        if let Some(st) = sel_tile {
+                            let coverage = st.data().get(px, py);
+                            if coverage <= 0.0 {
+                                continue;
+                            }
+                            alpha_val *= coverage;
+                        }
+
+                        if alpha_val <= 0.0 {
+                            continue;
+                        }
+
+                        // Convert alpha to grayscale RGBA: [v, v, v, 255]
+                        let v = (alpha_val * 255.0).round().clamp(0.0, 255.0) as u8;
+                        let out = dst.pixel_mut(px, py);
+                        out[0] = v;
+                        out[1] = v;
+                        out[2] = v;
+                        out[3] = 255;
+                        any_pixel = true;
+                    }
+                }
+            }
+        }
+
+        if !any_pixel {
+            return None;
+        }
+
+        let x = tx_min * ts;
+        let y = ty_min * ts;
+        let w = ((tx_max - tx_min + 1) * ts) as u32;
+        let h = ((ty_max - ty_min + 1) * ts) as u32;
+
+        Some(ImageClip {
+            tiles: result,
+            bounds: (x, y, w, h),
+        })
+    }
+
     /// Create an `ImageClip` from raw RGBA bytes (e.g. from an external paste).
     ///
     /// The bytes are chunked into TILE_SIZE×TILE_SIZE tiles. Fully transparent

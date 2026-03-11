@@ -173,6 +173,20 @@
         app.requestFrame();
     }
 
+    // Call onDeactivate/onActivate when the active tool changes.
+    let prevToolId = app.activeToolId;
+    $effect(() => {
+        const id = app.activeToolId;
+        if (id !== prevToolId) {
+            const ctx = getToolContext();
+            if (ctx) {
+                toolRegistry.get(prevToolId)?.onDeactivate?.(ctx);
+                toolRegistry.get(id)?.onActivate?.(ctx);
+            }
+            prevToolId = id;
+        }
+    });
+
     // Dismiss tool overlay when the active layer changes.
     let prevLayerId = app.activeLayerId;
     $effect(() => {

@@ -161,6 +161,7 @@ impl Config {
         d!("hotkeys.ellipseSelectTool", str "KeyJ");
         d!("hotkeys.lassoSelectTool",   str "KeyL");
         d!("hotkeys.magicWandTool",     str "KeyW");
+        d!("hotkeys.transformTool",     str "KeyT");
 
         // Hotkeys — clipboard (universal — same across all presets)
         d!("hotkeys.copy",         str "$mod+KeyC");
@@ -173,6 +174,10 @@ impl Config {
         d!("hotkeys.clearSelection",          str "$mod+Shift+KeyA");
         d!("hotkeys.invertSelection",         str "$mod+Shift+KeyI");
         d!("hotkeys.clearSelectionContents",  str "Delete");
+
+        // Hotkeys — floating content / transform
+        d!("hotkeys.commitFloating", str "Enter");
+        d!("hotkeys.cancelFloating", str "Escape");
 
         // Hotkeys — brush controls
         d!("hotkeys.brushSizeUp",   str "BracketRight");
