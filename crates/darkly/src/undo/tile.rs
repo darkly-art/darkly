@@ -27,7 +27,7 @@ impl UndoAction for TileAction {
 
                 for (&layer_id, memento) in mementos {
                     if let Some(Layer::Raster(r)) = doc.layer_mut(layer_id) {
-                        let (forward, affected) = r.tiles.rollback(memento);
+                        let (forward, affected) = r.surface.store.rollback(memento);
                         new_mementos.insert(layer_id, forward);
                         all_affected.insert(layer_id, affected);
                     }
@@ -40,10 +40,9 @@ impl UndoAction for TileAction {
                 let layer_id = *layer_id;
                 if let Some(Layer::Raster(r)) = doc.layer_mut(layer_id) {
                     if let Some(mask) = &mut r.mask {
-                        let (forward, affected) = mask.rollback(memento);
-                        let dirty = doc.mask_dirty.entry(layer_id).or_default();
+                        let (forward, affected) = mask.store.rollback(memento);
                         for &(tx, ty) in &affected {
-                            dirty.mark(tx, ty);
+                            mask.dirty.mark(tx, ty);
                         }
                         self.memento = TransactionMemento::Mask(layer_id, forward);
                     }
@@ -61,7 +60,7 @@ impl UndoAction for TileAction {
 
                 for (&layer_id, memento) in mementos {
                     if let Some(Layer::Raster(r)) = doc.layer_mut(layer_id) {
-                        let (backward, affected) = r.tiles.rollforward(memento);
+                        let (backward, affected) = r.surface.store.rollforward(memento);
                         new_mementos.insert(layer_id, backward);
                         all_affected.insert(layer_id, affected);
                     }
@@ -74,10 +73,9 @@ impl UndoAction for TileAction {
                 let layer_id = *layer_id;
                 if let Some(Layer::Raster(r)) = doc.layer_mut(layer_id) {
                     if let Some(mask) = &mut r.mask {
-                        let (backward, affected) = mask.rollforward(memento);
-                        let dirty = doc.mask_dirty.entry(layer_id).or_default();
+                        let (backward, affected) = mask.store.rollforward(memento);
                         for &(tx, ty) in &affected {
-                            dirty.mark(tx, ty);
+                            mask.dirty.mark(tx, ty);
                         }
                         self.memento = TransactionMemento::Mask(layer_id, backward);
                     }

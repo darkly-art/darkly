@@ -959,8 +959,8 @@ impl Compositor {
         doc: &mut Document,
     ) -> bool {
         // 1. Check if any dirty regions exist before scanning layers.
-        let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
-        let has_mask_dirty = doc.mask_dirty.values().any(|d| !d.is_empty());
+        let has_dirty = doc.has_dirty_layers();
+        let has_mask_dirty = doc.has_dirty_masks();
 
         if !self.needs_composite && !has_dirty && !has_mask_dirty {
             return false;
@@ -969,17 +969,14 @@ impl Compositor {
         // 2. Upload dirty tiles for each dirty raster layer
         if has_dirty {
             for raster in doc.all_raster_layers() {
-                let dirty = match doc.dirty.get(&raster.id) {
-                    Some(d) if !d.is_empty() => d,
-                    _ => continue,
-                };
+                if raster.surface.dirty.is_empty() { continue; }
 
                 let layer_tex = match self.layer_textures.get(&raster.id) {
                     Some(t) => t,
                     None => continue,
                 };
 
-                for (tx, ty) in dirty.iter() {
+                for (tx, ty) in raster.surface.dirty.iter() {
                     if tx < 0 || ty < 0 {
                         continue;
                     }
@@ -988,7 +985,7 @@ impl Compositor {
                     {
                         continue;
                     }
-                    let tile_data = match raster.tiles.get(tx, ty) {
+                    let tile_data = match raster.surface.store.get(tx, ty) {
                         Some(tile) => tile.data(),
                         None => &BLANK_TILE,
                     };
@@ -1010,10 +1007,11 @@ impl Compositor {
         // Works for both raster layers and groups.
         if has_mask_dirty {
 
-            // Collect (id, mask_active, mask_ref) for both rasters and groups
+            // Collect (id, mask_store, mask_dirty) for both rasters and groups
             struct MaskUploadInfo<'a> {
                 id: LayerId,
                 mask: &'a crate::tile::AlphaMask,
+                dirty: &'a crate::dirty::DirtyRegion,
             }
 
             let mut uploads: Vec<MaskUploadInfo> = Vec::new();
@@ -1021,29 +1019,26 @@ impl Compositor {
             for raster in doc.all_raster_layers() {
                 if !(raster.mask_enabled || raster.show_mask) { continue; }
                 if let Some(m) = &raster.mask {
-                    uploads.push(MaskUploadInfo { id: raster.id, mask: m });
+                    uploads.push(MaskUploadInfo { id: raster.id, mask: &m.store, dirty: &m.dirty });
                 }
             }
             for group in doc.all_groups() {
                 if !(group.mask_enabled || group.show_mask) { continue; }
                 if let Some(m) = &group.mask {
-                    uploads.push(MaskUploadInfo { id: group.id, mask: m });
+                    uploads.push(MaskUploadInfo { id: group.id, mask: &m.store, dirty: &m.dirty });
                 }
             }
 
             let ts = TILE_SIZE_USIZE;
             for info in &uploads {
-                let dirty = match doc.mask_dirty.get(&info.id) {
-                    Some(d) if !d.is_empty() => d,
-                    _ => continue,
-                };
+                if info.dirty.is_empty() { continue; }
 
                 let mask_tex = match self.mask_textures.get(&info.id) {
                     Some(t) => t,
                     None => continue,
                 };
 
-                for (tx, ty) in dirty.iter() {
+                for (tx, ty) in info.dirty.iter() {
                     if tx < 0 || ty < 0 {
                         continue;
                     }
@@ -1105,17 +1100,16 @@ impl Compositor {
         }
 
         if !self.needs_composite {
-            for dirty in doc.dirty.values_mut() {
-                dirty.clear();
-            }
-            for dirty in doc.mask_dirty.values_mut() {
-                dirty.clear();
-            }
+            doc.clear_all_dirty();
             return false;
         }
 
+        // Collect dirty regions for scissor calculation
+        let dirty_refs: Vec<_> = doc.all_raster_layers().iter()
+            .map(|r| &r.surface.dirty)
+            .collect();
         let scissor = dirty_pixel_rect(
-            doc.dirty.values(),
+            dirty_refs.into_iter(),
             self.canvas_width,
             self.canvas_height,
         ).unwrap_or((0, 0, self.canvas_width, self.canvas_height));
@@ -1128,12 +1122,7 @@ impl Compositor {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        for dirty in doc.dirty.values_mut() {
-            dirty.clear();
-        }
-        for dirty in doc.mask_dirty.values_mut() {
-            dirty.clear();
-        }
+        doc.clear_all_dirty();
         self.needs_composite = false;
         true
     }
@@ -1522,8 +1511,8 @@ impl Compositor {
         self.needs_composite
             || self.needs_present
             || self.veil_chain.needs_present()
-            || doc.dirty.values().any(|d| !d.is_empty())
-            || doc.mask_dirty.values().any(|d| !d.is_empty())
+            || doc.has_dirty_layers()
+            || doc.has_dirty_masks()
     }
 
     /// Clear present-related dirty flags after a frame.

@@ -1,4 +1,4 @@
-use crate::tile::{AlphaMask, TileGrid};
+use crate::tile::{MaskSurface, RasterSurface};
 
 pub type LayerId = u64;
 
@@ -26,12 +26,12 @@ impl BlendMode {
 pub struct RasterLayer {
     pub id: LayerId,
     pub name: String,
-    pub tiles: TileGrid,
+    pub surface: RasterSurface,
     pub opacity: f32,
     pub blend_mode: BlendMode,
     pub visible: bool,
     /// Optional layer mask (white=reveal, black=hide). Modulates alpha during compositing.
-    pub mask: Option<AlphaMask>,
+    pub mask: Option<MaskSurface>,
     /// Whether the mask affects compositing (GIMP's `apply_mask`).
     pub mask_enabled: bool,
     /// Display the mask as grayscale instead of layer content.
@@ -43,7 +43,7 @@ impl RasterLayer {
         RasterLayer {
             id,
             name: format!("Layer {id}"),
-            tiles: TileGrid::new(),
+            surface: RasterSurface::new(),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             visible: true,
@@ -64,7 +64,7 @@ pub struct LayerGroup {
     pub passthrough: bool,  // true = passthrough (default), false = normal group
     pub collapsed: bool,    // UI state: whether the group is visually collapsed
     /// Optional group mask. For passthrough groups, applied via snapshot-lerp (Photoshop behavior).
-    pub mask: Option<AlphaMask>,
+    pub mask: Option<MaskSurface>,
     pub mask_enabled: bool,
     pub show_mask: bool,
 }
@@ -89,8 +89,8 @@ impl LayerGroup {
 
 /// Common mask interface shared by RasterLayer and LayerGroup.
 pub trait Masked {
-    fn mask(&self) -> &Option<AlphaMask>;
-    fn mask_mut(&mut self) -> &mut Option<AlphaMask>;
+    fn mask(&self) -> &Option<MaskSurface>;
+    fn mask_mut(&mut self) -> &mut Option<MaskSurface>;
     fn mask_enabled(&self) -> bool;
     fn set_mask_enabled(&mut self, enabled: bool);
     fn show_mask(&self) -> bool;
@@ -100,8 +100,8 @@ pub trait Masked {
 macro_rules! impl_masked {
     ($t:ty) => {
         impl Masked for $t {
-            fn mask(&self) -> &Option<AlphaMask> { &self.mask }
-            fn mask_mut(&mut self) -> &mut Option<AlphaMask> { &mut self.mask }
+            fn mask(&self) -> &Option<MaskSurface> { &self.mask }
+            fn mask_mut(&mut self) -> &mut Option<MaskSurface> { &mut self.mask }
             fn mask_enabled(&self) -> bool { self.mask_enabled }
             fn set_mask_enabled(&mut self, enabled: bool) { self.mask_enabled = enabled; }
             fn show_mask(&self) -> bool { self.show_mask }
