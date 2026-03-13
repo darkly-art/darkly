@@ -120,16 +120,14 @@ impl ImageClip {
                             if a == 0 {
                                 continue;
                             }
-                            // Premultiply-correct: scale RGB by the coverage ratio.
-                            let ratio = if pixel[3] > 0 {
-                                a as f32 / pixel[3] as f32
-                            } else {
-                                0.0
-                            };
+                            // Straight-alpha: coverage only affects alpha,
+                            // not the color channels. Scaling premul by coverage
+                            // and converting back to straight leaves RGB unchanged:
+                            //   new_R = (R·α·cov) / (α·cov) = R
                             let out = dst.pixel_mut(px, py);
-                            out[0] = (pixel[0] as f32 * ratio).round() as u8;
-                            out[1] = (pixel[1] as f32 * ratio).round() as u8;
-                            out[2] = (pixel[2] as f32 * ratio).round() as u8;
+                            out[0] = pixel[0];
+                            out[1] = pixel[1];
+                            out[2] = pixel[2];
                             out[3] = a;
                             any_pixel = true;
                         } else {
@@ -457,6 +455,10 @@ mod tests {
         let idx = (5 * TILE_SIZE + 5) * 4;
         // Alpha should be ~128 (255 * 0.5).
         assert!((buf[idx + 3] as i32 - 128).abs() <= 1);
+        // RGB must be preserved — coverage only affects alpha, not color.
+        assert_eq!(buf[idx], 100);
+        assert_eq!(buf[idx + 1], 200);
+        assert_eq!(buf[idx + 2], 50);
     }
 
     #[test]

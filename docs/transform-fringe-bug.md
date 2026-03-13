@@ -204,3 +204,60 @@ Added brush opacity slider to test whether semi-transparent pixels render correc
 ### Narrowed: the fringe is created during CPU bilinear, not during GPU display
 
 The dark fringe is visible on committed pixels even when painted content at the same alpha renders correctly. The bilinear interpolation at content edges creates edge pixels whose stored RGBA values, when later composited by the (correct) GPU blend, produce a visible dark border. The issue is in what values the CPU writes, not in how the GPU reads them.
+
+---
+
+## Context 5 analysis (2026-03-13)
+
+### Applied: premultiplied source texture for GPU transform preview
+
+Uploaded source texture data as premultiplied alpha so hardware bilinear interpolation operates in premultiplied space (matching the CPU bilinear path). Updated `transform.wgsl` to treat sampled values as premultiplied in the Porter-Duff blend. **No effect on the fringe** — expected, since the bug manifests after CPU commit, not during GPU preview.
+
+### Verified: CPU bilinear math is correct
+
+Exhaustive trace of the premultiplied interpolation pipeline confirms the math is sound. For any input pixel, the premultiply → interpolate → un-premultiply roundtrip preserves color channels exactly (within ±1 from u8 rounding, which is non-directional). The compositor blend formula, tile upload path, and sampler alignment are all correct. There is no systematic darkening in the transform commit path itself.
+
+### Verified: repeated resampling causes expected edge softening, not darkening
+
+Repeated bilinear resampling with sub-pixel offsets progressively erodes edge alpha (edges get softer/more transparent). This is inherent to resampling and not a bug — but it makes any pre-existing color error at edges more visible over cycles.
+
+### New lead: the dark fringe originates in copy/paste, not transform
+
+Key observation: **pure transform (no copy/paste) does not introduce the dark fringe.** The fringe is already present in the content when it arrives via copy or paste. Repeated transforms then exacerbate the existing edge artifacts through resampling softening.
+
+This means the source of the dark color is in either:
+1. **`ImageClip::from_layer`** — the copy/extraction path (`clipboard.rs`). Possibly the selection-coverage multiplication (`pixel[3] * coverage`, `pixel[c] * ratio`) introduces rounding errors that darken edge pixels.
+2. **The paste commit path** — `rasterize_to_tiles` in Paste mode does Normal blend onto existing content. If the blend formula or the bilinear output has a subtle error specific to paste, it could bake dark edges into the tiles.
+3. **The clipboard encode/decode roundtrip** — if clipboard data goes through a PNG or other lossy encoding, the alpha handling there could introduce dark halos (classic straight-alpha PNG problem).
+
+Next step: isolate whether the fringe appears after copy (inspect extracted tiles before any transform), or only after paste commit (inspect tiles after paste). This narrows it to one of the three paths above.
+
+### FOUND: selection-coverage copy produces premultiplied output stored as straight
+
+**Root cause:** `ImageClip::from_layer` in `clipboard.rs` (lines 119-133) applied selection coverage by scaling BOTH alpha AND RGB channels:
+
+```rust
+let a = (pixel[3] as f32 * coverage).round() as u8;
+let ratio = a as f32 / pixel[3] as f32;  // ≈ coverage
+out[0] = (pixel[0] as f32 * ratio).round() as u8;  // WRONG: scales color
+out[3] = a;
+```
+
+For pixel `[255, 0, 0, 255]` with 50% selection coverage, this produced `[128, 0, 0, 128]` — a **premultiplied** result stored as **straight alpha**. The compositor reads this as straight (color=128, alpha=0.5) and renders dark red instead of bright semi-transparent red.
+
+**The math:** In straight alpha, scaling by coverage should only affect alpha:
+- `premul_R = R · α · coverage`
+- `new_α = α · coverage`
+- `new_straight_R = premul_R / new_α = R`  (unchanged)
+
+**Fix:** Remove the RGB scaling — only scale alpha, copy RGB as-is:
+```rust
+out[0] = pixel[0];  // color unchanged
+out[3] = a;         // only alpha scaled by coverage
+```
+
+This explains why:
+- The fringe appeared on copy/paste but not pure transform
+- The fringe color matched the "darkened" version of the content color
+- Repeated transforms exacerbated it (resampling softened edges that already had wrong colors)
+- The bilinear fallback color test (transparent-black vs transparent-white) changed the fringe color — the darkened edge pixels were being interpolated with the fallback

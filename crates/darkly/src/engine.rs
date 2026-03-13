@@ -1180,6 +1180,13 @@ impl DarklyEngine {
             },
         });
 
+        // Selection was used to define what gets picked up — clear it now so
+        // the marching ants disappear and the transform output isn't clipped.
+        if self.doc.selection.is_some() {
+            self.doc.selection = None;
+            self.update_selection_overlay();
+        }
+
         true
     }
 
