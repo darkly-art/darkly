@@ -6,7 +6,9 @@
 //! internally — callers never see the selection.
 
 use crate::dirty::DirtyRegion;
-use crate::tile::{AlphaF32Data, AlphaMask, RgbaData, TileGrid, TILE_SIZE};
+use crate::layer::LayerId;
+use crate::tile::{AlphaF32, AlphaF32Data, AlphaMask, Memento, Rgba, RgbaData, TileGrid, TILE_SIZE};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // PaintSurface trait
@@ -325,6 +327,13 @@ pub enum Surface<'a> {
     Mask(MaskPaintTarget<'a>),
 }
 
+/// What kind of tile data was captured during a transaction.
+/// Used by the undo system to handle both layer tiles and mask tiles.
+pub enum TransactionMemento {
+    Tiles(HashMap<LayerId, Memento<Rgba>>),
+    Mask(LayerId, Memento<AlphaF32>),
+}
+
 impl Surface<'_> {
     pub fn composite(&mut self, px: i32, py: i32, src: [u8; 4]) {
         match self { Surface::Layer(t) => t.composite(px, py, src), Surface::Mask(t) => t.composite(px, py, src) }
@@ -336,6 +345,29 @@ impl Surface<'_> {
 
     pub fn replace(&mut self, px: i32, py: i32, color: [u8; 4]) {
         match self { Surface::Layer(t) => t.replace(px, py, color), Surface::Mask(t) => t.replace(px, py, color) }
+    }
+
+    pub fn begin_transaction(&mut self) {
+        match self {
+            Surface::Layer(t) => t.tiles.begin_transaction(),
+            Surface::Mask(t) => t.mask.begin_transaction(),
+        }
+    }
+
+    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<TransactionMemento> {
+        match self {
+            Surface::Layer(t) => {
+                t.tiles.commit_transaction().map(|m| {
+                    let mut mementos = HashMap::new();
+                    mementos.insert(layer_id, m);
+                    TransactionMemento::Tiles(mementos)
+                })
+            }
+            Surface::Mask(t) => {
+                t.mask.commit_transaction()
+                    .map(|m| TransactionMemento::Mask(layer_id, m))
+            }
+        }
     }
 }
 

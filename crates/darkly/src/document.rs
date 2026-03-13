@@ -1,16 +1,8 @@
 use crate::dirty::DirtyRegion;
 use crate::layer::*;
-use crate::paint::{self, MaskPaintTarget, PaintTarget, Surface};
-use crate::tile::{AlphaF32, AlphaMask, Memento, Rgba, TILE_SIZE, TileGrid};
+use crate::paint::{self, MaskPaintTarget, PaintTarget, Surface, TransactionMemento};
+use crate::tile::{AlphaMask, TILE_SIZE, TileGrid};
 use std::collections::HashMap;
-
-/// What kind of tile data was captured during a transaction.
-/// Returned by `commit_transaction` so the undo system can handle both
-/// layer tiles and mask tiles with one action type.
-pub enum TransactionMemento {
-    Tiles(HashMap<LayerId, Memento<Rgba>>),
-    Mask(LayerId, Memento<AlphaF32>),
-}
 
 pub enum SelectionMode {
     Replace,
@@ -497,11 +489,13 @@ impl Document {
         layer_id: LayerId,
     ) -> Option<Surface<'a>> {
         if mask_editing == Some(layer_id) {
-            let raster = find_raster_in_mut(layers, layer_id)?;
-            let mask = raster.mask.as_mut()?;
+            // Mask editing works on any node type (raster or group)
+            let node = find_node_in_mut(layers, layer_id)?;
+            let mask = node.as_masked_mut().mask_mut().as_mut()?;
             let dirty_region = mask_dirty.get_mut(&layer_id)?;
             Some(Surface::Mask(MaskPaintTarget::new(mask, dirty_region, selection)))
         } else {
+            // Pixel painting is raster-only (groups have no tiles)
             let raster = find_raster_in_mut(layers, layer_id)?;
             let dirty_region = dirty.get_mut(&layer_id)?;
             Some(Surface::Layer(PaintTarget::new(&mut raster.tiles, dirty_region, selection)))
@@ -603,41 +597,22 @@ impl Document {
         }
     }
 
-    /// Begin recording tile changes on a raster layer (or its mask) for undo.
-    /// Routes to the mask automatically when `mask_editing` is set.
+    /// Begin recording tile changes on a layer (or its mask) for undo.
     pub fn begin_transaction(&mut self, layer_id: LayerId) {
-        let editing_mask = self.mask_editing == Some(layer_id);
-        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
-            if editing_mask {
-                if let Some(mask) = &mut r.mask {
-                    mask.begin_transaction();
-                }
-            } else {
-                r.tiles.begin_transaction();
-            }
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
+            self.selection.as_ref(), self.mask_editing, layer_id,
+        ) {
+            s.begin_transaction();
         }
     }
 
     /// Commit the active transaction and return a memento for undo.
-    /// Returns the appropriate variant depending on whether we're editing
-    /// the mask or the layer tiles.
     pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<TransactionMemento> {
-        let editing_mask = self.mask_editing == Some(layer_id);
-        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
-            if editing_mask {
-                if let Some(mask) = &mut r.mask {
-                    return mask.commit_transaction()
-                        .map(|m| TransactionMemento::Mask(layer_id, m));
-                }
-            } else {
-                if let Some(memento) = r.tiles.commit_transaction() {
-                    let mut mementos = HashMap::new();
-                    mementos.insert(layer_id, memento);
-                    return Some(TransactionMemento::Tiles(mementos));
-                }
-            }
-        }
-        None
+        Self::make_surface(
+            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
+            self.selection.as_ref(), self.mask_editing, layer_id,
+        )?.commit_transaction(layer_id)
     }
 
     /// Apply a shape mask to the document selection using the given mode.

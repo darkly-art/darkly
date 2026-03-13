@@ -662,13 +662,19 @@ impl Compositor {
                 });
                 self.mask_textures.insert(layer_id, mask_tex);
                 if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
-                    cache.mask_bind_group = mask_bg;
+                    cache.mask_bind_group = mask_bg.clone();
+                }
+                if let Some(gs) = self.group_state.get_mut(&layer_id) {
+                    gs.mask_bind_group = mask_bg;
                 }
             }
         } else {
             self.mask_textures.remove(&layer_id);
             if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
                 cache.mask_bind_group = self.default_mask_bind_group.clone();
+            }
+            if let Some(gs) = self.group_state.get_mut(&layer_id) {
+                gs.mask_bind_group = self.default_mask_bind_group.clone();
             }
         }
     }
@@ -697,7 +703,10 @@ impl Compositor {
             }],
         });
         if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
-            cache.mask_bind_group = mask_bg;
+            cache.mask_bind_group = mask_bg.clone();
+        }
+        if let Some(gs) = self.group_state.get_mut(&layer_id) {
+            gs.mask_bind_group = mask_bg;
         }
     }
 

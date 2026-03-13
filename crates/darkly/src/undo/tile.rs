@@ -1,5 +1,6 @@
 use super::UndoAction;
-use crate::document::{Document, TransactionMemento};
+use crate::document::Document;
+use crate::paint::TransactionMemento;
 use crate::layer::{Layer, LayerId};
 use std::collections::{HashMap, HashSet};
 

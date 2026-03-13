@@ -39,11 +39,12 @@
             handle.resize(canvas.width, canvas.height);
             app.handle = handle;
 
-            // Demo setup: gradient background + paint layer
+            // Demo setup: gradient background + paint layer in a group
             const bg = handle.add_raster_layer();
             handle.fill_gradient(bg);
 
-            const paintLayerId = handle.add_raster_layer();
+            const groupId = handle.add_group();
+            const paintLayerId = handle.add_raster_layer_in(groupId);
             app.activeLayerId = paintLayerId;
 
             // Observe element resizes to keep GPU surface in sync
