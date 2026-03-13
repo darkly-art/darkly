@@ -82,6 +82,19 @@ struct BlendUniforms {
     _pad1: f32,
 }
 
+/// GPU state for a passthrough group that has a mask (Photoshop-style).
+/// Stores a snapshot texture for the parent accumulator, a uniform buffer
+/// for the lerp pass, and the mask bind group.
+struct PassthroughMaskState {
+    /// Snapshot of the parent accumulator before compositing this group's children.
+    snapshot: wgpu::Texture,
+    snapshot_view: wgpu::TextureView,
+    /// Uniform buffer for the mask lerp shader (show_mask flag).
+    uniform_buf: wgpu::Buffer,
+    /// Mask bind group (group 1) pointing to the real mask texture.
+    mask_bind_group: wgpu::BindGroup,
+}
+
 pub struct Compositor {
     /// Per-group GPU state. Every non-passthrough group (including root)
     /// owns a GroupState with its own accumulators and composite cache.
@@ -102,6 +115,11 @@ pub struct Compositor {
     raster_cache: HashMap<LayerId, RasterLayerCache>,
 
     blend_pipelines: BlendPipelines,
+
+    // --- Passthrough Group Mask (Photoshop-style snapshot-lerp) ---
+    mask_lerp_pipeline: wgpu::RenderPipeline,
+    /// Per-group GPU state for passthrough groups with masks.
+    passthrough_mask_state: HashMap<LayerId, PassthroughMaskState>,
 
     present_pipeline: wgpu::RenderPipeline,
     /// Present pipeline targeting the accum format (Rgba8Unorm) for veil input.
@@ -278,6 +296,53 @@ impl Compositor {
             }],
         });
 
+        // --- Mask lerp pipeline (passthrough groups with masks) ---
+        // Reuses the blend BGL for group 0 (before, after, sampler, uniforms)
+        // and the mask BGL for group 1 (mask texture).
+        let mask_lerp_pipeline = {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("mask-lerp-shader"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("../../../../shaders/mask_lerp.wgsl").into(),
+                ),
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("mask-lerp-pipeline-layout"),
+                bind_group_layouts: &[
+                    &blend_pipelines.bind_group_layout,
+                    &blend_pipelines.mask_bind_group_layout,
+                ],
+                immediate_size: 0,
+            });
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("mask-lerp-pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: accum_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         // View transform uniform buffer (present shader binding 2)
         let view_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("view-transform-uniform"),
@@ -445,6 +510,8 @@ impl Compositor {
             default_mask_bind_group,
             raster_cache: HashMap::new(),
             blend_pipelines,
+            mask_lerp_pipeline,
+            passthrough_mask_state: HashMap::new(),
             present_pipeline,
             present_to_veil_pipeline,
             _present_bind_group_layout,
@@ -533,6 +600,11 @@ impl Compositor {
                 _pad1: 0.0,
             };
             queue.write_buffer(&gs.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        }
+        // Also update passthrough mask state uniform (show_mask only).
+        if let Some(pms) = self.passthrough_mask_state.get(&group_id) {
+            let val = show_mask as u32;
+            queue.write_buffer(&pms.uniform_buf, 0, bytemuck::bytes_of(&val));
         }
     }
 
@@ -665,11 +737,33 @@ impl Compositor {
                     cache.mask_bind_group = mask_bg.clone();
                 }
                 if let Some(gs) = self.group_state.get_mut(&layer_id) {
-                    gs.mask_bind_group = mask_bg;
+                    gs.mask_bind_group = mask_bg.clone();
+                }
+                // Passthrough groups: create or update PassthroughMaskState.
+                if let Some(pms) = self.passthrough_mask_state.get_mut(&layer_id) {
+                    pms.mask_bind_group = mask_bg;
+                } else {
+                    let (snapshot, snapshot_view) = Self::make_accum_texture(
+                        device, self.padded_width, self.padded_height,
+                        &format!("pt-snapshot-{layer_id}"),
+                    );
+                    let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(&format!("pt-lerp-uniforms-{layer_id}")),
+                        size: 4,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.passthrough_mask_state.insert(layer_id, PassthroughMaskState {
+                        snapshot,
+                        snapshot_view,
+                        uniform_buf,
+                        mask_bind_group: mask_bg,
+                    });
                 }
             }
         } else {
             self.mask_textures.remove(&layer_id);
+            self.passthrough_mask_state.remove(&layer_id);
             if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
                 cache.mask_bind_group = self.default_mask_bind_group.clone();
             }
@@ -706,7 +800,11 @@ impl Compositor {
             cache.mask_bind_group = mask_bg.clone();
         }
         if let Some(gs) = self.group_state.get_mut(&layer_id) {
-            gs.mask_bind_group = mask_bg;
+            gs.mask_bind_group = mask_bg.clone();
+        }
+        // Keep passthrough mask state in sync.
+        if let Some(pms) = self.passthrough_mask_state.get_mut(&layer_id) {
+            pms.mask_bind_group = mask_bg;
         }
     }
 
@@ -1239,8 +1337,24 @@ impl Compositor {
 
                 LayerNode::Group(g) => {
                     if g.passthrough {
-                        // Passthrough: inline children into same parent accumulators.
-                        self.compose_children(encoder, device, parent_group, &g.children, scissor);
+                        let has_active_mask = g.mask.is_some()
+                            && g.mask_enabled
+                            && self.mask_textures.contains_key(&g.id);
+
+                        if has_active_mask || g.show_mask {
+                            // Photoshop-style passthrough + mask:
+                            // 1. Snapshot parent accum before children.
+                            // 2. Composite children (passthrough into parent).
+                            // 3. Lerp between snapshot and result using mask.
+                            self.compose_passthrough_masked(
+                                encoder, device, parent_group, g, scissor,
+                            );
+                        } else {
+                            // Pure passthrough — inline children into parent.
+                            self.compose_children(
+                                encoder, device, parent_group, &g.children, scissor,
+                            );
+                        }
                     } else {
                         // Normal group: composite into its own isolated buffer,
                         // then blend the result into the parent.
@@ -1290,6 +1404,116 @@ impl Compositor {
                     }
                 }
             }
+        }
+    }
+
+    /// Composite a passthrough group whose mask is active.
+    ///
+    /// Snapshots the parent accumulator, composites children (passthrough),
+    /// then lerps between the snapshot and the result using the group mask.
+    fn compose_passthrough_masked(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
+        parent_group: LayerId,
+        group: &crate::layer::LayerGroup,
+        scissor: (u32, u32, u32, u32),
+    ) {
+        let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
+        let group_id = group.id;
+
+        // PassthroughMaskState must exist (created when the mask was added).
+        if !self.passthrough_mask_state.contains_key(&group_id) {
+            // Fallback: just inline children without mask.
+            self.compose_children(encoder, device, parent_group, &group.children, scissor);
+            return;
+        }
+
+        // 1. Copy current parent accum (the "before" state) into the snapshot.
+        let gs = self.group_state.get(&parent_group).expect("parent GroupState missing");
+        let before_idx = gs.current_accum;
+        let origin = wgpu::Origin3d { x: scissor_x, y: scissor_y, z: 0 };
+        let copy_size = wgpu::Extent3d {
+            width: scissor_w,
+            height: scissor_h,
+            depth_or_array_layers: 1,
+        };
+        let pms = &self.passthrough_mask_state[&group_id];
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.group_state[&parent_group].accum.textures[before_idx],
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &pms.snapshot,
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            copy_size,
+        );
+
+        // 2. Composite children into parent accumulators (passthrough).
+        self.compose_children(encoder, device, parent_group, &group.children, scissor);
+
+        // 3. Lerp pass: mix(snapshot, current_accum, mask).
+        //    Write the lerp result into the ping-pong "other" accumulator.
+        let gs = self.group_state.get_mut(&parent_group).unwrap();
+        let after_idx = gs.current_accum;
+        let dst = 1 - after_idx;
+        gs.current_accum = dst;
+
+        let pms = &self.passthrough_mask_state[&group_id];
+
+        // Create lerp bind group (group 0): before=snapshot, after=current_accum, sampler, uniforms.
+        let lerp_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("mask-lerp-bg"),
+            layout: &self.blend_pipelines.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&pms.snapshot_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &self.group_state[&parent_group].accum.views[after_idx],
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: pms.uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        {
+            let gs = &self.group_state[&parent_group];
+            let pms = &self.passthrough_mask_state[&group_id];
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("mask-lerp"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &gs.accum.views[dst],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
+            rpass.set_pipeline(&self.mask_lerp_pipeline);
+            rpass.set_bind_group(0, &lerp_bind_group, &[]);
+            rpass.set_bind_group(1, &pms.mask_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
         }
     }
 

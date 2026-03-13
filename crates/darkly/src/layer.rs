@@ -63,7 +63,7 @@ pub struct LayerGroup {
     pub visible: bool,
     pub passthrough: bool,  // true = passthrough (default), false = normal group
     pub collapsed: bool,    // UI state: whether the group is visually collapsed
-    /// Optional group mask (data only — GPU compositing deferred until group isolation).
+    /// Optional group mask. For passthrough groups, applied via snapshot-lerp (Photoshop behavior).
     pub mask: Option<AlphaMask>,
     pub mask_enabled: bool,
     pub show_mask: bool,

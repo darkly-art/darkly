@@ -250,11 +250,9 @@ impl DarklyEngine {
                 &self.gpu.queue, layer_id, r.opacity, r.blend_mode,
             );
         } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
-            if !g.passthrough {
-                self.compositor.update_group_uniforms(
-                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode, g.show_mask,
-                );
-            }
+            self.compositor.update_group_uniforms(
+                &self.gpu.queue, layer_id, g.opacity, g.blend_mode, g.show_mask,
+            );
         }
         self.compositor.mark_dirty();
 
@@ -285,11 +283,9 @@ impl DarklyEngine {
                 &self.gpu.queue, layer_id, r.opacity, r.blend_mode,
             );
         } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
-            if !g.passthrough {
-                self.compositor.update_group_uniforms(
-                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode, g.show_mask,
-                );
-            }
+            self.compositor.update_group_uniforms(
+                &self.gpu.queue, layer_id, g.opacity, g.blend_mode, g.show_mask,
+            );
         }
         self.compositor.mark_dirty();
 
