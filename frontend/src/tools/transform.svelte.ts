@@ -43,6 +43,21 @@ function affineScale(sx: number, sy: number): Affine2D {
     return [sx, 0, 0, 0, sy, 0];
 }
 
+function affineInverse(m: Affine2D): Affine2D | null {
+    const [a, b, tx, c, d, ty] = m;
+    const det = a * d - b * c;
+    if (Math.abs(det) < 1e-12) return null;
+    const inv = 1 / det;
+    return [
+        d * inv,
+        -b * inv,
+        (b * ty - d * tx) * inv,
+        -c * inv,
+        a * inv,
+        (c * tx - a * ty) * inv,
+    ];
+}
+
 function affineRotate(angle: number): Affine2D {
     const c = Math.cos(angle);
     const s = Math.sin(angle);
@@ -215,18 +230,22 @@ function updateDrag(canvasX: number, canvasY: number, shiftKey: boolean) {
             ),
         );
     } else {
+        // Compute scale in source-local space so it follows the object's
+        // edges regardless of rotation, then apply in local space.
         const dragLocal = handleLocal(handle, srcW, srcH);
-        const dragOffset = affineTransform(initialMatrix, dragLocal[0], dragLocal[1]);
-        const anchorOffset = affineTransform(initialMatrix, anchorLocal[0], anchorLocal[1]);
-
         const mouseOffset: [number, number] = [canvasX - origin[0], canvasY - origin[1]];
-        const dInitialX = dragOffset[0] - anchorOffset[0];
-        const dInitialY = dragOffset[1] - anchorOffset[1];
-        const dMouseX = mouseOffset[0] - anchorOffset[0];
-        const dMouseY = mouseOffset[1] - anchorOffset[1];
 
-        let sx = Math.abs(dInitialX) > 0.01 ? dMouseX / dInitialX : 1;
-        let sy = Math.abs(dInitialY) > 0.01 ? dMouseY / dInitialY : 1;
+        const inv = affineInverse(initialMatrix);
+        if (!inv) return;
+        const mouseLocal = affineTransform(inv, mouseOffset[0], mouseOffset[1]);
+
+        const dLocalX = dragLocal[0] - anchorLocal[0];
+        const dLocalY = dragLocal[1] - anchorLocal[1];
+        const dMouseLocalX = mouseLocal[0] - anchorLocal[0];
+        const dMouseLocalY = mouseLocal[1] - anchorLocal[1];
+
+        let sx = Math.abs(dLocalX) > 0.01 ? dMouseLocalX / dLocalX : 1;
+        let sy = Math.abs(dLocalY) > 0.01 ? dMouseLocalY / dLocalY : 1;
 
         if (handle === Handle.Top || handle === Handle.Bottom) sx = 1;
         if (handle === Handle.Left || handle === Handle.Right) sy = 1;
@@ -237,13 +256,14 @@ function updateDrag(canvasX: number, canvasY: number, shiftKey: boolean) {
             sy = uniform * Math.sign(sy || 1);
         }
 
+        // Apply scale in local space around the local anchor point
         matrix = affineMultiply(
-            affineTranslate(anchorOffset[0], anchorOffset[1]),
+            initialMatrix,
             affineMultiply(
-                affineScale(sx, sy),
+                affineTranslate(anchorLocal[0], anchorLocal[1]),
                 affineMultiply(
-                    affineTranslate(-anchorOffset[0], -anchorOffset[1]),
-                    initialMatrix,
+                    affineScale(sx, sy),
+                    affineTranslate(-anchorLocal[0], -anchorLocal[1]),
                 ),
             ),
         );
