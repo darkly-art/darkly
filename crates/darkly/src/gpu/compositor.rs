@@ -1517,6 +1517,21 @@ impl Compositor {
         }
     }
 
+    /// Whether any rendering work is pending (dirty tiles, present, veils).
+    fn has_pending_work(&self, doc: &Document) -> bool {
+        self.needs_composite
+            || self.needs_present
+            || self.veil_chain.needs_present()
+            || doc.dirty.values().any(|d| !d.is_empty())
+            || doc.mask_dirty.values().any(|d| !d.is_empty())
+    }
+
+    /// Clear present-related dirty flags after a frame.
+    fn finish_present(&mut self) {
+        self.needs_present = false;
+        self.veil_chain.clear_needs_present();
+    }
+
     /// Composite layers if needed, then present to an arbitrary texture view.
     ///
     /// This is the backend-agnostic rendering entry point. Any frontend
@@ -1529,16 +1544,11 @@ impl Compositor {
         target_view: &wgpu::TextureView,
         doc: &mut Document,
     ) {
-        let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
-        let has_mask_dirty = doc.mask_dirty.values().any(|d| !d.is_empty());
-        let veil_needs = self.veil_chain.needs_present();
-        if !self.needs_composite && !has_dirty && !has_mask_dirty && !self.needs_present && !veil_needs {
+        if !self.has_pending_work(doc) {
             return;
         }
 
-        if self.needs_composite || has_dirty || has_mask_dirty {
-            self.render_offscreen(device, queue, doc);
-        }
+        self.render_offscreen(device, queue, doc);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("present-to-view"),
@@ -1546,8 +1556,7 @@ impl Compositor {
         self.present_and_veils(&mut encoder, target_view);
         queue.submit(std::iter::once(encoder.finish()));
 
-        self.needs_present = false;
-        self.veil_chain.clear_needs_present();
+        self.finish_present();
     }
 
     /// Upload dirty tiles, composite changed layers, present to a surface.
@@ -1564,20 +1573,14 @@ impl Compositor {
     ) {
         perf::time("render-total");
 
-        let has_dirty = doc.dirty.values().any(|d| !d.is_empty());
-        let has_mask_dirty = doc.mask_dirty.values().any(|d| !d.is_empty());
-        let veil_needs = self.veil_chain.needs_present();
-        if !self.needs_composite && !has_dirty && !has_mask_dirty && !self.needs_present && !veil_needs {
+        if !self.has_pending_work(doc) {
             perf::time_end("render-total");
             return;
         }
 
-        // Composite layers into composite_cache if needed.
-        if self.needs_composite || has_dirty || has_mask_dirty {
-            perf::time("offscreen");
-            self.render_offscreen(device, queue, doc);
-            perf::time_end("offscreen");
-        }
+        perf::time("offscreen");
+        self.render_offscreen(device, queue, doc);
+        perf::time_end("offscreen");
 
         // Acquire surface and present composite_cache → veils → surface.
         let output = match surface.get_current_texture() {
@@ -1633,8 +1636,7 @@ impl Compositor {
         output.present();
         perf::time_end("present");
 
-        self.needs_present = false;
-        self.veil_chain.clear_needs_present();
+        self.finish_present();
         perf::time_end("render-total");
     }
 }
