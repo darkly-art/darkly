@@ -421,7 +421,7 @@ mod tests {
         // Should be exactly 1 undo step, not 4.
         assert!(undo.can_undo());
         assert_eq!(
-            doc.layer(id).map(|l| match l { Layer::Raster(r) => r.opacity, _ => 0.0 }),
+            doc.layer(id).map(|l| match l { Layer::Raster(r) => r.opacity }),
             Some(0.3),
         );
 

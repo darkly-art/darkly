@@ -523,12 +523,13 @@ impl Compositor {
         group_id: LayerId,
         opacity: f32,
         blend_mode: BlendMode,
+        show_mask: bool,
     ) {
         if let Some(gs) = self.group_state.get(&group_id) {
             let uniforms = BlendUniforms {
                 opacity,
                 blend_mode: blend_mode as u32,
-                show_mask: 0,
+                show_mask: show_mask as u32,
                 _pad1: 0.0,
             };
             queue.write_buffer(&gs.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
@@ -899,29 +900,42 @@ impl Compositor {
 
         // 2b. Upload dirty mask tiles (f32→u8 conversion, R8Unorm format).
         // Only upload when mask_enabled || show_mask (GIMP's dormant mask optimization).
+        // Works for both raster layers and groups.
         if has_mask_dirty {
-            for raster in doc.all_raster_layers() {
-                let mask_active = raster.mask_enabled || raster.show_mask;
-                if !mask_active {
-                    continue;
-                }
 
-                let dirty = match doc.mask_dirty.get(&raster.id) {
+            // Collect (id, mask_active, mask_ref) for both rasters and groups
+            struct MaskUploadInfo<'a> {
+                id: LayerId,
+                mask: &'a crate::tile::AlphaMask,
+            }
+
+            let mut uploads: Vec<MaskUploadInfo> = Vec::new();
+
+            for raster in doc.all_raster_layers() {
+                if !(raster.mask_enabled || raster.show_mask) { continue; }
+                if let Some(m) = &raster.mask {
+                    uploads.push(MaskUploadInfo { id: raster.id, mask: m });
+                }
+            }
+            for group in doc.all_groups() {
+                if !(group.mask_enabled || group.show_mask) { continue; }
+                if let Some(m) = &group.mask {
+                    uploads.push(MaskUploadInfo { id: group.id, mask: m });
+                }
+            }
+
+            let ts = TILE_SIZE_USIZE;
+            for info in &uploads {
+                let dirty = match doc.mask_dirty.get(&info.id) {
                     Some(d) if !d.is_empty() => d,
                     _ => continue,
                 };
 
-                let mask_tex = match self.mask_textures.get(&raster.id) {
+                let mask_tex = match self.mask_textures.get(&info.id) {
                     Some(t) => t,
                     None => continue,
                 };
 
-                let mask = match &raster.mask {
-                    Some(m) => m,
-                    None => continue,
-                };
-
-                let ts = TILE_SIZE_USIZE;
                 for (tx, ty) in dirty.iter() {
                     if tx < 0 || ty < 0 {
                         continue;
@@ -933,10 +947,8 @@ impl Compositor {
                     }
 
                     // Convert f32 mask tile to u8 for R8Unorm upload
-                    let u8_data: &[u8] = match mask.get(tx, ty) {
+                    let u8_data: &[u8] = match info.mask.get(tx, ty) {
                         Some(tile) => {
-                            // Convert f32 → u8 into a temporary buffer
-                            // We use a thread-local buffer to avoid allocation per tile
                             thread_local! {
                                 static BUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(
                                     vec![0u8; 64 * 64]
@@ -948,9 +960,6 @@ impl Compositor {
                                 for i in 0..(ts * ts) {
                                     buf[i] = (data.0[i].clamp(0.0, 1.0) * 255.0) as u8;
                                 }
-                                // SAFETY: The buf lives in the thread-local and we immediately
-                                // use it for the queue write below. The borrow is released
-                                // after this closure returns.
                                 unsafe {
                                     std::slice::from_raw_parts(buf.as_ptr(), ts * ts)
                                 }

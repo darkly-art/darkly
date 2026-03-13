@@ -48,7 +48,8 @@
         if (!app.handle || app.activeLayerId === null) return;
         // Find the active layer info to check if it's raster and doesn't already have a mask
         const layer = findLayer(app.layerTree, app.activeLayerId);
-        if (!layer || layer.type !== 'raster' || layer.hasMask) return;
+        if (!layer || layer.hasMask) return;
+        if (layer.type !== 'raster' && layer.type !== 'group') return;
         app.handle.add_mask(app.activeLayerId);
         refresh();
     }
@@ -67,7 +68,7 @@
     let canAddMask = $derived(() => {
         if (!app.handle || app.activeLayerId === null) return false;
         const layer = findLayer(app.layerTree, app.activeLayerId);
-        return layer?.type === 'raster' && !layer.hasMask;
+        return (layer?.type === 'raster' || layer?.type === 'group') && !layer.hasMask;
     });
 
     function onDragOver(e: DragEvent) {

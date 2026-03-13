@@ -87,6 +87,32 @@ impl LayerGroup {
     }
 }
 
+/// Common mask interface shared by RasterLayer and LayerGroup.
+pub trait Masked {
+    fn mask(&self) -> &Option<AlphaMask>;
+    fn mask_mut(&mut self) -> &mut Option<AlphaMask>;
+    fn mask_enabled(&self) -> bool;
+    fn set_mask_enabled(&mut self, enabled: bool);
+    fn show_mask(&self) -> bool;
+    fn set_show_mask(&mut self, show: bool);
+}
+
+macro_rules! impl_masked {
+    ($t:ty) => {
+        impl Masked for $t {
+            fn mask(&self) -> &Option<AlphaMask> { &self.mask }
+            fn mask_mut(&mut self) -> &mut Option<AlphaMask> { &mut self.mask }
+            fn mask_enabled(&self) -> bool { self.mask_enabled }
+            fn set_mask_enabled(&mut self, enabled: bool) { self.mask_enabled = enabled; }
+            fn show_mask(&self) -> bool { self.show_mask }
+            fn set_show_mask(&mut self, show: bool) { self.show_mask = show; }
+        }
+    };
+}
+
+impl_masked!(RasterLayer);
+impl_masked!(LayerGroup);
+
 /// A node in the layer tree. Either a leaf layer or a group containing children.
 pub enum LayerNode {
     Layer(Layer),
@@ -105,6 +131,20 @@ impl LayerNode {
         match self {
             LayerNode::Layer(l) => l.visible(),
             LayerNode::Group(g) => g.visible,
+        }
+    }
+
+    pub fn as_masked(&self) -> &dyn Masked {
+        match self {
+            LayerNode::Layer(Layer::Raster(r)) => r,
+            LayerNode::Group(g) => g,
+        }
+    }
+
+    pub fn as_masked_mut(&mut self) -> &mut dyn Masked {
+        match self {
+            LayerNode::Layer(Layer::Raster(r)) => r,
+            LayerNode::Group(g) => g,
         }
     }
 }

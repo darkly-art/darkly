@@ -31,7 +31,9 @@ pub enum LayerInfo {
     #[serde(rename_all = "camelCase")]
     Group {
         id: f64, name: String, visible: bool, collapsed: bool, passthrough: bool,
-        opacity: f32, blend_mode: u32, children: Vec<LayerInfo>,
+        opacity: f32, blend_mode: u32,
+        has_mask: bool, mask_enabled: bool, show_mask: bool,
+        children: Vec<LayerInfo>,
     },
 }
 
@@ -250,7 +252,7 @@ impl DarklyEngine {
         } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
             if !g.passthrough {
                 self.compositor.update_group_uniforms(
-                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode,
+                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode, g.show_mask,
                 );
             }
         }
@@ -285,7 +287,7 @@ impl DarklyEngine {
         } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
             if !g.passthrough {
                 self.compositor.update_group_uniforms(
-                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode,
+                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode, g.show_mask,
                 );
             }
         }
@@ -356,7 +358,7 @@ impl DarklyEngine {
             self.compositor.ensure_group_state(&self.gpu.device, &self.gpu.queue, group_id);
             if let Some(LayerNode::Group(g)) = self.doc.find_node(group_id) {
                 self.compositor.update_group_uniforms(
-                    &self.gpu.queue, group_id, g.opacity, g.blend_mode,
+                    &self.gpu.queue, group_id, g.opacity, g.blend_mode, g.show_mask,
                 );
             }
         }
@@ -371,11 +373,14 @@ impl DarklyEngine {
     // --- Layer Masks ---
 
     pub fn add_mask(&mut self, layer_id: u64) {
+
         // Snapshot old state for undo
-        let (old_mask, old_enabled, old_show) = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => (r.mask.clone(), r.mask_enabled, r.show_mask),
-            _ => return,
+        let node = match self.doc.find_node(layer_id) {
+            Some(n) => n,
+            None => return,
         };
+        let m = node.as_masked();
+        let (old_mask, old_enabled, old_show) = (m.mask().clone(), m.mask_enabled(), m.show_mask());
 
         self.doc.add_mask(layer_id);
         self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
@@ -388,10 +393,13 @@ impl DarklyEngine {
     }
 
     pub fn remove_mask(&mut self, layer_id: u64) {
-        let (old_mask, old_enabled, old_show) = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => (r.mask.clone(), r.mask_enabled, r.show_mask),
-            _ => return,
+
+        let node = match self.doc.find_node(layer_id) {
+            Some(n) => n,
+            None => return,
         };
+        let m = node.as_masked();
+        let (old_mask, old_enabled, old_show) = (m.mask().clone(), m.mask_enabled(), m.show_mask());
 
         self.doc.remove_mask(layer_id);
         self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
@@ -405,6 +413,7 @@ impl DarklyEngine {
     }
 
     pub fn apply_mask(&mut self, layer_id: u64) {
+        // apply_mask is raster-only — groups have no pixel data to bake into
         let (old_mask, old_enabled, old_show) = match self.doc.layer(layer_id) {
             Some(Layer::Raster(r)) => (r.mask.clone(), r.mask_enabled, r.show_mask),
             _ => return,
@@ -433,9 +442,10 @@ impl DarklyEngine {
     }
 
     pub fn set_mask_enabled(&mut self, layer_id: u64, enabled: bool) {
-        let old = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => r.mask_enabled,
-            _ => return,
+
+        let old = match self.doc.find_node(layer_id) {
+            Some(n) => n.as_masked().mask_enabled(),
+            None => return,
         };
         self.doc.set_mask_enabled(layer_id, enabled);
         self.sync_mask_state(layer_id);
@@ -447,9 +457,10 @@ impl DarklyEngine {
     }
 
     pub fn set_show_mask(&mut self, layer_id: u64, show: bool) {
-        let old = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => r.show_mask,
-            _ => return,
+
+        let old = match self.doc.find_node(layer_id) {
+            Some(n) => n.as_masked().show_mask(),
+            None => return,
         };
         self.doc.set_show_mask(layer_id, show);
         self.sync_mask_state(layer_id);
@@ -469,17 +480,20 @@ impl DarklyEngine {
     }
 
     pub fn selection_to_mask(&mut self, layer_id: u64) {
-        let (old_mask, old_enabled, old_show) = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => (r.mask.clone(), r.mask_enabled, r.show_mask),
-            _ => return,
+
+        let node = match self.doc.find_node(layer_id) {
+            Some(n) => n,
+            None => return,
         };
+        let m = node.as_masked();
+        let (old_mask, old_enabled, old_show) = (m.mask().clone(), m.mask_enabled(), m.show_mask());
 
         self.doc.selection_to_mask(layer_id);
         self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
         // Mark all mask tiles dirty for upload
-        let mask_coords: Vec<(i32, i32)> = self.doc.layer(layer_id)
-            .and_then(|l| match l { Layer::Raster(r) => r.mask.as_ref() })
+        let mask_coords: Vec<(i32, i32)> = self.doc.find_node(layer_id)
+            .and_then(|n| n.as_masked().mask().as_ref())
             .map(|m| m.iter().map(|((tx, ty), _)| (tx, ty)).collect())
             .unwrap_or_default();
         let dirty = self.doc.mask_dirty.entry(layer_id).or_default();
@@ -502,20 +516,35 @@ impl DarklyEngine {
         self.update_selection_overlay();
     }
 
-    /// Sync compositor mask state (bind group + uniforms) for a layer.
+    /// Sync compositor mask state (bind group + uniforms) for a layer or group.
     fn sync_mask_state(&mut self, layer_id: u64) {
-        if let Some(Layer::Raster(r)) = self.doc.layer(layer_id) {
-            let has_mask = r.mask.is_some();
-            let mask_enabled = r.mask_enabled;
-            let show_mask = r.show_mask;
 
-            self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, has_mask);
-            self.compositor.update_mask_binding(
-                &self.gpu.device, layer_id, mask_enabled, show_mask,
-            );
-            self.compositor.update_raster_uniforms_full(
-                &self.gpu.queue, layer_id, r.opacity, r.blend_mode, show_mask,
-            );
+        let node = match self.doc.find_node(layer_id) {
+            Some(n) => n,
+            None => return,
+        };
+        let m = node.as_masked();
+        let has_mask = m.mask().is_some();
+        let mask_enabled = m.mask_enabled();
+        let show_mask = m.show_mask();
+
+        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, has_mask);
+        self.compositor.update_mask_binding(
+            &self.gpu.device, layer_id, mask_enabled, show_mask,
+        );
+
+        // Update uniforms for the appropriate cache type
+        match node {
+            LayerNode::Layer(Layer::Raster(r)) => {
+                self.compositor.update_raster_uniforms_full(
+                    &self.gpu.queue, layer_id, r.opacity, r.blend_mode, show_mask,
+                );
+            }
+            LayerNode::Group(g) => {
+                self.compositor.update_group_uniforms(
+                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode, show_mask,
+                );
+            }
         }
     }
 
@@ -616,12 +645,11 @@ impl DarklyEngine {
     /// Generate an RGBA thumbnail of a layer's mask (grayscale).
     /// Returns empty vec if the layer has no mask.
     pub fn mask_thumbnail(&self, layer_id: u64, width: u32, height: u32) -> Vec<u8> {
-        let mask = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => match &r.mask {
-                Some(m) => m,
-                None => return Vec::new(),
-            },
-            _ => return Vec::new(),
+        let mask = match self.doc.find_node(layer_id)
+            .and_then(|n| n.as_masked().mask().as_ref())
+        {
+            Some(m) => m,
+            None => return Vec::new(),
         };
         generate_mask_thumbnail(mask, self.doc.width, self.doc.height, width, height)
     }
@@ -1363,14 +1391,14 @@ impl DarklyEngine {
         }
 
         // Sync non-passthrough group state
-        let groups: Vec<(u64, f32, BlendMode)> = self.doc.all_groups()
+        let groups: Vec<(u64, f32, BlendMode, bool)> = self.doc.all_groups()
             .iter()
             .filter(|g| !g.passthrough)
-            .map(|g| (g.id, g.opacity, g.blend_mode))
+            .map(|g| (g.id, g.opacity, g.blend_mode, g.show_mask))
             .collect();
-        for (id, opacity, blend_mode) in groups {
+        for (id, opacity, blend_mode, show_mask) in groups {
             self.compositor.ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
-            self.compositor.update_group_uniforms(&self.gpu.queue, id, opacity, blend_mode);
+            self.compositor.update_group_uniforms(&self.gpu.queue, id, opacity, blend_mode, show_mask);
         }
     }
 }
@@ -1397,6 +1425,9 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
             passthrough: g.passthrough,
             opacity: g.opacity,
             blend_mode: g.blend_mode as u32,
+            has_mask: g.mask.is_some(),
+            mask_enabled: g.mask_enabled,
+            show_mask: g.show_mask,
             children: g.children.iter().rev().map(node_to_layer_info).collect(),
         },
     }

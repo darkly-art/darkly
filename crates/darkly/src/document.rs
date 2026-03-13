@@ -675,59 +675,65 @@ impl Document {
 
     /// Add a white (reveal-all) mask to a raster layer. Returns the previous mask state.
     pub fn add_mask(&mut self, layer_id: LayerId) -> Option<AlphaMask> {
-        let raster = find_raster_in_mut(&mut self.root.children, layer_id)?;
-        let old = raster.mask.take();
-        raster.mask = Some(AlphaMask::new()); // empty store; get_or_create_full provides 1.0 default
-        raster.mask_enabled = true;
-        raster.show_mask = false;
+
+        let node = find_node_in_mut(&mut self.root.children, layer_id)?;
+        let m = node.as_masked_mut();
+        let old = m.mask_mut().take();
+        *m.mask_mut() = Some(AlphaMask::new());
+        m.set_mask_enabled(true);
+        m.set_show_mask(false);
         self.mask_dirty.entry(layer_id).or_insert_with(DirtyRegion::new);
         old
     }
 
-    /// Remove the mask from a raster layer. Returns the removed mask.
+    /// Remove the mask from a layer or group. Returns the removed mask.
     pub fn remove_mask(&mut self, layer_id: LayerId) -> Option<AlphaMask> {
-        let raster = find_raster_in_mut(&mut self.root.children, layer_id)?;
-        let old = raster.mask.take();
-        raster.mask_enabled = true;
-        raster.show_mask = false;
+
+        let node = find_node_in_mut(&mut self.root.children, layer_id)?;
+        let m = node.as_masked_mut();
+        let old = m.mask_mut().take();
+        m.set_mask_enabled(true);
+        m.set_show_mask(false);
         self.mask_dirty.remove(&layer_id);
         old
     }
 
     pub fn set_mask_enabled(&mut self, layer_id: LayerId, enabled: bool) {
-        if let Some(LayerNode::Layer(Layer::Raster(r))) = find_node_in_mut(&mut self.root.children, layer_id) {
-            r.mask_enabled = enabled;
+
+        if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
+            node.as_masked_mut().set_mask_enabled(enabled);
         }
     }
 
     pub fn set_show_mask(&mut self, layer_id: LayerId, show: bool) {
-        if let Some(LayerNode::Layer(Layer::Raster(r))) = find_node_in_mut(&mut self.root.children, layer_id) {
-            r.show_mask = show;
+
+        if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
+            node.as_masked_mut().set_show_mask(show);
         }
     }
 
-
-
     /// Convert the current selection to a layer mask (replaces existing mask).
     pub fn selection_to_mask(&mut self, layer_id: LayerId) {
+
         let sel = match &self.selection {
             Some(s) => s.clone(),
             None => return,
         };
-        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
-            r.mask = Some(sel);
-            r.mask_enabled = true;
-            r.show_mask = false;
+        if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
+            let m = node.as_masked_mut();
+            *m.mask_mut() = Some(sel);
+            m.set_mask_enabled(true);
+            m.set_show_mask(false);
             self.mask_dirty.entry(layer_id).or_insert_with(DirtyRegion::new);
         }
     }
 
     /// Convert a layer mask to a selection (replaces current selection).
     pub fn mask_to_selection(&mut self, layer_id: LayerId) {
-        let mask_clone = match self.layer(layer_id) {
-            Some(Layer::Raster(r)) => r.mask.clone(),
-            _ => None,
-        };
+
+        let mask_clone = self.find_node(layer_id)
+            .map(|n| n.as_masked().mask().clone())
+            .unwrap_or(None);
         if let Some(mask) = mask_clone {
             self.selection = Some(mask);
         }

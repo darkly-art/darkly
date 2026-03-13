@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { getMaskThumbnail, THUMB_SIZE } from './thumbnails';
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
 
@@ -8,15 +9,22 @@
             type: 'group'; id: number; name: string; visible: boolean;
             collapsed: boolean; passthrough: boolean; opacity: number;
             blendMode: number; children: any[];
+            hasMask?: boolean; maskEnabled?: boolean; showMask?: boolean;
         };
         depth?: number;
         onupdate: () => void;
     } = $props();
 
     let isActive = $derived(app.activeLayerId === group.id);
+    let isEditingMask = $derived(app.editingMaskLayerId === group.id);
     let editing = $state(false);
     let editInput = $state<HTMLInputElement | null>(null);
     let dropPos = $state<'none' | 'above' | 'below' | 'into'>('none');
+
+    let maskThumb = $derived(group.hasMask && app.handle ? getMaskThumbnail(group.id) : '');
+    let showMaskMenu = $state(false);
+    let maskMenuX = $state(0);
+    let maskMenuY = $state(0);
 
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
@@ -47,6 +55,54 @@
         editing = false;
         if (app.handle && editInput) {
             app.handle.set_layer_name(group.id, editInput.value);
+            onupdate();
+        }
+    }
+
+    function clickMaskThumb(e: MouseEvent) {
+        e.stopPropagation();
+        app.activeLayerId = group.id;
+        if (!isEditingMask) {
+            app.editingMaskLayerId = group.id;
+            app.handle?.set_editing_mask(group.id, true);
+        } else {
+            app.editingMaskLayerId = null;
+            app.handle?.set_editing_mask(group.id, false);
+        }
+        onupdate();
+    }
+
+    function onMaskContextMenu(e: MouseEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        maskMenuX = e.clientX;
+        maskMenuY = e.clientY;
+        showMaskMenu = true;
+        const close = () => { showMaskMenu = false; document.removeEventListener('click', close); };
+        requestAnimationFrame(() => document.addEventListener('click', close));
+    }
+
+    function toggleMaskEnabled() {
+        if (app.handle) {
+            app.handle.set_mask_enabled(group.id, !group.maskEnabled);
+            onupdate();
+        }
+    }
+
+    function toggleShowMask() {
+        if (app.handle) {
+            app.handle.set_show_mask(group.id, !group.showMask);
+            onupdate();
+        }
+    }
+
+    function removeMask() {
+        if (app.handle) {
+            if (isEditingMask) {
+                app.editingMaskLayerId = null;
+                app.handle.set_editing_mask(group.id, false);
+            }
+            app.handle.remove_mask(group.id);
             onupdate();
         }
     }
@@ -161,7 +217,34 @@
         {:else}
             <span class="group-name">{group.name}</span>
         {/if}
+
+        {#if group.hasMask && maskThumb}
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+            <img
+                class="thumb"
+                class:thumb-active={isEditingMask}
+                class:mask-disabled={!group.maskEnabled}
+                src={maskThumb}
+                alt="mask"
+                width={THUMB_SIZE}
+                height={THUMB_SIZE}
+                onclick={clickMaskThumb}
+                oncontextmenu={onMaskContextMenu}
+            />
+        {/if}
     </div>
+
+{#if showMaskMenu}
+    <div class="mask-menu" style:left="{maskMenuX}px" style:top="{maskMenuY}px">
+        <button onclick={toggleMaskEnabled}>
+            {group.maskEnabled ? 'Disable mask' : 'Enable mask'}
+        </button>
+        <button onclick={toggleShowMask}>
+            {group.showMask ? 'Hide mask' : 'Show mask'}
+        </button>
+        <button onclick={removeMask}>Remove mask</button>
+    </div>
+{/if}
 
     {#if !group.collapsed}
         <div class="group-children">
@@ -284,4 +367,37 @@
         padding: 1px 4px;
         outline: none;
     }
+
+    .thumb {
+        border: 2px solid #444;
+        border-radius: 2px;
+        flex-shrink: 0;
+        cursor: pointer;
+        image-rendering: pixelated;
+    }
+    .thumb-active { border-color: #6a6aff; }
+    .mask-disabled { opacity: 0.4; }
+
+    .mask-menu {
+        position: fixed;
+        z-index: 1000;
+        background: #2a2a2a;
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 4px 0;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+    .mask-menu button {
+        display: block;
+        width: 100%;
+        background: none;
+        border: none;
+        color: #ccc;
+        padding: 4px 12px;
+        text-align: left;
+        cursor: pointer;
+        font-size: 12px;
+        white-space: nowrap;
+    }
+    .mask-menu button:hover { background: #3a3a4a; }
 </style>
