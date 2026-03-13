@@ -55,15 +55,18 @@ struct Uniforms {
         return bg;
     }
 
-    let fg = textureSampleLevel(t_source, t_sampler, src_uv, 0.0);
-    let a = fg.a * u.opacity;
+    // Source texture is stored premultiplied so hardware bilinear
+    // interpolation doesn't produce dark halos at content edges.
+    let fg_pm = textureSampleLevel(t_source, t_sampler, src_uv, 0.0);
+    let a = fg_pm.a * u.opacity;
 
     if (a <= 0.0) {
         return bg;
     }
 
-    // Normal blend — straight alpha Porter-Duff source-over
+    // Porter-Duff source-over: fg is premultiplied, bg is straight
+    let fg_pre = fg_pm.rgb * u.opacity;
     let out_a = a + bg.a * (1.0 - a);
-    let out_rgb = (fg.rgb * a + bg.rgb * bg.a * (1.0 - a)) / max(out_a, 0.001);
+    let out_rgb = (fg_pre + bg.rgb * bg.a * (1.0 - a)) / max(out_a, 0.001);
     return vec4f(out_rgb, out_a);
 }

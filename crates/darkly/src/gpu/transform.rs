@@ -563,8 +563,15 @@ impl TransformPass {
                     if pixel[3] == 0 {
                         continue;
                     }
+                    // Upload as premultiplied alpha so hardware bilinear
+                    // interpolation operates in premultiplied space —
+                    // eliminates dark halos at content edges.
                     let offset = (img_y as usize * w + img_x as usize) * 4;
-                    rgba[offset..offset + 4].copy_from_slice(pixel);
+                    let a = pixel[3] as f32 / 255.0;
+                    rgba[offset]     = (pixel[0] as f32 * a).round() as u8;
+                    rgba[offset + 1] = (pixel[1] as f32 * a).round() as u8;
+                    rgba[offset + 2] = (pixel[2] as f32 * a).round() as u8;
+                    rgba[offset + 3] = pixel[3];
                 }
             }
         }
