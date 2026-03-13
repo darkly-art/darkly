@@ -67,14 +67,14 @@ impl ImageClip {
             sel.bounding_rect()?
         } else {
             // No selection — use union of layer tile extent and doc bounds.
-            if layer.tiles.is_empty() {
+            if layer.surface.store.is_empty() {
                 return None;
             }
             let mut min_x = i32::MAX;
             let mut min_y = i32::MAX;
             let mut max_x = i32::MIN;
             let mut max_y = i32::MIN;
-            for ((tx, ty), _) in layer.tiles.iter() {
+            for ((tx, ty), _) in layer.surface.store.iter() {
                 min_x = min_x.min(tx);
                 min_y = min_y.min(ty);
                 max_x = max_x.max(tx);
@@ -88,7 +88,7 @@ impl ImageClip {
 
         for ty in ty_min..=ty_max {
             for tx in tx_min..=tx_max {
-                let layer_tile = layer.tiles.get(tx, ty);
+                let layer_tile = layer.surface.store.get(tx, ty);
                 let sel_tile = selection.and_then(|s| s.get(tx, ty));
 
                 // If selection exists but has no tile here, this region is unselected — skip.
@@ -431,7 +431,7 @@ mod tests {
         let (tx, ty) = TileGrid::tile_coords_for_pixel(10, 10);
         let lx = 10usize % TILE_SIZE;
         let ly = 10usize % TILE_SIZE;
-        layer.tiles.get_or_create(tx, ty).write().pixel_mut(lx, ly)
+        layer.surface.store.get_or_create(tx, ty).write().pixel_mut(lx, ly)
             .copy_from_slice(&[255, 0, 0, 255]);
 
         let clip = ImageClip::from_layer(&layer, None, 256, 256).unwrap();
@@ -443,7 +443,7 @@ mod tests {
     fn from_layer_with_selection() {
         let mut layer = RasterLayer::new(1);
         // Paint at (5, 5) — fully opaque.
-        layer.tiles.get_or_create(0, 0).write().pixel_mut(5, 5)
+        layer.surface.store.get_or_create(0, 0).write().pixel_mut(5, 5)
             .copy_from_slice(&[100, 200, 50, 255]);
 
         // Selection with 50% coverage at (5, 5).

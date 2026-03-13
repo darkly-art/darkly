@@ -488,13 +488,14 @@ impl DarklyEngine {
         self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
         // Mark all mask tiles dirty for upload
-        let mask_coords: Vec<(i32, i32)> = self.doc.find_node(layer_id)
-            .and_then(|n| n.as_masked().mask().as_ref())
-            .map(|m| m.iter().map(|((tx, ty), _)| (tx, ty)).collect())
-            .unwrap_or_default();
-        let dirty = self.doc.mask_dirty.entry(layer_id).or_default();
-        for (tx, ty) in mask_coords {
-            dirty.mark(tx, ty);
+        if let Some(n) = self.doc.find_node_mut(layer_id) {
+            if let Some(mask) = n.as_masked_mut().mask_mut().as_mut() {
+                let coords: Vec<(i32, i32)> = mask.store.iter()
+                    .map(|((tx, ty), _)| (tx, ty)).collect();
+                for (tx, ty) in coords {
+                    mask.dirty.mark(tx, ty);
+                }
+            }
         }
 
         self.sync_mask_state(layer_id);
@@ -632,7 +633,7 @@ impl DarklyEngine {
     /// Returns `width * height * 4` bytes (RGBA). Transparent areas show checkerboard.
     pub fn layer_thumbnail(&self, layer_id: u64, width: u32, height: u32) -> Vec<u8> {
         let tiles = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => &r.tiles,
+            Some(Layer::Raster(r)) => &r.surface.store,
             _ => return vec![0u8; (width * height * 4) as usize],
         };
         generate_rgba_thumbnail(tiles, self.doc.width, self.doc.height, width, height)
@@ -641,13 +642,13 @@ impl DarklyEngine {
     /// Generate an RGBA thumbnail of a layer's mask (grayscale).
     /// Returns empty vec if the layer has no mask.
     pub fn mask_thumbnail(&self, layer_id: u64, width: u32, height: u32) -> Vec<u8> {
-        let mask = match self.doc.find_node(layer_id)
+        let mask_store = match self.doc.find_node(layer_id)
             .and_then(|n| n.as_masked().mask().as_ref())
         {
-            Some(m) => m,
+            Some(m) => &m.store,
             None => return Vec::new(),
         };
-        generate_mask_thumbnail(mask, self.doc.width, self.doc.height, width, height)
+        generate_mask_thumbnail(mask_store, self.doc.width, self.doc.height, width, height)
     }
 
     // --- Rendering ---
@@ -676,7 +677,7 @@ impl DarklyEngine {
     pub fn undo(&mut self) {
         self.auto_commit_floating();
         if let Some(affected) = self.undo_stack.undo(&mut self.doc) {
-            mark_affected_dirty(&mut self.doc.dirty, &affected);
+            mark_affected_dirty(&mut self.doc, &affected);
             self.sync_compositor_layers();
             self.compositor.mark_dirty();
             self.update_selection_overlay();
@@ -686,7 +687,7 @@ impl DarklyEngine {
     pub fn redo(&mut self) {
         self.auto_commit_floating();
         if let Some(affected) = self.undo_stack.redo(&mut self.doc) {
-            mark_affected_dirty(&mut self.doc.dirty, &affected);
+            mark_affected_dirty(&mut self.doc, &affected);
             self.sync_compositor_layers();
             self.compositor.mark_dirty();
             self.update_selection_overlay();
@@ -847,7 +848,7 @@ impl DarklyEngine {
         mode: SelectionMode,
     ) {
         let source = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => &r.tiles,
+            Some(Layer::Raster(r)) => &r.surface.store,
             _ => return,
         };
         let mask = crate::tools::magic_wand::rasterize(
@@ -920,7 +921,7 @@ impl DarklyEngine {
 
         // When editing a mask, copy from the mask instead of the layer tiles.
         let clip = if self.editing_mask_layer == Some(layer_id) {
-            let mask = layer.mask.as_ref()?;
+            let mask = &layer.mask.as_ref()?.store;
             ImageClip::from_mask(mask, self.doc.selection.as_ref())?
         } else {
             ImageClip::from_layer(
@@ -953,9 +954,9 @@ impl DarklyEngine {
             self.doc.begin_transaction(layer_id);
             if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
                 // Touch each tile to record it in the transaction, then clear.
-                let keys: Vec<(i32, i32)> = r.tiles.iter().map(|(k, _)| k).collect();
+                let keys: Vec<(i32, i32)> = r.surface.store.iter().map(|(k, _)| k).collect();
                 for (tx, ty) in keys {
-                    r.tiles.get_or_create(tx, ty).write().0.fill(0);
+                    r.surface.store.get_or_create(tx, ty).write().0.fill(0);
                 }
             }
             if let Some(memento) = self.doc.commit_transaction(layer_id) {
@@ -983,17 +984,16 @@ impl DarklyEngine {
         let id = self.doc.add_raster_layer();
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
             r.name = "Pasted Layer".to_string();
-            clip.write_to_layer(&mut r.tiles, offset_x, offset_y);
+            clip.write_to_layer(&mut r.surface.store, offset_x, offset_y);
         }
 
         // Mark all written tiles dirty for GPU upload.
-        let tile_keys: Vec<(i32, i32)> = self.doc.layer(id)
-            .and_then(|l| match l { Layer::Raster(r) => Some(r) })
-            .map(|r| r.tiles.iter().map(|(k, _)| k).collect())
-            .unwrap_or_default();
-        let dirty = self.doc.dirty.entry(id).or_default();
-        for (tx, ty) in tile_keys {
-            dirty.mark(tx, ty);
+        if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
+            let keys: Vec<(i32, i32)> = r.surface.store.iter()
+                .map(|(k, _)| k).collect();
+            for (tx, ty) in keys {
+                r.surface.dirty.mark(tx, ty);
+            }
         }
 
         self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
@@ -1104,12 +1104,12 @@ impl DarklyEngine {
 
         // Clone the relevant tiles
         let (source_tiles, source_origin, source_width, source_height) = if target_is_mask {
-            let mask = match &layer.mask {
-                Some(m) => m,
+            let mask_store = match &layer.mask {
+                Some(m) => &m.store,
                 None => return false,
             };
             // Convert mask to RGBA for the floating content
-            let clip = match ImageClip::from_mask(mask, self.doc.selection.as_ref()) {
+            let clip = match ImageClip::from_mask(mask_store, self.doc.selection.as_ref()) {
                 Some(c) => c,
                 None => return false,
             };
@@ -1132,12 +1132,12 @@ impl DarklyEngine {
         if target_is_mask {
             if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
                 if let Some(mask) = &mut r.mask {
-                    clear_mask_in_bounds(mask, source_origin, source_width, source_height);
+                    clear_mask_in_bounds(&mut mask.store, source_origin, source_width, source_height);
                 }
             }
         } else {
             if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-                clear_rgba_in_bounds(&mut r.tiles, source_origin, source_width, source_height);
+                clear_rgba_in_bounds(&mut r.surface.store, source_origin, source_width, source_height);
             }
         }
         let cancel_undo: Option<Box<dyn crate::undo::UndoAction>> =
@@ -1217,12 +1217,12 @@ impl DarklyEngine {
         if is_mask {
             if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
                 if let Some(mask) = &mut r.mask {
-                    fc.rasterize_to_mask(mask, sel.as_ref());
+                    fc.rasterize_to_mask(&mut mask.store, sel.as_ref());
                 }
             }
         } else {
             if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-                fc.rasterize_to_tiles(&mut r.tiles, sel.as_ref());
+                fc.rasterize_to_tiles(&mut r.surface.store, sel.as_ref());
             }
         }
 
@@ -1270,13 +1270,8 @@ impl DarklyEngine {
             }
             FloatingMode::Transform { mut cancel_undo } => {
                 // Restore the original tiles that were cleared.
-                let dirty = cancel_undo.undo(&mut self.doc);
-                for (layer_id, coords) in dirty {
-                    let entry = self.doc.dirty.entry(layer_id).or_default();
-                    for (tx, ty) in coords {
-                        entry.mark(tx, ty);
-                    }
-                }
+                let affected = cancel_undo.undo(&mut self.doc);
+                mark_affected_dirty(&mut self.doc, &affected);
             }
         }
 
@@ -1297,14 +1292,18 @@ impl DarklyEngine {
         let tx_max = TileGrid::tile_coords_for_pixel(ox + width as i32 - 1, 0).0;
         let ty_max = TileGrid::tile_coords_for_pixel(0, oy + height as i32 - 1).1;
 
-        let dirty = if is_mask {
-            self.doc.mask_dirty.entry(layer_id).or_default()
-        } else {
-            self.doc.dirty.entry(layer_id).or_default()
-        };
-        for ty in ty_min..=ty_max {
-            for tx in tx_min..=tx_max {
-                dirty.mark(tx, ty);
+        if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
+            let dirty = if is_mask {
+                r.mask.as_mut().map(|m| &mut m.dirty)
+            } else {
+                Some(&mut r.surface.dirty)
+            };
+            if let Some(dirty) = dirty {
+                for ty in ty_min..=ty_max {
+                    for tx in tx_min..=tx_max {
+                        dirty.mark(tx, ty);
+                    }
+                }
             }
         }
     }
@@ -1359,7 +1358,7 @@ impl DarklyEngine {
         }
         let infos: Vec<RasterInfo> = self.doc.all_raster_layers().into_iter().map(|r| {
             let mask_coords: Vec<(i32, i32)> = r.mask.as_ref()
-                .map(|m| m.iter().map(|((tx, ty), _)| (tx, ty)).collect())
+                .map(|m| m.store.iter().map(|((tx, ty), _)| (tx, ty)).collect())
                 .unwrap_or_default();
             RasterInfo {
                 id: r.id, opacity: r.opacity, blend_mode: r.blend_mode,
@@ -1379,9 +1378,12 @@ impl DarklyEngine {
             );
             // Mark all mask tiles dirty for re-upload after undo/redo
             if !info.mask_coords.is_empty() {
-                let dirty = self.doc.mask_dirty.entry(info.id).or_default();
-                for &(tx, ty) in &info.mask_coords {
-                    dirty.mark(tx, ty);
+                if let Some(Layer::Raster(r)) = self.doc.layer_mut(info.id) {
+                    if let Some(mask) = &mut r.mask {
+                        for &(tx, ty) in &info.mask_coords {
+                            mask.dirty.mark(tx, ty);
+                        }
+                    }
                 }
             }
         }

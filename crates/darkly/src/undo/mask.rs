@@ -1,14 +1,14 @@
 use super::UndoAction;
 use crate::document::Document;
 use crate::layer::LayerId;
-use crate::tile::AlphaMask;
+use crate::tile::MaskSurface;
 use std::collections::{HashMap, HashSet};
 
 /// Undo action for mask structural changes (add/remove mask, toggle mask_enabled/show_mask).
 /// Swaps the full mask state on undo/redo. Works for both raster layers and groups.
 pub struct MaskPropertyAction {
     layer_id: LayerId,
-    mask: Option<AlphaMask>,
+    mask: Option<MaskSurface>,
     mask_enabled: bool,
     show_mask: bool,
 }
@@ -16,7 +16,7 @@ pub struct MaskPropertyAction {
 impl MaskPropertyAction {
     pub fn new(
         layer_id: LayerId,
-        mask: Option<AlphaMask>,
+        mask: Option<MaskSurface>,
         mask_enabled: bool,
         show_mask: bool,
     ) -> Self {
@@ -47,13 +47,6 @@ impl MaskPropertyAction {
             let mut show = m.show_mask();
             std::mem::swap(&mut show, &mut self.show_mask);
             m.set_show_mask(show);
-
-            // Update mask_dirty tracking
-            if m.mask().is_some() {
-                doc.mask_dirty.entry(self.layer_id).or_default();
-            } else {
-                doc.mask_dirty.remove(&self.layer_id);
-            }
         }
     }
 }

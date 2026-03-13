@@ -1,8 +1,6 @@
-use crate::dirty::DirtyRegion;
 use crate::layer::*;
 use crate::paint::{self, MaskPaintTarget, PaintTarget, Surface, TransactionMemento};
-use crate::tile::{AlphaMask, TILE_SIZE, TileGrid};
-use std::collections::HashMap;
+use crate::tile::{AlphaMask, MaskSurface, TILE_SIZE};
 
 pub enum SelectionMode {
     Replace,
@@ -27,9 +25,6 @@ pub struct Document {
     pub root: LayerGroup,
     pub width: u32,
     pub height: u32,
-    pub dirty: HashMap<LayerId, DirtyRegion>,
-    /// Dirty regions for layer mask tiles (separate from layer tile dirty).
-    pub mask_dirty: HashMap<LayerId, DirtyRegion>,
     pub selection: Option<AlphaMask>,
     /// Which layer (if any) is having its mask edited instead of its pixels.
     /// Set by the engine before beginning a stroke, cleared after committing.
@@ -211,16 +206,6 @@ fn find_parent_of(nodes: &[LayerNode], id: LayerId) -> Option<LayerId> {
     None
 }
 
-/// Recursively collect all IDs under a node (including the node itself).
-fn collect_all_ids(node: &LayerNode, out: &mut Vec<LayerId>) {
-    out.push(node.id());
-    if let LayerNode::Group(g) = node {
-        for child in &g.children {
-            collect_all_ids(child, out);
-        }
-    }
-}
-
 /// Recursively collect all raster layer IDs under a node.
 fn count_nodes(nodes: &[LayerNode]) -> usize {
     let mut count = 0;
@@ -255,8 +240,6 @@ impl Document {
             root: LayerGroup::new(ROOT_ID),
             width,
             height,
-            dirty: HashMap::new(),
-            mask_dirty: HashMap::new(),
             selection: None,
             mask_editing: None,
             next_id: 1,
@@ -274,7 +257,6 @@ impl Document {
         let id = self.alloc_id();
         let layer = RasterLayer::new(id);
         self.root.children.push(LayerNode::Layer(Layer::Raster(layer)));
-        self.dirty.insert(id, DirtyRegion::new());
         id
     }
 
@@ -283,7 +265,6 @@ impl Document {
         let id = self.alloc_id();
         let layer = RasterLayer::new(id);
         let node = LayerNode::Layer(Layer::Raster(layer));
-        self.dirty.insert(id, DirtyRegion::new());
 
         match parent {
             Some(group_id) => {
@@ -374,19 +355,12 @@ impl Document {
     }
 
     /// Detach a node from the tree for undo purposes.
-    /// Removes the node and cleans up dirty regions, returning the detached node.
     pub fn detach_for_undo(&mut self, id: LayerId) -> Option<LayerNode> {
-        let node = detach_node(&mut self.root.children, id)?;
-        let mut ids = Vec::new();
-        collect_all_ids(&node, &mut ids);
-        for removed_id in ids {
-            self.dirty.remove(&removed_id);
-        }
-        Some(node)
+        detach_node(&mut self.root.children, id)
     }
 
     /// Reinsert a previously detached node at a specific position.
-    /// Sets up dirty regions and marks all tiles dirty for GPU upload.
+    /// Marks all tiles dirty for GPU upload.
     pub fn reinsert_node(&mut self, node: LayerNode, parent: Option<LayerId>, position: usize) {
         // Collect raster layer IDs before we move the node into the tree.
         let mut raster_ids = Vec::new();
@@ -410,12 +384,12 @@ impl Document {
             }
         }
 
-        // Set up dirty regions and mark all existing tiles for upload.
+        // Mark all existing tiles dirty for upload.
         for &id in &raster_ids {
-            let dirty = self.dirty.entry(id).or_insert_with(DirtyRegion::new);
-            if let Some(Layer::Raster(r)) = find_layer_in(&self.root.children, id) {
-                for ((tx, ty), _) in r.tiles.iter() {
-                    dirty.mark(tx, ty);
+            if let Some(Layer::Raster(r)) = find_layer_in_mut(&mut self.root.children, id) {
+                let keys: Vec<(i32, i32)> = r.surface.store.iter().map(|(k, _)| k).collect();
+                for (tx, ty) in keys {
+                    r.surface.dirty.mark(tx, ty);
                 }
             }
         }
@@ -467,23 +441,60 @@ impl Document {
         }
     }
 
-    /// Remove a node (layer or group) from the tree. Also removes dirty regions.
+    /// Remove a node (layer or group) from the tree.
     pub fn remove_node(&mut self, id: LayerId) {
-        if let Some(node) = detach_node(&mut self.root.children, id) {
-            let mut ids = Vec::new();
-            collect_all_ids(&node, &mut ids);
-            for removed_id in ids {
-                self.dirty.remove(&removed_id);
+        detach_node(&mut self.root.children, id);
+    }
+
+    // --- Dirty state helpers (used by compositor) ---
+
+    /// Returns true if any raster layer surface has dirty tiles.
+    pub fn has_dirty_layers(&self) -> bool {
+        self.all_raster_layers().iter().any(|r| !r.surface.dirty.is_empty())
+    }
+
+    /// Returns true if any mask surface has dirty tiles.
+    pub fn has_dirty_masks(&self) -> bool {
+        for r in self.all_raster_layers() {
+            if let Some(m) = &r.mask {
+                if !m.dirty.is_empty() { return true; }
             }
         }
+        for g in self.all_groups() {
+            if let Some(m) = &g.mask {
+                if !m.dirty.is_empty() { return true; }
+            }
+        }
+        false
+    }
+
+    /// Clear all dirty regions on all surfaces (layers and masks).
+    pub fn clear_all_dirty(&mut self) {
+        fn clear_dirty_recursive(nodes: &mut [LayerNode]) {
+            for node in nodes {
+                match node {
+                    LayerNode::Layer(Layer::Raster(r)) => {
+                        r.surface.dirty.clear();
+                        if let Some(m) = &mut r.mask {
+                            m.dirty.clear();
+                        }
+                    }
+                    LayerNode::Group(g) => {
+                        if let Some(m) = &mut g.mask {
+                            m.dirty.clear();
+                        }
+                        clear_dirty_recursive(&mut g.children);
+                    }
+                }
+            }
+        }
+        clear_dirty_recursive(&mut self.root.children);
     }
 
     /// Borrow-split factory that returns a `Surface` — either layer tiles or mask,
     /// depending on `mask_editing`. Callers never branch on surface type.
     fn make_surface<'a>(
         layers: &'a mut Vec<LayerNode>,
-        dirty: &'a mut HashMap<LayerId, DirtyRegion>,
-        mask_dirty: &'a mut HashMap<LayerId, DirtyRegion>,
         selection: Option<&'a AlphaMask>,
         mask_editing: Option<LayerId>,
         layer_id: LayerId,
@@ -491,35 +502,23 @@ impl Document {
         if mask_editing == Some(layer_id) {
             // Mask editing works on any node type (raster or group)
             let node = find_node_in_mut(layers, layer_id)?;
-            let mask = node.as_masked_mut().mask_mut().as_mut()?;
-            let dirty_region = mask_dirty.get_mut(&layer_id)?;
-            Some(Surface::Mask(MaskPaintTarget::new(mask, dirty_region, selection)))
+            let mask_surface = node.as_masked_mut().mask_mut().as_mut()?;
+            Some(Surface::Mask(MaskPaintTarget::new(
+                &mut mask_surface.store, &mut mask_surface.dirty, selection,
+            )))
         } else {
             // Pixel painting is raster-only (groups have no tiles)
             let raster = find_raster_in_mut(layers, layer_id)?;
-            let dirty_region = dirty.get_mut(&layer_id)?;
-            Some(Surface::Layer(PaintTarget::new(&mut raster.tiles, dirty_region, selection)))
+            Some(Surface::Layer(PaintTarget::new(
+                &mut raster.surface.store, &mut raster.surface.dirty, selection,
+            )))
         }
-    }
-
-    /// Get a mutable reference to the raster layer's tiles and the dirty region simultaneously.
-    /// Uses borrow splitting: layers and dirty are separate fields.
-    /// Used by operations that need raw tile access without selection masking (e.g. fill_gradient).
-    fn raster_tiles_and_dirty<'a>(
-        layers: &'a mut Vec<LayerNode>,
-        dirty: &'a mut HashMap<LayerId, DirtyRegion>,
-        layer_id: LayerId,
-    ) -> Option<(&'a mut TileGrid, &'a mut DirtyRegion)> {
-        let raster = find_raster_in_mut(layers, layer_id)?;
-        let dirty_region = dirty.get_mut(&layer_id)?;
-        Some((&mut raster.tiles, dirty_region))
     }
 
     /// Paint a filled circle on a raster layer (or its mask when mask_editing is set).
     pub fn paint_circle(&mut self, layer_id: LayerId, cx: f32, cy: f32, radius: f32, color: [u8; 4]) {
         if let Some(mut s) = Self::make_surface(
-            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
-            self.selection.as_ref(), self.mask_editing, layer_id,
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
             paint::paint_circle(&mut s, cx, cy, radius, color);
         }
@@ -528,8 +527,7 @@ impl Document {
     /// Erase a filled circle on a raster layer (or its mask when mask_editing is set).
     pub fn erase_circle(&mut self, layer_id: LayerId, cx: f32, cy: f32, radius: f32) {
         if let Some(mut s) = Self::make_surface(
-            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
-            self.selection.as_ref(), self.mask_editing, layer_id,
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
             paint::erase_circle(&mut s, cx, cy, radius);
         }
@@ -543,8 +541,7 @@ impl Document {
         let w = self.width as i32;
         let h = self.height as i32;
         if let Some(mut s) = Self::make_surface(
-            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
-            self.selection.as_ref(), self.mask_editing, layer_id,
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
             paint::flood_fill(&mut s, seed_x, seed_y, w, h, color, tolerance);
         }
@@ -562,8 +559,7 @@ impl Document {
             .iter().map(|((tx, ty), _)| (tx, ty)).collect();
 
         let mut surface = match Self::make_surface(
-            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
-            self.selection.as_ref(), self.mask_editing, layer_id,
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
             Some(s) => s,
             None => return,
@@ -590,8 +586,7 @@ impl Document {
         let width = self.width;
         let height = self.height;
         if let Some(mut s) = Self::make_surface(
-            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
-            self.selection.as_ref(), self.mask_editing, layer_id,
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
             paint::linear_gradient(&mut s, x0, y0, x1, y1, color0, color1, width, height);
         }
@@ -600,8 +595,7 @@ impl Document {
     /// Begin recording tile changes on a layer (or its mask) for undo.
     pub fn begin_transaction(&mut self, layer_id: LayerId) {
         if let Some(mut s) = Self::make_surface(
-            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
-            self.selection.as_ref(), self.mask_editing, layer_id,
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
         ) {
             s.begin_transaction();
         }
@@ -610,8 +604,7 @@ impl Document {
     /// Commit the active transaction and return a memento for undo.
     pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<TransactionMemento> {
         Self::make_surface(
-            &mut self.root.children, &mut self.dirty, &mut self.mask_dirty,
-            self.selection.as_ref(), self.mask_editing, layer_id,
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
         )?.commit_transaction(layer_id)
     }
 
@@ -648,40 +641,34 @@ impl Document {
 
     // --- Layer Mask Operations ---
 
-    /// Add a white (reveal-all) mask to a raster layer. Returns the previous mask state.
-    pub fn add_mask(&mut self, layer_id: LayerId) -> Option<AlphaMask> {
-
+    /// Add a white (reveal-all) mask to a node. Returns the previous mask state.
+    pub fn add_mask(&mut self, layer_id: LayerId) -> Option<MaskSurface> {
         let node = find_node_in_mut(&mut self.root.children, layer_id)?;
         let m = node.as_masked_mut();
         let old = m.mask_mut().take();
-        *m.mask_mut() = Some(AlphaMask::new());
+        *m.mask_mut() = Some(MaskSurface::new());
         m.set_mask_enabled(true);
         m.set_show_mask(false);
-        self.mask_dirty.entry(layer_id).or_insert_with(DirtyRegion::new);
         old
     }
 
     /// Remove the mask from a layer or group. Returns the removed mask.
-    pub fn remove_mask(&mut self, layer_id: LayerId) -> Option<AlphaMask> {
-
+    pub fn remove_mask(&mut self, layer_id: LayerId) -> Option<MaskSurface> {
         let node = find_node_in_mut(&mut self.root.children, layer_id)?;
         let m = node.as_masked_mut();
         let old = m.mask_mut().take();
         m.set_mask_enabled(true);
         m.set_show_mask(false);
-        self.mask_dirty.remove(&layer_id);
         old
     }
 
     pub fn set_mask_enabled(&mut self, layer_id: LayerId, enabled: bool) {
-
         if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
             node.as_masked_mut().set_mask_enabled(enabled);
         }
     }
 
     pub fn set_show_mask(&mut self, layer_id: LayerId, show: bool) {
-
         if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
             node.as_masked_mut().set_show_mask(show);
         }
@@ -689,28 +676,25 @@ impl Document {
 
     /// Convert the current selection to a layer mask (replaces existing mask).
     pub fn selection_to_mask(&mut self, layer_id: LayerId) {
-
         let sel = match &self.selection {
             Some(s) => s.clone(),
             None => return,
         };
         if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
             let m = node.as_masked_mut();
-            *m.mask_mut() = Some(sel);
+            *m.mask_mut() = Some(MaskSurface { store: sel, ..MaskSurface::new() });
             m.set_mask_enabled(true);
             m.set_show_mask(false);
-            self.mask_dirty.entry(layer_id).or_insert_with(DirtyRegion::new);
         }
     }
 
     /// Convert a layer mask to a selection (replaces current selection).
     pub fn mask_to_selection(&mut self, layer_id: LayerId) {
-
         let mask_clone = self.find_node(layer_id)
-            .map(|n| n.as_masked().mask().clone())
-            .unwrap_or(None);
-        if let Some(mask) = mask_clone {
-            self.selection = Some(mask);
+            .and_then(|n| n.as_masked().mask().as_ref())
+            .map(|ms| ms.store.clone());
+        if let Some(store) = mask_clone {
+            self.selection = Some(store);
         }
     }
 
@@ -720,7 +704,7 @@ impl Document {
         // First, collect the mask tile data we need
         let mask_tiles: Vec<((i32, i32), Vec<f32>)> = match self.layer(layer_id) {
             Some(Layer::Raster(r)) => match &r.mask {
-                Some(mask) => mask.iter().map(|((tx, ty), tile)| {
+                Some(mask_surface) => mask_surface.store.iter().map(|((tx, ty), tile)| {
                     ((tx, ty), tile.data().0.to_vec())
                 }).collect(),
                 None => return,
@@ -733,16 +717,12 @@ impl Document {
             None => return,
         };
 
-        let dirty = self.dirty.entry(layer_id).or_insert_with(DirtyRegion::new);
-
         // Multiply layer alpha by mask value for tiles that exist in the mask
         for ((tx, ty), mask_data) in &mask_tiles {
-            if let Some(tile) = raster.tiles.get(tx.clone(), ty.clone()) {
-                let _ = tile; // just check existence
-            } else {
+            if raster.surface.store.get(*tx, *ty).is_none() {
                 continue; // no layer tile = nothing to multiply
             }
-            let layer_tile = raster.tiles.get_or_create(*tx, *ty);
+            let layer_tile = raster.surface.store.get_or_create(*tx, *ty);
             let data = layer_tile.write();
             for ly in 0..TILE_SIZE {
                 for lx in 0..TILE_SIZE {
@@ -753,14 +733,13 @@ impl Document {
                     }
                 }
             }
-            dirty.mark(*tx, *ty);
+            raster.surface.dirty.mark(*tx, *ty);
         }
 
         // Remove the mask
         raster.mask = None;
         raster.mask_enabled = true;
         raster.show_mask = false;
-        self.mask_dirty.remove(&layer_id);
     }
 
     /// Fill a raster layer with a horizontal gradient (demo helper).
@@ -768,11 +747,10 @@ impl Document {
         let width = self.width;
         let height = self.height;
 
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.root.children, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
+        let raster = match find_raster_in_mut(&mut self.root.children, layer_id) {
+            Some(r) => r,
+            None => return,
+        };
 
         let tile_size = TILE_SIZE as i32;
         let tiles_x = (width as i32 + tile_size - 1) / tile_size;
@@ -780,7 +758,7 @@ impl Document {
 
         for ty in 0..tiles_y {
             for tx in 0..tiles_x {
-                let tile = tiles.get_or_create(tx, ty);
+                let tile = raster.surface.store.get_or_create(tx, ty);
                 let data = tile.write();
                 for ly in 0..TILE_SIZE {
                     for lx in 0..TILE_SIZE {
@@ -795,7 +773,7 @@ impl Document {
                         }
                     }
                 }
-                dirty.mark(tx, ty);
+                raster.surface.dirty.mark(tx, ty);
             }
         }
     }
@@ -811,11 +789,9 @@ mod tests {
         let id = doc.add_raster_layer();
         doc.paint_circle(id, 32.0, 32.0, 5.0, [255, 0, 0, 255]);
 
-        let dirty = doc.dirty.get(&id).unwrap();
-        assert!(!dirty.is_empty());
-
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            let tile = r.tiles.get(0, 0).unwrap();
+            assert!(!r.surface.dirty.is_empty());
+            let tile = r.surface.store.get(0, 0).unwrap();
             let px = tile.data().pixel(32, 32);
             assert_eq!(px, &[255, 0, 0, 255]);
         } else {
@@ -831,11 +807,9 @@ mod tests {
         let id = doc.add_raster_layer();
         doc.fill_gradient(id);
 
-        let dirty = doc.dirty.get(&id).unwrap();
-        assert_eq!(dirty.len(), 4);
-
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            let tile = r.tiles.get(0, 0).unwrap();
+            assert_eq!(r.surface.dirty.len(), 4);
+            let tile = r.surface.store.get(0, 0).unwrap();
             let px = tile.data().pixel(0, 0);
             assert_eq!(px[3], 255);
         }
@@ -891,14 +865,12 @@ mod tests {
     }
 
     #[test]
-    fn remove_group_removes_children_dirty() {
+    fn remove_group_removes_children() {
         let mut doc = Document::new(256, 256);
         let g1 = doc.add_group();
-        let l1 = doc.add_raster_layer_in(Some(g1));
+        let _l1 = doc.add_raster_layer_in(Some(g1));
 
-        assert!(doc.dirty.contains_key(&l1));
         doc.remove_node(g1);
-        assert!(!doc.dirty.contains_key(&l1));
         assert!(doc.flat_layers().is_empty());
     }
 

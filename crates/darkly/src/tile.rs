@@ -343,7 +343,37 @@ impl<F: TileFormat> Default for TileStore<F> {
 }
 
 // ---------------------------------------------------------------------------
-// Type aliases — backward-compatible names
+// TiledSurface<F> — tile store + dirty tracking, owned by the surface
+// ---------------------------------------------------------------------------
+
+use crate::dirty::DirtyRegion;
+
+/// A paintable tiled surface — owns tiles + dirty tracking.
+/// Used for both layer pixels and masks. Each surface independently
+/// tracks which tiles have been modified since last GPU upload.
+#[derive(Clone)]
+pub struct TiledSurface<F: TileFormat> {
+    pub store: TileStore<F>,
+    pub dirty: DirtyRegion,
+}
+
+impl<F: TileFormat> TiledSurface<F> {
+    pub fn new() -> Self {
+        TiledSurface {
+            store: TileStore::new(),
+            dirty: DirtyRegion::new(),
+        }
+    }
+}
+
+impl<F: TileFormat> Default for TiledSurface<F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Type aliases
 // ---------------------------------------------------------------------------
 
 /// The legacy name for RGBA tile data.
@@ -354,6 +384,10 @@ pub type TileGrid = TileStore<Rgba>;
 pub type AlphaMask = TileStore<AlphaF32>;
 /// RGBA memento.
 pub type RgbaMemento = Memento<Rgba>;
+/// RGBA tiled surface (raster layers).
+pub type RasterSurface = TiledSurface<Rgba>;
+/// Alpha f32 tiled surface (masks).
+pub type MaskSurface = TiledSurface<AlphaF32>;
 
 // ---------------------------------------------------------------------------
 // Tests

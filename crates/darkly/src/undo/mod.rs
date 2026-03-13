@@ -12,7 +12,6 @@ pub use property::PropertyAction;
 pub use selection::SelectionAction;
 pub use compound::CompoundAction;
 
-use crate::dirty::DirtyRegion;
 use crate::document::Document;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
@@ -102,14 +101,16 @@ impl UndoStack {
 }
 
 /// Mark the affected tiles as dirty so the compositor re-uploads them.
+/// Looks up each layer by ID and marks its surface dirty.
 pub fn mark_affected_dirty(
-    dirty: &mut HashMap<LayerId, DirtyRegion>,
+    doc: &mut Document,
     affected: &HashMap<LayerId, HashSet<(i32, i32)>>,
 ) {
     for (&layer_id, tiles) in affected {
-        let region = dirty.entry(layer_id).or_insert_with(DirtyRegion::new);
-        for &(tx, ty) in tiles {
-            region.mark(tx, ty);
+        if let Some(crate::layer::Layer::Raster(r)) = doc.layer_mut(layer_id) {
+            for &(tx, ty) in tiles {
+                r.surface.dirty.mark(tx, ty);
+            }
         }
     }
 }
@@ -125,7 +126,7 @@ mod tests {
             Some(Layer::Raster(r)) => r,
             _ => return true,
         };
-        match r.tiles.get(tx, ty) {
+        match r.surface.store.get(tx, ty) {
             None => true,
             Some(t) => {
                 let data = t.data();
@@ -146,7 +147,7 @@ mod tests {
             Some(Layer::Raster(r)) => r,
             _ => return vec![],
         };
-        let tile = match r.tiles.get(tx, ty) {
+        let tile = match r.surface.store.get(tx, ty) {
             Some(t) => t,
             None => return vec![],
         };
@@ -180,12 +181,12 @@ mod tests {
         let painted_pixels = non_transparent_pixels(&doc, id, 0, 0);
         assert!(!painted_pixels.is_empty(), "dab should have painted pixels");
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            let px = r.tiles.get(0, 0).unwrap().data().pixel(32, 32);
+            let px = r.surface.store.get(0, 0).unwrap().data().pixel(32, 32);
             assert_eq!(px[3], 200, "center pixel alpha should be 200, got {}", px[3]);
         }
 
         let affected = undo.undo(&mut doc).unwrap();
-        mark_affected_dirty(&mut doc.dirty, &affected);
+        mark_affected_dirty(&mut doc, &affected);
 
         assert!(
             tile_is_blank(&doc, id, 0, 0),
@@ -194,7 +195,7 @@ mod tests {
         );
 
         let affected = undo.redo(&mut doc).unwrap();
-        mark_affected_dirty(&mut doc.dirty, &affected);
+        mark_affected_dirty(&mut doc, &affected);
 
         let redone_pixels = non_transparent_pixels(&doc, id, 0, 0);
         assert_eq!(
@@ -224,12 +225,12 @@ mod tests {
         }
 
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            let px = r.tiles.get(0, 0).unwrap().data().pixel(32, 32);
+            let px = r.surface.store.get(0, 0).unwrap().data().pixel(32, 32);
             assert!(px[3] > 200, "two overlapping dabs should blend: alpha={}", px[3]);
         }
 
         let affected = undo.undo(&mut doc).unwrap();
-        mark_affected_dirty(&mut doc.dirty, &affected);
+        mark_affected_dirty(&mut doc, &affected);
 
         let after_undo = non_transparent_pixels(&doc, id, 0, 0);
         assert_eq!(
