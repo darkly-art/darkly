@@ -44,3 +44,21 @@ Both stages run only when the selection changes (not per-frame). Stage 2 is skip
 This reduced HashMap lookups from ~8M to ~1K for a full-canvas fill (30×17 = 510 tiles × ~2 lookups each).
 
 **Takeaway**: Sparse tile grids are great for memory efficiency but toxic for per-pixel iteration. Any algorithm that touches every pixel in a region must batch access at the tile level. This applies to any future pixel-scanning code (color picker sampling, histogram computation, etc.).
+
+## 4. CPU/GPU pixel-center convention mismatch in transform rasterization
+
+**Problem**: Every fractional translation during a transform cycle shaved ~1px off the top and left edges of the content. Repeated transform-commit cycles caused progressive content loss.
+
+**Root cause**: The CPU rasterization loop in `rasterize_to_tiles` sampled at integer pixel positions `(px, py)`, while the GPU fragment shader samples at pixel centers `(px + 0.5, py + 0.5)`. This is a fundamental GPU convention (defined in D3D, OpenGL, Vulkan, WebGPU specs): a pixel at integer coords `(i, j)` occupies the area `[i, i+1) × [j, j+1)` with its center at `(i + 0.5, j + 0.5)`. The hardware rasterizer evaluates all fragment positions at these half-integer centers.
+
+For fractional translations, this caused the CPU bounds check to reject pixels the GPU correctly accepts. Example with translation `(89.416, 46.593)` from origin `(555, 328)`:
+- CPU at pixel 644: `src_x = 89 - 89.416 = -0.416` → rejected (< 0)
+- GPU at pixel 644: fragment center at 644.5, `src_x = 89.5 - 89.416 = 0.084` → accepted
+
+Similarly, the GPU hardware bilinear sampler uses `u × N − 0.5` to convert UV to texel index — the same half-pixel shift appears in texture sampling.
+
+**Fix**: Two changes to match the GPU convention:
+1. `rasterize_to_tiles`/`rasterize_to_mask`: sample at pixel centers — `local_x = px + 0.5 - origin_x`
+2. `sample_bilinear`: convert from pixel-center to texel-index space via `sx - 0.5`, with bounds check adjusted to `[-0.5, w-0.5]` to allow the half-texel clamp-to-edge border.
+
+**Takeaway**: Any CPU code that replicates what a GPU shader does must use pixel-center coordinates `(i + 0.5, j + 0.5)`, not integer positions `(i, j)`. The 0.5 offset is not a fudge factor — it's a spec-defined convention. This applies to any future CPU-side rasterization, ray casting, or texture sampling that needs to match GPU output.

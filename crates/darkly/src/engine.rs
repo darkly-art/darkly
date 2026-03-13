@@ -1127,6 +1127,13 @@ impl DarklyEngine {
             source_from_clip(&clip)
         };
 
+        log::info!(
+            "[transform] begin: origin=({}, {}), size={}x{}, tiles={}",
+            source_origin.0, source_origin.1,
+            source_width, source_height,
+            source_tiles.iter().count(),
+        );
+
         // Clear the source tiles (within a transaction for undo)
         self.doc.begin_transaction(layer_id);
         if target_is_mask {
@@ -1199,6 +1206,14 @@ impl DarklyEngine {
 
         let layer_id = fc.target_layer;
         let is_mask = fc.target_is_mask;
+
+        log::info!(
+            "[transform] commit: origin=({}, {}), size={}x{}, matrix=[{:.4}, {:.4}, {:.4}, {:.4}, {:.4}, {:.4}]",
+            fc.source_origin.0, fc.source_origin.1,
+            fc.source_width, fc.source_height,
+            fc.matrix[0], fc.matrix[1], fc.matrix[2],
+            fc.matrix[3], fc.matrix[4], fc.matrix[5],
+        );
 
         // Temporarily route transaction to the correct surface
         let was_editing_mask = self.editing_mask_layer;

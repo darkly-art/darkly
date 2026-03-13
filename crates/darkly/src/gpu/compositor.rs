@@ -245,7 +245,6 @@ impl Compositor {
         let padded_w = ((width + ts - 1) / ts) * ts;
         let padded_h = ((height + ts - 1) / ts) * ts;
 
-        // Use Rgba8Unorm for accumulators (linear color space for blending)
         let accum_format = wgpu::TextureFormat::Rgba8Unorm;
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {

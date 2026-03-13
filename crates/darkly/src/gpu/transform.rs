@@ -145,13 +145,24 @@ impl FloatingContent {
     /// Bilinear sample from source_tiles at a fractional source-local position.
     /// Uses premultiplied-alpha interpolation with clamp-to-edge (matching GPU
     /// hardware samplers). Returns straight-alpha [r, g, b, a].
+    ///
+    /// Input coordinates use pixel-center convention: the center of texel (0,0)
+    /// is at (0.5, 0.5), matching GPU fragment centers. Internally we convert
+    /// to texel-index space (center at integer) via the standard `u·N − 0.5`
+    /// mapping so the bilinear kernel aligns with hardware samplers.
     fn sample_bilinear(&self, sx: f32, sy: f32) -> [u8; 4] {
         let (ox, oy) = self.source_origin;
         let w = self.source_width as i32;
         let h = self.source_height as i32;
 
-        // Reject samples whose center is outside content bounds
-        if sx < 0.0 || sy < 0.0 || sx >= w as f32 || sy >= h as f32 {
+        // Convert pixel-center coords to texel-index space (GPU: u·N − 0.5)
+        let sx = sx - 0.5;
+        let sy = sy - 0.5;
+
+        // Reject samples outside the half-texel border around the grid.
+        // This matches the GPU shader's `src_uv ∈ [0, 1)` check after the
+        // fragment-center offset is accounted for.
+        if sx < -0.5 || sy < -0.5 || sx > (w as f32 - 0.5) || sy > (h as f32 - 0.5) {
             return [0, 0, 0, 0];
         }
 
@@ -242,9 +253,10 @@ impl FloatingContent {
                     }
                 }
 
-                // Transform to source-local coords
-                let local_x = px as f32 - self.source_origin.0 as f32;
-                let local_y = py as f32 - self.source_origin.1 as f32;
+                // Transform to source-local coords (pixel-center convention:
+                // fragment center at px+0.5 matches GPU fragment positions)
+                let local_x = px as f32 + 0.5 - self.source_origin.0 as f32;
+                let local_y = py as f32 + 0.5 - self.source_origin.1 as f32;
                 let (src_x, src_y) = affine_transform(&inv, local_x, local_y);
 
                 let fg = self.sample_bilinear(src_x, src_y);
@@ -314,8 +326,9 @@ impl FloatingContent {
                     }
                 }
 
-                let local_x = px as f32 - self.source_origin.0 as f32;
-                let local_y = py as f32 - self.source_origin.1 as f32;
+                // Pixel-center convention (matches GPU fragment centers)
+                let local_x = px as f32 + 0.5 - self.source_origin.0 as f32;
+                let local_y = py as f32 + 0.5 - self.source_origin.1 as f32;
                 let (src_x, src_y) = affine_transform(&inv, local_x, local_y);
 
                 let fg = self.sample_bilinear(src_x, src_y);
