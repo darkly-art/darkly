@@ -60,16 +60,12 @@ struct GroupState {
     /// Uniform buffer holding opacity, blend_mode, show_mask for blending
     /// this group's result into its parent.
     uniform_buf: wgpu::Buffer,
-    /// Mask bind group for blending this group into parent.
-    mask_bind_group: wgpu::BindGroup,
 }
 
 /// Pre-built GPU objects for a raster layer.
 struct RasterLayerCache {
     /// Uniform buffer holding opacity + blend_mode + show_mask.
     uniform_buf: wgpu::Buffer,
-    /// Mask bind group (group 1). Points to real mask texture or 1x1 white fallback.
-    mask_bind_group: wgpu::BindGroup,
 }
 
 /// Uniforms for raster layer compositing.
@@ -83,16 +79,14 @@ struct BlendUniforms {
 }
 
 /// GPU state for a passthrough group that has a mask (Photoshop-style).
-/// Stores a snapshot texture for the parent accumulator, a uniform buffer
-/// for the lerp pass, and the mask bind group.
+/// Stores a snapshot texture for the parent accumulator and a uniform buffer
+/// for the lerp pass.
 struct PassthroughMaskState {
     /// Snapshot of the parent accumulator before compositing this group's children.
     snapshot: wgpu::Texture,
     snapshot_view: wgpu::TextureView,
     /// Uniform buffer for the mask lerp shader (show_mask flag).
     uniform_buf: wgpu::Buffer,
-    /// Mask bind group (group 1) pointing to the real mask texture.
-    mask_bind_group: wgpu::BindGroup,
 }
 
 pub struct Compositor {
@@ -106,10 +100,13 @@ pub struct Compositor {
 
     /// Per-layer/group mask GPU textures (R8Unorm, one per entity with a mask).
     mask_textures: HashMap<LayerId, LayerTexture>,
-    /// Default 1x1 white mask texture (mask_alpha=1.0 = no effect).
-    default_mask_view: wgpu::TextureView,
     /// Default mask bind group using the 1x1 white texture.
     default_mask_bind_group: wgpu::BindGroup,
+
+    /// Resolved mask bind group per entity. Points to the real mask texture
+    /// when mask_enabled/show_mask, or absent (falls back to default_mask_bind_group).
+    /// Single source of truth — no other struct caches a mask bind group.
+    mask_bind_groups: HashMap<LayerId, wgpu::BindGroup>,
 
     /// Pre-built GPU objects per raster layer.
     raster_cache: HashMap<LayerId, RasterLayerCache>,
@@ -199,7 +196,6 @@ impl Compositor {
         queue: &wgpu::Queue,
         padded_w: u32,
         padded_h: u32,
-        default_mask_bind_group: &wgpu::BindGroup,
         group_id: LayerId,
     ) -> GroupState {
         let (a0, v0) = Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id}-0"));
@@ -230,7 +226,6 @@ impl Compositor {
             composite_cache_view: cache_view,
             cache_valid_through: None,
             uniform_buf,
-            mask_bind_group: default_mask_bind_group.clone(),
         }
     }
 
@@ -463,7 +458,7 @@ impl Compositor {
 
         // Create root GroupState (root is always a non-passthrough group)
         let root_state = Self::create_group_state(
-            device, queue, padded_w, padded_h, &default_mask_bind_group, ROOT_ID,
+            device, queue, padded_w, padded_h, ROOT_ID,
         );
 
         // Present bind group reads from root's composite cache
@@ -506,8 +501,8 @@ impl Compositor {
             group_state,
             layer_textures: HashMap::new(),
             mask_textures: HashMap::new(),
-            default_mask_view,
             default_mask_bind_group,
+            mask_bind_groups: HashMap::new(),
             raster_cache: HashMap::new(),
             blend_pipelines,
             mask_lerp_pipeline,
@@ -558,13 +553,10 @@ impl Compositor {
         });
         queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
-        let mask_bind_group = self.default_mask_bind_group.clone();
-
         self.raster_cache.insert(
             layer_id,
             RasterLayerCache {
                 uniform_buf,
-                mask_bind_group,
             },
         );
         self.layer_textures.insert(layer_id, layer_tex);
@@ -577,8 +569,7 @@ impl Compositor {
             return;
         }
         let gs = Self::create_group_state(
-            device, queue, self.padded_width, self.padded_height,
-            &self.default_mask_bind_group, group_id,
+            device, queue, self.padded_width, self.padded_height, group_id,
         );
         self.group_state.insert(group_id, gs);
     }
@@ -733,16 +724,9 @@ impl Compositor {
                     }],
                 });
                 self.mask_textures.insert(layer_id, mask_tex);
-                if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
-                    cache.mask_bind_group = mask_bg.clone();
-                }
-                if let Some(gs) = self.group_state.get_mut(&layer_id) {
-                    gs.mask_bind_group = mask_bg.clone();
-                }
-                // Passthrough groups: create or update PassthroughMaskState.
-                if let Some(pms) = self.passthrough_mask_state.get_mut(&layer_id) {
-                    pms.mask_bind_group = mask_bg;
-                } else {
+                self.mask_bind_groups.insert(layer_id, mask_bg);
+                // Passthrough groups: create PassthroughMaskState if needed.
+                if !self.passthrough_mask_state.contains_key(&layer_id) {
                     let (snapshot, snapshot_view) = Self::make_accum_texture(
                         device, self.padded_width, self.padded_height,
                         &format!("pt-snapshot-{layer_id}"),
@@ -757,19 +741,13 @@ impl Compositor {
                         snapshot,
                         snapshot_view,
                         uniform_buf,
-                        mask_bind_group: mask_bg,
                     });
                 }
             }
         } else {
             self.mask_textures.remove(&layer_id);
+            self.mask_bind_groups.remove(&layer_id);
             self.passthrough_mask_state.remove(&layer_id);
-            if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
-                cache.mask_bind_group = self.default_mask_bind_group.clone();
-            }
-            if let Some(gs) = self.group_state.get_mut(&layer_id) {
-                gs.mask_bind_group = self.default_mask_bind_group.clone();
-            }
         }
     }
 
@@ -783,29 +761,26 @@ impl Compositor {
         show_mask: bool,
     ) {
         let use_real = (mask_enabled || show_mask) && self.mask_textures.contains_key(&layer_id);
-        let view = if use_real {
-            &self.mask_textures[&layer_id].view
+        if use_real {
+            let view = &self.mask_textures[&layer_id].view;
+            let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(&format!("mask-bg-{layer_id}")),
+                layout: &self.blend_pipelines.mask_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                }],
+            });
+            self.mask_bind_groups.insert(layer_id, mask_bg);
         } else {
-            &self.default_mask_view
-        };
-        let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(&format!("mask-bg-{layer_id}")),
-            layout: &self.blend_pipelines.mask_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
-            }],
-        });
-        if let Some(cache) = self.raster_cache.get_mut(&layer_id) {
-            cache.mask_bind_group = mask_bg.clone();
+            self.mask_bind_groups.remove(&layer_id);
         }
-        if let Some(gs) = self.group_state.get_mut(&layer_id) {
-            gs.mask_bind_group = mask_bg.clone();
-        }
-        // Keep passthrough mask state in sync.
-        if let Some(pms) = self.passthrough_mask_state.get_mut(&layer_id) {
-            pms.mask_bind_group = mask_bg;
-        }
+    }
+
+    /// Look up the resolved mask bind group for an entity, falling back to
+    /// the default (1x1 white = no masking) when no real mask is active.
+    fn mask_bind_group(&self, layer_id: LayerId) -> &wgpu::BindGroup {
+        self.mask_bind_groups.get(&layer_id).unwrap_or(&self.default_mask_bind_group)
     }
 
     pub fn accum_format(&self) -> wgpu::TextureFormat {
@@ -1246,8 +1221,8 @@ impl Compositor {
                         Some(t) => &t.view,
                         None => continue,
                     };
-                    let (uniform_buf_ptr, mask_bg) = match self.raster_cache.get(&raster.id) {
-                        Some(c) => (&c.uniform_buf, &c.mask_bind_group),
+                    let uniform_buf_ptr = match self.raster_cache.get(&raster.id) {
+                        Some(c) => &c.uniform_buf,
                         None => continue,
                     };
 
@@ -1267,6 +1242,7 @@ impl Compositor {
 
                     {
                         let gs = &self.group_state[&parent_group];
+                        let mask_bg = self.mask_bind_group(raster.id);
                         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("blend-raster"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1369,7 +1345,7 @@ impl Compositor {
                         );
 
                         let gs_parent = &self.group_state[&parent_group];
-                        let gs_child = &self.group_state[&g.id];
+                        let child_mask_bg = self.mask_bind_group(g.id);
                         {
                             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                                 label: Some("blend-group"),
@@ -1387,7 +1363,7 @@ impl Compositor {
                             rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
                             rpass.set_pipeline(self.blend_pipelines.pipeline());
                             rpass.set_bind_group(0, &bind_group, &[]);
-                            rpass.set_bind_group(1, &gs_child.mask_bind_group, &[]);
+                            rpass.set_bind_group(1, child_mask_bg, &[]);
                             rpass.draw(0..3, 0..1);
                         }
                     }
@@ -1484,7 +1460,7 @@ impl Compositor {
 
         {
             let gs = &self.group_state[&parent_group];
-            let pms = &self.passthrough_mask_state[&group_id];
+            let group_mask_bg = self.mask_bind_group(group_id);
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("mask-lerp"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1501,7 +1477,7 @@ impl Compositor {
             rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
             rpass.set_pipeline(&self.mask_lerp_pipeline);
             rpass.set_bind_group(0, &lerp_bind_group, &[]);
-            rpass.set_bind_group(1, &pms.mask_bind_group, &[]);
+            rpass.set_bind_group(1, group_mask_bg, &[]);
             rpass.draw(0..3, 0..1);
         }
     }

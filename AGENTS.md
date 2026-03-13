@@ -26,6 +26,10 @@ This same pattern applies to all modular systems in the project.
 
 Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. Extract shared logic into a common abstraction rather than duplicating the pattern. This applies across modules, across layers (Rust, WASM bridge, JS), and across systems. When you notice structural similarity, unify it.
 
+## Ownership Principle
+
+State belongs to the thing it describes — not to a parent that manages it on its behalf. Don't let Rust's borrow checker dictate the data model. If splitting state out of a struct makes borrowing easier but scatters a logical concept across multiple locations, find a different way to satisfy the borrow checker (helper methods, borrow-splitting, restructured access) and keep the data model clean.
+
 ## Prior Art Principle
 
 Before deciding on an implementation approach — even when the solution seems obvious — research how established editors handle it. Krita and GIMP source code are checked out under `gimp/` and `krita/` in the project root specifically for this purpose. Read the relevant source, understand the algorithm and data structures they chose, and base our design on that understanding. These are mature codebases with decades of real-world usage; they've already hit and solved the edge cases we'd discover the hard way.
