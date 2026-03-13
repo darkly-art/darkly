@@ -90,7 +90,7 @@ impl UndoAction for LayerRemoveAction {
                     None
                 }
             }
-            None => doc.layers.get(self.position).map(|n| n.id()),
+            None => doc.root.children.get(self.position).map(|n| n.id()),
         };
 
         if let Some(layer_id) = container {

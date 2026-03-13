@@ -3,6 +3,8 @@
 pub struct BlendPipelines {
     pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
+    /// Separate bind group layout for the mask texture (group 1).
+    pub mask_bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl BlendPipelines {
@@ -39,7 +41,7 @@ impl BlendPipelines {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // binding 3: uniforms (opacity, blend_mode)
+                // binding 3: uniforms (opacity, blend_mode, show_mask)
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -53,9 +55,26 @@ impl BlendPipelines {
             ],
         });
 
+        // Group 1: mask texture (R8Unorm or fallback 1x1 white)
+        let mask_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mask-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("blend-pipeline-layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[&bind_group_layout, &mask_bind_group_layout],
             immediate_size: 0,
         });
 
@@ -98,6 +117,7 @@ impl BlendPipelines {
         BlendPipelines {
             pipeline,
             bind_group_layout,
+            mask_bind_group_layout,
         }
     }
 

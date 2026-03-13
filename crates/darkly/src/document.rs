@@ -1,7 +1,13 @@
-use crate::dirty::DirtyRegion;
 use crate::layer::*;
-use crate::tile::{Memento, TILE_SIZE, TileGrid};
-use std::collections::HashMap;
+use crate::paint::{self, MaskPaintTarget, PaintTarget, Surface, TransactionMemento};
+use crate::tile::{AlphaMask, MaskSurface, TILE_SIZE};
+
+pub enum SelectionMode {
+    Replace,
+    Add,
+    Subtract,
+    Intersect,
+}
 
 pub enum MoveTarget {
     Before(LayerId),
@@ -10,11 +16,19 @@ pub enum MoveTarget {
     IntoGroupBottom(LayerId),
 }
 
+/// Well-known ID for the implicit root group.
+pub const ROOT_ID: LayerId = 0;
+
 pub struct Document {
-    pub layers: Vec<LayerNode>,
+    /// The root of the layer tree. All layers live inside this group.
+    /// The root group itself is never exposed to the UI — only its children are.
+    pub root: LayerGroup,
     pub width: u32,
     pub height: u32,
-    pub dirty: HashMap<LayerId, DirtyRegion>,
+    pub selection: Option<AlphaMask>,
+    /// Which layer (if any) is having its mask edited instead of its pixels.
+    /// Set by the engine before beginning a stroke, cleared after committing.
+    mask_editing: Option<LayerId>,
     next_id: LayerId,
 }
 
@@ -163,7 +177,15 @@ fn collect_raster_layers<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a RasterLay
         match node {
             LayerNode::Layer(Layer::Raster(r)) => out.push(r),
             LayerNode::Group(g) => collect_raster_layers(&g.children, out),
-            _ => {}
+        }
+    }
+}
+
+fn collect_groups<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a LayerGroup>) {
+    for node in nodes {
+        if let LayerNode::Group(g) = node {
+            out.push(g);
+            collect_groups(&g.children, out);
         }
     }
 }
@@ -182,16 +204,6 @@ fn find_parent_of(nodes: &[LayerNode], id: LayerId) -> Option<LayerId> {
         }
     }
     None
-}
-
-/// Recursively collect all IDs under a node (including the node itself).
-fn collect_all_ids(node: &LayerNode, out: &mut Vec<LayerId>) {
-    out.push(node.id());
-    if let LayerNode::Group(g) = node {
-        for child in &g.children {
-            collect_all_ids(child, out);
-        }
-    }
 }
 
 /// Recursively collect all raster layer IDs under a node.
@@ -214,7 +226,6 @@ fn collect_raster_ids(node: &LayerNode, out: &mut Vec<LayerId>) {
                 collect_raster_ids(child, out);
             }
         }
-        _ => {}
     }
 }
 
@@ -226,10 +237,11 @@ fn position_in(nodes: &[LayerNode], id: LayerId) -> Option<usize> {
 impl Document {
     pub fn new(width: u32, height: u32) -> Self {
         Document {
-            layers: Vec::new(),
+            root: LayerGroup::new(ROOT_ID),
             width,
             height,
-            dirty: HashMap::new(),
+            selection: None,
+            mask_editing: None,
             next_id: 1,
         }
     }
@@ -244,8 +256,7 @@ impl Document {
     pub fn add_raster_layer(&mut self) -> LayerId {
         let id = self.alloc_id();
         let layer = RasterLayer::new(id);
-        self.layers.push(LayerNode::Layer(Layer::Raster(layer)));
-        self.dirty.insert(id, DirtyRegion::new());
+        self.root.children.push(LayerNode::Layer(Layer::Raster(layer)));
         id
     }
 
@@ -254,29 +265,17 @@ impl Document {
         let id = self.alloc_id();
         let layer = RasterLayer::new(id);
         let node = LayerNode::Layer(Layer::Raster(layer));
-        self.dirty.insert(id, DirtyRegion::new());
 
         match parent {
             Some(group_id) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, group_id) {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, group_id) {
                     g.children.push(node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
-            None => self.layers.push(node),
+            None => self.root.children.push(node),
         }
-        id
-    }
-
-    pub fn add_filter_layer(&mut self, filter: Box<dyn crate::gpu::filter::Filter>) -> LayerId {
-        let id = self.alloc_id();
-        let layer = FilterLayer {
-            id,
-            filter,
-            visible: true,
-        };
-        self.layers.push(LayerNode::Layer(Layer::Filter(layer)));
         id
     }
 
@@ -284,7 +283,7 @@ impl Document {
     pub fn add_group(&mut self) -> LayerId {
         let id = self.alloc_id();
         let group = LayerGroup::new(id);
-        self.layers.push(LayerNode::Group(group));
+        self.root.children.push(LayerNode::Group(group));
         id
     }
 
@@ -292,7 +291,7 @@ impl Document {
     /// Hidden groups exclude all children. Passthrough groups flatten children directly.
     pub fn flat_layers(&self) -> Vec<&Layer> {
         let mut out = Vec::new();
-        flatten_nodes(&self.layers, &mut out);
+        flatten_nodes(&self.root.children, &mut out);
         out
     }
 
@@ -300,14 +299,20 @@ impl Document {
     /// Used for tile upload — we keep GPU textures in sync even for hidden layers.
     pub fn all_raster_layers(&self) -> Vec<&RasterLayer> {
         let mut out = Vec::new();
-        collect_raster_layers(&self.layers, &mut out);
+        collect_raster_layers(&self.root.children, &mut out);
+        out
+    }
+
+    pub fn all_groups(&self) -> Vec<&LayerGroup> {
+        let mut out = Vec::new();
+        collect_groups(&self.root.children, &mut out);
         out
     }
 
     /// Compute the flat (display order) index of a layer by id.
     /// Count all nodes (layers + groups) in the tree.
     pub fn node_count(&self) -> usize {
-        count_nodes(&self.layers)
+        count_nodes(&self.root.children)
     }
 
     pub fn flat_layer_index(&self, id: LayerId) -> Option<usize> {
@@ -315,23 +320,23 @@ impl Document {
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        find_layer_in(&self.layers, id)
+        find_layer_in(&self.root.children, id)
     }
 
     pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
-        find_layer_in_mut(&mut self.layers, id)
+        find_layer_in_mut(&mut self.root.children, id)
     }
 
     pub fn find_node(&self, id: LayerId) -> Option<&LayerNode> {
-        find_node_in(&self.layers, id)
+        find_node_in(&self.root.children, id)
     }
 
     pub fn find_node_mut(&mut self, id: LayerId) -> Option<&mut LayerNode> {
-        find_node_in_mut(&mut self.layers, id)
+        find_node_in_mut(&mut self.root.children, id)
     }
 
     pub fn parent_of(&self, id: LayerId) -> Option<LayerId> {
-        find_parent_of(&self.layers, id)
+        find_parent_of(&self.root.children, id)
     }
 
     /// Index of a node within its parent container (root list or group children).
@@ -339,30 +344,23 @@ impl Document {
         let parent = self.parent_of(id);
         match parent {
             Some(pid) => {
-                if let Some(LayerNode::Group(g)) = find_node_in(&self.layers, pid) {
+                if let Some(LayerNode::Group(g)) = find_node_in(&self.root.children, pid) {
                     position_in(&g.children, id)
                 } else {
                     None
                 }
             }
-            None => position_in(&self.layers, id),
+            None => position_in(&self.root.children, id),
         }
     }
 
     /// Detach a node from the tree for undo purposes.
-    /// Removes the node and cleans up dirty regions, returning the detached node.
     pub fn detach_for_undo(&mut self, id: LayerId) -> Option<LayerNode> {
-        let node = detach_node(&mut self.layers, id)?;
-        let mut ids = Vec::new();
-        collect_all_ids(&node, &mut ids);
-        for removed_id in ids {
-            self.dirty.remove(&removed_id);
-        }
-        Some(node)
+        detach_node(&mut self.root.children, id)
     }
 
     /// Reinsert a previously detached node at a specific position.
-    /// Sets up dirty regions and marks all tiles dirty for GPU upload.
+    /// Marks all tiles dirty for GPU upload.
     pub fn reinsert_node(&mut self, node: LayerNode, parent: Option<LayerId>, position: usize) {
         // Collect raster layer IDs before we move the node into the tree.
         let mut raster_ids = Vec::new();
@@ -371,27 +369,27 @@ impl Document {
         // Insert into the tree.
         match parent {
             Some(pid) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, pid) {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, pid) {
                     let pos = position.min(g.children.len());
                     g.children.insert(pos, node);
                 } else {
                     // Parent gone (shouldn't happen) — insert at root.
-                    let pos = position.min(self.layers.len());
-                    self.layers.insert(pos, node);
+                    let pos = position.min(self.root.children.len());
+                    self.root.children.insert(pos, node);
                 }
             }
             None => {
-                let pos = position.min(self.layers.len());
-                self.layers.insert(pos, node);
+                let pos = position.min(self.root.children.len());
+                self.root.children.insert(pos, node);
             }
         }
 
-        // Set up dirty regions and mark all existing tiles for upload.
+        // Mark all existing tiles dirty for upload.
         for &id in &raster_ids {
-            let dirty = self.dirty.entry(id).or_insert_with(DirtyRegion::new);
-            if let Some(Layer::Raster(r)) = find_layer_in(&self.layers, id) {
-                for ((tx, ty), _) in r.tiles.iter() {
-                    dirty.mark(tx, ty);
+            if let Some(Layer::Raster(r)) = find_layer_in_mut(&mut self.root.children, id) {
+                let keys: Vec<(i32, i32)> = r.surface.store.iter().map(|(k, _)| k).collect();
+                for (tx, ty) in keys {
+                    r.surface.dirty.mark(tx, ty);
                 }
             }
         }
@@ -399,7 +397,7 @@ impl Document {
 
     /// Move a node to a new position in the tree.
     pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
-        let node = match detach_node(&mut self.layers, layer_id) {
+        let node = match detach_node(&mut self.root.children, layer_id) {
             Some(n) => n,
             None => return,
         };
@@ -409,349 +407,339 @@ impl Document {
     fn insert_node(&mut self, node: LayerNode, target: MoveTarget) {
         match target {
             MoveTarget::Before(ref_id) => {
-                if let Some(path) = find_position(&self.layers, ref_id) {
+                if let Some(path) = find_position(&self.root.children, ref_id) {
                     let idx = *path.last().unwrap();
-                    let container = container_at_path(&mut self.layers, &path);
+                    let container = container_at_path(&mut self.root.children, &path);
                     container.insert(idx, node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
             MoveTarget::After(ref_id) => {
-                if let Some(path) = find_position(&self.layers, ref_id) {
+                if let Some(path) = find_position(&self.root.children, ref_id) {
                     let idx = *path.last().unwrap();
-                    let container = container_at_path(&mut self.layers, &path);
+                    let container = container_at_path(&mut self.root.children, &path);
                     container.insert(idx + 1, node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
             MoveTarget::IntoGroupTop(group_id) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, group_id) {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, group_id) {
                     g.children.push(node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
             MoveTarget::IntoGroupBottom(group_id) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.layers, group_id) {
+                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, group_id) {
                     g.children.insert(0, node);
                 } else {
-                    self.layers.push(node);
+                    self.root.children.push(node);
                 }
             }
         }
     }
 
-    /// Remove a node (layer or group) from the tree. Also removes dirty regions.
+    /// Remove a node (layer or group) from the tree.
     pub fn remove_node(&mut self, id: LayerId) {
-        if let Some(node) = detach_node(&mut self.layers, id) {
-            let mut ids = Vec::new();
-            collect_all_ids(&node, &mut ids);
-            for removed_id in ids {
-                self.dirty.remove(&removed_id);
-            }
-        }
+        detach_node(&mut self.root.children, id);
     }
 
-    /// Get a mutable reference to the raster layer's tiles and the dirty region simultaneously.
-    /// Uses borrow splitting: layers and dirty are separate fields.
-    fn raster_tiles_and_dirty<'a>(
+    // --- Dirty state helpers (used by compositor) ---
+
+    /// Returns true if any raster layer surface has dirty tiles.
+    pub fn has_dirty_layers(&self) -> bool {
+        self.all_raster_layers().iter().any(|r| !r.surface.dirty.is_empty())
+    }
+
+    /// Returns true if any mask surface has dirty tiles.
+    pub fn has_dirty_masks(&self) -> bool {
+        for r in self.all_raster_layers() {
+            if let Some(m) = &r.mask {
+                if !m.dirty.is_empty() { return true; }
+            }
+        }
+        for g in self.all_groups() {
+            if let Some(m) = &g.mask {
+                if !m.dirty.is_empty() { return true; }
+            }
+        }
+        false
+    }
+
+    /// Clear all dirty regions on all surfaces (layers and masks).
+    pub fn clear_all_dirty(&mut self) {
+        fn clear_dirty_recursive(nodes: &mut [LayerNode]) {
+            for node in nodes {
+                match node {
+                    LayerNode::Layer(Layer::Raster(r)) => {
+                        r.surface.dirty.clear();
+                        if let Some(m) = &mut r.mask {
+                            m.dirty.clear();
+                        }
+                    }
+                    LayerNode::Group(g) => {
+                        if let Some(m) = &mut g.mask {
+                            m.dirty.clear();
+                        }
+                        clear_dirty_recursive(&mut g.children);
+                    }
+                }
+            }
+        }
+        clear_dirty_recursive(&mut self.root.children);
+    }
+
+    /// Borrow-split factory that returns a `Surface` — either layer tiles or mask,
+    /// depending on `mask_editing`. Callers never branch on surface type.
+    fn make_surface<'a>(
         layers: &'a mut Vec<LayerNode>,
-        dirty: &'a mut HashMap<LayerId, DirtyRegion>,
+        selection: Option<&'a AlphaMask>,
+        mask_editing: Option<LayerId>,
         layer_id: LayerId,
-    ) -> Option<(&'a mut TileGrid, &'a mut DirtyRegion)> {
-        let raster = find_raster_in_mut(layers, layer_id)?;
-        let dirty_region = dirty.get_mut(&layer_id)?;
-        Some((&mut raster.tiles, dirty_region))
-    }
-
-    /// Paint a filled circle on a raster layer.
-    pub fn paint_circle(
-        &mut self,
-        layer_id: LayerId,
-        cx: f32,
-        cy: f32,
-        radius: f32,
-        color: [u8; 4],
-    ) {
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
-
-        let r2 = radius * radius;
-        let x_min = (cx - radius).floor() as i32;
-        let x_max = (cx + radius).ceil() as i32;
-        let y_min = (cy - radius).floor() as i32;
-        let y_max = (cy + radius).ceil() as i32;
-
-        let (tx_min, ty_min) = TileGrid::tile_coords_for_pixel(x_min, y_min);
-        let (tx_max, ty_max) = TileGrid::tile_coords_for_pixel(x_max, y_max);
-
-        let tile_size = TILE_SIZE as i32;
-
-        for ty in ty_min..=ty_max {
-            for tx in tx_min..=tx_max {
-                let tile_px_x = tx * tile_size;
-                let tile_px_y = ty * tile_size;
-
-                let mut touched = false;
-                let tile = tiles.get_or_create(tx, ty);
-                let data = tile.write();
-
-                let lx_start = (x_min - tile_px_x).max(0) as usize;
-                let lx_end = ((x_max - tile_px_x).min(tile_size) as usize).min(TILE_SIZE);
-                let ly_start = (y_min - tile_px_y).max(0) as usize;
-                let ly_end = ((y_max - tile_px_y).min(tile_size) as usize).min(TILE_SIZE);
-
-                for ly in ly_start..ly_end {
-                    for lx in lx_start..lx_end {
-                        let px = (tile_px_x + lx as i32) as f32 + 0.5;
-                        let py = (tile_px_y + ly as i32) as f32 + 0.5;
-                        let dx = px - cx;
-                        let dy = py - cy;
-                        if dx * dx + dy * dy <= r2 {
-                            let dst = data.pixel_mut(lx, ly);
-                            let src_a = color[3] as f32 / 255.0;
-                            let dst_a = dst[3] as f32 / 255.0;
-                            let out_a = src_a + dst_a * (1.0 - src_a);
-                            if out_a > 0.0 {
-                                for c in 0..3 {
-                                    let src_c = color[c] as f32 / 255.0;
-                                    let dst_c = dst[c] as f32 / 255.0;
-                                    let out_c =
-                                        (src_c * src_a + dst_c * dst_a * (1.0 - src_a)) / out_a;
-                                    dst[c] = (out_c * 255.0).round() as u8;
-                                }
-                                dst[3] = (out_a * 255.0).round() as u8;
-                            }
-                            touched = true;
-                        }
-                    }
-                }
-
-                if touched {
-                    dirty.mark(tx, ty);
-                }
-            }
+    ) -> Option<Surface<'a>> {
+        if mask_editing == Some(layer_id) {
+            // Mask editing works on any node type (raster or group)
+            let node = find_node_in_mut(layers, layer_id)?;
+            let mask_surface = node.as_masked_mut().mask_mut().as_mut()?;
+            Some(Surface::Mask(MaskPaintTarget::new(
+                &mut mask_surface.store, &mut mask_surface.dirty, selection,
+            )))
+        } else {
+            // Pixel painting is raster-only (groups have no tiles)
+            let raster = find_raster_in_mut(layers, layer_id)?;
+            Some(Surface::Layer(PaintTarget::new(
+                &mut raster.surface.store, &mut raster.surface.dirty, selection,
+            )))
         }
     }
 
-    /// Erase a filled circle on a raster layer (set pixels to transparent).
-    pub fn erase_circle(
-        &mut self,
-        layer_id: LayerId,
-        cx: f32,
-        cy: f32,
-        radius: f32,
-    ) {
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
+    /// Paint a filled circle on a raster layer (or its mask when mask_editing is set).
+    pub fn paint_circle(&mut self, layer_id: LayerId, cx: f32, cy: f32, radius: f32, color: [u8; 4]) {
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
+        ) {
+            paint::paint_circle(&mut s, cx, cy, radius, color);
+        }
+    }
 
-        let r2 = radius * radius;
-        let x_min = (cx - radius).floor() as i32;
-        let x_max = (cx + radius).ceil() as i32;
-        let y_min = (cy - radius).floor() as i32;
-        let y_max = (cy + radius).ceil() as i32;
-
-        let (tx_min, ty_min) = TileGrid::tile_coords_for_pixel(x_min, y_min);
-        let (tx_max, ty_max) = TileGrid::tile_coords_for_pixel(x_max, y_max);
-
-        let tile_size = TILE_SIZE as i32;
-
-        for ty in ty_min..=ty_max {
-            for tx in tx_min..=tx_max {
-                let tile_px_x = tx * tile_size;
-                let tile_px_y = ty * tile_size;
-
-                let mut touched = false;
-                let tile = tiles.get_or_create(tx, ty);
-                let data = tile.write();
-
-                let lx_start = (x_min - tile_px_x).max(0) as usize;
-                let lx_end = ((x_max - tile_px_x).min(tile_size) as usize).min(TILE_SIZE);
-                let ly_start = (y_min - tile_px_y).max(0) as usize;
-                let ly_end = ((y_max - tile_px_y).min(tile_size) as usize).min(TILE_SIZE);
-
-                for ly in ly_start..ly_end {
-                    for lx in lx_start..lx_end {
-                        let px = (tile_px_x + lx as i32) as f32 + 0.5;
-                        let py = (tile_px_y + ly as i32) as f32 + 0.5;
-                        let dx = px - cx;
-                        let dy = py - cy;
-                        if dx * dx + dy * dy <= r2 {
-                            data.pixel_mut(lx, ly).copy_from_slice(&[0, 0, 0, 0]);
-                            touched = true;
-                        }
-                    }
-                }
-
-                if touched {
-                    dirty.mark(tx, ty);
-                }
-            }
+    /// Erase a filled circle on a raster layer (or its mask when mask_editing is set).
+    pub fn erase_circle(&mut self, layer_id: LayerId, cx: f32, cy: f32, radius: f32) {
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
+        ) {
+            paint::erase_circle(&mut s, cx, cy, radius);
         }
     }
 
     /// Flood fill from a seed point with a color, using tolerance-based matching.
-    pub fn flood_fill(
-        &mut self,
-        layer_id: LayerId,
-        seed_x: i32,
-        seed_y: i32,
-        color: [u8; 4],
-        tolerance: u8,
-    ) {
+    pub fn flood_fill(&mut self, layer_id: LayerId, seed_x: i32, seed_y: i32, color: [u8; 4], tolerance: u8) {
         if seed_x < 0 || seed_y < 0 || seed_x >= self.width as i32 || seed_y >= self.height as i32 {
             return;
         }
-
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
-
-        let tile_size = TILE_SIZE as i32;
-
-        // Read the target color at seed
-        let (stx, sty) = TileGrid::tile_coords_for_pixel(seed_x, seed_y);
-        let slx = (seed_x - stx * tile_size) as usize;
-        let sly = (seed_y - sty * tile_size) as usize;
-
-        let target_color = match tiles.get(stx, sty) {
-            Some(t) => *t.data().pixel(slx, sly),
-            None => [0, 0, 0, 0],
-        };
-
-        if target_color == color {
-            return;
-        }
-
-        let tol = tolerance as i16;
-        let matches = |px: &[u8; 4]| -> bool {
-            (px[0] as i16 - target_color[0] as i16).abs() <= tol
-                && (px[1] as i16 - target_color[1] as i16).abs() <= tol
-                && (px[2] as i16 - target_color[2] as i16).abs() <= tol
-                && (px[3] as i16 - target_color[3] as i16).abs() <= tol
-        };
-
         let w = self.width as i32;
         let h = self.height as i32;
-        let mut visited = std::collections::HashSet::new();
-        let mut stack = vec![(seed_x, seed_y)];
-
-        while let Some((x, y)) = stack.pop() {
-            if x < 0 || y < 0 || x >= w || y >= h {
-                continue;
-            }
-            if !visited.insert((x, y)) {
-                continue;
-            }
-
-            let (tx, ty_coord) = TileGrid::tile_coords_for_pixel(x, y);
-            let lx = (x - tx * tile_size) as usize;
-            let ly = (y - ty_coord * tile_size) as usize;
-
-            let current = match tiles.get(tx, ty_coord) {
-                Some(t) => *t.data().pixel(lx, ly),
-                None => [0, 0, 0, 0],
-            };
-
-            if !matches(&current) {
-                continue;
-            }
-
-            let tile = tiles.get_or_create(tx, ty_coord);
-            tile.write().pixel_mut(lx, ly).copy_from_slice(&color);
-            dirty.mark(tx, ty_coord);
-
-            stack.push((x + 1, y));
-            stack.push((x - 1, y));
-            stack.push((x, y + 1));
-            stack.push((x, y - 1));
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
+        ) {
+            paint::flood_fill(&mut s, seed_x, seed_y, w, h, color, tolerance);
         }
     }
 
-    /// Draw a linear gradient between two points on a raster layer.
+    /// Clear (erase to transparent) all pixels within the current selection on a raster layer.
+    /// Iterates only over tiles where the selection mask exists, for efficiency.
+    pub fn clear_selection_contents(&mut self, layer_id: LayerId) {
+        if self.selection.is_none() {
+            return;
+        }
+
+        let ts = TILE_SIZE as i32;
+        let tile_keys: Vec<(i32, i32)> = self.selection.as_ref().unwrap()
+            .iter().map(|((tx, ty), _)| (tx, ty)).collect();
+
+        let mut surface = match Self::make_surface(
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
+        ) {
+            Some(s) => s,
+            None => return,
+        };
+
+        for (tx, ty) in tile_keys {
+            let base_x = tx * ts;
+            let base_y = ty * ts;
+            for ly in 0..TILE_SIZE {
+                for lx in 0..TILE_SIZE {
+                    surface.erase(base_x + lx as i32, base_y + ly as i32, 1.0);
+                }
+            }
+        }
+    }
+
+    /// Draw a linear gradient between two points on a raster layer (or its mask).
     pub fn linear_gradient(
         &mut self,
         layer_id: LayerId,
-        x0: f32, y0: f32,
-        x1: f32, y1: f32,
-        color0: [u8; 4],
-        color1: [u8; 4],
+        x0: f32, y0: f32, x1: f32, y1: f32,
+        color0: [u8; 4], color1: [u8; 4],
     ) {
         let width = self.width;
         let height = self.height;
-
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
-
-        let dx = x1 - x0;
-        let dy = y1 - y0;
-        let len2 = dx * dx + dy * dy;
-        if len2 < 0.001 {
-            return;
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
+        ) {
+            paint::linear_gradient(&mut s, x0, y0, x1, y1, color0, color1, width, height);
         }
+    }
 
-        let tile_size = TILE_SIZE as i32;
-        let tiles_x = (width as i32 + tile_size - 1) / tile_size;
-        let tiles_y = (height as i32 + tile_size - 1) / tile_size;
+    /// Begin recording tile changes on a layer (or its mask) for undo.
+    pub fn begin_transaction(&mut self, layer_id: LayerId) {
+        if let Some(mut s) = Self::make_surface(
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
+        ) {
+            s.begin_transaction();
+        }
+    }
 
-        for ty in 0..tiles_y {
-            for tx in 0..tiles_x {
-                let tile = tiles.get_or_create(tx, ty);
-                let data = tile.write();
-                for ly in 0..TILE_SIZE {
-                    for lx in 0..TILE_SIZE {
-                        let px = (tx * tile_size + lx as i32) as f32 + 0.5;
-                        let py = (ty * tile_size + ly as i32) as f32 + 0.5;
-                        if px >= width as f32 || py >= height as f32 {
-                            continue;
-                        }
+    /// Commit the active transaction and return a memento for undo.
+    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<TransactionMemento> {
+        Self::make_surface(
+            &mut self.root.children, self.selection.as_ref(), self.mask_editing, layer_id,
+        )?.commit_transaction(layer_id)
+    }
 
-                        let t = ((px - x0) * dx + (py - y0) * dy) / len2;
-                        let t = t.clamp(0.0, 1.0);
+    /// Apply a shape mask to the document selection using the given mode.
+    pub fn apply_selection(&mut self, shape_mask: AlphaMask, mode: SelectionMode) {
+        match mode {
+            SelectionMode::Replace => {
+                self.selection = Some(shape_mask);
+            }
+            SelectionMode::Add => {
+                match &mut self.selection {
+                    Some(sel) => sel.boolean_add(&shape_mask),
+                    None => self.selection = Some(shape_mask),
+                }
+            }
+            SelectionMode::Subtract => {
+                if let Some(sel) = &mut self.selection {
+                    sel.boolean_subtract(&shape_mask);
+                }
+            }
+            SelectionMode::Intersect => {
+                match &mut self.selection {
+                    Some(sel) => sel.boolean_intersect(&shape_mask),
+                    None => {} // intersect with nothing = nothing
+                }
+            }
+        }
+    }
 
-                        let r = (color0[0] as f32 * (1.0 - t) + color1[0] as f32 * t) as u8;
-                        let g = (color0[1] as f32 * (1.0 - t) + color1[1] as f32 * t) as u8;
-                        let b = (color0[2] as f32 * (1.0 - t) + color1[2] as f32 * t) as u8;
-                        let a = (color0[3] as f32 * (1.0 - t) + color1[3] as f32 * t) as u8;
+    /// Tell the document which layer (if any) should route operations to its mask.
+    pub fn set_mask_editing(&mut self, layer_id: Option<LayerId>) {
+        self.mask_editing = layer_id;
+    }
 
-                        data.pixel_mut(lx, ly).copy_from_slice(&[r, g, b, a]);
+    // --- Layer Mask Operations ---
+
+    /// Add a white (reveal-all) mask to a node. Returns the previous mask state.
+    pub fn add_mask(&mut self, layer_id: LayerId) -> Option<MaskSurface> {
+        let node = find_node_in_mut(&mut self.root.children, layer_id)?;
+        let m = node.as_masked_mut();
+        let old = m.mask_mut().take();
+        *m.mask_mut() = Some(MaskSurface::new());
+        m.set_mask_enabled(true);
+        m.set_show_mask(false);
+        old
+    }
+
+    /// Remove the mask from a layer or group. Returns the removed mask.
+    pub fn remove_mask(&mut self, layer_id: LayerId) -> Option<MaskSurface> {
+        let node = find_node_in_mut(&mut self.root.children, layer_id)?;
+        let m = node.as_masked_mut();
+        let old = m.mask_mut().take();
+        m.set_mask_enabled(true);
+        m.set_show_mask(false);
+        old
+    }
+
+    pub fn set_mask_enabled(&mut self, layer_id: LayerId, enabled: bool) {
+        if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
+            node.as_masked_mut().set_mask_enabled(enabled);
+        }
+    }
+
+    pub fn set_show_mask(&mut self, layer_id: LayerId, show: bool) {
+        if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
+            node.as_masked_mut().set_show_mask(show);
+        }
+    }
+
+    /// Convert the current selection to a layer mask (replaces existing mask).
+    pub fn selection_to_mask(&mut self, layer_id: LayerId) {
+        let sel = match &self.selection {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
+            let m = node.as_masked_mut();
+            *m.mask_mut() = Some(MaskSurface { store: sel, ..MaskSurface::new() });
+            m.set_mask_enabled(true);
+            m.set_show_mask(false);
+        }
+    }
+
+    /// Convert a layer mask to a selection (replaces current selection).
+    pub fn mask_to_selection(&mut self, layer_id: LayerId) {
+        let mask_clone = self.find_node(layer_id)
+            .and_then(|n| n.as_masked().mask().as_ref())
+            .map(|ms| ms.store.clone());
+        if let Some(store) = mask_clone {
+            self.selection = Some(store);
+        }
+    }
+
+    /// Destructively apply the mask to the layer's alpha channel, then remove the mask.
+    /// Each pixel's alpha is multiplied by the mask value.
+    pub fn apply_mask_destructive(&mut self, layer_id: LayerId) {
+        // First, collect the mask tile data we need
+        let mask_tiles: Vec<((i32, i32), Vec<f32>)> = match self.layer(layer_id) {
+            Some(Layer::Raster(r)) => match &r.mask {
+                Some(mask_surface) => mask_surface.store.iter().map(|((tx, ty), tile)| {
+                    ((tx, ty), tile.data().0.to_vec())
+                }).collect(),
+                None => return,
+            },
+            _ => return,
+        };
+
+        let raster = match find_raster_in_mut(&mut self.root.children, layer_id) {
+            Some(r) => r,
+            None => return,
+        };
+
+        // Multiply layer alpha by mask value for tiles that exist in the mask
+        for ((tx, ty), mask_data) in &mask_tiles {
+            if raster.surface.store.get(*tx, *ty).is_none() {
+                continue; // no layer tile = nothing to multiply
+            }
+            let layer_tile = raster.surface.store.get_or_create(*tx, *ty);
+            let data = layer_tile.write();
+            for ly in 0..TILE_SIZE {
+                for lx in 0..TILE_SIZE {
+                    let mask_val = mask_data[ly * TILE_SIZE + lx];
+                    if mask_val < 1.0 {
+                        let px = data.pixel_mut(lx, ly);
+                        px[3] = (px[3] as f32 * mask_val).round() as u8;
                     }
                 }
-                dirty.mark(tx, ty);
             }
+            raster.surface.dirty.mark(*tx, *ty);
         }
-    }
 
-    /// Begin recording tile changes on a raster layer for undo.
-    pub fn begin_transaction(&mut self, layer_id: LayerId) {
-        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
-            r.tiles.begin_transaction();
-        }
-    }
-
-    /// Commit the active transaction and return per-layer mementos if any tiles changed.
-    pub fn commit_transaction(&mut self, layer_id: LayerId) -> Option<HashMap<LayerId, Memento>> {
-        if let Some(Layer::Raster(r)) = self.layer_mut(layer_id) {
-            if let Some(memento) = r.tiles.commit_transaction() {
-                let mut mementos = HashMap::new();
-                mementos.insert(layer_id, memento);
-                return Some(mementos);
-            }
-        }
-        None
+        // Remove the mask
+        raster.mask = None;
+        raster.mask_enabled = true;
+        raster.show_mask = false;
     }
 
     /// Fill a raster layer with a horizontal gradient (demo helper).
@@ -759,11 +747,10 @@ impl Document {
         let width = self.width;
         let height = self.height;
 
-        let (tiles, dirty) =
-            match Self::raster_tiles_and_dirty(&mut self.layers, &mut self.dirty, layer_id) {
-                Some(v) => v,
-                None => return,
-            };
+        let raster = match find_raster_in_mut(&mut self.root.children, layer_id) {
+            Some(r) => r,
+            None => return,
+        };
 
         let tile_size = TILE_SIZE as i32;
         let tiles_x = (width as i32 + tile_size - 1) / tile_size;
@@ -771,7 +758,7 @@ impl Document {
 
         for ty in 0..tiles_y {
             for tx in 0..tiles_x {
-                let tile = tiles.get_or_create(tx, ty);
+                let tile = raster.surface.store.get_or_create(tx, ty);
                 let data = tile.write();
                 for ly in 0..TILE_SIZE {
                     for lx in 0..TILE_SIZE {
@@ -786,7 +773,7 @@ impl Document {
                         }
                     }
                 }
-                dirty.mark(tx, ty);
+                raster.surface.dirty.mark(tx, ty);
             }
         }
     }
@@ -802,11 +789,9 @@ mod tests {
         let id = doc.add_raster_layer();
         doc.paint_circle(id, 32.0, 32.0, 5.0, [255, 0, 0, 255]);
 
-        let dirty = doc.dirty.get(&id).unwrap();
-        assert!(!dirty.is_empty());
-
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            let tile = r.tiles.get(0, 0).unwrap();
+            assert!(!r.surface.dirty.is_empty());
+            let tile = r.surface.store.get(0, 0).unwrap();
             let px = tile.data().pixel(32, 32);
             assert_eq!(px, &[255, 0, 0, 255]);
         } else {
@@ -822,11 +807,9 @@ mod tests {
         let id = doc.add_raster_layer();
         doc.fill_gradient(id);
 
-        let dirty = doc.dirty.get(&id).unwrap();
-        assert_eq!(dirty.len(), 4);
-
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            let tile = r.tiles.get(0, 0).unwrap();
+            assert_eq!(r.surface.dirty.len(), 4);
+            let tile = r.surface.store.get(0, 0).unwrap();
             let px = tile.data().pixel(0, 0);
             assert_eq!(px[3], 255);
         }
@@ -882,14 +865,12 @@ mod tests {
     }
 
     #[test]
-    fn remove_group_removes_children_dirty() {
+    fn remove_group_removes_children() {
         let mut doc = Document::new(256, 256);
         let g1 = doc.add_group();
-        let l1 = doc.add_raster_layer_in(Some(g1));
+        let _l1 = doc.add_raster_layer_in(Some(g1));
 
-        assert!(doc.dirty.contains_key(&l1));
         doc.remove_node(g1);
-        assert!(!doc.dirty.contains_key(&l1));
         assert!(doc.flat_layers().is_empty());
     }
 

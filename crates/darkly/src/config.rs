@@ -32,6 +32,13 @@ fn preset_krita() -> HashMap<String, ConfigValue> {
         ("hotkeys.fillTool", "KeyF"),
         ("hotkeys.gradientTool", "KeyG"),
         ("hotkeys.colorPickerTool", "KeyP"),
+        ("hotkeys.rectSelectTool", "KeyR"),
+        ("hotkeys.ellipseSelectTool", "Shift+KeyR"),
+        ("hotkeys.lassoSelectTool", "KeyL"),
+        ("hotkeys.magicWandTool", "KeyW"),
+        ("hotkeys.clearSelection", "$mod+Shift+KeyA"),
+        ("hotkeys.invertSelection", "$mod+Shift+KeyI"),
+        ("hotkeys.clearSelectionContents", "Delete"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -45,6 +52,16 @@ fn preset_photoshop() -> HashMap<String, ConfigValue> {
         ("hotkeys.fillTool", "KeyG"),
         ("hotkeys.gradientTool", "Shift+KeyG"),
         ("hotkeys.colorPickerTool", "KeyI"),
+        ("hotkeys.rectSelectTool", "KeyM"),
+        ("hotkeys.ellipseSelectTool", "Shift+KeyM"),
+        ("hotkeys.lassoSelectTool", "KeyL"),
+        ("hotkeys.magicWandTool", "KeyW"),
+        ("hotkeys.clearSelection", "$mod+KeyD"),
+        ("hotkeys.invertSelection", "$mod+Shift+KeyI"),
+        ("hotkeys.clearSelectionContents", "Delete"),
+        ("hotkeys.isolateLayer", ""),
+        ("bindings.layerEye.alt+click", "isolateLayer"),
+        ("bindings.maskThumb.alt+click", "isolateMask"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -58,6 +75,13 @@ fn preset_gimp() -> HashMap<String, ConfigValue> {
         ("hotkeys.fillTool", "Shift+KeyB"),
         ("hotkeys.gradientTool", "KeyG"),
         ("hotkeys.colorPickerTool", "KeyO"),
+        ("hotkeys.rectSelectTool", "KeyR"),
+        ("hotkeys.ellipseSelectTool", "KeyE"),
+        ("hotkeys.lassoSelectTool", "KeyF"),
+        ("hotkeys.magicWandTool", "KeyU"),
+        ("hotkeys.clearSelection", "$mod+Shift+KeyA"),
+        ("hotkeys.invertSelection", "$mod+KeyI"),
+        ("hotkeys.clearSelectionContents", "Delete"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), ConfigValue::Str(v.to_string())))
@@ -112,8 +136,10 @@ impl Config {
         d!("ui.leftSidebarWidth",  int 48);
         d!("ui.rightSidebarWidth", int 260);
 
-        // Animation
-        d!("animation.fps", int 24);
+        // Animation — frame scheduler divisors (fraction of master rAF rate).
+        // Divisor 1 = every frame (100%), 2 = every other frame (50%), 4 = every 4th (25%).
+        d!("animation.veil_divisor", int 2);
+        d!("animation.overlay_divisor", int 4);
 
         // Hotkeys — navigation
         d!("hotkeys.nav.trigger", str "Space");
@@ -134,12 +160,40 @@ impl Config {
         d!("hotkeys.fillTool",        str "KeyF");
         d!("hotkeys.gradientTool",    str "KeyG");
         d!("hotkeys.colorPickerTool", str "KeyP");
+        d!("hotkeys.rectSelectTool",    str "KeyR");
+        d!("hotkeys.ellipseSelectTool", str "KeyJ");
+        d!("hotkeys.lassoSelectTool",   str "KeyL");
+        d!("hotkeys.magicWandTool",     str "KeyW");
+        d!("hotkeys.transformTool",     str "KeyT");
+
+        // Hotkeys — clipboard (universal — same across all presets)
+        d!("hotkeys.copy",         str "$mod+KeyC");
+        d!("hotkeys.cut",          str "$mod+KeyX");
+        d!("hotkeys.paste",        str "$mod+KeyV");
+        d!("hotkeys.pasteInPlace", str "$mod+Shift+KeyV");
+
+        // Hotkeys — selection (default follows Krita)
+        d!("hotkeys.selectAll",               str "$mod+KeyA");
+        d!("hotkeys.clearSelection",          str "$mod+Shift+KeyA");
+        d!("hotkeys.invertSelection",         str "$mod+Shift+KeyI");
+        d!("hotkeys.clearSelectionContents",  str "Delete");
+
+        // Hotkeys — floating content / transform
+        d!("hotkeys.commitFloating", str "Enter");
+        d!("hotkeys.cancelFloating", str "Escape");
 
         // Hotkeys — brush controls
         d!("hotkeys.brushSizeUp",   str "BracketRight");
         d!("hotkeys.brushSizeDown", str "BracketLeft");
-        d!("hotkeys.opacityUp",     str "KeyO");
-        d!("hotkeys.opacityDown",   str "KeyI");
+
+        // Hotkeys — layers
+        d!("hotkeys.isolateLayer",  str "KeyI");
+
+        // UI bindings — modifier+click on UI elements → action name (empty = no action)
+        d!("bindings.layerEye.alt+click",       str "");
+        d!("bindings.layerEye.ctrl+click",      str "");
+        d!("bindings.layerThumb.alt+click",     str "");
+        d!("bindings.maskThumb.ctrl+click",     str "");
 
         Config {
             defaults,
@@ -270,17 +324,18 @@ mod tests {
 
     #[test]
     fn defaults_are_set() {
-        assert_eq!(get_i64("animation.fps"), 24);
+        assert_eq!(get_i64("animation.veil_divisor"), 2);
+        assert_eq!(get_i64("animation.overlay_divisor"), 4);
         assert_eq!(get_str("hotkeys.nav.trigger"), "Space");
         assert_eq!(get_i64("canvas.width"), 1920);
     }
 
     #[test]
     fn user_override_wins() {
-        set("animation.fps", ConfigValue::Int(30));
-        assert_eq!(get_i64("animation.fps"), 30);
-        reset("animation.fps");
-        assert_eq!(get_i64("animation.fps"), 24);
+        set("animation.veil_divisor", ConfigValue::Int(1));
+        assert_eq!(get_i64("animation.veil_divisor"), 1);
+        reset("animation.veil_divisor");
+        assert_eq!(get_i64("animation.veil_divisor"), 2);
     }
 
     #[test]
@@ -304,15 +359,15 @@ mod tests {
 
     #[test]
     fn reset_all_clears_overrides() {
-        set("animation.fps", ConfigValue::Int(60));
+        set("animation.veil_divisor", ConfigValue::Int(1));
         set("canvas.width", ConfigValue::Int(3840));
         reset_all();
-        assert_eq!(get_i64("animation.fps"), 24);
+        assert_eq!(get_i64("animation.veil_divisor"), 2);
         assert_eq!(get_i64("canvas.width"), 1920);
     }
 
     #[test]
     fn get_f64_coerces_int() {
-        assert_eq!(get_f64("animation.fps"), 24.0);
+        assert_eq!(get_f64("animation.veil_divisor"), 2.0);
     }
 }

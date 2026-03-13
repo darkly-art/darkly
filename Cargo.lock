@@ -173,6 +173,7 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "log",
+ "naga",
  "pollster",
  "serde",
  "serde_json",

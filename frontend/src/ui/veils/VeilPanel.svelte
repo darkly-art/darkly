@@ -4,6 +4,7 @@
 
     function refresh() {
         app.refreshVeilList();
+        app.requestFrame();
     }
 
     $effect(() => {
@@ -14,7 +15,7 @@
 
     function addPixelate() {
         if (app.handle) {
-            app.handle.add_veil('pixelate', { scale: 2, soft: true });
+            app.handle.add_veil('pixelate', { scale: 2, soft: false });
             refresh();
         }
     }

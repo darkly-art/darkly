@@ -6,9 +6,7 @@
 //! on native wgpu (software backend) and prints per-phase timing.
 
 use darkly::document::Document;
-use darkly::layer::Layer;
 use darkly::gpu::compositor::Compositor;
-use darkly::gpu::filters::noise::Noise;
 use std::time::Instant;
 
 /// Request a headless wgpu device (no window, no surface).
@@ -103,14 +101,6 @@ fn profile_render_pipeline() {
     let bg_id = doc.add_raster_layer();
     compositor.ensure_raster_layer(&device, &queue, bg_id);
     doc.fill_gradient(bg_id);
-
-    let accum_format = compositor.accum_format();
-    let noise_pipeline = compositor.filter_registry_mut().pipeline("noise", &device, accum_format);
-    let noise = Noise::new(0.3, 2, noise_pipeline);
-    let noise_id = doc.add_filter_layer(Box::new(noise));
-    if let Some(Layer::Filter(f)) = doc.layer(noise_id) {
-        compositor.ensure_filter_layer(&device, &queue, noise_id, f.filter.as_ref());
-    }
 
     let paint_id = doc.add_raster_layer();
     compositor.ensure_raster_layer(&device, &queue, paint_id);

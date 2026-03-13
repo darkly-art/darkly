@@ -50,14 +50,24 @@
         {/each}
     </div>
 
-    <!-- Brush size display -->
-    <div class="info-display">
-        <span class="info-label">Size</span>
-        <span class="info-value">{app.brushSize}</span>
+    <!-- Brush controls -->
+    <div class="slider-group">
+        <span class="slider-label">Size: {app.brushSize}</span>
+        <input
+            type="range"
+            class="sidebar-slider"
+            min="1" max="500" step="1"
+            bind:value={app.brushSize}
+        />
     </div>
-    <div class="info-display">
-        <span class="info-label">Opacity</span>
-        <span class="info-value">{Math.round(app.brushOpacity * 100)}%</span>
+    <div class="slider-group">
+        <span class="slider-label">Opacity: {Math.round(app.brushOpacity * 100)}%</span>
+        <input
+            type="range"
+            class="sidebar-slider"
+            min="0" max="1" step="0.01"
+            bind:value={app.brushOpacity}
+        />
     </div>
 </div>
 
@@ -155,23 +165,50 @@
         border-color: #6a6aff;
     }
 
-    .info-display {
+    .slider-group {
         display: flex;
         flex-direction: column;
         align-items: center;
-        font-size: 9px;
-        color: #888;
-        margin-top: 4px;
+        width: 100%;
+        padding: 0 4px;
+        margin-top: 6px;
     }
 
-    .info-label {
+    .slider-label {
         font-size: 8px;
+        color: #888;
         text-transform: uppercase;
         letter-spacing: 0.5px;
+        margin-bottom: 2px;
     }
 
-    .info-value {
-        color: #ccc;
-        font-size: 10px;
+    .sidebar-slider {
+        width: 40px;
+        height: 4px;
+        -webkit-appearance: none;
+        appearance: none;
+        background: #444;
+        border-radius: 2px;
+        outline: none;
+        cursor: pointer;
+    }
+
+    .sidebar-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #6a6aff;
+        cursor: pointer;
+    }
+
+    .sidebar-slider::-moz-range-thumb {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #6a6aff;
+        border: none;
+        cursor: pointer;
     }
 </style>

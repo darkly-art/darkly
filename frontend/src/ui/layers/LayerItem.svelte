@@ -1,27 +1,130 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
+    import { getLayerThumbnail, getMaskThumbnail, THUMB_SIZE } from './thumbnails';
+    import { dispatchBinding } from '../../actions/triggers';
+    import { actions } from '../../actions/registry';
+    import { config } from '../../config/store.svelte';
 
     let { layer, depth = 0, onupdate }: {
-        layer: { type: string; id: number; name: string; visible: boolean; opacity?: number; blendMode?: number };
+        layer: {
+            type: string; id: number; name: string; visible: boolean;
+            opacity?: number; blendMode?: number;
+            hasMask?: boolean; maskEnabled?: boolean; showMask?: boolean;
+        };
         depth?: number;
         onupdate: () => void;
     } = $props();
 
     let isActive = $derived(app.activeLayerId === layer.id);
+    let isEditingMask = $derived(app.editingMaskLayerId === layer.id);
     let editing = $state(false);
     let editInput = $state<HTMLInputElement | null>(null);
     let dropPos = $state<'none' | 'above' | 'below'>('none');
 
+    // Thumbnails — regenerated when layer data changes (onupdate triggers re-render)
+    let layerThumb = $derived(layer.type === 'raster' && app.handle ? getLayerThumbnail(layer.id) : '');
+    let maskThumb = $derived(layer.hasMask && app.handle ? getMaskThumbnail(layer.id) : '');
+
+    // Mask context menu
+    let showMaskMenu = $state(false);
+    let maskMenuX = $state(0);
+    let maskMenuY = $state(0);
+
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (app.handle) {
-            app.handle.set_layer_visible(layer.id, !layer.visible);
+        if (dispatchBinding('layerEye', e, { layerId: layer.id }, config)) {
             onupdate();
+            return;
         }
+        // Default: plain click toggles visibility
+        actions.dispatch('toggleVisibility', { layerId: layer.id });
+        onupdate();
     }
 
     function setActive() {
         app.activeLayerId = layer.id;
+        // If we're clicking the layer row (not the mask thumb), switch to layer editing
+        if (isEditingMask) {
+            app.editingMaskLayerId = null;
+            app.handle?.set_editing_mask(layer.id, false);
+            onupdate();
+        }
+    }
+
+    function clickLayerThumb(e: MouseEvent) {
+        e.stopPropagation();
+        app.activeLayerId = layer.id;
+        if (isEditingMask) {
+            app.editingMaskLayerId = null;
+            app.handle?.set_editing_mask(layer.id, false);
+            onupdate();
+        }
+    }
+
+    function clickMaskThumb(e: MouseEvent) {
+        e.stopPropagation();
+        if (dispatchBinding('maskThumb', e, { layerId: layer.id }, config)) {
+            onupdate();
+            return;
+        }
+        // Default: plain click toggles mask editing mode
+        app.activeLayerId = layer.id;
+        if (!isEditingMask) {
+            app.editingMaskLayerId = layer.id;
+            app.handle?.set_editing_mask(layer.id, true);
+        } else {
+            app.editingMaskLayerId = null;
+            app.handle?.set_editing_mask(layer.id, false);
+        }
+        onupdate();
+    }
+
+    function onMaskContextMenu(e: MouseEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        maskMenuX = e.clientX;
+        maskMenuY = e.clientY;
+        showMaskMenu = true;
+
+        // Close on next click anywhere
+        const close = () => { showMaskMenu = false; document.removeEventListener('click', close); };
+        requestAnimationFrame(() => document.addEventListener('click', close));
+    }
+
+    function toggleMaskEnabled() {
+        if (app.handle) {
+            app.handle.set_mask_enabled(layer.id, !layer.maskEnabled);
+            onupdate();
+        }
+    }
+
+    function toggleShowMask() {
+        if (app.handle) {
+            app.handle.set_show_mask(layer.id, !layer.showMask);
+            onupdate();
+        }
+    }
+
+    function applyMask() {
+        if (app.handle) {
+            if (isEditingMask) {
+                app.editingMaskLayerId = null;
+                app.handle.set_editing_mask(layer.id, false);
+            }
+            app.handle.apply_mask(layer.id);
+            onupdate();
+        }
+    }
+
+    function removeMask() {
+        if (app.handle) {
+            if (isEditingMask) {
+                app.editingMaskLayerId = null;
+                app.handle.set_editing_mask(layer.id, false);
+            }
+            app.handle.remove_mask(layer.id);
+            onupdate();
+        }
     }
 
     function startRename() {
@@ -64,7 +167,6 @@
     }
 
     function onDragLeave(e: DragEvent) {
-        // Only clear if leaving the element entirely (not entering a child)
         const related = e.relatedTarget as Node | null;
         if (!related || !(e.currentTarget as HTMLElement).contains(related)) {
             dropPos = 'none';
@@ -120,6 +222,34 @@
         {layer.visible ? '\u{1F441}' : '\u{2014}'}
     </button>
 
+    {#if layer.type === 'raster' && layerThumb}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <img
+            class="thumb"
+            class:thumb-active={isActive && !isEditingMask}
+            src={layerThumb}
+            alt="layer"
+            width={THUMB_SIZE}
+            height={THUMB_SIZE}
+            onclick={clickLayerThumb}
+        />
+    {/if}
+
+    {#if layer.hasMask && maskThumb}
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <img
+            class="thumb"
+            class:thumb-active={isEditingMask}
+            class:mask-disabled={!layer.maskEnabled}
+            src={maskThumb}
+            alt="mask"
+            width={THUMB_SIZE}
+            height={THUMB_SIZE}
+            onclick={clickMaskThumb}
+            oncontextmenu={onMaskContextMenu}
+        />
+    {/if}
+
     {#if editing}
         <input
             class="name-input"
@@ -149,6 +279,19 @@
         />
     {/if}
 </div>
+
+{#if showMaskMenu}
+    <div class="mask-menu" style:left="{maskMenuX}px" style:top="{maskMenuY}px">
+        <button onclick={toggleMaskEnabled}>
+            {layer.maskEnabled ? 'Disable mask' : 'Enable mask'}
+        </button>
+        <button onclick={toggleShowMask}>
+            {layer.showMask ? 'Hide mask' : 'Show mask'}
+        </button>
+        <button onclick={applyMask}>Apply mask</button>
+        <button onclick={removeMask}>Remove mask</button>
+    </div>
+{/if}
 
 <style>
     .layer-item {
@@ -202,8 +345,25 @@
         font-size: 12px;
         width: 18px;
         text-align: center;
+        flex-shrink: 0;
     }
     .vis-btn.hidden { color: #444; }
+
+    .thumb {
+        border: 2px solid #444;
+        border-radius: 2px;
+        flex-shrink: 0;
+        cursor: pointer;
+        image-rendering: pixelated;
+    }
+
+    .thumb-active {
+        border-color: #6a6aff;
+    }
+
+    .mask-disabled {
+        opacity: 0.4;
+    }
 
     .layer-name {
         flex: 1;
@@ -212,6 +372,7 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        min-width: 0;
     }
 
     .name-input {
@@ -223,11 +384,40 @@
         font-size: 12px;
         padding: 1px 4px;
         outline: none;
+        min-width: 0;
     }
 
     .opacity-slider {
         width: 50px;
         height: 12px;
         accent-color: #6a6aff;
+        flex-shrink: 0;
+    }
+
+    .mask-menu {
+        position: fixed;
+        z-index: 1000;
+        background: #2a2a2a;
+        border: 1px solid #555;
+        border-radius: 4px;
+        padding: 4px 0;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+
+    .mask-menu button {
+        display: block;
+        width: 100%;
+        background: none;
+        border: none;
+        color: #ccc;
+        font-size: 12px;
+        padding: 6px 16px;
+        text-align: left;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .mask-menu button:hover {
+        background: #3a3a4a;
     }
 </style>

@@ -1,5 +1,4 @@
-use crate::gpu::filter::Filter;
-use crate::tile::TileGrid;
+use crate::tile::{MaskSurface, RasterSurface};
 
 pub type LayerId = u64;
 
@@ -27,10 +26,16 @@ impl BlendMode {
 pub struct RasterLayer {
     pub id: LayerId,
     pub name: String,
-    pub tiles: TileGrid,
+    pub surface: RasterSurface,
     pub opacity: f32,
     pub blend_mode: BlendMode,
     pub visible: bool,
+    /// Optional layer mask (white=reveal, black=hide). Modulates alpha during compositing.
+    pub mask: Option<MaskSurface>,
+    /// Whether the mask affects compositing (GIMP's `apply_mask`).
+    pub mask_enabled: bool,
+    /// Display the mask as grayscale instead of layer content.
+    pub show_mask: bool,
 }
 
 impl RasterLayer {
@@ -38,18 +43,15 @@ impl RasterLayer {
         RasterLayer {
             id,
             name: format!("Layer {id}"),
-            tiles: TileGrid::new(),
+            surface: RasterSurface::new(),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             visible: true,
+            mask: None,
+            mask_enabled: true,
+            show_mask: false,
         }
     }
-}
-
-pub struct FilterLayer {
-    pub id: LayerId,
-    pub filter: Box<dyn Filter>,
-    pub visible: bool,
 }
 
 pub struct LayerGroup {
@@ -61,6 +63,10 @@ pub struct LayerGroup {
     pub visible: bool,
     pub passthrough: bool,  // true = passthrough (default), false = normal group
     pub collapsed: bool,    // UI state: whether the group is visually collapsed
+    /// Optional group mask. For passthrough groups, applied via snapshot-lerp (Photoshop behavior).
+    pub mask: Option<MaskSurface>,
+    pub mask_enabled: bool,
+    pub show_mask: bool,
 }
 
 impl LayerGroup {
@@ -74,9 +80,38 @@ impl LayerGroup {
             visible: true,
             passthrough: true,
             collapsed: false,
+            mask: None,
+            mask_enabled: true,
+            show_mask: false,
         }
     }
 }
+
+/// Common mask interface shared by RasterLayer and LayerGroup.
+pub trait Masked {
+    fn mask(&self) -> &Option<MaskSurface>;
+    fn mask_mut(&mut self) -> &mut Option<MaskSurface>;
+    fn mask_enabled(&self) -> bool;
+    fn set_mask_enabled(&mut self, enabled: bool);
+    fn show_mask(&self) -> bool;
+    fn set_show_mask(&mut self, show: bool);
+}
+
+macro_rules! impl_masked {
+    ($t:ty) => {
+        impl Masked for $t {
+            fn mask(&self) -> &Option<MaskSurface> { &self.mask }
+            fn mask_mut(&mut self) -> &mut Option<MaskSurface> { &mut self.mask }
+            fn mask_enabled(&self) -> bool { self.mask_enabled }
+            fn set_mask_enabled(&mut self, enabled: bool) { self.mask_enabled = enabled; }
+            fn show_mask(&self) -> bool { self.show_mask }
+            fn set_show_mask(&mut self, show: bool) { self.show_mask = show; }
+        }
+    };
+}
+
+impl_masked!(RasterLayer);
+impl_masked!(LayerGroup);
 
 /// A node in the layer tree. Either a leaf layer or a group containing children.
 pub enum LayerNode {
@@ -98,25 +133,36 @@ impl LayerNode {
             LayerNode::Group(g) => g.visible,
         }
     }
+
+    pub fn as_masked(&self) -> &dyn Masked {
+        match self {
+            LayerNode::Layer(Layer::Raster(r)) => r,
+            LayerNode::Group(g) => g,
+        }
+    }
+
+    pub fn as_masked_mut(&mut self) -> &mut dyn Masked {
+        match self {
+            LayerNode::Layer(Layer::Raster(r)) => r,
+            LayerNode::Group(g) => g,
+        }
+    }
 }
 
 pub enum Layer {
     Raster(RasterLayer),
-    Filter(FilterLayer),
 }
 
 impl Layer {
     pub fn id(&self) -> LayerId {
         match self {
             Layer::Raster(r) => r.id,
-            Layer::Filter(f) => f.id,
         }
     }
 
     pub fn visible(&self) -> bool {
         match self {
             Layer::Raster(r) => r.visible,
-            Layer::Filter(f) => f.visible,
         }
     }
 }

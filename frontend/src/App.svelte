@@ -3,6 +3,7 @@
     import CanvasView from './canvas/CanvasView.svelte';
     import RightSidebar from './ui/RightSidebar.svelte';
     import Toast from './ui/Toast.svelte';
+    import PresetPicker from './ui/PresetPicker.svelte';
     // Register all tools
     import './tools/index';
     // Initialize hotkeys
@@ -15,6 +16,7 @@
     <RightSidebar />
 </div>
 <Toast />
+<PresetPicker />
 
 <style>
     :global(body) {

@@ -1,8 +1,14 @@
+pub mod clipboard;
 pub mod config;
 pub mod dirty;
 pub mod document;
 pub mod engine;
 pub mod layer;
+pub mod mask;
+pub mod paint;
+pub mod sdf;
 pub mod tile;
+pub mod tool;
+pub mod tools;
 pub mod undo;
 pub mod gpu;

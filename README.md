@@ -54,18 +54,13 @@ npm run dev
 
 Open the URL printed by vite (typically `https://localhost:5173`). Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox Nightly with flag).
 
-**GPU backend configuration (Linux):** Chrome's WebGPU defaults to a software rasterizer on many Linux setups. For real GPU performance you typically need two flags:
+**GPU backend configuration (Linux):** Chrome's WebGPU defaults to a software rasterizer on many Linux setups. Launch Chromium with GPU and Vulkan support:
 
-1. **Enable Unsafe WebGPU** — allows Chrome to use GPU backends it considers experimental:
-   ```
-   chrome://flags/#enable-unsafe-webgpu  →  Enabled
-   ```
-2. **Enable Vulkan** — switches the graphics backend from SwiftShader (CPU) to your actual GPU:
-   ```
-   chrome://flags/#enable-vulkan  →  Enabled
-   ```
+```sh
+chromium --enable-features=Vulkan --enable-unsafe-webgpu
+```
 
-Restart Chrome after changing flags. You can verify the active backend at `chrome://gpu` — look for "Vulkan" under Graphics Feature Status. On macOS and Windows these flags are generally not needed (Metal and D3D12 are used by default).
+You can verify the active backend at `chrome://gpu` — look for "Vulkan" under Graphics Feature Status. On macOS and Windows this is generally not needed (Metal and D3D12 are used by default).
 
 ### Electron mode (napi-rs + native GPU) — planned
 

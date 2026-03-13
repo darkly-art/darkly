@@ -23,6 +23,7 @@
             canvas.width = w;
             canvas.height = h;
             app.handle?.resize(w, h);
+            app.requestFrame();
         }
     }
 
@@ -38,13 +39,12 @@
             handle.resize(canvas.width, canvas.height);
             app.handle = handle;
 
-            // Demo setup: gradient background + noise filter + paint layer
+            // Demo setup: gradient background + paint layer in a group
             const bg = handle.add_raster_layer();
             handle.fill_gradient(bg);
 
-            handle.add_filter_layer("noise", { amount: 0.3, resolution: 2 });
-
-            const paintLayerId = handle.add_raster_layer();
+            const groupId = handle.add_group();
+            const paintLayerId = handle.add_raster_layer_in(groupId);
             app.activeLayerId = paintLayerId;
 
             // Observe element resizes to keep GPU surface in sync
@@ -58,8 +58,8 @@
             const fitZoom = Math.min(dprRect.w / docW, dprRect.h / docH, 1);
             app.zoom = fitZoom;
 
-            // Start render loop
-            requestAnimationFrame(renderLoop);
+            // Kick the first frame
+            app.requestFrame();
 
             // Check GPU status and notify user
             checkGpu().then(result => {
@@ -71,12 +71,6 @@
         }
     });
 
-    function renderLoop() {
-        if (app.handle) {
-            app.handle.render(performance.now() / 1000.0);
-        }
-        requestAnimationFrame(renderLoop);
-    }
 
     function getToolContext(): ToolContext | null {
         if (!app.handle) return null;
@@ -123,6 +117,7 @@
         const pos = getCanvasCoords(e);
         const tool = toolRegistry.get(app.activeToolId);
         tool?.onPointerDown(ctx, e, pos.x, pos.y);
+        app.requestFrame();
     }
 
     function onPointerMove(e: PointerEvent) {
@@ -142,6 +137,7 @@
         const pos = getCanvasCoords(e);
         const tool = toolRegistry.get(app.activeToolId);
         tool?.onPointerMove(ctx, e, pos.x, pos.y);
+        app.requestFrame();
     }
 
     function onPointerUp(e: PointerEvent) {
@@ -161,6 +157,7 @@
         if (!ctx) return;
         const tool = toolRegistry.get(app.activeToolId);
         tool?.onPointerUp(ctx, e);
+        app.requestFrame();
     }
 
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
@@ -172,7 +169,22 @@
         const tool = toolRegistry.get(app.activeToolId);
         if (tool?.onKeyDown?.(e)) return;
         tool?.dismissOverlay?.();
+        app.requestFrame();
     }
+
+    // Call onDeactivate/onActivate when the active tool changes.
+    let prevToolId = app.activeToolId;
+    $effect(() => {
+        const id = app.activeToolId;
+        if (id !== prevToolId) {
+            const ctx = getToolContext();
+            if (ctx) {
+                toolRegistry.get(prevToolId)?.onDeactivate?.(ctx);
+                toolRegistry.get(id)?.onActivate?.(ctx);
+            }
+            prevToolId = id;
+        }
+    });
 
     // Dismiss tool overlay when the active layer changes.
     let prevLayerId = app.activeLayerId;
@@ -196,6 +208,7 @@
                 app.zoom, app.rotation,
                 canvas.width, canvas.height,
             );
+            app.requestFrame();
         }
     });
 </script>
@@ -212,7 +225,7 @@
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
-        onwheel={(e: WheelEvent) => nav.onWheel(e, canvas)}
+        onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); app.requestFrame(); }}
     ></canvas>
     {#if canvas}
         <ToolOverlay canvasEl={canvas} />

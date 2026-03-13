@@ -6,6 +6,7 @@
 
     function refresh() {
         app.refreshLayerTree();
+        app.requestFrame();
     }
 
     // Refresh whenever handle becomes available
@@ -43,6 +44,33 @@
         }
     }
 
+    function addMask() {
+        if (!app.handle || app.activeLayerId === null) return;
+        // Find the active layer info to check if it's raster and doesn't already have a mask
+        const layer = findLayer(app.layerTree, app.activeLayerId);
+        if (!layer || layer.hasMask) return;
+        if (layer.type !== 'raster' && layer.type !== 'group') return;
+        app.handle.add_mask(app.activeLayerId);
+        refresh();
+    }
+
+    function findLayer(nodes: any[], id: number): any | null {
+        for (const n of nodes) {
+            if (n.id === id) return n;
+            if (n.children) {
+                const found = findLayer(n.children, id);
+                if (found) return found;
+            }
+        }
+        return null;
+    }
+
+    let canAddMask = $derived(() => {
+        if (!app.handle || app.activeLayerId === null) return false;
+        const layer = findLayer(app.layerTree, app.activeLayerId);
+        return (layer?.type === 'raster' || layer?.type === 'group') && !layer.hasMask;
+    });
+
     function onDragOver(e: DragEvent) {
         e.preventDefault();
     }
@@ -76,6 +104,7 @@
     <div class="panel-actions">
         <button class="action-btn" onclick={addLayer} title="Add layer">+</button>
         <button class="action-btn" onclick={addGroup} title="Add group">&#x1F4C1;</button>
+        <button class="action-btn" onclick={addMask} disabled={!canAddMask()} title="Add layer mask">&#x25D0;</button>
         <button class="action-btn" onclick={removeLayer} title="Delete layer">&#x1F5D1;</button>
     </div>
 </div>
@@ -128,7 +157,12 @@
         font-size: 14px;
     }
 
-    .action-btn:hover {
+    .action-btn:hover:not(:disabled) {
         background: #333;
+    }
+
+    .action-btn:disabled {
+        opacity: 0.35;
+        cursor: default;
     }
 </style>

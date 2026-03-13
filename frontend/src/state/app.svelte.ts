@@ -17,6 +17,9 @@ class AppState {
     // Active layer
     activeLayerId = $state<number | null>(null);
 
+    // Mask editing — which layer's mask is the current paint target (null = editing layer content)
+    editingMaskLayerId = $state<number | null>(null);
+
     // Tool runtime state -- working values adjusted while painting.
     brushSize = $state(24);
     brushOpacity = $state(1.0);
@@ -59,6 +62,22 @@ class AppState {
             const list = this.handle.veil_list();
             this.veilList = Array.isArray(list) ? list : [];
         }
+    }
+
+    // --- Demand-driven rendering ---
+
+    private _framePending = false;
+
+    /** Schedule a render frame if one isn't already pending. */
+    requestFrame() {
+        if (this._framePending) return;
+        this._framePending = true;
+        requestAnimationFrame((ts) => {
+            this._framePending = false;
+            if (!this.handle) return;
+            const needsMore = this.handle.render(ts / 1000.0);
+            if (needsMore) this.requestFrame();
+        });
     }
 }
 

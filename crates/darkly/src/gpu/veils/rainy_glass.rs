@@ -6,7 +6,7 @@ use std::sync::Arc;
 /// is derived from this so that landscape and portrait viewports produce
 /// roughly equal GPU load. sqrt(130_000) ~ 360, so a square viewport
 /// renders at ~360x360. A 16:9 landscape renders at ~480x270.
-const PIXEL_BUDGET: f32 = 130_000.0;
+const PIXEL_BUDGET: f32 = 200_000.0;
 
 const PARAMS: &[ParamDef] = &[
     ParamDef::Float { name: "speed",       min: 0.0, max: 3.0, default: 1.0 },
