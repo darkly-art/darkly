@@ -143,13 +143,15 @@ impl FloatingContent {
     }
 
     /// Bilinear sample from source_tiles at a fractional source-local position.
-    /// Returns [r, g, b, a] or [0,0,0,0] if out of bounds.
+    /// Uses premultiplied-alpha interpolation with clamp-to-edge (matching GPU
+    /// hardware samplers). Returns straight-alpha [r, g, b, a].
     fn sample_bilinear(&self, sx: f32, sy: f32) -> [u8; 4] {
         let (ox, oy) = self.source_origin;
-        let w = self.source_width as f32;
-        let h = self.source_height as f32;
+        let w = self.source_width as i32;
+        let h = self.source_height as i32;
 
-        if sx < 0.0 || sy < 0.0 || sx >= w || sy >= h {
+        // Reject samples whose center is outside content bounds
+        if sx < 0.0 || sy < 0.0 || sx >= w as f32 || sy >= h as f32 {
             return [0, 0, 0, 0];
         }
 
@@ -158,12 +160,13 @@ impl FloatingContent {
         let fx = sx - ix as f32;
         let fy = sy - iy as f32;
 
+        // Clamp-to-edge: OOB kernel pixels snap to nearest valid pixel,
+        // matching GPU hardware sampler behavior.
         let get_pixel = |px: i32, py: i32| -> [f32; 4] {
-            if px < 0 || py < 0 || px >= w as i32 || py >= h as i32 {
-                return [0.0; 4];
-            }
-            let canvas_x = px + ox;
-            let canvas_y = py + oy;
+            let cx = px.clamp(0, w - 1);
+            let cy = py.clamp(0, h - 1);
+            let canvas_x = cx + ox;
+            let canvas_y = cy + oy;
             let (tx, ty) = TileGrid::tile_coords_for_pixel(canvas_x, canvas_y);
             let ts = TILE_SIZE as i32;
             let lx = canvas_x.rem_euclid(ts) as usize;
@@ -171,7 +174,9 @@ impl FloatingContent {
             match self.source_tiles.get(tx, ty) {
                 Some(tile) => {
                     let p = tile.data().pixel(lx, ly);
-                    [p[0] as f32, p[1] as f32, p[2] as f32, p[3] as f32]
+                    // Return as premultiplied for correct interpolation
+                    let a = p[3] as f32 / 255.0;
+                    [p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, p[3] as f32]
                 }
                 None => [0.0; 4],
             }
@@ -182,15 +187,27 @@ impl FloatingContent {
         let p01 = get_pixel(ix, iy + 1);
         let p11 = get_pixel(ix + 1, iy + 1);
 
+        // Interpolate in premultiplied space
         let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-        let mut result = [0u8; 4];
+        let mut pm = [0.0f32; 4];
         for c in 0..4 {
             let top = lerp(p00[c], p10[c], fx);
             let bot = lerp(p01[c], p11[c], fx);
-            let val = lerp(top, bot, fy);
-            result[c] = val.round().clamp(0.0, 255.0) as u8;
+            pm[c] = lerp(top, bot, fy);
         }
-        result
+
+        // Un-premultiply back to straight alpha for storage
+        let out_a = pm[3];
+        if out_a < 0.5 {
+            return [0, 0, 0, 0];
+        }
+        let inv_a = 255.0 / out_a;
+        [
+            (pm[0] * inv_a).round().clamp(0.0, 255.0) as u8,
+            (pm[1] * inv_a).round().clamp(0.0, 255.0) as u8,
+            (pm[2] * inv_a).round().clamp(0.0, 255.0) as u8,
+            out_a.round().clamp(0.0, 255.0) as u8,
+        ]
     }
 
     /// CPU-side rasterization: write transformed source pixels into a target
@@ -306,18 +323,9 @@ impl FloatingContent {
                     continue;
                 }
 
-                // Convert RGBA to alpha via luminance (un-premultiply first)
+                // Convert straight-alpha RGBA to mask value via luminance
                 let a = fg[3] as f32 / 255.0;
-                let (r, g, b) = if a > 0.0 {
-                    (
-                        (fg[0] as f32 / a).min(255.0),
-                        (fg[1] as f32 / a).min(255.0),
-                        (fg[2] as f32 / a).min(255.0),
-                    )
-                } else {
-                    (0.0, 0.0, 0.0)
-                };
-                let lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
+                let lum = (0.2126 * fg[0] as f32 + 0.7152 * fg[1] as f32 + 0.0722 * fg[2] as f32) / 255.0;
                 let alpha_val = lum * a;
 
                 if alpha_val <= 0.0 {

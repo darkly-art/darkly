@@ -62,8 +62,8 @@ struct Uniforms {
         return bg;
     }
 
-    // Normal blend (premultiplied alpha)
+    // Normal blend — straight alpha Porter-Duff source-over
     let out_a = a + bg.a * (1.0 - a);
-    let out_rgb = fg.rgb * u.opacity + bg.rgb * (1.0 - a);
+    let out_rgb = (fg.rgb * a + bg.rgb * bg.a * (1.0 - a)) / max(out_a, 0.001);
     return vec4f(out_rgb, out_a);
 }

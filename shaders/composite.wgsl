@@ -31,36 +31,25 @@ struct Uniforms {
 @group(1) @binding(0) var t_mask: texture_2d<f32>;
 
 fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
-    let fg_pre = fg.rgb * fg.a;
-    let bg_pre = bg.rgb * bg.a;
-    var blended_rgb: vec3f;
-
+    // Blend modes operate on straight-alpha colors (PDF/SVG spec).
+    var Cs: vec3f;
     switch mode {
-        // Normal
-        case 0u: {
-            blended_rgb = fg_pre;
+        case 0u: { Cs = fg.rgb; }                                    // Normal
+        case 1u: { Cs = fg.rgb * bg.rgb; }                           // Multiply
+        case 2u: { Cs = fg.rgb + bg.rgb - fg.rgb * bg.rgb; }         // Screen
+        case 3u: {                                                    // Overlay
+            let lo = 2.0 * fg.rgb * bg.rgb;
+            let hi = 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb);
+            Cs = select(hi, lo, bg.rgb < vec3f(0.5));
         }
-        // Multiply
-        case 1u: {
-            blended_rgb = fg_pre * bg_pre;
-        }
-        // Screen
-        case 2u: {
-            blended_rgb = fg_pre + bg_pre - fg_pre * bg_pre;
-        }
-        // Overlay
-        case 3u: {
-            let lo = 2.0 * fg_pre * bg_pre;
-            let hi = 1.0 - 2.0 * (1.0 - fg_pre) * (1.0 - bg_pre);
-            blended_rgb = select(hi, lo, bg_pre < vec3f(0.5));
-        }
-        default: {
-            blended_rgb = fg_pre;
-        }
+        default: { Cs = fg.rgb; }
     }
 
+    // Porter-Duff source-over compositing (PDF 11.3.7):
+    // Cr = (αs · lerp(Cs_src, B(Cs,Cb), αb) + (1−αs)·αb·Cb) / αo
     let out_a = fg.a + bg.a * (1.0 - fg.a);
-    let out_rgb = mix(bg_pre, blended_rgb, fg.a) / max(out_a, 0.001);
+    let out_rgb = (fg.a * mix(fg.rgb, Cs, bg.a) + (1.0 - fg.a) * bg.a * bg.rgb)
+               / max(out_a, 0.001);
     return vec4f(out_rgb, out_a);
 }
 
