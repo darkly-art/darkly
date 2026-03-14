@@ -4,6 +4,7 @@
 
 pub mod bokeh;
 pub mod kuwahara;
+pub mod monochrome;
 pub mod pixelate;
 pub mod rainy_glass;
 pub mod watercolor;
@@ -14,6 +15,7 @@ pub fn registrations() -> Vec<VeilRegistration> {
     vec![
         bokeh::register(),
         kuwahara::register(),
+        monochrome::register(),
         pixelate::register(),
         rainy_glass::register(),
         watercolor::register(),
