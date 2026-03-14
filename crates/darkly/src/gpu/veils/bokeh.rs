@@ -3,60 +3,52 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int   { name: "kernel_size", min: 1, max: 12, default: 6 },
-    ParamDef::Float { name: "sharpness",   min: 1.0, max: 18.0, default: 8.0 },
-    ParamDef::Float { name: "hardness",    min: 1.0, max: 200.0, default: 100.0 },
+    ParamDef::Float { name: "radius",    min: 0.1, max: 1.0, default: 0.5 },
+    ParamDef::Float { name: "threshold", min: 0.01, max: 1.0, default: 0.1 },
 ];
 
 pub fn register() -> VeilRegistration {
     VeilRegistration {
-        type_id: "kuwahara",
+        type_id: "bokeh",
         params: PARAMS,
-        create_pipeline: create_kuwahara_pipeline,
+        create_pipeline: create_bokeh_pipeline,
         from_params: |params, shared| {
-            let kernel_size = match params.get(0) { Some(ParamValue::Int(v)) => *v, _ => 6 };
-            let sharpness = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 8.0 };
-            let hardness = match params.get(2) { Some(ParamValue::Float(v)) => *v, _ => 100.0 };
-            Box::new(Kuwahara::new(kernel_size, sharpness, hardness, shared))
+            let radius = match params.get(0) { Some(ParamValue::Float(v)) => *v, _ => 0.5 };
+            let threshold = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 0.1 };
+            Box::new(Bokeh::new(radius, threshold, shared))
         },
     }
 }
 
-/// GPU uniforms for the Kuwahara shader.
-/// Layout must match the WGSL `Params` struct exactly.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct KuwaharaUniforms {
-    kernel_size: i32,
-    sharpness: f32,
-    hardness: f32,
-    _pad: f32,
+struct BokehUniforms {
+    radius: f32,
+    threshold: f32,
     resolution_x: f32,
     resolution_y: f32,
 }
 
 #[derive(Clone, Debug)]
-pub struct Kuwahara {
-    pub kernel_size: i32,
-    pub sharpness: f32,
-    pub hardness: f32,
+pub struct Bokeh {
+    pub radius: f32,
+    pub threshold: f32,
     shared: Arc<EffectPipeline>,
 }
 
-impl Kuwahara {
-    pub fn new(kernel_size: i32, sharpness: f32, hardness: f32, shared: Arc<EffectPipeline>) -> Self {
-        Kuwahara {
-            kernel_size: kernel_size.max(1),
-            sharpness,
-            hardness,
+impl Bokeh {
+    pub fn new(radius: f32, threshold: f32, shared: Arc<EffectPipeline>) -> Self {
+        Bokeh {
+            radius: radius.max(0.1),
+            threshold: threshold.max(0.01),
             shared,
         }
     }
 }
 
-impl Veil for Kuwahara {
+impl Veil for Bokeh {
     fn type_id(&self) -> &'static str {
-        "kuwahara"
+        "bokeh"
     }
 
     fn clone_boxed(&self) -> Box<dyn Veil> {
@@ -69,9 +61,8 @@ impl Veil for Kuwahara {
 
     fn param_values(&self) -> Vec<ParamValue> {
         vec![
-            ParamValue::Int(self.kernel_size),
-            ParamValue::Float(self.sharpness),
-            ParamValue::Float(self.hardness),
+            ParamValue::Float(self.radius),
+            ParamValue::Float(self.threshold),
         ]
     }
 
@@ -84,17 +75,15 @@ impl Veil for Kuwahara {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = KuwaharaUniforms {
-            kernel_size: self.kernel_size,
-            sharpness: self.sharpness,
-            hardness: self.hardness,
-            _pad: 0.0,
+        let uniforms = BokehUniforms {
+            radius: self.radius,
+            threshold: self.threshold,
             resolution_x: render_width as f32,
             resolution_y: render_height as f32,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("kuwahara-uniforms"),
-            size: std::mem::size_of::<KuwaharaUniforms>() as u64,
+            label: Some("bokeh-uniforms"),
+            size: std::mem::size_of::<BokehUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -103,7 +92,7 @@ impl Veil for Kuwahara {
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("kuwahara-bg-{i}")),
+                label: Some(&format!("bokeh-bg-{i}")),
                 layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -139,7 +128,7 @@ impl Veil for Kuwahara {
         dst_view: &wgpu::TextureView,
     ) {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("kuwahara"),
+            label: Some("bokeh"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: dst_view,
                 resolve_target: None,
@@ -157,13 +146,13 @@ impl Veil for Kuwahara {
     }
 }
 
-fn create_kuwahara_pipeline(
+fn create_bokeh_pipeline(
     device: &wgpu::Device,
     _format: wgpu::TextureFormat,
 ) -> EffectPipeline {
     let bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("kuwahara-bgl"),
+            label: Some("bokeh-bgl"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -195,20 +184,20 @@ fn create_kuwahara_pipeline(
         });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("kuwahara-pipeline-layout"),
+        label: Some("bokeh-pipeline-layout"),
         bind_group_layouts: &[&bind_group_layout],
         immediate_size: 0,
     });
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("kuwahara-shader"),
+        label: Some("bokeh-shader"),
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/kuwahara.wgsl").into(),
+            include_str!("../../../../../shaders/veils/bokeh.wgsl").into(),
         ),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("kuwahara-pipeline"),
+        label: Some("bokeh-pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -218,7 +207,7 @@ fn create_kuwahara_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_kuwahara"),
+            entry_point: Some("fs_bokeh"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 blend: None,

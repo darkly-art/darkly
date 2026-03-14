@@ -235,6 +235,7 @@ impl Compositor {
         surface_format: wgpu::TextureFormat,
         width: u32,
         height: u32,
+        is_software: bool,
     ) -> Self {
         use crate::tile::TILE_SIZE;
 
@@ -490,6 +491,7 @@ impl Compositor {
             sampler.clone(),
             surface_format,
             accum_format,
+            is_software,
         );
 
         let tool_overlay = ToolOverlay::new(device, surface_format);

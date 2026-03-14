@@ -3,8 +3,8 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int   { name: "iterations", min: 1,   max: 50,  default: 20 },
-    ParamDef::Float { name: "wetness",    min: 0.0, max: 2.0, default: 1.0 },
+    ParamDef::Int   { name: "iterations", min: 1,   max: 50,  default: 5 },
+    ParamDef::Float { name: "wetness",    min: 0.0, max: 2.0, default: 0.5 },
 ];
 
 /// Size of the generated RGBA noise texture used as a flow map.
@@ -143,6 +143,10 @@ impl Veil for Watercolor {
         Box::new(self.clone())
     }
 
+    fn cpu_pixel_budget(&self) -> Option<f32> {
+        Some(50_000.0)
+    }
+
     fn param_values(&self) -> Vec<ParamValue> {
         vec![
             ParamValue::Int(self.iterations),
@@ -156,15 +160,15 @@ impl Veil for Watercolor {
         queue: &wgpu::Queue,
         ping_pong_views: &[wgpu::TextureView; 2],
         sampler: &wgpu::Sampler,
-        viewport_width: u32,
-        viewport_height: u32,
+        render_width: u32,
+        render_height: u32,
     ) -> EffectCache {
         let layout = &self.shared.bind_group_layout;
 
         // --- Uniform buffers for each pass type ---
-        let init_ub = self.make_uniform_buf(device, queue, 0, viewport_width, viewport_height, "watercolor-ub-init");
-        let blur_ub = self.make_uniform_buf(device, queue, 1, viewport_width, viewport_height, "watercolor-ub-blur");
-        let final_ub = self.make_uniform_buf(device, queue, 2, viewport_width, viewport_height, "watercolor-ub-final");
+        let init_ub = self.make_uniform_buf(device, queue, 0, render_width, render_height, "watercolor-ub-init");
+        let blur_ub = self.make_uniform_buf(device, queue, 1, render_width, render_height, "watercolor-ub-blur");
+        let final_ub = self.make_uniform_buf(device, queue, 2, render_width, render_height, "watercolor-ub-final");
 
         // --- Noise texture + repeat sampler for flow-map bias ---
         let (noise_tex, noise_view) = create_noise_texture(device, queue);
@@ -187,8 +191,8 @@ impl Veil for Watercolor {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("watercolor-aux-{i}")),
                 size: wgpu::Extent3d {
-                    width: viewport_width,
-                    height: viewport_height,
+                    width: render_width,
+                    height: render_height,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,

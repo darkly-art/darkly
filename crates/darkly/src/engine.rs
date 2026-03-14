@@ -147,7 +147,7 @@ impl DarklyEngine {
     pub fn new(gpu: GpuContext, doc_width: u32, doc_height: u32) -> Self {
         let compositor = Compositor::new(
             &gpu.device, &gpu.queue, gpu.surface_format(),
-            doc_width, doc_height,
+            doc_width, doc_height, gpu.is_software,
         );
         let doc = Document::new(doc_width, doc_height);
         let undo_stack = UndoStack::new(50);

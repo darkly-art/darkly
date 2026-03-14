@@ -1,8 +1,9 @@
 import type { ToastLevel } from './state/toast.svelte';
 
-interface GpuCheckResult {
+export interface GpuCheckResult {
     level: ToastLevel;
     message: string;
+    isSoftware: boolean;
 }
 
 /** Known software renderer identifiers (case-insensitive substring match). */
@@ -21,13 +22,15 @@ function isSoftwareRenderer(description: string): boolean {
 
 /**
  * Probes the WebGPU adapter to determine whether hardware acceleration
- * is active. Returns a toast-ready result.
+ * is active. Returns a toast-ready result plus an `isSoftware` flag
+ * for passing into the WASM engine.
  */
 export async function checkGpu(): Promise<GpuCheckResult> {
     if (!navigator.gpu) {
         return {
             level: 'error',
             message: 'WebGPU is not supported in this browser.',
+            isSoftware: true,
         };
     }
 
@@ -39,6 +42,7 @@ export async function checkGpu(): Promise<GpuCheckResult> {
         return {
             level: 'error',
             message: 'No GPU adapter found. Hardware acceleration may be disabled.',
+            isSoftware: true,
         };
     }
 
@@ -51,11 +55,13 @@ export async function checkGpu(): Promise<GpuCheckResult> {
         return {
             level: 'warning',
             message: `Software renderer detected (${label}). Enable hardware acceleration for best performance.`,
+            isSoftware: true,
         };
     }
 
     return {
         level: 'success',
         message: `GPU: ${label}`,
+        isSoftware: false,
     };
 }
