@@ -310,6 +310,10 @@ impl DarklyHandle {
         serde_wasm_bindgen::to_value(&self.0.veil_list()).unwrap()
     }
 
+    pub fn veil_types(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.0.veil_types()).unwrap()
+    }
+
     // --- Thumbnails ---
 
     pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {

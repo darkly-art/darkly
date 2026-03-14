@@ -128,7 +128,7 @@
         }
 
         if (nav.isNavigating) {
-            nav.onPointerMove(e);
+            nav.onPointerMove(e, canvas);
             return;
         }
 

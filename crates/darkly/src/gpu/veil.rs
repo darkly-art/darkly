@@ -95,6 +95,16 @@ impl VeilRegistry {
         VeilRegistry { entries }
     }
 
+    /// Return all registered veil type IDs with their parameter definitions.
+    pub fn types(&self) -> Vec<(&'static str, &'static [ParamDef])> {
+        let mut types: Vec<_> = self.entries
+            .iter()
+            .map(|(&id, e)| (id, e.params))
+            .collect();
+        types.sort_by_key(|(id, _)| *id);
+        types
+    }
+
     /// Get the static parameter definitions for a veil type.
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.entries
