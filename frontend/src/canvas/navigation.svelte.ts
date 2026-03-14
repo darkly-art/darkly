@@ -92,7 +92,7 @@ class NavigationState {
         return true; // consumed — don't dispatch to tool
     }
 
-    onPointerMove(e: PointerEvent) {
+    onPointerMove(e: PointerEvent, canvasEl?: HTMLCanvasElement) {
         if (this.mode === 'none') return;
 
         const dx = e.clientX - this.startX;
@@ -112,10 +112,16 @@ class NavigationState {
                 app.rotation = this.startRotation - (curAngle - this.startAngle);
             }
                 break;
-            case 'zoom':
+            case 'zoom': {
                 // Drag down = zoom in, drag up = zoom out. Exponential scaling.
-                app.zoom = this.startZoom * Math.pow(2, -dy / 150);
+                const newZoom = this.startZoom * Math.pow(2, -dy / 150);
+                // Adjust pan so the viewport center stays fixed.
+                // panX_new = panX_old * newZoom / oldZoom
+                app.panX = this.startPanX * newZoom / this.startZoom;
+                app.panY = this.startPanY * newZoom / this.startZoom;
+                app.zoom = newZoom;
                 break;
+            }
         }
     }
 
@@ -182,24 +188,22 @@ class NavigationState {
         const curDist = Math.hypot(cur2.x - cur1.x, cur2.y - cur1.y);
         const curAngle = Math.atan2(cur2.y - cur1.y, cur2.x - cur1.x);
 
-        // Pan: delta of midpoints
-        app.panX += curCx - prevCx;
-        app.panY += curCy - prevCy;
-
-        // Zoom: centered on gesture midpoint
+        // Combined pan + zoom: pivot around the gesture midpoint so the
+        // canvas point between the two fingers stays pinned there.
+        // Compute from pre-mutation state to avoid order-dependent drift.
+        const rect = canvasEl.getBoundingClientRect();
         if (prevDist > 1) {
             const zoomFactor = curDist / prevDist;
             const newZoom = Math.max(0.01, Math.min(100, app.zoom * zoomFactor));
-
-            const rect = canvasEl.getBoundingClientRect();
-            const cursorX = curCx - rect.left;
-            const cursorY = curCy - rect.top;
-            const pivotX = rect.width / 2 + app.panX;
-            const pivotY = rect.height / 2 + app.panY;
             const ratio = 1 - newZoom / app.zoom;
-            app.panX += (cursorX - pivotX) * ratio;
-            app.panY += (cursorY - pivotY) * ratio;
+            const midX = prevCx - rect.left;
+            const midY = prevCy - rect.top;
+            app.panX += ratio * (midX - rect.width / 2 - app.panX) + (curCx - prevCx);
+            app.panY += ratio * (midY - rect.height / 2 - app.panY) + (curCy - prevCy);
             app.zoom = newZoom;
+        } else {
+            app.panX += curCx - prevCx;
+            app.panY += curCy - prevCy;
         }
 
         // Rotation: angular delta

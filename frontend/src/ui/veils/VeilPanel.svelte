@@ -2,6 +2,8 @@
     import { app } from '../../state/app.svelte';
     import VeilItem from './VeilItem.svelte';
 
+    let veilTypes = $state<any[]>([]);
+
     function refresh() {
         app.refreshVeilList();
         app.requestFrame();
@@ -9,22 +11,23 @@
 
     $effect(() => {
         if (app.handle) {
+            veilTypes = app.handle.veil_types();
             refresh();
         }
     });
 
-    function addPixelate() {
-        if (app.handle) {
-            app.handle.add_veil('pixelate', { scale: 2, soft: false });
-            refresh();
+    function addVeil(vt: any) {
+        if (!app.handle) return;
+        const defaults: Record<string, any> = {};
+        for (const p of vt.params) {
+            defaults[p.name] = p.default;
         }
+        app.handle.add_veil(vt.type, defaults);
+        refresh();
     }
 
-    function addRainyGlass() {
-        if (app.handle) {
-            app.handle.add_veil('rainy_glass', { speed: 1.0, rain_amount: 0.7, direction: 0.0, fog_amount: 0.0 });
-            refresh();
-        }
+    function displayName(typeId: string): string {
+        return typeId.replace(/_/g, ' ');
     }
 
     function onDragOver(e: DragEvent) {
@@ -53,8 +56,9 @@
     </div>
 
     <div class="panel-actions">
-        <button class="action-btn" onclick={addPixelate} title="Add pixelate veil">+ pixelate</button>
-        <button class="action-btn" onclick={addRainyGlass} title="Add rainy glass veil">+ rainy glass</button>
+        {#each veilTypes as vt (vt.type)}
+            <button class="action-btn" onclick={() => addVeil(vt)} title="Add {displayName(vt.type)} veil">+ {displayName(vt.type)}</button>
+        {/each}
     </div>
 </div>
 
@@ -94,6 +98,7 @@
         gap: 4px;
         padding: 6px 8px;
         border-top: 1px solid #333;
+        flex-wrap: wrap;
     }
 
     .action-btn {

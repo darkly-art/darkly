@@ -39,6 +39,14 @@ pub enum LayerInfo {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct VeilTypeInfo {
+    #[serde(rename = "type")]
+    pub type_id: &'static str,
+    pub params: Vec<ParamInfo>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VeilInfo {
     #[serde(rename = "type")]
     pub type_id: String,
@@ -760,6 +768,17 @@ impl DarklyEngine {
             }
         }
         list
+    }
+
+    /// Return all registered veil types with their parameter definitions.
+    pub fn veil_types(&self) -> Vec<VeilTypeInfo> {
+        self.compositor.veil_chain().registry().types()
+            .into_iter()
+            .map(|(type_id, defs)| VeilTypeInfo {
+                type_id,
+                params: defs.iter().map(|d| ParamInfo::from_def(d, None)).collect(),
+            })
+            .collect()
     }
 
     /// Get the parameter definitions for a veil type.
