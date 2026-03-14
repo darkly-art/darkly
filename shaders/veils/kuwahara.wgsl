@@ -1,3 +1,5 @@
+// Based on https://www.shadertoy.com/view/mlffWf by p4vv37
+
 // Generalized Kuwahara filter — painterly/oil-painting post-processing veil.
 // Based on work by Acerola, ported from Shadertoy GLSL to WGSL.
 //   https://www.youtube.com/watch?v=LDhN-JK3U9g

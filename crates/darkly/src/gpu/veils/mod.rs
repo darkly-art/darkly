@@ -2,6 +2,7 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::gpu::veil::VeilRegistration`.
 
+pub mod bokeh;
 pub mod kuwahara;
 pub mod pixelate;
 pub mod rainy_glass;
@@ -11,6 +12,7 @@ use crate::gpu::veil::VeilRegistration;
 
 pub fn registrations() -> Vec<VeilRegistration> {
     vec![
+        bokeh::register(),
         kuwahara::register(),
         pixelate::register(),
         rainy_glass::register(),

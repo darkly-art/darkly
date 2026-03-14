@@ -48,7 +48,7 @@ fn js_to_param_values(js: &JsValue, defs: &[ParamDef]) -> Vec<ParamValue> {
 #[wasm_bindgen]
 impl DarklyHandle {
     /// Create a new Darkly editor instance from an HTML canvas element.
-    pub async fn create(canvas: web_sys::HtmlCanvasElement, doc_width: u32, doc_height: u32) -> DarklyHandle {
+    pub async fn create(canvas: web_sys::HtmlCanvasElement, doc_width: u32, doc_height: u32, is_software: bool) -> DarklyHandle {
         let initial_width = canvas.width();
         let initial_height = canvas.height();
 
@@ -63,6 +63,7 @@ impl DarklyHandle {
             instance, surface,
             wgpu::Limits::downlevel_webgl2_defaults(),
             initial_width, initial_height,
+            is_software,
         ).await;
 
         DarklyHandle(DarklyEngine::new(gpu, doc_width, doc_height))

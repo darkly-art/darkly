@@ -1,29 +1,50 @@
 use crate::gpu::effect::{self, EffectCache, EffectPipeline};
-use crate::gpu::veil::{ParamValue, Veil, VeilRegistry};
+use crate::gpu::veil::{budget_scaled_dimensions, ParamValue, Veil, VeilRegistry};
+
+/// Per-veil reduced-resolution resources for CPU rendering.
+/// Created when a veil declares a `cpu_pixel_budget` and we're on a
+/// software renderer. The veil chain handles downscale/upscale around
+/// the veil — the veil itself is resolution-agnostic.
+struct VeilScaling {
+    /// Kept alive so the GPU textures aren't dropped.
+    _textures: [wgpu::Texture; 2],
+    views: [wgpu::TextureView; 2],
+    /// Bind groups for downscaling: [i] reads native ping-pong[i].
+    downscale_bgs: [wgpu::BindGroup; 2],
+    /// Bind group for upscaling: reads reduced[1] (veil output).
+    upscale_bg: wgpu::BindGroup,
+}
 
 /// A veil in the chain, with visibility state and GPU cache.
 struct VeilEntry {
     veil: Box<dyn Veil>,
     cache: EffectCache,
     visible: bool,
+    /// Present when the veil runs at reduced resolution on CPU.
+    scaling: Option<VeilScaling>,
 }
 
 pub struct VeilChain {
     registry: VeilRegistry,
     entries: Vec<VeilEntry>,
-    /// Screen-sized ping-pong textures for veil chain.
+    /// Ping-pong textures at native viewport resolution.
     /// Created lazily when the first veil is added.
     textures: Option<[wgpu::Texture; 2]>,
     views: Option<[wgpu::TextureView; 2]>,
-    /// Blit pipeline for final veil output → surface.
+    /// Blit pipeline for final veil output → surface (surface format).
     blit_pipeline: EffectPipeline,
     /// Bind groups for blitting veil_textures[0] or [1] to surface.
     blit_bind_groups: Option<[wgpu::BindGroup; 2]>,
+    /// Blit pipeline for downscale/upscale between native and reduced-res
+    /// textures (accum format). Created lazily on first scaled veil.
+    scaling_pipeline: Option<EffectPipeline>,
     sampler: wgpu::Sampler,
     /// Current viewport dimensions (updated on resize).
     viewport_width: u32,
     viewport_height: u32,
     accum_format: wgpu::TextureFormat,
+    /// True when running on a software renderer (CPU).
+    is_software: bool,
     /// Set when structural changes occur (add/remove/visibility/reorder).
     /// Animation-driven re-renders are handled by the compositor's frame scheduler.
     needs_present: bool,
@@ -35,6 +56,7 @@ impl VeilChain {
         sampler: wgpu::Sampler,
         surface_format: wgpu::TextureFormat,
         accum_format: wgpu::TextureFormat,
+        is_software: bool,
     ) -> Self {
         let registry = VeilRegistry::new();
         let blit_pipeline =
@@ -47,10 +69,12 @@ impl VeilChain {
             views: None,
             blit_pipeline,
             blit_bind_groups: None,
+            scaling_pipeline: None,
             sampler,
             viewport_width: 0,
             viewport_height: 0,
             accum_format,
+            is_software,
             needs_present: false,
         }
     }
@@ -89,19 +113,19 @@ impl VeilChain {
         veil: Box<dyn Veil>,
     ) {
         self.ensure_textures(device);
-        let views = self.views.as_ref().unwrap();
-        let cache = veil.create_cache(
-            device,
-            queue,
-            views,
-            &self.sampler,
-            self.viewport_width,
-            self.viewport_height,
+        self.ensure_scaling_pipeline(device);
+        let native_views = self.views.as_ref().unwrap();
+
+        let (scaling, cache) = create_veil_resources(
+            device, queue, &*veil, native_views, &self.sampler,
+            self.scaling_pipeline.as_ref(), self.accum_format,
+            self.viewport_width, self.viewport_height, self.is_software,
         );
         self.entries.push(VeilEntry {
             veil,
             cache,
             visible: true,
+            scaling,
         });
         self.needs_present = true;
     }
@@ -156,20 +180,20 @@ impl VeilChain {
             return;
         }
         self.ensure_textures(device);
-        let views = self.views.as_ref().unwrap();
-        let cache = new_veil.create_cache(
-            device,
-            queue,
-            views,
-            &self.sampler,
-            self.viewport_width,
-            self.viewport_height,
+        self.ensure_scaling_pipeline(device);
+        let native_views = self.views.as_ref().unwrap();
+
+        let (scaling, cache) = create_veil_resources(
+            device, queue, &*new_veil, native_views, &self.sampler,
+            self.scaling_pipeline.as_ref(), self.accum_format,
+            self.viewport_width, self.viewport_height, self.is_software,
         );
         let visible = self.entries[index].visible;
         self.entries[index] = VeilEntry {
             veil: new_veil,
             cache,
             visible,
+            scaling,
         };
         self.needs_present = true;
     }
@@ -282,15 +306,34 @@ impl VeilChain {
         }
 
         // Step 2: Run visible veils with ping-pong.
+        // Veils with per-veil scaling get downscale → veil → upscale passes.
         let mut current_src = 0usize;
         for entry in &self.entries {
             if !entry.visible {
                 continue;
             }
             let dst = 1 - current_src;
-            entry
-                .veil
-                .encode(encoder, &entry.cache, current_src, &veil_views[dst]);
+
+            if let Some(ref scaling) = entry.scaling {
+                let sp = self.scaling_pipeline.as_ref().unwrap();
+                // Downscale: native pp[current_src] → reduced[0]
+                blit_pass(
+                    encoder, &sp.pipeline,
+                    &scaling.downscale_bgs[current_src], &scaling.views[0],
+                    "veil-downscale",
+                );
+                // Run veil at reduced resolution: reads reduced[0], writes reduced[1]
+                entry.veil.encode(encoder, &entry.cache, 0, &scaling.views[1]);
+                // Upscale: reduced[1] → native pp[dst]
+                blit_pass(
+                    encoder, &sp.pipeline,
+                    &scaling.upscale_bg, &veil_views[dst],
+                    "veil-upscale",
+                );
+            } else {
+                entry.veil.encode(encoder, &entry.cache, current_src, &veil_views[dst]);
+            }
+
             current_src = dst;
         }
 
@@ -321,7 +364,16 @@ impl VeilChain {
 
     // --- Internal helpers ---
 
-    /// Ensure screen-sized veil textures exist at the current viewport dimensions.
+    /// Ensure the scaling blit pipeline exists (needed for CPU-scaled veils).
+    fn ensure_scaling_pipeline(&mut self, device: &wgpu::Device) {
+        if self.is_software && self.scaling_pipeline.is_none() {
+            self.scaling_pipeline = Some(
+                effect::create_blit_pipeline(device, self.accum_format, "veil-scaling"),
+            );
+        }
+    }
+
+    /// Ensure native ping-pong textures exist at the current viewport dimensions.
     fn ensure_textures(&mut self, device: &wgpu::Device) {
         let w = self.viewport_width;
         let h = self.viewport_height;
@@ -391,17 +443,137 @@ impl VeilChain {
     fn recreate_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.drop_textures();
         self.ensure_textures(device);
+        self.ensure_scaling_pipeline(device);
 
-        let views = self.views.as_ref().unwrap();
+        let native_views = self.views.as_ref().unwrap();
         for entry in &mut self.entries {
-            entry.cache = entry.veil.create_cache(
-                device,
-                queue,
-                views,
-                &self.sampler,
-                self.viewport_width,
-                self.viewport_height,
+            let (scaling, cache) = create_veil_resources(
+                device, queue, &*entry.veil, native_views, &self.sampler,
+                self.scaling_pipeline.as_ref(), self.accum_format,
+                self.viewport_width, self.viewport_height, self.is_software,
             );
+            entry.cache = cache;
+            entry.scaling = scaling;
         }
     }
+}
+
+// --- Free functions ---
+
+/// Create the veil's EffectCache and optional VeilScaling.
+/// If the veil declares a `cpu_pixel_budget` and we're on CPU,
+/// creates reduced-res textures and passes those to the veil.
+/// Otherwise passes the native ping-pong views directly.
+fn create_veil_resources(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    veil: &dyn Veil,
+    native_views: &[wgpu::TextureView; 2],
+    sampler: &wgpu::Sampler,
+    scaling_pipeline: Option<&EffectPipeline>,
+    accum_format: wgpu::TextureFormat,
+    viewport_width: u32,
+    viewport_height: u32,
+    is_software: bool,
+) -> (Option<VeilScaling>, EffectCache) {
+    let budget = if is_software {
+        veil.cpu_pixel_budget()
+    } else {
+        None
+    };
+
+    if let Some(pixel_budget) = budget {
+        let (rw, rh) = budget_scaled_dimensions(viewport_width, viewport_height, pixel_budget);
+        let sp = scaling_pipeline.expect("scaling pipeline must exist for CPU-scaled veils");
+        let scaling = create_veil_scaling(device, sampler, sp, accum_format, rw, rh, native_views);
+        let cache = veil.create_cache(device, queue, &scaling.views, sampler, rw, rh);
+        (Some(scaling), cache)
+    } else {
+        let cache = veil.create_cache(
+            device, queue, native_views, sampler, viewport_width, viewport_height,
+        );
+        (None, cache)
+    }
+}
+
+/// Create per-veil reduced-resolution textures and scaling bind groups.
+fn create_veil_scaling(
+    device: &wgpu::Device,
+    sampler: &wgpu::Sampler,
+    scaling_pipeline: &EffectPipeline,
+    format: wgpu::TextureFormat,
+    render_width: u32,
+    render_height: u32,
+    native_views: &[wgpu::TextureView; 2],
+) -> VeilScaling {
+    let make_tex = |label: &str| -> (wgpu::Texture, wgpu::TextureView) {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: render_width,
+                height: render_height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    };
+
+    let (t0, v0) = make_tex("veil-scaled-0");
+    let (t1, v1) = make_tex("veil-scaled-1");
+
+    let layout = &scaling_pipeline.bind_group_layout;
+
+    // Downscale: [i] reads native pp[i], draws to reduced[0].
+    let downscale_bgs: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
+        effect::create_blit_bind_group(
+            device, layout, &native_views[i], sampler,
+            &format!("veil-downscale-{i}"),
+        )
+    });
+
+    // Upscale: reads reduced[1] (veil output), draws to native pp[dst].
+    let upscale_bg = effect::create_blit_bind_group(
+        device, layout, &v1, sampler, "veil-upscale",
+    );
+
+    VeilScaling {
+        _textures: [t0, t1],
+        views: [v0, v1],
+        downscale_bgs,
+        upscale_bg,
+    }
+}
+
+/// Execute a fullscreen blit render pass.
+fn blit_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+    dst_view: &wgpu::TextureView,
+    label: &'static str,
+) {
+    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: dst_view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
+    rpass.set_pipeline(pipeline);
+    rpass.set_bind_group(0, bind_group, &[]);
+    rpass.draw(0..3, 0..1);
 }

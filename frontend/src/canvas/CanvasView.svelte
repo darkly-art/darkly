@@ -9,7 +9,6 @@
     import { screenToCanvas } from './coordinates';
     import ToolOverlay from './ToolOverlay.svelte';
     import { toast } from '../state/toast.svelte';
-    import { checkGpu } from '../gpu';
 
     let canvas = $state<HTMLCanvasElement>(undefined!);
 
@@ -60,11 +59,6 @@
 
             // Kick the first frame
             app.requestFrame();
-
-            // Check GPU status and notify user
-            checkGpu().then(result => {
-                toast.show(result.level, result.message, result.level === 'success' ? 3000 : undefined);
-            });
         } catch (e) {
             console.error("Failed to initialize Darkly:", e);
             toast.show('error', `Failed to initialize: ${e instanceof Error ? e.message : e}`);
