@@ -11,3 +11,7 @@ pub mod veils;
 pub mod view;
 pub mod overlay;
 pub mod transform;
+pub mod region_store;
+pub mod paint_target;
+pub mod readback;
+pub mod test_utils;
