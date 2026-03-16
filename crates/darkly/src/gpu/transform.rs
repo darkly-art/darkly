@@ -566,6 +566,167 @@ impl TransformPass {
         });
     }
 
+    /// Set floating content by copying a region directly from a layer GPU texture.
+    ///
+    /// GPU→GPU copy via `copy_texture_to_texture` — no CPU round-trip.
+    /// Used by `begin_transform` when extracting content from a GPU-authoritative layer.
+    pub fn set_floating_content_from_gpu(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        sampler: &wgpu::Sampler,
+        accum_views: &[wgpu::TextureView; 2],
+        cache_view: &wgpu::TextureView,
+        layer_texture: &wgpu::Texture,
+        source_origin: (i32, i32),
+        source_width: u32,
+        source_height: u32,
+        canvas_width: u32,
+        canvas_height: u32,
+        target_layer: LayerId,
+        target_is_mask: bool,
+    ) {
+        let src_format = if target_is_mask {
+            wgpu::TextureFormat::R8Unorm
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+
+        // The source texture is always RGBA8 (the transform shader expects RGBA).
+        // For masks (R8), we create an RGBA8 texture and copy the R8 channel.
+        // The transform commit shader handles the RGBA→R8 conversion.
+        let source_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("transform-source-gpu"),
+            size: wgpu::Extent3d {
+                width: source_width.max(1),
+                height: source_height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: src_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+
+        // GPU→GPU copy from layer texture to source texture.
+        let src_x = source_origin.0.max(0) as u32;
+        let src_y = source_origin.1.max(0) as u32;
+        let copy_w = source_width.min(canvas_width.saturating_sub(src_x));
+        let copy_h = source_height.min(canvas_height.saturating_sub(src_y));
+
+        if copy_w > 0 && copy_h > 0 {
+            // Offset into the source texture if source_origin is negative
+            let dst_x = (-source_origin.0).max(0) as u32;
+            let dst_y = (-source_origin.1).max(0) as u32;
+
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: layer_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: src_x, y: src_y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &source_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: dst_x, y: dst_y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: copy_w.min(source_width - dst_x),
+                    height: copy_h.min(source_height - dst_y),
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Uniform buffer (identity matrix initially)
+        let uniforms = TransformBlendUniforms {
+            inv_row0: [1.0, 0.0, 0.0, 0.0],
+            inv_row1: [0.0, 1.0, 0.0, 0.0],
+            source_origin: [source_origin.0 as f32, source_origin.1 as f32],
+            source_size: [source_width as f32, source_height as f32],
+            canvas_size: [canvas_width as f32, canvas_height as f32],
+            opacity: 1.0,
+            _pad: 0.0,
+        };
+
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("transform-uniforms"),
+            size: std::mem::size_of::<TransformBlendUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        // Create bind groups (same pattern as set_floating_content)
+        let make_bind_group = |bg_view: &wgpu::TextureView, label: &str| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(bg_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&source_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                ],
+            })
+        };
+
+        let bg0 = make_bind_group(&accum_views[0], "transform-gpu-bg0");
+        let bg1 = make_bind_group(&accum_views[1], "transform-gpu-bg1");
+        let cache_bg = make_bind_group(cache_view, "transform-gpu-bg-cache");
+
+        let commit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("transform-gpu-commit-bg"),
+            layout: &self.commit_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+
+        self.active = Some(TransformState {
+            source_texture,
+            source_view,
+            uniform_buf,
+            bind_groups: [bg0, bg1],
+            cache_source_bind_group: cache_bg,
+            commit_bind_group,
+            target_layer,
+            target_is_mask,
+        });
+    }
+
     /// Update the affine matrix uniform for real-time preview.
     pub fn update_matrix(
         &self,

@@ -137,6 +137,41 @@ impl<'a> GpuPaintTarget<'a> {
         self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(selection_bind_group));
     }
 
+    /// Multiply the target's pixel values by a mask texture.
+    ///
+    /// `dst.rgba *= mask_sample` (premultiplied-safe: scales all channels equally).
+    /// Used by apply_mask_destructive (mask × layer alpha) and selection masking
+    /// of transform sources (zero out unselected pixels).
+    ///
+    /// The mask texture must be the same dimensions as the target (or use a
+    /// 1:1 UV mapping). The caller is responsible for cropping/uploading a
+    /// correctly-sized mask.
+    pub fn multiply_by_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        mask_bind_group: &wgpu::BindGroup,
+    ) {
+        let pipeline = pipelines.mask_multiply_pipeline(self.format);
+
+        // Full-target rect, color = black with full alpha.
+        // The shader outputs (0, 0, 0, mask_sample) and the blend state
+        // computes dst * SrcAlpha = dst * mask_sample.
+        let uniforms = PaintUniforms {
+            origin: [0.0, 0.0],
+            size: [self.width as f32, self.height as f32],
+            canvas_size: [self.width as f32, self.height as f32],
+            center: [0.0, 0.0],
+            radius: 0.0,
+            softness: 0.0,
+            _pad: [0.0; 2],
+            color: [0.0, 0.0, 0.0, 1.0],
+        };
+
+        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
+    }
+
     /// Clear a rect to transparent (RGBA) or full reveal (R8).
     pub fn clear_rect(
         &self,
@@ -328,6 +363,8 @@ pub struct PaintPipelines {
     clear_r8: wgpu::RenderPipeline,
     gradient_rgba: wgpu::RenderPipeline,
     gradient_r8: wgpu::RenderPipeline,
+    mask_multiply_rgba: wgpu::RenderPipeline,
+    mask_multiply_r8: wgpu::RenderPipeline,
 
     pub(crate) uniform_buf: wgpu::Buffer,
     pub(crate) uniform_bind_group: wgpu::BindGroup,
@@ -566,6 +603,22 @@ impl PaintPipelines {
         // For opaque gradient colors at coverage 1.0, this is equivalent to replace.
         let blend_gradient = blend_composite;
 
+        // Mask multiply: dst.rgba *= fragment_alpha.
+        // Fragment shader outputs (0,0,0, mask_sample), blend multiplies dst by it.
+        // Used by apply_mask_destructive and selection masking of transform sources.
+        let blend_mask_multiply = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::SrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::SrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+
         PaintPipelines {
             composite_rgba: make_pipeline("paint-composite-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_composite),
             composite_r8: make_pipeline("paint-composite-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_composite),
@@ -575,6 +628,8 @@ impl PaintPipelines {
             clear_r8: make_pipeline("paint-clear-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_clear),
             gradient_rgba: make_pipeline("gradient-rgba", &gradient_layout, &gradient_shader, wgpu::TextureFormat::Rgba8Unorm, blend_gradient),
             gradient_r8: make_pipeline("gradient-r8", &gradient_layout, &gradient_shader, wgpu::TextureFormat::R8Unorm, blend_gradient),
+            mask_multiply_rgba: make_pipeline("mask-multiply-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_mask_multiply),
+            mask_multiply_r8: make_pipeline("mask-multiply-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_mask_multiply),
             uniform_buf,
             uniform_bind_group,
             gradient_uniform_buf,
@@ -681,6 +736,13 @@ impl PaintPipelines {
         match format {
             wgpu::TextureFormat::R8Unorm => &self.gradient_r8,
             _ => &self.gradient_rgba,
+        }
+    }
+
+    fn mask_multiply_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        match format {
+            wgpu::TextureFormat::R8Unorm => &self.mask_multiply_r8,
+            _ => &self.mask_multiply_rgba,
         }
     }
 }

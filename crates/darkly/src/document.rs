@@ -446,51 +446,6 @@ impl Document {
         detach_node(&mut self.root.children, id);
     }
 
-    // --- Dirty state helpers (used by compositor) ---
-
-    /// Returns true if any raster layer surface has dirty tiles.
-    pub fn has_dirty_layers(&self) -> bool {
-        self.all_raster_layers().iter().any(|r| !r.surface.dirty.is_empty())
-    }
-
-    /// Returns true if any mask surface has dirty tiles.
-    pub fn has_dirty_masks(&self) -> bool {
-        for r in self.all_raster_layers() {
-            if let Some(m) = &r.mask {
-                if !m.dirty.is_empty() { return true; }
-            }
-        }
-        for g in self.all_groups() {
-            if let Some(m) = &g.mask {
-                if !m.dirty.is_empty() { return true; }
-            }
-        }
-        false
-    }
-
-    /// Clear all dirty regions on all surfaces (layers and masks).
-    pub fn clear_all_dirty(&mut self) {
-        fn clear_dirty_recursive(nodes: &mut [LayerNode]) {
-            for node in nodes {
-                match node {
-                    LayerNode::Layer(Layer::Raster(r)) => {
-                        r.surface.dirty.clear();
-                        if let Some(m) = &mut r.mask {
-                            m.dirty.clear();
-                        }
-                    }
-                    LayerNode::Group(g) => {
-                        if let Some(m) = &mut g.mask {
-                            m.dirty.clear();
-                        }
-                        clear_dirty_recursive(&mut g.children);
-                    }
-                }
-            }
-        }
-        clear_dirty_recursive(&mut self.root.children);
-    }
-
     /// Borrow-split factory that returns a `Surface` — either layer tiles or mask,
     /// depending on `mask_editing`. Callers never branch on surface type.
     fn make_surface<'a>(

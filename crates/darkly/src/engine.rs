@@ -3,7 +3,7 @@ use crate::document::{Document, MoveTarget, SelectionMode};
 use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY, source_from_clip};
 use crate::layer::{BlendMode, Layer, LayerNode};
 use crate::undo::{
-    UndoStack, TileAction, GpuRegionAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
+    UndoStack, GpuRegionAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
     MaskPropertyAction, PropertyAction, SelectionAction, mark_affected_dirty,
 };
 use crate::undo::property::Property;
@@ -179,6 +179,20 @@ struct PendingColorPick {
     request: ReadbackRequest,
 }
 
+/// Pending async copy — waiting for GPU readback to build clipboard data.
+struct PendingCopy {
+    request: ReadbackRequest,
+    /// True if copying from a mask (R8); false for layer (RGBA).
+    is_mask: bool,
+    /// Source region bounds in canvas coords.
+    region: [u32; 4],
+    /// Selection coverage for each pixel in the region (None = no selection).
+    selection_data: Option<Vec<u8>>,
+    /// Whether this is also a cut (clear after copy).
+    is_cut: bool,
+    layer_id: u64,
+}
+
 pub struct DarklyEngine {
     doc: Document,
     compositor: Compositor,
@@ -207,6 +221,9 @@ pub struct DarklyEngine {
     // --- Async readback operations ---
     pending_flood_fill: Option<PendingFloodFill>,
     pending_color_pick: Option<PendingColorPick>,
+    pending_copy: Option<PendingCopy>,
+    /// Completed copy result — picked up by the frontend on the next poll.
+    pending_copy_result: Option<ClipboardExport>,
     /// Last picked color — returned immediately while async readback is in flight.
     last_picked_color: [u8; 4],
 }
@@ -239,6 +256,8 @@ impl DarklyEngine {
             gpu_stroke: None,
             pending_flood_fill: None,
             pending_color_pick: None,
+            pending_copy: None,
+            pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],
         }
     }
@@ -502,20 +521,67 @@ impl DarklyEngine {
             return;
         }
 
-        // Record layer tile state before destructive bake
-        self.doc.begin_transaction(layer_id);
-        self.doc.apply_mask_destructive(layer_id);
-        let tile_memento = self.doc.commit_transaction(layer_id);
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+
+        // Save layer texture to region store for undo.
+        if let Some(layer_tex) = self.compositor.layer_texture(layer_id) {
+            let mut encoder = self.gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("apply-mask-save") },
+            );
+            self.region_store.save_region(
+                &mut encoder, &layer_tex.texture, format,
+                [0, 0, canvas_w, canvas_h],
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+        }
+
+        // Create a bind group from the mask GPU texture for the multiply pass.
+        let mask_bind_group = self.compositor.mask_texture(layer_id).map(|mask_tex| {
+            let sampler = self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("mask-apply-sampler"),
+                mag_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            });
+            self.paint_pipelines.create_selection_bind_group(
+                &self.gpu.device, &mask_tex.view, &sampler,
+            )
+        });
+
+        // GPU render pass: multiply layer alpha by mask values.
+        if let (Some(layer_tex), Some(mask_bg)) = (
+            self.compositor.layer_texture(layer_id),
+            mask_bind_group.as_ref(),
+        ) {
+            let target = GpuPaintTarget::from_layer(layer_tex, canvas_w, canvas_h);
+            let mut encoder = self.gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("apply-mask-multiply") },
+            );
+            target.multiply_by_mask(
+                &mut encoder, &self.paint_pipelines, &self.gpu.queue, mask_bg,
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+        }
+
+        // Commit undo region.
+        {
+            let mut encoder = self.gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("apply-mask-undo") },
+            );
+            let entry = self.region_store.commit_region(
+                &mut encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        }
 
         self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
         self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, false);
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
-        // Push tile action first (for the alpha bake), then mask property action
-        if let Some(memento) = tile_memento {
-            self.undo_stack.push(Box::new(TileAction::new(memento)));
-        }
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
             layer_id, old_mask, old_enabled, old_show,
         )));
@@ -571,16 +637,8 @@ impl DarklyEngine {
         self.doc.selection_to_mask(layer_id);
         self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
-        // Mark all mask tiles dirty for upload
-        if let Some(n) = self.doc.find_node_mut(layer_id) {
-            if let Some(mask) = n.as_masked_mut().mask_mut().as_mut() {
-                let coords: Vec<(i32, i32)> = mask.store.iter()
-                    .map(|((tx, ty), _)| (tx, ty)).collect();
-                for (tx, ty) in coords {
-                    mask.dirty.mark(tx, ty);
-                }
-            }
-        }
+        // Upload selection data directly to the GPU mask texture.
+        self.upload_mask_to_gpu(layer_id);
 
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
@@ -592,9 +650,100 @@ impl DarklyEngine {
 
     pub fn mask_to_selection(&mut self, layer_id: u64) {
         let old_sel = self.doc.selection.clone();
-        self.doc.mask_to_selection(layer_id);
+
+        // Readback the GPU mask texture and build an AlphaMask from the bytes.
+        if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
+            let canvas_w = self.doc.width;
+            let canvas_h = self.doc.height;
+            let mut encoder = self.gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("mask-to-sel-readback") },
+            );
+            let request = readback::request_readback(
+                &self.gpu.device, &mut encoder, &mask_tex.texture,
+                wgpu::TextureFormat::R8Unorm,
+                [0, 0, canvas_w, canvas_h],
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+            let pixels = request.blocking_read(&self.gpu.device);
+
+            // Build AlphaMask from R8 pixel data.
+            let ts = TILE_SIZE;
+            let mut mask = AlphaMask::new();
+            for py in 0..canvas_h {
+                for px in 0..canvas_w {
+                    let v = pixels[(py * canvas_w + px) as usize];
+                    // Only store non-zero values (skip fully-transparent regions).
+                    if v > 0 {
+                        let tx = (px / ts as u32) as i32;
+                        let ty = (py / ts as u32) as i32;
+                        let lx = (px % ts as u32) as usize;
+                        let ly = (py % ts as u32) as usize;
+                        mask.get_or_create(tx, ty).write().set(lx, ly, v as f32 / 255.0);
+                    }
+                }
+            }
+            self.doc.selection = Some(mask);
+        } else {
+            // Fallback: use CPU mask data.
+            self.doc.mask_to_selection(layer_id);
+        }
+
         self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
         self.update_selection_overlay();
+    }
+
+    /// Upload CPU-side mask data (AlphaMask) to the GPU mask texture.
+    fn upload_mask_to_gpu(&self, layer_id: u64) {
+        let mask_tex = match self.compositor.mask_texture(layer_id) {
+            Some(t) => t,
+            None => return,
+        };
+        let node = match self.doc.find_node(layer_id) {
+            Some(n) => n,
+            None => return,
+        };
+        let mask_store = match node.as_masked().mask() {
+            Some(m) => &m.store,
+            None => return,
+        };
+
+        let ts = TILE_SIZE;
+        // Thread-local buffer for f32→u8 conversion.
+        let mut buf = vec![0u8; ts * ts];
+
+        for ((tx, ty), tile) in mask_store.iter() {
+            if tx < 0 || ty < 0 { continue; }
+            if tx as u32 >= mask_tex.width_in_tiles || ty as u32 >= mask_tex.height_in_tiles {
+                continue;
+            }
+            let data = tile.data();
+            for i in 0..(ts * ts) {
+                buf[i] = (data.0[i].clamp(0.0, 1.0) * 255.0) as u8;
+            }
+            self.gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &mask_tex.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: tx as u32 * ts as u32,
+                        y: ty as u32 * ts as u32,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &buf,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(ts as u32),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: ts as u32,
+                    height: ts as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
     }
 
     /// Sync compositor mask state (bind group + uniforms) for a layer or group.
@@ -856,6 +1005,86 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
     }
 
+    /// Complete a pending copy once GPU readback data is available.
+    fn complete_copy(&mut self, pending: PendingCopy, pixels: Vec<u8>) {
+        let PendingCopy {
+            is_mask, region, selection_data, is_cut, layer_id, ..
+        } = pending;
+        let [rx, ry, rw, rh] = region;
+
+        // Build RGBA bytes from the readback data.
+        let (rgba, width, height) = if is_mask {
+            // R8 readback → convert to grayscale RGBA: [v, v, v, 255]
+            let mut rgba = vec![0u8; (rw * rh * 4) as usize];
+            for i in 0..(rw * rh) as usize {
+                let v = pixels[i];
+                // Skip fully-revealed mask pixels (default state).
+                if v == 255 && selection_data.is_none() {
+                    // For masks, 255 = "reveal all" which is the default.
+                    // Only include if selection forces inclusion.
+                } else {
+                    let sv = if let Some(ref sel) = selection_data {
+                        let coverage = sel[i] as f32 / 255.0;
+                        ((v as f32 * coverage).round()) as u8
+                    } else {
+                        v
+                    };
+                    if sv > 0 {
+                        rgba[i * 4] = sv;
+                        rgba[i * 4 + 1] = sv;
+                        rgba[i * 4 + 2] = sv;
+                        rgba[i * 4 + 3] = 255;
+                    }
+                }
+            }
+            (rgba, rw, rh)
+        } else {
+            // RGBA readback. Apply selection masking if present.
+            let mut rgba = pixels;
+            if let Some(ref sel) = selection_data {
+                for i in 0..(rw * rh) as usize {
+                    let coverage = sel[i] as f32 / 255.0;
+                    if coverage <= 0.0 {
+                        rgba[i * 4] = 0;
+                        rgba[i * 4 + 1] = 0;
+                        rgba[i * 4 + 2] = 0;
+                        rgba[i * 4 + 3] = 0;
+                    } else if coverage < 1.0 {
+                        // Multiply alpha by selection coverage.
+                        let a = rgba[i * 4 + 3] as f32 * coverage;
+                        rgba[i * 4 + 3] = a.round() as u8;
+                    }
+                }
+            }
+            (rgba, rw, rh)
+        };
+
+        let offset_x = rx as i32;
+        let offset_y = ry as i32;
+
+        // Build ImageClip and store in clipboard.
+        let clip = ImageClip::from_rgba(width, height, &rgba, offset_x, offset_y);
+        let (export_rgba, ew, eh, eox, eoy) = clip.to_rgba();
+        self.clipboard = Some(Clipboard::ImageData(clip));
+
+        self.pending_copy_result = Some(ClipboardExport {
+            rgba: export_rgba,
+            width: ew,
+            height: eh,
+            offset_x: eox,
+            offset_y: eoy,
+        });
+
+        // If this was a cut, clear the source.
+        if is_cut {
+            if self.doc.selection.is_some() {
+                self.gpu_clear_selection(layer_id);
+            } else {
+                self.gpu_clear_layer(layer_id);
+            }
+        }
+    }
+
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
             // If a flood fill is pending, defer undo commit — complete_flood_fill
@@ -981,6 +1210,45 @@ impl DarklyEngine {
             self.compositor.layer_texture(layer_id)
                 .map(|t| (GpuPaintTarget::from_layer(t, canvas_w, canvas_h), wgpu::TextureFormat::Rgba8Unorm))
         }
+    }
+
+    /// Upload a cropped region of the selection mask as an R8 GPU texture.
+    /// The output matches the given sub-region dimensions for use with
+    /// `multiply_by_mask` on a source texture that covers only that region.
+    fn upload_cropped_selection_mask(
+        &self,
+        origin: (i32, i32),
+        width: u32,
+        height: u32,
+    ) -> Option<wgpu::BindGroup> {
+        let selection = self.doc.selection.as_ref()?;
+
+        let ts = TILE_SIZE;
+        let mut pixels = vec![0u8; (width * height) as usize];
+        let (ox, oy) = origin;
+
+        for ((tx, ty), tile) in selection.iter() {
+            let base_x = tx * ts as i32;
+            let base_y = ty * ts as i32;
+            let data = tile.data();
+            for ly in 0..ts {
+                for lx in 0..ts {
+                    let cx = base_x + lx as i32;
+                    let cy = base_y + ly as i32;
+                    let px = cx - ox;
+                    let py = cy - oy;
+                    if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
+                        let v = (data.get(lx, ly) * 255.0).clamp(0.0, 255.0) as u8;
+                        pixels[(py as u32 * width + px as u32) as usize] = v;
+                    }
+                }
+            }
+        }
+
+        Some(self.paint_pipelines.upload_r8_bind_group(
+            &self.gpu.device, &self.gpu.queue, width, height,
+            &pixels, "selection-cropped",
+        ))
     }
 
     /// Upload the document's selection mask (AlphaMask) as an R8 GPU texture,
@@ -1116,6 +1384,15 @@ impl DarklyEngine {
                     self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
                 }
                 self.pending_color_pick = None;
+                did_work = true;
+            }
+        }
+
+        // --- Copy readback ---
+        if let Some(ref pending) = self.pending_copy {
+            if let Some(pixels) = pending.request.poll(&self.gpu.device) {
+                let pending = self.pending_copy.take().unwrap();
+                self.complete_copy(pending, pixels);
                 did_work = true;
             }
         }
@@ -1453,46 +1730,118 @@ impl DarklyEngine {
     // --- Copy / Cut / Paste ---
 
     /// Copy the active layer's content (masked by selection) into the internal
-    /// clipboard. Returns a `ClipboardExport` with raw RGBA bytes for the JS
-    /// side to push to the system clipboard as PNG.
+    /// clipboard. Kicks off an async GPU readback — the result is available via
+    /// `poll_copy_result()` on the next frame. Returns `None` immediately.
     pub fn copy(&mut self, layer_id: u64) -> Option<ClipboardExport> {
-        let layer = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => r,
-            _ => return None,
-        };
-
-        // When editing a mask, copy from the mask instead of the layer tiles.
-        let clip = if self.editing_mask_layer == Some(layer_id) {
-            let mask = &layer.mask.as_ref()?.store;
-            ImageClip::from_mask(mask, self.doc.selection.as_ref())?
-        } else {
-            ImageClip::from_layer(
-                layer,
-                self.doc.selection.as_ref(),
-                self.doc.width,
-                self.doc.height,
-            )?
-        };
-
-        let (rgba, width, height, offset_x, offset_y) = clip.to_rgba();
-        self.clipboard = Some(Clipboard::ImageData(clip));
-
-        Some(ClipboardExport { rgba, width, height, offset_x, offset_y })
-    }
-
-    /// Cut = copy + clear. Returns the same export as copy.
-    pub fn cut(&mut self, layer_id: u64) -> Option<ClipboardExport> {
-        let export = self.copy(layer_id)?;
-
-        // Clear the selected region (or entire layer if no selection).
-        if self.doc.selection.is_some() {
-            self.gpu_clear_selection(layer_id);
-        } else {
-            // No selection — clear entire layer via GPU.
-            self.gpu_clear_layer(layer_id);
+        if self.doc.layer(layer_id).is_none() {
+            return None;
         }
 
-        Some(export)
+        self.start_copy_readback(layer_id, false);
+        None
+    }
+
+    /// Poll for a completed copy result. Returns the ClipboardExport once the
+    /// GPU readback has completed (typically the next frame after copy/cut).
+    pub fn poll_copy_result(&mut self) -> Option<ClipboardExport> {
+        self.pending_copy_result.take()
+    }
+
+    /// Start a GPU readback for copy (or cut). The readback completes
+    /// asynchronously and is processed in `poll_pending`.
+    fn start_copy_readback(&mut self, layer_id: u64, is_cut: bool) {
+        let is_mask = self.editing_mask_layer == Some(layer_id);
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+
+        // Determine bounds and check texture exists.
+        let format = if is_mask {
+            if self.compositor.mask_texture(layer_id).is_none() { return; }
+            wgpu::TextureFormat::R8Unorm
+        } else {
+            if self.compositor.layer_texture(layer_id).is_none() { return; }
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+        let region = self.copy_region_from_selection(canvas_w, canvas_h);
+
+        let texture = if is_mask {
+            &self.compositor.mask_texture(layer_id).unwrap().texture
+        } else {
+            &self.compositor.layer_texture(layer_id).unwrap().texture
+        };
+
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("copy-readback") },
+        );
+        let mut request = readback::request_readback(
+            &self.gpu.device, &mut encoder, texture, format, region,
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        request.begin_mapping();
+
+        // Also readback the selection mask for the same region if present.
+        let selection_data = self.readback_selection_region(region);
+
+        self.pending_copy = Some(PendingCopy {
+            request,
+            is_mask,
+            region,
+            selection_data,
+            is_cut,
+            layer_id,
+        });
+    }
+
+    /// Determine the copy region from the selection (or full canvas).
+    fn copy_region_from_selection(&self, canvas_w: u32, canvas_h: u32) -> [u32; 4] {
+        if let Some(sel) = &self.doc.selection {
+            if let Some((tx_min, ty_min, tx_max, ty_max)) = sel.bounding_rect() {
+                let ts = TILE_SIZE as i32;
+                let x = (tx_min * ts).max(0) as u32;
+                let y = (ty_min * ts).max(0) as u32;
+                let w = (((tx_max - tx_min + 1) * ts) as u32).min(canvas_w.saturating_sub(x));
+                let h = (((ty_max - ty_min + 1) * ts) as u32).min(canvas_h.saturating_sub(y));
+                return [x, y, w, h];
+            }
+        }
+        [0, 0, canvas_w, canvas_h]
+    }
+
+    /// Read selection coverage for a given region from CPU-side AlphaMask.
+    /// Returns None if there's no selection.
+    fn readback_selection_region(&self, region: [u32; 4]) -> Option<Vec<u8>> {
+        let selection = self.doc.selection.as_ref()?;
+        let [rx, ry, rw, rh] = region;
+        let ts = TILE_SIZE;
+        let mut data = vec![0u8; (rw * rh) as usize];
+        for ((tx, ty), tile) in selection.iter() {
+            let base_x = tx * ts as i32;
+            let base_y = ty * ts as i32;
+            let td = tile.data();
+            for ly in 0..ts {
+                for lx in 0..ts {
+                    let cx = base_x + lx as i32;
+                    let cy = base_y + ly as i32;
+                    let px = cx - rx as i32;
+                    let py = cy - ry as i32;
+                    if px >= 0 && py >= 0 && (px as u32) < rw && (py as u32) < rh {
+                        let v = (td.get(lx, ly) * 255.0).clamp(0.0, 255.0) as u8;
+                        data[(py as u32 * rw + px as u32) as usize] = v;
+                    }
+                }
+            }
+        }
+        Some(data)
+    }
+
+    /// Cut = copy + clear. The clear happens after the readback completes.
+    /// Returns `None` immediately; result available via `poll_copy_result()`.
+    pub fn cut(&mut self, layer_id: u64) -> Option<ClipboardExport> {
+        if self.doc.layer(layer_id).is_none() {
+            return None;
+        }
+        self.start_copy_readback(layer_id, true);
+        None
     }
 
     /// Paste raw RGBA bytes as a new layer. Used for both internal and external
@@ -1506,25 +1855,60 @@ impl DarklyEngine {
         offset_y: i32,
         active_layer_id: Option<u64>,
     ) -> u64 {
-        let clip = ImageClip::from_rgba(width, height, rgba, offset_x, offset_y);
-
         // Create a new layer and insert above the active layer.
         let id = self.doc.add_raster_layer();
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
             r.name = "Pasted Layer".to_string();
-            clip.write_to_layer(&mut r.surface.store, offset_x, offset_y);
-        }
-
-        // Mark all written tiles dirty for GPU upload.
-        if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
-            let keys: Vec<(i32, i32)> = r.surface.store.iter()
-                .map(|(k, _)| k).collect();
-            for (tx, ty) in keys {
-                r.surface.dirty.mark(tx, ty);
-            }
         }
 
         self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
+
+        // Write RGBA data directly to the GPU layer texture.
+        let canvas_w = self.compositor.canvas_width();
+        let canvas_h = self.compositor.canvas_height();
+
+        // Clip the paste region to the canvas bounds.
+        let src_x = (-offset_x).max(0) as u32;
+        let src_y = (-offset_y).max(0) as u32;
+        let dst_x = offset_x.max(0) as u32;
+        let dst_y = offset_y.max(0) as u32;
+        let copy_w = (width - src_x).min(canvas_w - dst_x);
+        let copy_h = (height - src_y).min(canvas_h - dst_y);
+
+        if copy_w > 0 && copy_h > 0 {
+            if let Some(layer_tex) = self.compositor.layer_texture(id) {
+                // Build a contiguous buffer for the clipped region.
+                let row_bytes = copy_w as usize * 4;
+                let mut buf = vec![0u8; row_bytes * copy_h as usize];
+                for row in 0..copy_h as usize {
+                    let src_row = (src_y as usize + row) * width as usize * 4 + src_x as usize * 4;
+                    let dst_row = row * row_bytes;
+                    buf[dst_row..dst_row + row_bytes]
+                        .copy_from_slice(&rgba[src_row..src_row + row_bytes]);
+                }
+
+                self.gpu.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &layer_tex.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: dst_x, y: dst_y, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &buf,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(row_bytes as u32),
+                        rows_per_image: None,
+                    },
+                    wgpu::Extent3d {
+                        width: copy_w,
+                        height: copy_h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+
         self.compositor.mark_dirty();
 
         // Position above active layer if specified.
@@ -1624,35 +2008,13 @@ impl DarklyEngine {
 
         let target_is_mask = self.editing_mask_layer == Some(layer_id);
 
-        let layer = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => r,
-            _ => return false,
-        };
-
-        // Extract source tiles for upload to GPU (used for preview texture).
-        // The tiles are only needed temporarily — FloatingContent doesn't store them.
-        let (source_tiles, source_origin, source_width, source_height) = if target_is_mask {
-            let mask_store = match &layer.mask {
-                Some(m) => &m.store,
-                None => return false,
-            };
-            let clip = match ImageClip::from_mask(mask_store, self.doc.selection.as_ref()) {
-                Some(c) => c,
-                None => return false,
-            };
-            source_from_clip(&clip)
-        } else {
-            let clip = match ImageClip::from_layer(
-                layer,
-                self.doc.selection.as_ref(),
-                self.doc.width,
-                self.doc.height,
-            ) {
-                Some(c) => c,
-                None => return false,
-            };
-            source_from_clip(&clip)
-        };
+        if self.doc.layer(layer_id).is_none() {
+            return false;
+        }
+        if target_is_mask {
+            let has_mask = matches!(self.doc.layer(layer_id), Some(Layer::Raster(r)) if r.mask.is_some());
+            if !has_mask { return false; }
+        }
 
         let format = if target_is_mask {
             wgpu::TextureFormat::R8Unorm
@@ -1661,6 +2023,34 @@ impl DarklyEngine {
         };
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
+
+        // Determine source bounds.
+        // With selection: use selection tile extent.
+        // Without selection: use full canvas (content bounds tracking is a future optimization).
+        let (source_origin, source_width, source_height) = if let Some(sel) = &self.doc.selection {
+            match sel.bounding_rect() {
+                Some((tx_min, ty_min, tx_max, ty_max)) => {
+                    let ts = TILE_SIZE as i32;
+                    let x = tx_min * ts;
+                    let y = ty_min * ts;
+                    let w = ((tx_max - tx_min + 1) * ts) as u32;
+                    let h = ((ty_max - ty_min + 1) * ts) as u32;
+                    // Clamp to canvas bounds.
+                    let x = x.max(0);
+                    let y = y.max(0);
+                    let w = w.min(canvas_w.saturating_sub(x as u32));
+                    let h = h.min(canvas_h.saturating_sub(y as u32));
+                    ((x, y), w, h)
+                }
+                None => return false, // empty selection
+            }
+        } else {
+            ((0i32, 0i32), canvas_w, canvas_h)
+        };
+
+        if source_width == 0 || source_height == 0 {
+            return false;
+        }
 
         // Save the full canvas GPU texture to scratch (pre-clear snapshot for
         // undo and cancel). Must happen before the clear.
@@ -1682,14 +2072,82 @@ impl DarklyEngine {
             }
         }
 
-        // Clear the source region on the GPU texture directly.
-        let clear_x = source_origin.0.max(0) as u32;
-        let clear_y = source_origin.1.max(0) as u32;
-        let clear_w = source_width.min(canvas_w.saturating_sub(clear_x));
-        let clear_h = source_height.min(canvas_h.saturating_sub(clear_y));
-        let clear_rect = [clear_x, clear_y, clear_w, clear_h];
-
+        // Copy source region from GPU texture to transform source texture.
         {
+            let mut encoder = self.gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("transform-copy-source") },
+            );
+            self.compositor.set_floating_content_from_gpu(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &mut encoder,
+                source_origin,
+                source_width,
+                source_height,
+                layer_id,
+                target_is_mask,
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+        }
+
+        // If selection is active, mask the source texture so only selected pixels
+        // are included in the transform. Also clear only selected pixels on the layer.
+        let has_selection = self.doc.selection.is_some();
+        if has_selection {
+            // Upload a cropped selection mask matching the source region dimensions.
+            let cropped_sel_bg = self.upload_cropped_selection_mask(
+                source_origin, source_width, source_height,
+            );
+            // Full-canvas selection for erasing on the layer.
+            let full_sel_bg = self.upload_selection_mask(canvas_w, canvas_h);
+
+            if let Some(sel_bg) = &cropped_sel_bg {
+                // Multiply source texture by selection mask — zeroes out unselected pixels.
+                if let Some(source_tex) = self.compositor.transform_source_texture() {
+                    let target = GpuPaintTarget {
+                        texture: source_tex.0,
+                        view: source_tex.1,
+                        format,
+                        width: source_width,
+                        height: source_height,
+                    };
+                    let mut encoder = self.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("transform-sel-mask") },
+                    );
+                    target.multiply_by_mask(
+                        &mut encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg,
+                    );
+                    self.gpu.queue.submit([encoder.finish()]);
+                }
+            }
+
+            if let Some(sel_bg) = &full_sel_bg {
+                // Clear selected pixels on the layer using erase_with_selection.
+                let layer_target = if target_is_mask {
+                    self.compositor.mask_texture(layer_id)
+                        .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
+                } else {
+                    self.compositor.layer_texture(layer_id)
+                        .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
+                };
+                if let Some(target) = layer_target {
+                    let mut encoder = self.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("transform-clear-sel") },
+                    );
+                    target.erase_with_selection(
+                        &mut encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg,
+                    );
+                    self.gpu.queue.submit([encoder.finish()]);
+                }
+            }
+        } else {
+            // No selection — clear the full source region on the layer.
+            let clear_x = source_origin.0.max(0) as u32;
+            let clear_y = source_origin.1.max(0) as u32;
+            let clear_w = source_width.min(canvas_w.saturating_sub(clear_x));
+            let clear_h = source_height.min(canvas_h.saturating_sub(clear_y));
+            let clear_rect = [clear_x, clear_y, clear_w, clear_h];
+
             let target = if target_is_mask {
                 self.compositor.mask_texture(layer_id)
                     .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
@@ -1709,17 +2167,11 @@ impl DarklyEngine {
             }
         }
 
-        // Upload source tiles to GPU for preview (tiles are consumed here)
-        self.compositor.set_floating_content(
-            &self.gpu.device,
-            &self.gpu.queue,
-            &source_tiles,
-            source_origin,
-            source_width,
-            source_height,
-            layer_id,
-            target_is_mask,
-        );
+        let clear_x = source_origin.0.max(0) as u32;
+        let clear_y = source_origin.1.max(0) as u32;
+        let clear_w = source_width.min(canvas_w.saturating_sub(clear_x));
+        let clear_h = source_height.min(canvas_h.saturating_sub(clear_y));
+        let clear_rect = [clear_x, clear_y, clear_w, clear_h];
 
         self.floating = Some(FloatingContent {
             source_origin,
@@ -1733,7 +2185,7 @@ impl DarklyEngine {
 
         // Selection was used to define what gets picked up — clear it now so
         // the marching ants disappear and the transform output isn't clipped.
-        if self.doc.selection.is_some() {
+        if has_selection {
             self.doc.selection = None;
             self.update_selection_overlay();
         }

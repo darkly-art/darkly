@@ -1,22 +1,9 @@
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
 use crate::gpu::overlay::{OverlayPrimitive, ToolOverlay};
-use crate::gpu::staging::StagingRing;
 use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::ViewTransform;
-use crate::dirty::dirty_pixel_rect;
 use crate::document::{Document, ROOT_ID};
-use crate::tile::{TileData, TILE_SIZE as TILE_SIZE_USIZE};
-use std::sync::LazyLock;
-
-/// Blank (fully transparent) tile data uploaded when a tile has been removed
-/// from the grid (e.g. by undo) but the GPU texture still has stale data.
-static BLANK_TILE: LazyLock<TileData> = LazyLock::new(TileData::default);
-
-/// Fully opaque (255) mask tile data for uploading full mask tiles.
-static FULL_MASK_TILE: LazyLock<[u8; TILE_SIZE_USIZE * TILE_SIZE_USIZE]> =
-    LazyLock::new(|| [255u8; TILE_SIZE_USIZE * TILE_SIZE_USIZE]);
-
 use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
 use std::collections::HashMap;
 
@@ -127,7 +114,6 @@ pub struct Compositor {
     /// View transform uniform buffer for the present shader.
     view_uniform_buf: wgpu::Buffer,
 
-    staging: StagingRing,
     sampler: wgpu::Sampler,
 
     /// Dirty gate — false means nothing changed, skip compositing.
@@ -484,8 +470,6 @@ impl Compositor {
         let mut group_state = HashMap::new();
         group_state.insert(ROOT_ID, root_state);
 
-        let staging = StagingRing::new();
-
         let veil_chain = VeilChain::new(
             device,
             sampler.clone(),
@@ -513,7 +497,6 @@ impl Compositor {
             _present_bind_group_layout,
             present_cache_bind_group,
             view_uniform_buf,
-            staging,
             sampler,
             needs_composite: true,
             needs_present: false,
@@ -882,6 +865,51 @@ impl Compositor {
         self.mark_dirty();
     }
 
+    /// Set floating content by copying directly from a layer's GPU texture.
+    /// GPU→GPU copy — no CPU tiles involved. Looks up the texture from
+    /// `layer_textures` / `mask_textures` by `target_layer` and `target_is_mask`.
+    pub fn set_floating_content_from_gpu(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        source_origin: (i32, i32),
+        source_width: u32,
+        source_height: u32,
+        target_layer: LayerId,
+        target_is_mask: bool,
+    ) {
+        let layer_texture = if target_is_mask {
+            match self.mask_textures.get(&target_layer) {
+                Some(t) => &t.texture,
+                None => return,
+            }
+        } else {
+            match self.layer_textures.get(&target_layer) {
+                Some(t) => &t.texture,
+                None => return,
+            }
+        };
+        let root = self.group_state.get(&ROOT_ID).expect("root GroupState missing");
+        self.transform_pass.set_floating_content_from_gpu(
+            device,
+            queue,
+            encoder,
+            &self.sampler,
+            &root.accum.views,
+            &root.composite_cache_view,
+            layer_texture,
+            source_origin,
+            source_width,
+            source_height,
+            self.padded_width,
+            self.padded_height,
+            target_layer,
+            target_is_mask,
+        );
+        self.mark_dirty();
+    }
+
     /// Update the floating content's affine transform matrix for real-time preview.
     pub fn update_floating_matrix(
         &mut self,
@@ -944,6 +972,12 @@ impl Compositor {
         self.mark_dirty();
     }
 
+    /// Get a reference to the transform source texture and its view.
+    /// Returns None if no floating content is active.
+    pub fn transform_source_texture(&self) -> Option<(&wgpu::Texture, &wgpu::TextureView)> {
+        self.transform_pass.active.as_ref().map(|s| (&s.source_texture, &s.source_view))
+    }
+
     /// Check if floating content is active.
     pub fn has_floating_content(&self) -> bool {
         self.transform_pass.active.is_some()
@@ -989,169 +1023,19 @@ impl Compositor {
         );
     }
 
-    /// Upload dirty tiles and composite changed layers (no surface present).
-    /// Returns true if GPU work was submitted, false if skipped (nothing dirty).
+    /// Composite layer tree to offscreen target. GPU textures are authoritative —
+    /// no CPU tile upload needed. Returns true if GPU work was submitted.
     pub fn render_offscreen(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         doc: &mut Document,
     ) -> bool {
-        // 1. Check if any dirty regions exist before scanning layers.
-        let has_dirty = doc.has_dirty_layers();
-        let has_mask_dirty = doc.has_dirty_masks();
-
-        if !self.needs_composite && !has_dirty && !has_mask_dirty {
-            return false;
-        }
-
-        // 2. Upload dirty tiles for each dirty raster layer
-        if has_dirty {
-            for raster in doc.all_raster_layers() {
-                if raster.surface.dirty.is_empty() { continue; }
-
-                let layer_tex = match self.layer_textures.get(&raster.id) {
-                    Some(t) => t,
-                    None => continue,
-                };
-
-                for (tx, ty) in raster.surface.dirty.iter() {
-                    if tx < 0 || ty < 0 {
-                        continue;
-                    }
-                    if tx as u32 >= layer_tex.width_in_tiles
-                        || ty as u32 >= layer_tex.height_in_tiles
-                    {
-                        continue;
-                    }
-                    let tile_data = match raster.surface.store.get(tx, ty) {
-                        Some(tile) => tile.data(),
-                        None => &BLANK_TILE,
-                    };
-                    self.staging.upload_tile(
-                        queue,
-                        tile_data,
-                        &layer_tex.texture,
-                        tx as u32,
-                        ty as u32,
-                    );
-                }
-
-                self.needs_composite = true;
-            }
-        }
-
-        // 2b. Upload dirty mask tiles (f32→u8 conversion, R8Unorm format).
-        // Only upload when mask_enabled || show_mask (GIMP's dormant mask optimization).
-        // Works for both raster layers and groups.
-        if has_mask_dirty {
-
-            // Collect (id, mask_store, mask_dirty) for both rasters and groups
-            struct MaskUploadInfo<'a> {
-                id: LayerId,
-                mask: &'a crate::tile::AlphaMask,
-                dirty: &'a crate::dirty::DirtyRegion,
-            }
-
-            let mut uploads: Vec<MaskUploadInfo> = Vec::new();
-
-            for raster in doc.all_raster_layers() {
-                if !(raster.mask_enabled || raster.show_mask) { continue; }
-                if let Some(m) = &raster.mask {
-                    uploads.push(MaskUploadInfo { id: raster.id, mask: &m.store, dirty: &m.dirty });
-                }
-            }
-            for group in doc.all_groups() {
-                if !(group.mask_enabled || group.show_mask) { continue; }
-                if let Some(m) = &group.mask {
-                    uploads.push(MaskUploadInfo { id: group.id, mask: &m.store, dirty: &m.dirty });
-                }
-            }
-
-            let ts = TILE_SIZE_USIZE;
-            for info in &uploads {
-                if info.dirty.is_empty() { continue; }
-
-                let mask_tex = match self.mask_textures.get(&info.id) {
-                    Some(t) => t,
-                    None => continue,
-                };
-
-                for (tx, ty) in info.dirty.iter() {
-                    if tx < 0 || ty < 0 {
-                        continue;
-                    }
-                    if tx as u32 >= mask_tex.width_in_tiles
-                        || ty as u32 >= mask_tex.height_in_tiles
-                    {
-                        continue;
-                    }
-
-                    // Convert f32 mask tile to u8 for R8Unorm upload
-                    let u8_data: &[u8] = match info.mask.get(tx, ty) {
-                        Some(tile) => {
-                            thread_local! {
-                                static BUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(
-                                    vec![0u8; 64 * 64]
-                                );
-                            }
-                            BUF.with(|buf| {
-                                let mut buf = buf.borrow_mut();
-                                let data = tile.data();
-                                for i in 0..(ts * ts) {
-                                    buf[i] = (data.0[i].clamp(0.0, 1.0) * 255.0) as u8;
-                                }
-                                unsafe {
-                                    std::slice::from_raw_parts(buf.as_ptr(), ts * ts)
-                                }
-                            })
-                        }
-                        None => &*FULL_MASK_TILE,
-                    };
-
-                    queue.write_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &mask_tex.texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d {
-                                x: tx as u32 * ts as u32,
-                                y: ty as u32 * ts as u32,
-                                z: 0,
-                            },
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        u8_data,
-                        wgpu::TexelCopyBufferLayout {
-                            offset: 0,
-                            bytes_per_row: Some(ts as u32),
-                            rows_per_image: None,
-                        },
-                        wgpu::Extent3d {
-                            width: ts as u32,
-                            height: ts as u32,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                }
-
-                self.needs_composite = true;
-            }
-        }
-
         if !self.needs_composite {
-            doc.clear_all_dirty();
             return false;
         }
 
-        // Collect dirty regions for scissor calculation
-        let dirty_refs: Vec<_> = doc.all_raster_layers().iter()
-            .map(|r| &r.surface.dirty)
-            .collect();
-        let scissor = dirty_pixel_rect(
-            dirty_refs.into_iter(),
-            self.canvas_width,
-            self.canvas_height,
-        ).unwrap_or((0, 0, self.canvas_width, self.canvas_height));
+        let scissor = (0, 0, self.canvas_width, self.canvas_height);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("composite"),
@@ -1161,7 +1045,6 @@ impl Compositor {
 
         queue.submit(std::iter::once(encoder.finish()));
 
-        doc.clear_all_dirty();
         self.needs_composite = false;
         true
     }
@@ -1546,13 +1429,11 @@ impl Compositor {
         }
     }
 
-    /// Whether any rendering work is pending (dirty tiles, present, veils).
-    fn has_pending_work(&self, doc: &Document) -> bool {
+    /// Whether any rendering work is pending (composite, present, veils).
+    fn has_pending_work(&self, _doc: &Document) -> bool {
         self.needs_composite
             || self.needs_present
             || self.veil_chain.needs_present()
-            || doc.has_dirty_layers()
-            || doc.has_dirty_masks()
     }
 
     /// Clear present-related dirty flags after a frame.
