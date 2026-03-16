@@ -1,6 +1,6 @@
 # GPU-Authoritative Engine Refactor — Implementation Plan
 
-## Status: PLANNED
+## Status: Phases 1-4 COMPLETE, Phase 5 PLANNED
 
 Reference: [gpu-authoritative-architecture.md](gpu-authoritative-architecture.md)
 
@@ -300,11 +300,85 @@ Clipboard paste uploads pixels directly to a GPU texture via `queue.write_textur
 
 ---
 
-## Phase 5: Remove CPU Tile Infrastructure
+## Phase 5: Migrate Remaining CPU Tile Readers to GPU
+
+After Phase 4, paint/gradient/flood fill/transform commit all go through GPU. But several features still READ from CPU tile stores and will break (or silently do nothing) because GPU-painted content only exists on the GPU texture. This phase migrates those readers before Phase 6 deletes the tile infrastructure.
+
+### 5A. Transform Source — GPU→GPU Copy
+
+`begin_transform()` calls `ImageClip::from_layer()` which reads CPU tiles. GPU-painted content is invisible to it — transform does nothing on a layer that was painted via GPU.
+
+**Fix:** Copy the source region directly from the layer GPU texture to the floating source texture (GPU→GPU copy via `copy_texture_to_texture`). The layer texture already stores premultiplied alpha from the paint blend state, which is what the transform source needs.
+
+For bounds:
+- **With selection:** use selection mask tile extent (already works — selections are CPU-side).
+- **Without selection:** readback the layer texture and scan for tight pixel bounds. Cache the result. (Alternatively: maintain a cumulative `content_bounds` rect per layer, updated on each paint/clear/paste operation — cheaper, no readback, but slightly loose bounds.)
+
+New methods:
+- `TransformPass::set_floating_content_from_gpu(encoder, layer_texture, region, ...)` — copies from layer texture instead of rasterizing CPU tiles.
+- `Compositor::set_floating_content_from_gpu(...)` — wrapper.
+
+The CPU-tile path (`set_floating_content` with `TileGrid`) is kept temporarily for paste (which builds tiles from external RGBA bytes). It can be simplified in Phase 6.
+
+### 5B. Copy/Clipboard — GPU Readback
+
+`copy()` calls `ImageClip::from_layer()` → reads CPU tiles → returns `None` for GPU-painted layers.
+
+**Fix:** Readback the relevant region from the GPU texture, then build `ImageClip` from the readback bytes.
+
+Flow:
+1. Determine bounds (selection mask tiles, or full canvas if no selection).
+2. `readback::request_readback(layer_texture, region)`.
+3. On WASM: async — `begin_mapping` + poll each frame, deliver clipboard data when ready.
+4. On native: `blocking_read`.
+5. Build `ImageClip::from_rgba(width, height, &readback_bytes, offset_x, offset_y)`.
+
+Mask copy (`ImageClip::from_mask`) similarly readbacks the R8 mask texture and converts to grayscale RGBA.
+
+### 5C. Compositor Upload Loop — Remove
+
+The dirty tile upload loop in `render_offscreen()` reads CPU tiles and uploads them to GPU textures. After Phase 4, GPU textures are already authoritative — this upload is redundant (and actively harmful, since it would overwrite GPU-painted content with stale CPU tile data).
+
+**Fix:** Delete the dirty tile upload loop. The compositor already composites from `layer_textures` / `mask_textures` — just stop uploading to them from CPU tiles. Keep the layer texture creation/deletion logic (triggered by layer add/remove), but initial content comes from GPU operations, not CPU tiles.
+
+Also delete `has_dirty_layers()`, `has_dirty_masks()`, `clear_all_dirty()` from `Document`.
+
+### 5D. Mask ↔ Selection — GPU Texture Path
+
+`mask_to_selection()` clones the CPU mask tile store to become the selection. `selection_to_mask()` does the reverse.
+
+**Fix:** The selection mask is already an `AlphaMask` (CPU-side `TileStore<AlphaF32>`). For now, readback the GPU mask texture → build `AlphaMask` from readback bytes for `mask_to_selection`. The reverse (`selection_to_mask`) uploads from `AlphaMask` to GPU mask texture.
+
+(Full GPU-side selection is deferred to Phase 6.)
+
+### 5E. Apply Mask Destructive — GPU Render Pass
+
+`apply_mask_destructive()` iterates every pixel of mask × layer, multiplying layer alpha by mask value. This is a per-pixel CPU operation.
+
+**Fix:** A simple GPU render pass that reads the mask texture and multiplies the layer texture's alpha channel. Single fullscreen triangle, fragment shader: `layer.a *= mask_sample`. Uses the existing `GpuPaintTarget` pattern with a custom blend state or a dedicated shader.
+
+### 5F. Paste Write — Delete CPU Path
+
+`paste_image()` calls `clip.write_to_layer(&mut r.surface.store, ...)` to write pixels to CPU tiles. The GPU texture is already updated separately via `set_floating_content` + `commit_floating`. The CPU write is redundant — just delete it.
+
+### 5G. What Changes
+
+| Operation | Before (CPU) | After (GPU) |
+|-----------|-------------|-------------|
+| Transform source | `ImageClip::from_layer` → `source_from_clip` | `copy_texture_to_texture` from layer tex |
+| Copy to clipboard | `ImageClip::from_layer` reads CPU tiles | GPU readback → `ImageClip::from_rgba` |
+| Compositor upload | Dirty tile scan → `write_texture` per tile | Deleted (GPU already authoritative) |
+| Mask → selection | Clone mask `TileStore` | Readback mask texture → build `AlphaMask` |
+| Apply mask | Per-pixel CPU multiply | GPU render pass (mask × layer alpha) |
+| Paste to layer tiles | `write_to_layer` on CPU tiles | Deleted (GPU path via floating content) |
+
+---
+
+## Phase 6: Remove CPU Tile Infrastructure
 
 Everything now goes through GPU. Rip out the CPU pixel store.
 
-### 5A. Delete Dead Code
+### 6A. Delete Dead Code
 
 | File | Removed |
 |------|---------|
@@ -336,18 +410,18 @@ pub struct RasterLayer {
 
 The `Compositor`'s `layer_textures` / `mask_textures` are now the source of truth.
 
-### 5C. Save/Export
+### 6C. Save/Export
 
 Without CPU tiles, save uses the readback utility:
 1. `readback_region(layer_tex, full_rect) -> Vec<u8>` per layer.
 2. Encode pixel data into file format.
 3. For large canvases, readback all layers in parallel (one `copy_texture_to_buffer` per layer, single submit).
 
-### 5D. Selection Migration
+### 6D. Selection Migration
 
 Move selection mask from `TileStore<AlphaF32>` to an R8 GPU texture. Boolean operations (add/subtract/intersect) use readback → modify → upload — acceptable because selection changes are infrequent.
 
-### 5E. What Survives
+### 6E. What Survives
 
 - `UndoStack`, `UndoAction` trait, all non-tile undo actions — unchanged.
 - `tile.rs` data types (`RgbaData`, `AlphaF32Data`, `TILE_SIZE`) — keep if needed by flood fill CPU path.
@@ -364,7 +438,8 @@ Move selection mask from `TileStore<AlphaF32>` to an R8 GPU texture. Boolean ope
 | 2. Basic Brush → GPU | Wire paint_circle/erase_circle through GPU | ~300 lines | ~0 (bypass only) | Medium — changes the hot path |
 | 3. Remaining Paint Ops | Gradient, flood fill, clear → GPU | ~300 lines | ~200 lines | Low — each op independent |
 | 4. Transform Commit | Preview shader = commit shader | ~100 lines | ~150 lines | Low — well-contained |
-| 5. Remove CPU Tiles | Delete TileStore, DirtyRegion, Memento | ~0 | ~1500 lines | Medium — many call sites |
+| 5. Migrate CPU Readers | Transform source, copy, mask ops → GPU | ~400 lines | ~200 lines | Medium — async readback on WASM |
+| 6. Remove CPU Tiles | Delete TileStore, DirtyRegion, Memento | ~0 | ~1500 lines | Medium — many call sites |
 
 ---
 
@@ -626,7 +701,42 @@ Pixel-exact comparison at each step.
 
 ### Phase 5 Tests
 
-**Regression suite — re-run all Phase 2-4 tests.**
+**Transform from GPU-painted content:**
+```
+1. Paint circles on a layer via GPU (no CPU tiles populated).
+2. begin_transform (should detect content from GPU texture).
+3. Translate by (10, 10), commit.
+4. Readback → painted content at new position, old position clear.
+5. Undo → content at original position.
+```
+
+**Copy from GPU-painted layer:**
+```
+1. Paint red circles on a transparent layer via GPU.
+2. copy(layer_id) → should return non-None clipboard data.
+3. Verify clipboard RGBA bytes match the painted content.
+4. Paste → new layer has the copied content.
+```
+
+**Copy with selection on GPU-painted layer:**
+```
+1. Paint on a layer via GPU.
+2. Create selection covering part of the painted area.
+3. copy(layer_id) → only selected portion copied.
+4. Verify clipboard bounds match selection bounds.
+```
+
+**Apply mask destructive via GPU:**
+```
+1. Fill layer with opaque red.
+2. Paint mask with 50% gray center region.
+3. apply_mask_destructive.
+4. Readback → center has alpha ~128, edges have alpha 255.
+```
+
+### Phase 6 Tests
+
+**Regression suite — re-run all Phase 2-5 tests.**
 After removing CPU tiles, every previous test must still pass. This is the primary validation that nothing was missed.
 
 **Save/export round-trip:**
@@ -656,7 +766,7 @@ Verifies LayerAddAction/LayerRemoveAction work with GPU textures.
 
 ---
 
-## What This Enables (After Phase 5)
+## What This Enables (After Phase 6)
 
 With the GPU engine stable and the basic brush working on it:
 
