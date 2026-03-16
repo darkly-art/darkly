@@ -4,7 +4,7 @@ use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY, s
 use crate::layer::{BlendMode, Layer, LayerNode};
 use crate::undo::{
     UndoStack, GpuRegionAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
-    MaskPropertyAction, PropertyAction, SelectionAction, mark_affected_dirty,
+    MaskPropertyAction, PropertyAction, SelectionAction,
 };
 use crate::undo::property::Property;
 use crate::gpu::compositor::Compositor;
@@ -692,6 +692,48 @@ impl DarklyEngine {
         self.update_selection_overlay();
     }
 
+    /// Upload CPU-side layer tiles (RGBA8) to the GPU layer texture.
+    fn upload_layer_tiles_to_gpu(&self, layer_id: u64) {
+        let layer_tex = match self.compositor.layer_texture(layer_id) {
+            Some(t) => t,
+            None => return,
+        };
+        let raster = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => r,
+            _ => return,
+        };
+        let ts = TILE_SIZE;
+        for ((tx, ty), tile) in raster.surface.store.iter() {
+            if tx < 0 || ty < 0 { continue; }
+            if tx as u32 >= layer_tex.width_in_tiles || ty as u32 >= layer_tex.height_in_tiles {
+                continue;
+            }
+            self.gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &layer_tex.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: tx as u32 * ts as u32,
+                        y: ty as u32 * ts as u32,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &tile.data().0,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(ts as u32 * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: ts as u32,
+                    height: ts as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+
     /// Upload CPU-side mask data (AlphaMask) to the GPU mask texture.
     fn upload_mask_to_gpu(&self, layer_id: u64) {
         let mask_tex = match self.compositor.mask_texture(layer_id) {
@@ -791,6 +833,8 @@ impl DarklyEngine {
 
     pub fn fill_gradient(&mut self, layer_id: u64) {
         self.doc.fill_gradient(layer_id);
+        self.upload_layer_tiles_to_gpu(layer_id);
+        self.compositor.mark_dirty();
     }
 
     // --- Stroke lifecycle ---
@@ -1467,7 +1511,10 @@ impl DarklyEngine {
         }
 
         self.undo_stack.complete_undo(action);
-        mark_affected_dirty(&mut self.doc, &affected);
+        // Upload any CPU tiles that were restored by TileAction undo.
+        for &layer_id in affected.keys() {
+            self.upload_layer_tiles_to_gpu(layer_id);
+        }
         self.sync_compositor_layers();
         self.compositor.mark_dirty();
         self.update_selection_overlay();
@@ -1500,7 +1547,10 @@ impl DarklyEngine {
         }
 
         self.undo_stack.complete_redo(action);
-        mark_affected_dirty(&mut self.doc, &affected);
+        // Upload any CPU tiles that were restored by TileAction redo.
+        for &layer_id in affected.keys() {
+            self.upload_layer_tiles_to_gpu(layer_id);
+        }
         self.sync_compositor_layers();
         self.compositor.mark_dirty();
         self.update_selection_overlay();
@@ -2361,16 +2411,12 @@ impl DarklyEngine {
             show_mask: bool,
             mask_enabled: bool,
             has_mask: bool,
-            mask_coords: Vec<(i32, i32)>,
         }
         let infos: Vec<RasterInfo> = self.doc.all_raster_layers().into_iter().map(|r| {
-            let mask_coords: Vec<(i32, i32)> = r.mask.as_ref()
-                .map(|m| m.store.iter().map(|((tx, ty), _)| (tx, ty)).collect())
-                .unwrap_or_default();
             RasterInfo {
                 id: r.id, opacity: r.opacity, blend_mode: r.blend_mode,
                 show_mask: r.show_mask, mask_enabled: r.mask_enabled,
-                has_mask: r.mask.is_some(), mask_coords,
+                has_mask: r.mask.is_some(),
             }
         }).collect();
 
@@ -2383,15 +2429,9 @@ impl DarklyEngine {
             self.compositor.update_mask_binding(
                 &self.gpu.device, info.id, info.mask_enabled, info.show_mask,
             );
-            // Mark all mask tiles dirty for re-upload after undo/redo
-            if !info.mask_coords.is_empty() {
-                if let Some(Layer::Raster(r)) = self.doc.layer_mut(info.id) {
-                    if let Some(mask) = &mut r.mask {
-                        for &(tx, ty) in &info.mask_coords {
-                            mask.dirty.mark(tx, ty);
-                        }
-                    }
-                }
+            // Upload mask tiles to GPU after undo/redo (dirty upload loop removed).
+            if info.has_mask {
+                self.upload_mask_to_gpu(info.id);
             }
         }
 
