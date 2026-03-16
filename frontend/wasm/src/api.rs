@@ -147,9 +147,21 @@ impl DarklyHandle {
         vec![cx, cy]
     }
 
-    pub fn pick_color(&self, x: f32, y: f32) -> Vec<u8> {
+    /// Start an async color pick. Returns the last picked color immediately
+    /// for responsive UI — the real result arrives on the next frame.
+    pub fn pick_color(&mut self, x: f32, y: f32) -> Vec<u8> {
         let c = self.0.pick_color(x, y);
         c.to_vec()
+    }
+
+    /// Get the most recently resolved color pick result.
+    pub fn last_picked_color(&self) -> Vec<u8> {
+        self.0.last_picked_color().to_vec()
+    }
+
+    /// True if a color pick readback is still in flight.
+    pub fn has_pending_color_pick(&self) -> bool {
+        self.0.has_pending_color_pick()
     }
 
     // --- Rendering ---

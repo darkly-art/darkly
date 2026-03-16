@@ -1,24 +1,40 @@
 //! On-demand async GPU→CPU pixel readback.
 //!
 //! Used for save/export, clipboard copy, flood fill seed reads, and color picking.
+//!
+//! On WebGPU (WASM), `map_async` resolves via a JS Promise — the browser event
+//! loop must run before the callback fires.  `blocking_read` therefore spins
+//! `device.poll(Wait)` which never completes in single-threaded WASM, freezing
+//! the tab at 100% CPU.
+//!
+//! The correct pattern: call [`begin_mapping`] after `queue.submit`, then poll
+//! with [`poll`] each frame until the data arrives.  `blocking_read` is kept
+//! only for headless / native test code.
 
 /// Alignment required by wgpu for bytes_per_row in buffer↔texture copies.
 const COPY_ROW_ALIGNMENT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
 /// A pending GPU→CPU readback.
 ///
-/// Created by [`request_readback`], completed by [`poll`] or [`blocking_read`].
+/// Created by [`request_readback`], which encodes the copy command.
+/// After submitting the encoder, call [`begin_mapping`] to start the async map,
+/// then [`poll`] each frame until data is available.
 pub struct ReadbackRequest {
     buffer: wgpu::Buffer,
     height: u32,
     padded_row_bytes: u32,
     unpadded_row_bytes: u32,
+    /// Receiver for the map_async callback.  `None` until `begin_mapping()`.
+    rx: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
 /// Initiate a readback of a texture region.
 ///
-/// Encodes a `copy_texture_to_buffer` command. The returned [`ReadbackRequest`]
-/// can be polled or blocking-read after the encoder is submitted.
+/// Encodes a `copy_texture_to_buffer` command into `encoder`.
+/// After this, the caller must:
+/// 1. `queue.submit([encoder.finish()])`
+/// 2. `request.begin_mapping()`
+/// 3. Poll with `request.poll(device)` each frame.
 pub fn request_readback(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
@@ -64,33 +80,55 @@ pub fn request_readback(
         height: h,
         padded_row_bytes,
         unpadded_row_bytes,
+        rx: None,
     }
 }
 
 impl ReadbackRequest {
-    /// Non-blocking poll. Returns `Some(pixels)` if the readback is ready.
-    pub fn poll(&self, device: &wgpu::Device) -> Option<Vec<u8>> {
+    /// Start the async buffer mapping.
+    ///
+    /// **Must** be called after `queue.submit()` — the copy command must be
+    /// submitted before the map can complete.  Call this exactly once.
+    pub fn begin_mapping(&mut self) {
         let slice = self.buffer.slice(..);
-
-        // Start the map if not already started.
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         slice.map_async(wgpu::MapMode::Read, move |result| {
             let _ = tx.send(result);
         });
+        self.rx = Some(rx);
+    }
 
+    /// Non-blocking poll.  Returns `Some(pixels)` when the readback is ready.
+    ///
+    /// Calls `device.poll(Poll)` to give the backend a chance to process
+    /// callbacks (needed on native; on WebGPU the browser resolves the
+    /// Promise between frames).
+    pub fn poll(&self, device: &wgpu::Device) -> Option<Vec<u8>> {
+        let rx = self.rx.as_ref()?;
+
+        // Nudge the backend so it can fire ready callbacks (native).
         let _ = device.poll(wgpu::PollType::Poll);
 
         match rx.try_recv() {
             Ok(Ok(())) => {
+                let slice = self.buffer.slice(..);
                 let data = self.extract_pixels(&slice);
                 self.buffer.unmap();
                 Some(data)
             }
-            _ => None,
+            Ok(Err(e)) => {
+                log::error!("readback buffer mapping failed: {e}");
+                None
+            }
+            Err(_) => None, // not ready yet
         }
     }
 
-    /// Blocking read. Waits until the GPU is done and returns the pixel data.
+    /// Blocking read — **native / test only**.
+    ///
+    /// On WebGPU/WASM this will spin at 100% CPU forever because `map_async`
+    /// resolves via a JS Promise that requires the event loop.  Use the
+    /// async `begin_mapping` + `poll` path for production code.
     pub fn blocking_read(&self, device: &wgpu::Device) -> Vec<u8> {
         let slice = self.buffer.slice(..);
 
@@ -119,7 +157,6 @@ impl ReadbackRequest {
         let padded = self.padded_row_bytes as usize;
 
         if unpadded == padded {
-            // No padding — fast path.
             return mapped.to_vec();
         }
 

@@ -62,3 +62,22 @@ Similarly, the GPU hardware bilinear sampler uses `u × N − 0.5` to convert UV
 2. `sample_bilinear`: convert from pixel-center to texel-index space via `sx - 0.5`, with bounds check adjusted to `[-0.5, w-0.5]` to allow the half-texel clamp-to-edge border.
 
 **Takeaway**: Any CPU code that replicates what a GPU shader does must use pixel-center coordinates `(i + 0.5, j + 0.5)`, not integer positions `(i, j)`. The 0.5 offset is not a fudge factor — it's a spec-defined convention. This applies to any future CPU-side rasterization, ray casting, or texture sampling that needs to match GPU output.
+
+## 5. GPU buffer readback deadlocks on WebGPU/WASM
+
+**Problem**: Flood fill and color picker froze the Chrome tab permanently, pegging one CPU core at 100%. Both operations used `blocking_read()` to synchronously wait for a GPU→CPU buffer mapping.
+
+**Root cause**: `blocking_read` called `device.poll(PollType::Wait)` then `rx.recv()`. On native backends (Vulkan, Metal, DX12), `poll(Wait)` processes the `map_async` callback synchronously — the callback fires during `poll`, sends on the channel, and `recv()` returns immediately. On WebGPU/WASM, `map_async` resolves via a JavaScript Promise through the browser event loop. `poll(Wait)` has no native blocking mechanism on web — wgpu implements it as a spin loop. But the Promise can never resolve because the spin loop never yields back to the JS event loop. Result: infinite busy-wait at 100% CPU.
+
+The color picker (1×1 pixel readback) and the flood fill (full-canvas readback) both hit the same deadlock — the buffer size doesn't matter, the mechanism is fundamentally broken on web.
+
+**Why it wasn't caught earlier**: The blocking pattern works perfectly on native (tests run on Vulkan), and `device.poll(Wait)` is the documented way to synchronously wait for GPU work. The WebGPU backend silently degrades `poll(Wait)` into a spin loop instead of erroring — there's no compile-time or runtime warning.
+
+**Fix — async readback with frame-driven polling**: Split readback into three phases:
+1. **Encode + submit**: `request_readback()` encodes the `copy_texture_to_buffer` command. Caller submits.
+2. **Begin mapping**: `begin_mapping()` calls `map_async` once, stores the `mpsc::Receiver`.
+3. **Frame poll**: `poll(device)` calls `device.poll(Poll)` (non-blocking nudge for native) then `try_recv()`. The Promise resolves naturally between frames via the browser event loop.
+
+For flood fill: `gpu_flood_fill` starts the readback and stores a `PendingFloodFill`. On the next frame, `render()` polls for completion, then runs the CPU scanline fill + GPU stamp + undo commit. For color picker: `pick_color` returns the cached last-picked color immediately (one-frame latency, imperceptible for UI) and resolves on the next frame.
+
+**Takeaway**: Never use synchronous GPU readback in code that runs on WebGPU/WASM. `device.poll(Wait)` and any form of blocking channel receive will deadlock because the single-threaded WASM runtime cannot yield to the browser event loop. All GPU→CPU data transfers must be async: start the mapping, return control to JS, poll on the next frame. This applies to any future readback use case (save/export, histogram, clipboard copy). Native-only code paths (tests, headless rendering) can still use `blocking_read` safely.

@@ -4,6 +4,7 @@ mod mask;
 pub mod property;
 mod selection;
 mod compound;
+mod gpu_region;
 
 pub use tile::TileAction;
 pub use layer::{LayerAddAction, LayerRemoveAction, LayerMoveAction};
@@ -11,8 +12,10 @@ pub use mask::MaskPropertyAction;
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
 pub use compound::CompoundAction;
+pub use gpu_region::GpuRegionAction;
 
 use crate::document::Document;
+use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
 
@@ -33,6 +36,13 @@ pub trait UndoAction {
     /// Only `PropertyAction` overrides this — all others return false.
     fn try_coalesce_property(&mut self, _other: &PropertyAction) -> bool {
         false
+    }
+
+    /// If this is a GPU region action, return a mutable reference to its entry.
+    /// The engine uses this to execute GPU texture restores during undo/redo,
+    /// then swaps the entry with the forward/backward entry returned by `restore_region`.
+    fn gpu_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
+        None
     }
 }
 
@@ -89,6 +99,28 @@ impl UndoStack {
         let affected = action.redo(doc);
         self.undo_steps.push(action);
         Some(affected)
+    }
+
+    /// Pop the top undo action without executing it.
+    /// The caller is responsible for calling `action.undo(doc)` and then
+    /// `complete_undo(action)` to move it to the redo stack.
+    pub fn pop_for_undo(&mut self) -> Option<Box<dyn UndoAction>> {
+        self.undo_steps.pop()
+    }
+
+    /// Move an action to the redo stack after the caller has executed its undo.
+    pub fn complete_undo(&mut self, action: Box<dyn UndoAction>) {
+        self.redo_steps.push(action);
+    }
+
+    /// Pop the top redo action without executing it.
+    pub fn pop_for_redo(&mut self) -> Option<Box<dyn UndoAction>> {
+        self.redo_steps.pop()
+    }
+
+    /// Move an action to the undo stack after the caller has executed its redo.
+    pub fn complete_redo(&mut self, action: Box<dyn UndoAction>) {
+        self.undo_steps.push(action);
     }
 
     pub fn can_undo(&self) -> bool {

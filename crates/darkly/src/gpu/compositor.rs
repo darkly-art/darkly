@@ -615,6 +615,28 @@ impl Compositor {
         self.needs_present = true;
     }
 
+    // --- Paint Target Accessors (Phase 2: GPU brush) ---
+
+    /// Get a reference to a layer's GPU texture.
+    pub fn layer_texture(&self, layer_id: LayerId) -> Option<&LayerTexture> {
+        self.layer_textures.get(&layer_id)
+    }
+
+    /// Get a reference to a layer's mask GPU texture.
+    pub fn mask_texture(&self, layer_id: LayerId) -> Option<&LayerTexture> {
+        self.mask_textures.get(&layer_id)
+    }
+
+    /// Canvas width in pixels (unpadded).
+    pub fn canvas_width(&self) -> u32 {
+        self.canvas_width
+    }
+
+    /// Canvas height in pixels (unpadded).
+    pub fn canvas_height(&self) -> u32 {
+        self.canvas_height
+    }
+
     /// Unified frame scheduler. Called once per rAF tick.
     ///
     /// Systems fire at fractional rates of the master clock (rAF rate):
@@ -782,6 +804,12 @@ impl Compositor {
     /// the default (1x1 white = no masking) when no real mask is active.
     fn mask_bind_group(&self, layer_id: LayerId) -> &wgpu::BindGroup {
         self.mask_bind_groups.get(&layer_id).unwrap_or(&self.default_mask_bind_group)
+    }
+
+    /// Get the composited output texture (root group's composite cache).
+    /// Used by the color picker for readback.
+    pub fn composited_texture(&self) -> &wgpu::Texture {
+        &self.group_state[&ROOT_ID].composite_cache
     }
 
     pub fn accum_format(&self) -> wgpu::TextureFormat {

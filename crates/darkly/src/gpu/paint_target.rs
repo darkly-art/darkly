@@ -50,7 +50,7 @@ impl<'a> GpuPaintTarget<'a> {
         opacity: f32,
     ) {
         let pipeline = pipelines.composite_pipeline(self.format);
-        self.draw_circle(encoder, pipeline, pipelines, queue, cx, cy, radius, color, opacity);
+        self.draw_circle(encoder, pipeline, pipelines, queue, cx, cy, radius, color, opacity, None);
     }
 
     /// Erase a soft circle from the target.
@@ -66,7 +66,24 @@ impl<'a> GpuPaintTarget<'a> {
         let pipeline = pipelines.erase_pipeline(self.format);
         // Erase uses white color at full alpha — the blend state does the subtracting.
         // For R8 targets, luminance(1,1,1) = 1.0 which reduces toward 0.
-        self.draw_circle(encoder, pipeline, pipelines, queue, cx, cy, radius, [255, 255, 255, 255], 1.0);
+        self.draw_circle(encoder, pipeline, pipelines, queue, cx, cy, radius, [255, 255, 255, 255], 1.0, None);
+    }
+
+    /// Paint a soft circle with a custom selection mask bind group.
+    pub fn composite_circle_with_selection(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        color: [u8; 4],
+        opacity: f32,
+        selection_bind_group: &wgpu::BindGroup,
+    ) {
+        let pipeline = pipelines.composite_pipeline(self.format);
+        self.draw_circle(encoder, pipeline, pipelines, queue, cx, cy, radius, color, opacity, Some(selection_bind_group));
     }
 
     /// Fill a rect with a solid color via alpha-over blending.
@@ -78,21 +95,46 @@ impl<'a> GpuPaintTarget<'a> {
         rect: [u32; 4],
         color: [u8; 4],
     ) {
-        let [x, y, w, h] = rect;
-        let pipeline = pipelines.composite_pipeline(self.format);
+        self.fill_rect_inner(encoder, pipelines, queue, rect, color, None);
+    }
+
+    /// Fill a rect with a solid color, masked by a selection bind group.
+    /// Used by flood fill: the fill mask texture is bound as the "selection".
+    pub fn fill_rect_with_selection(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        rect: [u32; 4],
+        color: [u8; 4],
+        selection_bind_group: &wgpu::BindGroup,
+    ) {
+        self.fill_rect_inner(encoder, pipelines, queue, rect, color, Some(selection_bind_group));
+    }
+
+    /// Erase pixels within a selection mask. Full-canvas erase modulated by the
+    /// selection texture — used for clear_selection_contents.
+    pub fn erase_with_selection(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        selection_bind_group: &wgpu::BindGroup,
+    ) {
+        let pipeline = pipelines.erase_pipeline(self.format);
 
         let uniforms = PaintUniforms {
-            origin: [x as f32, y as f32],
-            size: [w as f32, h as f32],
+            origin: [0.0, 0.0],
+            size: [self.width as f32, self.height as f32],
             canvas_size: [self.width as f32, self.height as f32],
             center: [0.0, 0.0],
-            radius: 0.0, // solid fill — no SDF
+            radius: 0.0, // solid fill — coverage from selection only
             softness: 0.0,
             _pad: [0.0; 2],
-            color: color_to_float(color, 1.0),
+            color: [1.0, 1.0, 1.0, 1.0], // full erase strength
         };
 
-        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms);
+        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(selection_bind_group));
     }
 
     /// Clear a rect to transparent (RGBA) or full reveal (R8).
@@ -122,45 +164,42 @@ impl<'a> GpuPaintTarget<'a> {
             color,
         };
 
-        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms);
+        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, None);
     }
 
-    /// Paint a soft circle with a custom selection mask bind group.
-    pub fn composite_circle_with_selection(
+    /// Render a linear gradient on the target. Selection masking optional.
+    pub fn linear_gradient(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
-        cx: f32,
-        cy: f32,
-        radius: f32,
-        color: [u8; 4],
-        opacity: f32,
-        selection_bind_group: &wgpu::BindGroup,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        color0: [u8; 4],
+        color1: [u8; 4],
+        selection: Option<&wgpu::BindGroup>,
     ) {
-        let pipeline = pipelines.composite_pipeline(self.format);
-        let softness = 1.0_f32;
-        let pad = softness + 1.0;
-        let x0 = (cx - radius - pad).max(0.0);
-        let y0 = (cy - radius - pad).max(0.0);
-        let x1 = (cx + radius + pad).min(self.width as f32);
-        let y1 = (cy + radius + pad).min(self.height as f32);
+        let pipeline = pipelines.gradient_pipeline(self.format);
 
-        let uniforms = PaintUniforms {
-            origin: [x0, y0],
-            size: [x1 - x0, y1 - y0],
+        let uniforms = GradientUniforms {
+            origin: [0.0, 0.0],
+            size: [self.width as f32, self.height as f32],
             canvas_size: [self.width as f32, self.height as f32],
-            center: [cx, cy],
-            radius,
-            softness,
+            start: [x0, y0],
+            end: [x1, y1],
             _pad: [0.0; 2],
-            color: color_to_float(color, opacity),
+            color0: color_to_float(color0, 1.0),
+            color1: color_to_float(color1, 1.0),
         };
 
-        queue.write_buffer(&pipelines.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(&pipelines.gradient_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        let sel = selection.unwrap_or(&pipelines.default_selection_bind_group);
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("paint-target-sel"),
+            label: Some("paint-gradient"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: self.view,
                 resolve_target: None,
@@ -174,12 +213,38 @@ impl<'a> GpuPaintTarget<'a> {
         });
 
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
-        pass.set_bind_group(1, selection_bind_group, &[]);
+        pass.set_bind_group(0, &pipelines.gradient_uniform_bind_group, &[]);
+        pass.set_bind_group(1, sel, &[]);
         pass.draw(0..3, 0..1);
     }
 
     // --- Internal ---
+
+    fn fill_rect_inner(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        rect: [u32; 4],
+        color: [u8; 4],
+        selection: Option<&wgpu::BindGroup>,
+    ) {
+        let [x, y, w, h] = rect;
+        let pipeline = pipelines.composite_pipeline(self.format);
+
+        let uniforms = PaintUniforms {
+            origin: [x as f32, y as f32],
+            size: [w as f32, h as f32],
+            canvas_size: [self.width as f32, self.height as f32],
+            center: [0.0, 0.0],
+            radius: 0.0, // solid fill — no SDF
+            softness: 0.0,
+            _pad: [0.0; 2],
+            color: color_to_float(color, 1.0),
+        };
+
+        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, selection);
+    }
 
     fn draw_circle(
         &self,
@@ -192,6 +257,7 @@ impl<'a> GpuPaintTarget<'a> {
         radius: f32,
         color: [u8; 4],
         opacity: f32,
+        selection: Option<&wgpu::BindGroup>,
     ) {
         // Pad the quad by softness + 1 pixel so the SDF falloff isn't clipped.
         let softness = 1.0_f32;
@@ -212,7 +278,7 @@ impl<'a> GpuPaintTarget<'a> {
             color: color_to_float(color, opacity),
         };
 
-        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms);
+        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, selection);
     }
 
     fn execute_pass(
@@ -222,8 +288,11 @@ impl<'a> GpuPaintTarget<'a> {
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
         uniforms: &PaintUniforms,
+        selection: Option<&wgpu::BindGroup>,
     ) {
         queue.write_buffer(&pipelines.uniform_buf, 0, bytemuck::bytes_of(uniforms));
+
+        let sel = selection.unwrap_or(&pipelines.default_selection_bind_group);
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("paint-target"),
@@ -241,15 +310,15 @@ impl<'a> GpuPaintTarget<'a> {
 
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
-        pass.set_bind_group(1, &pipelines.default_selection_bind_group, &[]);
+        pass.set_bind_group(1, sel, &[]);
         pass.draw(0..3, 0..1);
     }
 }
 
 /// Pre-built render pipelines for paint operations.
 ///
-/// Four pipeline variants: {composite, erase} × {RGBA8, R8}.
-/// Plus a clear pipeline per format (replace blend).
+/// Pipeline variants: {composite, erase, clear} × {RGBA8, R8} for circle/rect ops,
+/// plus {gradient} × {RGBA8, R8} with replace blend.
 pub struct PaintPipelines {
     composite_rgba: wgpu::RenderPipeline,
     composite_r8: wgpu::RenderPipeline,
@@ -257,9 +326,14 @@ pub struct PaintPipelines {
     erase_r8: wgpu::RenderPipeline,
     clear_rgba: wgpu::RenderPipeline,
     clear_r8: wgpu::RenderPipeline,
+    gradient_rgba: wgpu::RenderPipeline,
+    gradient_r8: wgpu::RenderPipeline,
 
     pub(crate) uniform_buf: wgpu::Buffer,
     pub(crate) uniform_bind_group: wgpu::BindGroup,
+
+    gradient_uniform_buf: wgpu::Buffer,
+    gradient_uniform_bind_group: wgpu::BindGroup,
 
     /// 1×1 white selection texture — binds when no selection is active.
     pub(crate) default_selection_bind_group: wgpu::BindGroup,
@@ -268,10 +342,17 @@ pub struct PaintPipelines {
 
 impl PaintPipelines {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let paint_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("paint-circle"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../../../shaders/paint_circle.wgsl").into(),
+            ),
+        });
+
+        let gradient_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gradient"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/gradient.wgsl").into(),
             ),
         });
 
@@ -312,13 +393,20 @@ impl PaintPipelines {
             ],
         });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let paint_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("paint-pipeline-layout"),
             bind_group_layouts: &[&uniform_bgl, &selection_bgl],
             immediate_size: 0,
         });
 
-        // --- Uniform buffer ---
+        // Gradient uses the same layout (uniform + selection) but a different uniform buffer.
+        let gradient_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("gradient-pipeline-layout"),
+            bind_group_layouts: &[&uniform_bgl, &selection_bgl],
+            immediate_size: 0,
+        });
+
+        // --- Uniform buffers ---
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("paint-uniforms"),
             size: std::mem::size_of::<PaintUniforms>() as u64,
@@ -332,6 +420,22 @@ impl PaintPipelines {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: uniform_buf.as_entire_binding(),
+            }],
+        });
+
+        let gradient_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gradient-uniforms"),
+            size: std::mem::size_of::<GradientUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let gradient_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("gradient-uniform-bg"),
+            layout: &uniform_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: gradient_uniform_buf.as_entire_binding(),
             }],
         });
 
@@ -386,12 +490,12 @@ impl PaintPipelines {
         });
 
         // --- Build pipeline variants ---
-        let make_pipeline = |label: &str, format: wgpu::TextureFormat, blend: wgpu::BlendState| {
+        let make_pipeline = |label: &str, layout: &wgpu::PipelineLayout, shader: &wgpu::ShaderModule, format: wgpu::TextureFormat, blend: wgpu::BlendState| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&pipeline_layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
-                    module: &shader,
+                    module: shader,
                     entry_point: Some("vs_main"),
                     buffers: &[],
                     compilation_options: Default::default(),
@@ -403,7 +507,7 @@ impl PaintPipelines {
                 depth_stencil: None,
                 multisample: wgpu::MultisampleState::default(),
                 fragment: Some(wgpu::FragmentState {
-                    module: &shader,
+                    module: shader,
                     entry_point: Some("fs_main"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format,
@@ -458,18 +562,75 @@ impl PaintPipelines {
         // Clear: replace with source value (no blending).
         let blend_clear = wgpu::BlendState::REPLACE;
 
+        // Gradient: composite blend (selection coverage modulates alpha).
+        // For opaque gradient colors at coverage 1.0, this is equivalent to replace.
+        let blend_gradient = blend_composite;
+
         PaintPipelines {
-            composite_rgba: make_pipeline("paint-composite-rgba", wgpu::TextureFormat::Rgba8Unorm, blend_composite),
-            composite_r8: make_pipeline("paint-composite-r8", wgpu::TextureFormat::R8Unorm, blend_composite),
-            erase_rgba: make_pipeline("paint-erase-rgba", wgpu::TextureFormat::Rgba8Unorm, blend_erase_rgba),
-            erase_r8: make_pipeline("paint-erase-r8", wgpu::TextureFormat::R8Unorm, blend_erase_r8),
-            clear_rgba: make_pipeline("paint-clear-rgba", wgpu::TextureFormat::Rgba8Unorm, blend_clear),
-            clear_r8: make_pipeline("paint-clear-r8", wgpu::TextureFormat::R8Unorm, blend_clear),
+            composite_rgba: make_pipeline("paint-composite-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_composite),
+            composite_r8: make_pipeline("paint-composite-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_composite),
+            erase_rgba: make_pipeline("paint-erase-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_erase_rgba),
+            erase_r8: make_pipeline("paint-erase-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_erase_r8),
+            clear_rgba: make_pipeline("paint-clear-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_clear),
+            clear_r8: make_pipeline("paint-clear-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_clear),
+            gradient_rgba: make_pipeline("gradient-rgba", &gradient_layout, &gradient_shader, wgpu::TextureFormat::Rgba8Unorm, blend_gradient),
+            gradient_r8: make_pipeline("gradient-r8", &gradient_layout, &gradient_shader, wgpu::TextureFormat::R8Unorm, blend_gradient),
             uniform_buf,
             uniform_bind_group,
+            gradient_uniform_buf,
+            gradient_uniform_bind_group,
             default_selection_bind_group,
             selection_bind_group_layout: selection_bgl,
         }
+    }
+
+    /// Upload flat R8 pixel data as a temporary GPU texture and return a
+    /// selection-slot bind group for it.
+    ///
+    /// Used by flood fill (fill mask) and selection upload — both need to turn
+    /// a `Vec<u8>` of R8 data into a bind group the paint shader can sample.
+    pub fn upload_r8_bind_group(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        data: &[u8],
+        label: &str,
+    ) -> wgpu::BindGroup {
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            data,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("r8-mask-sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        self.create_selection_bind_group(device, &view, &sampler)
     }
 
     /// Create a bind group for a custom selection mask texture.
@@ -515,6 +676,13 @@ impl PaintPipelines {
             _ => &self.clear_rgba,
         }
     }
+
+    fn gradient_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        match format {
+            wgpu::TextureFormat::R8Unorm => &self.gradient_r8,
+            _ => &self.gradient_rgba,
+        }
+    }
 }
 
 /// Uniform data sent to the paint_circle shader.
@@ -529,6 +697,20 @@ struct PaintUniforms {
     softness: f32,         // Soft edge width in pixels
     _pad: [f32; 2],        // Align color to 16 bytes
     color: [f32; 4],       // RGBA paint color (straight alpha)
+}
+
+/// Uniform data sent to the gradient shader.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct GradientUniforms {
+    origin: [f32; 2],      // Quad origin in canvas pixels
+    size: [f32; 2],        // Quad size in canvas pixels
+    canvas_size: [f32; 2], // Padded canvas dimensions
+    start: [f32; 2],       // Gradient start point in canvas pixels
+    end: [f32; 2],         // Gradient end point in canvas pixels
+    _pad: [f32; 2],        // Align colors to 16 bytes
+    color0: [f32; 4],      // Start color (RGBA, straight alpha)
+    color1: [f32; 4],      // End color (RGBA, straight alpha)
 }
 
 /// Convert u8 RGBA color + opacity to f32 array for the shader.
