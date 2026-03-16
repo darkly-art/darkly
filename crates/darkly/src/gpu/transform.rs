@@ -1,12 +1,12 @@
 //! Floating content GPU pipeline — transform-blend shader, texture management,
-//! and CPU-side affine rasterization for commit.
+//! and GPU commit render pass.
 //!
 //! Used by both paste-in-place and the interactive transform tool. The GPU
-//! texture provides real-time preview during interaction; the CPU source tiles
-//! are used for the final commit (avoiding async GPU readback).
+//! texture provides real-time preview during interaction, and the commit
+//! render pass writes transformed pixels directly to the layer texture.
 
 use crate::layer::LayerId;
-use crate::tile::{TileGrid, TileStore, AlphaMask, AlphaF32, TILE_SIZE};
+use crate::tile::{TileGrid, TILE_SIZE};
 
 // ---------------------------------------------------------------------------
 // Affine matrix helpers  ([a, b, tx, c, d, ty])
@@ -81,17 +81,20 @@ pub enum FloatingMode {
     /// Clipboard paste — commit composites INTO target. Cancel = no-op.
     Paste,
     /// Extracted from layer — commit writes transformed pixels.
-    /// Cancel restores original tiles.
+    /// Cancel restores the pre-clear state from RegionStore scratch.
     Transform {
-        /// Undo action to restore original tiles on cancel.
-        cancel_undo: Box<dyn crate::undo::UndoAction>,
+        /// Texture format of the target (Rgba8Unorm or R8Unorm).
+        format: wgpu::TextureFormat,
+        /// Bounding rect of the source region that was cleared [x, y, w, h].
+        clear_rect: [u32; 4],
     },
 }
 
-/// CPU-side floating content state, owned by the engine.
+/// Floating content state, owned by the engine.
+///
+/// Source pixel data lives on the GPU (in TransformState's source_texture).
+/// This struct holds only the metadata needed for the transform UI and commit.
 pub struct FloatingContent {
-    /// RGBA source tiles (always RGBA, even for mask sources).
-    pub source_tiles: TileGrid,
     /// Pixel offset of the source content in document space.
     pub source_origin: (i32, i32),
     /// Source dimensions in pixels.
@@ -141,228 +144,6 @@ impl FloatingContent {
             (max_y + oy as f32).ceil() as i32,
         )
     }
-
-    /// Bilinear sample from source_tiles at a fractional source-local position.
-    /// Uses premultiplied-alpha interpolation with clamp-to-edge (matching GPU
-    /// hardware samplers). Returns straight-alpha [r, g, b, a].
-    ///
-    /// Input coordinates use pixel-center convention: the center of texel (0,0)
-    /// is at (0.5, 0.5), matching GPU fragment centers. Internally we convert
-    /// to texel-index space (center at integer) via the standard `u·N − 0.5`
-    /// mapping so the bilinear kernel aligns with hardware samplers.
-    fn sample_bilinear(&self, sx: f32, sy: f32) -> [u8; 4] {
-        let (ox, oy) = self.source_origin;
-        let w = self.source_width as i32;
-        let h = self.source_height as i32;
-
-        // Convert pixel-center coords to texel-index space (GPU: u·N − 0.5)
-        let sx = sx - 0.5;
-        let sy = sy - 0.5;
-
-        // Reject samples outside the half-texel border around the grid.
-        // This matches the GPU shader's `src_uv ∈ [0, 1)` check after the
-        // fragment-center offset is accounted for.
-        if sx < -0.5 || sy < -0.5 || sx > (w as f32 - 0.5) || sy > (h as f32 - 0.5) {
-            return [0, 0, 0, 0];
-        }
-
-        let ix = sx.floor() as i32;
-        let iy = sy.floor() as i32;
-        let fx = sx - ix as f32;
-        let fy = sy - iy as f32;
-
-        // Clamp-to-edge: OOB kernel pixels snap to nearest valid pixel,
-        // matching GPU hardware sampler behavior.
-        let get_pixel = |px: i32, py: i32| -> [f32; 4] {
-            let cx = px.clamp(0, w - 1);
-            let cy = py.clamp(0, h - 1);
-            let canvas_x = cx + ox;
-            let canvas_y = cy + oy;
-            let (tx, ty) = TileGrid::tile_coords_for_pixel(canvas_x, canvas_y);
-            let ts = TILE_SIZE as i32;
-            let lx = canvas_x.rem_euclid(ts) as usize;
-            let ly = canvas_y.rem_euclid(ts) as usize;
-            match self.source_tiles.get(tx, ty) {
-                Some(tile) => {
-                    let p = tile.data().pixel(lx, ly);
-                    // Return as premultiplied for correct interpolation
-                    let a = p[3] as f32 / 255.0;
-                    [p[0] as f32 * a, p[1] as f32 * a, p[2] as f32 * a, p[3] as f32]
-                }
-                None => [0.0; 4],
-            }
-        };
-
-        let p00 = get_pixel(ix, iy);
-        let p10 = get_pixel(ix + 1, iy);
-        let p01 = get_pixel(ix, iy + 1);
-        let p11 = get_pixel(ix + 1, iy + 1);
-
-        // Interpolate in premultiplied space
-        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-        let mut pm = [0.0f32; 4];
-        for c in 0..4 {
-            let top = lerp(p00[c], p10[c], fx);
-            let bot = lerp(p01[c], p11[c], fx);
-            pm[c] = lerp(top, bot, fy);
-        }
-
-        // Un-premultiply back to straight alpha for storage
-        let out_a = pm[3];
-        if out_a < 0.5 {
-            return [0, 0, 0, 0];
-        }
-        let inv_a = 255.0 / out_a;
-        [
-            (pm[0] * inv_a).round().clamp(0.0, 255.0) as u8,
-            (pm[1] * inv_a).round().clamp(0.0, 255.0) as u8,
-            (pm[2] * inv_a).round().clamp(0.0, 255.0) as u8,
-            out_a.round().clamp(0.0, 255.0) as u8,
-        ]
-    }
-
-    /// CPU-side rasterization: write transformed source pixels into a target
-    /// TileGrid (layer tiles) using Normal blend.
-    pub fn rasterize_to_tiles(
-        &self,
-        tiles: &mut TileGrid,
-        selection: Option<&AlphaMask>,
-    ) {
-        let inv = match affine_inverse(&self.matrix) {
-            Some(inv) => inv,
-            None => return, // singular matrix — nothing to draw
-        };
-
-        let (min_x, min_y, max_x, max_y) = self.transformed_bounds();
-
-        for py in min_y..=max_y {
-            for px in min_x..=max_x {
-                // Apply selection mask
-                if let Some(sel) = selection {
-                    let (stx, sty) = TileGrid::tile_coords_for_pixel(px, py);
-                    let ts = TILE_SIZE as i32;
-                    match sel.get(stx, sty) {
-                        Some(st) => {
-                            let slx = px.rem_euclid(ts) as usize;
-                            let sly = py.rem_euclid(ts) as usize;
-                            if st.data().get(slx, sly) <= 0.0 {
-                                continue;
-                            }
-                        }
-                        None => continue, // unselected region
-                    }
-                }
-
-                // Transform to source-local coords (pixel-center convention:
-                // fragment center at px+0.5 matches GPU fragment positions)
-                let local_x = px as f32 + 0.5 - self.source_origin.0 as f32;
-                let local_y = py as f32 + 0.5 - self.source_origin.1 as f32;
-                let (src_x, src_y) = affine_transform(&inv, local_x, local_y);
-
-                let fg = self.sample_bilinear(src_x, src_y);
-                if fg[3] == 0 {
-                    continue;
-                }
-
-                let (tx, ty) = TileGrid::tile_coords_for_pixel(px, py);
-                let ts = TILE_SIZE as i32;
-                let lx = px.rem_euclid(ts) as usize;
-                let ly = py.rem_euclid(ts) as usize;
-
-                let dst_tile = tiles.get_or_create(tx, ty);
-                let dst = dst_tile.write().pixel_mut(lx, ly);
-
-                if matches!(self.mode, FloatingMode::Transform { .. }) {
-                    // Transform mode: direct write (target was cleared)
-                    dst.copy_from_slice(&fg);
-                } else {
-                    // Paste mode: Normal blend onto existing
-                    let fa = fg[3] as f32 / 255.0;
-                    let ba = dst[3] as f32 / 255.0;
-                    let out_a = fa + ba * (1.0 - fa);
-                    if out_a > 0.0 {
-                        for c in 0..3 {
-                            let fg_pre = fg[c] as f32 * fa;
-                            let bg_pre = dst[c] as f32 * ba;
-                            let blended = fg_pre + bg_pre * (1.0 - fa);
-                            dst[c] = (blended / out_a).round().clamp(0.0, 255.0) as u8;
-                        }
-                        dst[3] = (out_a * 255.0).round().clamp(0.0, 255.0) as u8;
-                    }
-                }
-            }
-        }
-    }
-
-    /// CPU-side rasterization: write transformed source pixels into a target
-    /// AlphaMask. Extracts luminance from RGBA source.
-    pub fn rasterize_to_mask(
-        &self,
-        mask: &mut AlphaMask,
-        selection: Option<&AlphaMask>,
-    ) {
-        let inv = match affine_inverse(&self.matrix) {
-            Some(inv) => inv,
-            None => return,
-        };
-
-        let (min_x, min_y, max_x, max_y) = self.transformed_bounds();
-
-        for py in min_y..=max_y {
-            for px in min_x..=max_x {
-                // Apply selection mask
-                if let Some(sel) = selection {
-                    let (stx, sty) = TileGrid::tile_coords_for_pixel(px, py);
-                    let ts = TILE_SIZE as i32;
-                    match sel.get(stx, sty) {
-                        Some(st) => {
-                            let slx = px.rem_euclid(ts) as usize;
-                            let sly = py.rem_euclid(ts) as usize;
-                            if st.data().get(slx, sly) <= 0.0 {
-                                continue;
-                            }
-                        }
-                        None => continue,
-                    }
-                }
-
-                // Pixel-center convention (matches GPU fragment centers)
-                let local_x = px as f32 + 0.5 - self.source_origin.0 as f32;
-                let local_y = py as f32 + 0.5 - self.source_origin.1 as f32;
-                let (src_x, src_y) = affine_transform(&inv, local_x, local_y);
-
-                let fg = self.sample_bilinear(src_x, src_y);
-                if fg[3] == 0 {
-                    continue;
-                }
-
-                // Convert straight-alpha RGBA to mask value via luminance
-                let a = fg[3] as f32 / 255.0;
-                let lum = (0.2126 * fg[0] as f32 + 0.7152 * fg[1] as f32 + 0.0722 * fg[2] as f32) / 255.0;
-                let alpha_val = lum * a;
-
-                if alpha_val <= 0.0 {
-                    continue;
-                }
-
-                let (tx, ty) = TileStore::<AlphaF32>::tile_coords_for_pixel(px, py);
-                let ts = TILE_SIZE as i32;
-                let lx = px.rem_euclid(ts) as usize;
-                let ly = py.rem_euclid(ts) as usize;
-
-                let dst_tile = mask.get_or_create(tx, ty);
-                let dst = dst_tile.write();
-
-                if matches!(self.mode, FloatingMode::Transform { .. }) {
-                    dst.set(lx, ly, alpha_val);
-                } else {
-                    // Paste mode: add (clamped) onto existing
-                    let existing = dst.get(lx, ly);
-                    dst.set(lx, ly, (existing + alpha_val).min(1.0));
-                }
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -397,6 +178,8 @@ pub struct TransformState {
     pub bind_groups: [wgpu::BindGroup; 2],
     /// Bind group reading from composite cache as background.
     pub cache_source_bind_group: wgpu::BindGroup,
+    /// Bind group for commit pass (source + sampler + uniforms only).
+    pub commit_bind_group: wgpu::BindGroup,
     pub target_layer: LayerId,
     pub target_is_mask: bool,
 }
@@ -405,6 +188,10 @@ pub struct TransformState {
 pub struct TransformPass {
     pub pipeline: wgpu::RenderPipeline,
     pub bind_group_layout: wgpu::BindGroupLayout,
+    /// Commit pipelines: render transform directly to layer/mask texture.
+    commit_rgba_pipeline: wgpu::RenderPipeline,
+    commit_r8_pipeline: wgpu::RenderPipeline,
+    commit_bind_group_layout: wgpu::BindGroupLayout,
     pub active: Option<TransformState>,
 }
 
@@ -498,9 +285,109 @@ impl TransformPass {
             cache: None,
         });
 
+        // --- Commit pipelines (render directly to layer/mask texture) ---
+        let commit_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("transform-commit-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let commit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("transform-commit-layout"),
+            bind_group_layouts: &[&commit_bind_group_layout],
+            immediate_size: 0,
+        });
+
+        let commit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("transform-commit-shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/transform_commit.wgsl").into(),
+            ),
+        });
+
+        let blend_composite = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::SrcAlpha,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+
+        let make_commit_pipeline = |label: &str, format: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&commit_layout),
+                vertex: wgpu::VertexState {
+                    module: &commit_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &commit_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(blend_composite),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+
+        let commit_rgba_pipeline = make_commit_pipeline(
+            "transform-commit-rgba", wgpu::TextureFormat::Rgba8Unorm,
+        );
+        let commit_r8_pipeline = make_commit_pipeline(
+            "transform-commit-r8", wgpu::TextureFormat::R8Unorm,
+        );
+
         TransformPass {
             pipeline,
             bind_group_layout,
+            commit_rgba_pipeline,
+            commit_r8_pipeline,
+            commit_bind_group_layout,
             active: None,
         }
     }
@@ -647,12 +534,33 @@ impl TransformPass {
         let bg1 = make_bind_group(&accum_views[1], "transform-bg1");
         let cache_bg = make_bind_group(cache_view, "transform-bg-cache");
 
+        // Commit bind group (source + sampler + uniforms — no background)
+        let commit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("transform-commit-bg"),
+            layout: &self.commit_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: uniform_buf.as_entire_binding(),
+                },
+            ],
+        });
+
         self.active = Some(TransformState {
             source_texture,
             source_view,
             uniform_buf,
             bind_groups: [bg0, bg1],
             cache_source_bind_group: cache_bg,
+            commit_bind_group,
             target_layer,
             target_is_mask,
         });
@@ -689,6 +597,66 @@ impl TransformPass {
         queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
     }
 
+    /// Render the transformed source directly onto a target texture (layer or mask).
+    /// Used by commit_floating() to replace CPU-side rasterize_to_tiles().
+    pub fn commit_to_texture(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        target_view: &wgpu::TextureView,
+        target_format: wgpu::TextureFormat,
+        matrix: &Affine2D,
+        source_origin: (i32, i32),
+        source_width: u32,
+        source_height: u32,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) {
+        let state = match &self.active {
+            Some(s) => s,
+            None => return,
+        };
+
+        let inv = affine_inverse(matrix).unwrap_or(IDENTITY);
+        let is_mask = if target_format == wgpu::TextureFormat::R8Unorm { 1.0 } else { 0.0 };
+
+        // Reuse the preview uniform struct — _pad becomes is_mask for commit.
+        let uniforms = TransformBlendUniforms {
+            inv_row0: [inv[0], inv[1], inv[2], 0.0],
+            inv_row1: [inv[3], inv[4], inv[5], 0.0],
+            source_origin: [source_origin.0 as f32, source_origin.1 as f32],
+            source_size: [source_width as f32, source_height as f32],
+            canvas_size: [canvas_width as f32, canvas_height as f32],
+            opacity: 1.0,
+            _pad: is_mask,
+        };
+
+        queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        let pipeline = match target_format {
+            wgpu::TextureFormat::R8Unorm => &self.commit_r8_pipeline,
+            _ => &self.commit_rgba_pipeline,
+        };
+
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("transform-commit"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+
+        rpass.set_pipeline(pipeline);
+        rpass.set_bind_group(0, &state.commit_bind_group, &[]);
+        rpass.draw(0..3, 0..1);
+    }
+
     /// Remove floating content GPU state.
     pub fn clear(&mut self) {
         self.active = None;
@@ -706,7 +674,7 @@ impl TransformPass {
 
 /// Compute tight pixel bounds around non-transparent content in a tile grid.
 /// Returns `(min_x, min_y, width, height)` or `None` if fully transparent.
-fn tight_pixel_bounds(tiles: &TileGrid) -> Option<(i32, i32, u32, u32)> {
+pub fn tight_pixel_bounds(tiles: &TileGrid) -> Option<(i32, i32, u32, u32)> {
     let ts = TILE_SIZE as i32;
     let mut min_x = i32::MAX;
     let mut min_y = i32::MAX;
@@ -737,19 +705,17 @@ fn tight_pixel_bounds(tiles: &TileGrid) -> Option<(i32, i32, u32, u32)> {
     Some((min_x, min_y, (max_x - min_x + 1) as u32, (max_y - min_y + 1) as u32))
 }
 
-/// Extract source tiles, origin, and dimensions from an ImageClip for
-/// creating a FloatingContent. Uses tight pixel bounds instead of
-/// tile-aligned bounds so the bounding box matches the actual content.
+/// Extract source tiles, origin, and dimensions from an ImageClip.
+/// Uses tight pixel bounds instead of tile-aligned bounds so the bounding
+/// box matches the actual content.
 pub fn source_from_clip(
     clip: &crate::clipboard::ImageClip,
 ) -> (TileGrid, (i32, i32), u32, u32) {
-    // Clone the clip's tiles for the FloatingContent's CPU source
     let mut tiles = TileGrid::new();
     for ((tx, ty), src_tile) in clip.tiles.iter() {
         let dst = tiles.get_or_create(tx, ty);
         *dst.write() = src_tile.data().clone();
     }
-    // Use tight bounds around actual non-transparent pixels
     match tight_pixel_bounds(&tiles) {
         Some((x, y, w, h)) => (tiles, (x, y), w, h),
         None => {

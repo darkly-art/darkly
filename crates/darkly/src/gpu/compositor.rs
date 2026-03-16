@@ -903,6 +903,41 @@ impl Compositor {
         self.mark_dirty();
     }
 
+    /// Render the transform directly onto the target layer/mask texture.
+    /// Used by commit_floating() to replace CPU-side rasterize_to_tiles().
+    pub fn commit_floating_to_texture(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        queue: &wgpu::Queue,
+        matrix: &crate::gpu::transform::Affine2D,
+        source_origin: (i32, i32),
+        source_width: u32,
+        source_height: u32,
+    ) {
+        let (layer_id, is_mask) = match &self.transform_pass.active {
+            Some(s) => (s.target_layer, s.target_is_mask),
+            None => return,
+        };
+
+        let (view, format) = if is_mask {
+            match self.mask_textures.get(&layer_id) {
+                Some(t) => (&t.view, wgpu::TextureFormat::R8Unorm),
+                None => return,
+            }
+        } else {
+            match self.layer_textures.get(&layer_id) {
+                Some(t) => (&t.view, wgpu::TextureFormat::Rgba8Unorm),
+                None => return,
+            }
+        };
+
+        self.transform_pass.commit_to_texture(
+            encoder, queue, view, format,
+            matrix, source_origin, source_width, source_height,
+            self.padded_width, self.padded_height,
+        );
+    }
+
     /// Remove floating content GPU state.
     pub fn clear_floating_content(&mut self) {
         self.transform_pass.clear();

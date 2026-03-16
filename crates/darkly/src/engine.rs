@@ -1605,7 +1605,6 @@ impl DarklyEngine {
         );
 
         self.floating = Some(FloatingContent {
-            source_tiles,
             source_origin,
             source_width,
             source_height,
@@ -1630,13 +1629,13 @@ impl DarklyEngine {
             _ => return false,
         };
 
-        // Clone the relevant tiles
+        // Extract source tiles for upload to GPU (used for preview texture).
+        // The tiles are only needed temporarily — FloatingContent doesn't store them.
         let (source_tiles, source_origin, source_width, source_height) = if target_is_mask {
             let mask_store = match &layer.mask {
                 Some(m) => &m.store,
                 None => return false,
             };
-            // Convert mask to RGBA for the floating content
             let clip = match ImageClip::from_mask(mask_store, self.doc.selection.as_ref()) {
                 Some(c) => c,
                 None => return false,
@@ -1655,27 +1654,62 @@ impl DarklyEngine {
             source_from_clip(&clip)
         };
 
-        // Clear the source tiles (within a transaction for undo)
-        self.doc.begin_transaction(layer_id);
-        if target_is_mask {
-            if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-                if let Some(mask) = &mut r.mask {
-                    clear_mask_in_bounds(&mut mask.store, source_origin, source_width, source_height);
-                }
-            }
+        let format = if target_is_mask {
+            wgpu::TextureFormat::R8Unorm
         } else {
-            if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-                clear_rgba_in_bounds(&mut r.surface.store, source_origin, source_width, source_height);
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+
+        // Save the full canvas GPU texture to scratch (pre-clear snapshot for
+        // undo and cancel). Must happen before the clear.
+        {
+            let texture = if target_is_mask {
+                self.compositor.mask_texture(layer_id).map(|t| &t.texture)
+            } else {
+                self.compositor.layer_texture(layer_id).map(|t| &t.texture)
+            };
+            if let Some(texture) = texture {
+                let mut encoder = self.gpu.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("transform-save") },
+                );
+                self.region_store.save_region(
+                    &mut encoder, texture, format,
+                    [0, 0, canvas_w, canvas_h],
+                );
+                self.gpu.queue.submit([encoder.finish()]);
             }
         }
-        let cancel_undo: Option<Box<dyn crate::undo::UndoAction>> =
-            self.doc.commit_transaction(layer_id)
-                .map(|m| Box::new(TileAction::new(m)) as Box<dyn crate::undo::UndoAction>);
 
-        // Mark cleared tiles dirty
-        self.mark_bounds_dirty(layer_id, target_is_mask, source_origin, source_width, source_height);
+        // Clear the source region on the GPU texture directly.
+        let clear_x = source_origin.0.max(0) as u32;
+        let clear_y = source_origin.1.max(0) as u32;
+        let clear_w = source_width.min(canvas_w.saturating_sub(clear_x));
+        let clear_h = source_height.min(canvas_h.saturating_sub(clear_y));
+        let clear_rect = [clear_x, clear_y, clear_w, clear_h];
 
-        // Upload to GPU for preview
+        {
+            let target = if target_is_mask {
+                self.compositor.mask_texture(layer_id)
+                    .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
+            } else {
+                self.compositor.layer_texture(layer_id)
+                    .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
+            };
+            if let Some(target) = target {
+                let mut encoder = self.gpu.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("transform-clear") },
+                );
+                target.clear_rect(
+                    &mut encoder, &self.paint_pipelines, &self.gpu.queue,
+                    clear_rect,
+                );
+                self.gpu.queue.submit([encoder.finish()]);
+            }
+        }
+
+        // Upload source tiles to GPU for preview (tiles are consumed here)
         self.compositor.set_floating_content(
             &self.gpu.device,
             &self.gpu.queue,
@@ -1688,17 +1722,13 @@ impl DarklyEngine {
         );
 
         self.floating = Some(FloatingContent {
-            source_tiles,
             source_origin,
             source_width,
             source_height,
             matrix: IDENTITY,
             target_layer: layer_id,
             target_is_mask,
-            mode: match cancel_undo {
-                Some(action) => FloatingMode::Transform { cancel_undo: action },
-                None => FloatingMode::Paste, // No tiles were cleared, treat like paste
-            },
+            mode: FloatingMode::Transform { format, clear_rect },
         });
 
         // Selection was used to define what gets picked up — clear it now so
@@ -1725,7 +1755,8 @@ impl DarklyEngine {
         }
     }
 
-    /// Commit floating content: rasterize transformed pixels into the target.
+    /// Commit floating content: render transformed pixels into the target
+    /// layer/mask texture via a GPU render pass.
     pub fn commit_floating(&mut self) {
         let fc = match self.floating.take() {
             Some(fc) => fc,
@@ -1734,65 +1765,71 @@ impl DarklyEngine {
 
         let layer_id = fc.target_layer;
         let is_mask = fc.target_is_mask;
-
-        // Temporarily route transaction to the correct surface
-        let was_editing_mask = self.editing_mask_layer;
-        if is_mask {
-            self.editing_mask_layer = Some(layer_id);
-        } else if self.editing_mask_layer == Some(layer_id) {
-            self.editing_mask_layer = None;
-        }
-
-        self.doc.begin_transaction(layer_id);
-
-        // Clone selection for use during rasterization (avoids borrow conflict
-        // with layer_mut).
-        let sel = self.doc.selection.clone();
-
-        if is_mask {
-            if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-                if let Some(mask) = &mut r.mask {
-                    fc.rasterize_to_mask(&mut mask.store, sel.as_ref());
-                }
-            }
+        let format = if is_mask {
+            wgpu::TextureFormat::R8Unorm
         } else {
-            if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-                fc.rasterize_to_tiles(&mut r.surface.store, sel.as_ref());
-            }
-        }
+            wgpu::TextureFormat::Rgba8Unorm
+        };
 
-        // Compute dirty bounds before consuming fc.
+        // Compute tight affected rect = union(source bounds, transformed bounds),
+        // clamped to canvas.
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
         let (min_x, min_y, max_x, max_y) = fc.transformed_bounds();
+        let (sox, soy) = fc.source_origin;
+        let union_min_x = min_x.min(sox).max(0) as u32;
+        let union_min_y = min_y.min(soy).max(0) as u32;
+        let union_max_x = (max_x.max(sox + fc.source_width as i32) as u32).min(canvas_w);
+        let union_max_y = (max_y.max(soy + fc.source_height as i32) as u32).min(canvas_h);
+        let affected_w = union_max_x.saturating_sub(union_min_x);
+        let affected_h = union_max_y.saturating_sub(union_min_y);
+        let affected_rect = [union_min_x, union_min_y, affected_w, affected_h];
 
-        if let Some(memento) = self.doc.commit_transaction(layer_id) {
-            let rasterize_action: Box<dyn crate::undo::UndoAction> =
-                Box::new(TileAction::new(memento));
-            match fc.mode {
-                FloatingMode::Transform { cancel_undo } => {
-                    // Compound: [clear, rasterize] — undo reverses both in one step.
-                    self.undo_stack.push(Box::new(
-                        crate::undo::CompoundAction::new(vec![cancel_undo, rasterize_action]),
-                    ));
-                }
-                FloatingMode::Paste => {
-                    self.undo_stack.push(rasterize_action);
-                }
+        // For paste mode, the scratch doesn't have a pre-operation snapshot yet
+        // (begin_transform wasn't called). Save the current state now.
+        if matches!(fc.mode, FloatingMode::Paste) {
+            let texture = if is_mask {
+                self.compositor.mask_texture(layer_id).map(|t| &t.texture)
+            } else {
+                self.compositor.layer_texture(layer_id).map(|t| &t.texture)
+            };
+            if let Some(texture) = texture {
+                let mut encoder = self.gpu.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("paste-save") },
+                );
+                self.region_store.save_region(
+                    &mut encoder, texture, format,
+                    [0, 0, canvas_w, canvas_h],
+                );
+                self.gpu.queue.submit([encoder.finish()]);
             }
         }
 
-        // Restore mask editing state
-        self.editing_mask_layer = was_editing_mask;
+        // Commit the pre-operation state (from scratch) to the undo ring buffer,
+        // then render the transform.
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("transform-commit") },
+        );
+        let entry = self.region_store.commit_region(
+            &mut encoder, layer_id, format, affected_rect,
+        );
 
-        // Mark dirty
-        let w = (max_x - min_x).max(0) as u32;
-        let h = (max_y - min_y).max(0) as u32;
-        self.mark_bounds_dirty(layer_id, is_mask, (min_x, min_y), w, h);
+        // GPU render pass: write transformed source pixels to layer/mask texture.
+        self.compositor.commit_floating_to_texture(
+            &mut encoder, &self.gpu.queue,
+            &fc.matrix, fc.source_origin, fc.source_width, fc.source_height,
+        );
+
+        self.gpu.queue.submit([encoder.finish()]);
+
+        // Push GPU undo action.
+        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
 
         // Clean up GPU state
         self.compositor.clear_floating_content();
     }
 
-    /// Cancel floating content: discard or restore original tiles.
+    /// Cancel floating content: discard or restore original pixels.
     pub fn cancel_floating(&mut self) {
         let fc = match self.floating.take() {
             Some(fc) => fc,
@@ -1803,44 +1840,27 @@ impl DarklyEngine {
             FloatingMode::Paste => {
                 // No-op — target layer was never modified.
             }
-            FloatingMode::Transform { mut cancel_undo } => {
-                // Restore the original tiles that were cleared.
-                let affected = cancel_undo.undo(&mut self.doc);
-                mark_affected_dirty(&mut self.doc, &affected);
+            FloatingMode::Transform { format, clear_rect } => {
+                // Restore the pre-clear state from the RegionStore scratch
+                // texture (saved during begin_transform).
+                let texture = if fc.target_is_mask {
+                    self.compositor.mask_texture(fc.target_layer).map(|t| &t.texture)
+                } else {
+                    self.compositor.layer_texture(fc.target_layer).map(|t| &t.texture)
+                };
+                if let Some(texture) = texture {
+                    let mut encoder = self.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("cancel-restore") },
+                    );
+                    self.region_store.restore_from_scratch(
+                        &mut encoder, format, clear_rect, texture,
+                    );
+                    self.gpu.queue.submit([encoder.finish()]);
+                }
             }
         }
 
         self.compositor.clear_floating_content();
-    }
-
-    fn mark_bounds_dirty(
-        &mut self,
-        layer_id: u64,
-        is_mask: bool,
-        origin: (i32, i32),
-        width: u32,
-        height: u32,
-    ) {
-        let (ox, oy) = origin;
-        let tx_min = TileGrid::tile_coords_for_pixel(ox, 0).0;
-        let ty_min = TileGrid::tile_coords_for_pixel(0, oy).1;
-        let tx_max = TileGrid::tile_coords_for_pixel(ox + width as i32 - 1, 0).0;
-        let ty_max = TileGrid::tile_coords_for_pixel(0, oy + height as i32 - 1).1;
-
-        if let Some(Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-            let dirty = if is_mask {
-                r.mask.as_mut().map(|m| &mut m.dirty)
-            } else {
-                Some(&mut r.surface.dirty)
-            };
-            if let Some(dirty) = dirty {
-                for ty in ty_min..=ty_max {
-                    for tx in tx_min..=tx_max {
-                        dirty.mark(tx, ty);
-                    }
-                }
-            }
-        }
     }
 
     /// Regenerate marching ants overlay from the current selection.
@@ -2107,74 +2127,3 @@ mod tests {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Free helper functions for floating content (avoid borrow conflicts)
-// ---------------------------------------------------------------------------
-
-/// Clear RGBA tiles within a bounding region.
-fn clear_rgba_in_bounds(
-    tiles: &mut TileGrid,
-    origin: (i32, i32),
-    width: u32,
-    height: u32,
-) {
-    let ts = TILE_SIZE as i32;
-    let (ox, oy) = origin;
-    let tx_min = TileGrid::tile_coords_for_pixel(ox, 0).0;
-    let ty_min = TileGrid::tile_coords_for_pixel(0, oy).1;
-    let tx_max = TileGrid::tile_coords_for_pixel(ox + width as i32 - 1, 0).0;
-    let ty_max = TileGrid::tile_coords_for_pixel(0, oy + height as i32 - 1).1;
-
-    for ty in ty_min..=ty_max {
-        for tx in tx_min..=tx_max {
-            if tiles.get(tx, ty).is_some() {
-                let data = tiles.get_or_create(tx, ty).write();
-                for py in 0..TILE_SIZE {
-                    for px in 0..TILE_SIZE {
-                        let canvas_x = tx * ts + px as i32;
-                        let canvas_y = ty * ts + py as i32;
-                        if canvas_x >= ox && canvas_x < ox + width as i32
-                            && canvas_y >= oy && canvas_y < oy + height as i32
-                        {
-                            data.pixel_mut(px, py).copy_from_slice(&[0, 0, 0, 0]);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Clear mask tiles within a bounding region.
-fn clear_mask_in_bounds(
-    mask: &mut AlphaMask,
-    origin: (i32, i32),
-    width: u32,
-    height: u32,
-) {
-    let ts = TILE_SIZE as i32;
-    let (ox, oy) = origin;
-    let tx_min = AlphaMask::tile_coords_for_pixel(ox, 0).0;
-    let ty_min = AlphaMask::tile_coords_for_pixel(0, oy).1;
-    let tx_max = AlphaMask::tile_coords_for_pixel(ox + width as i32 - 1, 0).0;
-    let ty_max = AlphaMask::tile_coords_for_pixel(0, oy + height as i32 - 1).1;
-
-    for ty in ty_min..=ty_max {
-        for tx in tx_min..=tx_max {
-            if mask.get(tx, ty).is_some() {
-                let data = mask.get_or_create(tx, ty).write();
-                for py in 0..TILE_SIZE {
-                    for px in 0..TILE_SIZE {
-                        let canvas_x = tx * ts + px as i32;
-                        let canvas_y = ty * ts + py as i32;
-                        if canvas_x >= ox && canvas_x < ox + width as i32
-                            && canvas_y >= oy && canvas_y < oy + height as i32
-                        {
-                            data.set(px, py, 0.0);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}

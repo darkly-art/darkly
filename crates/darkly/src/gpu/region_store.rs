@@ -236,6 +236,36 @@ impl RegionStore {
         }
     }
 
+    /// Restore a region directly from the scratch texture to the target.
+    ///
+    /// Used by `cancel_floating()` to undo the source region clear without
+    /// going through the ring buffer. The scratch must still contain the
+    /// pre-clear snapshot from a prior `save_region()` call.
+    pub fn restore_from_scratch(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        format: wgpu::TextureFormat,
+        rect: [u32; 4],
+        target: &wgpu::Texture,
+    ) {
+        let [x, y, w, h] = rect;
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: self.scratch_for(format),
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: target,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+    }
+
     /// Reallocate scratch textures when the canvas size changes.
     pub fn resize_scratch(&mut self, device: &wgpu::Device, width: u32, height: u32) {
         if width == self.scratch_width && height == self.scratch_height {
