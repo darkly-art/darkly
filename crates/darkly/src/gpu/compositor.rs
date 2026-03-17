@@ -833,13 +833,13 @@ impl Compositor {
 
     // --- Floating Content (Transform) ---
 
-    /// Set up floating content for GPU preview. Uploads source tiles as a
-    /// texture and creates bind groups for compositing.
+    /// Set up floating content for GPU preview. Uploads flat RGBA pixel data
+    /// as a texture and creates bind groups for compositing.
     pub fn set_floating_content(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        source_tiles: &crate::tile::TileGrid,
+        rgba_data: &[u8],
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
@@ -853,7 +853,7 @@ impl Compositor {
             &self.sampler,
             &root.accum.views,
             &root.composite_cache_view,
-            source_tiles,
+            rgba_data,
             source_origin,
             source_width,
             source_height,
@@ -1249,7 +1249,7 @@ impl Compositor {
 
                 LayerNode::Group(g) => {
                     if g.passthrough {
-                        let has_active_mask = g.mask.is_some()
+                        let has_active_mask = g.has_mask
                             && g.mask_enabled
                             && self.mask_textures.contains_key(&g.id);
 

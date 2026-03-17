@@ -1,4 +1,3 @@
-mod tile;
 mod layer;
 mod mask;
 pub mod property;
@@ -6,7 +5,6 @@ mod selection;
 mod compound;
 mod gpu_region;
 
-pub use tile::TileAction;
 pub use layer::{LayerAddAction, LayerRemoveAction, LayerMoveAction};
 pub use mask::MaskPropertyAction;
 pub use property::PropertyAction;
@@ -132,173 +130,11 @@ impl UndoStack {
     }
 }
 
-/// Mark the affected tiles as dirty so the compositor re-uploads them.
-/// Looks up each layer by ID and marks its surface dirty.
-pub fn mark_affected_dirty(
-    doc: &mut Document,
-    affected: &HashMap<LayerId, HashSet<(i32, i32)>>,
-) {
-    for (&layer_id, tiles) in affected {
-        if let Some(crate::layer::Layer::Raster(r)) = doc.layer_mut(layer_id) {
-            for &(tx, ty) in tiles {
-                r.surface.dirty.mark(tx, ty);
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tile::TILE_SIZE;
     use crate::layer::Layer;
-
-    fn tile_is_blank(doc: &Document, layer_id: LayerId, tx: i32, ty: i32) -> bool {
-        let r = match doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => r,
-            _ => return true,
-        };
-        match r.surface.store.get(tx, ty) {
-            None => true,
-            Some(t) => {
-                let data = t.data();
-                for y in 0..TILE_SIZE {
-                    for x in 0..TILE_SIZE {
-                        if data.pixel(x, y)[3] != 0 {
-                            return false;
-                        }
-                    }
-                }
-                true
-            }
-        }
-    }
-
-    fn non_transparent_pixels(doc: &Document, layer_id: LayerId, tx: i32, ty: i32) -> Vec<(usize, usize, [u8; 4])> {
-        let r = match doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => r,
-            _ => return vec![],
-        };
-        let tile = match r.surface.store.get(tx, ty) {
-            Some(t) => t,
-            None => return vec![],
-        };
-        let data = tile.data();
-        let mut pixels = Vec::new();
-        for y in 0..TILE_SIZE {
-            for x in 0..TILE_SIZE {
-                let px = data.pixel(x, y);
-                if px[3] != 0 {
-                    pixels.push((x, y, *px));
-                }
-            }
-        }
-        pixels
-    }
-
-    #[test]
-    fn undo_semitransparent_dab_on_empty_layer() {
-        let mut doc = Document::new(128, 128);
-        let id = doc.add_raster_layer();
-        let mut undo = UndoStack::new(100);
-
-        assert!(tile_is_blank(&doc, id, 0, 0));
-
-        doc.begin_transaction(id);
-        doc.paint_circle(id, 32.0, 32.0, 5.0, [220, 180, 60, 200]);
-        if let Some(step) = doc.commit_transaction(id) {
-            undo.push(Box::new(TileAction::new(step)));
-        }
-
-        let painted_pixels = non_transparent_pixels(&doc, id, 0, 0);
-        assert!(!painted_pixels.is_empty(), "dab should have painted pixels");
-        if let Some(Layer::Raster(r)) = doc.layer(id) {
-            let px = r.surface.store.get(0, 0).unwrap().data().pixel(32, 32);
-            assert_eq!(px[3], 200, "center pixel alpha should be 200, got {}", px[3]);
-        }
-
-        let affected = undo.undo(&mut doc).unwrap();
-        mark_affected_dirty(&mut doc, &affected);
-
-        assert!(
-            tile_is_blank(&doc, id, 0, 0),
-            "after undo, tile (0,0) should be blank but has pixels: {:?}",
-            non_transparent_pixels(&doc, id, 0, 0),
-        );
-
-        let affected = undo.redo(&mut doc).unwrap();
-        mark_affected_dirty(&mut doc, &affected);
-
-        let redone_pixels = non_transparent_pixels(&doc, id, 0, 0);
-        assert_eq!(
-            painted_pixels, redone_pixels,
-            "redo should restore exactly the same pixels"
-        );
-    }
-
-    #[test]
-    fn undo_two_overlapping_strokes() {
-        let mut doc = Document::new(128, 128);
-        let id = doc.add_raster_layer();
-        let mut undo = UndoStack::new(100);
-
-        doc.begin_transaction(id);
-        doc.paint_circle(id, 32.0, 32.0, 5.0, [220, 180, 60, 200]);
-        if let Some(step) = doc.commit_transaction(id) {
-            undo.push(Box::new(TileAction::new(step)));
-        }
-
-        let after_stroke1 = non_transparent_pixels(&doc, id, 0, 0);
-
-        doc.begin_transaction(id);
-        doc.paint_circle(id, 32.0, 32.0, 5.0, [220, 180, 60, 200]);
-        if let Some(step) = doc.commit_transaction(id) {
-            undo.push(Box::new(TileAction::new(step)));
-        }
-
-        if let Some(Layer::Raster(r)) = doc.layer(id) {
-            let px = r.surface.store.get(0, 0).unwrap().data().pixel(32, 32);
-            assert!(px[3] > 200, "two overlapping dabs should blend: alpha={}", px[3]);
-        }
-
-        let affected = undo.undo(&mut doc).unwrap();
-        mark_affected_dirty(&mut doc, &affected);
-
-        let after_undo = non_transparent_pixels(&doc, id, 0, 0);
-        assert_eq!(
-            after_stroke1, after_undo,
-            "undoing stroke 2 should restore exact state after stroke 1"
-        );
-    }
-
-    #[test]
-    fn undo_clears_redo() {
-        let mut doc = Document::new(128, 128);
-        let id = doc.add_raster_layer();
-        let mut undo = UndoStack::new(100);
-
-        doc.begin_transaction(id);
-        doc.paint_circle(id, 10.0, 10.0, 3.0, [255, 0, 0, 255]);
-        if let Some(step) = doc.commit_transaction(id) {
-            undo.push(Box::new(TileAction::new(step)));
-        }
-
-        doc.begin_transaction(id);
-        doc.paint_circle(id, 50.0, 50.0, 3.0, [0, 255, 0, 255]);
-        if let Some(step) = doc.commit_transaction(id) {
-            undo.push(Box::new(TileAction::new(step)));
-        }
-
-        undo.undo(&mut doc);
-        assert!(undo.can_redo());
-
-        doc.begin_transaction(id);
-        doc.paint_circle(id, 70.0, 70.0, 3.0, [0, 0, 255, 255]);
-        if let Some(step) = doc.commit_transaction(id) {
-            undo.push(Box::new(TileAction::new(step)));
-        }
-        assert!(!undo.can_redo());
-    }
 
     #[test]
     fn undo_layer_add_remove() {
@@ -306,10 +142,6 @@ mod tests {
         let mut undo = UndoStack::new(100);
 
         let id = doc.add_raster_layer();
-
-        // Paint something on the layer so we can verify it survives undo/redo.
-        doc.paint_circle(id, 32.0, 32.0, 5.0, [255, 0, 0, 255]);
-        let painted = non_transparent_pixels(&doc, id, 0, 0);
 
         // Record the add as undoable.
         let parent = doc.parent_of(id);
@@ -322,11 +154,9 @@ mod tests {
         undo.undo(&mut doc);
         assert_eq!(doc.flat_layers().len(), 0);
 
-        // Redo — layer comes back with its tile data.
+        // Redo — layer comes back.
         undo.redo(&mut doc);
         assert_eq!(doc.flat_layers().len(), 1);
-        let restored = non_transparent_pixels(&doc, id, 0, 0);
-        assert_eq!(painted, restored, "redo should restore layer with its tiles");
     }
 
     #[test]
@@ -335,8 +165,6 @@ mod tests {
         let mut undo = UndoStack::new(100);
 
         let id = doc.add_raster_layer();
-        doc.paint_circle(id, 32.0, 32.0, 5.0, [255, 0, 0, 255]);
-        let painted = non_transparent_pixels(&doc, id, 0, 0);
 
         // Remove the layer (undoable).
         let parent = doc.parent_of(id);
@@ -349,8 +177,6 @@ mod tests {
         // Undo the remove — layer should come back.
         undo.undo(&mut doc);
         assert_eq!(doc.flat_layers().len(), 1);
-        let restored = non_transparent_pixels(&doc, id, 0, 0);
-        assert_eq!(painted, restored);
 
         // Redo the remove — layer gone again.
         undo.redo(&mut doc);
@@ -484,156 +310,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn coalesce_does_not_merge_across_different_actions() {
-        use super::property::Property;
-
-        let mut doc = Document::new(128, 128);
-        let mut undo = UndoStack::new(100);
-        let id = doc.add_raster_layer();
-
-        // First drag: opacity 1.0 → 0.5
-        if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
-            r.opacity = 0.5;
-        }
-        undo.coalesce_property(PropertyAction::new(
-            id,
-            Property::Opacity(1.0),
-            Property::Opacity(0.5),
-        ));
-
-        // Paint a stroke (different action type intervenes).
-        doc.begin_transaction(id);
-        doc.paint_circle(id, 32.0, 32.0, 5.0, [255, 0, 0, 255]);
-        if let Some(step) = doc.commit_transaction(id) {
-            undo.push(Box::new(TileAction::new(step)));
-        }
-
-        // Second drag: opacity 0.5 → 0.8
-        if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
-            r.opacity = 0.8;
-        }
-        undo.coalesce_property(PropertyAction::new(
-            id,
-            Property::Opacity(0.5),
-            Property::Opacity(0.8),
-        ));
-
-        // Should be 3 undo steps: drag1, paint, drag2.
-        // Undo drag2.
-        undo.undo(&mut doc);
-        let op = match doc.layer(id) {
-            Some(Layer::Raster(r)) => r.opacity,
-            _ => unreachable!(),
-        };
-        assert!(
-            (op - 0.5).abs() < f32::EPSILON,
-            "undo drag2 should restore 0.5, got {op}"
-        );
-
-        // Undo paint.
-        undo.undo(&mut doc);
-
-        // Undo drag1.
-        undo.undo(&mut doc);
-        let op = match doc.layer(id) {
-            Some(Layer::Raster(r)) => r.opacity,
-            _ => unreachable!(),
-        };
-        assert!(
-            (op - 1.0).abs() < f32::EPSILON,
-            "undo drag1 should restore 1.0, got {op}"
-        );
-
-        assert!(!undo.can_undo());
-    }
-
-    /// Reproduces the exact GUI init pattern from CanvasView.svelte:
-    ///   1. add_raster_layer (bg)  → LayerAddAction pushed
-    ///   2. fill_gradient(bg)      → tiles written, NO undo entry
-    ///   3. add_raster_layer (paint) → LayerAddAction pushed
-    ///      (filter layer skipped — can't construct without GPU, but we add
-    ///       a third raster layer to match the 3 LayerAddActions)
-    ///   4. add_raster_layer (extra) → LayerAddAction pushed
-    ///
-    /// Then: paint on paint layer → change opacity → undo should work.
-    #[test]
-    fn repro_gui_init_paint_then_opacity_undo() {
-        use super::property::Property;
-
-        let mut doc = Document::new(900, 1600);
-        let mut undo = UndoStack::new(50); // matches api.rs
-
-        // --- GUI init: 3 layers ---
-        let bg = doc.add_raster_layer();
-        let parent = doc.parent_of(bg);
-        let pos = doc.position_in_parent(bg).unwrap_or(0);
-        undo.push(Box::new(LayerAddAction::new(bg, parent, pos)));
-
-        // fill_gradient writes tiles without undo (no transaction).
-        doc.fill_gradient(bg);
-
-        // Stand-in for the filter layer (3rd undo entry).
-        let extra = doc.add_raster_layer();
-        let parent = doc.parent_of(extra);
-        let pos = doc.position_in_parent(extra).unwrap_or(0);
-        undo.push(Box::new(LayerAddAction::new(extra, parent, pos)));
-
-        let paint = doc.add_raster_layer();
-        let parent = doc.parent_of(paint);
-        let pos = doc.position_in_parent(paint).unwrap_or(0);
-        undo.push(Box::new(LayerAddAction::new(paint, parent, pos)));
-
-        // Undo stack: [LA(bg), LA(extra), LA(paint)]
-
-        // --- User paints on the paint layer ---
-        doc.begin_transaction(paint);
-        doc.paint_circle(paint, 100.0, 100.0, 12.0, [0, 0, 0, 255]);
-        if let Some(step) = doc.commit_transaction(paint) {
-            undo.push(Box::new(TileAction::new(step)));
-        }
-
-        // Undo stack: [LA(bg), LA(extra), LA(paint), TileAction]
-
-        // --- User changes opacity on the paint layer ---
-        let old_opacity = match doc.layer(paint) {
-            Some(Layer::Raster(r)) => r.opacity,
-            _ => unreachable!(),
-        };
-        if let Some(Layer::Raster(r)) = doc.layer_mut(paint) {
-            r.opacity = 0.5;
-        }
-        undo.push(Box::new(PropertyAction::new(
-            paint,
-            Property::Opacity(old_opacity),
-            Property::Opacity(0.5),
-        )));
-
-        // Undo stack: [LA(bg), LA(extra), LA(paint), TileAction, PropAction]
-
-        // --- Ctrl+Z: should undo opacity ---
-        undo.undo(&mut doc);
-        let op = match doc.layer(paint) {
-            Some(Layer::Raster(r)) => r.opacity,
-            _ => panic!("paint layer should still exist after undo"),
-        };
-        assert!(
-            (op - 1.0).abs() < f32::EPSILON,
-            "undo #1 should restore opacity to 1.0, got {op}"
-        );
-
-        // --- Ctrl+Z: should undo paint ---
-        undo.undo(&mut doc);
-        assert!(
-            tile_is_blank(&doc, paint, 0, 0),
-            "undo #2 should remove painted pixels"
-        );
-
-        // --- Ctrl+Z: should undo layer add (remove paint layer) ---
-        undo.undo(&mut doc);
-        assert!(
-            doc.layer(paint).is_none(),
-            "undo #3 should remove the paint layer"
-        );
-    }
 }

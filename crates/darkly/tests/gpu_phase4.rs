@@ -11,7 +11,6 @@ use darkly::gpu::transform::{
     TransformPass, Affine2D, IDENTITY,
     affine_translate, affine_inverse, affine_multiply,
 };
-use darkly::tile::{TileGrid, TILE_SIZE};
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
     device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test") })
@@ -69,25 +68,19 @@ fn setup_transform_pass(
     (pass, accum_views, cache_view, sampler)
 }
 
-/// Helper: create a TileGrid with a solid-color rectangle painted at given
-/// canvas pixel coordinates. Returns (tiles, origin, width, height).
+/// Helper: create flat RGBA pixel data with a solid-color rectangle.
+/// Returns (rgba_data, origin, width, height).
 fn make_source_rect(
     x: i32, y: i32, w: u32, h: u32, color: [u8; 4],
-) -> (TileGrid, (i32, i32), u32, u32) {
-    let mut tiles = TileGrid::new();
-    let ts = TILE_SIZE as i32;
-
-    for py in y..y + h as i32 {
-        for px in x..x + w as i32 {
-            let tx = px.div_euclid(ts);
-            let ty = py.div_euclid(ts);
-            let lx = px.rem_euclid(ts) as usize;
-            let ly = py.rem_euclid(ts) as usize;
-            let tile = tiles.get_or_create(tx, ty);
-            *tile.write().pixel_mut(lx, ly) = color;
+) -> (Vec<u8>, (i32, i32), u32, u32) {
+    let mut data = vec![0u8; (w * h * 4) as usize];
+    for py in 0..h {
+        for px in 0..w {
+            let off = ((py * w + px) * 4) as usize;
+            data[off..off + 4].copy_from_slice(&color);
         }
     }
-    (tiles, (x, y), w, h)
+    (data, (x, y), w, h)
 }
 
 // ============================================================================
@@ -110,12 +103,12 @@ fn transform_commit_translate() {
         setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: 4×4 red block at (10, 10).
-    let (source_tiles, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [255, 0, 0, 255]);
+    let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [255, 0, 0, 255]);
 
     pass.set_floating_content(
         &device, &queue, &sampler,
         &accum_views, &cache_view,
-        &source_tiles, origin, sw, sh, cw, ch,
+        &source_data, origin, sw, sh, cw, ch,
         1, false,
     );
 
@@ -167,12 +160,12 @@ fn transform_commit_translate_undo() {
     let (mut pass, accum_views, cache_view, sampler) =
         setup_transform_pass(&device, &queue, cw, ch);
 
-    let (source_tiles, origin, sw, sh) = make_source_rect(5, 5, 4, 4, [0, 255, 0, 255]);
+    let (source_data, origin, sw, sh) = make_source_rect(5, 5, 4, 4, [0, 255, 0, 255]);
 
     pass.set_floating_content(
         &device, &queue, &sampler,
         &accum_views, &cache_view,
-        &source_tiles, origin, sw, sh, cw, ch,
+        &source_data, origin, sw, sh, cw, ch,
         1, false,
     );
 
@@ -225,41 +218,23 @@ fn transform_commit_rotate_90() {
     let (mut pass, accum_views, cache_view, sampler) =
         setup_transform_pass(&device, &queue, cw, ch);
 
-    // Source: vertical line at x=2 in a 5×5 block at origin (10, 10).
-    let mut tiles = TileGrid::new();
-    let ts = TILE_SIZE as i32;
+    // Source: vertical line at x=2 in a 5×5 block.
+    let (sw, sh) = (5u32, 5u32);
     let (ox, oy) = (10i32, 10i32);
-    for py in 0..5i32 {
-        let cx = ox + 2;
-        let cy = oy + py;
-        let tx = cx.div_euclid(ts);
-        let ty = cy.div_euclid(ts);
-        let lx = cx.rem_euclid(ts) as usize;
-        let ly = cy.rem_euclid(ts) as usize;
-        let tile = tiles.get_or_create(tx, ty);
-        *tile.write().pixel_mut(lx, ly) = [0, 0, 255, 255];
+    let mut source_data = vec![0u8; (sw * sh * 4) as usize];
+    for py in 0..5u32 {
+        let off = ((py * sw + 2) * 4) as usize;
+        source_data[off..off + 4].copy_from_slice(&[0, 0, 255, 255]);
     }
 
-    let (sw, sh) = (5u32, 5u32);
     pass.set_floating_content(
         &device, &queue, &sampler,
         &accum_views, &cache_view,
-        &tiles, (ox, oy), sw, sh, cw, ch,
+        &source_data, (ox, oy), sw, sh, cw, ch,
         1, false,
     );
 
-    // Rotate 90° CW = -π/2 radians. The rotation is around the source-local origin (0,0),
-    // which is the top-left of the source rect. A 90° CW rotation maps:
-    //   (x, y) → (y, -x)
-    // So a vertical line at local x=2 becomes horizontal at local y=-2.
-    // We need to also translate to keep content in positive coords.
-    // For a 5×5 source rotated 90° CW: translate(0, 5) then rotate(-π/2)
-    // or equivalently: rotate(-π/2) then translate(5, 0) in local coords.
-    //
-    // Use: rotate(-π/2) ∘ translate(center) composed properly.
-    // Simpler: 90° CW as matrix [0, 1, 0, -1, 0, 5] maps:
-    //   (2, 0) → (0, 3), (2, 1) → (1, 3), (2, 2) → (2, 3), (2, 3) → (3, 3), (2, 4) → (4, 3)
-    // That gives a horizontal line at local y=3.
+    // Rotate 90° CW: matrix [0, 1, 0, -1, 0, 5]
     let matrix: Affine2D = [0.0, 1.0, 0.0, -1.0, 0.0, 5.0];
 
     let mut enc = encoder(&device);
@@ -268,20 +243,14 @@ fn transform_commit_rotate_90() {
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
 
-    // The matrix [0, 1, 0, -1, 0, 5] rotates 90° CW around center (2.5, 2.5).
-    // Source pixel (2, k) has center at (2.5, k+0.5).
-    // Forward: (k+0.5, 5 - 2.5) = (k+0.5, 2.5) → pixel (k, 2) in local coords.
-    // Canvas: (10+k, 12) for k=0..4.
-    // So horizontal line at y=12, x=10..14.
-
+    // Horizontal line at y=12, x=10..14.
     for x in 10..15u32 {
         let p = pixel_at(&pixels, cw, x, 12, 4);
         assert!(p[2] > 200, "rotated line at ({},12) should be blue, B={}", x, p[2]);
         assert!(p[3] > 200, "rotated line at ({},12) should be opaque, A={}", x, p[3]);
     }
 
-    // Original vertical line position (x=12, y=10..11) should be transparent
-    // (y=12 overlaps with the rotated line, so skip it).
+    // Original vertical line position (x=12, y=10..11) should be transparent.
     let p = pixel_at(&pixels, cw, 12, 10, 4);
     assert_eq!(p[3], 0, "original vert line pos (12,10) should be clear, A={}", p[3]);
     let p = pixel_at(&pixels, cw, 12, 11, 4);
@@ -308,13 +277,13 @@ fn paste_commit_identity() {
         setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: 8×8 magenta block at (20, 20).
-    let (source_tiles, origin, sw, sh) =
+    let (source_data, origin, sw, sh) =
         make_source_rect(20, 20, 8, 8, [255, 0, 255, 255]);
 
     pass.set_floating_content(
         &device, &queue, &sampler,
         &accum_views, &cache_view,
-        &source_tiles, origin, sw, sh, cw, ch,
+        &source_data, origin, sw, sh, cw, ch,
         1, false,
     );
 
@@ -350,13 +319,13 @@ fn paste_commit_undo() {
     let (mut pass, accum_views, cache_view, sampler) =
         setup_transform_pass(&device, &queue, cw, ch);
 
-    let (source_tiles, origin, sw, sh) =
+    let (source_data, origin, sw, sh) =
         make_source_rect(10, 10, 6, 6, [255, 255, 0, 255]);
 
     pass.set_floating_content(
         &device, &queue, &sampler,
         &accum_views, &cache_view,
-        &source_tiles, origin, sw, sh, cw, ch,
+        &source_data, origin, sw, sh, cw, ch,
         1, false,
     );
 
@@ -416,13 +385,13 @@ fn commit_composites_over_existing() {
         setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: semi-transparent red (alpha=128) at (10,10) size 4×4.
-    let (source_tiles, origin, sw, sh) =
+    let (source_data, origin, sw, sh) =
         make_source_rect(10, 10, 4, 4, [255, 0, 0, 128]);
 
     pass.set_floating_content(
         &device, &queue, &sampler,
         &accum_views, &cache_view,
-        &source_tiles, origin, sw, sh, cw, ch,
+        &source_data, origin, sw, sh, cw, ch,
         1, false,
     );
 
@@ -433,9 +402,6 @@ fn commit_composites_over_existing() {
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
 
     // At (12, 12): semi-transparent red over blue.
-    // Source-over: result_R = src_R * src_A + dst_R * (1 - src_A)
-    // src_A ≈ 128/255 ≈ 0.502, src_R = 1.0, dst_R = 0.0, dst_B = 1.0
-    // result_R ≈ 0.502 * 255 ≈ 128, result_B ≈ (1 - 0.502) * 255 ≈ 127
     let p = pixel_at(&pixels, cw, 12, 12, 4);
     assert!(p[0] > 100 && p[0] < 180, "blended R should be ~128, got {}", p[0]);
     assert!(p[2] > 80 && p[2] < 180, "blended B should be ~127, got {}", p[2]);
@@ -466,13 +432,13 @@ fn transform_commit_on_mask() {
         setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: 4×4 white block at (10, 10). White RGB → luminance = 1.0 → mask value 255.
-    let (source_tiles, origin, sw, sh) =
+    let (source_data, origin, sw, sh) =
         make_source_rect(10, 10, 4, 4, [255, 255, 255, 255]);
 
     pass.set_floating_content(
         &device, &queue, &sampler,
         &accum_views, &cache_view,
-        &source_tiles, origin, sw, sh, cw, ch,
+        &source_data, origin, sw, sh, cw, ch,
         1, true, // target_is_mask = true
     );
 

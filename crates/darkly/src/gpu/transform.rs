@@ -6,7 +6,6 @@
 //! render pass writes transformed pixels directly to the layer texture.
 
 use crate::layer::LayerId;
-use crate::tile::{TileGrid, TILE_SIZE};
 
 // ---------------------------------------------------------------------------
 // Affine matrix helpers  ([a, b, tx, c, d, ty])
@@ -392,8 +391,12 @@ impl TransformPass {
         }
     }
 
-    /// Upload source tiles as an RGBA texture and create bind groups for
-    /// compositing against both ping-pong accumulators.
+    /// Upload flat RGBA pixel data as a source texture and create bind groups
+    /// for compositing against both ping-pong accumulators.
+    ///
+    /// `rgba_data` must be `source_width * source_height * 4` bytes, row-major,
+    /// in straight alpha. This method converts to premultiplied alpha for
+    /// correct hardware bilinear interpolation.
     pub fn set_floating_content(
         &mut self,
         device: &wgpu::Device,
@@ -401,7 +404,7 @@ impl TransformPass {
         sampler: &wgpu::Sampler,
         accum_views: &[wgpu::TextureView; 2],
         cache_view: &wgpu::TextureView,
-        source_tiles: &TileGrid,
+        rgba_data: &[u8],
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
@@ -410,7 +413,6 @@ impl TransformPass {
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
-        // Create the source texture and upload tile data
         let source_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transform-source"),
             size: wgpu::Extent3d {
@@ -426,41 +428,16 @@ impl TransformPass {
             view_formats: &[],
         });
 
-        // Rasterize source tiles into a contiguous RGBA buffer for upload
-        let w = source_width as usize;
-        let h = source_height as usize;
-        let mut rgba = vec![0u8; w * h * 4];
-        let ts = TILE_SIZE as i32;
-        let (ox, oy) = source_origin;
-
-        for ((tx, ty), tile) in source_tiles.iter() {
-            let tile_px = tx * ts;
-            let tile_py = ty * ts;
-            let data = tile.data();
-            for ly in 0..TILE_SIZE {
-                for lx in 0..TILE_SIZE {
-                    let canvas_x = tile_px + lx as i32;
-                    let canvas_y = tile_py + ly as i32;
-                    let img_x = canvas_x - ox;
-                    let img_y = canvas_y - oy;
-                    if img_x < 0 || img_y < 0 || img_x >= w as i32 || img_y >= h as i32 {
-                        continue;
-                    }
-                    let pixel = data.pixel(lx, ly);
-                    if pixel[3] == 0 {
-                        continue;
-                    }
-                    // Upload as premultiplied alpha so hardware bilinear
-                    // interpolation operates in premultiplied space —
-                    // eliminates dark halos at content edges.
-                    let offset = (img_y as usize * w + img_x as usize) * 4;
-                    let a = pixel[3] as f32 / 255.0;
-                    rgba[offset]     = (pixel[0] as f32 * a).round() as u8;
-                    rgba[offset + 1] = (pixel[1] as f32 * a).round() as u8;
-                    rgba[offset + 2] = (pixel[2] as f32 * a).round() as u8;
-                    rgba[offset + 3] = pixel[3];
-                }
-            }
+        // Convert straight alpha → premultiplied alpha for correct bilinear interpolation.
+        let pixel_count = (source_width * source_height) as usize;
+        let mut premul = vec![0u8; pixel_count * 4];
+        for i in 0..pixel_count {
+            let off = i * 4;
+            let a = rgba_data[off + 3] as f32 / 255.0;
+            premul[off]     = (rgba_data[off]     as f32 * a).round() as u8;
+            premul[off + 1] = (rgba_data[off + 1] as f32 * a).round() as u8;
+            premul[off + 2] = (rgba_data[off + 2] as f32 * a).round() as u8;
+            premul[off + 3] = rgba_data[off + 3];
         }
 
         queue.write_texture(
@@ -470,10 +447,10 @@ impl TransformPass {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba,
+            &premul,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(w as u32 * 4),
+                bytes_per_row: Some(source_width * 4),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
@@ -829,59 +806,3 @@ impl TransformPass {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Utility: build source tiles + dimensions from an ImageClip
-// ---------------------------------------------------------------------------
-
-/// Compute tight pixel bounds around non-transparent content in a tile grid.
-/// Returns `(min_x, min_y, width, height)` or `None` if fully transparent.
-pub fn tight_pixel_bounds(tiles: &TileGrid) -> Option<(i32, i32, u32, u32)> {
-    let ts = TILE_SIZE as i32;
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
-
-    for ((tx, ty), tile) in tiles.iter() {
-        let base_x = tx * ts;
-        let base_y = ty * ts;
-        let data = tile.data();
-        for ly in 0..TILE_SIZE {
-            for lx in 0..TILE_SIZE {
-                if data.pixel(lx, ly)[3] > 0 {
-                    let cx = base_x + lx as i32;
-                    let cy = base_y + ly as i32;
-                    min_x = min_x.min(cx);
-                    min_y = min_y.min(cy);
-                    max_x = max_x.max(cx);
-                    max_y = max_y.max(cy);
-                }
-            }
-        }
-    }
-
-    if min_x > max_x {
-        return None;
-    }
-    Some((min_x, min_y, (max_x - min_x + 1) as u32, (max_y - min_y + 1) as u32))
-}
-
-/// Extract source tiles, origin, and dimensions from an ImageClip.
-/// Uses tight pixel bounds instead of tile-aligned bounds so the bounding
-/// box matches the actual content.
-pub fn source_from_clip(
-    clip: &crate::clipboard::ImageClip,
-) -> (TileGrid, (i32, i32), u32, u32) {
-    let mut tiles = TileGrid::new();
-    for ((tx, ty), src_tile) in clip.tiles.iter() {
-        let dst = tiles.get_or_create(tx, ty);
-        *dst.write() = src_tile.data().clone();
-    }
-    match tight_pixel_bounds(&tiles) {
-        Some((x, y, w, h)) => (tiles, (x, y), w, h),
-        None => {
-            let (x, y, w, h) = clip.bounds;
-            (tiles, (x, y), w, h)
-        }
-    }
-}

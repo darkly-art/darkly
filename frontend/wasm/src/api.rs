@@ -113,9 +113,6 @@ impl DarklyHandle {
 
     // --- Painting (pass-through) ---
 
-    pub fn paint(&mut self, layer_id: f64, x: f32, y: f32, radius: f32, r: u8, g: u8, b: u8, a: u8) {
-        self.0.paint(layer_id as u64, x, y, radius, r, g, b, a)
-    }
     pub fn fill_gradient(&mut self, layer_id: f64) { self.0.fill_gradient(layer_id as u64) }
 
     // --- Stroke lifecycle ---
@@ -329,10 +326,10 @@ impl DarklyHandle {
 
     // --- Thumbnails ---
 
-    pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
+    pub fn layer_thumbnail(&mut self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
         self.0.layer_thumbnail(layer_id as u64, width, height)
     }
-    pub fn mask_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
+    pub fn mask_thumbnail(&mut self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
         self.0.mask_thumbnail(layer_id as u64, width, height)
     }
 

@@ -1,24 +1,32 @@
-//! On-demand async GPU→CPU pixel readback.
+//! Async GPU→CPU pixel readback with a scheduler.
 //!
-//! Used for save/export, clipboard copy, flood fill seed reads, and color picking.
+//! Used for save/export, clipboard copy, flood fill, color picking, thumbnails,
+//! and any other operation that needs to read pixels back from VRAM.
 //!
-//! On WebGPU (WASM), `map_async` resolves via a JS Promise — the browser event
-//! loop must run before the callback fires.  `blocking_read` therefore spins
-//! `device.poll(Wait)` which never completes in single-threaded WASM, freezing
-//! the tab at 100% CPU.
+//! On WebGPU/WASM, you cannot synchronously wait for GPU results. `map_async`
+//! resolves via a JS Promise through the browser event loop. Any form of
+//! blocking (`recv()`, `thread::park()`) prevents the event loop from running,
+//! deadlocking the tab at 100% CPU (see gpu-lessons-learned.md §5).
 //!
-//! The correct pattern: call [`begin_mapping`] after `queue.submit`, then poll
-//! with [`poll`] each frame until the data arrives.  `blocking_read` is kept
-//! only for headless / native test code.
+//! The correct pattern: encode the copy, submit, call `begin_mapping`, then
+//! poll each frame until the data arrives.
+//!
+//! [`ReadbackScheduler`] encapsulates this lifecycle. Callers submit a
+//! `ReadbackRequest` paired with a context value, and the scheduler returns
+//! completed `(context, pixels)` pairs when polled. One scheduler, one poll
+//! call per frame, no per-operation boilerplate.
 
 /// Alignment required by wgpu for bytes_per_row in buffer↔texture copies.
 const COPY_ROW_ALIGNMENT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
+// ---------------------------------------------------------------------------
+// ReadbackRequest — a single pending GPU→CPU copy
+// ---------------------------------------------------------------------------
+
 /// A pending GPU→CPU readback.
 ///
 /// Created by [`request_readback`], which encodes the copy command.
-/// After submitting the encoder, call [`begin_mapping`] to start the async map,
-/// then [`poll`] each frame until data is available.
+/// Submitted to a [`ReadbackScheduler`] via [`submit`](ReadbackScheduler::submit).
 pub struct ReadbackRequest {
     buffer: wgpu::Buffer,
     height: u32,
@@ -28,13 +36,11 @@ pub struct ReadbackRequest {
     rx: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
 }
 
-/// Initiate a readback of a texture region.
+/// Encode a `copy_texture_to_buffer` command for a texture region.
 ///
-/// Encodes a `copy_texture_to_buffer` command into `encoder`.
 /// After this, the caller must:
 /// 1. `queue.submit([encoder.finish()])`
-/// 2. `request.begin_mapping()`
-/// 3. Poll with `request.poll(device)` each frame.
+/// 2. Pass the request to [`ReadbackScheduler::submit`].
 pub fn request_readback(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
@@ -88,8 +94,8 @@ impl ReadbackRequest {
     /// Start the async buffer mapping.
     ///
     /// **Must** be called after `queue.submit()` — the copy command must be
-    /// submitted before the map can complete.  Call this exactly once.
-    pub fn begin_mapping(&mut self) {
+    /// submitted before the map can complete.
+    fn begin_mapping(&mut self) {
         let slice = self.buffer.slice(..);
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         slice.map_async(wgpu::MapMode::Read, move |result| {
@@ -98,37 +104,11 @@ impl ReadbackRequest {
         self.rx = Some(rx);
     }
 
-    /// Non-blocking poll.  Returns `Some(pixels)` when the readback is ready.
-    ///
-    /// Calls `device.poll(Poll)` to give the backend a chance to process
-    /// callbacks (needed on native; on WebGPU the browser resolves the
-    /// Promise between frames).
-    pub fn poll(&self, device: &wgpu::Device) -> Option<Vec<u8>> {
-        let rx = self.rx.as_ref()?;
-
-        // Nudge the backend so it can fire ready callbacks (native).
-        let _ = device.poll(wgpu::PollType::Poll);
-
-        match rx.try_recv() {
-            Ok(Ok(())) => {
-                let slice = self.buffer.slice(..);
-                let data = self.extract_pixels(&slice);
-                self.buffer.unmap();
-                Some(data)
-            }
-            Ok(Err(e)) => {
-                log::error!("readback buffer mapping failed: {e}");
-                None
-            }
-            Err(_) => None, // not ready yet
-        }
-    }
-
     /// Blocking read — **native / test only**.
     ///
-    /// On WebGPU/WASM this will spin at 100% CPU forever because `map_async`
-    /// resolves via a JS Promise that requires the event loop.  Use the
-    /// async `begin_mapping` + `poll` path for production code.
+    /// On WebGPU/WASM this deadlocks: `recv()` spin-waits (Rust's thread
+    /// parker is a no-op on wasm32), blocking the JS event loop, so the
+    /// `map_async` Promise can never resolve. See gpu-lessons-learned.md §5.
     pub fn blocking_read(&self, device: &wgpu::Device) -> Vec<u8> {
         let slice = self.buffer.slice(..);
 
@@ -166,5 +146,98 @@ impl ReadbackRequest {
             out.extend_from_slice(&mapped[start..start + unpadded]);
         }
         out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ReadbackScheduler<C> — generic async readback queue
+// ---------------------------------------------------------------------------
+
+/// A scheduler that manages pending GPU→CPU readbacks.
+///
+/// `C` is a caller-defined context type (typically an enum) that travels with
+/// the request and is returned alongside the pixel data on completion.
+///
+/// Usage:
+/// 1. Encode the copy: `let req = request_readback(device, &mut encoder, ...);`
+/// 2. Submit the encoder: `queue.submit([encoder.finish()]);`
+/// 3. Submit to scheduler: `scheduler.submit(req, my_context);`
+/// 4. Each frame: `for (ctx, pixels) in scheduler.poll(device) { ... }`
+pub struct ReadbackScheduler<C> {
+    tasks: Vec<(ReadbackRequest, C)>,
+}
+
+impl<C> ReadbackScheduler<C> {
+    pub fn new() -> Self {
+        ReadbackScheduler { tasks: Vec::new() }
+    }
+
+    /// Submit a readback request with its associated context.
+    ///
+    /// Automatically calls `begin_mapping` — the encoder must already be submitted.
+    pub fn submit(&mut self, mut request: ReadbackRequest, context: C) {
+        request.begin_mapping();
+        self.tasks.push((request, context));
+    }
+
+    /// Poll all pending readbacks. Returns completed `(context, pixels)` pairs.
+    ///
+    /// Calls `device.poll(Poll)` once to nudge native backends, then checks
+    /// every pending request. Completed tasks are removed; in-flight tasks remain.
+    pub fn poll(&mut self, device: &wgpu::Device) -> Vec<(C, Vec<u8>)> {
+        // One poll call for all pending readbacks — the device processes all
+        // ready callbacks in a single pass.
+        if !self.tasks.is_empty() {
+            let _ = device.poll(wgpu::PollType::Poll);
+        }
+
+        let mut completed = Vec::new();
+        let mut i = 0;
+        while i < self.tasks.len() {
+            // Skip the device.poll inside ReadbackRequest::poll — we already
+            // did it above. Just check the channel directly.
+            let ready = self.tasks[i].0.rx.as_ref()
+                .and_then(|rx| rx.try_recv().ok());
+
+            match ready {
+                Some(Ok(())) => {
+                    let (req, ctx) = self.tasks.swap_remove(i);
+                    let slice = req.buffer.slice(..);
+                    let pixels = req.extract_pixels(&slice);
+                    req.buffer.unmap();
+                    completed.push((ctx, pixels));
+                    // Don't increment i — swap_remove moved the last element here.
+                }
+                Some(Err(e)) => {
+                    log::error!("readback buffer mapping failed: {e}");
+                    self.tasks.swap_remove(i);
+                }
+                None => {
+                    i += 1;
+                }
+            }
+        }
+        completed
+    }
+
+    /// True if any readbacks are in flight.
+    pub fn has_pending(&self) -> bool {
+        !self.tasks.is_empty()
+    }
+
+    /// True if any pending readback matches the predicate.
+    pub fn any<F: Fn(&C) -> bool>(&self, f: F) -> bool {
+        self.tasks.iter().any(|(_, ctx)| f(ctx))
+    }
+
+    /// Cancel and remove all pending readbacks matching the predicate.
+    pub fn cancel<F: Fn(&C) -> bool>(&mut self, f: F) {
+        self.tasks.retain(|(_, ctx)| !f(ctx));
+    }
+}
+
+impl<C> Default for ReadbackScheduler<C> {
+    fn default() -> Self {
+        Self::new()
     }
 }

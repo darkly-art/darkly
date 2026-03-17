@@ -1,6 +1,6 @@
 use crate::clipboard::{Clipboard, ImageClip};
 use crate::document::{Document, MoveTarget, SelectionMode};
-use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY, source_from_clip};
+use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY};
 use crate::layer::{BlendMode, Layer, LayerNode};
 use crate::undo::{
     UndoStack, GpuRegionAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
@@ -15,10 +15,11 @@ use crate::gpu::overlay::{
 };
 use crate::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use crate::gpu::params::{ParamDef, ParamValue};
-use crate::gpu::readback::{self, ReadbackRequest};
+use crate::gpu::readback::{self, ReadbackScheduler};
 use crate::gpu::region_store::RegionStore;
 use crate::gpu::view::ViewTransform;
-use crate::tile::{AlphaMask, TileGrid, TILE_SIZE};
+use crate::tile::{AlphaMask, TILE_SIZE};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 // Shared return types — serde-serializable for any FFI bridge.
@@ -161,36 +162,57 @@ impl GpuStrokeState {
     }
 }
 
-/// Pending async flood fill — waiting for GPU readback to complete.
-struct PendingFloodFill {
-    request: ReadbackRequest,
-    layer_id: u64,
-    mask_editing: bool,
-    seed_x: i32,
-    seed_y: i32,
-    color: [u8; 4],
-    tolerance: u8,
-    canvas_w: u32,
-    canvas_h: u32,
+/// Context for a pending async GPU readback — travels with the request and
+/// is returned alongside the pixel data on completion.
+enum ReadbackContext {
+    FloodFill {
+        layer_id: u64,
+        mask_editing: bool,
+        seed_x: i32,
+        seed_y: i32,
+        color: [u8; 4],
+        tolerance: u8,
+        canvas_w: u32,
+        canvas_h: u32,
+    },
+    ColorPick,
+    Copy {
+        is_mask: bool,
+        region: [u32; 4],
+        selection_data: Option<Vec<u8>>,
+        is_cut: bool,
+        layer_id: u64,
+    },
+    MagicWand {
+        old_sel: Option<AlphaMask>,
+        seed_x: i32,
+        seed_y: i32,
+        tolerance: u8,
+        mode: SelectionMode,
+    },
+    MaskToSelection {
+        old_sel: Option<AlphaMask>,
+    },
+    Thumbnail {
+        layer_id: u64,
+        is_mask: bool,
+        thumb_w: u32,
+        thumb_h: u32,
+    },
 }
 
-/// Pending async color pick — waiting for 1×1 GPU readback.
-struct PendingColorPick {
-    request: ReadbackRequest,
+/// Cached thumbnail data per layer.
+struct ThumbnailCache {
+    /// Cached RGBA thumbnail bytes per layer id (layer content).
+    layer: HashMap<u64, Vec<u8>>,
+    /// Cached RGBA thumbnail bytes per layer id (mask).
+    mask: HashMap<u64, Vec<u8>>,
 }
 
-/// Pending async copy — waiting for GPU readback to build clipboard data.
-struct PendingCopy {
-    request: ReadbackRequest,
-    /// True if copying from a mask (R8); false for layer (RGBA).
-    is_mask: bool,
-    /// Source region bounds in canvas coords.
-    region: [u32; 4],
-    /// Selection coverage for each pixel in the region (None = no selection).
-    selection_data: Option<Vec<u8>>,
-    /// Whether this is also a cut (clear after copy).
-    is_cut: bool,
-    layer_id: u64,
+impl ThumbnailCache {
+    fn new() -> Self {
+        ThumbnailCache { layer: HashMap::new(), mask: HashMap::new() }
+    }
 }
 
 pub struct DarklyEngine {
@@ -218,14 +240,13 @@ pub struct DarklyEngine {
     /// Active GPU stroke state (replaces CPU transaction for PaintCircle/EraseCircle).
     gpu_stroke: Option<GpuStrokeState>,
 
-    // --- Async readback operations ---
-    pending_flood_fill: Option<PendingFloodFill>,
-    pending_color_pick: Option<PendingColorPick>,
-    pending_copy: Option<PendingCopy>,
+    // --- Async readback ---
+    readbacks: ReadbackScheduler<ReadbackContext>,
     /// Completed copy result — picked up by the frontend on the next poll.
     pending_copy_result: Option<ClipboardExport>,
     /// Last picked color — returned immediately while async readback is in flight.
     last_picked_color: [u8; 4],
+    thumbnail_cache: ThumbnailCache,
 }
 
 impl DarklyEngine {
@@ -254,11 +275,10 @@ impl DarklyEngine {
             region_store,
             paint_pipelines,
             gpu_stroke: None,
-            pending_flood_fill: None,
-            pending_color_pick: None,
-            pending_copy: None,
+            readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],
+            thumbnail_cache: ThumbnailCache::new(),
         }
     }
 
@@ -479,7 +499,7 @@ impl DarklyEngine {
             None => return,
         };
         let m = node.as_masked();
-        let (old_mask, old_enabled, old_show) = (m.mask().clone(), m.mask_enabled(), m.show_mask());
+        let (old_has, old_enabled, old_show) = (m.has_mask(), m.mask_enabled(), m.show_mask());
 
         self.doc.add_mask(layer_id);
         self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
@@ -487,18 +507,43 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, old_mask, old_enabled, old_show,
+            layer_id, old_has, old_enabled, old_show,
         )));
     }
 
     pub fn remove_mask(&mut self, layer_id: u64) {
+        use crate::undo::CompoundAction;
 
         let node = match self.doc.find_node(layer_id) {
             Some(n) => n,
             None => return,
         };
         let m = node.as_masked();
-        let (old_mask, old_enabled, old_show) = (m.mask().clone(), m.mask_enabled(), m.show_mask());
+        let (old_has, old_enabled, old_show) = (m.has_mask(), m.mask_enabled(), m.show_mask());
+        if !old_has {
+            return;
+        }
+
+        // Save mask texture pixels to RegionStore for undo before removing.
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+        let format = wgpu::TextureFormat::R8Unorm;
+        let gpu_region_entry = if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
+            let mut encoder = self.gpu.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("remove-mask-save") },
+            );
+            self.region_store.save_region(
+                &mut encoder, &mask_tex.texture, format,
+                [0, 0, canvas_w, canvas_h],
+            );
+            let entry = self.region_store.commit_region(
+                &mut encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
+            );
+            self.gpu.queue.submit([encoder.finish()]);
+            Some(entry)
+        } else {
+            None
+        };
 
         self.doc.remove_mask(layer_id);
         self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
@@ -506,18 +551,28 @@ impl DarklyEngine {
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
-        self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, old_mask, old_enabled, old_show,
-        )));
+        // Wrap GpuRegionAction + MaskPropertyAction in a CompoundAction so
+        // undo restores both the mask flag and the mask pixel data.
+        let mask_action = Box::new(MaskPropertyAction::new(
+            layer_id, old_has, old_enabled, old_show,
+        ));
+        if let Some(entry) = gpu_region_entry {
+            let region_action = Box::new(GpuRegionAction::new(entry));
+            self.undo_stack.push(Box::new(CompoundAction::new(vec![
+                region_action, mask_action,
+            ])));
+        } else {
+            self.undo_stack.push(mask_action);
+        }
     }
 
     pub fn apply_mask(&mut self, layer_id: u64) {
         // apply_mask is raster-only — groups have no pixel data to bake into
-        let (old_mask, old_enabled, old_show) = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => (r.mask.clone(), r.mask_enabled, r.show_mask),
+        let (old_has, old_enabled, old_show) = match self.doc.layer(layer_id) {
+            Some(Layer::Raster(r)) => (r.has_mask, r.mask_enabled, r.show_mask),
             _ => return,
         };
-        if old_mask.is_none() {
+        if !old_has {
             return;
         }
 
@@ -582,15 +637,21 @@ impl DarklyEngine {
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
+        // Also remove mask on document side
+        self.doc.remove_mask(layer_id);
+
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, old_mask, old_enabled, old_show,
+            layer_id, old_has, old_enabled, old_show,
         )));
     }
 
     pub fn set_mask_enabled(&mut self, layer_id: u64, enabled: bool) {
 
-        let old = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_enabled(),
+        let (old_has, old_enabled, old_show) = match self.doc.find_node(layer_id) {
+            Some(n) => {
+                let m = n.as_masked();
+                (m.has_mask(), m.mask_enabled(), m.show_mask())
+            }
             None => return,
         };
         self.doc.set_mask_enabled(layer_id, enabled);
@@ -598,14 +659,17 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, None, old, false,
+            layer_id, old_has, old_enabled, old_show,
         )));
     }
 
     pub fn set_show_mask(&mut self, layer_id: u64, show: bool) {
 
-        let old = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().show_mask(),
+        let (old_has, old_enabled, old_show) = match self.doc.find_node(layer_id) {
+            Some(n) => {
+                let m = n.as_masked();
+                (m.has_mask(), m.mask_enabled(), m.show_mask())
+            }
             None => return,
         };
         self.doc.set_show_mask(layer_id, show);
@@ -613,7 +677,7 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, None, false, old,
+            layer_id, old_has, old_enabled, old_show,
         )));
     }
 
@@ -632,160 +696,103 @@ impl DarklyEngine {
             None => return,
         };
         let m = node.as_masked();
-        let (old_mask, old_enabled, old_show) = (m.mask().clone(), m.mask_enabled(), m.show_mask());
+        let (old_has, old_enabled, old_show) = (m.has_mask(), m.mask_enabled(), m.show_mask());
 
         self.doc.selection_to_mask(layer_id);
         self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
         // Upload selection data directly to the GPU mask texture.
-        self.upload_mask_to_gpu(layer_id);
+        if let Some(sel) = &self.doc.selection {
+            if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
+                let canvas_w = self.doc.width;
+                let canvas_h = self.doc.height;
+                let ts = TILE_SIZE;
+                // Convert AlphaMask tiles to flat R8 and upload to GPU.
+                let mut buf = vec![255u8; (canvas_w * canvas_h) as usize]; // default white (reveal all)
+                for ((tx, ty), tile) in sel.iter() {
+                    if tx < 0 || ty < 0 { continue; }
+                    let data = tile.data();
+                    for ly in 0..ts {
+                        for lx in 0..ts {
+                            let px = tx as u32 * ts as u32 + lx as u32;
+                            let py = ty as u32 * ts as u32 + ly as u32;
+                            if px < canvas_w && py < canvas_h {
+                                buf[(py * canvas_w + px) as usize] =
+                                    (data.get(lx, ly).clamp(0.0, 1.0) * 255.0) as u8;
+                            }
+                        }
+                    }
+                }
+                self.gpu.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &mask_tex.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &buf,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(canvas_w),
+                        rows_per_image: None,
+                    },
+                    wgpu::Extent3d { width: canvas_w, height: canvas_h, depth_or_array_layers: 1 },
+                );
+            }
+        }
 
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, old_mask, old_enabled, old_show,
+            layer_id, old_has, old_enabled, old_show,
         )));
     }
 
     pub fn mask_to_selection(&mut self, layer_id: u64) {
-        let old_sel = self.doc.selection.clone();
-
-        // Readback the GPU mask texture and build an AlphaMask from the bytes.
-        if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
-            let canvas_w = self.doc.width;
-            let canvas_h = self.doc.height;
-            let mut encoder = self.gpu.device.create_command_encoder(
-                &wgpu::CommandEncoderDescriptor { label: Some("mask-to-sel-readback") },
-            );
-            let request = readback::request_readback(
-                &self.gpu.device, &mut encoder, &mask_tex.texture,
-                wgpu::TextureFormat::R8Unorm,
-                [0, 0, canvas_w, canvas_h],
-            );
-            self.gpu.queue.submit([encoder.finish()]);
-            let pixels = request.blocking_read(&self.gpu.device);
-
-            // Build AlphaMask from R8 pixel data.
-            let ts = TILE_SIZE;
-            let mut mask = AlphaMask::new();
-            for py in 0..canvas_h {
-                for px in 0..canvas_w {
-                    let v = pixels[(py * canvas_w + px) as usize];
-                    // Only store non-zero values (skip fully-transparent regions).
-                    if v > 0 {
-                        let tx = (px / ts as u32) as i32;
-                        let ty = (py / ts as u32) as i32;
-                        let lx = (px % ts as u32) as usize;
-                        let ly = (py % ts as u32) as usize;
-                        mask.get_or_create(tx, ty).write().set(lx, ly, v as f32 / 255.0);
-                    }
-                }
-            }
-            self.doc.selection = Some(mask);
-        } else {
-            // Fallback: use CPU mask data.
-            self.doc.mask_to_selection(layer_id);
-        }
-
-        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
-        self.update_selection_overlay();
-    }
-
-    /// Upload CPU-side layer tiles (RGBA8) to the GPU layer texture.
-    fn upload_layer_tiles_to_gpu(&self, layer_id: u64) {
-        let layer_tex = match self.compositor.layer_texture(layer_id) {
-            Some(t) => t,
-            None => return,
-        };
-        let raster = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => r,
-            _ => return,
-        };
-        let ts = TILE_SIZE;
-        for ((tx, ty), tile) in raster.surface.store.iter() {
-            if tx < 0 || ty < 0 { continue; }
-            if tx as u32 >= layer_tex.width_in_tiles || ty as u32 >= layer_tex.height_in_tiles {
-                continue;
-            }
-            self.gpu.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &layer_tex.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: tx as u32 * ts as u32,
-                        y: ty as u32 * ts as u32,
-                        z: 0,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &tile.data().0,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(ts as u32 * 4),
-                    rows_per_image: None,
-                },
-                wgpu::Extent3d {
-                    width: ts as u32,
-                    height: ts as u32,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-    }
-
-    /// Upload CPU-side mask data (AlphaMask) to the GPU mask texture.
-    fn upload_mask_to_gpu(&self, layer_id: u64) {
         let mask_tex = match self.compositor.mask_texture(layer_id) {
             Some(t) => t,
             None => return,
         };
-        let node = match self.doc.find_node(layer_id) {
-            Some(n) => n,
-            None => return,
-        };
-        let mask_store = match node.as_masked().mask() {
-            Some(m) => &m.store,
-            None => return,
-        };
 
+        let old_sel = self.doc.selection.clone();
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("mask-to-sel-readback") },
+        );
+        let request = readback::request_readback(
+            &self.gpu.device, &mut encoder, &mask_tex.texture,
+            wgpu::TextureFormat::R8Unorm,
+            [0, 0, canvas_w, canvas_h],
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        self.readbacks.submit(request, ReadbackContext::MaskToSelection { old_sel });
+    }
+
+    /// Complete mask-to-selection after async readback.
+    fn complete_mask_to_selection(&mut self, old_sel: Option<AlphaMask>, pixels: Vec<u8>) {
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
         let ts = TILE_SIZE;
-        // Thread-local buffer for f32→u8 conversion.
-        let mut buf = vec![0u8; ts * ts];
 
-        for ((tx, ty), tile) in mask_store.iter() {
-            if tx < 0 || ty < 0 { continue; }
-            if tx as u32 >= mask_tex.width_in_tiles || ty as u32 >= mask_tex.height_in_tiles {
-                continue;
+        let mut mask = AlphaMask::new();
+        for py in 0..canvas_h {
+            for px in 0..canvas_w {
+                let v = pixels[(py * canvas_w + px) as usize];
+                if v > 0 {
+                    let tx = (px / ts as u32) as i32;
+                    let ty = (py / ts as u32) as i32;
+                    let lx = (px % ts as u32) as usize;
+                    let ly = (py % ts as u32) as usize;
+                    mask.get_or_create(tx, ty).write().set(lx, ly, v as f32 / 255.0);
+                }
             }
-            let data = tile.data();
-            for i in 0..(ts * ts) {
-                buf[i] = (data.0[i].clamp(0.0, 1.0) * 255.0) as u8;
-            }
-            self.gpu.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &mask_tex.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: tx as u32 * ts as u32,
-                        y: ty as u32 * ts as u32,
-                        z: 0,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &buf,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(ts as u32),
-                    rows_per_image: None,
-                },
-                wgpu::Extent3d {
-                    width: ts as u32,
-                    height: ts as u32,
-                    depth_or_array_layers: 1,
-                },
-            );
         }
+        self.doc.selection = Some(mask);
+        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
+        self.update_selection_overlay();
     }
 
     /// Sync compositor mask state (bind group + uniforms) for a layer or group.
@@ -796,7 +803,7 @@ impl DarklyEngine {
             None => return,
         };
         let m = node.as_masked();
-        let has_mask = m.mask().is_some();
+        let has_mask = m.has_mask();
         let mask_enabled = m.mask_enabled();
         let show_mask = m.show_mask();
 
@@ -822,18 +829,39 @@ impl DarklyEngine {
 
     // --- Painting ---
 
-    pub fn paint(
-        &mut self,
-        layer_id: u64,
-        x: f32, y: f32, radius: f32,
-        r: u8, g: u8, b: u8, a: u8,
-    ) {
-        self.doc.paint_circle(layer_id, x, y, radius, [r, g, b, a]);
-    }
-
     pub fn fill_gradient(&mut self, layer_id: u64) {
-        self.doc.fill_gradient(layer_id);
-        self.upload_layer_tiles_to_gpu(layer_id);
+        let canvas_w = self.compositor.canvas_width();
+        let canvas_h = self.compositor.canvas_height();
+        let rect = [0, 0, canvas_w, canvas_h];
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+
+        let layer_tex = match self.compositor.layer_texture(layer_id) {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Save current state to scratch for undo.
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("fill-gradient-save") },
+        );
+        self.region_store.save_region(&mut encoder, &layer_tex.texture, format, rect);
+        let entry = self.region_store.commit_region(&mut encoder, layer_id, format, rect);
+        self.gpu.queue.submit([encoder.finish()]);
+
+        // Render gradient via GPU paint target.
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("fill-gradient-render") },
+        );
+        let target = GpuPaintTarget::from_layer(layer_tex, canvas_w, canvas_h);
+        target.linear_gradient(
+            &mut encoder, &self.paint_pipelines, &self.gpu.queue,
+            0.0, 0.0, canvas_w as f32, canvas_h as f32,
+            [0, 0, 0, 255], [255, 255, 255, 255],
+            None,
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+
+        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         self.compositor.mark_dirty();
     }
 
@@ -979,32 +1007,21 @@ impl DarklyEngine {
         let mut encoder = self.gpu.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor { label: Some("flood-fill-readback") },
         );
-        let mut request = readback::request_readback(
+        let request = readback::request_readback(
             &self.gpu.device, &mut encoder, target.texture, format,
             [0, 0, canvas_w, canvas_h],
         );
         self.gpu.queue.submit([encoder.finish()]);
-        request.begin_mapping();
-
-        self.pending_flood_fill = Some(PendingFloodFill {
-            request,
-            layer_id,
-            mask_editing,
-            seed_x,
-            seed_y,
-            color,
-            tolerance,
-            canvas_w,
-            canvas_h,
+        self.readbacks.submit(request, ReadbackContext::FloodFill {
+            layer_id, mask_editing, seed_x, seed_y, color, tolerance, canvas_w, canvas_h,
         });
     }
 
     /// Complete a pending flood fill once readback data is available.
-    fn complete_flood_fill(&mut self, pending: PendingFloodFill, pixels: Vec<u8>) {
-        let PendingFloodFill {
-            layer_id, mask_editing, seed_x, seed_y, color, tolerance,
-            canvas_w, canvas_h, ..
-        } = pending;
+    fn complete_flood_fill(
+        &mut self, layer_id: u64, mask_editing: bool, seed_x: i32, seed_y: i32,
+        color: [u8; 4], tolerance: u8, canvas_w: u32, canvas_h: u32, pixels: Vec<u8>,
+    ) {
 
         // 1. CPU scanline fill → produce R8 mask.
         let fill_mask = if mask_editing {
@@ -1050,10 +1067,10 @@ impl DarklyEngine {
     }
 
     /// Complete a pending copy once GPU readback data is available.
-    fn complete_copy(&mut self, pending: PendingCopy, pixels: Vec<u8>) {
-        let PendingCopy {
-            is_mask, region, selection_data, is_cut, layer_id, ..
-        } = pending;
+    fn complete_copy(
+        &mut self, is_mask: bool, region: [u32; 4],
+        selection_data: Option<Vec<u8>>, is_cut: bool, layer_id: u64, pixels: Vec<u8>,
+    ) {
         let [rx, ry, rw, rh] = region;
 
         // Build RGBA bytes from the readback data.
@@ -1107,17 +1124,16 @@ impl DarklyEngine {
         let offset_y = ry as i32;
 
         // Build ImageClip and store in clipboard.
-        let clip = ImageClip::from_rgba(width, height, &rgba, offset_x, offset_y);
+        let clip = ImageClip::from_rgba(width, height, rgba, offset_x, offset_y);
         let (export_rgba, ew, eh, eox, eoy) = clip.to_rgba();
-        self.clipboard = Some(Clipboard::ImageData(clip));
-
         self.pending_copy_result = Some(ClipboardExport {
-            rgba: export_rgba,
+            rgba: export_rgba.to_vec(),
             width: ew,
             height: eh,
             offset_x: eox,
             offset_y: eoy,
         });
+        self.clipboard = Some(Clipboard::ImageData(clip));
 
         // If this was a cut, clear the source.
         if is_cut {
@@ -1133,7 +1149,7 @@ impl DarklyEngine {
         if let Some(layer_id) = self.active_stroke_layer.take() {
             // If a flood fill is pending, defer undo commit — complete_flood_fill
             // will handle it when the readback arrives.
-            if self.pending_flood_fill.is_some() {
+            if self.readbacks.any(|c| matches!(c, ReadbackContext::FloodFill { .. })) {
                 self.doc.set_mask_editing(None);
                 return;
             }
@@ -1366,82 +1382,143 @@ impl DarklyEngine {
         let mut encoder = self.gpu.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor { label: Some("pick-color") },
         );
-        let mut request = readback::request_readback(
+        let request = readback::request_readback(
             &self.gpu.device, &mut encoder, texture,
             wgpu::TextureFormat::Rgba8Unorm, [px, py, 1, 1],
         );
         self.gpu.queue.submit([encoder.finish()]);
-        request.begin_mapping();
-
-        self.pending_color_pick = Some(PendingColorPick { request });
+        self.readbacks.submit(request, ReadbackContext::ColorPick);
 
         // Return cached color for immediate feedback — real result arrives next frame.
         self.last_picked_color
     }
 
     // --- Thumbnails ---
+    //
+    // Thumbnails use async GPU readback to avoid blocking the main thread.
+    // `layer_thumbnail` / `mask_thumbnail` return cached data immediately
+    // and kick off a fresh readback if no pending request exists. The result
+    // arrives via `poll_pending` on the next frame.
 
-    /// Generate an RGBA thumbnail of a layer's content.
-    /// Returns `width * height * 4` bytes (RGBA). Transparent areas show checkerboard.
-    pub fn layer_thumbnail(&self, layer_id: u64, width: u32, height: u32) -> Vec<u8> {
-        let tiles = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => &r.surface.store,
-            _ => return vec![0u8; (width * height * 4) as usize],
-        };
-        generate_rgba_thumbnail(tiles, self.doc.width, self.doc.height, width, height)
+    /// Return the cached layer thumbnail, kicking off an async readback if needed.
+    /// First call returns a transparent placeholder; updated data arrives next frame.
+    pub fn layer_thumbnail(&mut self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+        let cached = self.thumbnail_cache.layer.get(&layer_id).cloned();
+        self.request_thumbnail_readback(layer_id, false, thumb_w, thumb_h);
+        cached.unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
     }
 
-    /// Generate an RGBA thumbnail of a layer's mask (grayscale).
+    /// Return the cached mask thumbnail, kicking off an async readback if needed.
     /// Returns empty vec if the layer has no mask.
-    pub fn mask_thumbnail(&self, layer_id: u64, width: u32, height: u32) -> Vec<u8> {
-        let mask_store = match self.doc.find_node(layer_id)
-            .and_then(|n| n.as_masked().mask().as_ref())
-        {
-            Some(m) => &m.store,
-            None => return Vec::new(),
+    pub fn mask_thumbnail(&mut self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+        let has_mask = match self.doc.find_node(layer_id) {
+            Some(n) => n.as_masked().has_mask(),
+            None => false,
         };
-        generate_mask_thumbnail(mask_store, self.doc.width, self.doc.height, width, height)
+        if !has_mask {
+            return Vec::new();
+        }
+
+        let cached = self.thumbnail_cache.mask.get(&layer_id).cloned();
+        self.request_thumbnail_readback(layer_id, true, thumb_w, thumb_h);
+        cached.unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
+    }
+
+    /// Kick off an async GPU readback for a thumbnail if one isn't already pending.
+    fn request_thumbnail_readback(
+        &mut self, layer_id: u64, is_mask: bool, thumb_w: u32, thumb_h: u32,
+    ) {
+        // Don't queue duplicate requests.
+        if self.readbacks.any(|c| matches!(c, ReadbackContext::Thumbnail { layer_id: lid, is_mask: im, .. } if *lid == layer_id && *im == is_mask)) {
+            return;
+        }
+
+        let doc_w = self.doc.width;
+        let doc_h = self.doc.height;
+
+        let (texture, format) = if is_mask {
+            match self.compositor.mask_texture(layer_id) {
+                Some(t) => (&t.texture, wgpu::TextureFormat::R8Unorm),
+                None => return,
+            }
+        } else {
+            match self.compositor.layer_texture(layer_id) {
+                Some(t) => (&t.texture, wgpu::TextureFormat::Rgba8Unorm),
+                None => return,
+            }
+        };
+
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("thumb-readback") },
+        );
+        let request = readback::request_readback(
+            &self.gpu.device, &mut encoder, texture, format, [0, 0, doc_w, doc_h],
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        self.readbacks.submit(request, ReadbackContext::Thumbnail {
+            layer_id, is_mask, thumb_w, thumb_h,
+        });
+    }
+
+    /// Invalidate cached thumbnails for a layer (call after paint/undo/redo).
+    fn invalidate_thumbnails(&mut self, layer_id: u64) {
+        self.thumbnail_cache.layer.remove(&layer_id);
+        self.thumbnail_cache.mask.remove(&layer_id);
     }
 
     // --- Rendering ---
 
-    /// Poll pending async readback operations (flood fill, color pick).
+    /// Poll all pending async readback operations.
     ///
-    /// Called at the start of each frame.  Returns true if any operation
+    /// Called at the start of each frame. Returns true if any operation
     /// completed (and therefore the compositor should re-render).
     fn poll_pending(&mut self) -> bool {
-        let mut did_work = false;
-
-        // --- Flood fill ---
-        if let Some(ref pending) = self.pending_flood_fill {
-            if let Some(pixels) = pending.request.poll(&self.gpu.device) {
-                let pending = self.pending_flood_fill.take().unwrap();
-                self.complete_flood_fill(pending, pixels);
-                did_work = true;
-            }
+        let completed = self.readbacks.poll(&self.gpu.device);
+        if completed.is_empty() {
+            return false;
         }
 
-        // --- Color pick ---
-        if let Some(ref pending) = self.pending_color_pick {
-            if let Some(pixels) = pending.request.poll(&self.gpu.device) {
-                if pixels.len() >= 4 {
-                    self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
+        for (ctx, pixels) in completed {
+            match ctx {
+                ReadbackContext::FloodFill {
+                    layer_id, mask_editing, seed_x, seed_y, color, tolerance,
+                    canvas_w, canvas_h,
+                } => self.complete_flood_fill(
+                    layer_id, mask_editing, seed_x, seed_y, color, tolerance,
+                    canvas_w, canvas_h, pixels,
+                ),
+                ReadbackContext::ColorPick => {
+                    if pixels.len() >= 4 {
+                        self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
+                    }
                 }
-                self.pending_color_pick = None;
-                did_work = true;
+                ReadbackContext::Copy { is_mask, region, selection_data, is_cut, layer_id } => {
+                    self.complete_copy(is_mask, region, selection_data, is_cut, layer_id, pixels);
+                }
+                ReadbackContext::MagicWand { old_sel, seed_x, seed_y, tolerance, mode } => {
+                    self.complete_magic_wand(old_sel, seed_x, seed_y, tolerance, mode, pixels);
+                }
+                ReadbackContext::MaskToSelection { old_sel } => {
+                    self.complete_mask_to_selection(old_sel, pixels);
+                }
+                ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
+                    let doc_w = self.doc.width;
+                    let doc_h = self.doc.height;
+                    if is_mask {
+                        let thumb = generate_mask_thumbnail_from_pixels(
+                            &pixels, doc_w, doc_h, thumb_w, thumb_h,
+                        );
+                        self.thumbnail_cache.mask.insert(layer_id, thumb);
+                    } else {
+                        let thumb = generate_rgba_thumbnail_from_pixels(
+                            &pixels, doc_w, doc_h, thumb_w, thumb_h,
+                        );
+                        self.thumbnail_cache.layer.insert(layer_id, thumb);
+                    }
+                }
             }
         }
-
-        // --- Copy readback ---
-        if let Some(ref pending) = self.pending_copy {
-            if let Some(pixels) = pending.request.poll(&self.gpu.device) {
-                let pending = self.pending_copy.take().unwrap();
-                self.complete_copy(pending, pixels);
-                did_work = true;
-            }
-        }
-
-        did_work
+        true
     }
 
     /// Get the most recently picked color (updated asynchronously).
@@ -1451,7 +1528,7 @@ impl DarklyEngine {
 
     /// True if a color pick readback is still in flight.
     pub fn has_pending_color_pick(&self) -> bool {
-        self.pending_color_pick.is_some()
+        self.readbacks.any(|c| matches!(c, ReadbackContext::ColorPick))
     }
 
     /// Render a frame. Returns true if animations need another frame.
@@ -1471,9 +1548,7 @@ impl DarklyEngine {
         );
 
         // Keep requesting frames while async operations are in flight.
-        self.compositor.needs_animation()
-            || self.pending_flood_fill.is_some()
-            || self.pending_color_pick.is_some()
+        self.compositor.needs_animation() || self.readbacks.has_pending()
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -1491,7 +1566,11 @@ impl DarklyEngine {
             None => return,
         };
 
-        let affected = action.undo(&mut self.doc);
+        action.undo(&mut self.doc);
+
+        // Sync layer/mask state BEFORE restoring GPU regions, so that mask
+        // textures are (re)created if needed by the undo action.
+        self.sync_compositor_layers();
 
         // If this is a GPU region action, execute the texture restore.
         if let Some(entry) = action.gpu_region_entry_mut() {
@@ -1511,11 +1590,6 @@ impl DarklyEngine {
         }
 
         self.undo_stack.complete_undo(action);
-        // Upload any CPU tiles that were restored by TileAction undo.
-        for &layer_id in affected.keys() {
-            self.upload_layer_tiles_to_gpu(layer_id);
-        }
-        self.sync_compositor_layers();
         self.compositor.mark_dirty();
         self.update_selection_overlay();
     }
@@ -1527,7 +1601,10 @@ impl DarklyEngine {
             None => return,
         };
 
-        let affected = action.redo(&mut self.doc);
+        action.redo(&mut self.doc);
+
+        // Sync layer/mask state BEFORE restoring GPU regions.
+        self.sync_compositor_layers();
 
         // If this is a GPU region action, execute the texture restore (redo direction).
         if let Some(entry) = action.gpu_region_entry_mut() {
@@ -1547,11 +1624,6 @@ impl DarklyEngine {
         }
 
         self.undo_stack.complete_redo(action);
-        // Upload any CPU tiles that were restored by TileAction redo.
-        for &layer_id in affected.keys() {
-            self.upload_layer_tiles_to_gpu(layer_id);
-        }
-        self.sync_compositor_layers();
         self.compositor.mark_dirty();
         self.update_selection_overlay();
     }
@@ -1720,17 +1792,58 @@ impl DarklyEngine {
         tolerance: u8,
         mode: SelectionMode,
     ) {
-        let source = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => &r.surface.store,
+        let layer_tex = match self.compositor.layer_texture(layer_id) {
+            Some(t) => t,
             _ => return,
         };
-        let mask = crate::tools::magic_wand::rasterize(
-            source,
-            seed_x, seed_y,
-            self.doc.width as i32, self.doc.height as i32,
-            tolerance,
-        );
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+
         let old_sel = self.doc.selection.clone();
+
+        // Async GPU readback of layer texture.
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("magic-wand-readback") },
+        );
+        let request = readback::request_readback(
+            &self.gpu.device, &mut encoder, &layer_tex.texture,
+            wgpu::TextureFormat::Rgba8Unorm, [0, 0, canvas_w, canvas_h],
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        self.readbacks.submit(request, ReadbackContext::MagicWand {
+            old_sel, seed_x, seed_y, tolerance, mode,
+        });
+    }
+
+    /// Complete magic wand after async readback.
+    fn complete_magic_wand(
+        &mut self, old_sel: Option<AlphaMask>, seed_x: i32, seed_y: i32,
+        tolerance: u8, mode: SelectionMode, pixels: Vec<u8>,
+    ) {
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+
+        // CPU scanline flood fill on the flat pixel data.
+        let fill_mask = flood_fill::flood_fill_rgba(
+            &pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance,
+        );
+
+        // Convert R8 fill result to AlphaMask.
+        let ts = TILE_SIZE;
+        let mut mask = AlphaMask::new();
+        for py in 0..canvas_h {
+            for px in 0..canvas_w {
+                let v = fill_mask[(py * canvas_w + px) as usize];
+                if v > 0 {
+                    let tx = (px / ts as u32) as i32;
+                    let ty = (py / ts as u32) as i32;
+                    let lx = (px % ts as u32) as usize;
+                    let ly = (py % ts as u32) as usize;
+                    mask.get_or_create(tx, ty).write().set(lx, ly, v as f32 / 255.0);
+                }
+            }
+        }
+
         self.doc.apply_selection(mask, mode);
         self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
         self.update_selection_overlay();
@@ -1823,22 +1936,16 @@ impl DarklyEngine {
         let mut encoder = self.gpu.device.create_command_encoder(
             &wgpu::CommandEncoderDescriptor { label: Some("copy-readback") },
         );
-        let mut request = readback::request_readback(
+        let request = readback::request_readback(
             &self.gpu.device, &mut encoder, texture, format, region,
         );
         self.gpu.queue.submit([encoder.finish()]);
-        request.begin_mapping();
 
         // Also readback the selection mask for the same region if present.
         let selection_data = self.readback_selection_region(region);
 
-        self.pending_copy = Some(PendingCopy {
-            request,
-            is_mask,
-            region,
-            selection_data,
-            is_cut,
-            layer_id,
+        self.readbacks.submit(request, ReadbackContext::Copy {
+            is_mask, region, selection_data, is_cut, layer_id,
         });
     }
 
@@ -1977,7 +2084,11 @@ impl DarklyEngine {
     /// Returns the new layer ID, or None if clipboard is empty.
     pub fn paste_in_place(&mut self, active_layer_id: Option<u64>) -> Option<u64> {
         let clip = self.clipboard.as_ref()?.as_image()?;
-        let (rgba, width, height, offset_x, offset_y) = clip.to_rgba();
+        let width = clip.width;
+        let height = clip.height;
+        let offset_x = clip.offset_x;
+        let offset_y = clip.offset_y;
+        let rgba = clip.data.clone();
         Some(self.paste_image(width, height, &rgba, offset_x, offset_y, active_layer_id))
     }
 
@@ -2023,14 +2134,15 @@ impl DarklyEngine {
 
         let target_is_mask = self.editing_mask_layer == Some(layer_id);
 
-        // Clone source tiles and dimensions from clipboard
-        let (source_tiles, source_origin, source_width, source_height) = source_from_clip(clip);
+        let source_origin = (clip.offset_x, clip.offset_y);
+        let source_width = clip.width;
+        let source_height = clip.height;
 
-        // Upload to GPU for preview
+        // Upload flat RGBA data to GPU for preview.
         self.compositor.set_floating_content(
             &self.gpu.device,
             &self.gpu.queue,
-            &source_tiles,
+            &clip.data,
             source_origin,
             source_width,
             source_height,
@@ -2062,7 +2174,7 @@ impl DarklyEngine {
             return false;
         }
         if target_is_mask {
-            let has_mask = matches!(self.doc.layer(layer_id), Some(Layer::Raster(r)) if r.mask.is_some());
+            let has_mask = matches!(self.doc.layer(layer_id), Some(Layer::Raster(r)) if r.has_mask);
             if !has_mask { return false; }
         }
 
@@ -2416,7 +2528,7 @@ impl DarklyEngine {
             RasterInfo {
                 id: r.id, opacity: r.opacity, blend_mode: r.blend_mode,
                 show_mask: r.show_mask, mask_enabled: r.mask_enabled,
-                has_mask: r.mask.is_some(),
+                has_mask: r.has_mask,
             }
         }).collect();
 
@@ -2429,10 +2541,6 @@ impl DarklyEngine {
             self.compositor.update_mask_binding(
                 &self.gpu.device, info.id, info.mask_enabled, info.show_mask,
             );
-            // Upload mask tiles to GPU after undo/redo (dirty upload loop removed).
-            if info.has_mask {
-                self.upload_mask_to_gpu(info.id);
-            }
         }
 
         // Sync non-passthrough group state
@@ -2457,7 +2565,7 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
                 visible: r.visible,
                 opacity: r.opacity,
                 blend_mode: r.blend_mode as u32,
-                has_mask: r.mask.is_some(),
+                has_mask: r.has_mask,
                 mask_enabled: r.mask_enabled,
                 show_mask: r.show_mask,
             },
@@ -2470,7 +2578,7 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
             passthrough: g.passthrough,
             opacity: g.opacity,
             blend_mode: g.blend_mode as u32,
-            has_mask: g.mask.is_some(),
+            has_mask: g.has_mask,
             mask_enabled: g.mask_enabled,
             show_mask: g.show_mask,
             children: g.children.iter().rev().map(node_to_layer_info).collect(),
@@ -2479,36 +2587,29 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Thumbnail generation — CPU-side nearest-neighbor sampling from tile data
+// Thumbnail generation — nearest-neighbor sampling from GPU readback pixels
 // ---------------------------------------------------------------------------
 
-fn generate_rgba_thumbnail(
-    tiles: &TileGrid,
+fn generate_rgba_thumbnail_from_pixels(
+    pixels: &[u8],
     doc_w: u32, doc_h: u32,
     thumb_w: u32, thumb_h: u32,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; (thumb_w * thumb_h * 4) as usize];
-    let ts = TILE_SIZE as u32;
 
     for oy in 0..thumb_h {
         let cy = (oy * doc_h / thumb_h).min(doc_h - 1);
-        let ty = (cy / ts) as i32;
-        let ly = (cy % ts) as usize;
-
         for ox in 0..thumb_w {
             let cx = (ox * doc_w / thumb_w).min(doc_w - 1);
-            let tx = (cx / ts) as i32;
-            let lx = (cx % ts) as usize;
 
-            let off = ((oy * thumb_w + ox) * 4) as usize;
-
-            let (r, g, b, a) = if let Some(tile) = tiles.get(tx, ty) {
-                let p = tile.data().pixel(lx, ly);
-                (p[0], p[1], p[2], p[3])
+            let src = ((cy * doc_w + cx) * 4) as usize;
+            let (r, g, b, a) = if src + 3 < pixels.len() {
+                (pixels[src], pixels[src + 1], pixels[src + 2], pixels[src + 3])
             } else {
                 (0, 0, 0, 0)
             };
 
+            let off = ((oy * thumb_w + ox) * 4) as usize;
             // Checkerboard behind transparent areas
             let check = if ((ox / 4) + (oy / 4)) % 2 == 0 { 102u8 } else { 153u8 };
             let af = a as f32 / 255.0;
@@ -2521,29 +2622,19 @@ fn generate_rgba_thumbnail(
     buf
 }
 
-fn generate_mask_thumbnail(
-    mask: &AlphaMask,
+fn generate_mask_thumbnail_from_pixels(
+    pixels: &[u8],
     doc_w: u32, doc_h: u32,
     thumb_w: u32, thumb_h: u32,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; (thumb_w * thumb_h * 4) as usize];
-    let ts = TILE_SIZE as u32;
 
     for oy in 0..thumb_h {
         let cy = (oy * doc_h / thumb_h).min(doc_h - 1);
-        let ty = (cy / ts) as i32;
-        let ly = (cy % ts) as usize;
-
         for ox in 0..thumb_w {
             let cx = (ox * doc_w / thumb_w).min(doc_w - 1);
-            let tx = (cx / ts) as i32;
-            let lx = (cx % ts) as usize;
 
-            let v = if let Some(tile) = mask.get(tx, ty) {
-                (tile.data().get(lx, ly) * 255.0) as u8
-            } else {
-                255 // no tile = white (reveal all) — matches get_or_create_full() default
-            };
+            let v = pixels.get((cy * doc_w + cx) as usize).copied().unwrap_or(255);
 
             let off = ((oy * thumb_w + ox) * 4) as usize;
             buf[off]     = v;
