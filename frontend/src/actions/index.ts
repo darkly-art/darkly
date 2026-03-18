@@ -78,10 +78,12 @@ export function registerActions() {
         category: 'edit',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
-            const result = app.handle.copy(app.activeLayerId);
-            if (result && result.rgba) {
-                copyToSystemClipboard(result.rgba, result.width, result.height);
-            }
+            app.handle.copy(app.activeLayerId);
+            app.onCopyResult((result) => {
+                if (result?.rgba) {
+                    copyToSystemClipboard(result.rgba, result.width, result.height);
+                }
+            });
         },
     });
     actions.register({
@@ -90,10 +92,12 @@ export function registerActions() {
         category: 'edit',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
-            const result = app.handle.cut(app.activeLayerId);
-            if (result && result.rgba) {
-                copyToSystemClipboard(result.rgba, result.width, result.height);
-            }
+            app.handle.cut(app.activeLayerId);
+            app.onCopyResult((result) => {
+                if (result?.rgba) {
+                    copyToSystemClipboard(result.rgba, result.width, result.height);
+                }
+            });
             app.requestFrame();
         },
     });

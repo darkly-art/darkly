@@ -64,6 +64,16 @@ class AppState {
         }
     }
 
+    // --- Async copy result callback ---
+
+    private _copyCallback: ((result: any) => void) | null = null;
+
+    /** Register a one-shot callback for when the async copy readback completes. */
+    onCopyResult(cb: (result: any) => void) {
+        this._copyCallback = cb;
+        this.requestFrame();
+    }
+
     // --- Demand-driven rendering ---
 
     private _framePending = false;
@@ -76,7 +86,18 @@ class AppState {
             this._framePending = false;
             if (!this.handle) return;
             const needsMore = this.handle.render(ts / 1000.0);
-            if (needsMore) this.requestFrame();
+
+            // Check for completed async copy/cut readback.
+            if (this._copyCallback) {
+                const result = this.handle.poll_copy_result();
+                if (result) {
+                    const cb = this._copyCallback;
+                    this._copyCallback = null;
+                    cb(result);
+                }
+            }
+
+            if (needsMore || this._copyCallback) this.requestFrame();
         });
     }
 }

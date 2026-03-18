@@ -21,6 +21,11 @@ use crate::gpu::view::ViewTransform;
 use crate::tile::{AlphaMask, TILE_SIZE};
 use std::collections::HashMap;
 
+/// Default thumbnail dimensions for proactive readbacks (content bounds scan).
+/// Matches the JS-side THUMB_SIZE used by the layer panel.
+const THUMB_W: u32 = 36;
+const THUMB_H: u32 = 36;
+
 // ---------------------------------------------------------------------------
 // Shared return types — serde-serializable for any FFI bridge.
 // ---------------------------------------------------------------------------
@@ -247,6 +252,10 @@ pub struct DarklyEngine {
     /// Last picked color — returned immediately while async readback is in flight.
     last_picked_color: [u8; 4],
     thumbnail_cache: ThumbnailCache,
+    /// Exact content bounds per layer [x, y, w, h], computed from the full-res
+    /// thumbnail readback by scanning for non-zero alpha. Updated every time
+    /// a thumbnail completes; invalidated on pixel mutations.
+    content_bounds: std::collections::HashMap<u64, [u32; 4]>,
 }
 
 impl DarklyEngine {
@@ -279,6 +288,7 @@ impl DarklyEngine {
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],
             thumbnail_cache: ThumbnailCache::new(),
+            content_bounds: std::collections::HashMap::new(),
         }
     }
 
@@ -329,7 +339,7 @@ impl DarklyEngine {
         if let Some(node) = self.doc.detach_for_undo(layer_id) {
             self.undo_stack.push(Box::new(LayerRemoveAction::new(node, parent, pos)));
         }
-
+        self.content_bounds.remove(&layer_id);
         self.compositor.mark_dirty();
         Ok(())
     }
@@ -1461,13 +1471,21 @@ impl DarklyEngine {
     }
 
     /// Invalidate cached thumbnails for a layer.
+    /// Invalidate cached thumbnails and content bounds for a layer,
+    /// then immediately request a fresh readback so bounds are recomputed
+    /// by next frame.
     fn invalidate_thumbnails(&mut self, layer_id: u64) {
         self.thumbnail_cache.layer.remove(&layer_id);
         self.thumbnail_cache.mask.remove(&layer_id);
+        self.content_bounds.remove(&layer_id);
+        // Kick off a fresh readback so content bounds are recomputed
+        // as soon as the readback completes (next frame).
+        self.request_thumbnail_readback(layer_id, false, THUMB_W, THUMB_H);
     }
 
     /// Push an undo action that changes pixel data. Extracts the layer_id
-    /// from the action's `gpu_region_entry_mut` and invalidates thumbnails.
+    /// from the action's `gpu_region_entry_mut` and invalidates thumbnails
+    /// and content bounds (recomputed on next thumbnail readback).
     fn push_pixel_action(&mut self, mut action: Box<dyn UndoAction>) {
         if let Some(entry) = action.gpu_region_entry_mut() {
             self.invalidate_thumbnails(entry.layer_id);
@@ -1513,6 +1531,15 @@ impl DarklyEngine {
                 ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
                     let doc_w = self.doc.width;
                     let doc_h = self.doc.height;
+                    // Scan full-res pixels for content bounds before downsampling.
+                    if !is_mask {
+                        let bounds = scan_content_bounds_rgba(&pixels, doc_w, doc_h);
+                        if let Some(b) = bounds {
+                            self.content_bounds.insert(layer_id, b);
+                        } else {
+                            self.content_bounds.remove(&layer_id);
+                        }
+                    }
                     if is_mask {
                         let thumb = generate_mask_thumbnail_from_pixels(
                             &pixels, doc_w, doc_h, thumb_w, thumb_h,
@@ -2201,7 +2228,7 @@ impl DarklyEngine {
 
         // Determine source bounds.
         // With selection: use selection tile extent.
-        // Without selection: use full canvas (content bounds tracking is a future optimization).
+        // Without selection: use tracked content bounds, or full canvas if unknown.
         let (source_origin, source_width, source_height) = if let Some(sel) = &self.doc.selection {
             match sel.bounding_rect() {
                 Some((tx_min, ty_min, tx_max, ty_max)) => {
@@ -2219,6 +2246,9 @@ impl DarklyEngine {
                 }
                 None => return false, // empty selection
             }
+        } else if let Some(&[bx, by, bw, bh]) = self.content_bounds.get(&layer_id) {
+            // Exact bounds from last thumbnail readback pixel scan.
+            ((bx as i32, by as i32), bw, bh)
         } else {
             ((0i32, 0i32), canvas_w, canvas_h)
         };
@@ -2602,6 +2632,32 @@ fn node_to_layer_info(node: &LayerNode) -> LayerInfo {
 // ---------------------------------------------------------------------------
 // Thumbnail generation — nearest-neighbor sampling from GPU readback pixels
 // ---------------------------------------------------------------------------
+
+/// Scan RGBA pixels for the bounding rect of non-zero alpha.
+/// Returns `[x, y, w, h]` or `None` if the layer is fully transparent.
+fn scan_content_bounds_rgba(pixels: &[u8], width: u32, height: u32) -> Option<[u32; 4]> {
+    let (mut min_x, mut min_y) = (width, height);
+    let (mut max_x, mut max_y) = (0u32, 0u32);
+
+    for y in 0..height {
+        let row = (y * width * 4) as usize;
+        for x in 0..width {
+            let a = pixels[row + (x as usize) * 4 + 3];
+            if a > 0 {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+
+    if max_x >= min_x && max_y >= min_y {
+        Some([min_x, min_y, max_x - min_x + 1, max_y - min_y + 1])
+    } else {
+        None
+    }
+}
 
 fn generate_rgba_thumbnail_from_pixels(
     pixels: &[u8],

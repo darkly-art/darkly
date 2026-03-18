@@ -219,6 +219,15 @@ impl DarklyHandle {
         }
     }
 
+    /// Poll for a completed copy/cut result (async readback).
+    /// Returns the ClipboardExport object, or null if not ready yet.
+    pub fn poll_copy_result(&mut self) -> JsValue {
+        match self.0.poll_copy_result() {
+            Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
+            None => JsValue::NULL,
+        }
+    }
+
     /// Paste raw RGBA bytes as a new layer. Returns the new layer ID.
     pub fn paste_image(
         &mut self,
