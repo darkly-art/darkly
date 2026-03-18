@@ -95,3 +95,28 @@ The buffer size doesn't matter — color picker (1×1 pixel) and flood fill (ful
 For flood fill: `gpu_flood_fill` starts the readback and stores a `PendingFloodFill`. On the next frame, `render()` polls for completion, then runs the CPU scanline fill + GPU stamp + undo commit. For color picker: `pick_color` returns the cached last-picked color immediately (one-frame latency, imperceptible for UI) and resolves on the next frame.
 
 **Takeaway**: You cannot synchronously wait for GPU results on WebGPU/WASM. It's not a wgpu limitation — the web platform fundamentally does not offer synchronous GPU readback. The browser event loop is the *only* mechanism for getting data back from the GPU, and any form of blocking (`recv()`, `thread::park()`, busy-wait) prevents the event loop from running. All GPU→CPU data transfers must be async: start the mapping, return control to JS, poll on the next frame. This applies to any future readback use case (save/export, histogram, clipboard copy, thumbnails). Native-only code paths (tests, headless rendering) can still use `blocking_read` safely.
+
+## 6. NDC coordinate stretch from padded render targets
+
+**Problem**: All paint operations (brush, fill, gradient, erase) were offset from the cursor. ~4px vertical at the canvas center, ~8px at the bottom, 0px at the top. The offset varied with zoom level and canvas dimensions.
+
+**Root cause**: Layer textures are padded to tile boundaries (e.g., 1920×1080 becomes 1920×1088 with TILE_SIZE=64). Paint shaders convert canvas pixels to NDC:
+
+```wgsl
+canvas_pos.x / uniforms.canvas_size.x * 2.0 - 1.0,
+1.0 - canvas_pos.y / uniforms.canvas_size.y * 2.0,
+```
+
+`canvas_size` was the unpadded document size (1080), but the render target was the padded texture (1088). Without an explicit viewport, wgpu defaults to the full texture dimensions. NDC [-1, +1] maps to viewport [0, 1088], so the unpadded canvas range [0, 1080] stretches across 1088 texels — a scale factor of 1088/1080 ≈ 1.0074. At the center pixel (y=540), the stretch shifts content by 540 × (1088/1080 - 1) ≈ 4 pixels. The distortion grows linearly from 0 at the origin to (padded - unpadded) at the far edge.
+
+The compositor's own render passes were unaffected because they consistently use padded dimensions for both `canvas_size` and the render target — the two cancel out.
+
+**Fix**: Set the render pass viewport to the unpadded canvas dimensions before drawing:
+
+```rust
+pass.set_viewport(0.0, 0.0, self.width as f32, self.height as f32, 0.0, 1.0);
+```
+
+This restricts rasterization to the unpadded region of the padded texture. NDC [-1, +1] now maps to [0, canvas_h], and the padding area receives no fragments.
+
+**Takeaway**: When rendering geometry positioned in "canvas pixel" coordinates via NDC conversion, the viewport dimensions must match the coordinate system's range. If the render target is larger (padded, power-of-two, atlas), the viewport must be set explicitly. The default viewport (full render target) is only correct when the coordinate system spans the entire texture. This is easy to miss when textures are padded for alignment — everything works until the padding is non-zero.

@@ -343,6 +343,11 @@ impl<'a> GpuPaintTarget<'a> {
             ..Default::default()
         });
 
+        // Viewport must match the unpadded canvas size so NDC [-1,1] maps to
+        // [0, canvas_w] × [0, canvas_h]. Without this, the padded texture dimensions
+        // stretch the coordinate space, causing a per-pixel offset that grows from
+        // 0 at the origin to (padded - unpadded) at the far edge.
+        pass.set_viewport(0.0, 0.0, self.width as f32, self.height as f32, 0.0, 1.0);
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &pipelines.uniform_bind_group, &[]);
         pass.set_bind_group(1, sel, &[]);
@@ -753,7 +758,7 @@ impl PaintPipelines {
 struct PaintUniforms {
     origin: [f32; 2],      // Quad origin in canvas pixels
     size: [f32; 2],        // Quad size in canvas pixels
-    canvas_size: [f32; 2], // Padded canvas dimensions
+    canvas_size: [f32; 2], // Unpadded canvas dimensions (viewport is set to match)
     center: [f32; 2],      // Circle center in canvas pixels
     radius: f32,           // Circle radius (0 = solid fill)
     softness: f32,         // Soft edge width in pixels
@@ -767,7 +772,7 @@ struct PaintUniforms {
 struct GradientUniforms {
     origin: [f32; 2],      // Quad origin in canvas pixels
     size: [f32; 2],        // Quad size in canvas pixels
-    canvas_size: [f32; 2], // Padded canvas dimensions
+    canvas_size: [f32; 2], // Unpadded canvas dimensions (viewport is set to match)
     start: [f32; 2],       // Gradient start point in canvas pixels
     end: [f32; 2],         // Gradient end point in canvas pixels
     _pad: [f32; 2],        // Align colors to 16 bytes

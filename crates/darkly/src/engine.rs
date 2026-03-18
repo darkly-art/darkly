@@ -3,7 +3,7 @@ use crate::document::{Document, MoveTarget, SelectionMode};
 use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY};
 use crate::layer::{BlendMode, Layer, LayerNode};
 use crate::undo::{
-    UndoStack, GpuRegionAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
+    UndoAction, UndoStack, GpuRegionAction, LayerAddAction, LayerRemoveAction, LayerMoveAction,
     MaskPropertyAction, PropertyAction, SelectionAction,
 };
 use crate::undo::property::Property;
@@ -558,7 +558,7 @@ impl DarklyEngine {
         ));
         if let Some(entry) = gpu_region_entry {
             let region_action = Box::new(GpuRegionAction::new(entry));
-            self.undo_stack.push(Box::new(CompoundAction::new(vec![
+            self.push_pixel_action(Box::new(CompoundAction::new(vec![
                 region_action, mask_action,
             ])));
         } else {
@@ -629,7 +629,7 @@ impl DarklyEngine {
                 &mut encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
             );
             self.gpu.queue.submit([encoder.finish()]);
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            self.push_pixel_action(Box::new(GpuRegionAction::new(entry)));
         }
 
         self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
@@ -861,7 +861,7 @@ impl DarklyEngine {
         );
         self.gpu.queue.submit([encoder.finish()]);
 
-        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        self.push_pixel_action(Box::new(GpuRegionAction::new(entry)));
         self.compositor.mark_dirty();
     }
 
@@ -1060,7 +1060,7 @@ impl DarklyEngine {
                 &mut encoder, layer_id, gs.format, rect,
             );
             self.gpu.queue.submit([encoder.finish()]);
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            self.push_pixel_action(Box::new(GpuRegionAction::new(entry)));
         }
 
         self.compositor.mark_dirty();
@@ -1164,7 +1164,7 @@ impl DarklyEngine {
                         &mut encoder, layer_id, gs.format, rect,
                     );
                     self.gpu.queue.submit([encoder.finish()]);
-                    self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                    self.push_pixel_action(Box::new(GpuRegionAction::new(entry)));
                 }
                 // else: no paint was applied (empty stroke), nothing to undo.
             }
@@ -1215,7 +1215,7 @@ impl DarklyEngine {
             &mut encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
         );
         self.gpu.queue.submit([encoder.finish()]);
-        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        self.push_pixel_action(Box::new(GpuRegionAction::new(entry)));
         self.compositor.mark_dirty();
     }
 
@@ -1255,7 +1255,7 @@ impl DarklyEngine {
             &mut encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
         );
         self.gpu.queue.submit([encoder.finish()]);
-        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        self.push_pixel_action(Box::new(GpuRegionAction::new(entry)));
         self.compositor.mark_dirty();
     }
 
@@ -1460,10 +1460,19 @@ impl DarklyEngine {
         });
     }
 
-    /// Invalidate cached thumbnails for a layer (call after paint/undo/redo).
+    /// Invalidate cached thumbnails for a layer.
     fn invalidate_thumbnails(&mut self, layer_id: u64) {
         self.thumbnail_cache.layer.remove(&layer_id);
         self.thumbnail_cache.mask.remove(&layer_id);
+    }
+
+    /// Push an undo action that changes pixel data. Extracts the layer_id
+    /// from the action's `gpu_region_entry_mut` and invalidates thumbnails.
+    fn push_pixel_action(&mut self, mut action: Box<dyn UndoAction>) {
+        if let Some(entry) = action.gpu_region_entry_mut() {
+            self.invalidate_thumbnails(entry.layer_id);
+        }
+        self.undo_stack.push(action);
     }
 
     // --- Rendering ---
@@ -1574,10 +1583,11 @@ impl DarklyEngine {
 
         // If this is a GPU region action, execute the texture restore.
         if let Some(entry) = action.gpu_region_entry_mut() {
+            let layer_id = entry.layer_id;
             let texture = if entry.format == wgpu::TextureFormat::R8Unorm {
-                self.compositor.mask_texture(entry.layer_id).map(|t| &t.texture)
+                self.compositor.mask_texture(layer_id).map(|t| &t.texture)
             } else {
-                self.compositor.layer_texture(entry.layer_id).map(|t| &t.texture)
+                self.compositor.layer_texture(layer_id).map(|t| &t.texture)
             };
             if let Some(texture) = texture {
                 let mut encoder = self.gpu.device.create_command_encoder(
@@ -1587,6 +1597,7 @@ impl DarklyEngine {
                 self.gpu.queue.submit([encoder.finish()]);
                 *entry = forward;
             }
+            self.invalidate_thumbnails(layer_id);
         }
 
         self.undo_stack.complete_undo(action);
@@ -1608,10 +1619,11 @@ impl DarklyEngine {
 
         // If this is a GPU region action, execute the texture restore (redo direction).
         if let Some(entry) = action.gpu_region_entry_mut() {
+            let layer_id = entry.layer_id;
             let texture = if entry.format == wgpu::TextureFormat::R8Unorm {
-                self.compositor.mask_texture(entry.layer_id).map(|t| &t.texture)
+                self.compositor.mask_texture(layer_id).map(|t| &t.texture)
             } else {
-                self.compositor.layer_texture(entry.layer_id).map(|t| &t.texture)
+                self.compositor.layer_texture(layer_id).map(|t| &t.texture)
             };
             if let Some(texture) = texture {
                 let mut encoder = self.gpu.device.create_command_encoder(
@@ -1621,6 +1633,7 @@ impl DarklyEngine {
                 self.gpu.queue.submit([encoder.finish()]);
                 *entry = backward;
             }
+            self.invalidate_thumbnails(layer_id);
         }
 
         self.undo_stack.complete_redo(action);
@@ -2437,7 +2450,7 @@ impl DarklyEngine {
         self.gpu.queue.submit([encoder.finish()]);
 
         // Push GPU undo action.
-        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        self.push_pixel_action(Box::new(GpuRegionAction::new(entry)));
 
         // Clean up GPU state
         self.compositor.clear_floating_content();
