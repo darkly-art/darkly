@@ -3,6 +3,9 @@ members = [
     "crates/darkly",
     "frontend/wasm",
 ]
+default-members = [
+    "crates/darkly",
+]
 resolver = "2"
 
 [workspace.dependencies]
