@@ -7,6 +7,31 @@ export const SIZE_STEP = 4;
 export const INITIAL_SIZE = 24;
 export const INITIAL_OPACITY = 1.0;
 
+/** Convert sRGB 0-255 to linear 0-1. */
+function srgbToLinear(c: number): number {
+    const s = c / 255;
+    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+}
+
+/** Build a brush_stroke params object from a PointerEvent. */
+function brushStrokeParams(e: PointerEvent, cx: number, cy: number) {
+    const c = app.foreground;
+    return {
+        x: cx,
+        y: cy,
+        pressure: e.pressure,
+        x_tilt: (e.tiltX ?? 0) / 90, // normalize -90..90 → -1..1
+        y_tilt: (e.tiltY ?? 0) / 90,
+        rotation: (e.twist ?? 0) / 360, // normalize 0..359 → 0..1
+        tangential_pressure: (e as any).tangentialPressure ?? 0,
+        time_ms: e.timeStamp,
+        cr: srgbToLinear(c.r),
+        cg: srgbToLinear(c.g),
+        cb: srgbToLinear(c.b),
+        ca: (c.a / 255) * app.brushOpacity,
+    };
+}
+
 // --- Gesture interpreter ---
 
 export const brushTool: Tool = {
@@ -20,23 +45,12 @@ export const brushTool: Tool = {
         if (!layerId) return;
 
         ctx.handle.begin_stroke(layerId);
-
-        const c = app.foreground;
-        const alpha = Math.round(c.a * app.brushOpacity);
-        ctx.handle.stroke_to('paint_circle', {
-            x: cx, y: cy, radius: app.brushSize,
-            r: c.r, g: c.g, b: c.b, a: alpha,
-        });
+        ctx.handle.stroke_to('brush_stroke', brushStrokeParams(e, cx, cy));
     },
 
     onPointerMove(ctx, e, cx, cy) {
         if (!(e.buttons & 1)) return;
-        const c = app.foreground;
-        const alpha = Math.round(c.a * app.brushOpacity);
-        ctx.handle.stroke_to('paint_circle', {
-            x: cx, y: cy, radius: app.brushSize,
-            r: c.r, g: c.g, b: c.b, a: alpha,
-        });
+        ctx.handle.stroke_to('brush_stroke', brushStrokeParams(e, cx, cy));
     },
 
     onPointerUp(ctx) {

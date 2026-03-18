@@ -1,14 +1,18 @@
 //! Node-graph composable brush engine.
 //!
-//! Phase 3: GPU stage nodes (procedural dab generation + dab compositing),
-//! dab texture pool, brush pipelines, and GPU evaluation in the runner.
+//! Phase 4: Stroke engine + engine integration.  Dab spacing, position
+//! smoothing, sensor interpolation, and full paint pipeline from pointer
+//! events through the node graph to GPU dab compositing.
 
 pub mod dab_pool;
 pub mod eval;
 pub mod gpu_context;
+pub mod interpolation;
 pub mod nodes;
 pub mod paint_info;
 pub mod pipelines;
+pub mod spacing;
+pub mod stroke_engine;
 pub mod wire;
 
 use std::collections::HashMap;
@@ -84,6 +88,75 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("procedural".into(), Box::new(nodes::procedural::ProceduralEvaluator));
     map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
     map
+}
+
+/// Build the default brush graph: pressure-sensitive dab painting.
+///
+/// Graph topology:
+///   pen_input ──pressure──→ procedural.size
+///   paint_color ──color──→  procedural.color
+///   procedural ──dab──→     color_output.dab
+///   procedural ──dab_size──→ color_output.dab_size
+///   pen_input ──position──→ color_output.position
+///
+/// Produces a basic round brush with pressure → size dynamics.
+pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
+    use crate::nodegraph::{Graph, PortRef};
+
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::new();
+
+    let pen_reg = registry.get("pen_input").unwrap();
+    let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+
+    let color_reg = registry.get("paint_color").unwrap();
+    let paint_color = graph.add_node("paint_color", color_reg.ports.clone(), vec![]);
+
+    let proc_reg = registry.get("procedural").unwrap();
+    let procedural = graph.add_node("procedural", proc_reg.ports.clone(), vec![]);
+
+    let out_reg = registry.get("color_output").unwrap();
+    let color_output = graph.add_node("color_output", out_reg.ports.clone(), vec![]);
+
+    // pressure → procedural.size
+    graph.connect(
+        PortRef { node: pen, port: "pressure".into() },
+        PortRef { node: procedural, port: "size".into() },
+    ).unwrap();
+
+    // paint_color → procedural.color
+    graph.connect(
+        PortRef { node: paint_color, port: "color".into() },
+        PortRef { node: procedural, port: "color".into() },
+    ).unwrap();
+
+    // procedural.dab → color_output.dab
+    graph.connect(
+        PortRef { node: procedural, port: "dab".into() },
+        PortRef { node: color_output, port: "dab".into() },
+    ).unwrap();
+
+    // procedural.dab_size → color_output.dab_size
+    graph.connect(
+        PortRef { node: procedural, port: "dab_size".into() },
+        PortRef { node: color_output, port: "dab_size".into() },
+    ).unwrap();
+
+    // pen_input.position → color_output.position
+    graph.connect(
+        PortRef { node: pen, port: "position".into() },
+        PortRef { node: color_output, port: "position".into() },
+    ).unwrap();
+
+    graph
+}
+
+/// Compile the default brush graph into a ready-to-run runner.
+pub fn default_runner() -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
+    let graph = default_graph();
+    let registry = BrushNodeRegistry::new();
+    let evaluators = default_evaluators();
+    eval::BrushGraphRunner::new(&graph, registry.as_map(), evaluators)
 }
 
 #[cfg(test)]
@@ -264,5 +337,11 @@ mod tests {
             ScalarValue::Color(c) => assert_eq!(c, fg_color),
             other => panic!("expected Color, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn default_runner_compiles() {
+        let runner = super::default_runner();
+        assert!(runner.is_ok(), "default_runner() failed: {:?}", runner.err());
     }
 }

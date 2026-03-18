@@ -67,7 +67,9 @@ pub fn compile<W: WireKind>(
 
     while let Some(id) = queue.pop() {
         sorted.push(id);
-        // Collect downstream node ids (deterministic order).
+        // Decrement in-degree for each connection from this node.
+        // Do NOT dedup: in-degree was counted per-connection, so we must
+        // decrement once per connection too.
         let mut downstream: Vec<NodeId> = graph
             .connections
             .iter()
@@ -75,7 +77,6 @@ pub fn compile<W: WireKind>(
             .map(|c| c.to.node)
             .collect();
         downstream.sort_by_key(|id| id.0);
-        downstream.dedup();
 
         for &next in &downstream {
             let deg = in_degree.get_mut(&next).unwrap();
@@ -347,5 +348,61 @@ mod tests {
         let plan = compile(&g, &test_registry()).unwrap();
         assert_eq!(plan.steps.len(), 0);
         assert_eq!(plan.slot_count, 0);
+    }
+
+    #[test]
+    fn multi_edge_fanout_to_same_node() {
+        // A has two outputs, both feeding into B's two inputs.
+        // This must not be detected as a cycle.
+        let mut g = Graph::<TestWireKind>::new();
+        let a = g.add_node(
+            "source",
+            vec![
+                PortDef::output("out1", TestWireKind::Scalar),
+                PortDef::output("out2", TestWireKind::Scalar),
+            ],
+            vec![],
+        );
+        let b = g.add_node(
+            "sink",
+            vec![
+                PortDef::input("in1", TestWireKind::Scalar),
+                PortDef::input("in2", TestWireKind::Scalar),
+            ],
+            vec![],
+        );
+
+        g.connect(
+            PortRef { node: a, port: "out1".into() },
+            PortRef { node: b, port: "in1".into() },
+        ).unwrap();
+        g.connect(
+            PortRef { node: a, port: "out2".into() },
+            PortRef { node: b, port: "in2".into() },
+        ).unwrap();
+
+        let mut reg = test_registry();
+        reg.insert("source".into(), NodeRegistration {
+            type_id: "source", category: "test", display_name: "Source",
+            ports: vec![
+                PortDef::output("out1", TestWireKind::Scalar),
+                PortDef::output("out2", TestWireKind::Scalar),
+            ],
+            params: &[], is_gpu: false,
+        });
+        reg.insert("sink".into(), NodeRegistration {
+            type_id: "sink", category: "test", display_name: "Sink",
+            ports: vec![
+                PortDef::input("in1", TestWireKind::Scalar),
+                PortDef::input("in2", TestWireKind::Scalar),
+            ],
+            params: &[], is_gpu: false,
+        });
+
+        let plan = compile(&g, &reg).unwrap();
+        assert_eq!(plan.steps.len(), 2);
+
+        let pos = |id: NodeId| plan.steps.iter().position(|s| s.node_id == id).unwrap();
+        assert!(pos(a) < pos(b));
     }
 }

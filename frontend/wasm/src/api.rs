@@ -122,8 +122,9 @@ impl DarklyHandle {
     pub fn stroke_to(&mut self, op_type: &str, params: JsValue) {
         // Inject the discriminator tag expected by serde's tagged enum.
         js_sys::Reflect::set(&params, &"op".into(), &op_type.into()).ok();
-        if let Ok(op) = serde_wasm_bindgen::from_value::<StrokeOp>(params) {
-            self.0.stroke_to(op);
+        match serde_wasm_bindgen::from_value::<StrokeOp>(params) {
+            Ok(op) => self.0.stroke_to(op),
+            Err(e) => log::error!("stroke_to deserialization failed: {e}"),
         }
     }
 

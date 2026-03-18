@@ -174,17 +174,25 @@ impl<C> ReadbackScheduler<C> {
 
     /// Submit a readback request with its associated context.
     ///
-    /// Automatically calls `begin_mapping` — the encoder must already be submitted.
-    pub fn submit(&mut self, mut request: ReadbackRequest, context: C) {
-        request.begin_mapping();
+    /// Mapping is deferred to the next `poll()` call — safe to call inside a
+    /// `gpu.encode()` closure before the encoder has been submitted.
+    pub fn submit(&mut self, request: ReadbackRequest, context: C) {
         self.tasks.push((request, context));
     }
 
     /// Poll all pending readbacks. Returns completed `(context, pixels)` pairs.
     ///
-    /// Calls `device.poll(Poll)` once to nudge native backends, then checks
+    /// Begins mapping for any newly submitted requests, then calls
+    /// `device.poll(Poll)` once to nudge native backends, then checks
     /// every pending request. Completed tasks are removed; in-flight tasks remain.
     pub fn poll(&mut self, device: &wgpu::Device) -> Vec<(C, Vec<u8>)> {
+        // Begin mapping for newly submitted requests (deferred from submit()).
+        for (req, _) in &mut self.tasks {
+            if req.rx.is_none() {
+                req.begin_mapping();
+            }
+        }
+
         // One poll call for all pending readbacks — the device processes all
         // ready callbacks in a single pass.
         if !self.tasks.is_empty() {

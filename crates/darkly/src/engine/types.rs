@@ -88,6 +88,17 @@ pub enum StrokeOp {
         r0: u8, g0: u8, b0: u8, a0: u8,
         r1: u8, g1: u8, b1: u8, a1: u8,
     },
+    /// Node-graph brush stroke event with full tablet data.
+    BrushStroke {
+        x: f32, y: f32,
+        pressure: f32,
+        x_tilt: f32, y_tilt: f32,
+        rotation: f32,
+        tangential_pressure: f32,
+        time_ms: f64,
+        /// Foreground color as linear RGBA floats (0-1).
+        cr: f32, cg: f32, cb: f32, ca: f32,
+    },
 }
 
 /// Data returned to the WASM bridge on copy/cut — always RGBA pixels regardless

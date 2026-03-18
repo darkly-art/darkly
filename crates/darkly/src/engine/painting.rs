@@ -2,6 +2,10 @@
 
 use super::{DarklyEngine, GpuStrokeState, ReadbackContext};
 use super::types::StrokeOp;
+use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::paint_info::PaintInformation;
+use crate::brush::spacing::SpacingConfig;
+use crate::brush::stroke_engine::StrokeEngine;
 use crate::gpu::flood_fill;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
@@ -152,9 +156,105 @@ impl DarklyEngine {
                     x as i32, y as i32, [r, g, b, a], tolerance,
                     canvas_w, canvas_h);
             }
+            StrokeOp::BrushStroke { x, y, pressure, x_tilt, y_tilt, rotation, tangential_pressure, time_ms, cr, cg, cb, ca } => {
+                self.brush_stroke_to(
+                    layer_id, mask_editing,
+                    x, y, pressure, x_tilt, y_tilt, rotation, tangential_pressure, time_ms,
+                    [cr, cg, cb, ca],
+                    canvas_w, canvas_h,
+                );
+            }
         }
 
         self.compositor.mark_dirty();
+    }
+
+    /// Handle a BrushStroke event through the node-graph brush engine.
+    ///
+    /// Lazy-inits a `StrokeEngine` with the default brush graph on the first
+    /// event.  Each event feeds through the stroke engine which smooths,
+    /// interpolates, and places dabs via the compiled brush graph.
+    fn brush_stroke_to(
+        &mut self,
+        layer_id: u64,
+        mask_editing: bool,
+        x: f32, y: f32,
+        pressure: f32,
+        x_tilt: f32, y_tilt: f32,
+        rotation: f32,
+        tangential_pressure: f32,
+        time_ms: f64,
+        color: [f32; 4],
+        canvas_w: u32, canvas_h: u32,
+    ) {
+        // Lazy-init: compile the default brush graph on first BrushStroke event.
+        if self.brush_stroke_engine.is_none() {
+            let runner = match crate::brush::default_runner() {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("brush graph compilation failed: {e:?}");
+                    return;
+                }
+            };
+            self.brush_stroke_engine = Some(StrokeEngine::new(
+                runner, color, SpacingConfig::default(), 0.3,
+            ));
+        }
+
+        // Build PaintInformation from the raw tablet data.
+        let info = PaintInformation {
+            pos: [x, y],
+            pressure,
+            x_tilt,
+            y_tilt,
+            rotation,
+            tangential_pressure,
+            time: (time_ms / 1000.0) as f32,
+            ..Default::default()
+        };
+
+        // Get the canvas texture view for compositing.
+        let canvas_view = if mask_editing {
+            match self.compositor.mask_texture(layer_id) {
+                Some(t) => t.view.clone(),
+                None => return,
+            }
+        } else {
+            match self.compositor.layer_texture(layer_id) {
+                Some(t) => t.view.clone(),
+                None => return,
+            }
+        };
+
+        // Take the stroke engine out to avoid borrow conflicts.
+        let mut engine = self.brush_stroke_engine.take().unwrap();
+
+        // Create a command encoder for all dab passes in this move_to.
+        let mut encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("brush-stroke") },
+        );
+
+        let sel_bg = &self.brush_pipelines.default_selection_bind_group;
+        {
+            let mut gpu_ctx = BrushGpuContext {
+                encoder: &mut encoder,
+                device: &self.gpu.device,
+                queue: &self.gpu.queue,
+                dab_pool: &mut self.dab_pool,
+                pipelines: &self.brush_pipelines,
+                canvas_view: &canvas_view,
+                canvas_width: canvas_w,
+                canvas_height: canvas_h,
+                selection_bind_group: sel_bg,
+            };
+
+            engine.move_to(info, &mut gpu_ctx);
+        }
+
+        self.gpu.queue.submit([encoder.finish()]);
+
+        // Put the engine back.
+        self.brush_stroke_engine = Some(engine);
     }
 
     /// Start async GPU flood fill: readback layer texture, then complete on a
@@ -248,8 +348,26 @@ impl DarklyEngine {
                 return;
             }
 
+            // Brush stroke path: finalize the StrokeEngine and commit undo.
+            if let Some(engine) = self.brush_stroke_engine.take() {
+                let (_, stroke_rect) = engine.end();
+                if let Some(rect) = stroke_rect {
+                    let format = if self.editing_mask_layer == Some(layer_id) {
+                        wgpu::TextureFormat::R8Unorm
+                    } else {
+                        wgpu::TextureFormat::Rgba8Unorm
+                    };
+                    self.gpu.encode("brush-stroke-end", |encoder| {
+                        let entry = self.region_store.commit_region(
+                            encoder, layer_id, format, rect,
+                        );
+                        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                    });
+                }
+            }
+
             if let Some(gs) = self.gpu_stroke.take() {
-                // GPU path: commit the changed region to the undo buffer.
+                // Legacy GPU path: commit the changed region to the undo buffer.
                 if let Some(rect) = gs.stroke_rect {
                     self.gpu.encode("stroke-end", |encoder| {
                         let entry = self.region_store.commit_region(

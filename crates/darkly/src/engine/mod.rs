@@ -12,6 +12,9 @@ pub use types::{
     ClipboardExport, LayerInfo, ParamInfo, StrokeOp, VeilInfo, VeilTypeInfo,
 };
 
+use crate::brush::dab_pool::DabTexturePool;
+use crate::brush::pipelines::BrushPipelines;
+use crate::brush::stroke_engine::StrokeEngine;
 use crate::clipboard::Clipboard;
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
@@ -146,6 +149,12 @@ pub struct DarklyEngine {
     /// Active GPU stroke state (replaces CPU transaction for PaintCircle/EraseCircle).
     pub(crate) gpu_stroke: Option<GpuStrokeState>,
 
+    // --- Brush Engine (Phase 4) ---
+    pub(crate) dab_pool: DabTexturePool,
+    pub(crate) brush_pipelines: BrushPipelines,
+    /// Active brush stroke engine (only during a BrushStroke operation).
+    pub(crate) brush_stroke_engine: Option<StrokeEngine>,
+
     // --- Async readback ---
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
     /// Completed copy result — picked up by the frontend on the next poll.
@@ -165,6 +174,8 @@ impl DarklyEngine {
         let undo_stack = UndoStack::new(50);
         let region_store = RegionStore::new(&gpu.device, doc_width, doc_height);
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
+        let dab_pool = DabTexturePool::new(&gpu.device);
+        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout());
 
         DarklyEngine {
             doc,
@@ -181,6 +192,9 @@ impl DarklyEngine {
             region_store,
             paint_pipelines,
             gpu_stroke: None,
+            dab_pool,
+            brush_pipelines,
+            brush_stroke_engine: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],
