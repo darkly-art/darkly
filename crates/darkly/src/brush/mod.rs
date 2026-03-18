@@ -1,11 +1,14 @@
 //! Node-graph composable brush engine.
 //!
-//! Phase 2: wire types, CPU evaluation runtime, sensor data, and first
-//! CPU math/sensor nodes.  No GPU — that comes in Phase 3.
+//! Phase 3: GPU stage nodes (procedural dab generation + dab compositing),
+//! dab texture pool, brush pipelines, and GPU evaluation in the runner.
 
+pub mod dab_pool;
 pub mod eval;
+pub mod gpu_context;
 pub mod nodes;
 pub mod paint_info;
+pub mod pipelines;
 pub mod wire;
 
 use std::collections::HashMap;
@@ -62,20 +65,24 @@ impl Default for BrushNodeRegistry {
     }
 }
 
-/// Create the standard set of CPU evaluators for all built-in nodes.
+/// Create the standard set of evaluators for all built-in nodes.
 ///
 /// Separate from `BrushNodeRegistry` because evaluators are trait objects
 /// (runtime behavior) while the registry holds static metadata (compile-
 /// time port/param schemas).  Both are keyed by the same `type_id` string.
 /// The runner takes ownership of the evaluator map and uses it during
-/// `execute_cpu()` to dispatch each node's computation.
+/// `execute_cpu()` and `execute_gpu()` to dispatch each node's computation.
 pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>> {
     let mut map: HashMap<String, Box<dyn eval::BrushNodeEvaluator>> = HashMap::new();
+    // CPU nodes.
     map.insert("pen_input".into(), Box::new(nodes::pen_input::PenInputEvaluator));
     map.insert("constant".into(), Box::new(nodes::constant::ConstantEvaluator));
     map.insert("multiply".into(), Box::new(nodes::multiply::MultiplyEvaluator));
     map.insert("curve".into(), Box::new(nodes::curve::CurveEvaluator));
     map.insert("paint_color".into(), Box::new(nodes::paint_color::PaintColorEvaluator));
+    // GPU nodes.
+    map.insert("procedural".into(), Box::new(nodes::procedural::ProceduralEvaluator));
+    map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
     map
 }
 
@@ -83,7 +90,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
 mod tests {
     use super::*;
     use crate::gpu::params::ParamValue;
-    use crate::nodegraph::{Graph, PortRef};
+    use crate::nodegraph::{Graph, NodeId, PortRef};
     use super::eval::BrushGraphRunner;
     use super::paint_info::{PaintInformation, StrokeRecord};
     use super::wire::{BrushWireType, ScalarValue};

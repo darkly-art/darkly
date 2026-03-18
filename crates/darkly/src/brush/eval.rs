@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::{ExecutionPlan, Graph, NodeId, NodeRegistration, PortDef, PortDir};
 
+use super::gpu_context::BrushGpuContext;
 use super::paint_info::PaintInformation;
 use super::wire::{BrushWireType, ScalarValue};
 
@@ -62,16 +63,30 @@ impl EvalContext<'_> {
     }
 }
 
-/// Trait implemented by each CPU node to produce output values.
+/// Trait implemented by each node to produce output values.
 pub trait BrushNodeEvaluator: Send + Sync {
-    /// Evaluate the node and return named output values.
+    /// Evaluate the node on the CPU and return named output values.
     ///
     /// Called once per dab for each CPU node in topological order.
-    /// GPU nodes skip this — they're handled by `execute_gpu` (Phase 3).
+    /// GPU nodes return empty from this — they use `evaluate_gpu` instead.
     fn evaluate_cpu(
         &self,
         ctx: &EvalContext,
     ) -> Vec<(String, ScalarValue)>;
+
+    /// Evaluate the node on the GPU, recording render passes into the
+    /// encoder.  Returns named output values (e.g. texture handles).
+    ///
+    /// Default implementation is a no-op — CPU-only nodes don't override
+    /// this.  GPU nodes (`is_gpu: true`) override this and ignore
+    /// `evaluate_cpu`.
+    fn evaluate_gpu(
+        &self,
+        _ctx: &EvalContext,
+        _gpu: &mut BrushGpuContext,
+    ) -> Vec<(String, ScalarValue)> {
+        vec![]
+    }
 }
 
 // ── Graph runner ────────────────────────────────────────────────────
@@ -86,10 +101,11 @@ pub trait BrushNodeEvaluator: Send + Sync {
 /// 1. `seed_sensors()` — writes tablet data directly into pre-known slot
 ///    indices (no virtual dispatch, no HashMap lookup on the hot path).
 /// 2. `execute_cpu()` — walks the topologically-sorted plan, calling each
-///    node's evaluator which reads inputs from and writes outputs to the
-///    flat slot table.
-/// 3. Downstream consumers (GPU stage nodes in Phase 3) read final values
-///    from the slot table by index.
+///    CPU node's evaluator which reads inputs from and writes outputs to
+///    the flat slot table.
+/// 3. `execute_gpu()` — walks GPU nodes in topological order, calling
+///    `evaluate_gpu()` which records render passes and writes texture
+///    handles back to the slot table.
 ///
 /// The slot table is a flat `Vec<Option<ScalarValue>>` — one entry per
 /// output port in the graph, indexed by the compiler-assigned slot number.
@@ -236,6 +252,56 @@ impl BrushGraphRunner {
             };
 
             let outputs = evaluator.evaluate_cpu(&ctx);
+
+            // Write outputs to their assigned slots.
+            for (port_name, value) in outputs {
+                for (name, slot_idx) in &step.output_slots {
+                    if *name == port_name {
+                        self.slots[*slot_idx] = Some(value);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Execute all GPU nodes in topological order.
+    ///
+    /// Call `seed_sensors()` and `execute_cpu()` first — GPU nodes read
+    /// their scalar inputs (size, opacity, color, position) from the slot
+    /// table populated by CPU nodes.  GPU nodes record render passes into
+    /// the encoder and write texture handles back to the slot table.
+    ///
+    /// After this returns, call `gpu.dab_pool.release_all()` to return
+    /// acquired dab textures to the pool.
+    pub fn execute_gpu(&mut self, gpu: &mut BrushGpuContext) {
+        for step in &self.plan.steps {
+            if !step.is_gpu {
+                continue;
+            }
+
+            let Some(evaluator) = self.evaluators.get(&step.type_id) else {
+                continue;
+            };
+
+            // Gather connected inputs from the slot table.
+            let mut inputs = HashMap::new();
+            for (port_name, slot_idx) in &step.input_slots {
+                if let Some(val) = self.slots[*slot_idx] {
+                    inputs.insert(port_name.clone(), val);
+                }
+            }
+
+            let node = self.node_data.get(&step.node_id);
+            let empty_params = Vec::new();
+            let empty_ports = Vec::new();
+            let ctx = EvalContext {
+                inputs: &inputs,
+                params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
+                port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
+            };
+
+            let outputs = evaluator.evaluate_gpu(&ctx, gpu);
 
             // Write outputs to their assigned slots.
             for (port_name, value) in outputs {
