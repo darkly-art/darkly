@@ -9,7 +9,7 @@ pub enum ParamDef {
 }
 
 /// A concrete runtime parameter value, read from an effect instance.
-#[derive(Clone, Debug, serde::Serialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum ParamValue {
     Float(f32),
