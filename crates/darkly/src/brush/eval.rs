@@ -16,6 +16,13 @@ use super::wire::{BrushWireType, ScalarValue};
 // ── Evaluator trait ─────────────────────────────────────────────────
 
 /// Context passed to each node's CPU evaluator.
+///
+/// Inputs are gathered into a HashMap by the runner before calling the
+/// evaluator, rather than giving evaluators direct slot table access.
+/// This keeps evaluators decoupled from the slot layout — they just ask
+/// for named inputs and get values back, without knowing slot indices.
+/// The HashMap allocation is per-node-per-dab, but node input counts
+/// are tiny (1-3 ports), so this is negligible.
 pub struct EvalContext<'a> {
     /// Read a named input port.  Returns `None` for disconnected ports.
     pub inputs: &'a HashMap<String, ScalarValue>,
@@ -70,18 +77,46 @@ pub trait BrushNodeEvaluator: Send + Sync {
 // ── Graph runner ────────────────────────────────────────────────────
 
 /// A compiled, ready-to-run brush graph with pre-allocated slot table.
+///
+/// The evaluation model is **compile once, evaluate per-dab**.  When the
+/// user edits the brush graph, we compile a new runner (cheap — just a
+/// topo sort and slot allocation).  During a stroke, each dab reuses the
+/// same runner with zero heap allocation:
+///
+/// 1. `seed_sensors()` — writes tablet data directly into pre-known slot
+///    indices (no virtual dispatch, no HashMap lookup on the hot path).
+/// 2. `execute_cpu()` — walks the topologically-sorted plan, calling each
+///    node's evaluator which reads inputs from and writes outputs to the
+///    flat slot table.
+/// 3. Downstream consumers (GPU stage nodes in Phase 3) read final values
+///    from the slot table by index.
+///
+/// The slot table is a flat `Vec<Option<ScalarValue>>` — one entry per
+/// output port in the graph, indexed by the compiler-assigned slot number.
+/// This avoids per-node HashMaps and keeps evaluation cache-friendly.
 pub struct BrushGraphRunner {
-    /// The compiled execution plan.
+    /// Topologically-sorted execution steps with pre-assigned slot indices.
+    /// Compiled once from the graph; determines evaluation order and which
+    /// slot each port reads from / writes to.
     plan: ExecutionPlan,
-    /// Evaluator for each node type_id.
+    /// Evaluator for each node type_id.  Looked up once per step during
+    /// `execute_cpu()` — the HashMap cost is acceptable because the number
+    /// of steps per dab is small (typically 5-15 nodes).
     evaluators: HashMap<String, Box<dyn BrushNodeEvaluator>>,
-    /// Flat slot table — pre-sized, reused across dabs.
+    /// Flat slot table indexed by compiler-assigned slot number.  Pre-sized
+    /// to `plan.slot_count` and reused across dabs — `clear_slots()` resets
+    /// it between evaluations without reallocating.
     slots: Vec<Option<ScalarValue>>,
-    /// Per-node instance data: (type_id, params, port_defs).
+    /// Cached per-node params and port defs, copied from the graph at
+    /// compile time so we don't need to borrow the graph during evaluation.
     node_data: HashMap<NodeId, NodeData>,
-    /// Slot indices for pen_input sensor outputs (for direct seeding).
+    /// Pre-resolved slot indices for pen_input's output ports.  Stored
+    /// separately so `seed_sensors()` can write directly without walking
+    /// the plan or doing any lookups — this is the hottest path (called
+    /// once per dab, potentially hundreds of times per stroke).
     pen_input_slots: Vec<(String, usize)>,
-    /// Slot index for the paint_color node's color output.
+    /// Pre-resolved slot index for paint_color's output.  Same rationale
+    /// as `pen_input_slots` — avoid plan traversal on the hot path.
     paint_color_slot: Option<usize>,
 }
 
@@ -220,6 +255,8 @@ impl BrushGraphRunner {
     }
 
     /// Find the slot index for a named output port on a specific step.
+    ///
+    /// Linear scan — intended for tests and debugging, not hot paths.
     pub fn find_output_slot(&self, type_id: &str, port_name: &str) -> Option<usize> {
         self.plan
             .steps
@@ -234,6 +271,8 @@ impl BrushGraphRunner {
     }
 
     /// Find the slot index for a specific node's output port.
+    ///
+    /// Linear scan — intended for tests and debugging, not hot paths.
     pub fn find_node_output_slot(&self, node_id: NodeId, port_name: &str) -> Option<usize> {
         self.plan
             .steps

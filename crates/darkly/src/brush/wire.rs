@@ -60,8 +60,10 @@ pub struct TextureHandle(pub u16);
 
 /// A value that fits in a slot in the evaluation table.
 ///
-/// 16 bytes, `Copy`, no heap.  This is the universal currency of the
-/// brush graph runtime — every wire carries one of these.
+/// Every wire in the brush graph carries one of these.  A single enum
+/// rather than generic typed slots because the slot table is a flat
+/// `Vec<Option<ScalarValue>>` — uniform size means no boxing, no trait
+/// objects, and direct array indexing.  16 bytes, `Copy`, no heap.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ScalarValue {
     Scalar(f32),
