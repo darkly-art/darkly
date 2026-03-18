@@ -11,6 +11,11 @@ fn main() {
     );
 
     generate_registry(&src.join("tools"), "crate::tool::ToolRegistration");
+
+    generate_registry(
+        &src.join("brush/nodes"),
+        "crate::brush::BrushNodeRegistration",
+    );
 }
 
 /// Scan a directory for .rs module files (excluding mod.rs) and generate
