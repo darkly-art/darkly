@@ -86,6 +86,14 @@ impl LayerGroup {
     }
 }
 
+/// Snapshot of mask boolean state — used for undo actions.
+#[derive(Clone, Copy)]
+pub struct MaskSnapshot {
+    pub has_mask: bool,
+    pub mask_enabled: bool,
+    pub show_mask: bool,
+}
+
 /// Common mask interface shared by RasterLayer and LayerGroup.
 /// Mask pixel data is GPU-authoritative — these methods only track
 /// the boolean flag and compositing toggles.
@@ -96,6 +104,14 @@ pub trait Masked {
     fn set_mask_enabled(&mut self, enabled: bool);
     fn show_mask(&self) -> bool;
     fn set_show_mask(&mut self, show: bool);
+
+    fn mask_snapshot(&self) -> MaskSnapshot {
+        MaskSnapshot {
+            has_mask: self.has_mask(),
+            mask_enabled: self.mask_enabled(),
+            show_mask: self.show_mask(),
+        }
+    }
 }
 
 macro_rules! impl_masked {

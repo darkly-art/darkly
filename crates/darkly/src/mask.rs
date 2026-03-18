@@ -697,6 +697,70 @@ fn lerp_edge(v0: f32, v1: f32, threshold: f32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
+// R8 pixel buffer conversions
+// ---------------------------------------------------------------------------
+
+impl AlphaMask {
+    /// Rasterize the mask into a flat R8 (`Vec<u8>`) pixel buffer.
+    ///
+    /// `origin` is the top-left corner in canvas pixel coordinates.
+    /// Pixels outside allocated tiles default to `default_value`.
+    pub fn rasterize_r8(
+        &self,
+        origin: (i32, i32),
+        width: u32,
+        height: u32,
+        default_value: u8,
+    ) -> Vec<u8> {
+        let mut pixels = vec![default_value; (width * height) as usize];
+        let (ox, oy) = origin;
+        let ts = TILE_SIZE;
+
+        for ((tx, ty), tile) in self.iter() {
+            let base_x = tx * ts as i32;
+            let base_y = ty * ts as i32;
+            let data = tile.data();
+            for ly in 0..ts {
+                for lx in 0..ts {
+                    let px = base_x + lx as i32 - ox;
+                    let py = base_y + ly as i32 - oy;
+                    if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
+                        let v = (data.get(lx, ly).clamp(0.0, 1.0) * 255.0) as u8;
+                        pixels[(py as u32 * width + px as u32) as usize] = v;
+                    }
+                }
+            }
+        }
+
+        pixels
+    }
+
+    /// Construct an AlphaMask from a flat R8 pixel buffer.
+    ///
+    /// Pixels with value 0 are skipped (treated as empty). The buffer covers
+    /// canvas coordinates starting at (0, 0).
+    pub fn from_r8(pixels: &[u8], width: u32, height: u32) -> Self {
+        let ts = TILE_SIZE;
+        let mut mask = AlphaMask::new();
+
+        for py in 0..height {
+            for px in 0..width {
+                let v = pixels[(py * width + px) as usize];
+                if v > 0 {
+                    let tx = (px / ts as u32) as i32;
+                    let ty = (py / ts as u32) as i32;
+                    let lx = (px % ts as u32) as usize;
+                    let ly = (py % ts as u32) as usize;
+                    mask.get_or_create(tx, ty).write().set(lx, ly, v as f32 / 255.0);
+                }
+            }
+        }
+
+        mask
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 

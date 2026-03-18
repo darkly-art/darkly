@@ -77,6 +77,18 @@ impl GpuContext {
         }
     }
 
+    /// Create a command encoder, run `f`, and submit the resulting commands.
+    ///
+    /// Eliminates the 4-line boilerplate pattern that appears ~30 times in the
+    /// engine: create encoder → do work → queue.submit.
+    pub fn encode(&self, label: &str, f: impl FnOnce(&mut wgpu::CommandEncoder)) {
+        let mut encoder = self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some(label) },
+        );
+        f(&mut encoder);
+        self.queue.submit([encoder.finish()]);
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             self.surface_config.width = width;
