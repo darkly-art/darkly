@@ -37,7 +37,7 @@ Distilled from community discussions, pain points, and the Krita feature request
 
 **Avoid:** The "snowflake" architecture. 16 separate `KisPaintOp` subclasses with inconsistent feature parity. Adding a new capability means either modifying an existing engine (breaking encapsulation) or creating engine #17 (fragmentation). The `KisBrushBasedPaintOp` base class shares *some* code, but fundamental behaviors (smudging, filtering, deformation) can't be mixed.
 
-**Avoid:** CPU-only rendering. Krita's brush pipeline is entirely CPU-bound. Large brushes on large canvases lag badly, and GPU acceleration is blocked on their Qt6 port with "all signs point to no" for years. We start GPU-first.
+**Avoid:** CPU-only rendering. Krita's brush pipeline is entirely CPU-bound. Large brushes on large canvases lag badly, and GPU acceleration is blocked on their Qt6 port with "all signs point to no" for years. Our GPU-authoritative engine is already in place — every pixel operation is a GPU render pass, no CPU tile store.
 
 See [Krita Brush System — Deep Dive](krita-brush-system.md).
 
@@ -106,13 +106,13 @@ Source stages come first. Transform stages chain after. Blend stages read from b
 
 ### GPU Execution
 
-Each stage is a GPU compute or render pass. Between stages, dab data lives in a ping-pong buffer pair (the same pattern Darkly already uses for filter/veil effects). The pipeline:
+Each stage is a GPU compute or render pass. Between stages, dab data lives in a ping-pong buffer pair (the same pattern Darkly already uses for veil effects in `VeilChain`). The pipeline:
 
 1. Allocates dab-sized ping-pong textures (sized to current brush diameter)
 2. Source stage writes to buffer A
 3. Transform stages alternate: read A → write B, read B → write A, …
 4. Blend stage reads canvas region + current buffer → writes result
-5. Output stage composites onto canvas tile(s)
+5. Output stage composites onto the layer texture via `GpuPaintTarget`
 
 For brushes with no transform or blend stages (simple stamp), the pipeline collapses to source → output with zero intermediate passes.
 
@@ -122,7 +122,7 @@ For brushes with no transform or blend stages (simple stamp), the pipeline colla
 
 ### Stage System — Following the Modularity Pattern
 
-Brush stages follow the same auto-discovery pattern as filters and veils:
+Brush stages follow the same auto-discovery pattern as veils (see `gpu/veil.rs` + `gpu/veils/` + `build.rs`):
 
 ```
 crates/darkly/src/gpu/
@@ -150,7 +150,7 @@ pub struct BrushStageRegistration {
 }
 ```
 
-`BrushStageRegistry` mirrors `FilterRegistry` — HashMap-backed, lazy pipeline caching, auto-populated from generated `brush_stages::registrations()`.
+`BrushStageRegistry` mirrors `VeilRegistry` — HashMap-backed, lazy pipeline caching, auto-populated from generated `brush_stages::registrations()`. The `build.rs` script already supports auto-generating `mod.rs` for any directory with a registration type — adding `brush_stages/` requires one line.
 
 ### The BrushStage Trait
 
@@ -164,7 +164,7 @@ pub trait BrushStage: std::fmt::Debug {
 
     /// Encode this stage's GPU pass.
     /// `dab_src` / `dab_dst`: ping-pong dab textures
-    /// `canvas_region`: read-only view of canvas under the dab (for Blend stages)
+    /// `canvas_region`: GPU texture copy of canvas pixels under the dab (for Blend stages)
     /// `dynamics`: evaluated sensor values for this dab
     fn encode(
         &self,
@@ -478,6 +478,22 @@ This would be implemented as a special Transform stage type that generates a mas
 
 ## Implementation Phases
 
+### Prerequisites — COMPLETE
+
+The GPU-authoritative engine rework (see [gpu-authoritative-architecture.md](../gpu-authoritative-architecture.md)) is complete. The brush engine builds on top of this infrastructure:
+
+- **`GpuPaintTarget`** (`gpu/paint_target.rs`) — unified abstraction over RGBA8 layer textures and R8 mask textures. Provides `composite_circle`, `erase_circle`, `fill_rect`, `linear_gradient`, etc. as GPU render passes. The Output stage will composite dabs through this.
+- **`RegionStore`** (`gpu/region_store.rs`) — GPU-side undo with scratch textures and a 256MB ring buffer. `save_region()` snapshots before a stroke, `commit_region()` finalizes the undo entry at pen-up. Already integrated into the stroke lifecycle.
+- **`ReadbackScheduler`** (`gpu/readback.rs`) — async GPU→CPU readback for save/export/flood fill/color pick. Not needed for the brush pipeline itself (all dab operations stay on GPU), but available for any stage that needs CPU pixels.
+- **`PaintPipelines`** (`gpu/paint_target.rs`) — pre-built render pipelines for composite/erase/clear/gradient in both RGBA8 and R8 formats.
+- **`VeilChain` ping-pong pattern** (`gpu/veil_chain.rs`) — the dab buffer ping-pong will follow this same pattern at dab-buffer resolution.
+- **WASM bridge** (`frontend/wasm/src/api.rs`) — `stroke_to()`, `begin_stroke()`, `end_stroke()` already exposed. Needs extension for `PaintInformation` input.
+- **Auto-discovery build system** (`build.rs`) — `generate_registry()` already handles `veils/` and `tool/`. Adding `brush_stages/` is one line.
+
+The old CPU infrastructure (TileStore for layers, TiledSurface, DirtyRegion, Surface enum, PaintTarget, MaskPaintTarget) has been removed. All pixel data is GPU-authoritative. The current brush path is a minimal `StrokeOp::PaintCircle` that renders SDF circles directly onto layer textures — it validates the GPU paint path works end-to-end but has no dab system, dynamics, or pipeline stages.
+
+---
+
 This system will be built incrementally, with human feedback checkpoints between phases. The core building blocks must feel right before we build on top of them — a smudge stage is worthless if the underlying dab placement feels mechanical, and presets are meaningless if individual stages don't produce convincing results. Each phase ends with a hands-on testing session where strokes are evaluated for naturalness, responsiveness, and visual quality.
 
 ### Phase 1 — Pipeline Skeleton + Round Brush
@@ -486,16 +502,18 @@ This system will be built incrementally, with human feedback checkpoints between
 
 Build:
 - `BrushStage` trait, `BrushStageRegistry`, `BrushPipeline` structs
-- Ping-pong dab buffer allocation and management
-- `Procedural` source stage (circle with gaussian falloff)
-- `ColorOutput` output stage (composite dab onto canvas tiles)
+- Add `brush_stages/` to `build.rs` auto-discovery (one line — the `generate_registry` infrastructure already exists)
+- Dab-sized ping-pong buffer pair (same pattern as `VeilChain`'s viewport-sized ping-pong textures, but sized to brush diameter)
+- `Procedural` source stage (circle with gaussian falloff) — replaces the current `StrokeOp::PaintCircle` / `composite_circle` SDF path
+- `ColorOutput` output stage (composite dab onto layer texture via `GpuPaintTarget`)
 - Basic dab placement with proportional spacing
 - Linear stroke interpolation between input events
-- WASM bridge: wire up `stroke_to()` to the new pipeline
+- Extend WASM bridge: the `stroke_to()` / `begin_stroke()` / `end_stroke()` bridge already exists in `frontend/wasm/src/api.rs` — extend it to pass `PaintInformation` (position, pressure, tilt) instead of discrete `StrokeOp` variants
+- Integrate with existing undo: `RegionStore.save_region()` at pen-down, `commit_region()` at pen-up (already working for current strokes)
 
-Result: A hard/soft round brush. No dynamics (fixed size/opacity), no smoothing. Dabs are placed, GPU-rendered, and composited onto the canvas.
+Result: A hard/soft round brush. No dynamics (fixed size/opacity), no smoothing. Dabs are placed, GPU-rendered, and composited onto the canvas. The current `StrokeOp::PaintCircle` path becomes obsolete.
 
-**Feedback checkpoint:** Does the basic stroke feel responsive? Is dab placement smooth at various speeds? Any visible gaps or overdraw artifacts? How does latency compare to the existing CPU paint path?
+**Feedback checkpoint:** Does the basic stroke feel responsive? Is dab placement smooth at various speeds? Any visible gaps or overdraw artifacts? How does latency compare to the existing SDF circle paint path?
 
 ### Phase 2 — Dynamics Core
 
@@ -532,7 +550,7 @@ Result: Textured brush strokes with image tips. Can approximate pencil, charcoal
 **Goal:** Paint blending — the critical feature that makes digital paint feel like real paint.
 
 Build:
-- Canvas region readback (GPU read of pixels under the dab for Blend stages)
+- Canvas region copy (GPU `copy_texture_to_texture` of pixels under the dab into a temporary texture, bound as read-only input to Blend stages — no CPU readback needed, stays entirely on GPU)
 - `Smudge` blend stage (blend paint color with canvas, dulling vs smear modes)
 - `ColorMix` blend stage (wet-paint mixing between consecutive dabs)
 - Dynamics on smudge length and mix ratio
@@ -620,3 +638,7 @@ Result: Artists can bring their existing Photoshop brush libraries into Darkly.
 5. **Texture mode** — Krita's biggest missing feature is per-stroke texture (texture anchored to canvas coordinates rather than dab center). Our Texture Overlay stage should support this from day one, but the implementation needs care: the texture UV must be computed from the dab's canvas position, not its local position.
 
 6. **Hot-swapping performance** — When a user edits a pipeline in the preset editor, we want live preview. How expensive is it to rebuild the GPU pipeline when a stage is added/removed/reordered? The lazy pipeline caching pattern helps (stage pipelines are cached), but the overall command buffer encoding may need to be re-planned.
+
+7. **GpuPaintTarget evolution** — The current `GpuPaintTarget` has hardcoded operations (`composite_circle`, `erase_circle`, etc.) with their own dedicated pipelines in `PaintPipelines`. The brush engine's Output stage needs to composite arbitrary dab textures, not just SDF circles. Options: add a `composite_texture` method to `GpuPaintTarget`, or have the Output stage manage its own pipeline independently. The latter is more modular (follows the stage pattern), but the former reuses the existing format-aware RGBA8/R8 pipeline infrastructure.
+
+8. **StrokeOp retirement** — Once the brush pipeline handles all painting, the current `StrokeOp::PaintCircle` / `EraseCircle` variants become redundant. FloodFill and LinearGradient are tool-level operations, not brush operations, so they should remain. The transition path: Phase 1 adds a `BrushDab` stroke type alongside the existing ops, and the old circle ops are removed once the pipeline is validated.

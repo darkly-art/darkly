@@ -1,6 +1,6 @@
 # GPU-Authoritative Architecture
 
-## Status: PLANNING
+## Status: COMPLETE
 
 This document captures the full context behind a fundamental architectural decision: moving from a CPU-authoritative pixel store (with GPU as a display cache) to a GPU-authoritative system where GPU textures are the source of truth and the CPU dirty tile system is removed entirely.
 
