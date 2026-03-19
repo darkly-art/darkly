@@ -229,39 +229,254 @@ Unit tests with a test-only `TestWireKind` enum:
 
 ---
 
+## Phase 7 — Preset Format + Round-Trip
+
+**Goal:** Define and ship the `.darkly-brush` preset format. Save/load from disk, round-trip tested. This comes before stamp tips because every subsequent phase adds new node types and capabilities — having a tested serialization format early catches compatibility issues as the system grows.
+
+### Format Design
+
+A `.darkly-brush` file is a ZIP archive containing:
+- `preset.json` — metadata envelope + node graph
+- `resources/` — binary assets (brush tip images, textures) referenced by filename from the graph
+
+```json
+{
+  "format_version": 1,
+  "name": "Soft Round Pressure",
+  "engine_version": "0.1.0",
+  "category": "Basic",
+  "author": "Darkly",
+  "description": "Pressure-sensitive soft round brush",
+  "tags": ["round", "soft", "basic"],
+  "graph": { /* Graph<BrushWireType> serialization */ },
+  "resources": [
+    { "name": "tip.png", "kind": "brush_tip", "path": "resources/tip.png" }
+  ]
+}
+```
+
+**Why ZIP, not flat JSON:** Brush tip images and textures are binary blobs — embedding them as base64 in JSON bloats the file and makes diffs unreadable. ZIP keeps the JSON human-readable and the binaries efficient. This matches how KPP (PNG+XML), ORA (ZIP+XML), and GIMP's GIH formats handle embedded resources.
+
+### Create
+
+- `crates/darkly/src/brush/preset.rs` — `BrushPreset` struct (name, category, author, description, tags, graph, resources), `PresetResource` struct, `save(path)`, `load(path)`, format version handling
+- `crates/darkly/src/brush/preset_library.rs` — `PresetLibrary` (scan directory, list presets, load by name, save new)
+
+### Modify
+
+- `crates/darkly/src/brush/mod.rs` — add `pub mod preset; pub mod preset_library;`
+- `crates/darkly/src/engine/mod.rs` — add `preset_library: PresetLibrary`, methods for save/load/list
+- `frontend/wasm/src/api.rs` — add `brush_preset_list()`, `brush_preset_load(name)`, `brush_preset_save(json)`, `brush_preset_export(name) -> Vec<u8>`, `brush_preset_import(bytes)`
+
+### Verify
+
+- **Round-trip test:** Create graph programmatically → save to `.darkly-brush` → load back → assert graph equals original (node types, connections, param values, positions all match)
+- **Round-trip with resources:** Save preset with embedded brush tip image → load → verify image bytes identical
+- **Format version test:** Load a v1 preset, verify forward-compat strategy (unknown fields ignored, missing optional fields defaulted)
+- **Corrupt file handling:** Truncated ZIP, missing preset.json, malformed JSON — all return clean errors
+- **Library scanning:** Create temp directory with multiple presets, verify `PresetLibrary` discovers and lists them all
+- **WASM bridge test:** Save via WASM → list → load → compile → paint — full stack round-trip
+
+---
+
+## Phase 8 — Stamp Tips
+
+**Goal:** Image-based dab sources. This is the big unlock for Krita brush compatibility — most pixel brush presets are a grayscale stamp image + dynamics.
+
+### Create
+
+- `crates/darkly/src/brush/nodes/stamp.rs` — GPU source node: loads brush tip texture, stamps it at dab position with size/rotation/mirror/ratio transforms. Inputs: size, rotation, mirror_x, mirror_y, ratio, opacity, color. Outputs: Texture, dab_size. Replaces `procedural.rs` as the dab source for image-based brushes.
+- `crates/darkly/src/brush/brush_tip.rs` — `BrushTip` enum (Auto { hardness, shape, spikes, ratio, fade }, Predefined { image, application_mode }), `BrushTipApplication` enum (AlphaMask, ImageStamp, LightnessMap, GradientMap — per Krita's `enumBrushApplication`)
+- `shaders/brush/stamp.wgsl` — Sample brush tip texture, apply color + opacity, handle rotation/mirror/ratio transforms
+
+### Modify
+
+- `crates/darkly/src/brush/dab_pool.rs` — add brush tip texture upload and caching (separate from dab render targets)
+- `crates/darkly/src/brush/preset.rs` — handle brush tip images as preset resources
+
+### Key Design
+
+- Brush tip textures uploaded once and cached — not per-dab
+- Alpha mask mode: tip grayscale = opacity, color from paint color (most common)
+- Image stamp mode: tip RGB used directly (for colored brushes)
+- Lightness map mode: tip luminance modulates paint color lightness (Krita's default for color smudge)
+- Auto brush tips generated on the GPU as a texture at brush load time, then treated identically to predefined tips
+
+### Verify
+
+- Load a grayscale PNG brush tip → paint with it → verify dab shape matches tip
+- Rotation dynamics: wire drawing_angle → stamp rotation → verify dabs rotate along stroke
+- Mirror: enable mirror_x → verify horizontally flipped dabs
+- Round-trip: save preset with embedded tip → load → verify painting identical
+- Compare output with Krita using same tip image at same settings
+
+---
+
+## Phase 9 — Texture Overlay
+
+**Goal:** Pattern/grain textures applied to dabs. Needed for pencil, charcoal, canvas-texture brushes.
+
+### Create
+
+- `crates/darkly/src/brush/nodes/texture_overlay.rs` — GPU node: takes dab Texture + pattern Texture, composites pattern onto dab. Inputs: dab, pattern, scale, offset_x, offset_y, strength, blend_mode. Output: Texture. Blend modes: Multiply, Subtract, Overlay (per Krita's `KisTextureOption`)
+- `crates/darkly/src/brush/pattern.rs` — `BrushPattern` (tiling image, scale, offset mode: fixed / random per dab / follow stroke)
+- `shaders/brush/texture_overlay.wgsl` — Pattern sampling with tiling, blend with dab
+
+### Modify
+
+- `crates/darkly/src/brush/preset.rs` — handle pattern textures as preset resources
+
+### Verify
+
+- Apply pencil-grain texture to round brush → verify visible grain in strokes
+- Scale parameter changes grain size
+- Multiply vs overlay produce visually distinct results
+- Round-trip: save preset with pattern → load → verify identical
+
+---
+
+## Phase 10 — KPP Import
+
+**Goal:** Load Krita `.kpp` preset files and convert them to `.darkly-brush` presets. This is the "download from krita-artists.org and paint" milestone.
+
+### Create
+
+- `crates/darkly/src/brush/kpp_import.rs` — `import_kpp(bytes) -> Result<BrushPreset>`: extract PNG thumbnail, parse embedded XML, extract base64-encoded resources (brush tips, patterns, gradients), map Krita settings to a node graph
+- `crates/darkly/src/brush/kpp_mapping.rs` — `KritaSettings → Graph<BrushWireType>` translation: for each Krita option (size, opacity, flow, rotation, scatter, etc.), emit the corresponding nodes + connections. Sensor curve XML → Curve nodes with matching gamma/control points.
+
+### Krita Engine Coverage
+
+**Pixel brush (`paintopid="paintbrush"`):**
+- Auto brush → Procedural node with matching hardness/shape
+- Predefined brush → Stamp node with extracted tip image
+- All standard options: size, opacity, flow, softness, rotation, scatter, spacing, ratio, mirror
+- Sensor curves: pressure, speed, distance, tilt, drawing_angle, fuzzy, fade, time
+- Texture option → Texture Overlay node
+
+**Color smudge (`paintopid="colorsmudge"`):**
+- Same brush tip handling as pixel brush
+- Smudge length, color rate → Smudge node params
+- Smear vs dulling mode
+- Lightness map application mode
+
+**Unsupported engines (graceful fallback):**
+- MyPaint, hairy, spray, sketch, etc. → return `Err` with engine name, or fall back to a basic round brush with a warning
+
+### Modify
+
+- `frontend/wasm/src/api.rs` — add `brush_import_kpp(bytes) -> Result<String>` (returns preset JSON or error)
+- Preset library — imported presets saved as `.darkly-brush` for future loads
+
+### Verify
+
+- **Known-good presets:** Download 5-10 popular brush packs from krita-artists.org, import each preset, verify it loads without error and produces reasonable output
+- **Property coverage:** For each Krita option type, create a minimal KPP exercising that option → import → verify the corresponding node graph is correct
+- **Sensor curves:** Create KPP with custom pressure→size curve → import → verify Curve node control points match
+- **Embedded resources:** KPP with predefined brush tip + texture → import → verify both extracted and wired into graph
+- **Round-trip:** Import KPP → save as .darkly-brush → load → verify identical graph
+- **Unsupported engine:** Import KPP with hairy brush engine → verify clean error message
+
+---
+
+## Phase 11 — Color Smudge
+
+**Goal:** Canvas readback + paint blending. This unlocks the second most popular Krita engine (~25% of community presets).
+
+### Create
+
+- `crates/darkly/src/brush/nodes/smudge.rs` — GPU node: reads canvas pixels under dab position, blends with paint color according to smudge_length and color_rate. Inputs: position, dab_size, smudge_length (0=full smudge, 1=no smudge), color_rate (how much paint color mixed in), paint_color, mode (dulling/smear). Output: Color (blended color to use for this dab).
+- `shaders/brush/smudge_readback.wgsl` — Read canvas region, average/sample, blend with paint
+
+### Key Design
+
+- **Dulling mode:** Average canvas color under dab → blend with paint color at color_rate → use as dab color. Simple, most common.
+- **Smear mode:** Read canvas at offset position (previous dab location → current), producing a directional smear. More complex, used for oil-paint effects.
+- Per Krita's `KisColorSmudgeStrategy` hierarchy — start with dulling, add smear as a follow-up.
+- Canvas readback requires a copy of the canvas region before compositing the current dab — coordinate with `color_output.rs` to read-before-write.
+
+### Verify
+
+- Paint with smudge brush over existing colors → verify color pickup and blending
+- Smudge length 0 → pure smudge (no paint), 1 → pure paint (no smudge)
+- Color rate controls paint/canvas mix ratio
+- Import Krita color smudge preset → verify reasonable output
+- Performance: smudge readback should not significantly degrade painting FPS
+
+---
+
+## Phase 12 — Smoothing + Stabilizer
+
+**Goal:** Stroke smoothing algorithms for clean lines. Not required for Krita import compatibility, but dramatically improves stroke quality.
+
+### Create
+
+- `crates/darkly/src/brush/smoothing.rs` — `SmoothingMode` enum:
+  - `WeightedAverage { factor }` — exponential moving average on position (current basic impl)
+  - `PulledString { distance }` — cursor must travel `distance` pixels before the brush follows; produces very smooth curves
+  - `SpringDynamics { mass, drag }` — physical spring simulation; the Procreate taffy feel
+- Retroactive smoothing via `StrokeRecord::replay()` — change smoothing mid-stroke and watch it update
+
+### Modify
+
+- `crates/darkly/src/brush/stroke_engine.rs` — plug in smoothing modes, replace current hardcoded weighted average
+
+### Verify
+
+- Each mode produces visibly different stroke character
+- Pulled string: sharp corners become smooth curves
+- Spring dynamics: overshoots and settles like physical brush
+- Retroactive: change smoothing params → stroke re-renders with new smoothing
+
+---
+
 ## Later Phases (Outlined)
 
-**7a: Stamp Tips + Texture** — `nodes/stamp.rs` (image dab source), `nodes/texture_overlay.rs` (paper grain), DabTexturePool image uploads
+**13: Color Dynamics** — hue/saturation/value randomization per dab, color mixing along stroke, gradient mapping
 
-**7b: Smudge** — `nodes/smudge.rs` (canvas readback under dab, blend with paint), dulling vs smear modes per Krita's `KisColorSmudgeStrategy`
+**14: Stroke Re-rendering** — keep StrokeRecord in undo stack entry, "edit last stroke" mode (re-render with tweaked parameters), discard vectors on next action
 
-**7c: Smoothing + Stabilizer** — weighted average, pulled string, spring dynamics; retroactive smoothing via StrokeRecord replay (the Procreate taffy feel)
+**15: Brush Builder Polish** — refined UI, curve editor widget, preset browser with thumbnails, drag-drop import, category filtering
 
-**7d: Presets** — `.darkly-brush` format (JSON graph + binary resources), save/load, default library
-
-**7e: Stroke Re-rendering** — keep StrokeRecord in undo stack entry, "edit last stroke" mode (re-render with tweaked parameters), discard vectors on next action
-
-**7f: Brush Builder Polish** — refined UI, curve editor widget, preset thumbnails, import/export
+**16: Default Brush Library** — ship a curated set of `.darkly-brush` presets covering common use cases (pencil, ink, watercolor, airbrush, eraser, smudge, textured)
 
 ---
 
 ## Dependency Graph
 
 ```
-Phase 1 (nodegraph infra)
+Phase 1 (nodegraph infra)                    ✓ complete
     ↓
-Phase 2 (brush wire types + CPU nodes)
+Phase 2 (brush wire types + CPU nodes)       ✓ complete
     ↓
-Phase 3 (GPU stage nodes)
+Phase 3 (GPU stage nodes)                    ✓ complete
     ↓
-Phase 4 (stroke engine + engine integration)
+Phase 4 (stroke engine + integration)        ✓ complete
     ↓
-Phase 5 (WASM bridge + brush builder UI)  ← visual debugging from here on
+Phase 5 (WASM bridge + brush builder UI)     ✓ complete
     ↓
-Phase 6 (dynamics + math nodes)  ← testable in brush builder
+Phase 6 (dynamics + math nodes)              ← CURRENT
     ↓
-Phase 7a-f (stamps, smudge, stabilizer, presets, re-rendering, UI polish)
+Phase 7 (preset format + round-trip)         ← save/load our own .darkly-brush
+    ↓
+Phase 8 (stamp tips)                         ← image-based dabs, big Krita compat unlock
+    ↓
+Phase 9 (texture overlay)                    ← pencil/canvas grain
+    ↓
+Phase 10 (KPP import)                        ← "download and paint" milestone
+    ↓
+Phase 11 (color smudge)                      ← ~90% of Krita brush packs work
+    ↓
+Phase 12 (smoothing + stabilizer)            ← stroke quality
+    ↓
+Phase 13-16 (color dynamics, re-rendering, UI polish, default library)
 ```
+
+### Parallelizable Work
+
+Some phases can overlap:
+- **Phase 7 + 8** can be developed together — stamp node is a new node type that immediately tests the preset resource system
+- **Phase 9 + 10** can overlap — texture overlay is needed by KPP import, but basic KPP import (brushes without texture) can land first
+- **Phase 12** is independent of phases 10-11 and can be done any time after phase 6
 
 ## Critical Existing Files
 
