@@ -107,7 +107,17 @@
         }
     }
 
+    /** Track pointer type so dragstart can reject non-mouse input.
+     *  Chromium's Wayland backend misroutes pen-initiated drags through
+     *  kMouse, putting the drag controller into an invalid state that
+     *  freezes the browser's input pipeline. */
+    let lastPointerType = '';
+
     function onDragStart(e: DragEvent) {
+        if (lastPointerType !== 'mouse') {
+            e.preventDefault();
+            return;
+        }
         e.dataTransfer?.setData('text/plain', String(group.id));
     }
 
@@ -167,6 +177,7 @@
         onclick={setActive}
         ondblclick={startRename}
         onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActive(); }}}
+        onpointerdown={(e: PointerEvent) => { lastPointerType = e.pointerType; }}
         role="button"
         tabindex="0"
         draggable="true"
@@ -181,6 +192,7 @@
             class="vis-btn"
             class:hidden={!group.visible}
             onclick={toggleVisibility}
+            onpointerdown={(e: PointerEvent) => { e.stopPropagation(); }}
             title="Toggle visibility"
         >
             {group.visible ? '\u{1F441}' : '\u{2014}'}
@@ -340,10 +352,12 @@
         border: none;
         color: #888;
         cursor: pointer;
-        padding: 0;
+        padding: 4px 6px;
+        margin: -4px 0 -4px -6px;
         font-size: 12px;
-        width: 18px;
+        min-width: 28px;
         text-align: center;
+        flex-shrink: 0;
     }
     .vis-btn.hidden { color: #444; }
 

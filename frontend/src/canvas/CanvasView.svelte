@@ -30,6 +30,14 @@
                 canvas.width = w;
                 canvas.height = h;
                 app.handle?.resize(w, h);
+                // Re-sync the Rust view transform with the new screen dimensions
+                // so the compositor and JS coordinate conversion agree.
+                const dpr2 = dpr;
+                app.handle?.set_view_transform(
+                    app.panX * dpr2, app.panY * dpr2,
+                    app.zoom, app.rotation,
+                    w, h,
+                );
                 app.requestFrame();
             }
         });
@@ -163,6 +171,24 @@
         app.requestFrame();
     }
 
+    function onPointerCancel(e: PointerEvent) {
+        // Pen/touch can fire pointercancel instead of pointerup (pen lifted
+        // out of range, system gesture, browser intervention).  Clean up
+        // the same state that onPointerUp would.
+        if (e.pointerType === 'touch') {
+            nav.onTouchPointerUp(e);
+        }
+        if (nav.isNavigating) {
+            nav.onPointerUp();
+            return;
+        }
+        const ctx = getToolContext();
+        if (!ctx) return;
+        const tool = toolRegistry.get(app.activeToolId);
+        tool?.onPointerUp(ctx, e);
+        app.requestFrame();
+    }
+
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
 
     function onKeyDown(e: KeyboardEvent) {
@@ -228,6 +254,7 @@
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
+        onpointercancel={onPointerCancel}
         onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); app.requestFrame(); }}
     ></canvas>
     {#if canvas}
