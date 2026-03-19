@@ -1,3 +1,4 @@
+mod brush_graph;
 mod clipboard;
 mod floating;
 mod layers;
@@ -15,6 +16,7 @@ pub use types::{
 use crate::brush::dab_pool::DabTexturePool;
 use crate::brush::pipelines::BrushPipelines;
 use crate::brush::stroke_engine::StrokeEngine;
+use crate::brush::wire::BrushWireType;
 use crate::clipboard::Clipboard;
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
@@ -149,11 +151,14 @@ pub struct DarklyEngine {
     /// Active GPU stroke state (replaces CPU transaction for PaintCircle/EraseCircle).
     pub(crate) gpu_stroke: Option<GpuStrokeState>,
 
-    // --- Brush Engine (Phase 4) ---
+    // --- Brush Engine (Phase 4-5) ---
     pub(crate) dab_pool: DabTexturePool,
     pub(crate) brush_pipelines: BrushPipelines,
     /// Active brush stroke engine (only during a BrushStroke operation).
     pub(crate) brush_stroke_engine: Option<StrokeEngine>,
+    /// The brush graph that will be compiled into a runner on each stroke start.
+    /// Defaults to `brush::default_graph()`.  Updated via `set_brush_graph()`.
+    pub(crate) active_brush_graph: crate::nodegraph::Graph<BrushWireType>,
 
     // --- Async readback ---
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
@@ -195,6 +200,7 @@ impl DarklyEngine {
             dab_pool,
             brush_pipelines,
             brush_stroke_engine: None,
+            active_brush_graph: crate::brush::default_graph(),
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],

@@ -1,3 +1,18 @@
+//! WASM bridge for the Darkly engine.
+//!
+//! ## Serialization conventions
+//!
+//! - **Rust → JS** (queries): return `String` via `serde_json::to_string`.
+//!   The JS side calls `JSON.parse()`.  This avoids `serde_wasm_bindgen`
+//!   edge cases (e.g. `HashMap<NonStringKey, _>` → JS `Map`).
+//!
+//! - **JS → Rust** (commands): accept `JsValue` and deserialize with
+//!   `serde_wasm_bindgen::from_value`.  This direction is reliable because
+//!   JS plain objects always map to Rust structs/maps correctly.
+//!
+//! - **Hot-path primitives** (overlays): manual `js_sys::Reflect` extraction
+//!   for zero-allocation, per-frame data.
+
 use darkly::document::MoveTarget;
 use darkly::engine::{DarklyEngine, StrokeOp};
 use darkly::gpu::context::GpuContext;
@@ -320,18 +335,64 @@ impl DarklyHandle {
         self.0.update_veil(index as usize, &pv)
     }
 
-    // --- Queries (serialize to JS) ---
+    // --- Brush Graph (Phase 5) ---
 
-    pub fn layer_tree(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.0.layer_tree()).unwrap()
+    /// Return metadata for all registered brush node types as a JSON string.
+    pub fn brush_node_types(&self) -> String {
+        let val = self.0.brush_node_types();
+        serde_json::to_string(&val).unwrap_or_else(|_| "[]".into())
     }
 
-    pub fn veil_list(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.0.veil_list()).unwrap()
+    /// Return the default brush graph as a JSON string.
+    pub fn brush_graph_default(&self) -> String {
+        let val = self.0.default_brush_graph();
+        serde_json::to_string(&val).unwrap_or_else(|_| "null".into())
     }
 
-    pub fn veil_types(&self) -> JsValue {
-        serde_wasm_bindgen::to_value(&self.0.veil_types()).unwrap()
+    /// Return the currently active brush graph as a JSON string.
+    pub fn brush_graph_active(&self) -> String {
+        serde_json::to_string(self.0.active_brush_graph_ref()).unwrap_or_else(|_| "null".into())
+    }
+
+    /// Validate a brush graph JSON string.  Returns null on success or an error string.
+    pub fn brush_graph_validate(&self, json: &str) -> JsValue {
+        match self.0.validate_brush_graph(json) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    /// Compile a brush graph from JSON and set it as the active brush.
+    /// Returns null on success or an error string.
+    pub fn brush_graph_compile(&mut self, json: &str) -> JsValue {
+        match self.0.set_brush_graph(json) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    /// Reset the active brush graph to the built-in default.
+    pub fn brush_graph_reset(&mut self) {
+        self.0.reset_brush_graph();
+    }
+
+    // --- Queries ---
+    // Rust→JS serialization uses JSON strings (serde_json).  This avoids
+    // serde_wasm_bindgen edge cases (e.g. HashMap with non-string keys
+    // becomes a JS Map instead of a plain object) and gives a single,
+    // predictable convention: all query methods return `String`, JS calls
+    // `JSON.parse()`.
+
+    pub fn layer_tree(&self) -> String {
+        serde_json::to_string(&self.0.layer_tree()).unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn veil_list(&self) -> String {
+        serde_json::to_string(&self.0.veil_list()).unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn veil_types(&self) -> String {
+        serde_json::to_string(&self.0.veil_types()).unwrap_or_else(|_| "[]".into())
     }
 
     // --- Thumbnails ---

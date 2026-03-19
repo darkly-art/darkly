@@ -187,9 +187,9 @@ impl DarklyEngine {
         color: [f32; 4],
         canvas_w: u32, canvas_h: u32,
     ) {
-        // Lazy-init: compile the default brush graph on first BrushStroke event.
+        // Lazy-init: compile the active brush graph on first BrushStroke event.
         if self.brush_stroke_engine.is_none() {
-            let runner = match crate::brush::default_runner() {
+            let runner = match crate::brush::compile_graph(&self.active_brush_graph) {
                 Ok(r) => r,
                 Err(e) => {
                     log::error!("brush graph compilation failed: {e:?}");

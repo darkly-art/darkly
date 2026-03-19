@@ -108,15 +108,19 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
 
     let pen_reg = registry.get("pen_input").unwrap();
     let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+    graph.nodes.get_mut(&pen).unwrap().position = [40.0, 40.0];
 
     let color_reg = registry.get("paint_color").unwrap();
     let paint_color = graph.add_node("paint_color", color_reg.ports.clone(), vec![]);
+    graph.nodes.get_mut(&paint_color).unwrap().position = [40.0, 200.0];
 
     let proc_reg = registry.get("procedural").unwrap();
     let procedural = graph.add_node("procedural", proc_reg.ports.clone(), vec![]);
+    graph.nodes.get_mut(&procedural).unwrap().position = [280.0, 40.0];
 
     let out_reg = registry.get("color_output").unwrap();
     let color_output = graph.add_node("color_output", out_reg.ports.clone(), vec![]);
+    graph.nodes.get_mut(&color_output).unwrap().position = [520.0, 40.0];
 
     // pressure → procedural.size
     graph.connect(
@@ -151,12 +155,39 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     graph
 }
 
-/// Compile the default brush graph into a ready-to-run runner.
-pub fn default_runner() -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
-    let graph = default_graph();
+/// Compile any brush graph into a ready-to-run runner.
+pub fn compile_graph(
+    graph: &crate::nodegraph::Graph<BrushWireType>,
+) -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
     let registry = BrushNodeRegistry::new();
     let evaluators = default_evaluators();
-    eval::BrushGraphRunner::new(&graph, registry.as_map(), evaluators)
+    eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)
+}
+
+/// Compile the default brush graph into a ready-to-run runner.
+pub fn default_runner() -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
+    compile_graph(&default_graph())
+}
+
+/// Deserialize a brush graph from JSON and compile it.
+///
+/// Returns the compiled runner or a human-readable error string.
+pub fn compile_from_json(json: &str) -> Result<eval::BrushGraphRunner, String> {
+    let graph: crate::nodegraph::Graph<BrushWireType> =
+        serde_json::from_str(json).map_err(|e| format!("invalid graph JSON: {e}"))?;
+    compile_graph(&graph).map_err(|e| format!("graph compilation failed: {e}"))
+}
+
+/// Validate a brush graph from JSON without compiling.
+///
+/// Returns Ok(()) or a human-readable error string.
+pub fn validate_graph_json(json: &str) -> Result<(), String> {
+    let graph: crate::nodegraph::Graph<BrushWireType> =
+        serde_json::from_str(json).map_err(|e| format!("invalid graph JSON: {e}"))?;
+    let registry = BrushNodeRegistry::new();
+    crate::nodegraph::compile(&graph, registry.as_map())
+        .map_err(|e| format!("graph validation failed: {e}"))?;
+    Ok(())
 }
 
 #[cfg(test)]

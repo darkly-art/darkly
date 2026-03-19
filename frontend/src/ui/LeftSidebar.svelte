@@ -1,5 +1,6 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
+    import { brushGraph } from '../state/brush_graph.svelte';
     import { toolRegistry } from '../tools/registry';
     import ColorPicker from './ColorPicker.svelte';
 
@@ -69,6 +70,16 @@
             bind:value={app.brushOpacity}
         />
     </div>
+
+    <!-- Brush builder toggle -->
+    <button
+        class="tool-btn brush-builder-btn"
+        class:active={brushGraph.isOpen}
+        onclick={() => { brushGraph.isOpen = !brushGraph.isOpen; if (brushGraph.isOpen && !brushGraph.graph) brushGraph.init(); }}
+        title="Brush Builder"
+    >
+        N
+    </button>
 </div>
 
 <style>
@@ -163,6 +174,10 @@
     .tool-btn.active {
         background: #3a3a3a;
         border-color: #6a6aff;
+    }
+
+    .brush-builder-btn {
+        margin-top: 8px;
     }
 
     .slider-group {

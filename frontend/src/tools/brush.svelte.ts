@@ -1,5 +1,6 @@
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
+import { brushGraph } from '../state/brush_graph.svelte';
 
 export const MIN_SIZE = 1;
 export const MAX_SIZE = 500;
@@ -39,6 +40,13 @@ export const brushTool: Tool = {
     name: 'Brush',
     icon: 'B',
     hotkeyAction: 'brushTool',
+
+    onActivate(_ctx) {
+        // Initialize brush graph state from WASM on first activation.
+        if (!brushGraph.graph && app.handle) {
+            brushGraph.init();
+        }
+    },
 
     onPointerDown(ctx, e, cx, cy) {
         const layerId = app.activeLayerId;

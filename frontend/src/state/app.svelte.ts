@@ -52,15 +52,19 @@ class AppState {
 
     refreshLayerTree() {
         if (this.handle) {
-            const tree = this.handle.layer_tree();
-            this.layerTree = Array.isArray(tree) ? tree : [];
+            try {
+                const tree = JSON.parse(this.handle.layer_tree());
+                this.layerTree = Array.isArray(tree) ? tree : [];
+            } catch { this.layerTree = []; }
         }
     }
 
     refreshVeilList() {
         if (this.handle) {
-            const list = this.handle.veil_list();
-            this.veilList = Array.isArray(list) ? list : [];
+            try {
+                const list = JSON.parse(this.handle.veil_list());
+                this.veilList = Array.isArray(list) ? list : [];
+            } catch { this.veilList = []; }
         }
     }
 

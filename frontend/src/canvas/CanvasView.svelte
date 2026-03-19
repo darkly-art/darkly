@@ -18,6 +18,7 @@
         const rect = canvas.getBoundingClientRect();
         const w = Math.round(rect.width * dpr);
         const h = Math.round(rect.height * dpr);
+        if (w < 1 || h < 1) return; // WebGPU cannot create 0-dimension textures.
         if (canvas.width !== w || canvas.height !== h) {
             canvas.width = w;
             canvas.height = h;
@@ -234,7 +235,7 @@
         align-items: center;
         overflow: hidden;
         position: relative;
-        min-height: 0;
+        min-height: 64px;
         height: 100%;
     }
 

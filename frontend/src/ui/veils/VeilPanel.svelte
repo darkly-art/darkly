@@ -11,7 +11,9 @@
 
     $effect(() => {
         if (app.handle) {
-            veilTypes = app.handle.veil_types();
+            try {
+                veilTypes = JSON.parse(app.handle.veil_types());
+            } catch { veilTypes = []; }
             refresh();
         }
     });

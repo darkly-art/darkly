@@ -183,6 +183,13 @@ impl DarklyEngine {
             self.compositor.mark_dirty();
         }
 
+        // Skip rendering when the surface has zero dimensions (e.g. canvas
+        // squeezed to 0 height by a UI panel).  WebGPU cannot create
+        // 0-dimension textures and attempting to do so corrupts the device.
+        if self.gpu.surface_config.width == 0 || self.gpu.surface_config.height == 0 {
+            return self.readbacks.has_pending();
+        }
+
         self.compositor.update_animations(&self.gpu.queue, time_secs);
         self.compositor.render(
             &self.gpu.device,
@@ -197,6 +204,9 @@ impl DarklyEngine {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        if width == 0 || height == 0 {
+            return; // WebGPU cannot create 0-dimension textures.
+        }
         self.gpu.resize(width, height);
         self.compositor.veil_chain_mut().resize(&self.gpu.device, &self.gpu.queue, width, height);
         self.compositor.mark_needs_present();
