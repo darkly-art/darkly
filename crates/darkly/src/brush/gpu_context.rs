@@ -8,19 +8,38 @@ use super::pipelines::BrushPipelines;
 
 /// Everything a GPU brush node needs to record render passes.
 ///
-/// Created per-dab by the stroke engine (Phase 4) and passed to
-/// `BrushGraphRunner::execute_gpu()`.  The encoder accumulates all
-/// render passes for one dab — the caller submits the encoder after
-/// all dabs for the current `move_to()` are processed.
+/// Created once per `move_to()` by the painting layer and passed to
+/// the stroke engine.  Each dab records its render passes into the
+/// encoder, then calls `submit_and_reset()` to flush — this ensures
+/// `queue.write_buffer` uniform data is consumed before the next dab
+/// overwrites it.
 pub struct BrushGpuContext<'a> {
-    pub encoder: &'a mut wgpu::CommandEncoder,
+    pub encoder: wgpu::CommandEncoder,
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
     pub dab_pool: &'a mut DabTexturePool,
     pub pipelines: &'a BrushPipelines,
     pub canvas_view: &'a wgpu::TextureView,
+    /// The canvas layer texture (needed for copy_texture_to_texture).
+    pub canvas_texture: &'a wgpu::Texture,
     pub canvas_width: u32,
     pub canvas_height: u32,
     /// Selection mask bind group (or default 1x1 white when no selection).
     pub selection_bind_group: &'a wgpu::BindGroup,
+}
+
+impl<'a> BrushGpuContext<'a> {
+    /// Submit the current encoder and create a fresh one.
+    ///
+    /// Must be called after each dab so that `queue.write_buffer` uniform
+    /// writes are consumed before the next dab overwrites them.
+    pub fn submit_and_reset(&mut self) {
+        let finished = std::mem::replace(
+            &mut self.encoder,
+            self.device.create_command_encoder(
+                &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
+            ),
+        );
+        self.queue.submit([finished.finish()]);
+    }
 }

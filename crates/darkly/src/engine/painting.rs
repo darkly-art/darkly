@@ -213,36 +213,36 @@ impl DarklyEngine {
             ..Default::default()
         };
 
-        // Get the canvas texture view for compositing.
-        let canvas_view = if mask_editing {
+        // Get the canvas texture and view for compositing.
+        let layer_tex = if mask_editing {
             match self.compositor.mask_texture(layer_id) {
-                Some(t) => t.view.clone(),
+                Some(t) => t,
                 None => return,
             }
         } else {
             match self.compositor.layer_texture(layer_id) {
-                Some(t) => t.view.clone(),
+                Some(t) => t,
                 None => return,
             }
         };
+        let canvas_view = layer_tex.view.clone();
+        let canvas_texture = &layer_tex.texture;
 
         // Take the stroke engine out to avoid borrow conflicts.
         let mut engine = self.brush_stroke_engine.take().unwrap();
 
-        // Create a command encoder for all dab passes in this move_to.
-        let mut encoder = self.gpu.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor { label: Some("brush-stroke") },
-        );
-
         let sel_bg = &self.brush_pipelines.default_selection_bind_group;
         {
             let mut gpu_ctx = BrushGpuContext {
-                encoder: &mut encoder,
+                encoder: self.gpu.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
+                ),
                 device: &self.gpu.device,
                 queue: &self.gpu.queue,
                 dab_pool: &mut self.dab_pool,
                 pipelines: &self.brush_pipelines,
                 canvas_view: &canvas_view,
+                canvas_texture,
                 canvas_width: canvas_w,
                 canvas_height: canvas_h,
                 selection_bind_group: sel_bg,
@@ -250,8 +250,6 @@ impl DarklyEngine {
 
             engine.move_to(info, &mut gpu_ctx);
         }
-
-        self.gpu.queue.submit([encoder.finish()]);
 
         // Put the engine back.
         self.brush_stroke_engine = Some(engine);

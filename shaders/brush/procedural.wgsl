@@ -7,7 +7,7 @@ struct DabUniforms {
     radius: f32,         // SDF circle radius in pixels
     softness: f32,       // edge softness in pixels (min 1.0 for AA)
     opacity: f32,        // dab opacity (0-1)
-    color: vec4f,        // RGBA paint color (straight alpha)
+    color: vec4f,        // RGBA paint color (straight alpha, premultiplied on output)
 }
 
 @group(0) @binding(0) var<uniform> u: DabUniforms;
@@ -20,7 +20,7 @@ struct DabUniforms {
     let coverage = 1.0 - smoothstep(u.radius - u.softness, u.radius, dist);
 
     let a = u.color.a * coverage * u.opacity;
-    return vec4f(u.color.rgb, a);
+    return vec4f(u.color.rgb * a, a); // premultiplied alpha
 }
 
 // Full-screen triangle — 3 vertices cover the viewport.

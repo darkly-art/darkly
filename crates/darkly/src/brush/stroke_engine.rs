@@ -187,6 +187,7 @@ impl StrokeEngine {
         self.runner.seed_sensors(info, self.record.color);
         self.runner.execute_cpu();
         self.runner.execute_gpu(gpu);
+        gpu.submit_and_reset();
         gpu.dab_pool.release_all();
 
         // Update dab diameter from the procedural node's output.
