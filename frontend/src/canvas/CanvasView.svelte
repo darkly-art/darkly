@@ -12,19 +12,27 @@
 
     let canvas = $state<HTMLCanvasElement>(undefined!);
 
+    // Deferred to avoid re-entering the WASM handle while it's borrowed
+    // (ResizeObserver can fire synchronously during layout, mid-render).
+    let resizePending = false;
     function syncCanvasSize() {
-        if (!canvas) return;
-        const dpr = window.devicePixelRatio || 1;
-        const rect = canvas.getBoundingClientRect();
-        const w = Math.round(rect.width * dpr);
-        const h = Math.round(rect.height * dpr);
-        if (w < 1 || h < 1) return; // WebGPU cannot create 0-dimension textures.
-        if (canvas.width !== w || canvas.height !== h) {
-            canvas.width = w;
-            canvas.height = h;
-            app.handle?.resize(w, h);
-            app.requestFrame();
-        }
+        if (resizePending) return;
+        resizePending = true;
+        requestAnimationFrame(() => {
+            resizePending = false;
+            if (!canvas) return;
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            const w = Math.round(rect.width * dpr);
+            const h = Math.round(rect.height * dpr);
+            if (w < 1 || h < 1) return;
+            if (canvas.width !== w || canvas.height !== h) {
+                canvas.width = w;
+                canvas.height = h;
+                app.handle?.resize(w, h);
+                app.requestFrame();
+            }
+        });
     }
 
     onMount(async () => {
