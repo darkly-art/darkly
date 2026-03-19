@@ -29,6 +29,7 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("dab", BrushWireType::Texture),
             PortDef::input("dab_size", BrushWireType::Scalar),
             PortDef::input("position", BrushWireType::Vec2),
+            PortDef::input("scatter_offset", BrushWireType::Vec2),
         ],
         params: &[],
         is_gpu: true,
@@ -53,7 +54,9 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             _ => return vec![],
         };
         let dab_diameter = ctx.input_f32("dab_size");
-        let position = ctx.input("position").as_vec2();
+        let base_position = ctx.input("position").as_vec2();
+        let scatter = ctx.input("scatter_offset").as_vec2();
+        let position = [base_position[0] + scatter[0], base_position[1] + scatter[1]];
 
         if dab_diameter <= 0.0 {
             return vec![];

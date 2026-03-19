@@ -15,6 +15,23 @@
     function onPointerDown(e: PointerEvent) {
         e.stopPropagation();
         e.preventDefault();
+
+        // If dragging from a connected input, detach the wire and drag from the output end.
+        if (port.dir === 'Input' && connected) {
+            const conn = brushGraph.connectionList.find(
+                c => c.to.node === nodeId && c.to.port === port.name
+            );
+            if (conn) {
+                brushGraph.disconnect(conn.from.node, conn.from.port, conn.to.node, conn.to.port);
+                brushGraph.draggingFrom = {
+                    node: conn.from.node,
+                    port: conn.from.port,
+                    dir: 'Output',
+                };
+                return;
+            }
+        }
+
         brushGraph.draggingFrom = {
             node: nodeId,
             port: port.name,
@@ -31,6 +48,7 @@
         // Can't connect to self.
         if (drag.node === nodeId && drag.port === port.name) {
             brushGraph.draggingFrom = null;
+            brushGraph.dragMouse = null;
             return;
         }
 
@@ -41,6 +59,7 @@
             brushGraph.connect(nodeId, port.name, drag.node, drag.port);
         }
         brushGraph.draggingFrom = null;
+        brushGraph.dragMouse = null;
     }
 </script>
 

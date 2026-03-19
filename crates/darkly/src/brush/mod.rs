@@ -84,6 +84,12 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("multiply".into(), Box::new(nodes::multiply::MultiplyEvaluator));
     map.insert("curve".into(), Box::new(nodes::curve::CurveEvaluator));
     map.insert("paint_color".into(), Box::new(nodes::paint_color::PaintColorEvaluator));
+    map.insert("add".into(), Box::new(nodes::add::AddEvaluator));
+    map.insert("clamp".into(), Box::new(nodes::clamp::ClampEvaluator));
+    map.insert("remap".into(), Box::new(nodes::remap::RemapEvaluator));
+    map.insert("mix".into(), Box::new(nodes::mix::MixEvaluator));
+    map.insert("split_vec2".into(), Box::new(nodes::split_vec2::SplitVec2Evaluator));
+    map.insert("make_color".into(), Box::new(nodes::make_color::MakeColorEvaluator));
     // GPU nodes.
     map.insert("procedural".into(), Box::new(nodes::procedural::ProceduralEvaluator));
     map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
@@ -150,6 +156,12 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     graph.connect(
         PortRef { node: pen, port: "position".into() },
         PortRef { node: color_output, port: "position".into() },
+    ).unwrap();
+
+    // procedural.scatter_offset → color_output.scatter_offset
+    graph.connect(
+        PortRef { node: procedural, port: "scatter_offset".into() },
+        PortRef { node: color_output, port: "scatter_offset".into() },
     ).unwrap();
 
     graph

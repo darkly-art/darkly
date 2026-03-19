@@ -2,24 +2,36 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::brush::BrushNodeRegistration`.
 
+pub mod add;
+pub mod clamp;
 pub mod color_output;
 pub mod constant;
 pub mod curve;
+pub mod make_color;
+pub mod mix;
 pub mod multiply;
 pub mod paint_color;
 pub mod pen_input;
 pub mod procedural;
+pub mod remap;
+pub mod split_vec2;
 
 use crate::brush::BrushNodeRegistration;
 
 pub fn registrations() -> Vec<BrushNodeRegistration> {
     vec![
+        add::register(),
+        clamp::register(),
         color_output::register(),
         constant::register(),
         curve::register(),
+        make_color::register(),
+        mix::register(),
         multiply::register(),
         paint_color::register(),
         pen_input::register(),
         procedural::register(),
+        remap::register(),
+        split_vec2::register(),
     ]
 }

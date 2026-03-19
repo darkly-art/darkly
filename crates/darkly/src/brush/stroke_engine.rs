@@ -17,6 +17,10 @@ use super::spacing::SpacingConfig;
 /// Reference maximum speed in px/sec for normalizing speed to 0-1.
 const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
 
+/// Reference fade distance in pixels.  The fade sensor goes from 0 to 1
+/// over this distance, then clamps at 1.  Configurable per-brush later.
+const FADE_DISTANCE_PX: f32 = 1000.0;
+
 /// Drives a single brush stroke from begin to end.
 ///
 /// Created by the engine at stroke start, fed pointer events via `move_to`,
@@ -48,6 +52,11 @@ pub struct StrokeEngine {
 
     /// Bounding rect of all dabs placed: [x, y, w, h]. None until first dab.
     stroke_rect: Option<[u32; 4]>,
+
+    /// Per-stroke random value (0-1), constant across all dabs.
+    fuzzy_stroke: f32,
+    /// Stroke seed for deterministic per-dab randomness.
+    stroke_seed: u32,
 }
 
 impl StrokeEngine {
@@ -62,6 +71,14 @@ impl StrokeEngine {
         spacing: SpacingConfig,
         smoothing_weight: f32,
     ) -> Self {
+        // Generate stroke seed from system time for deterministic PRNG.
+        // Uses web-time which is a drop-in replacement that works on WASM.
+        let stroke_seed = web_time::SystemTime::now()
+            .duration_since(web_time::SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u32)
+            .unwrap_or(42);
+        let fuzzy_stroke = Self::prng_f32(stroke_seed, 0);
+
         Self {
             runner,
             record: StrokeRecord::new(color, "default".into()),
@@ -75,7 +92,21 @@ impl StrokeEngine {
             dab_count: 0,
             stroke_start_time: None,
             stroke_rect: None,
+            fuzzy_stroke,
+            stroke_seed,
         }
+    }
+
+    /// Deterministic PRNG: hash seed + index to produce a 0-1 float.
+    /// Uses a simple xorshift-style hash for speed.
+    fn prng_f32(seed: u32, index: u32) -> f32 {
+        let mut h = seed.wrapping_add(index.wrapping_mul(2654435761));
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x45d9f3b);
+        h ^= h >> 16;
+        h = h.wrapping_mul(0x45d9f3b);
+        h ^= h >> 16;
+        (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
     }
 
     /// Default dab diameter for initial spacing (before the first dab is evaluated).
@@ -183,8 +214,14 @@ impl StrokeEngine {
 
     /// Evaluate the brush graph for a single dab at the given position.
     fn place_dab(&mut self, info: &PaintInformation, gpu: &mut BrushGpuContext) {
+        // Set per-dab randomness and fade sensor.
+        let mut dab_info = *info;
+        dab_info.fuzzy_dab = Self::prng_f32(self.stroke_seed, self.dab_count);
+        dab_info.fuzzy_stroke = self.fuzzy_stroke;
+        dab_info.fade = (dab_info.distance / FADE_DISTANCE_PX).min(1.0);
+
         self.runner.clear_slots();
-        self.runner.seed_sensors(info, self.record.color);
+        self.runner.seed_sensors(&dab_info, self.record.color);
         self.runner.execute_cpu();
         self.runner.execute_gpu(gpu);
         gpu.submit_and_reset();
@@ -247,6 +284,7 @@ impl StrokeEngine {
         self.stroke_start_time = None;
         self.stroke_rect = None;
         self.smoothed_pos = [0.0; 2];
+        // Preserve stroke_seed and fuzzy_stroke for deterministic replay.
 
         for event in &record.events {
             self.move_to(*event, gpu);

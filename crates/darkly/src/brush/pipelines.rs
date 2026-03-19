@@ -24,6 +24,8 @@ pub struct DabUniforms {
     pub softness: f32,       // edge softness in pixels
     pub opacity: f32,        // dab opacity (0-1)
     pub color: [f32; 4],     // RGBA paint color (straight alpha, premultiplied on output)
+    pub rotation: f32,       // dab rotation in radians
+    pub _pad: [f32; 3],      // padding to 16-byte alignment
 }
 
 /// Uniform data for the dab compositing shader.

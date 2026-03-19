@@ -454,9 +454,9 @@ Phase 4 (stroke engine + integration)        ✓ complete
     ↓
 Phase 5 (WASM bridge + brush builder UI)     ✓ complete
     ↓
-Phase 6 (dynamics + math nodes)              ← CURRENT
+Phase 6 (dynamics + math nodes)              ✓ complete
     ↓
-Phase 7 (preset format + round-trip)         ← save/load our own .darkly-brush
+Phase 7 (preset format + round-trip)         ← CURRENT
     ↓
 Phase 8 (stamp tips)                         ← image-based dabs, big Krita compat unlock
     ↓

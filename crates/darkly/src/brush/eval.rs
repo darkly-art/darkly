@@ -208,6 +208,9 @@ impl BrushGraphRunner {
                 "time" => ScalarValue::Scalar(info.time),
                 "position" => ScalarValue::Vec2(info.pos),
                 "index" => ScalarValue::Int(info.index as i32),
+                "fuzzy_dab" => ScalarValue::Scalar(info.fuzzy_dab),
+                "fuzzy_stroke" => ScalarValue::Scalar(info.fuzzy_stroke),
+                "fade" => ScalarValue::Scalar(info.fade),
                 _ => continue,
             };
             self.slots[*slot] = Some(value);

@@ -8,6 +8,10 @@ struct DabUniforms {
     softness: f32,       // edge softness in pixels (min 1.0 for AA)
     opacity: f32,        // dab opacity (0-1)
     color: vec4f,        // RGBA paint color (straight alpha, premultiplied on output)
+    rotation: f32,       // dab rotation in radians (used by stamp tips, no-op for SDF circle)
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: DabUniforms;

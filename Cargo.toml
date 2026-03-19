@@ -34,6 +34,7 @@ web-sys = { version = "=0.3.91", features = [
     "OffscreenCanvas",
     "console",
 ] }
+web-time = "1.1.0"
 console_error_panic_hook = "0.1"
 console_log = "1"
 

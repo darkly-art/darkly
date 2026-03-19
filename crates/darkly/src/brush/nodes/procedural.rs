@@ -28,9 +28,16 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("opacity", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0),
             PortDef::input("color", BrushWireType::Color),
+            PortDef::input("scatter_x", BrushWireType::Scalar)
+                .with_range(-1.0, 1.0, 0.0),
+            PortDef::input("scatter_y", BrushWireType::Scalar)
+                .with_range(-1.0, 1.0, 0.0),
+            PortDef::input("rotation", BrushWireType::Scalar)
+                .with_range(0.0, 1.0, 0.0),
             // Outputs.
             PortDef::output("dab", BrushWireType::Texture),
             PortDef::output("dab_size", BrushWireType::Scalar),
+            PortDef::output("scatter_offset", BrushWireType::Vec2),
         ],
         params: &[],
         is_gpu: true,
@@ -54,6 +61,9 @@ impl BrushNodeEvaluator for ProceduralEvaluator {
         let softness = ctx.input_f32("softness");
         let opacity = ctx.input_f32("opacity");
         let color = ctx.input("color").as_color();
+        let scatter_x = ctx.input_f32("scatter_x");
+        let scatter_y = ctx.input_f32("scatter_y");
+        let rotation_input = ctx.input_f32("rotation");
 
         // Map 0-1 size to pixel radius.  size=0 → 0.5px, size=1 → max/2 px.
         let max = MAX_DAB_SIZE as f32;
@@ -64,6 +74,14 @@ impl BrushNodeEvaluator for ProceduralEvaluator {
 
         // Actual dab diameter: tight to the SDF coverage region.
         let dab_diameter = ((2.0 * radius + 2.0).ceil() as u32).min(MAX_DAB_SIZE);
+
+        // Scatter: offset in pixels proportional to dab diameter.
+        // scatter_x/y range is -1..1, mapped to ±diameter.
+        let scatter_px_x = scatter_x * dab_diameter as f32;
+        let scatter_px_y = scatter_y * dab_diameter as f32;
+
+        // Rotation: 0-1 maps to 0-2π radians.
+        let rotation_rad = rotation_input * std::f32::consts::TAU;
 
         // Acquire a dab texture from the pool.
         let handle = gpu.dab_pool.acquire(gpu.device);
@@ -76,6 +94,8 @@ impl BrushNodeEvaluator for ProceduralEvaluator {
             softness: softness_px,
             opacity,
             color,
+            rotation: rotation_rad,
+            _pad: [0.0; 3],
         };
         gpu.pipelines.write_dab_uniforms(gpu.queue, &uniforms);
 
@@ -104,6 +124,7 @@ impl BrushNodeEvaluator for ProceduralEvaluator {
         vec![
             ("dab".into(), ScalarValue::Texture(handle)),
             ("dab_size".into(), ScalarValue::Scalar(dab_diameter as f32)),
+            ("scatter_offset".into(), ScalarValue::Vec2([scatter_px_x, scatter_px_y])),
         ]
     }
 }

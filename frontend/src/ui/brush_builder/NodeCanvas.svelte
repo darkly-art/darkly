@@ -69,6 +69,13 @@
             panX = panOriginX + (e.clientX - panStartX);
             panY = panOriginY + (e.clientY - panStartY);
         }
+        if (brushGraph.draggingFrom && canvasEl) {
+            const rect = canvasEl.getBoundingClientRect();
+            brushGraph.dragMouse = {
+                x: (e.clientX - rect.left - panX) / zoom,
+                y: (e.clientY - rect.top - panY) / zoom,
+            };
+        }
     }
 
     function onPointerUp(e: PointerEvent) {
@@ -79,6 +86,7 @@
         // Clear drag state on any mouseup over the canvas.
         if (brushGraph.draggingFrom) {
             brushGraph.draggingFrom = null;
+            brushGraph.dragMouse = null;
         }
     }
 
@@ -127,6 +135,8 @@
         {panX}
         {panY}
         {zoom}
+        draggingFrom={brushGraph.draggingFrom}
+        dragMouse={brushGraph.dragMouse}
     />
     {/key}
 

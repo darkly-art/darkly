@@ -77,6 +77,9 @@ class BrushGraphState {
     /** Node currently being dragged (for drag-to-connect). */
     draggingFrom = $state<{ node: number; port: string; dir: 'Input' | 'Output' } | null>(null);
 
+    /** Mouse position in graph coordinates during wire drag. */
+    dragMouse = $state<{ x: number; y: number } | null>(null);
+
     /** Currently selected node ID. */
     selectedNode = $state<number | null>(null);
 
