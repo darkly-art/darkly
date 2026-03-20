@@ -1,173 +1,222 @@
-<script lang="ts" module>
-    /** Context type for port offset registration. */
-    export interface PortRegistration {
-        register(nodeId: number, portName: string, dir: string, offset: { x: number; y: number }): void;
-        unregister(nodeId: number, portName: string, dir: string): void;
-    }
-</script>
-
 <script lang="ts">
-    import { setContext } from 'svelte';
-    import { brushGraph, WIRE_COLORS, type Connection } from '../../state/brush_graph.svelte';
-    import NodeWidget from './NodeWidget.svelte';
-    import WireRenderer from './WireRenderer.svelte';
+    import { onMount } from 'svelte';
+    import { brushGraph } from '../../state/brush_graph.svelte';
+    import { CanvasRenderer } from './canvas_renderer';
 
-    // --- Pan / zoom state ---
-    let panX = $state(0);
-    let panY = $state(0);
-    let zoom = $state(1);
+    let canvasEl: HTMLCanvasElement;
+    let renderer: CanvasRenderer;
 
-    let isPanning = $state(false);
-    let panStartX = 0;
-    let panStartY = 0;
-    let panOriginX = 0;
-    let panOriginY = 0;
+    // --- Interaction state (plain vars, no Svelte reactivity) ---
+    let isPanning = false;
+    let panStartX = 0, panStartY = 0, panOriginX = 0, panOriginY = 0;
 
-    let canvasEl: HTMLDivElement;
+    let isDraggingNode = false;
+    let dragNodeId = 0;
+    let dragStartGX = 0, dragStartGY = 0, nodeStartX = 0, nodeStartY = 0;
 
-    // --- Port offset cache ---
-    // Offsets are measured once per port on mount, relative to the node-widget origin.
-    // They never change (port layout within a node is fixed by CSS).
-    const portOffsets = new Map<string, { x: number; y: number }>();
-    let portOffsetsVersion = $state(0);
+    let isDraggingSlider = false;
+    let sliderNodeId = 0, sliderParamIdx = 0;
 
-    function portKey(nodeId: number, portName: string, dir: string): string {
-        return `${nodeId}:${portName}:${dir}`;
-    }
-
-    setContext<PortRegistration>('port-registration', {
-        register(nodeId, portName, dir, offset) {
-            portOffsets.set(portKey(nodeId, portName, dir), offset);
-            portOffsetsVersion++;
-        },
-        unregister(nodeId, portName, dir) {
-            portOffsets.delete(portKey(nodeId, portName, dir));
-            portOffsetsVersion++;
-        },
+    onMount(() => {
+        renderer = new CanvasRenderer(canvasEl);
+        renderer.start();
+        const ro = new ResizeObserver(() => renderer.resize());
+        ro.observe(canvasEl);
+        return () => { renderer.stop(); ro.disconnect(); };
     });
 
-    /** Resolve a port's position in graph coordinates from cached offsets. */
-    function resolvePortPosition(nodeId: number, portName: string, dir: string): { x: number; y: number } | null {
-        const offset = portOffsets.get(portKey(nodeId, portName, dir));
-        if (!offset) return null;
-        const node = brushGraph.graph?.nodes[String(nodeId)];
-        if (!node) return null;
-        return {
-            x: node.position[0] + offset.x,
-            y: node.position[1] + offset.y,
-        };
-    }
-
-    function bezierPathFromPoints(from: { x: number; y: number }, to: { x: number; y: number }): string {
-        const dx = Math.abs(to.x - from.x) * 0.5;
-        const cpx1 = from.x + Math.max(dx, 30);
-        const cpx2 = to.x - Math.max(dx, 30);
-        return `M ${from.x} ${from.y} C ${cpx1} ${from.y}, ${cpx2} ${to.y}, ${to.x} ${to.y}`;
-    }
-
-    // Pre-compute all wire paths. Depends on connections, node positions, and port offsets.
-    // Does NOT depend on panX/panY/zoom — those only affect the SVG <g transform>.
-    let wirePaths = $derived.by(() => {
-        const conns = brushGraph.connectionList;
-        const _v = portOffsetsVersion; // track offset changes
-        const _g = brushGraph.graph;   // track node position changes
-
-        const result: { path: string; color: string }[] = [];
-        for (const conn of conns) {
-            const from = resolvePortPosition(conn.from.node, conn.from.port, 'Output');
-            const to = resolvePortPosition(conn.to.node, conn.to.port, 'Input');
-            if (!from || !to) continue;
-            const wt = brushGraph.getPortWireType(conn.from.node, conn.from.port);
-            result.push({
-                path: bezierPathFromPoints(from, to),
-                color: wt ? (WIRE_COLORS[wt] ?? '#888') : '#888',
-            });
-        }
-        return result;
+    // Mark canvas dirty when graph state changes.
+    $effect(() => {
+        if (!renderer) return;
+        // Touch reactive values to subscribe.
+        brushGraph.graph;
+        brushGraph.selectedNode;
+        brushGraph.draggingFrom;
+        brushGraph.dragMouse;
+        renderer.markDirty();
     });
 
-    // Drag wire: compute from dragging port position + mouse.
-    let dragWire = $derived.by(() => {
-        const drag = brushGraph.draggingFrom;
-        const mouse = brushGraph.dragMouse;
-        if (!drag || !mouse) return null;
-        const _v = portOffsetsVersion;
-        const _g = brushGraph.graph;
-        const portPos = resolvePortPosition(drag.node, drag.port, drag.dir);
-        if (!portPos) return null;
-        const from = drag.dir === 'Output' ? portPos : mouse;
-        const to = drag.dir === 'Output' ? mouse : portPos;
-        const wt = brushGraph.getPortWireType(drag.node, drag.port);
-        return {
-            path: bezierPathFromPoints(from, to),
-            color: wt ? (WIRE_COLORS[wt] ?? '#888') : '#888',
-        };
-    });
+    // --- Events ---
 
     function onWheel(e: WheelEvent) {
         e.preventDefault();
+        if (!renderer) return;
         if (e.ctrlKey || e.metaKey) {
             const factor = e.deltaY > 0 ? 0.9 : 1.1;
-            const newZoom = Math.max(0.2, Math.min(3, zoom * factor));
+            const newZoom = Math.max(0.2, Math.min(3, renderer.zoom * factor));
             const rect = canvasEl.getBoundingClientRect();
             const mx = e.clientX - rect.left;
             const my = e.clientY - rect.top;
-            panX = mx - (mx - panX) * (newZoom / zoom);
-            panY = my - (my - panY) * (newZoom / zoom);
-            zoom = newZoom;
+            renderer.panX = mx - (mx - renderer.panX) * (newZoom / renderer.zoom);
+            renderer.panY = my - (my - renderer.panY) * (newZoom / renderer.zoom);
+            renderer.zoom = newZoom;
         } else {
-            panX -= e.deltaX;
-            panY -= e.deltaY;
+            renderer.panX -= e.deltaX;
+            renderer.panY -= e.deltaY;
         }
+        renderer.markDirty();
     }
 
     function onPointerDown(e: PointerEvent) {
+        if (!renderer) return;
+
+        // Middle-click → pan
         if (e.button === 1) {
             e.preventDefault();
             isPanning = true;
-            panStartX = e.clientX;
-            panStartY = e.clientY;
-            panOriginX = panX;
-            panOriginY = panY;
+            panStartX = e.clientX; panStartY = e.clientY;
+            panOriginX = renderer.panX; panOriginY = renderer.panY;
             canvasEl.setPointerCapture(e.pointerId);
-        } else if (e.button === 0) {
-            if (e.target === canvasEl || (e.target as HTMLElement).classList.contains('node-layer')) {
-                brushGraph.selectedNode = null;
+            return;
+        }
+        if (e.button !== 0) return;
+
+        const g = renderer.screenToGraph(e.clientX, e.clientY);
+        const hit = renderer.hitTest(g.x, g.y);
+
+        switch (hit.type) {
+            case 'remove-btn':
+                brushGraph.removeNode(hit.nodeId!);
+                break;
+
+            case 'node-header': {
+                brushGraph.selectedNode = hit.nodeId!;
+                isDraggingNode = true;
+                dragNodeId = hit.nodeId!;
+                dragStartGX = g.x; dragStartGY = g.y;
+                const n = brushGraph.graph?.nodes[String(hit.nodeId!)];
+                if (n) { nodeStartX = n.position[0]; nodeStartY = n.position[1]; }
+                canvasEl.setPointerCapture(e.pointerId);
+                break;
             }
+
+            case 'port': {
+                const { nodeId, portName, portDir } = hit;
+                // Detach if dragging from a connected input
+                if (portDir === 'Input' && brushGraph.isPortConnected(nodeId!, portName!, 'Input')) {
+                    const conn = brushGraph.connectionList.find(
+                        c => c.to.node === nodeId && c.to.port === portName,
+                    );
+                    if (conn) {
+                        brushGraph.disconnect(conn.from.node, conn.from.port, conn.to.node, conn.to.port);
+                        brushGraph.draggingFrom = { node: conn.from.node, port: conn.from.port, dir: 'Output' };
+                        canvasEl.setPointerCapture(e.pointerId);
+                        break;
+                    }
+                }
+                brushGraph.draggingFrom = { node: nodeId!, port: portName!, dir: portDir! };
+                canvasEl.setPointerCapture(e.pointerId);
+                break;
+            }
+
+            case 'param-checkbox': {
+                const n2 = brushGraph.graph?.nodes[String(hit.nodeId!)];
+                if (n2) {
+                    const v = !n2.params[hit.paramIndex!];
+                    brushGraph.setParamLocal(hit.nodeId!, hit.paramIndex!, v);
+                    brushGraph.setParam(hit.nodeId!, hit.paramIndex!, 'bool', v);
+                }
+                break;
+            }
+
+            case 'param-slider':
+                isDraggingSlider = true;
+                sliderNodeId = hit.nodeId!;
+                sliderParamIdx = hit.paramIndex!;
+                canvasEl.setPointerCapture(e.pointerId);
+                { const v = renderer.sliderValueAt(hit.nodeId!, hit.paramIndex!, g.x);
+                  if (v !== null) brushGraph.setParamLocal(hit.nodeId!, hit.paramIndex!, v); }
+                break;
+
+            case 'node-body':
+                brushGraph.selectedNode = hit.nodeId!;
+                break;
+
+            case 'none':
+                brushGraph.selectedNode = null;
+                break;
         }
     }
 
     function onPointerMove(e: PointerEvent) {
+        if (!renderer) return;
+
         if (isPanning) {
-            panX = panOriginX + (e.clientX - panStartX);
-            panY = panOriginY + (e.clientY - panStartY);
+            renderer.panX = panOriginX + (e.clientX - panStartX);
+            renderer.panY = panOriginY + (e.clientY - panStartY);
+            renderer.markDirty();
+            return;
         }
-        if (brushGraph.draggingFrom && canvasEl) {
-            const rect = canvasEl.getBoundingClientRect();
-            brushGraph.dragMouse = {
-                x: (e.clientX - rect.left - panX) / zoom,
-                y: (e.clientY - rect.top - panY) / zoom,
-            };
+
+        const g = renderer.screenToGraph(e.clientX, e.clientY);
+
+        if (isDraggingNode) {
+            brushGraph.moveNode(dragNodeId, nodeStartX + (g.x - dragStartGX), nodeStartY + (g.y - dragStartGY));
+            return;
+        }
+
+        if (isDraggingSlider) {
+            const v = renderer.sliderValueAt(sliderNodeId, sliderParamIdx, g.x);
+            if (v !== null) brushGraph.setParamLocal(sliderNodeId, sliderParamIdx, v);
+            return;
+        }
+
+        if (brushGraph.draggingFrom) {
+            brushGraph.dragMouse = { x: g.x, y: g.y };
         }
     }
 
     function onPointerUp(e: PointerEvent) {
+        if (!renderer) return;
+
         if (isPanning) {
             isPanning = false;
             canvasEl.releasePointerCapture(e.pointerId);
+            return;
         }
+
+        if (isDraggingNode) {
+            isDraggingNode = false;
+            canvasEl.releasePointerCapture(e.pointerId);
+            brushGraph.syncNodePosition(dragNodeId);
+            return;
+        }
+
+        if (isDraggingSlider) {
+            isDraggingSlider = false;
+            canvasEl.releasePointerCapture(e.pointerId);
+            const node = brushGraph.graph?.nodes[String(sliderNodeId)];
+            if (node) {
+                const ti = brushGraph.getNodeType(node.type_id);
+                const pd = (ti?.params as any)?.[sliderParamIdx];
+                if (pd) brushGraph.setParam(sliderNodeId, sliderParamIdx, pd.kind, node.params[sliderParamIdx]);
+            }
+            return;
+        }
+
         if (brushGraph.draggingFrom) {
+            const g = renderer.screenToGraph(e.clientX, e.clientY);
+            const hit = renderer.hitTest(g.x, g.y);
+            if (hit.type === 'port') {
+                const drag = brushGraph.draggingFrom;
+                if (!(drag.node === hit.nodeId && drag.port === hit.portName)) {
+                    if (drag.dir === 'Output' && hit.portDir === 'Input')
+                        brushGraph.connect(drag.node, drag.port, hit.nodeId!, hit.portName!);
+                    else if (drag.dir === 'Input' && hit.portDir === 'Output')
+                        brushGraph.connect(hit.nodeId!, hit.portName!, drag.node, drag.port);
+                }
+            }
             brushGraph.draggingFrom = null;
             brushGraph.dragMouse = null;
+            canvasEl.releasePointerCapture(e.pointerId);
         }
     }
 
-    function onContextMenu(e: MouseEvent) {
-        e.preventDefault();
-    }
+    function onContextMenu(e: MouseEvent) { e.preventDefault(); }
 </script>
 
-<div
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<canvas
     class="node-canvas"
     bind:this={canvasEl}
     onwheel={onWheel}
@@ -175,38 +224,12 @@
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     oncontextmenu={onContextMenu}
-    role="application"
-    tabindex="-1"
->
-    <WireRenderer {wirePaths} {dragWire} {panX} {panY} {zoom} />
-
-    <div
-        class="node-layer"
-        style="transform: translate({panX}px, {panY}px) scale({zoom}); transform-origin: 0 0;"
-    >
-        {#each brushGraph.nodeList as node (node.id)}
-            <NodeWidget {node} {zoom} />
-        {/each}
-    </div>
-</div>
+></canvas>
 
 <style>
     .node-canvas {
-        position: relative;
         flex: 1;
-        overflow: hidden;
-        background: #1a1a1a;
-        background-image:
-            radial-gradient(circle, #333 1px, transparent 1px);
-        background-size: 20px 20px;
         cursor: default;
-    }
-    .node-layer {
-        position: absolute;
-        inset: 0;
-        pointer-events: none;
-    }
-    .node-layer > :global(*) {
-        pointer-events: auto;
+        display: block;
     }
 </style>
