@@ -617,6 +617,61 @@ impl DarklyHandle {
         }
     }
 
+    // --- Brush Preset API (Phase 7) ---
+
+    /// List all brush presets in the library as a JSON array of `PresetInfo`.
+    pub fn brush_preset_list(&self) -> String {
+        match self.engine() {
+            Some(e) => serde_json::to_string(&e.brush_preset_list()).unwrap_or_else(|_| "[]".into()),
+            None => "[]".into(),
+        }
+    }
+
+    /// Load a brush preset by name and set it as the active brush.
+    /// Returns null on success or an error string.
+    pub fn brush_preset_load(&self, name: &str) -> JsValue {
+        let Some(mut e) = self.engine_mut() else { return JsValue::from_str("engine busy") };
+        match e.brush_preset_load(name) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    /// Save the active brush graph as a preset.
+    /// Takes a JSON string with `name` and `category` fields.
+    /// Returns null on success or an error string.
+    pub fn brush_preset_save(&self, name: &str, category: &str) -> JsValue {
+        let Some(mut e) = self.engine_mut() else { return JsValue::from_str("engine busy") };
+        match e.brush_preset_save(name, category) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    /// Export a preset as `.darkly-brush` ZIP bytes.
+    /// Returns a Uint8Array on success or an error string.
+    pub fn brush_preset_export(&self, name: &str) -> JsValue {
+        let Some(e) = self.engine() else { return JsValue::from_str("engine busy") };
+        match e.brush_preset_export(name) {
+            Ok(bytes) => {
+                let arr = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+                arr.copy_from(&bytes);
+                arr.into()
+            }
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    /// Import a preset from `.darkly-brush` ZIP bytes.
+    /// Returns the preset name on success or an error string.
+    pub fn brush_preset_import(&self, bytes: &[u8]) -> JsValue {
+        let Some(mut e) = self.engine_mut() else { return JsValue::from_str("engine busy") };
+        match e.brush_preset_import(bytes) {
+            Ok(name) => JsValue::from_str(&name),
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
     // --- Queries ---
     // Rust→JS serialization uses JSON strings (serde_json).  This avoids
     // serde_wasm_bindgen edge cases (e.g. HashMap with non-string keys

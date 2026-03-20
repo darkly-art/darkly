@@ -1,4 +1,5 @@
 mod brush_graph;
+mod brush_preset;
 mod clipboard;
 mod floating;
 mod layers;
@@ -15,6 +16,7 @@ pub use types::{
 
 use crate::brush::dab_pool::DabTexturePool;
 use crate::brush::pipelines::BrushPipelines;
+use crate::brush::preset_library::PresetLibrary;
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::brush::wire::BrushWireType;
 use crate::clipboard::Clipboard;
@@ -160,6 +162,9 @@ pub struct DarklyEngine {
     /// Defaults to `brush::default_graph()`.  Updated via `set_brush_graph()`.
     pub(crate) active_brush_graph: crate::nodegraph::Graph<BrushWireType>,
 
+    // --- Preset Library (Phase 7) ---
+    pub(crate) preset_library: PresetLibrary,
+
     // --- Async readback ---
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
     /// Completed copy result — picked up by the frontend on the next poll.
@@ -201,6 +206,7 @@ impl DarklyEngine {
             brush_pipelines,
             brush_stroke_engine: None,
             active_brush_graph: crate::brush::default_graph(),
+            preset_library: PresetLibrary::new(),
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],

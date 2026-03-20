@@ -279,22 +279,24 @@ A `.darkly-brush` file is a ZIP archive containing:
 
 ---
 
-## Phase 8 — Stamp Tips
+## Phase 8 — Stamp Tips + User-Exposed Properties
 
-**Goal:** Image-based dab sources. This is the big unlock for Krita brush compatibility — most pixel brush presets are a grayscale stamp image + dynamics.
+**Goal:** Image-based dab sources and user-exposed brush properties. Stamp tips are the big unlock for Krita brush compatibility — most pixel brush presets are a grayscale stamp image + dynamics. User-exposed properties let brush creators surface labeled sliders to end users, making every brush built from this point forward properly configurable without opening the node graph.
 
-### Create
+### 8a: Stamp Tips
+
+#### Create
 
 - `crates/darkly/src/brush/nodes/stamp.rs` — GPU source node: loads brush tip texture, stamps it at dab position with size/rotation/mirror/ratio transforms. Inputs: size, rotation, mirror_x, mirror_y, ratio, opacity, color. Outputs: Texture, dab_size. Replaces `procedural.rs` as the dab source for image-based brushes.
 - `crates/darkly/src/brush/brush_tip.rs` — `BrushTip` enum (Auto { hardness, shape, spikes, ratio, fade }, Predefined { image, application_mode }), `BrushTipApplication` enum (AlphaMask, ImageStamp, LightnessMap, GradientMap — per Krita's `enumBrushApplication`)
 - `shaders/brush/stamp.wgsl` — Sample brush tip texture, apply color + opacity, handle rotation/mirror/ratio transforms
 
-### Modify
+#### Modify
 
 - `crates/darkly/src/brush/dab_pool.rs` — add brush tip texture upload and caching (separate from dab render targets)
 - `crates/darkly/src/brush/preset.rs` — handle brush tip images as preset resources
 
-### Key Design
+#### Key Design
 
 - Brush tip textures uploaded once and cached — not per-dab
 - Alpha mask mode: tip grayscale = opacity, color from paint color (most common)
@@ -302,13 +304,52 @@ A `.darkly-brush` file is a ZIP archive containing:
 - Lightness map mode: tip luminance modulates paint color lightness (Krita's default for color smudge)
 - Auto brush tips generated on the GPU as a texture at brush load time, then treated identically to predefined tips
 
-### Verify
+#### Verify
 
 - Load a grayscale PNG brush tip → paint with it → verify dab shape matches tip
 - Rotation dynamics: wire drawing_angle → stamp rotation → verify dabs rotate along stroke
 - Mirror: enable mirror_x → verify horizontally flipped dabs
 - Round-trip: save preset with embedded tip → load → verify painting identical
 - Compare output with Krita using same tip image at same settings
+
+### 8b: User-Exposed Properties (`user_input` Node)
+
+A `user_input` node is a source node (like `constant`) that the brush creator places and labels. Functionally identical to `constant` — outputs a Scalar from a parameter — but semantically marked so the system surfaces it in a user-facing properties panel. This is the Krita "Brush Settings" vs "Brush Editor" distinction, or Procreate's per-brush slider panel.
+
+**Infrastructure prerequisite:** Add `ParamDef::String { name, default }` and `ParamValue::String(String)` to `params.rs`. Needed for the user-facing label.
+
+**Node definition:**
+- `type_id`: `"user_input"`, category: `"input"`, display_name: `"User Input"`
+- Params: `label` (String, default `""`), `value` (Float, 0-1, default 0.5)
+- Ports: one output `"value"` (Scalar)
+- Evaluator: reads `param_f32(1)`, outputs as Scalar (identical to `ConstantEvaluator`)
+
+**Value range:** Output is always 0-1 per the system convention. If the brush creator wants a different effective range, they wire through remap/multiply nodes. The user always sees a 0-1 slider. This keeps the node simple and consistent with the rest of the system.
+
+#### Create
+
+- `crates/darkly/src/gpu/params.rs` — add `ParamDef::String` / `ParamValue::String` variants
+- `crates/darkly/src/brush/nodes/user_input.rs` — node registration + evaluator (auto-discovered by `build.rs`)
+
+#### Modify
+
+- `crates/darkly/src/engine/brush_graph.rs` — add `brush_user_inputs() -> Vec<UserInputInfo>` (walks graph, finds all `user_input` nodes, returns `{ node_id, label, value }`)
+- `frontend/wasm/src/api.rs` — add `brush_user_inputs()` query
+- `frontend/src/ui/brush_builder/` — properties panel component showing labeled sliders for equipped brush
+
+#### Key Design
+
+- Query-based: the properties panel is derived from the graph, not stored separately. Add a `user_input` node = it appears in properties. Remove it = gone.
+- Mutation uses existing `brush_graph_set_param(node_id, 1, Float(value))` — no new mutation API needed.
+- Preset serialization already handles this: `user_input` nodes are just graph nodes with params, and the preset format serializes the full graph.
+- Multiple `user_input` nodes → multiple sliders. Order determined by node position (top-to-bottom, left-to-right) for a stable, creator-controlled layout.
+
+#### Verify
+
+- Place 3 `user_input` nodes labeled "Size", "Softness", "Scatter" → equip brush → verify properties panel shows 3 labeled sliders
+- Adjust slider → verify brush behavior changes in realtime
+- Save/load preset with `user_input` nodes → verify labels and values round-trip
+- Remove a `user_input` node from the graph → verify it disappears from properties
 
 ---
 
@@ -456,9 +497,9 @@ Phase 5 (WASM bridge + brush builder UI)     ✓ complete
     ↓
 Phase 6 (dynamics + math nodes)              ✓ complete
     ↓
-Phase 7 (preset format + round-trip)         ← CURRENT
+Phase 7 (preset format + round-trip)         ✓ complete
     ↓
-Phase 8 (stamp tips)                         ← image-based dabs, big Krita compat unlock
+Phase 8 (stamp tips + user-exposed properties) ← CURRENT
     ↓
 Phase 9 (texture overlay)                    ← pencil/canvas grain
     ↓
@@ -477,6 +518,7 @@ Some phases can overlap:
 - **Phase 7 + 8** can be developed together — stamp node is a new node type that immediately tests the preset resource system
 - **Phase 9 + 10** can overlap — texture overlay is needed by KPP import, but basic KPP import (brushes without texture) can land first
 - **Phase 12** is independent of phases 10-11 and can be done any time after phase 6
+- **Phase 8a + 8b** are independent of each other and can be developed in parallel
 
 ## Critical Existing Files
 

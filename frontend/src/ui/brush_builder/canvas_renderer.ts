@@ -225,10 +225,8 @@ export class CanvasRenderer {
         ctx.strokeStyle = wt ? (WIRE_COLORS[wt] ?? '#888') : '#888';
         ctx.lineWidth = 2 / this.zoom;
         ctx.globalAlpha = 0.5;
-        ctx.setLineDash([4 / this.zoom, 4 / this.zoom]);
         this.bezier(from, to);
         ctx.stroke();
-        ctx.setLineDash([]);
         ctx.globalAlpha = 1;
     }
 

@@ -11,6 +11,8 @@ pub mod interpolation;
 pub mod nodes;
 pub mod paint_info;
 pub mod pipelines;
+pub mod preset;
+pub mod preset_library;
 pub mod spacing;
 pub mod stroke_engine;
 pub mod wire;
