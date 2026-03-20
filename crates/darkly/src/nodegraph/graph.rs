@@ -246,6 +246,31 @@ impl<W: WireKind> Graph<W> {
             .filter(move |c| c.from.node == node_id)
     }
 
+    /// Update a node's UI position.
+    pub fn set_node_position(&mut self, id: NodeId, pos: [f32; 2]) -> Result<(), GraphError> {
+        let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;
+        node.position = pos;
+        Ok(())
+    }
+
+    /// Update a single parameter value on a node.
+    pub fn set_param(
+        &mut self,
+        id: NodeId,
+        index: usize,
+        value: ParamValue,
+    ) -> Result<(), GraphError> {
+        let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;
+        if index >= node.params.len() {
+            return Err(GraphError::PortNotFound {
+                node: id,
+                port: format!("param[{}]", index),
+            });
+        }
+        node.params[index] = value;
+        Ok(())
+    }
+
     // ── helpers ──────────────────────────────────────────────────────
 
     /// Find the wire type of a port, returning an error if the node or

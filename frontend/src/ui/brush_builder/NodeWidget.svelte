@@ -46,17 +46,34 @@
     function onHeaderUp(e: PointerEvent) {
         dragging = false;
         (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+        // Sync final position to Rust.
+        brushGraph.syncNodePosition(node.id);
     }
 
+    /** Local update for responsive slider feedback. */
     function onParamInput(index: number, e: Event) {
         const target = e.target as HTMLInputElement;
         const def = paramDefs[index] as any;
         if (def?.kind === 'bool') {
-            brushGraph.setParam(node.id, index, target.checked);
+            brushGraph.setParamLocal(node.id, index, target.checked);
         } else if (def?.kind === 'float') {
-            brushGraph.setParam(node.id, index, parseFloat(target.value));
+            brushGraph.setParamLocal(node.id, index, parseFloat(target.value));
         } else if (def?.kind === 'int') {
-            brushGraph.setParam(node.id, index, parseInt(target.value));
+            brushGraph.setParamLocal(node.id, index, parseInt(target.value));
+        }
+    }
+
+    /** Commit param to Rust on slider release / checkbox change. */
+    function onParamChange(index: number, e: Event) {
+        const target = e.target as HTMLInputElement;
+        const def = paramDefs[index] as any;
+        if (!def) return;
+        if (def.kind === 'bool') {
+            brushGraph.setParam(node.id, index, def.kind, target.checked);
+        } else if (def.kind === 'float') {
+            brushGraph.setParam(node.id, index, def.kind, parseFloat(target.value));
+        } else if (def.kind === 'int') {
+            brushGraph.setParam(node.id, index, def.kind, parseInt(target.value));
         }
     }
 
@@ -69,7 +86,7 @@
 <div
     class="node-widget"
     class:selected={isSelected}
-    style="left: {node.position[0]}px; top: {node.position[1]}px;"
+    style="transform: translate({node.position[0]}px, {node.position[1]}px);"
     data-node-id={node.id}
 >
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -106,7 +123,7 @@
                             <input
                                 type="checkbox"
                                 checked={node.params[i]}
-                                oninput={(e) => onParamInput(i, e)}
+                                onchange={(e) => onParamChange(i, e)}
                             />
                         {:else if pdef.kind === 'float'}
                             <input
@@ -117,6 +134,7 @@
                                 step={((pdef.max - pdef.min) / 100)}
                                 value={node.params[i] ?? pdef.default}
                                 oninput={(e) => onParamInput(i, e)}
+                                onchange={(e) => onParamChange(i, e)}
                             />
                             <span class="param-value">{(node.params[i] ?? pdef.default).toFixed(2)}</span>
                         {:else if pdef.kind === 'int'}
@@ -128,6 +146,7 @@
                                 step="1"
                                 value={node.params[i] ?? pdef.default}
                                 oninput={(e) => onParamInput(i, e)}
+                                onchange={(e) => onParamChange(i, e)}
                             />
                             <span class="param-value">{node.params[i] ?? pdef.default}</span>
                         {/if}
@@ -141,6 +160,8 @@
 <style>
     .node-widget {
         position: absolute;
+        left: 0;
+        top: 0;
         min-width: 140px;
         background: #2a2a2a;
         border: 1px solid #444;

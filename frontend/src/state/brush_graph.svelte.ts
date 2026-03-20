@@ -1,9 +1,10 @@
 /**
  * Reactive brush graph state management.
  *
- * Maintains the brush node graph as Svelte reactive state, syncs changes
- * to the WASM backend for validation/compilation, and exposes the data
- * the brush builder UI needs to render nodes, ports, and wires.
+ * Rust owns the authoritative graph.  This module is a thin command layer
+ * that sends mutations to WASM and replaces its local view with the
+ * returned snapshot.  The only local-only mutation is `moveNode` during
+ * drag (synced to Rust when the drag ends or on the next structural change).
  */
 import { app } from './app.svelte';
 
@@ -61,8 +62,14 @@ export const WIRE_COLORS: Record<string, string> = {
 
 // --- State ---
 
+/** Result type returned by WASM graph commands. */
+interface GraphCommandResult {
+    graph?: string;
+    error?: string;
+}
+
 class BrushGraphState {
-    /** The full graph structure synced with Rust. */
+    /** Local view of the graph (snapshot from Rust). */
     graph = $state<BrushGraph | null>(null);
 
     /** Registry of available node types (from WASM). */
@@ -83,6 +90,43 @@ class BrushGraphState {
     /** Currently selected node ID. */
     selectedNode = $state<number | null>(null);
 
+    // --- WASM command helpers ---
+
+    /** Apply a WASM command result: update graph snapshot and error state. */
+    private applyResult(result: GraphCommandResult) {
+        if (result.error) {
+            this.error = result.error;
+            return;
+        }
+        if (result.graph) {
+            try {
+                const graph = JSON.parse(result.graph);
+                if (graph && graph.nodes) {
+                    this.graph = graph as BrushGraph;
+                    this.error = null;
+                }
+            } catch {
+                // Parse failed — leave current state.
+            }
+        }
+    }
+
+    /** Fetch the current graph snapshot from Rust. */
+    private fetchGraph() {
+        if (!app.handle) return;
+        const graphStr = app.handle.brush_graph_active();
+        try {
+            const graph = JSON.parse(graphStr);
+            if (graph && graph.nodes) {
+                this.graph = graph as BrushGraph;
+            }
+        } catch {
+            // Parse failed.
+        }
+    }
+
+    // --- Public API ---
+
     /** Initialize from WASM — load node types and default graph. */
     init() {
         if (!app.handle) return;
@@ -93,133 +137,78 @@ class BrushGraphState {
         } catch {
             this.nodeTypes = [];
         }
-
-        const graphStr = app.handle.brush_graph_active();
-        try {
-            const graph = JSON.parse(graphStr);
-            if (graph && graph.nodes) {
-                this.graph = graph as BrushGraph;
-            }
-        } catch {
-            // Graph parse failed — leave as null.
-        }
+        this.fetchGraph();
     }
 
     /** Reset to the default brush graph. */
     resetToDefault() {
         if (!app.handle) return;
         app.handle.brush_graph_reset();
-        const graphStr = app.handle.brush_graph_active();
-        try {
-            const graph = JSON.parse(graphStr);
-            if (graph && graph.nodes) {
-                this.graph = graph as BrushGraph;
-                this.error = null;
-            }
-        } catch {
-            // Parse failed.
-        }
-    }
-
-    /** Sync the current graph to WASM for compilation. */
-    compile() {
-        if (!app.handle || !this.graph) return;
-        const json = JSON.stringify(this.graph);
-        const result = app.handle.brush_graph_compile(json);
-        if (result) {
-            this.error = result as string;
-        } else {
-            this.error = null;
-        }
+        this.fetchGraph();
+        this.error = null;
     }
 
     /** Add a node of the given type at the given position. */
     addNode(typeId: string, x: number, y: number) {
-        if (!this.graph) return;
-        const typeDef = this.nodeTypes.find(t => t.type_id === typeId);
-        if (!typeDef) return;
-
-        const nodeId = this.graph.next_id;
-        const node: NodeInstance = {
-            id: nodeId,
-            type_id: typeId,
-            ports: JSON.parse(JSON.stringify(typeDef.ports)),
-            params: typeDef.params.map((p: any) => {
-                if (p.kind === 'float') return p.default;
-                if (p.kind === 'int') return p.default;
-                if (p.kind === 'bool') return p.default;
-                return 0;
-            }),
-            position: [x, y],
-        };
-
-        this.graph.nodes[String(nodeId)] = node;
-        this.graph.next_id = nodeId + 1;
-        // Force reactivity
-        this.graph = { ...this.graph };
-        this.compile();
+        if (!app.handle) return;
+        this.applyResult(app.handle.brush_graph_add_node(typeId, x, y));
     }
 
     /** Remove a node and all its connections. */
     removeNode(nodeId: number) {
-        if (!this.graph) return;
-        delete this.graph.nodes[String(nodeId)];
-        this.graph.connections = this.graph.connections.filter(
-            c => c.from.node !== nodeId && c.to.node !== nodeId
-        );
+        if (!app.handle) return;
         if (this.selectedNode === nodeId) this.selectedNode = null;
-        this.graph = { ...this.graph };
-        this.compile();
+        this.applyResult(app.handle.brush_graph_remove_node(nodeId));
     }
 
     /** Connect two ports. */
     connect(fromNode: number, fromPort: string, toNode: number, toPort: string) {
-        if (!this.graph) return;
-
-        // Remove any existing connection to this input.
-        this.graph.connections = this.graph.connections.filter(
-            c => !(c.to.node === toNode && c.to.port === toPort)
-        );
-
-        this.graph.connections.push({
-            from: { node: fromNode, port: fromPort },
-            to: { node: toNode, port: toPort },
-        });
-        this.graph = { ...this.graph };
-        this.compile();
+        if (!app.handle) return;
+        this.applyResult(app.handle.brush_graph_connect(fromNode, fromPort, toNode, toPort));
     }
 
     /** Disconnect a specific wire. */
     disconnect(fromNode: number, fromPort: string, toNode: number, toPort: string) {
-        if (!this.graph) return;
-        this.graph.connections = this.graph.connections.filter(
-            c => !(c.from.node === fromNode && c.from.port === fromPort &&
-                   c.to.node === toNode && c.to.port === toPort)
-        );
-        this.graph = { ...this.graph };
-        this.compile();
+        if (!app.handle) return;
+        this.applyResult(app.handle.brush_graph_disconnect(fromNode, fromPort, toNode, toPort));
     }
 
-    /** Update a node's position (drag). */
+    /** Update a node's position (local-only during drag for responsiveness). */
     moveNode(nodeId: number, x: number, y: number) {
         if (!this.graph) return;
         const node = this.graph.nodes[String(nodeId)];
         if (node) {
-            node.position = [x, y];
-            // Trigger reactivity
-            this.graph = { ...this.graph };
+            // Mutate in place — Svelte 5's deep proxy tracks the change
+            // at the property level, so only consumers that read this
+            // node's position will re-evaluate (not every node/port/wire).
+            node.position[0] = x;
+            node.position[1] = y;
         }
     }
 
-    /** Update a node's parameter value. */
-    setParam(nodeId: number, paramIndex: number, value: any) {
+    /** Sync a node's position to Rust (call after drag ends). */
+    syncNodePosition(nodeId: number) {
+        if (!app.handle || !this.graph) return;
+        const node = this.graph.nodes[String(nodeId)];
+        if (node) {
+            app.handle.brush_graph_move_node(nodeId, node.position[0], node.position[1]);
+        }
+    }
+
+    /** Update a node's parameter value locally (for responsive slider feedback). */
+    setParamLocal(nodeId: number, paramIndex: number, value: any) {
         if (!this.graph) return;
         const node = this.graph.nodes[String(nodeId)];
         if (node && paramIndex < node.params.length) {
+            // Mutate in place — only consumers reading this param re-evaluate.
             node.params[paramIndex] = value;
-            this.graph = { ...this.graph };
-            this.compile();
         }
+    }
+
+    /** Update a node's parameter value via Rust (compiles the graph). */
+    setParam(nodeId: number, paramIndex: number, kind: string, value: any) {
+        if (!app.handle) return;
+        this.applyResult(app.handle.brush_graph_set_param(nodeId, paramIndex, kind, value));
     }
 
     /** Get a flat array of all node instances. */

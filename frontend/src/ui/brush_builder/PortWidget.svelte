@@ -1,5 +1,7 @@
 <script lang="ts">
+    import { onMount, onDestroy, getContext } from 'svelte';
     import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
+    import type { PortRegistration } from './NodeCanvas.svelte';
 
     interface Props {
         nodeId: number;
@@ -11,6 +13,26 @@
 
     let color = $derived(WIRE_COLORS[port.wire_type] ?? '#888');
     let connected = $derived(brushGraph.isPortConnected(nodeId, port.name, port.dir));
+
+    // --- Port offset registration ---
+    const { register, unregister } = getContext<PortRegistration>('port-registration');
+    let dotEl: HTMLDivElement;
+
+    onMount(() => {
+        // Measure offset of dot center relative to the ancestor node-widget.
+        const nodeEl = dotEl.closest('[data-node-id]') as HTMLElement;
+        if (!nodeEl) return;
+        const dotRect = dotEl.getBoundingClientRect();
+        const nodeRect = nodeEl.getBoundingClientRect();
+        register(nodeId, port.name, port.dir, {
+            x: (dotRect.left + dotRect.width / 2) - nodeRect.left,
+            y: (dotRect.top + dotRect.height / 2) - nodeRect.top,
+        });
+    });
+
+    onDestroy(() => {
+        unregister(nodeId, port.name, port.dir);
+    });
 
     function onPointerDown(e: PointerEvent) {
         e.stopPropagation();
@@ -75,9 +97,7 @@
         tabindex="-1"
         onpointerdown={onPointerDown}
         onpointerup={onPointerUp}
-        data-port-node={nodeId}
-        data-port-name={port.name}
-        data-port-dir={port.dir}
+        bind:this={dotEl}
     ></div>
     <span class="port-label">{port.name}</span>
 </div>

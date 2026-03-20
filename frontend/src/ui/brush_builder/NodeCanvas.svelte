@@ -1,6 +1,14 @@
+<script lang="ts" module>
+    /** Context type for port offset registration. */
+    export interface PortRegistration {
+        register(nodeId: number, portName: string, dir: string, offset: { x: number; y: number }): void;
+        unregister(nodeId: number, portName: string, dir: string): void;
+    }
+</script>
+
 <script lang="ts">
-    import { tick } from 'svelte';
-    import { brushGraph } from '../../state/brush_graph.svelte';
+    import { setContext } from 'svelte';
+    import { brushGraph, WIRE_COLORS, type Connection } from '../../state/brush_graph.svelte';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
 
@@ -15,22 +23,90 @@
     let panOriginX = 0;
     let panOriginY = 0;
 
-    // Bumped after DOM updates so WireRenderer re-queries port positions.
-    let wireTick = $state(0);
-
     let canvasEl: HTMLDivElement;
 
-    // Re-query wire positions after any change to nodes or connections.
-    $effect(() => {
-        brushGraph.nodeList;
-        brushGraph.connectionList;
-        tick().then(() => { wireTick++; });
+    // --- Port offset cache ---
+    // Offsets are measured once per port on mount, relative to the node-widget origin.
+    // They never change (port layout within a node is fixed by CSS).
+    const portOffsets = new Map<string, { x: number; y: number }>();
+    let portOffsetsVersion = $state(0);
+
+    function portKey(nodeId: number, portName: string, dir: string): string {
+        return `${nodeId}:${portName}:${dir}`;
+    }
+
+    setContext<PortRegistration>('port-registration', {
+        register(nodeId, portName, dir, offset) {
+            portOffsets.set(portKey(nodeId, portName, dir), offset);
+            portOffsetsVersion++;
+        },
+        unregister(nodeId, portName, dir) {
+            portOffsets.delete(portKey(nodeId, portName, dir));
+            portOffsetsVersion++;
+        },
+    });
+
+    /** Resolve a port's position in graph coordinates from cached offsets. */
+    function resolvePortPosition(nodeId: number, portName: string, dir: string): { x: number; y: number } | null {
+        const offset = portOffsets.get(portKey(nodeId, portName, dir));
+        if (!offset) return null;
+        const node = brushGraph.graph?.nodes[String(nodeId)];
+        if (!node) return null;
+        return {
+            x: node.position[0] + offset.x,
+            y: node.position[1] + offset.y,
+        };
+    }
+
+    function bezierPathFromPoints(from: { x: number; y: number }, to: { x: number; y: number }): string {
+        const dx = Math.abs(to.x - from.x) * 0.5;
+        const cpx1 = from.x + Math.max(dx, 30);
+        const cpx2 = to.x - Math.max(dx, 30);
+        return `M ${from.x} ${from.y} C ${cpx1} ${from.y}, ${cpx2} ${to.y}, ${to.x} ${to.y}`;
+    }
+
+    // Pre-compute all wire paths. Depends on connections, node positions, and port offsets.
+    // Does NOT depend on panX/panY/zoom — those only affect the SVG <g transform>.
+    let wirePaths = $derived.by(() => {
+        const conns = brushGraph.connectionList;
+        const _v = portOffsetsVersion; // track offset changes
+        const _g = brushGraph.graph;   // track node position changes
+
+        const result: { path: string; color: string }[] = [];
+        for (const conn of conns) {
+            const from = resolvePortPosition(conn.from.node, conn.from.port, 'Output');
+            const to = resolvePortPosition(conn.to.node, conn.to.port, 'Input');
+            if (!from || !to) continue;
+            const wt = brushGraph.getPortWireType(conn.from.node, conn.from.port);
+            result.push({
+                path: bezierPathFromPoints(from, to),
+                color: wt ? (WIRE_COLORS[wt] ?? '#888') : '#888',
+            });
+        }
+        return result;
+    });
+
+    // Drag wire: compute from dragging port position + mouse.
+    let dragWire = $derived.by(() => {
+        const drag = brushGraph.draggingFrom;
+        const mouse = brushGraph.dragMouse;
+        if (!drag || !mouse) return null;
+        const _v = portOffsetsVersion;
+        const _g = brushGraph.graph;
+        const portPos = resolvePortPosition(drag.node, drag.port, drag.dir);
+        if (!portPos) return null;
+        const from = drag.dir === 'Output' ? portPos : mouse;
+        const to = drag.dir === 'Output' ? mouse : portPos;
+        const wt = brushGraph.getPortWireType(drag.node, drag.port);
+        return {
+            path: bezierPathFromPoints(from, to),
+            color: wt ? (WIRE_COLORS[wt] ?? '#888') : '#888',
+        };
     });
 
     function onWheel(e: WheelEvent) {
         e.preventDefault();
         if (e.ctrlKey || e.metaKey) {
-            // Pinch-to-zoom (trackpad) or ctrl+scroll (mouse).
             const factor = e.deltaY > 0 ? 0.9 : 1.1;
             const newZoom = Math.max(0.2, Math.min(3, zoom * factor));
             const rect = canvasEl.getBoundingClientRect();
@@ -40,14 +116,12 @@
             panY = my - (my - panY) * (newZoom / zoom);
             zoom = newZoom;
         } else {
-            // Two-finger scroll → pan.
             panX -= e.deltaX;
             panY -= e.deltaY;
         }
     }
 
     function onPointerDown(e: PointerEvent) {
-        // Middle-click to pan.
         if (e.button === 1) {
             e.preventDefault();
             isPanning = true;
@@ -57,7 +131,6 @@
             panOriginY = panY;
             canvasEl.setPointerCapture(e.pointerId);
         } else if (e.button === 0) {
-            // Deselect when clicking on empty space.
             if (e.target === canvasEl || (e.target as HTMLElement).classList.contains('node-layer')) {
                 brushGraph.selectedNode = null;
             }
@@ -83,7 +156,6 @@
             isPanning = false;
             canvasEl.releasePointerCapture(e.pointerId);
         }
-        // Clear drag state on any mouseup over the canvas.
         if (brushGraph.draggingFrom) {
             brushGraph.draggingFrom = null;
             brushGraph.dragMouse = null;
@@ -92,28 +164,6 @@
 
     function onContextMenu(e: MouseEvent) {
         e.preventDefault();
-    }
-
-    /**
-     * Get the position of a port dot in canvas-local coordinates.
-     * Used by WireRenderer to draw bezier curves.
-     */
-    function getPortPosition(nodeId: number, portName: string, dir: 'Input' | 'Output'): { x: number; y: number } | null {
-        if (!canvasEl) return null;
-        const selector = `[data-port-node="${nodeId}"][data-port-name="${portName}"][data-port-dir="${dir}"]`;
-        const dot = canvasEl.querySelector(selector) as HTMLElement | null;
-        if (!dot) return null;
-
-        const dotRect = dot.getBoundingClientRect();
-        const canvasRect = canvasEl.getBoundingClientRect();
-
-        // Convert from screen to canvas-local, then undo pan/zoom to get graph coordinates.
-        const screenX = dotRect.left + dotRect.width / 2 - canvasRect.left;
-        const screenY = dotRect.top + dotRect.height / 2 - canvasRect.top;
-        return {
-            x: (screenX - panX) / zoom,
-            y: (screenY - panY) / zoom,
-        };
     }
 </script>
 
@@ -128,17 +178,7 @@
     role="application"
     tabindex="-1"
 >
-    {#key wireTick}
-    <WireRenderer
-        connections={brushGraph.connectionList}
-        {getPortPosition}
-        {panX}
-        {panY}
-        {zoom}
-        draggingFrom={brushGraph.draggingFrom}
-        dragMouse={brushGraph.dragMouse}
-    />
-    {/key}
+    <WireRenderer {wirePaths} {dragWire} {panX} {panY} {zoom} />
 
     <div
         class="node-layer"

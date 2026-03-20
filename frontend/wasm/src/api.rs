@@ -548,6 +548,75 @@ impl DarklyHandle {
     /// Reset the active brush graph to the built-in default.
     pub fn brush_graph_reset(&self) { if let Some(mut e) = self.engine_mut() { e.reset_brush_graph() } }
 
+    // --- Fine-grained graph commands ---
+    // Each returns a JsValue: on success, a JS object { graph: "<json>" }.
+    // On failure, a JS object { error: "<message>" }.
+    // If the engine is busy, returns { error: "engine busy" }.
+
+    fn graph_result(r: Result<String, String>) -> JsValue {
+        match r {
+            Ok(json) => {
+                let obj = js_sys::Object::new();
+                js_sys::Reflect::set(&obj, &"graph".into(), &JsValue::from_str(&json)).unwrap();
+                obj.into()
+            }
+            Err(e) => {
+                let obj = js_sys::Object::new();
+                js_sys::Reflect::set(&obj, &"error".into(), &JsValue::from_str(&e)).unwrap();
+                obj.into()
+            }
+        }
+    }
+
+    pub fn brush_graph_add_node(&self, type_id: &str, x: f32, y: f32) -> JsValue {
+        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
+        Self::graph_result(e.brush_graph_add_node(type_id, x, y))
+    }
+
+    pub fn brush_graph_remove_node(&self, node_id: u32) -> JsValue {
+        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
+        Self::graph_result(e.brush_graph_remove_node(node_id as u64))
+    }
+
+    pub fn brush_graph_connect(
+        &self,
+        from_node: u32,
+        from_port: &str,
+        to_node: u32,
+        to_port: &str,
+    ) -> JsValue {
+        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
+        Self::graph_result(e.brush_graph_connect(from_node as u64, from_port, to_node as u64, to_port))
+    }
+
+    pub fn brush_graph_disconnect(
+        &self,
+        from_node: u32,
+        from_port: &str,
+        to_node: u32,
+        to_port: &str,
+    ) -> JsValue {
+        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
+        Self::graph_result(e.brush_graph_disconnect(from_node as u64, from_port, to_node as u64, to_port))
+    }
+
+    pub fn brush_graph_set_param(&self, node_id: u32, param_index: u32, kind: &str, value: JsValue) -> JsValue {
+        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
+        let pv = match kind {
+            "float" => darkly::gpu::params::ParamValue::Float(value.as_f64().unwrap_or(0.0) as f32),
+            "int" => darkly::gpu::params::ParamValue::Int(value.as_f64().unwrap_or(0.0) as i32),
+            "bool" => darkly::gpu::params::ParamValue::Bool(value.as_bool().unwrap_or(false)),
+            _ => return Self::graph_result(Err(format!("unknown param kind: {kind}"))),
+        };
+        Self::graph_result(e.brush_graph_set_param(node_id as u64, param_index as usize, pv))
+    }
+
+    pub fn brush_graph_move_node(&self, node_id: u32, x: f32, y: f32) {
+        if let Some(mut e) = self.engine_mut() {
+            e.brush_graph_move_node(node_id as u64, x, y);
+        }
+    }
+
     // --- Queries ---
     // Rust→JS serialization uses JSON strings (serde_json).  This avoids
     // serde_wasm_bindgen edge cases (e.g. HashMap with non-string keys
