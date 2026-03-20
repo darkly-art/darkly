@@ -15,9 +15,19 @@
     function handleReset() {
         brushGraph.resetToDefault();
     }
+
+    let fullscreen = $state(false);
+
+    function onKeydown(e: KeyboardEvent) {
+        if (e.key === 'Escape' && fullscreen) {
+            fullscreen = false;
+        }
+    }
 </script>
 
-<div class="brush-builder">
+<svelte:window on:keydown={onKeydown} />
+
+<div class="brush-builder" class:fullscreen>
     <div class="builder-toolbar">
         <span class="builder-title">Brush Graph</span>
         <NodePalette onaddnode={handleAddNode} />
@@ -26,6 +36,15 @@
         {#if brushGraph.error}
             <span class="error-badge" title={brushGraph.error}>Error</span>
         {/if}
+        <button
+            class="fullscreen-btn"
+            onclick={() => fullscreen = !fullscreen}
+            title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+        >{#if fullscreen}
+                <svg width="14" height="14" viewBox="0 0 14 14"><path d="M5 1H1v4M9 1h4v4M1 9v4h4M13 9v4h-4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+            {:else}
+                <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 5V1h4M13 5V1H9M1 9v4h4M13 9v4H9" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+            {/if}</button>
         <button
             class="close-btn"
             onclick={() => brushGraph.isOpen = false}
@@ -81,6 +100,18 @@
         border-radius: 3px;
         cursor: help;
     }
+    .fullscreen-btn {
+        background: none;
+        border: none;
+        color: #888;
+        cursor: pointer;
+        padding: 0 4px;
+        display: flex;
+        align-items: center;
+    }
+    .fullscreen-btn:hover {
+        color: #ccc;
+    }
     .close-btn {
         background: none;
         border: none;
@@ -92,5 +123,13 @@
     }
     .close-btn:hover {
         color: #ff6b6b;
+    }
+    .brush-builder.fullscreen {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        z-index: 9999;
     }
 </style>

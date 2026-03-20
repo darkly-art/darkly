@@ -3,7 +3,7 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float { name: "evolution", min: 0.0, max: 1.0, default: 0.1 },
+    ParamDef::Float { name: "evolution", min: 0.0, max: 1.0, default: 0.05 },
     ParamDef::Float { name: "color",     min: 0.0, max: 1.0, default: 0.0 },
 ];
 
