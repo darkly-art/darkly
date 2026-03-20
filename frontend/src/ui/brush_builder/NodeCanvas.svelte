@@ -25,10 +25,13 @@
         return () => { renderer.stop(); ro.disconnect(); };
     });
 
-    // Mark canvas dirty when graph state changes.
+    // Mark canvas dirty when graph structure changes (add/remove node,
+    // connect/disconnect, selection change).  Deep mutations during drag
+    // (position, params) call markDirty() directly from event handlers
+    // because Svelte 5's $effect only tracks the properties actually read
+    // here — not nested mutations within the graph proxy.
     $effect(() => {
         if (!renderer) return;
-        // Touch reactive values to subscribe.
         brushGraph.graph;
         brushGraph.selectedNode;
         brushGraph.draggingFrom;
@@ -116,6 +119,7 @@
                     brushGraph.setParamLocal(hit.nodeId!, hit.paramIndex!, v);
                     brushGraph.setParam(hit.nodeId!, hit.paramIndex!, 'bool', v);
                 }
+                renderer.markDirty();
                 break;
             }
 
@@ -126,6 +130,7 @@
                 canvasEl.setPointerCapture(e.pointerId);
                 { const v = renderer.sliderValueAt(hit.nodeId!, hit.paramIndex!, g.x);
                   if (v !== null) brushGraph.setParamLocal(hit.nodeId!, hit.paramIndex!, v); }
+                renderer.markDirty();
                 break;
 
             case 'node-body':
@@ -152,17 +157,20 @@
 
         if (isDraggingNode) {
             brushGraph.moveNode(dragNodeId, nodeStartX + (g.x - dragStartGX), nodeStartY + (g.y - dragStartGY));
+            renderer.markDirty();
             return;
         }
 
         if (isDraggingSlider) {
             const v = renderer.sliderValueAt(sliderNodeId, sliderParamIdx, g.x);
             if (v !== null) brushGraph.setParamLocal(sliderNodeId, sliderParamIdx, v);
+            renderer.markDirty();
             return;
         }
 
         if (brushGraph.draggingFrom) {
             brushGraph.dragMouse = { x: g.x, y: g.y };
+            renderer.markDirty();
         }
     }
 
