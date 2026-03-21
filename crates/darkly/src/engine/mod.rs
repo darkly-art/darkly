@@ -37,6 +37,12 @@ use std::collections::HashMap;
 // Internal helper types
 // ---------------------------------------------------------------------------
 
+/// Deferred transform setup — waiting for async content bounds from the compositor.
+pub(crate) struct PendingTransform {
+    pub layer_id: u64,
+    pub target_is_mask: bool,
+}
+
 /// Tracks the bounding rect of a GPU stroke in progress.
 pub(crate) struct GpuStrokeState {
     pub format: wgpu::TextureFormat,
@@ -108,13 +114,6 @@ pub(crate) enum ReadbackContext {
         thumb_w: u32,
         thumb_h: u32,
     },
-    /// Async readback for computing layer content bounds before transform.
-    TransformBounds {
-        layer_id: u64,
-        target_is_mask: bool,
-        canvas_w: u32,
-        canvas_h: u32,
-    },
 }
 
 /// Cached thumbnail data per layer.
@@ -172,6 +171,10 @@ pub struct DarklyEngine {
     // --- Preset Library (Phase 7) ---
     pub(crate) preset_library: PresetLibrary,
 
+    // --- Deferred operations ---
+    /// Pending transform waiting for content bounds computation.
+    pub(crate) pending_transform: Option<PendingTransform>,
+
     // --- Async readback ---
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
     /// Completed copy result — picked up by the frontend on the next poll.
@@ -214,6 +217,7 @@ impl DarklyEngine {
             brush_stroke_engine: None,
             active_brush_graph: crate::brush::default_graph(),
             preset_library: PresetLibrary::new(),
+            pending_transform: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],

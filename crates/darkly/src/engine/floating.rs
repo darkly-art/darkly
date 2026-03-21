@@ -1,68 +1,11 @@
 //! Floating content — paste-in-place and interactive transforms.
 
-use super::{DarklyEngine, ReadbackContext};
+use super::DarklyEngine;
 use crate::gpu::paint_target::GpuPaintTarget;
-use crate::gpu::readback;
 use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY};
 use crate::layer::Layer;
 use crate::tile::TILE_SIZE;
 use crate::undo::GpuRegionAction;
-
-/// Scan pixel data for the bounding box of non-transparent content.
-///
-/// `pixels` is row-major pixel data, `bpp` bytes per pixel. The alpha channel
-/// is at offset `bpp - 1` within each pixel (works for both RGBA8 and R8).
-/// Returns `(x, y, w, h)` or `None` if the image is fully transparent.
-fn compute_content_bounds(pixels: &[u8], width: u32, height: u32, bpp: u32) -> Option<[u32; 4]> {
-    let w = width as usize;
-    let h = height as usize;
-    let stride = w * bpp as usize;
-    let alpha_off = (bpp - 1) as usize;
-
-    // Scan top → bottom for first non-transparent row.
-    let mut top = h;
-    for y in 0..h {
-        let row = &pixels[y * stride..(y + 1) * stride];
-        if row.iter().skip(alpha_off).step_by(bpp as usize).any(|&a| a > 0) {
-            top = y;
-            break;
-        }
-    }
-    if top == h {
-        return None; // fully transparent
-    }
-
-    // Scan bottom → top for last non-transparent row.
-    let mut bottom = top;
-    for y in (top..h).rev() {
-        let row = &pixels[y * stride..(y + 1) * stride];
-        if row.iter().skip(alpha_off).step_by(bpp as usize).any(|&a| a > 0) {
-            bottom = y;
-            break;
-        }
-    }
-
-    // Scan left → right and right → left within [top..=bottom].
-    let mut left = w;
-    let mut right = 0usize;
-    for y in top..=bottom {
-        let row = &pixels[y * stride..(y + 1) * stride];
-        for x in 0..w {
-            if row[x * bpp as usize + alpha_off] > 0 {
-                left = left.min(x);
-                break;
-            }
-        }
-        for x in (0..w).rev() {
-            if row[x * bpp as usize + alpha_off] > 0 {
-                right = right.max(x);
-                break;
-            }
-        }
-    }
-
-    Some([left as u32, top as u32, (right - left + 1) as u32, (bottom - top + 1) as u32])
-}
 
 impl DarklyEngine {
     /// Auto-commit any active floating content before performing other edits.
@@ -139,10 +82,10 @@ impl DarklyEngine {
     /// When a selection is active, source bounds come from the selection and
     /// the transform is set up synchronously (returns true).
     ///
-    /// When there is no selection, the layer texture must be read back from
-    /// the GPU to compute content bounds. This kicks off an async readback
-    /// and returns false. The transform will be set up on the next frame
-    /// when `poll_pending` picks up the completed readback.
+    /// When there is no selection, content bounds are needed from the
+    /// compositor's GPU compute system. If cached, setup is synchronous.
+    /// Otherwise, an async compute is dispatched and the transform completes
+    /// on the next frame via `poll_pending`.
     pub fn begin_transform(&mut self, layer_id: u64) -> bool {
         self.auto_commit_floating();
 
@@ -185,70 +128,30 @@ impl DarklyEngine {
             self.setup_transform(layer_id, target_is_mask, source_origin, source_width, source_height);
             true
         } else {
-            // No selection — kick off async readback to compute content bounds.
-            let format = if target_is_mask {
-                wgpu::TextureFormat::R8Unorm
+            // No selection — use compositor content bounds.
+            if let Some(bounds) = self.compositor.content_bounds(layer_id) {
+                // Bounds are cached — set up synchronously.
+                let [bx, by, bw, bh] = bounds;
+                if bw == 0 || bh == 0 { return false; }
+                self.setup_transform(layer_id, target_is_mask, (bx as i32, by as i32), bw, bh);
+                true
             } else {
-                wgpu::TextureFormat::Rgba8Unorm
-            };
-
-            let texture = if target_is_mask {
-                self.compositor.mask_texture(layer_id).map(|t| &t.texture)
-            } else {
-                self.compositor.layer_texture(layer_id).map(|t| &t.texture)
-            };
-
-            if let Some(texture) = texture {
-                let mut encoder = self.gpu.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("transform-bounds") },
+                // Bounds not yet computed — request async GPU compute.
+                self.compositor.request_content_bounds(
+                    &self.gpu.device, &self.gpu.queue, layer_id, target_is_mask,
                 );
-                let request = readback::request_readback(
-                    &self.gpu.device, &mut encoder, texture, format,
-                    [0, 0, canvas_w, canvas_h],
-                );
-                self.gpu.queue.submit([encoder.finish()]);
-                self.readbacks.submit(request, ReadbackContext::TransformBounds {
+                self.pending_transform = Some(super::PendingTransform {
                     layer_id,
                     target_is_mask,
-                    canvas_w,
-                    canvas_h,
                 });
+                false
             }
-
-            false
         }
-    }
-
-    /// Complete an async transform setup after content bounds have been
-    /// computed from GPU readback data.
-    pub(crate) fn complete_begin_transform(
-        &mut self,
-        layer_id: u64,
-        target_is_mask: bool,
-        canvas_w: u32,
-        canvas_h: u32,
-        pixels: Vec<u8>,
-    ) {
-        // Already have floating content (e.g. user cancelled/switched tools).
-        if self.floating.is_some() {
-            return;
-        }
-
-        let bpp = if target_is_mask { 1u32 } else { 4u32 };
-        let bounds = match compute_content_bounds(&pixels, canvas_w, canvas_h, bpp) {
-            Some(b) => b,
-            None => return, // fully transparent layer — nothing to transform
-        };
-
-        let [bx, by, bw, bh] = bounds;
-        let source_origin = (bx as i32, by as i32);
-
-        self.setup_transform(layer_id, target_is_mask, source_origin, bw, bh);
     }
 
     /// Common setup logic for interactive transforms — saves pre-clear state,
     /// copies source region to floating texture, clears source on layer.
-    fn setup_transform(
+    pub(crate) fn setup_transform(
         &mut self,
         layer_id: u64,
         target_is_mask: bool,

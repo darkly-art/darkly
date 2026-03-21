@@ -1,5 +1,6 @@
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
+use crate::gpu::content_bounds::ContentBoundsPass;
 use crate::gpu::overlay::{OverlayPrimitive, ToolOverlay};
 use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::ViewTransform;
@@ -138,6 +139,9 @@ pub struct Compositor {
     tool_overlay: ToolOverlay,
     /// Cached view transform for overlay forward matrix computation.
     cached_view_transform: ViewTransform,
+
+    // --- Content Bounds (GPU compute) ---
+    content_bounds: ContentBoundsPass,
 
     // --- Frame Scheduler ---
     /// Monotonic frame counter, incremented on each rAF tick.
@@ -481,6 +485,7 @@ impl Compositor {
         let tool_overlay = ToolOverlay::new(device, surface_format);
 
         let transform_pass = crate::gpu::transform::TransformPass::new(device, accum_format);
+        let content_bounds = ContentBoundsPass::new(device);
 
         Compositor {
             group_state,
@@ -506,6 +511,7 @@ impl Compositor {
             padded_height: padded_h,
             veil_chain,
             transform_pass,
+            content_bounds,
             tool_overlay,
             cached_view_transform: identity,
             frame_count: 0,
@@ -590,12 +596,61 @@ impl Compositor {
         for gs in self.group_state.values_mut() {
             gs.cache_valid_through = None;
         }
+        // Invalidate all layer content bounds — pixels may have changed.
+        self.content_bounds.invalidate_all();
     }
 
     /// Mark that only the present pass needs to re-run (view transform changed).
     /// Skips compositing when there are no dirty tiles or layer changes.
     pub fn mark_needs_present(&mut self) {
         self.needs_present = true;
+    }
+
+    // --- Content Bounds (GPU compute) ---
+
+    /// Return cached content bounds for a layer: `[x, y, w, h]`.
+    /// Returns `None` if bounds haven't been computed yet or were invalidated.
+    pub fn content_bounds(&self, layer_id: LayerId) -> Option<[u32; 4]> {
+        self.content_bounds.get(layer_id)
+    }
+
+    /// Request async content bounds computation for a layer.
+    /// Results arrive on the next frame — retrieve via [`content_bounds`].
+    pub fn request_content_bounds(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        is_mask: bool,
+    ) {
+        let (view, w, h) = if is_mask {
+            match self.mask_textures.get(&layer_id) {
+                Some(t) => (&t.view, self.canvas_width, self.canvas_height),
+                None => return,
+            }
+        } else {
+            match self.layer_textures.get(&layer_id) {
+                Some(t) => (&t.view, self.canvas_width, self.canvas_height),
+                None => return,
+            }
+        };
+        self.content_bounds.request(device, queue, view, w, h, is_mask, layer_id);
+    }
+
+    /// Poll pending content bounds computations. Call once per frame.
+    /// Returns layer IDs whose bounds just became available.
+    pub fn poll_content_bounds(&mut self, device: &wgpu::Device) -> Vec<LayerId> {
+        self.content_bounds.poll(device)
+    }
+
+    /// True if any content bounds computations are in flight.
+    pub fn has_pending_content_bounds(&self) -> bool {
+        self.content_bounds.has_pending()
+    }
+
+    /// True if a content bounds computation is in flight for a specific layer.
+    pub fn is_content_bounds_pending(&self, layer_id: LayerId) -> bool {
+        self.content_bounds.is_pending(layer_id)
     }
 
     // --- Paint Target Accessors (Phase 2: GPU brush) ---

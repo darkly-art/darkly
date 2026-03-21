@@ -118,9 +118,32 @@ impl DarklyEngine {
     /// Called at the start of each frame. Returns true if any operation
     /// completed (and therefore the compositor should re-render).
     fn poll_pending(&mut self) -> bool {
+        // Poll content bounds compute readbacks.
+        let bounds_completed = self.compositor.poll_content_bounds(&self.gpu.device);
+        let mut any_completed = false;
+
+        // Complete pending transform if content bounds just arrived.
+        if let Some(pt) = &self.pending_transform {
+            if bounds_completed.contains(&pt.layer_id) {
+                let layer_id = pt.layer_id;
+                let target_is_mask = pt.target_is_mask;
+                self.pending_transform = None;
+
+                if self.floating.is_none() {
+                    if let Some(bounds) = self.compositor.content_bounds(layer_id) {
+                        let [bx, by, bw, bh] = bounds;
+                        self.setup_transform(
+                            layer_id, target_is_mask, (bx as i32, by as i32), bw, bh,
+                        );
+                        any_completed = true;
+                    }
+                }
+            }
+        }
+
         let completed = self.readbacks.poll(&self.gpu.device);
         if completed.is_empty() {
-            return false;
+            return any_completed;
         }
 
         for (ctx, pixels) in completed {
@@ -145,13 +168,6 @@ impl DarklyEngine {
                 }
                 ReadbackContext::MaskToSelection { old_sel } => {
                     self.complete_mask_to_selection(old_sel, pixels);
-                }
-                ReadbackContext::TransformBounds {
-                    layer_id, target_is_mask, canvas_w, canvas_h,
-                } => {
-                    self.complete_begin_transform(
-                        layer_id, target_is_mask, canvas_w, canvas_h, pixels,
-                    );
                 }
                 ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
                     let doc_w = self.doc.width;
@@ -194,7 +210,8 @@ impl DarklyEngine {
         // squeezed to 0 height by a UI panel).  WebGPU cannot create
         // 0-dimension textures and attempting to do so corrupts the device.
         if self.gpu.surface_config.width == 0 || self.gpu.surface_config.height == 0 {
-            return self.readbacks.has_pending();
+            return self.readbacks.has_pending()
+                || self.compositor.has_pending_content_bounds();
         }
 
         self.compositor.update_animations(&self.gpu.queue, time_secs);
@@ -207,7 +224,9 @@ impl DarklyEngine {
         );
 
         // Keep requesting frames while async operations are in flight.
-        self.compositor.needs_animation() || self.readbacks.has_pending()
+        self.compositor.needs_animation()
+            || self.readbacks.has_pending()
+            || self.compositor.has_pending_content_bounds()
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
