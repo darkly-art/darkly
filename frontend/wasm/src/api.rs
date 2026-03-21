@@ -555,6 +555,18 @@ impl DarklyHandle {
     /// Reset the active brush graph to the built-in default.
     pub fn brush_graph_reset(&self) { if let Some(mut e) = self.engine_mut() { e.reset_brush_graph() } }
 
+    /// Set the global brush scale multiplier.
+    /// Controls the canvas footprint independently from the node graph's
+    /// internal rendering resolution.  1.0 = 1:1 mapping.
+    pub fn set_brush_scale(&self, scale: f32) {
+        if let Some(mut e) = self.engine_mut() { e.set_brush_scale(scale) }
+    }
+
+    /// Get the current global brush scale.
+    pub fn brush_scale(&self) -> f32 {
+        self.engine_mut().map_or(1.0, |e| e.brush_scale())
+    }
+
     // --- Fine-grained graph commands ---
     // Each returns a JsValue: on success, a JS object { graph: "<json>" }.
     // On failure, a JS object { error: "<message>" }.

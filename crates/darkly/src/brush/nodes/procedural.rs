@@ -36,7 +36,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_range(0.0, 1.0, 0.0),
             // Outputs.
             PortDef::output("dab", BrushWireType::Texture),
-            PortDef::output("dab_size", BrushWireType::Scalar),
+            PortDef::output("dab_size", BrushWireType::Vec2),
             PortDef::output("scatter_offset", BrushWireType::Vec2),
         ],
         params: &[],
@@ -123,7 +123,7 @@ impl BrushNodeEvaluator for ProceduralEvaluator {
 
         vec![
             ("dab".into(), ScalarValue::Texture(handle)),
-            ("dab_size".into(), ScalarValue::Scalar(dab_diameter as f32)),
+            ("dab_size".into(), ScalarValue::Vec2([dab_diameter as f32, dab_diameter as f32])),
             ("scatter_offset".into(), ScalarValue::Vec2([scatter_px_x, scatter_px_y])),
         ]
     }

@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use super::wire::TextureHandle;
 
 /// Maximum dab texture dimension (width = height).
+/// This is the internal rendering resolution — the quality budget.
+/// Actual brush footprint on canvas can be larger via global_scale.
 pub const MAX_DAB_SIZE: u32 = 512;
 
 /// A single pooled dab texture with its pre-built bind group.

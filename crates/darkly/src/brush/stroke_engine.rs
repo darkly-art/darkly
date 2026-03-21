@@ -42,8 +42,8 @@ pub struct StrokeEngine {
     /// Distance remaining from the last move_to that didn't reach the next
     /// spacing threshold — carried forward to the next move_to.
     leftover_distance: f32,
-    /// Dab diameter from the last evaluated dab (for spacing calculation).
-    last_dab_diameter: f32,
+    /// Dab size [w, h] from the last evaluated dab (for spacing and bounding rect).
+    last_dab_size: [f32; 2],
     /// Running dab index within the stroke.
     dab_count: u32,
 
@@ -79,6 +79,7 @@ impl StrokeEngine {
             .unwrap_or(42);
         let fuzzy_stroke = Self::prng_f32(stroke_seed, 0);
 
+        let d = Self::default_diameter();
         Self {
             runner,
             record: StrokeRecord::new(color, "default".into()),
@@ -88,7 +89,7 @@ impl StrokeEngine {
             last_point: None,
             accumulated_distance: 0.0,
             leftover_distance: 0.0,
-            last_dab_diameter: Self::default_diameter(),
+            last_dab_size: [d, d],
             dab_count: 0,
             stroke_start_time: None,
             stroke_rect: None,
@@ -113,6 +114,12 @@ impl StrokeEngine {
     /// Based on the procedural node's default size (0.5) → radius = 0.5 * 256 = 128 → diameter ≈ 258.
     fn default_diameter() -> f32 {
         MAX_DAB_SIZE as f32 * 0.5
+    }
+
+    /// The effective canvas-space diameter for spacing and bounding rect,
+    /// accounting for global_scale.
+    fn effective_diameter(&self, global_scale: f32) -> f32 {
+        self.last_dab_size[0].max(self.last_dab_size[1]) * global_scale
     }
 
     /// Process a raw pointer event — store, smooth, derive, interpolate, and
@@ -204,7 +211,8 @@ impl StrokeEngine {
             self.place_dab(&dab_info, gpu);
 
             // Recompute spacing after each dab — dynamic size may change it.
-            traveled += self.spacing.distance(self.last_dab_diameter);
+            // Use the effective (scaled) diameter for canvas-space spacing.
+            traveled += self.spacing.distance(self.effective_diameter(gpu.global_scale));
         }
 
         // Store leftover for next move_to.
@@ -227,17 +235,23 @@ impl StrokeEngine {
         gpu.submit_and_reset();
         gpu.dab_pool.release_all();
 
-        // Update dab diameter from the procedural node's output.
-        if let Some(slot) = self.runner.find_output_slot("procedural", "dab_size") {
-            if let Some(super::wire::ScalarValue::Scalar(d)) = self.runner.read_slot(slot) {
-                if d > 0.0 {
-                    self.last_dab_diameter = d;
+        // Update dab size from dab source node output (procedural or stamp).
+        // Try both node types — only one will be present in a given graph.
+        for node_type in &["procedural", "stamp"] {
+            if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
+                if let Some(val) = self.runner.read_slot(slot) {
+                    let size = val.as_vec2();
+                    if size[0] > 0.0 && size[1] > 0.0 {
+                        self.last_dab_size = size;
+                        break;
+                    }
                 }
             }
         }
 
-        // Expand bounding rect.
-        let radius = self.last_dab_diameter * 0.5 + 2.0;
+        // Expand bounding rect using scaled diameter.
+        let eff_d = self.effective_diameter(gpu.global_scale);
+        let radius = eff_d * 0.5 + 2.0;
         self.expand_rect(info.pos[0], info.pos[1], radius, gpu.canvas_width, gpu.canvas_height);
 
         self.dab_count += 1;
@@ -279,7 +293,8 @@ impl StrokeEngine {
         self.last_point = None;
         self.accumulated_distance = 0.0;
         self.leftover_distance = 0.0;
-        self.last_dab_diameter = Self::default_diameter();
+        let d = Self::default_diameter();
+        self.last_dab_size = [d, d];
         self.dab_count = 0;
         self.stroke_start_time = None;
         self.stroke_rect = None;

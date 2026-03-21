@@ -7,6 +7,11 @@
 //! This replaces `procedural.rs` as the dab source for image-based brushes.
 //! The brush tip texture is uploaded once on brush load (by the preset
 //! loading flow) and referenced by name through the `tip_name` parameter.
+//!
+//! The dab viewport may be non-square: if the tip texture has a non-square
+//! aspect ratio, the viewport preserves it so the tip is sampled without
+//! distortion.  The `size` input (0-1) scales the longer axis up to
+//! `MAX_DAB_SIZE`; the shorter axis follows from the tip aspect ratio.
 
 use crate::brush::brush_tip::BrushTipApplication;
 use crate::brush::dab_pool::MAX_DAB_SIZE;
@@ -45,7 +50,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_range(-1.0, 1.0, 0.0),
             // Outputs.
             PortDef::output("dab", BrushWireType::Texture),
-            PortDef::output("dab_size", BrushWireType::Scalar),
+            PortDef::output("dab_size", BrushWireType::Vec2),
             PortDef::output("scatter_offset", BrushWireType::Vec2),
         ],
         params: &[
@@ -98,14 +103,29 @@ impl BrushNodeEvaluator for StampEvaluator {
             return vec![];
         }
 
-        // Map 0-1 size to pixel diameter.  size=0 → 1px, size=1 → MAX px.
+        // Compute dab dimensions preserving tip aspect ratio.
+        // The `size` input (0-1) scales the longer axis up to MAX_DAB_SIZE;
+        // the shorter axis follows from the tip's natural aspect ratio.
         let max = MAX_DAB_SIZE as f32;
-        let diameter = (size * max).max(1.0);
-        let dab_diameter = (diameter.ceil() as u32).min(MAX_DAB_SIZE);
+        let (tip_w, tip_h) = gpu.dab_pool.tip_size(tip_name).unwrap_or((1, 1));
+        let tip_aspect = tip_w as f32 / tip_h as f32;
 
-        // Scatter: offset in pixels proportional to dab diameter.
-        let scatter_px_x = scatter_x * dab_diameter as f32;
-        let scatter_px_y = scatter_y * dab_diameter as f32;
+        let (dab_w, dab_h) = if tip_aspect >= 1.0 {
+            // Wide tip: width is the long axis.
+            let w = (size * max).max(1.0);
+            let h = (w / tip_aspect).max(1.0);
+            (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
+        } else {
+            // Tall tip: height is the long axis.
+            let h = (size * max).max(1.0);
+            let w = (h * tip_aspect).max(1.0);
+            (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
+        };
+
+        // Scatter: offset in pixels proportional to the larger dab dimension.
+        let dab_major = dab_w.max(dab_h) as f32;
+        let scatter_px_x = scatter_x * dab_major;
+        let scatter_px_y = scatter_y * dab_major;
 
         // Rotation: 0-1 maps to 0-2π radians.
         let rotation_rad = rotation_input * std::f32::consts::TAU;
@@ -123,19 +143,19 @@ impl BrushNodeEvaluator for StampEvaluator {
 
         // Write uniforms.
         let uniforms = StampUniforms {
-            dab_size: dab_diameter as f32,
+            dab_width: dab_w as f32,
+            dab_height: dab_h as f32,
             opacity,
             rotation: rotation_rad,
-            ratio,
             color,
             mirror_x,
             mirror_y,
             application: application_int,
-            _pad: 0.0,
+            ratio,
         };
         gpu.pipelines.write_stamp_uniforms(gpu.queue, &uniforms);
 
-        // Render stamp to dab texture.
+        // Render stamp to dab texture (non-square viewport).
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("brush-stamp"),
@@ -151,7 +171,7 @@ impl BrushNodeEvaluator for StampEvaluator {
                 ..Default::default()
             });
 
-            pass.set_viewport(0.0, 0.0, dab_diameter as f32, dab_diameter as f32, 0.0, 1.0);
+            pass.set_viewport(0.0, 0.0, dab_w as f32, dab_h as f32, 0.0, 1.0);
             pass.set_pipeline(gpu.pipelines.stamp_pipeline());
             pass.set_bind_group(0, &gpu.pipelines.stamp_uniform_bind_group, &[]);
             pass.set_bind_group(1, tip_bind_group, &[]);
@@ -160,7 +180,7 @@ impl BrushNodeEvaluator for StampEvaluator {
 
         vec![
             ("dab".into(), ScalarValue::Texture(handle)),
-            ("dab_size".into(), ScalarValue::Scalar(dab_diameter as f32)),
+            ("dab_size".into(), ScalarValue::Vec2([dab_w as f32, dab_h as f32])),
             ("scatter_offset".into(), ScalarValue::Vec2([scatter_px_x, scatter_px_y])),
         ]
     }

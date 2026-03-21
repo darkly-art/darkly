@@ -14,7 +14,6 @@
 //! Separate from `PaintPipelines` — different concerns (dab generation +
 //! dab compositing vs. SDF circle painting + gradient fill).
 
-use super::dab_pool::MAX_DAB_SIZE;
 
 /// Uniform data for the procedural dab generation shader.
 #[repr(C)]
@@ -33,15 +32,15 @@ pub struct DabUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct StampUniforms {
-    pub dab_size: f32,       // actual dab diameter in pixels
+    pub dab_width: f32,      // dab viewport width in pixels
+    pub dab_height: f32,     // dab viewport height in pixels
     pub opacity: f32,        // dab opacity (0-1)
     pub rotation: f32,       // dab rotation in radians
-    pub ratio: f32,          // aspect ratio (1.0 = square)
     pub color: [f32; 4],     // RGBA paint color (straight alpha)
     pub mirror_x: f32,       // 1.0 = flip horizontally
     pub mirror_y: f32,       // 1.0 = flip vertically
     pub application: u32,    // BrushTipApplication as u32
-    pub _pad: f32,
+    pub ratio: f32,          // user-controlled aspect ratio squeeze (1.0 = none)
 }
 
 /// Uniform data for the dab compositing shader.
@@ -75,7 +74,8 @@ pub struct BrushPipelines {
     pub(crate) selection_bgl: wgpu::BindGroupLayout,
 
     /// Canvas-region copy texture for shader-side Porter-Duff compositing.
-    /// Pre-allocated at MAX_DAB_SIZE × MAX_DAB_SIZE.
+    /// Sized to full canvas dimensions — the brush footprint after scaling
+    /// can be up to the canvas size.
     canvas_copy_texture: wgpu::Texture,
     // View and BGL are held alive for the bind group's internal Arc references.
     _canvas_copy_view: wgpu::TextureView,
@@ -87,10 +87,15 @@ impl BrushPipelines {
     /// Create brush pipelines.
     ///
     /// `dab_bgl` is the dab texture bind group layout from `DabTexturePool`.
+    /// `canvas_w`/`canvas_h` size the canvas-copy texture (used for shader-side
+    /// Porter-Duff compositing — must be large enough for the biggest possible
+    /// brush footprint, which is bounded by the canvas dimensions).
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         dab_bgl: &wgpu::BindGroupLayout,
+        canvas_w: u32,
+        canvas_h: u32,
     ) -> Self {
         // --- Shaders ---
         let procedural_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -298,11 +303,13 @@ impl BrushPipelines {
         });
 
         // --- Canvas copy texture (for shader-side Porter-Duff) ---
+        // Sized to the full canvas so any brush footprint (including scaled
+        // brushes) can be composited without hitting a size cap.
         let canvas_copy_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-canvas-copy"),
             size: wgpu::Extent3d {
-                width: MAX_DAB_SIZE,
-                height: MAX_DAB_SIZE,
+                width: canvas_w,
+                height: canvas_h,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,

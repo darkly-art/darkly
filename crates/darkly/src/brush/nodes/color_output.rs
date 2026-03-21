@@ -4,6 +4,13 @@
 //! canvas layer via shader-side Porter-Duff source-over blending.
 //! This is the final node in a brush graph — it produces visible output.
 //!
+//! The dab texture contains the brush content rendered at internal resolution
+//! (up to `MAX_DAB_SIZE`).  The `global_scale` from `BrushGpuContext` controls
+//! the final canvas footprint: the composite quad is sized to
+//! `dab_size * global_scale`, and the GPU bilinear samples the dab texture
+//! into the larger (or smaller) quad.  This decouples brush size from
+//! internal rendering resolution.
+//!
 //! Before the composite render pass, the canvas region under the dab is
 //! copied to a temporary texture.  The shader reads both the dab and the
 //! canvas copy, computes correct straight-alpha compositing, and writes
@@ -27,7 +34,7 @@ pub fn register() -> BrushNodeRegistration {
         display_name: "Color Output",
         ports: vec![
             PortDef::input("dab", BrushWireType::Texture),
-            PortDef::input("dab_size", BrushWireType::Scalar),
+            PortDef::input("dab_size", BrushWireType::Vec2),
             PortDef::input("position", BrushWireType::Vec2),
             PortDef::input("scatter_offset", BrushWireType::Vec2),
         ],
@@ -53,24 +60,32 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             ScalarValue::Texture(h) => h,
             _ => return vec![],
         };
-        let dab_diameter = ctx.input_f32("dab_size");
+        let dab_size = ctx.input("dab_size").as_vec2();
         let base_position = ctx.input("position").as_vec2();
         let scatter = ctx.input("scatter_offset").as_vec2();
         let position = [base_position[0] + scatter[0], base_position[1] + scatter[1]];
 
-        if dab_diameter <= 0.0 {
+        let dab_w = dab_size[0];
+        let dab_h = dab_size[1];
+        if dab_w <= 0.0 || dab_h <= 0.0 {
             return vec![];
         }
 
+        // Apply global_scale to get the canvas footprint.
+        let scale = gpu.global_scale;
+        let foot_w = dab_w * scale;
+        let foot_h = dab_h * scale;
+
         // Position the composite quad centered on the dab position,
         // clamped to canvas bounds.
-        let half = dab_diameter * 0.5;
-        let unclipped_x0 = position[0] - half;
-        let unclipped_y0 = position[1] - half;
+        let half_w = foot_w * 0.5;
+        let half_h = foot_h * 0.5;
+        let unclipped_x0 = position[0] - half_w;
+        let unclipped_y0 = position[1] - half_h;
         let x0 = unclipped_x0.max(0.0);
         let y0 = unclipped_y0.max(0.0);
-        let x1 = (position[0] + half).min(gpu.canvas_width as f32);
-        let y1 = (position[1] + half).min(gpu.canvas_height as f32);
+        let x1 = (position[0] + half_w).min(gpu.canvas_width as f32);
+        let y1 = (position[1] + half_h).min(gpu.canvas_height as f32);
 
         let quad_w = x1 - x0;
         let quad_h = y1 - y0;
@@ -78,11 +93,13 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             return vec![];
         }
 
-        // Integer pixel rect for the copy (ceil to cover partial pixels).
+        // Integer pixel rect for the canvas copy (ceil to cover partial pixels).
         let copy_x = x0 as u32;
         let copy_y = y0 as u32;
-        let copy_w = (quad_w.ceil() as u32).min(gpu.canvas_width - copy_x).min(MAX_DAB_SIZE);
-        let copy_h = (quad_h.ceil() as u32).min(gpu.canvas_height - copy_y).min(MAX_DAB_SIZE);
+        let copy_w = (quad_w.ceil() as u32)
+            .min(gpu.canvas_width - copy_x);
+        let copy_h = (quad_h.ceil() as u32)
+            .min(gpu.canvas_height - copy_y);
 
         if copy_w == 0 || copy_h == 0 {
             return vec![];
@@ -110,14 +127,20 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             },
         );
 
-        // UV mapping: the dab occupies [0, dab_diameter) in the pool texture.
-        // When clipped at the top/left canvas edge, offset the UV start to
-        // skip the clipped portion of the dab texture.
-        let tex_size = MAX_DAB_SIZE as f32;
-        let uv_min_x = (x0 - unclipped_x0) / tex_size;
-        let uv_min_y = (y0 - unclipped_y0) / tex_size;
-        let uv_max_x = (x1 - unclipped_x0) / tex_size;
-        let uv_max_y = (y1 - unclipped_y0) / tex_size;
+        // UV mapping: the dab content occupies [0..dab_w] x [0..dab_h] in the
+        // MAX_DAB_SIZE pool texture.  The composite quad maps to the scaled
+        // canvas footprint.  When clipped at the canvas edge, offset the UV
+        // start to skip the clipped portion.
+        let tex_w = MAX_DAB_SIZE as f32;
+        let tex_h = MAX_DAB_SIZE as f32;
+        let content_uv_w = dab_w / tex_w;
+        let content_uv_h = dab_h / tex_h;
+
+        // Fraction of the footprint that is clipped on each side.
+        let uv_min_x = (x0 - unclipped_x0) / foot_w * content_uv_w;
+        let uv_min_y = (y0 - unclipped_y0) / foot_h * content_uv_h;
+        let uv_max_x = (x1 - unclipped_x0) / foot_w * content_uv_w;
+        let uv_max_y = (y1 - unclipped_y0) / foot_h * content_uv_h;
 
         let uniforms = CompositeUniforms {
             origin: [x0, y0],

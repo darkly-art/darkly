@@ -178,6 +178,21 @@ impl DarklyEngine {
         let _ = self.active_brush_graph.set_node_position(NodeId(node_id), [x, y]);
     }
 
+    /// Set the global brush scale multiplier.
+    ///
+    /// This controls the canvas footprint of the brush independently from
+    /// the node graph's internal rendering resolution.  The value is
+    /// multiplicative: 1.0 = dab pixels map 1:1, 2.0 = brush is twice
+    /// as large on canvas, etc.
+    pub fn set_brush_scale(&mut self, scale: f32) {
+        self.brush_global_scale = scale.max(0.01);
+    }
+
+    /// Get the current global brush scale.
+    pub fn brush_scale(&self) -> f32 {
+        self.brush_global_scale
+    }
+
     /// Return info about all `user_input` nodes in the active brush graph.
     ///
     /// The result is ordered by node position (top-to-bottom, left-to-right)

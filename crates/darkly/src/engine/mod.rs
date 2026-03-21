@@ -171,6 +171,11 @@ pub struct DarklyEngine {
     // --- Preset Library (Phase 7) ---
     pub(crate) preset_library: PresetLibrary,
 
+    /// Global brush scale multiplier applied at composite time.
+    /// Controls the canvas footprint of the brush independently from the
+    /// node graph's internal rendering resolution.  Default 1.0.
+    pub(crate) brush_global_scale: f32,
+
     // --- Deferred operations ---
     /// Pending transform waiting for content bounds computation.
     pub(crate) pending_transform: Option<PendingTransform>,
@@ -195,7 +200,7 @@ impl DarklyEngine {
         let region_store = RegionStore::new(&gpu.device, doc_width, doc_height);
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
         let dab_pool = DabTexturePool::new(&gpu.device);
-        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout());
+        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout(), doc_width, doc_height);
 
         DarklyEngine {
             doc,
@@ -217,6 +222,7 @@ impl DarklyEngine {
             brush_stroke_engine: None,
             active_brush_graph: crate::brush::default_graph(),
             preset_library: PresetLibrary::new(),
+            brush_global_scale: 1.0,
             pending_transform: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,

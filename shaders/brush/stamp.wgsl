@@ -2,18 +2,20 @@
 // opacity, rotation, mirror, and ratio transforms.
 //
 // Render target: RGBA8 dab texture, REPLACE blend, LoadOp::Clear(transparent).
-// Viewport is set to (0, 0, dab_diameter, dab_diameter) by the host.
+// Viewport is set to (0, 0, dab_width, dab_height) by the host.
+// The viewport may be non-square when the tip texture has a non-square
+// aspect ratio.
 
 struct StampUniforms {
-    dab_size: f32,       // actual dab diameter in pixels (matches viewport)
+    dab_width: f32,      // dab viewport width in pixels
+    dab_height: f32,     // dab viewport height in pixels
     opacity: f32,        // dab opacity (0-1)
     rotation: f32,       // dab rotation in radians
-    ratio: f32,          // aspect ratio (1.0 = square, <1.0 = squashed)
     color: vec4f,        // RGBA paint color (straight alpha)
     mirror_x: f32,       // 1.0 = flip horizontally, 0.0 = normal
     mirror_y: f32,       // 1.0 = flip vertically, 0.0 = normal
     application: u32,    // 0=AlphaMask, 1=ImageStamp, 2=LightnessMap, 3=GradientMap
-    _pad: f32,
+    ratio: f32,          // user-controlled aspect ratio squeeze (1.0 = none)
 }
 
 @group(0) @binding(0) var<uniform> u: StampUniforms;
@@ -21,12 +23,13 @@ struct StampUniforms {
 @group(1) @binding(1) var s_tip: sampler;
 
 @fragment fn fs_main(@builtin(position) pos: vec4f) -> @location(0) vec4f {
-    let center = vec2f(u.dab_size * 0.5);
+    let dab_size = vec2f(u.dab_width, u.dab_height);
+    let center = dab_size * 0.5;
 
     // Transform fragment position to tip UV space:
     // 1. Center at origin
     // 2. Apply inverse rotation
-    // 3. Apply inverse aspect ratio
+    // 3. Apply inverse aspect ratio (user squeeze)
     // 4. Apply mirror
     // 5. Map back to 0-1 UV
     var p = pos.xy - center;
@@ -39,13 +42,13 @@ struct StampUniforms {
         p.x * sin_r + p.y * cos_r,
     );
 
-    // Inverse aspect ratio: stretch in Y to undo the squash.
+    // Inverse user aspect ratio squeeze: stretch in Y to undo the squash.
     if u.ratio > 0.001 {
         p.y /= u.ratio;
     }
 
-    // Map to 0-1 UV (centered).
-    var uv = p / u.dab_size + 0.5;
+    // Map to 0-1 UV using each axis independently (handles non-square dabs).
+    var uv = p / dab_size + 0.5;
 
     // Mirror.
     if u.mirror_x > 0.5 {
