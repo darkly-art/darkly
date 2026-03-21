@@ -73,21 +73,16 @@ struct Uniforms {
     // Read destination (straight alpha — the layer's existing pixels).
     let bg = textureLoad(t_dest, vec2i(in.position.xy), 0);
 
-    // Porter-Duff source-over (premultiplied fg, straight bg) → straight output.
-    let out_a = fg_a + bg.a * (1.0 - fg_a);
-    let out_rgb = select(
-        vec3f(0.0),
-        (fg_pre + (1.0 - fg_a) * bg.a * bg.rgb) / out_a,
-        out_a > 0.001,
-    );
+    // Porter-Duff source-over (premultiplied fg, straight bg → straight output).
+    let blended = source_over(fg_pre, fg_a, bg);
 
     if (u.is_mask > 0.5) {
         // Mask mode: convert RGB to luminance, output as single-channel value.
         // For R8 targets, only the R channel is written.
-        let lum = dot(out_rgb, vec3f(0.2126, 0.7152, 0.0722));
-        return vec4f(lum, lum, lum, out_a);
+        let lum = dot(blended.rgb, vec3f(0.2126, 0.7152, 0.0722));
+        return vec4f(lum, lum, lum, blended.a);
     } else {
         // RGBA mode: output straight-alpha color.
-        return vec4f(out_rgb, out_a);
+        return blended;
     }
 }

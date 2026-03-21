@@ -69,13 +69,6 @@ struct VertexOutput {
     let copy_uv = (in.canvas_pos - u.origin) / vec2f(textureDimensions(t_canvas_copy));
     let bg = textureSample(t_canvas_copy, s_canvas_copy, copy_uv);
 
-    // Porter-Duff source-over (premultiplied fg, straight bg) → straight output.
-    let out_a = fg_a + bg.a * (1.0 - fg_a);
-    let out_rgb = select(
-        vec3f(0.0),
-        (fg_rgb_pre + (1.0 - fg_a) * bg.a * bg.rgb) / out_a,
-        out_a > 0.001,
-    );
-
-    return vec4f(out_rgb, out_a);
+    // Porter-Duff source-over (premultiplied fg, straight bg → straight output).
+    return source_over(fg_rgb_pre, fg_a, bg);
 }

@@ -64,9 +64,7 @@ struct Uniforms {
         return bg;
     }
 
-    // Porter-Duff source-over: fg is premultiplied, bg is straight
+    // Porter-Duff source-over (premultiplied fg, straight bg → straight output).
     let fg_pre = fg_pm.rgb * u.opacity;
-    let out_a = a + bg.a * (1.0 - a);
-    let out_rgb = (fg_pre + bg.rgb * bg.a * (1.0 - a)) / max(out_a, 0.001);
-    return vec4f(out_rgb, out_a);
+    return source_over(fg_pre, a, bg);
 }

@@ -191,9 +191,9 @@ pub struct TransformPass {
     commit_rgba_pipeline: wgpu::RenderPipeline,
     commit_r8_pipeline: wgpu::RenderPipeline,
     commit_bind_group_layout: wgpu::BindGroupLayout,
-    commit_dest_bind_group_layout: wgpu::BindGroupLayout,
+    /// Single-texture BGL used for both dest copy (commit) and premultiply passes.
+    single_tex_bgl: wgpu::BindGroupLayout,
     premultiply_pipeline: wgpu::RenderPipeline,
-    premultiply_bind_group_layout: wgpu::BindGroupLayout,
     pub active: Option<TransformState>,
 }
 
@@ -254,7 +254,10 @@ impl TransformPass {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("transform-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/transform.wgsl").into(),
+                concat!(
+                    include_str!("../../../../shaders/source_over.wgsl"), "\n",
+                    include_str!("../../../../shaders/transform.wgsl"),
+                ).into(),
             ),
         });
 
@@ -320,31 +323,24 @@ impl TransformPass {
             ],
         });
 
-        // Dest texture bind group layout for shader-side Porter-Duff in commit pass.
-        let commit_dest_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("transform-commit-dest-bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
+        // Single-texture BGL shared by dest copy (commit) and premultiply passes.
+        let single_tex_bgl = super::straight_composite::single_texture_bind_group_layout(
+            device, "transform-single-tex-bgl",
+        );
 
         let commit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("transform-commit-layout"),
-            bind_group_layouts: &[&commit_bind_group_layout, &commit_dest_bgl],
+            bind_group_layouts: &[&commit_bind_group_layout, &single_tex_bgl],
             immediate_size: 0,
         });
 
         let commit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("transform-commit-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/transform_commit.wgsl").into(),
+                concat!(
+                    include_str!("../../../../shaders/source_over.wgsl"), "\n",
+                    include_str!("../../../../shaders/transform_commit.wgsl"),
+                ).into(),
             ),
         });
 
@@ -396,23 +392,9 @@ impl TransformPass {
             ),
         });
 
-        let premultiply_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("premultiply-bgl"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
-        });
-
         let premultiply_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("premultiply-layout"),
-            bind_group_layouts: &[&premultiply_bgl],
+            bind_group_layouts: &[&single_tex_bgl],
             immediate_size: 0,
         });
 
@@ -451,9 +433,8 @@ impl TransformPass {
             commit_rgba_pipeline,
             commit_r8_pipeline,
             commit_bind_group_layout,
-            commit_dest_bind_group_layout: commit_dest_bgl,
+            single_tex_bgl,
             premultiply_pipeline,
-            premultiply_bind_group_layout: premultiply_bgl,
             active: None,
         }
     }
@@ -711,7 +692,7 @@ impl TransformPass {
             let temp_view = temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
             let premul_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("premultiply-bg"),
-                layout: &self.premultiply_bind_group_layout,
+                layout: &self.single_tex_bgl,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(&temp_view),
@@ -906,44 +887,10 @@ impl TransformPass {
 
         queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
-        // Copy destination to temp texture for shader-side Porter-Duff.
-        let target_size = target_texture.size();
-        let dest_copy = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("transform-dest-copy"),
-            size: target_size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: target_format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: target_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &dest_copy,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            target_size,
+        // Copy destination for shader-side Porter-Duff (see straight_composite module).
+        let dest_bg = super::straight_composite::copy_for_compositing(
+            device, encoder, &self.single_tex_bgl, target_texture, target_format,
         );
-
-        let dest_view = dest_copy.create_view(&wgpu::TextureViewDescriptor::default());
-        let dest_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("transform-commit-dest-bg"),
-            layout: &self.commit_dest_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&dest_view),
-            }],
-        });
 
         let pipeline = match target_format {
             wgpu::TextureFormat::R8Unorm => &self.commit_r8_pipeline,

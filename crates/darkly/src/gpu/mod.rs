@@ -14,4 +14,5 @@ pub mod region_store;
 pub mod paint_target;
 pub mod readback;
 pub mod flood_fill;
+pub mod straight_composite;
 pub mod test_utils;
