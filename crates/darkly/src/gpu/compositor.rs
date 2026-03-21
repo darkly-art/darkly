@@ -935,6 +935,7 @@ impl Compositor {
     /// Used by commit_floating() to replace CPU-side rasterize_to_tiles().
     pub fn commit_floating_to_texture(
         &mut self,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         queue: &wgpu::Queue,
         matrix: &crate::gpu::transform::Affine2D,
@@ -947,20 +948,20 @@ impl Compositor {
             None => return,
         };
 
-        let (view, format) = if is_mask {
+        let (texture, view, format) = if is_mask {
             match self.mask_textures.get(&layer_id) {
-                Some(t) => (&t.view, wgpu::TextureFormat::R8Unorm),
+                Some(t) => (&t.texture, &t.view, wgpu::TextureFormat::R8Unorm),
                 None => return,
             }
         } else {
             match self.layer_textures.get(&layer_id) {
-                Some(t) => (&t.view, wgpu::TextureFormat::Rgba8Unorm),
+                Some(t) => (&t.texture, &t.view, wgpu::TextureFormat::Rgba8Unorm),
                 None => return,
             }
         };
 
         self.transform_pass.commit_to_texture(
-            encoder, queue, view, format,
+            device, encoder, queue, texture, view, format,
             matrix, source_origin, source_width, source_height,
             self.padded_width, self.padded_height,
         );

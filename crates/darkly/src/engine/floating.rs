@@ -462,7 +462,7 @@ impl DarklyEngine {
 
             // GPU render pass: write transformed source pixels to layer/mask texture.
             self.compositor.commit_floating_to_texture(
-                encoder, &self.gpu.queue,
+                &self.gpu.device, encoder, &self.gpu.queue,
                 &fc.matrix, fc.source_origin, fc.source_width, fc.source_height,
             );
 
