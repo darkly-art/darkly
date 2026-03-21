@@ -93,12 +93,14 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             return vec![];
         }
 
-        // Integer pixel rect for the canvas copy (ceil to cover partial pixels).
+        // Integer pixel rect for the canvas copy.  The composite shader
+        // uses floor(origin) for the copy UV, so the copy must span from
+        // floor(x0) to ceil(x1) to cover every texel the shader can reach.
         let copy_x = x0 as u32;
         let copy_y = y0 as u32;
-        let copy_w = (quad_w.ceil() as u32)
+        let copy_w = ((x1.ceil() as u32).saturating_sub(copy_x))
             .min(gpu.canvas_width - copy_x);
-        let copy_h = (quad_h.ceil() as u32)
+        let copy_h = ((y1.ceil() as u32).saturating_sub(copy_y))
             .min(gpu.canvas_height - copy_y);
 
         if copy_w == 0 || copy_h == 0 {

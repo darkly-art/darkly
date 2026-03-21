@@ -65,8 +65,9 @@ struct VertexOutput {
     let fg_rgb_pre = dab.rgb * sel;
 
     // Background: read canvas copy (straight alpha).
-    // UV maps quad pixel position to the copied region at (0,0) in the copy texture.
-    let copy_uv = (in.canvas_pos - u.origin) / vec2f(textureDimensions(t_canvas_copy));
+    // The copy_texture_to_texture origin is floor(u.origin) — integer pixel coords.
+    // Use floored origin so the UV maps each fragment to the correct canvas texel.
+    let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_canvas_copy));
     let bg = textureSample(t_canvas_copy, s_canvas_copy, copy_uv);
 
     // Porter-Duff source-over (premultiplied fg, straight bg → straight output).

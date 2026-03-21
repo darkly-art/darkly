@@ -48,7 +48,7 @@ Past lessons that illustrate the pattern:
 - **Selection overlay** generated one GPU primitive per boundary pixel (~800 instances for a rectangle). Fix: merge collinear segments and simplify polylines once when the selection changes — down to ~4-30 primitives.
 - **Animation scheduling** had independent per-system timers that forced extra frame renders. Fix: a single master clock with integer divisors so slower systems' ticks always align with faster ones — zero extra renders.
 
-See `gpu-perf-lessons-learned.md` for full details. The specifics vary but the theme is the same: the naive approach has a hidden multiplier, and there's a structural fix that eliminates it.
+See `gpu-lessons-learned.md` for full details. The specifics vary but the theme is the same: the naive approach has a hidden multiplier, and there's a structural fix that eliminates it.
 
 ## Engineering Principle
 

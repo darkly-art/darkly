@@ -120,3 +120,30 @@ pass.set_viewport(0.0, 0.0, self.width as f32, self.height as f32, 0.0, 1.0);
 This restricts rasterization to the unpadded region of the padded texture. NDC [-1, +1] now maps to [0, canvas_h], and the padding area receives no fragments.
 
 **Takeaway**: When rendering geometry positioned in "canvas pixel" coordinates via NDC conversion, the viewport dimensions must match the coordinate system's range. If the render target is larger (padded, power-of-two, atlas), the viewport must be set explicitly. The default viewport (full render target) is only correct when the coordinate system spans the entire texture. This is easy to miss when textures are padded for alignment — everything works until the padding is non-zero.
+
+## 7. Integer/float origin mismatch in copy-then-sample pattern
+
+**Problem**: Brush dabs "smeared" surrounding canvas content in the stroke direction. Each dab shifted the background by ~1 pixel, accumulating along overlapping dabs into a visible directional drag.
+
+**Root cause**: The composite pass copies the canvas region under the dab to a scratch texture, then the shader samples the scratch to do Porter-Duff blending. The copy uses integer pixel coordinates (`copy_texture_to_texture` truncates the origin to `u32`), but the shader computed the sample UV using the original float origin:
+
+```wgsl
+let copy_uv = (canvas_pos - origin) / texture_size;
+```
+
+When the dab position was fractional (e.g., origin = 100.7), the copy started at pixel 100 but the UV mapped pixel 101's fragment to `(101.5 - 100.7) / W = 0.8/W` → texel 0 (Nearest filtering) → canvas pixel 100. So the shader read pixel 100's data while writing to pixel 101 — a 1-pixel shift. With overlapping dabs, this accumulated into directional smearing.
+
+**The fix had two parts** — aligning one side without the other made things worse:
+
+1. **Shader**: Use `floor(origin)` in the copy UV to match the integer copy origin:
+   ```wgsl
+   let copy_uv = (canvas_pos - floor(origin)) / texture_size;
+   ```
+
+2. **Copy extent**: The floored UV shifts the addressable range right/down, so the copy region must expand to cover it. Changed from `ceil(quad_width)` to `ceil(x1) - floor(x0)`:
+   ```rust
+   let copy_w = (x1.ceil() as u32).saturating_sub(copy_x);
+   ```
+   Without this, the rightmost column/bottommost row sampled stale data from a previous dab, producing 1px missing lines at the bottom-right edge.
+
+**Takeaway**: `copy_texture_to_texture` is an integer-pixel operation; shader UVs are float. When a shader samples data placed by a texture copy, the UV calculation must use the same (integer) origin the copy used, and the copy extent must cover every texel the shifted UV can reach. Neither side is wrong in isolation — the bug lives at the seam between integer and float coordinate domains. Any copy-then-sample pattern needs both sides to agree on the origin, and the extent to cover the range implied by that origin.
