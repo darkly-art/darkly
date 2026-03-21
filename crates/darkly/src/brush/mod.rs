@@ -1,9 +1,8 @@
 //! Node-graph composable brush engine.
 //!
-//! Phase 4: Stroke engine + engine integration.  Dab spacing, position
-//! smoothing, sensor interpolation, and full paint pipeline from pointer
-//! events through the node graph to GPU dab compositing.
+//! Phase 8: Stamp tips + user-exposed properties.
 
+pub mod brush_tip;
 pub mod dab_pool;
 pub mod eval;
 pub mod gpu_context;
@@ -92,8 +91,10 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("mix".into(), Box::new(nodes::mix::MixEvaluator));
     map.insert("split_vec2".into(), Box::new(nodes::split_vec2::SplitVec2Evaluator));
     map.insert("make_color".into(), Box::new(nodes::make_color::MakeColorEvaluator));
+    map.insert("user_input".into(), Box::new(nodes::user_input::UserInputEvaluator));
     // GPU nodes.
     map.insert("procedural".into(), Box::new(nodes::procedural::ProceduralEvaluator));
+    map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
     map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
     map
 }

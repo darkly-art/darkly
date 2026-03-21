@@ -1,7 +1,8 @@
 //! Pre-built GPU pipelines for the brush system.
 //!
-//! Two pipelines:
+//! Three pipelines:
 //! - **Procedural**: renders SDF circle/gaussian to a dab texture (REPLACE blend).
+//! - **Stamp**: renders a brush tip texture to a dab texture with transforms.
 //! - **Composite**: composites a dab texture onto the canvas with correct
 //!   straight-alpha Porter-Duff source-over (REPLACE blend, shader-side composite).
 //!
@@ -28,6 +29,21 @@ pub struct DabUniforms {
     pub _pad: [f32; 3],      // padding to 16-byte alignment
 }
 
+/// Uniform data for the stamp dab generation shader.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct StampUniforms {
+    pub dab_size: f32,       // actual dab diameter in pixels
+    pub opacity: f32,        // dab opacity (0-1)
+    pub rotation: f32,       // dab rotation in radians
+    pub ratio: f32,          // aspect ratio (1.0 = square)
+    pub color: [f32; 4],     // RGBA paint color (straight alpha)
+    pub mirror_x: f32,       // 1.0 = flip horizontally
+    pub mirror_y: f32,       // 1.0 = flip vertically
+    pub application: u32,    // BrushTipApplication as u32
+    pub _pad: f32,
+}
+
 /// Uniform data for the dab compositing shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -42,10 +58,14 @@ pub struct CompositeUniforms {
 /// Pre-built render pipelines for the brush system.
 pub struct BrushPipelines {
     procedural_pipeline: wgpu::RenderPipeline,
+    stamp_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
 
     procedural_uniform_buf: wgpu::Buffer,
     pub(crate) procedural_uniform_bind_group: wgpu::BindGroup,
+
+    stamp_uniform_buf: wgpu::Buffer,
+    pub(crate) stamp_uniform_bind_group: wgpu::BindGroup,
 
     composite_uniform_buf: wgpu::Buffer,
     pub(crate) composite_uniform_bind_group: wgpu::BindGroup,
@@ -77,6 +97,13 @@ impl BrushPipelines {
             label: Some("brush-procedural"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../../../shaders/brush/procedural.wgsl").into(),
+            ),
+        });
+
+        let stamp_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("brush-stamp"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/brush/stamp.wgsl").into(),
             ),
         });
 
@@ -155,6 +182,13 @@ impl BrushPipelines {
             immediate_size: 0,
         });
 
+        // Stamp: group(0) = uniforms, group(1) = brush tip texture+sampler.
+        let stamp_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("brush-stamp-layout"),
+            bind_group_layouts: &[&uniform_bgl, dab_bgl],
+            immediate_size: 0,
+        });
+
         // Composite: group(0) = uniforms, group(1) = dab texture, group(2) = selection,
         //            group(3) = canvas copy (for shader-side Porter-Duff).
         let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -177,6 +211,22 @@ impl BrushPipelines {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: procedural_uniform_buf.as_entire_binding(),
+            }],
+        });
+
+        let stamp_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("brush-stamp-uniforms"),
+            size: std::mem::size_of::<StampUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let stamp_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("brush-stamp-uniform-bg"),
+            layout: &uniform_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: stamp_uniform_buf.as_entire_binding(),
             }],
         });
 
@@ -313,6 +363,36 @@ impl BrushPipelines {
             cache: None,
         });
 
+        // Stamp: REPLACE blend — clear dab texture and stamp the tip image.
+        let stamp_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("brush-stamp"),
+            layout: Some(&stamp_layout),
+            vertex: wgpu::VertexState {
+                module: &stamp_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &stamp_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // Composite: REPLACE blend — the shader does Porter-Duff source-over
         // manually by reading the canvas copy, producing correct straight-alpha output.
         let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -346,9 +426,12 @@ impl BrushPipelines {
 
         Self {
             procedural_pipeline,
+            stamp_pipeline,
             composite_pipeline,
             procedural_uniform_buf,
             procedural_uniform_bind_group,
+            stamp_uniform_buf,
+            stamp_uniform_bind_group,
             composite_uniform_buf,
             composite_uniform_bind_group,
             default_selection_bind_group,
@@ -362,6 +445,10 @@ impl BrushPipelines {
 
     pub fn procedural_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.procedural_pipeline
+    }
+
+    pub fn stamp_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.stamp_pipeline
     }
 
     pub fn composite_pipeline(&self) -> &wgpu::RenderPipeline {
@@ -379,6 +466,11 @@ impl BrushPipelines {
     /// Write procedural dab uniforms to the GPU buffer.
     pub fn write_dab_uniforms(&self, queue: &wgpu::Queue, uniforms: &DabUniforms) {
         queue.write_buffer(&self.procedural_uniform_buf, 0, bytemuck::bytes_of(uniforms));
+    }
+
+    /// Write stamp dab uniforms to the GPU buffer.
+    pub fn write_stamp_uniforms(&self, queue: &wgpu::Queue, uniforms: &StampUniforms) {
+        queue.write_buffer(&self.stamp_uniform_buf, 0, bytemuck::bytes_of(uniforms));
     }
 
     /// Write composite uniforms to the GPU buffer.

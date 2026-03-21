@@ -177,4 +177,66 @@ impl DarklyEngine {
     pub fn brush_graph_move_node(&mut self, node_id: u64, x: f32, y: f32) {
         let _ = self.active_brush_graph.set_node_position(NodeId(node_id), [x, y]);
     }
+
+    /// Return info about all `user_input` nodes in the active brush graph.
+    ///
+    /// The result is ordered by node position (top-to-bottom, left-to-right)
+    /// for a stable, creator-controlled layout in the properties panel.
+    pub fn brush_user_inputs(&self) -> Vec<UserInputInfo> {
+        let mut inputs: Vec<UserInputInfo> = self
+            .active_brush_graph
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.type_id == "user_input")
+            .map(|(_, node)| {
+                let label = node
+                    .params
+                    .first()
+                    .and_then(|p| match p {
+                        ParamValue::String(s) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                let value = node
+                    .params
+                    .get(1)
+                    .and_then(|p| match p {
+                        ParamValue::Float(v) => Some(*v),
+                        _ => None,
+                    })
+                    .unwrap_or(0.5);
+                UserInputInfo {
+                    node_id: node.id.0,
+                    label,
+                    value,
+                    position: node.position,
+                }
+            })
+            .collect();
+
+        // Sort by position: top-to-bottom (y), then left-to-right (x).
+        inputs.sort_by(|a, b| {
+            a.position[1]
+                .partial_cmp(&b.position[1])
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| {
+                    a.position[0]
+                        .partial_cmp(&b.position[0])
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+        });
+
+        inputs
+    }
+}
+
+/// Info about a `user_input` node — exposed to the frontend for the
+/// brush properties panel.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputInfo {
+    pub node_id: u64,
+    pub label: String,
+    pub value: f32,
+    pub position: [f32; 2],
 }

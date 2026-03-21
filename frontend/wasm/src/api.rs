@@ -170,6 +170,13 @@ fn js_to_param_values(js: &JsValue, defs: &[ParamDef]) -> Vec<ParamValue> {
                 .unwrap_or(*default);
             ParamValue::Bool(v)
         }
+        ParamDef::String { name, default } => {
+            let v = js_sys::Reflect::get(js, &(*name).into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_else(|| default.to_string());
+            ParamValue::String(v)
+        }
     }).collect()
 }
 
@@ -606,6 +613,7 @@ impl DarklyHandle {
             "float" => darkly::gpu::params::ParamValue::Float(value.as_f64().unwrap_or(0.0) as f32),
             "int" => darkly::gpu::params::ParamValue::Int(value.as_f64().unwrap_or(0.0) as i32),
             "bool" => darkly::gpu::params::ParamValue::Bool(value.as_bool().unwrap_or(false)),
+            "string" => darkly::gpu::params::ParamValue::String(value.as_string().unwrap_or_default()),
             _ => return Self::graph_result(Err(format!("unknown param kind: {kind}"))),
         };
         Self::graph_result(e.brush_graph_set_param(node_id as u64, param_index as usize, pv))
@@ -614,6 +622,15 @@ impl DarklyHandle {
     pub fn brush_graph_move_node(&self, node_id: u32, x: f32, y: f32) {
         if let Some(mut e) = self.engine_mut() {
             e.brush_graph_move_node(node_id as u64, x, y);
+        }
+    }
+
+    /// Return info about all `user_input` nodes in the active brush as JSON.
+    /// Each entry has { nodeId, label, value, position }.
+    pub fn brush_user_inputs(&self) -> String {
+        match self.engine() {
+            Some(e) => serde_json::to_string(&e.brush_user_inputs()).unwrap_or_else(|_| "[]".into()),
+            None => "[]".into(),
         }
     }
 

@@ -1,9 +1,10 @@
-//! Pre-allocated pool of GPU dab textures.
+//! Pre-allocated pool of GPU dab textures + cached brush tip textures.
 //!
-//! Avoids GPU allocation during painting — textures are created once and
-//! reused across dabs.  Each pool entry holds an RGBA8 texture at the max
-//! dab size, a texture view, and a pre-built bind group for sampling in
-//! the composite pass.
+//! Avoids GPU allocation during painting — dab textures are created once and
+//! reused across dabs.  Brush tip textures are uploaded once on brush load
+//! and cached by name.
+
+use std::collections::HashMap;
 
 use super::wire::TextureHandle;
 
@@ -19,14 +20,25 @@ struct DabEntry {
     in_use: bool,
 }
 
-/// Pool of pre-allocated RGBA8 dab textures.
+/// A cached brush tip texture uploaded to the GPU.
+struct BrushTipEntry {
+    _texture: wgpu::Texture,
+    _view: wgpu::TextureView,
+    /// Bind group for sampling this tip in the stamp pass (same BGL as dab).
+    bind_group: wgpu::BindGroup,
+    width: u32,
+    height: u32,
+}
+
+/// Pool of pre-allocated GPU dab textures plus cached brush tip textures.
 ///
-/// During a stroke, each dab acquires a texture (procedural node writes to
-/// it), then the composite node samples it.  After `execute_gpu()` finishes
+/// During a stroke, each dab acquires a texture (procedural/stamp node writes
+/// to it), then the composite node samples it.  After `execute_gpu()` finishes
 /// for one dab, all textures are released back to the pool.
 ///
-/// The pool starts empty and grows on demand (lazy allocation).  Textures
-/// are never freed — the pool holds them for the program's lifetime.
+/// Brush tip textures are uploaded once on brush load and cached by name.
+/// They are separate from dab render targets — tips are read-only texture
+/// sources, dabs are write-then-read render targets.
 pub struct DabTexturePool {
     entries: Vec<DabEntry>,
     /// Bind group layout for sampling dab textures (texture + sampler).
@@ -34,6 +46,8 @@ pub struct DabTexturePool {
     /// Shared sampler for all dab texture bind groups.
     sampler: wgpu::Sampler,
     max_size: u32,
+    /// Cached brush tip textures, keyed by resource name.
+    tip_cache: HashMap<String, BrushTipEntry>,
 }
 
 impl DabTexturePool {
@@ -72,6 +86,7 @@ impl DabTexturePool {
             bgl,
             sampler,
             max_size: MAX_DAB_SIZE,
+            tip_cache: HashMap::new(),
         }
     }
 
@@ -163,5 +178,105 @@ impl DabTexturePool {
     /// composite pass.
     pub fn bind_group(&self, handle: TextureHandle) -> &wgpu::BindGroup {
         &self.entries[handle.0 as usize].bind_group
+    }
+
+    // --- Brush tip texture cache ---
+
+    /// Upload a brush tip image (RGBA8 bytes) and cache it by name.
+    ///
+    /// Called once when a brush preset is loaded.  The resulting bind group
+    /// is used by the stamp node to sample the tip texture during dab
+    /// generation.  If a tip with the same name already exists, it is
+    /// replaced.
+    pub fn upload_tip(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        name: &str,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(&format!("brush-tip-{name}")),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("brush-tip-bg-{name}")),
+            layout: &self.bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+
+        self.tip_cache.insert(
+            name.to_string(),
+            BrushTipEntry {
+                _texture: texture,
+                _view: view,
+                bind_group,
+                width,
+                height,
+            },
+        );
+    }
+
+    /// Get the bind group for a cached brush tip texture.
+    ///
+    /// Returns `None` if the tip hasn't been uploaded.
+    pub fn tip_bind_group(&self, name: &str) -> Option<&wgpu::BindGroup> {
+        self.tip_cache.get(name).map(|e| &e.bind_group)
+    }
+
+    /// Get the dimensions of a cached brush tip texture.
+    pub fn tip_size(&self, name: &str) -> Option<(u32, u32)> {
+        self.tip_cache.get(name).map(|e| (e.width, e.height))
+    }
+
+    /// Check if a brush tip is cached.
+    pub fn has_tip(&self, name: &str) -> bool {
+        self.tip_cache.contains_key(name)
+    }
+
+    /// Clear all cached brush tips (e.g. when switching brush presets).
+    pub fn clear_tips(&mut self) {
+        self.tip_cache.clear();
     }
 }

@@ -499,9 +499,9 @@ Phase 6 (dynamics + math nodes)              ✓ complete
     ↓
 Phase 7 (preset format + round-trip)         ✓ complete
     ↓
-Phase 8 (stamp tips + user-exposed properties) ← CURRENT
+Phase 8 (stamp tips + user-exposed properties) ✓ complete
     ↓
-Phase 9 (texture overlay)                    ← pencil/canvas grain
+Phase 9 (texture overlay)                    ← CURRENT
     ↓
 Phase 10 (KPP import)                        ← "download and paint" milestone
     ↓

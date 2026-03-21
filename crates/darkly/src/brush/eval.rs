@@ -61,6 +61,14 @@ impl EvalContext<'_> {
             _ => 0.0,
         }
     }
+
+    /// Read a parameter by index as &str.
+    pub fn param_str(&self, index: usize) -> &str {
+        match self.params.get(index) {
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "",
+        }
+    }
 }
 
 /// Trait implemented by each node to produce output values.

@@ -73,6 +73,12 @@ impl ParamInfo {
                 default: ParamValue::Bool(*default),
                 value: value.cloned(),
             },
+            ParamDef::String { name, default } => ParamInfo {
+                kind: "string", name,
+                min: None, max: None,
+                default: ParamValue::String(default.to_string()),
+                value: value.cloned(),
+            },
         }
     }
 }

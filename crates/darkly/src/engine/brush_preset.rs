@@ -1,7 +1,7 @@
 //! Brush preset management methods on DarklyEngine.
 
 use super::DarklyEngine;
-use crate::brush::preset::{BrushPreset, PresetBundle};
+use crate::brush::preset::{BrushPreset, PresetBundle, ResourceKind};
 use crate::brush::preset_library::PresetInfo;
 
 impl DarklyEngine {
@@ -11,13 +11,19 @@ impl DarklyEngine {
     }
 
     /// Load a preset by name and set it as the active brush graph.
+    ///
+    /// Also uploads any brush tip resources to the GPU dab pool cache.
     pub fn brush_preset_load(&mut self, name: &str) -> Result<(), String> {
-        let graph = self
+        let bundle = self
             .preset_library
-            .graph(name)
+            .get(name)
             .ok_or_else(|| format!("preset '{}' not found", name))?
             .clone();
-        let json = serde_json::to_string(&graph)
+
+        // Upload brush tip resources to the GPU.
+        self.upload_preset_resources(&bundle);
+
+        let json = serde_json::to_string(&bundle.preset.graph)
             .map_err(|e| format!("failed to serialize graph: {e}"))?;
         self.set_brush_graph(&json)
     }
@@ -37,7 +43,43 @@ impl DarklyEngine {
     }
 
     /// Import a preset from `.darkly-brush` ZIP bytes into the library.
+    ///
+    /// Uploads brush tip resources to the GPU if the preset is loaded.
     pub fn brush_preset_import(&mut self, bytes: &[u8]) -> Result<String, String> {
         self.preset_library.import_bytes(bytes)
+    }
+
+    /// Upload brush tip and pattern resources from a preset bundle to the GPU.
+    fn upload_preset_resources(&mut self, bundle: &PresetBundle) {
+        // Clear previous tips (new preset = new tip set).
+        self.dab_pool.clear_tips();
+
+        for meta in &bundle.preset.resources {
+            if meta.kind != ResourceKind::BrushTip {
+                continue;
+            }
+            let Some(data) = bundle.resource(meta.name.as_str()) else {
+                log::warn!("preset resource '{}' not found in bundle", meta.name);
+                continue;
+            };
+            // Decode the image to RGBA8.
+            match image::load_from_memory(data) {
+                Ok(img) => {
+                    let rgba = img.to_rgba8();
+                    let (w, h) = rgba.dimensions();
+                    self.dab_pool.upload_tip(
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &meta.name,
+                        w,
+                        h,
+                        rgba.as_raw(),
+                    );
+                }
+                Err(e) => {
+                    log::warn!("failed to decode brush tip '{}': {e}", meta.name);
+                }
+            }
+        }
     }
 }

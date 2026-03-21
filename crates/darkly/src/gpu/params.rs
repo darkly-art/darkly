@@ -6,6 +6,7 @@ pub enum ParamDef {
     Float { name: &'static str, min: f32, max: f32, default: f32 },
     Int   { name: &'static str, min: i32, max: i32, default: i32 },
     Bool  { name: &'static str, default: bool },
+    String { name: &'static str, default: &'static str },
 }
 
 /// A concrete runtime parameter value, read from an effect instance.
@@ -15,6 +16,7 @@ pub enum ParamValue {
     Float(f32),
     Int(i32),
     Bool(bool),
+    String(String),
 }
 
 /// Convert a JSON object of `{ "name": value, ... }` into `Vec<ParamValue>`
@@ -47,6 +49,13 @@ pub fn param_values_from_json(obj: &serde_json::Value, defs: &[ParamDef]) -> Vec
                 .unwrap_or(*default);
             ParamValue::Bool(v)
         }
+        ParamDef::String { name, default } => {
+            let v = map.get(*name)
+                .and_then(|v| v.as_str())
+                .unwrap_or(default)
+                .to_string();
+            ParamValue::String(v)
+        }
     }).collect()
 }
 
@@ -56,6 +65,7 @@ impl ParamDef {
             ParamDef::Float { default, .. } => ParamValue::Float(*default),
             ParamDef::Int { default, .. } => ParamValue::Int(*default),
             ParamDef::Bool { default, .. } => ParamValue::Bool(*default),
+            ParamDef::String { default, .. } => ParamValue::String(default.to_string()),
         }
     }
 }
