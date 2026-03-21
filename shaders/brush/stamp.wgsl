@@ -55,12 +55,15 @@ struct StampUniforms {
         uv.y = 1.0 - uv.y;
     }
 
+    // Sample tip texture unconditionally (textureSample requires uniform control flow).
+    // Clamp UV so the sample is valid even for out-of-bounds fragments.
+    let clamped_uv = clamp(uv, vec2f(0.0), vec2f(1.0));
+    let tip = textureSample(t_tip, s_tip, clamped_uv);
+
     // Out of bounds → transparent.
     if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
         return vec4f(0.0);
     }
-
-    let tip = textureSample(t_tip, s_tip, uv);
 
     // Application mode determines how tip color maps to output.
     var out: vec4f;

@@ -1,11 +1,68 @@
 //! Floating content — paste-in-place and interactive transforms.
 
-use super::DarklyEngine;
+use super::{DarklyEngine, ReadbackContext};
 use crate::gpu::paint_target::GpuPaintTarget;
+use crate::gpu::readback;
 use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY};
 use crate::layer::Layer;
 use crate::tile::TILE_SIZE;
 use crate::undo::GpuRegionAction;
+
+/// Scan pixel data for the bounding box of non-transparent content.
+///
+/// `pixels` is row-major pixel data, `bpp` bytes per pixel. The alpha channel
+/// is at offset `bpp - 1` within each pixel (works for both RGBA8 and R8).
+/// Returns `(x, y, w, h)` or `None` if the image is fully transparent.
+fn compute_content_bounds(pixels: &[u8], width: u32, height: u32, bpp: u32) -> Option<[u32; 4]> {
+    let w = width as usize;
+    let h = height as usize;
+    let stride = w * bpp as usize;
+    let alpha_off = (bpp - 1) as usize;
+
+    // Scan top → bottom for first non-transparent row.
+    let mut top = h;
+    for y in 0..h {
+        let row = &pixels[y * stride..(y + 1) * stride];
+        if row.iter().skip(alpha_off).step_by(bpp as usize).any(|&a| a > 0) {
+            top = y;
+            break;
+        }
+    }
+    if top == h {
+        return None; // fully transparent
+    }
+
+    // Scan bottom → top for last non-transparent row.
+    let mut bottom = top;
+    for y in (top..h).rev() {
+        let row = &pixels[y * stride..(y + 1) * stride];
+        if row.iter().skip(alpha_off).step_by(bpp as usize).any(|&a| a > 0) {
+            bottom = y;
+            break;
+        }
+    }
+
+    // Scan left → right and right → left within [top..=bottom].
+    let mut left = w;
+    let mut right = 0usize;
+    for y in top..=bottom {
+        let row = &pixels[y * stride..(y + 1) * stride];
+        for x in 0..w {
+            if row[x * bpp as usize + alpha_off] > 0 {
+                left = left.min(x);
+                break;
+            }
+        }
+        for x in (0..w).rev() {
+            if row[x * bpp as usize + alpha_off] > 0 {
+                right = right.max(x);
+                break;
+            }
+        }
+    }
+
+    Some([left as u32, top as u32, (right - left + 1) as u32, (bottom - top + 1) as u32])
+}
 
 impl DarklyEngine {
     /// Auto-commit any active floating content before performing other edits.
@@ -78,7 +135,14 @@ impl DarklyEngine {
     }
 
     /// Begin an interactive transform on the current layer/mask content.
-    /// Returns true if floating content was created.
+    ///
+    /// When a selection is active, source bounds come from the selection and
+    /// the transform is set up synchronously (returns true).
+    ///
+    /// When there is no selection, the layer texture must be read back from
+    /// the GPU to compute content bounds. This kicks off an async readback
+    /// and returns false. The transform will be set up on the next frame
+    /// when `poll_pending` picks up the completed readback.
     pub fn begin_transform(&mut self, layer_id: u64) -> bool {
         self.auto_commit_floating();
 
@@ -92,6 +156,106 @@ impl DarklyEngine {
             if !has_mask { return false; }
         }
 
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+
+        // Determine source bounds.
+        if let Some(sel) = &self.doc.selection {
+            // Selection provides bounds synchronously.
+            let (source_origin, source_width, source_height) = match sel.bounding_rect() {
+                Some((tx_min, ty_min, tx_max, ty_max)) => {
+                    let ts = TILE_SIZE as i32;
+                    let x = tx_min * ts;
+                    let y = ty_min * ts;
+                    let w = ((tx_max - tx_min + 1) * ts) as u32;
+                    let h = ((ty_max - ty_min + 1) * ts) as u32;
+                    let x = x.max(0);
+                    let y = y.max(0);
+                    let w = w.min(canvas_w.saturating_sub(x as u32));
+                    let h = h.min(canvas_h.saturating_sub(y as u32));
+                    ((x, y), w, h)
+                }
+                None => return false,
+            };
+
+            if source_width == 0 || source_height == 0 {
+                return false;
+            }
+
+            self.setup_transform(layer_id, target_is_mask, source_origin, source_width, source_height);
+            true
+        } else {
+            // No selection — kick off async readback to compute content bounds.
+            let format = if target_is_mask {
+                wgpu::TextureFormat::R8Unorm
+            } else {
+                wgpu::TextureFormat::Rgba8Unorm
+            };
+
+            let texture = if target_is_mask {
+                self.compositor.mask_texture(layer_id).map(|t| &t.texture)
+            } else {
+                self.compositor.layer_texture(layer_id).map(|t| &t.texture)
+            };
+
+            if let Some(texture) = texture {
+                let mut encoder = self.gpu.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("transform-bounds") },
+                );
+                let request = readback::request_readback(
+                    &self.gpu.device, &mut encoder, texture, format,
+                    [0, 0, canvas_w, canvas_h],
+                );
+                self.gpu.queue.submit([encoder.finish()]);
+                self.readbacks.submit(request, ReadbackContext::TransformBounds {
+                    layer_id,
+                    target_is_mask,
+                    canvas_w,
+                    canvas_h,
+                });
+            }
+
+            false
+        }
+    }
+
+    /// Complete an async transform setup after content bounds have been
+    /// computed from GPU readback data.
+    pub(crate) fn complete_begin_transform(
+        &mut self,
+        layer_id: u64,
+        target_is_mask: bool,
+        canvas_w: u32,
+        canvas_h: u32,
+        pixels: Vec<u8>,
+    ) {
+        // Already have floating content (e.g. user cancelled/switched tools).
+        if self.floating.is_some() {
+            return;
+        }
+
+        let bpp = if target_is_mask { 1u32 } else { 4u32 };
+        let bounds = match compute_content_bounds(&pixels, canvas_w, canvas_h, bpp) {
+            Some(b) => b,
+            None => return, // fully transparent layer — nothing to transform
+        };
+
+        let [bx, by, bw, bh] = bounds;
+        let source_origin = (bx as i32, by as i32);
+
+        self.setup_transform(layer_id, target_is_mask, source_origin, bw, bh);
+    }
+
+    /// Common setup logic for interactive transforms — saves pre-clear state,
+    /// copies source region to floating texture, clears source on layer.
+    fn setup_transform(
+        &mut self,
+        layer_id: u64,
+        target_is_mask: bool,
+        source_origin: (i32, i32),
+        source_width: u32,
+        source_height: u32,
+    ) {
         let format = if target_is_mask {
             wgpu::TextureFormat::R8Unorm
         } else {
@@ -99,32 +263,6 @@ impl DarklyEngine {
         };
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
-
-        // Determine source bounds.
-        let (source_origin, source_width, source_height) = if let Some(sel) = &self.doc.selection {
-            match sel.bounding_rect() {
-                Some((tx_min, ty_min, tx_max, ty_max)) => {
-                    let ts = TILE_SIZE as i32;
-                    let x = tx_min * ts;
-                    let y = ty_min * ts;
-                    let w = ((tx_max - tx_min + 1) * ts) as u32;
-                    let h = ((ty_max - ty_min + 1) * ts) as u32;
-                    // Clamp to canvas bounds.
-                    let x = x.max(0);
-                    let y = y.max(0);
-                    let w = w.min(canvas_w.saturating_sub(x as u32));
-                    let h = h.min(canvas_h.saturating_sub(y as u32));
-                    ((x, y), w, h)
-                }
-                None => return false, // empty selection
-            }
-        } else {
-            ((0i32, 0i32), canvas_w, canvas_h)
-        };
-
-        if source_width == 0 || source_height == 0 {
-            return false;
-        }
 
         // Save the full canvas GPU texture to scratch (pre-clear snapshot for
         // undo and cancel). Must happen before the clear.
@@ -251,8 +389,6 @@ impl DarklyEngine {
             self.doc.selection = None;
             self.update_selection_overlay();
         }
-
-        true
     }
 
     /// Update the floating content's transform matrix.

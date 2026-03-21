@@ -28,6 +28,11 @@ export interface Tool {
     /** Handle a key event. Return true if the tool consumed it. */
     onKeyDown?(e: KeyboardEvent): boolean;
 
+    /** Called once per frame after render, for async state synchronization.
+     *  Tools that initiate async GPU operations (readbacks, etc.) use this
+     *  to detect when results arrive. */
+    onFrame?(): void;
+
     /** Return overlay shapes to render on top of the canvas.
      *  Called reactively — return null to hide the overlay. */
     getOverlay?(): ToolOverlayData | null;

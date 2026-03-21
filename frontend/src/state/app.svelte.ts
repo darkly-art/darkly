@@ -1,4 +1,5 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import { toolRegistry } from '../tools/registry';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -90,6 +91,9 @@ class AppState {
             this._framePending = false;
             if (!this.handle) return;
             const needsMore = this.handle.render(ts / 1000.0);
+
+            // Per-frame tool hook — async state sync (e.g. GPU readback completion).
+            toolRegistry.get(this.activeToolId)?.onFrame?.();
 
             // Check for completed async copy/cut readback.
             if (this._copyCallback) {

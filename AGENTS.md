@@ -26,17 +26,17 @@ This same pattern applies to all modular systems in the project.
 
 Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. Extract shared logic into a common abstraction rather than duplicating the pattern. This applies across modules, across layers (Rust, WASM bridge, JS), and across systems. When you notice structural similarity, unify it.
 
+**Place functionality where it generalizes.** Before writing logic, ask: "where does this belong so that it works for all cases, not just this one?" If a behavior applies to any tool, it belongs in the tool system's generic hooks — not inside one specific tool. If a behavior applies to any async operation, it belongs in the async completion pipeline — not special-cased at one call site. Putting the right logic in the right architectural layer eliminates the need to repeat it, and prevents future features from having to rediscover where to plug in. A good signal you've placed something wrong: it only works for one workflow, or a second caller would have to copy-paste the same pattern.
+
 ## Ownership Principle
 
 State belongs to the thing it describes — not to a parent that manages it on its behalf. Don't let Rust's borrow checker dictate the data model. If splitting state out of a struct makes borrowing easier but scatters a logical concept across multiple locations, find a different way to satisfy the borrow checker (helper methods, borrow-splitting, restructured access) and keep the data model clean.
 
 ## Prior Art Principle
 
-Before deciding on an implementation approach — even when the solution seems obvious — research how established editors handle it. Krita and GIMP source code are checked out under `gimp/` and `krita/` in the project root specifically for this purpose. Other relevant reference repos (MyPaint, libmypaint, Aseprite, etc.) may also be checked out at the project root. Read the relevant source, understand the algorithm and data structures they chose, and base our design on that understanding. These are mature codebases with decades of real-world usage; they've already hit and solved the edge cases we'd discover the hard way.
+Before deciding on an approach, research how established editors handle it. Krita and GIMP are checked out under the project root (`krita/`, `gimp/`), along with other references (MyPaint, libmypaint, Aseprite, etc.). Read the actual source — never rely on web searches, docs, or LLM training data for architectural claims. If a reference repo isn't checked out, clone it. Never claim "Krita does X" without pointing to a specific file and function.
 
-**Source code is the authority.** When researching prior art, clone the repository and read the actual source files — do not rely on web searches, blog posts, documentation summaries, or LLM training data for architectural claims. Web sources frequently misrepresent how software actually works. The only reliable way to know what Krita, GIMP, or any other project does is to read the code. If a reference repo isn't already checked out, clone it. If you're unsure where the relevant logic lives, search the repo with Grep/Glob. Never make claims like "Krita does X" without pointing to a specific file and function.
-
-Our implementation will often differ in specifics (e.g. GPU-centric pipelines, tile format differences, Rust idioms), but the core algorithm and architectural decisions should be informed by prior art, not invented from scratch.
+Our implementation will differ in specifics (GPU pipelines, tile formats, Rust idioms), but core algorithms and architectural decisions should be informed by prior art, not invented from scratch.
 
 ## Performance Principle
 

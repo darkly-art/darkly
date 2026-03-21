@@ -342,7 +342,13 @@ export class CanvasRenderer {
         ctx.textAlign = 'left';
         ctx.fillText(pm.name, nx + 8, py);
 
-        if (pm.kind === 'bool') {
+        if (pm.kind === 'string') {
+            ctx.font = '8px sans-serif';
+            ctx.fillStyle = C_PARAM_VAL;
+            ctx.textAlign = 'right';
+            ctx.fillText(String(value ?? ''), nx + nodeW - 6, py);
+            ctx.textAlign = 'left';
+        } else if (pm.kind === 'bool') {
             const cbx = nx + nodeW - 20, cby = py - 5;
             ctx.strokeStyle = '#666'; ctx.lineWidth = 1;
             ctx.strokeRect(cbx, cby, 10, 10);
@@ -410,6 +416,8 @@ export class CanvasRenderer {
                 if (Math.abs(gy - (ny + pm.y)) < PARAM_ROW_H / 2) {
                     return pm.kind === 'bool'
                         ? { type: 'param-checkbox', nodeId: node.id, paramIndex: pm.index }
+                        : pm.kind === 'string'
+                        ? { type: 'node-body', nodeId: node.id }
                         : { type: 'param-slider',   nodeId: node.id, paramIndex: pm.index };
                 }
             }

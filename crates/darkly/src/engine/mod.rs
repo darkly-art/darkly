@@ -108,6 +108,13 @@ pub(crate) enum ReadbackContext {
         thumb_w: u32,
         thumb_h: u32,
     },
+    /// Async readback for computing layer content bounds before transform.
+    TransformBounds {
+        layer_id: u64,
+        target_is_mask: bool,
+        canvas_w: u32,
+        canvas_h: u32,
+    },
 }
 
 /// Cached thumbnail data per layer.

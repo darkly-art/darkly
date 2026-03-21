@@ -146,6 +146,13 @@ impl DarklyEngine {
                 ReadbackContext::MaskToSelection { old_sel } => {
                     self.complete_mask_to_selection(old_sel, pixels);
                 }
+                ReadbackContext::TransformBounds {
+                    layer_id, target_is_mask, canvas_w, canvas_h,
+                } => {
+                    self.complete_begin_transform(
+                        layer_id, target_is_mask, canvas_w, canvas_h, pixels,
+                    );
+                }
                 ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
                     let doc_w = self.doc.width;
                     let doc_h = self.doc.height;

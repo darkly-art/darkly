@@ -406,6 +406,14 @@ export const transformTool: Tool = {
         return false;
     },
 
+    onFrame() {
+        // Sync when floating content arrives from an async GPU readback
+        // (begin_transform without selection computes content bounds async).
+        if (!active && app.handle?.has_floating()) {
+            syncFromRust();
+        }
+    },
+
     getOverlay(): ToolOverlayData | null {
         return buildOverlay();
     },
