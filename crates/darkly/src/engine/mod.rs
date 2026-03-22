@@ -270,6 +270,29 @@ impl DarklyEngine {
             &layer_tex.texture, wgpu::TextureFormat::Rgba8Unorm, w, h,
         )
     }
+
+    /// Block until all pending async readbacks complete. For tests only.
+    /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
+    /// processes all completed readbacks.
+    pub fn test_flush_readbacks(&mut self) {
+        let _ = self.gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
+        // Manually process completed readbacks (same as poll_pending's readback loop).
+        let completed = self.readbacks.poll(&self.gpu.device);
+        for (ctx, pixels) in completed {
+            match ctx {
+                ReadbackContext::Copy { is_mask, region, selection_data, is_cut, layer_id } => {
+                    self.complete_copy(is_mask, region, selection_data, is_cut, layer_id, pixels);
+                }
+                ReadbackContext::SelectionReadback => {
+                    self.gpu_selection.update_cache(pixels);
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

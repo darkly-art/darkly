@@ -1,12 +1,21 @@
 //! Copy, cut, paste operations.
 
-use super::{DarklyEngine, ReadbackContext};
+use super::DarklyEngine;
+use super::ReadbackContext;
 use super::types::ClipboardExport;
 use crate::clipboard::{Clipboard, ImageClip};
 use crate::document::MoveTarget;
 use crate::gpu::readback;
 use crate::layer::Layer;
-use crate::undo::LayerAddAction;
+use crate::undo::{GpuRegionAction, LayerAddAction};
+
+/// Integer alpha multiply matching Krita's UINT8_MULT: `(a*b + 128) / 255`.
+/// Guarantees `uint8_mult(a, s) + uint8_mult(a, 255 - s) == a` for all a, s,
+/// so that extracting and erasing with complementary masks is pixel-exact.
+fn uint8_mult(a: u8, b: u8) -> u8 {
+    let c = a as u32 * b as u32 + 0x80;
+    (((c >> 8) + c) >> 8) as u8
+}
 
 impl DarklyEngine {
     /// Copy the active layer's content (masked by selection) into the internal
@@ -138,19 +147,23 @@ impl DarklyEngine {
             (rgba, rw, rh)
         } else {
             // RGBA readback. Apply selection masking if present.
+            // Multiply ALL channels by selection coverage — the clipboard
+            // stores premultiplied data so that the inverse operation on the
+            // source layer produces pixel-exact complementary values.
             let mut rgba = pixels;
             if let Some(ref sel) = selection_data {
                 for i in 0..(rw * rh) as usize {
-                    let coverage = sel[i] as f32 / 255.0;
-                    if coverage <= 0.0 {
+                    let s = sel[i];
+                    if s == 0 {
                         rgba[i * 4] = 0;
                         rgba[i * 4 + 1] = 0;
                         rgba[i * 4 + 2] = 0;
                         rgba[i * 4 + 3] = 0;
-                    } else if coverage < 1.0 {
-                        // Multiply alpha by selection coverage.
-                        let a = rgba[i * 4 + 3] as f32 * coverage;
-                        rgba[i * 4 + 3] = a.round() as u8;
+                    } else if s < 255 {
+                        rgba[i * 4]     = uint8_mult(rgba[i * 4], s);
+                        rgba[i * 4 + 1] = uint8_mult(rgba[i * 4 + 1], s);
+                        rgba[i * 4 + 2] = uint8_mult(rgba[i * 4 + 2], s);
+                        rgba[i * 4 + 3] = uint8_mult(rgba[i * 4 + 3], s);
                     }
                 }
             }
@@ -172,10 +185,14 @@ impl DarklyEngine {
         });
         self.clipboard = Some(Clipboard::ImageData(clip));
 
-        // If this was a cut, clear the source.
+        // If this was a cut, erase the source. When a selection is active,
+        // apply the inverse mask on CPU from the same selection bytes used for
+        // the copy — this guarantees extracted + remaining = original with no
+        // border artifacts from float rounding (Krita's applyInverseAlphaU8Mask
+        // approach).
         if is_cut {
-            if self.gpu_selection.active {
-                self.gpu_clear_selection(layer_id);
+            if let Some(ref sel) = selection_data {
+                self.cpu_erase_with_selection(layer_id, is_mask, region, sel);
             } else {
                 self.gpu_clear_layer(layer_id);
             }
@@ -281,5 +298,104 @@ impl DarklyEngine {
         let offset_y = clip.offset_y;
         let rgba = clip.data.clone();
         Some(self.paste_image(width, height, &rgba, offset_x, offset_y, active_layer_id))
+    }
+
+    /// Erase selected pixels on CPU using the same integer math as the copy
+    /// extraction, then upload the result back to the GPU texture.
+    ///
+    /// This is the complementary operation to the copy masking: for each pixel,
+    /// `new = old * (255 - sel) / 255` using `uint8_mult`. Because
+    /// `uint8_mult(a, s) + uint8_mult(a, 255-s) == a`, the extracted pixels
+    /// and remaining pixels sum to exactly the original — no border artifacts.
+    fn cpu_erase_with_selection(
+        &mut self, layer_id: u64, is_mask: bool,
+        region: [u32; 4], selection: &[u8],
+    ) {
+        let [rx, ry, rw, rh] = region;
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+        let mask_editing = self.editing_mask_layer == Some(layer_id);
+
+        let (target, format) = match self.get_paint_target(layer_id, mask_editing) {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Save region for undo before modifying.
+        self.gpu.encode("cut-erase-save", |encoder| {
+            self.region_store.save_region(encoder, target.texture, format, [0, 0, canvas_w, canvas_h]);
+        });
+
+        // Read back the affected region from the GPU texture.
+        let (target, _) = self.get_paint_target(layer_id, mask_editing).unwrap();
+        let bpp = if is_mask { 1u32 } else { 4u32 };
+        let region_pixels = crate::gpu::test_utils::readback_texture(
+            &self.gpu.device, &self.gpu.queue,
+            target.texture, format, canvas_w, canvas_h,
+        );
+
+        // Apply inverse mask in-place using the same selection bytes.
+        let mut modified = region_pixels;
+        for py in 0..rh {
+            for px in 0..rw {
+                let si = (py * rw + px) as usize;
+                let s = selection[si];
+                if s == 0 { continue; } // unselected pixel — unchanged
+
+                let cx = rx + px;
+                let cy = ry + py;
+                if cx >= canvas_w || cy >= canvas_h { continue; }
+                let di = (cy * canvas_w + cx) as usize;
+                let inv = 255 - s;
+
+                if is_mask {
+                    if s == 255 {
+                        modified[di] = 0;
+                    } else {
+                        modified[di] = uint8_mult(modified[di], inv);
+                    }
+                } else {
+                    let base = di * 4;
+                    if s == 255 {
+                        modified[base] = 0;
+                        modified[base + 1] = 0;
+                        modified[base + 2] = 0;
+                        modified[base + 3] = 0;
+                    } else {
+                        modified[base]     = uint8_mult(modified[base], inv);
+                        modified[base + 1] = uint8_mult(modified[base + 1], inv);
+                        modified[base + 2] = uint8_mult(modified[base + 2], inv);
+                        modified[base + 3] = uint8_mult(modified[base + 3], inv);
+                    }
+                }
+            }
+        }
+
+        // Upload the modified pixels back to the GPU texture.
+        let (target, _) = self.get_paint_target(layer_id, mask_editing).unwrap();
+        self.gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: target.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &modified,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(canvas_w * bpp),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d { width: canvas_w, height: canvas_h, depth_or_array_layers: 1 },
+        );
+
+        // Commit undo.
+        self.gpu.encode("cut-erase-commit", |encoder| {
+            let entry = self.region_store.commit_region(
+                encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
+            );
+            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        });
+        self.compositor.mark_dirty();
     }
 }
