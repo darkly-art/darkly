@@ -206,10 +206,19 @@ impl DarklyEngine {
             self.compositor.mark_dirty();
         }
 
+        // Headless mode (tests): poll pending ops but skip presentation.
+        let (surface, surface_config) = match (&self.gpu.surface, &self.gpu.surface_config) {
+            (Some(s), Some(c)) => (s, c),
+            _ => {
+                return self.readbacks.has_pending()
+                    || self.compositor.has_pending_content_bounds();
+            }
+        };
+
         // Skip rendering when the surface has zero dimensions (e.g. canvas
         // squeezed to 0 height by a UI panel).  WebGPU cannot create
         // 0-dimension textures and attempting to do so corrupts the device.
-        if self.gpu.surface_config.width == 0 || self.gpu.surface_config.height == 0 {
+        if surface_config.width == 0 || surface_config.height == 0 {
             return self.readbacks.has_pending()
                 || self.compositor.has_pending_content_bounds();
         }
@@ -218,8 +227,8 @@ impl DarklyEngine {
         self.compositor.render(
             &self.gpu.device,
             &self.gpu.queue,
-            &self.gpu.surface,
-            &self.gpu.surface_config,
+            surface,
+            surface_config,
             &mut self.doc,
         );
 
@@ -230,8 +239,8 @@ impl DarklyEngine {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
-        if width == 0 || height == 0 {
-            return; // WebGPU cannot create 0-dimension textures.
+        if width == 0 || height == 0 || self.gpu.is_headless() {
+            return;
         }
         self.gpu.resize(width, height);
         self.compositor.veil_chain_mut().resize(&self.gpu.device, &self.gpu.queue, width, height);
