@@ -163,11 +163,15 @@ impl DarklyEngine {
                 ReadbackContext::Copy { is_mask, region, selection_data, is_cut, layer_id } => {
                     self.complete_copy(is_mask, region, selection_data, is_cut, layer_id, pixels);
                 }
-                ReadbackContext::MagicWand { old_sel, seed_x, seed_y, tolerance, mode } => {
-                    self.complete_magic_wand(old_sel, seed_x, seed_y, tolerance, mode, pixels);
+                ReadbackContext::MagicWand { was_active, seed_x, seed_y, tolerance, mode } => {
+                    self.complete_magic_wand(was_active, seed_x, seed_y, tolerance, mode, pixels);
                 }
-                ReadbackContext::MaskToSelection { old_sel } => {
-                    self.complete_mask_to_selection(old_sel, pixels);
+                ReadbackContext::MaskToSelection { was_active } => {
+                    self.complete_mask_to_selection(was_active, pixels);
+                }
+                ReadbackContext::SelectionReadback => {
+                    self.gpu_selection.update_cache(pixels);
+                    self.update_selection_overlay();
                 }
                 ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
                     let doc_w = self.doc.width;
@@ -294,6 +298,26 @@ impl DarklyEngine {
                     *entry = swapped;
                 });
             }
+        }
+
+        // If this is a selection GPU action, restore the selection texture
+        // and swap the active flag.
+        if let Some(restored_active) = action.swap_selection_active(self.gpu_selection.active) {
+            self.gpu_selection.active = restored_active;
+
+            if let Some(entry) = action.selection_region_entry_mut() {
+                let texture = self.gpu_selection.texture();
+                self.gpu.encode(match direction {
+                    UndoDirection::Undo => "undo-sel-restore",
+                    UndoDirection::Redo => "redo-sel-restore",
+                }, |encoder| {
+                    let swapped = self.region_store.restore_region(encoder, entry, texture);
+                    *entry = swapped;
+                });
+            }
+
+            self.gpu_selection.cache_valid = false;
+            self.kick_selection_readback();
         }
 
         match direction {

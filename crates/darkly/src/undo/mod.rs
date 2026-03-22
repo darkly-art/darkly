@@ -42,6 +42,20 @@ pub trait UndoAction {
     fn gpu_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
         None
     }
+
+    /// If this is a selection GPU action, return a mutable reference to its region entry.
+    /// The engine uses this to restore the selection GPU texture during undo/redo.
+    fn selection_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
+        None
+    }
+
+    /// Swap the selection active flag for undo/redo. `current_active` is the
+    /// engine's current `gpu_selection.active` state. Returns the flag value
+    /// the engine should set after the swap (i.e. the state before this action).
+    /// Returns `None` for non-selection actions.
+    fn swap_selection_active(&mut self, _current_active: bool) -> Option<bool> {
+        None
+    }
 }
 
 pub struct UndoStack {

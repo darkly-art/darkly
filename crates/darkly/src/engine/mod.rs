@@ -2,6 +2,7 @@ mod brush_graph;
 mod brush_preset;
 mod clipboard;
 mod floating;
+pub(crate) mod gpu_selection;
 mod layers;
 mod masks;
 mod painting;
@@ -29,8 +30,8 @@ use crate::gpu::readback::ReadbackScheduler;
 use crate::gpu::region_store::RegionStore;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::view::ViewTransform;
-use crate::tile::AlphaMask;
 use crate::undo::UndoStack;
+use gpu_selection::{GpuSelection, SelectionPipelines};
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -99,15 +100,17 @@ pub(crate) enum ReadbackContext {
         layer_id: u64,
     },
     MagicWand {
-        old_sel: Option<AlphaMask>,
+        was_active: bool,
         seed_x: i32,
         seed_y: i32,
         tolerance: u8,
         mode: crate::document::SelectionMode,
     },
     MaskToSelection {
-        old_sel: Option<AlphaMask>,
+        was_active: bool,
     },
+    /// Async readback of the selection GPU texture for CPU cache update.
+    SelectionReadback,
     Thumbnail {
         layer_id: u64,
         is_mask: bool,
@@ -179,6 +182,13 @@ pub struct DarklyEngine {
     /// node graph's internal rendering resolution.  Default 1.0.
     pub(crate) brush_global_scale: f32,
 
+    // --- GPU Selection (Phase 5) ---
+    /// GPU-authoritative selection mask — owns the R8 texture and bind groups.
+    /// Always allocated; `gpu_selection.active` tracks whether a selection exists.
+    pub(crate) gpu_selection: GpuSelection,
+    /// Reusable pipelines for selection boolean operations.
+    pub(crate) selection_pipelines: SelectionPipelines,
+
     // --- Deferred operations ---
     /// Pending transform waiting for content bounds computation.
     pub(crate) pending_transform: Option<PendingTransform>,
@@ -204,6 +214,12 @@ impl DarklyEngine {
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
         let dab_pool = DabTexturePool::new(&gpu.device);
         let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout(), doc_width, doc_height);
+        let selection_pipelines = SelectionPipelines::new(&gpu.device);
+        let gpu_selection = GpuSelection::new(
+            &gpu.device, doc_width, doc_height,
+            brush_pipelines.selection_bind_group_layout(),
+            &paint_pipelines.selection_bind_group_layout,
+        );
 
         DarklyEngine {
             doc,
@@ -227,6 +243,8 @@ impl DarklyEngine {
             preset_library: PresetLibrary::new(),
             resource_handles: std::collections::HashMap::new(),
             brush_global_scale: 1.0,
+            gpu_selection,
+            selection_pipelines,
             pending_transform: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,

@@ -42,16 +42,17 @@ impl DarklyEngine {
             if self.compositor.layer_texture(layer_id).is_none() { return; }
             wgpu::TextureFormat::Rgba8Unorm
         };
-        let region = self.copy_region_from_selection(canvas_w, canvas_h);
 
+        // Compute region and selection data first (may do blocking readback).
+        let region = self.copy_region_from_selection(canvas_w, canvas_h);
+        let selection_data = self.readback_selection_region(region);
+
+        // Now borrow compositor for the texture reference.
         let texture = if is_mask {
             &self.compositor.mask_texture(layer_id).unwrap().texture
         } else {
             &self.compositor.layer_texture(layer_id).unwrap().texture
         };
-
-        // Also readback the selection mask for the same region if present.
-        let selection_data = self.readback_selection_region(region);
 
         self.gpu.encode("copy-readback", |encoder| {
             let request = readback::request_readback(
@@ -64,9 +65,10 @@ impl DarklyEngine {
     }
 
     /// Determine the copy region from the selection (or full canvas).
-    fn copy_region_from_selection(&self, canvas_w: u32, canvas_h: u32) -> [u32; 4] {
-        if let Some(sel) = &self.doc.selection {
-            if let Some([x, y, w, h]) = sel.pixel_bounding_rect() {
+    fn copy_region_from_selection(&mut self, canvas_w: u32, canvas_h: u32) -> [u32; 4] {
+        if self.gpu_selection.active {
+            self.gpu_selection.ensure_cache_valid(&self.gpu.device, &self.gpu.queue);
+            if let Some([x, y, w, h]) = self.gpu_selection.pixel_bounds {
                 let w = w.min(canvas_w.saturating_sub(x));
                 let h = h.min(canvas_h.saturating_sub(y));
                 return [x, y, w, h];
@@ -75,12 +77,30 @@ impl DarklyEngine {
         [0, 0, canvas_w, canvas_h]
     }
 
-    /// Read selection coverage for a given region from CPU-side AlphaMask.
+    /// Read selection coverage for a given region from GPU selection CPU cache.
     /// Returns None if there's no selection.
-    fn readback_selection_region(&self, region: [u32; 4]) -> Option<Vec<u8>> {
-        let selection = self.doc.selection.as_ref()?;
+    fn readback_selection_region(&mut self, region: [u32; 4]) -> Option<Vec<u8>> {
+        if !self.gpu_selection.active {
+            return None;
+        }
+        self.gpu_selection.ensure_cache_valid(&self.gpu.device, &self.gpu.queue);
+
         let [rx, ry, rw, rh] = region;
-        Some(selection.rasterize_r8((rx as i32, ry as i32), rw, rh, 0))
+        let cache = &self.gpu_selection.cpu_cache;
+        let cw = self.gpu_selection.width;
+        let ch = self.gpu_selection.height;
+
+        let mut pixels = vec![0u8; (rw * rh) as usize];
+        for py in 0..rh {
+            for px in 0..rw {
+                let sx = rx + px;
+                let sy = ry + py;
+                if sx < cw && sy < ch {
+                    pixels[(py * rw + px) as usize] = cache[(sy * cw + sx) as usize];
+                }
+            }
+        }
+        Some(pixels)
     }
 
     /// Complete a pending copy once GPU readback data is available.
@@ -154,7 +174,7 @@ impl DarklyEngine {
 
         // If this was a cut, clear the source.
         if is_cut {
-            if self.doc.selection.is_some() {
+            if self.gpu_selection.active {
                 self.gpu_clear_selection(layer_id);
             } else {
                 self.gpu_clear_layer(layer_id);

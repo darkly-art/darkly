@@ -4,7 +4,6 @@ use super::DarklyEngine;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY};
 use crate::layer::Layer;
-use crate::tile::TILE_SIZE;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
@@ -103,29 +102,24 @@ impl DarklyEngine {
         let canvas_h = self.doc.height;
 
         // Determine source bounds.
-        if let Some(sel) = &self.doc.selection {
-            // Selection provides bounds synchronously.
-            let (source_origin, source_width, source_height) = match sel.bounding_rect() {
-                Some((tx_min, ty_min, tx_max, ty_max)) => {
-                    let ts = TILE_SIZE as i32;
-                    let x = tx_min * ts;
-                    let y = ty_min * ts;
-                    let w = ((tx_max - tx_min + 1) * ts) as u32;
-                    let h = ((ty_max - ty_min + 1) * ts) as u32;
-                    let x = x.max(0);
-                    let y = y.max(0);
-                    let w = w.min(canvas_w.saturating_sub(x as u32));
-                    let h = h.min(canvas_h.saturating_sub(y as u32));
-                    ((x, y), w, h)
-                }
+        if self.gpu_selection.active {
+            // Selection provides bounds synchronously from cached pixel bounds.
+            self.gpu_selection.ensure_cache_valid(&self.gpu.device, &self.gpu.queue);
+            let [bx, by, bw, bh] = match self.gpu_selection.pixel_bounds {
+                Some(b) => b,
                 None => return false,
             };
 
-            if source_width == 0 || source_height == 0 {
+            let x = (bx as i32).max(0);
+            let y = (by as i32).max(0);
+            let w = bw.min(canvas_w.saturating_sub(x as u32));
+            let h = bh.min(canvas_h.saturating_sub(y as u32));
+
+            if w == 0 || h == 0 {
                 return false;
             }
 
-            self.setup_transform(layer_id, target_is_mask, source_origin, source_width, source_height);
+            self.setup_transform(layer_id, target_is_mask, (x, y), w, h);
             true
         } else {
             // No selection — use compositor content bounds.
@@ -201,14 +195,14 @@ impl DarklyEngine {
 
         // If selection is active, mask the source texture so only selected pixels
         // are included in the transform. Also clear only selected pixels on the layer.
-        let has_selection = self.doc.selection.is_some();
+        let has_selection = self.gpu_selection.active;
         if has_selection {
             // Upload a cropped selection mask matching the source region dimensions.
-            let cropped_sel_bg = self.upload_cropped_selection_mask(
+            let cropped_sel_bg = self.upload_cropped_selection_r8(
                 source_origin, source_width, source_height,
             );
-            // Full-canvas selection for erasing on the layer.
-            let full_sel_bg = self.upload_selection_mask(canvas_w, canvas_h);
+            // Full-canvas selection bind group from GPU selection.
+            let full_sel_bg = Some(self.gpu_selection.paint_bind_group());
 
             if let Some(sel_bg) = &cropped_sel_bg {
                 // Multiply source texture by selection mask — zeroes out unselected pixels.
@@ -228,7 +222,7 @@ impl DarklyEngine {
                 }
             }
 
-            if let Some(sel_bg) = &full_sel_bg {
+            if let Some(sel_bg) = full_sel_bg {
                 // Clear selected pixels on the layer using erase_with_selection.
                 let layer_target = if target_is_mask {
                     self.compositor.mask_texture(layer_id)
@@ -289,7 +283,8 @@ impl DarklyEngine {
         // Selection was used to define what gets picked up — clear it now so
         // the marching ants disappear and the transform output isn't clipped.
         if has_selection {
-            self.doc.selection = None;
+            self.gpu_selection.clear(&self.gpu.queue);
+
             self.update_selection_overlay();
         }
     }

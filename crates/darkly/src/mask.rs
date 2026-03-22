@@ -292,6 +292,166 @@ impl AlphaMask {
 
 
 // ---------------------------------------------------------------------------
+// Flat-buffer SDF rasterization (no tile indirection)
+// ---------------------------------------------------------------------------
+
+/// Rasterize an SDF shape directly into a flat R8 buffer (canvas-sized).
+///
+/// This is the tile-free equivalent of `AlphaMask::rasterize()`, producing a
+/// `Vec<u8>` ready for `queue.write_texture()` to a GPU R8 texture.
+///
+/// - `canvas_width`, `canvas_height`: full canvas dimensions
+/// - `bounds`: (x, y, w, h) pixel bounding box of the shape
+/// - `sdf_fn`: signed distance at pixel center (negative = inside)
+/// - `antialias`: smooth 1px edge transition
+/// - `feather`: if > 0, smooth transition over this many pixels
+pub fn rasterize_sdf_r8(
+    canvas_width: u32,
+    canvas_height: u32,
+    bounds: (i32, i32, i32, i32),
+    sdf_fn: impl Fn(f32, f32) -> f32,
+    antialias: bool,
+    feather: f32,
+) -> Vec<u8> {
+    let mut pixels = vec![0u8; (canvas_width * canvas_height) as usize];
+    let (bx, by, bw, bh) = bounds;
+
+    let margin = if feather > 0.0 {
+        feather.ceil() as i32
+    } else if antialias {
+        1
+    } else {
+        0
+    };
+
+    let x0 = (bx - margin).max(0) as u32;
+    let y0 = (by - margin).max(0) as u32;
+    let x1 = ((bx + bw + margin) as u32).min(canvas_width);
+    let y1 = ((by + bh + margin) as u32).min(canvas_height);
+
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let sdf = sdf_fn(px as f32 + 0.5, py as f32 + 0.5);
+            let coverage = crate::sdf::sdf_coverage(sdf, antialias, feather);
+            if coverage > 0.0 {
+                pixels[(py * canvas_width + px) as usize] = (coverage * 255.0) as u8;
+            }
+        }
+    }
+
+    pixels
+}
+
+// ---------------------------------------------------------------------------
+// Flat-buffer contour extraction (no tile indirection)
+// ---------------------------------------------------------------------------
+
+/// Extract contour segments from a flat R8 buffer using marching squares.
+///
+/// Equivalent to `AlphaMask::contour_segments()` but operates on a flat `&[u8]`
+/// from GPU readback instead of tile-based storage.
+pub fn contour_segments_r8(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    threshold: u8,
+) -> Vec<([f32; 2], [f32; 2])> {
+    let [bx, by, bw, bh] = match pixel_bounds_r8(pixels, width, height) {
+        Some(b) => b,
+        None => return Vec::new(),
+    };
+
+    // Extend by 1 pixel for marching squares boundary blocks.
+    let px_min = (bx as i32 - 1).max(0);
+    let py_min = (by as i32 - 1).max(0);
+    let px_max = ((bx + bw) as i32).min(width as i32 - 1);
+    let py_max = ((by + bh) as i32).min(height as i32 - 1);
+
+    let sample = |x: i32, y: i32| -> f32 {
+        if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+            return 0.0;
+        }
+        pixels[(y as u32 * width + x as u32) as usize] as f32 / 255.0
+    };
+
+    let threshold_f = threshold as f32 / 255.0;
+    let mut segments = Vec::new();
+
+    for py in py_min..py_max {
+        for px in px_min..px_max {
+            let tl = sample(px, py) > threshold_f;
+            let tr = sample(px + 1, py) > threshold_f;
+            let bl = sample(px, py + 1) > threshold_f;
+            let br = sample(px + 1, py + 1) > threshold_f;
+
+            let index = (tl as u8) | ((tr as u8) << 1) | ((bl as u8) << 2) | ((br as u8) << 3);
+            if index == 0 || index == 15 {
+                continue;
+            }
+
+            let x = px as f32;
+            let y = py as f32;
+
+            let top = lerp_edge(sample(px, py), sample(px + 1, py), threshold_f);
+            let bottom = lerp_edge(sample(px, py + 1), sample(px + 1, py + 1), threshold_f);
+            let left = lerp_edge(sample(px, py), sample(px, py + 1), threshold_f);
+            let right = lerp_edge(sample(px + 1, py), sample(px + 1, py + 1), threshold_f);
+
+            let t = [x + top, y];
+            let b = [x + bottom, y + 1.0];
+            let l = [x, y + left];
+            let r = [x + 1.0, y + right];
+
+            match index {
+                1  => segments.push((l, t)),
+                2  => segments.push((t, r)),
+                3  => segments.push((l, r)),
+                4  => segments.push((b, l)),
+                5  => segments.push((b, t)),
+                6  => { segments.push((t, r)); segments.push((b, l)); }
+                7  => segments.push((b, r)),
+                8  => segments.push((r, b)),
+                9  => { segments.push((l, t)); segments.push((r, b)); }
+                10 => segments.push((t, b)),
+                11 => segments.push((l, b)),
+                12 => segments.push((r, l)),
+                13 => segments.push((r, t)),
+                14 => segments.push((t, l)),
+                _  => unreachable!(),
+            }
+        }
+    }
+
+    merge_collinear(segments)
+}
+
+/// Compute tight pixel bounding box from a flat R8 buffer.
+/// Returns `[x, y, w, h]` or None if all pixels are zero.
+pub fn pixel_bounds_r8(pixels: &[u8], width: u32, height: u32) -> Option<[u32; 4]> {
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+
+    for y in 0..height {
+        for x in 0..width {
+            if pixels[(y * width + x) as usize] > 0 {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+    }
+
+    if max_x < min_x {
+        None
+    } else {
+        Some([min_x, min_y, max_x - min_x + 1, max_y - min_y + 1])
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Feathering (separable Gaussian blur)
 // ---------------------------------------------------------------------------
 

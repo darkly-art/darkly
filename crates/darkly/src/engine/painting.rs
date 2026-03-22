@@ -231,7 +231,11 @@ impl DarklyEngine {
         // Take the stroke engine out to avoid borrow conflicts.
         let mut engine = self.brush_stroke_engine.take().unwrap();
 
-        let sel_bg = &self.brush_pipelines.default_selection_bind_group;
+        let sel_bg = if self.gpu_selection.active {
+            self.gpu_selection.brush_bind_group()
+        } else {
+            &self.brush_pipelines.default_selection_bind_group
+        };
         {
             let mut gpu_ctx = BrushGpuContext {
                 encoder: self.gpu.device.create_command_encoder(
@@ -386,6 +390,10 @@ impl DarklyEngine {
 
     /// Clear layer pixels within the current selection via GPU erase pass.
     pub(crate) fn gpu_clear_selection(&mut self, layer_id: u64) {
+        if !self.gpu_selection.active {
+            return;
+        }
+
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         let mask_editing = self.editing_mask_layer == Some(layer_id);
@@ -395,22 +403,17 @@ impl DarklyEngine {
             None => return,
         };
 
-        // Upload selection mask as R8 GPU texture.
-        let sel_bind_group = match self.upload_selection_mask(canvas_w, canvas_h) {
-            Some(bg) => bg,
-            None => return,
-        };
-
         // Save region for undo.
         self.gpu.encode("clear-sel-save", |encoder| {
             self.region_store.save_region(encoder, target.texture, format, [0, 0, canvas_w, canvas_h]);
         });
 
-        // Erase within selection.
+        // Erase within selection using the cached GPU selection bind group.
         let (target, _) = self.get_paint_target(layer_id, mask_editing).unwrap();
+        let sel_bg = self.gpu_selection.paint_bind_group();
         self.gpu.encode("clear-sel-erase", |encoder| {
             target.erase_with_selection(
-                encoder, &self.paint_pipelines, &self.gpu.queue, &sel_bind_group,
+                encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg,
             );
         });
 
@@ -472,29 +475,38 @@ impl DarklyEngine {
         }
     }
 
-    /// Upload a cropped region of the selection mask as an R8 GPU texture.
-    pub(crate) fn upload_cropped_selection_mask(
-        &self,
+    /// Upload a cropped region of the GPU selection as an R8 texture bind group.
+    /// Reads from the cpu_cache (ensures cache valid first).
+    pub(crate) fn upload_cropped_selection_r8(
+        &mut self,
         origin: (i32, i32),
         width: u32,
         height: u32,
     ) -> Option<wgpu::BindGroup> {
-        let selection = self.doc.selection.as_ref()?;
-        let pixels = selection.rasterize_r8(origin, width, height, 0);
+        if !self.gpu_selection.active {
+            return None;
+        }
+        self.gpu_selection.ensure_cache_valid(&self.gpu.device, &self.gpu.queue);
+
+        let (ox, oy) = origin;
+        let cache = &self.gpu_selection.cpu_cache;
+        let cw = self.gpu_selection.width;
+        let ch = self.gpu_selection.height;
+
+        let mut pixels = vec![0u8; (width * height) as usize];
+        for py in 0..height {
+            for px in 0..width {
+                let sx = ox + px as i32;
+                let sy = oy + py as i32;
+                if sx >= 0 && sy >= 0 && (sx as u32) < cw && (sy as u32) < ch {
+                    pixels[(py * width + px) as usize] = cache[(sy as u32 * cw + sx as u32) as usize];
+                }
+            }
+        }
+
         Some(self.paint_pipelines.upload_r8_bind_group(
             &self.gpu.device, &self.gpu.queue, width, height,
             &pixels, "selection-cropped",
-        ))
-    }
-
-    /// Upload the document's selection mask (AlphaMask) as an R8 GPU texture,
-    /// returning a bind group suitable for the paint pipeline's selection slot.
-    pub(crate) fn upload_selection_mask(&self, canvas_w: u32, canvas_h: u32) -> Option<wgpu::BindGroup> {
-        let selection = self.doc.selection.as_ref()?;
-        let pixels = selection.rasterize_r8((0, 0), canvas_w, canvas_h, 0);
-        Some(self.paint_pipelines.upload_r8_bind_group(
-            &self.gpu.device, &self.gpu.queue, canvas_w, canvas_h,
-            &pixels, "selection-upload",
         ))
     }
 }
