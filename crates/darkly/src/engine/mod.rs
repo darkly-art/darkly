@@ -170,6 +170,9 @@ pub struct DarklyEngine {
 
     // --- Preset Library (Phase 7) ---
     pub(crate) preset_library: PresetLibrary,
+    /// Resource name → TextureHandle for images uploaded by the current preset.
+    /// Built by `upload_preset_resources()`, read by Image nodes via BrushGpuContext.
+    pub(crate) resource_handles: std::collections::HashMap<String, crate::brush::wire::TextureHandle>,
 
     /// Global brush scale multiplier applied at composite time.
     /// Controls the canvas footprint of the brush independently from the
@@ -222,6 +225,7 @@ impl DarklyEngine {
             brush_stroke_engine: None,
             active_brush_graph: crate::brush::default_graph(),
             preset_library: PresetLibrary::new(),
+            resource_handles: std::collections::HashMap::new(),
             brush_global_scale: 1.0,
             pending_transform: None,
             readbacks: ReadbackScheduler::new(),

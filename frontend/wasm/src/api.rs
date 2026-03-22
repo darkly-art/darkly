@@ -637,6 +637,24 @@ impl DarklyHandle {
         }
     }
 
+    /// Upload an RGBA8 image and associate it with a resource name.
+    ///
+    /// Image nodes referencing this `resource_name` will output the
+    /// uploaded texture.  Returns null on success or an error string.
+    pub fn brush_upload_image(
+        &self,
+        resource_name: &str,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> JsValue {
+        let Some(mut e) = self.engine_mut() else { return JsValue::from_str("engine busy") };
+        match e.brush_upload_image(resource_name, width, height, rgba) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
     /// Return info about all `user_input` nodes in the active brush as JSON.
     /// Each entry has { nodeId, label, value, position }.
     pub fn brush_user_inputs(&self) -> String {

@@ -3,8 +3,11 @@
 //! Provides everything a GPU node needs: command encoder, device, queue,
 //! dab texture pool, pipelines, canvas target, and selection bind group.
 
+use std::collections::HashMap;
+
 use super::dab_pool::DabTexturePool;
 use super::pipelines::BrushPipelines;
+use super::wire::TextureHandle;
 
 /// Everything a GPU brush node needs to record render passes.
 ///
@@ -30,6 +33,9 @@ pub struct BrushGpuContext<'a> {
     /// The node graph renders dabs at internal resolution; this scales the
     /// final canvas footprint.  1.0 = dab pixels map 1:1 to canvas pixels.
     pub global_scale: f32,
+    /// Resource name → TextureHandle for images uploaded by the preset loader.
+    /// Image nodes read from this to resolve their `resource_name` param.
+    pub resource_handles: &'a HashMap<String, TextureHandle>,
 }
 
 impl<'a> BrushGpuContext<'a> {

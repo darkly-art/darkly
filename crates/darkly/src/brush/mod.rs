@@ -94,6 +94,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("user_input".into(), Box::new(nodes::user_input::UserInputEvaluator));
     // GPU nodes.
     map.insert("procedural".into(), Box::new(nodes::procedural::ProceduralEvaluator));
+    map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
     map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
     map

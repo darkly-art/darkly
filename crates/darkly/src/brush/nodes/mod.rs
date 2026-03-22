@@ -7,6 +7,7 @@ pub mod clamp;
 pub mod color_output;
 pub mod constant;
 pub mod curve;
+pub mod image;
 pub mod make_color;
 pub mod mix;
 pub mod multiply;
@@ -27,6 +28,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         color_output::register(),
         constant::register(),
         curve::register(),
+        image::register(),
         make_color::register(),
         mix::register(),
         multiply::register(),

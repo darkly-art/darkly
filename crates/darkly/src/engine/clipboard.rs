@@ -66,12 +66,9 @@ impl DarklyEngine {
     /// Determine the copy region from the selection (or full canvas).
     fn copy_region_from_selection(&self, canvas_w: u32, canvas_h: u32) -> [u32; 4] {
         if let Some(sel) = &self.doc.selection {
-            if let Some((tx_min, ty_min, tx_max, ty_max)) = sel.bounding_rect() {
-                let ts = crate::tile::TILE_SIZE as i32;
-                let x = (tx_min * ts).max(0) as u32;
-                let y = (ty_min * ts).max(0) as u32;
-                let w = (((tx_max - tx_min + 1) * ts) as u32).min(canvas_w.saturating_sub(x));
-                let h = (((ty_max - ty_min + 1) * ts) as u32).min(canvas_h.saturating_sub(y));
+            if let Some([x, y, w, h]) = sel.pixel_bounding_rect() {
+                let w = w.min(canvas_w.saturating_sub(x));
+                let h = h.min(canvas_h.saturating_sub(y));
                 return [x, y, w, h];
             }
         }

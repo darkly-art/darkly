@@ -49,10 +49,13 @@ impl DarklyEngine {
         self.preset_library.import_bytes(bytes)
     }
 
-    /// Upload brush tip and pattern resources from a preset bundle to the GPU.
+    /// Upload image resources from a preset bundle to the GPU.
+    ///
+    /// Populates `self.resource_handles` so Image nodes can resolve their
+    /// `resource_name` param to a `TextureHandle` at evaluation time.
     fn upload_preset_resources(&mut self, bundle: &PresetBundle) {
-        // Clear previous tips (new preset = new tip set).
-        self.dab_pool.clear_tips();
+        self.dab_pool.clear_static();
+        self.resource_handles.clear();
 
         for meta in &bundle.preset.resources {
             if meta.kind != ResourceKind::BrushTip {
@@ -62,12 +65,11 @@ impl DarklyEngine {
                 log::warn!("preset resource '{}' not found in bundle", meta.name);
                 continue;
             };
-            // Decode the image to RGBA8.
             match image::load_from_memory(data) {
                 Ok(img) => {
                     let rgba = img.to_rgba8();
                     let (w, h) = rgba.dimensions();
-                    self.dab_pool.upload_tip(
+                    let handle = self.dab_pool.upload_image(
                         &self.gpu.device,
                         &self.gpu.queue,
                         &meta.name,
@@ -75,6 +77,7 @@ impl DarklyEngine {
                         h,
                         rgba.as_raw(),
                     );
+                    self.resource_handles.insert(meta.name.clone(), handle);
                 }
                 Err(e) => {
                     log::warn!("failed to decode brush tip '{}': {e}", meta.name);

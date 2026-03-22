@@ -90,6 +90,9 @@ class BrushGraphState {
     /** Currently selected node ID. */
     selectedNode = $state<number | null>(null);
 
+    /** Cached image thumbnails for Image nodes, keyed by resource_name. */
+    imageThumbnails = new Map<string, ImageBitmap>();
+
     // --- WASM command helpers ---
 
     /** Apply a WASM command result: update graph snapshot and error state. */
@@ -235,6 +238,48 @@ class BrushGraphState {
             return this.graph.connections.some(c => c.to.node === nodeId && c.to.port === portName);
         }
         return this.graph.connections.some(c => c.from.node === nodeId && c.from.port === portName);
+    }
+
+    /**
+     * Upload an image to WASM, set it as the resource_name param on an
+     * Image node, and cache a thumbnail for preview rendering.
+     */
+    async uploadImageToNode(nodeId: number, resourceName: string, rgba: Uint8Array, width: number, height: number) {
+        if (!app.handle) return;
+
+        // Upload to GPU via WASM.
+        const err = app.handle.brush_upload_image(resourceName, width, height, rgba);
+        if (err !== null) {
+            console.warn('brush_upload_image failed:', err);
+            return;
+        }
+
+        // Set the resource_name param (index 0) on the Image node.
+        this.applyResult(app.handle.brush_graph_set_param(nodeId, 0, 'string', resourceName));
+
+        // Cache a thumbnail for canvas rendering.
+        const clamped = new Uint8ClampedArray(rgba.length);
+        clamped.set(rgba);
+        const imageData = new ImageData(clamped, width, height);
+        const bitmap = await createImageBitmap(imageData);
+        this.imageThumbnails.set(resourceName, bitmap);
+    }
+
+    /**
+     * Upload an image from a Blob/File to an Image node.
+     * Decodes via the browser, then calls uploadImageToNode.
+     */
+    async uploadBlobToNode(nodeId: number, blob: Blob) {
+        const bitmap = await createImageBitmap(blob);
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(bitmap, 0, 0);
+        const imageData = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+        const rgba = new Uint8Array(imageData.data.buffer);
+        // Use a unique resource name based on nodeId.
+        const resourceName = `image_${nodeId}`;
+        await this.uploadImageToNode(nodeId, resourceName, rgba, bitmap.width, bitmap.height);
+        bitmap.close();
     }
 
     /** Get the wire type of a port on a node. */

@@ -130,6 +130,47 @@ impl AlphaMask {
         }
     }
 
+    /// Tight pixel-level bounding rect of non-zero coverage: `[x, y, w, h]`.
+    ///
+    /// Scans every tile's actual pixel data, so this is more expensive than
+    /// `bounding_rect()` but gives exact bounds with no tile-alignment padding.
+    pub fn pixel_bounding_rect(&self) -> Option<[u32; 4]> {
+        let ts = TILE_SIZE as i32;
+        let mut px_min_x = i32::MAX;
+        let mut px_min_y = i32::MAX;
+        let mut px_max_x = i32::MIN;
+        let mut px_max_y = i32::MIN;
+
+        for ((tx, ty), tile) in self.iter() {
+            let data = tile.data();
+            let origin_x = tx * ts;
+            let origin_y = ty * ts;
+
+            for ly in 0..TILE_SIZE {
+                for lx in 0..TILE_SIZE {
+                    if data.0[ly * TILE_SIZE + lx] > 0.0 {
+                        let px = origin_x + lx as i32;
+                        let py = origin_y + ly as i32;
+                        px_min_x = px_min_x.min(px);
+                        px_min_y = px_min_y.min(py);
+                        px_max_x = px_max_x.max(px);
+                        px_max_y = px_max_y.max(py);
+                    }
+                }
+            }
+        }
+
+        if px_min_x <= px_max_x {
+            let x = px_min_x.max(0) as u32;
+            let y = px_min_y.max(0) as u32;
+            let w = (px_max_x - px_min_x + 1) as u32;
+            let h = (px_max_y - px_min_y + 1) as u32;
+            Some([x, y, w, h])
+        } else {
+            None
+        }
+    }
+
     /// Sample the mask value at a pixel coordinate. Returns 0.0 if no tile exists.
     pub fn sample(&self, px: i32, py: i32) -> f32 {
         let tile_size = TILE_SIZE as i32;

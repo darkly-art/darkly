@@ -57,29 +57,35 @@ function computeLayout(node: NodeInstance): NodeLayout {
     const inputs  = node.ports.filter(p => p.dir === 'Input');
     const outputs = node.ports.filter(p => p.dir === 'Output');
     const paramDefs: any[] = typeInfo?.params ?? [];
+    const isImage = node.type_id === 'image';
+
+    // Image nodes get an image preview area before the ports.
+    const imageH = isImage ? IMAGE_PREVIEW_SIZE + IMAGE_UPLOAD_H + BODY_PAD : 0;
 
     const maxPorts = Math.max(inputs.length, outputs.length);
     const portsH = maxPorts * PORT_ROW_H;
-    const portsEndY = NODE_HEADER_H + BODY_PAD + portsH;
+    const portsEndY = NODE_HEADER_H + BODY_PAD + imageH + portsH;
 
     const layoutPort = (p: { name: string; wire_type: string }, i: number): PortLayout => ({
         name: p.name,
-        y: NODE_HEADER_H + BODY_PAD + i * PORT_ROW_H + PORT_ROW_H / 2,
+        y: NODE_HEADER_H + BODY_PAD + imageH + i * PORT_ROW_H + PORT_ROW_H / 2,
         wireType: p.wire_type,
     });
 
-    const params: ParamLayout[] = paramDefs.map((pd: any, i: number) => ({
+    // Image nodes hide params from the canvas (resource_name is internal).
+    const visibleParams = isImage ? [] : paramDefs;
+    const params: ParamLayout[] = visibleParams.map((pd: any, i: number) => ({
         index: i,
         y: portsEndY + BODY_PAD + i * PARAM_ROW_H + PARAM_ROW_H / 2,
         kind: pd.kind, name: pd.name,
         min: pd.min, max: pd.max, default: pd.default,
     }));
 
-    const paramsH = paramDefs.length > 0 ? BODY_PAD * 2 + paramDefs.length * PARAM_ROW_H : 0;
+    const paramsH = visibleParams.length > 0 ? BODY_PAD * 2 + visibleParams.length * PARAM_ROW_H : 0;
 
     return {
         w: NODE_MIN_WIDTH,
-        h: NODE_HEADER_H + BODY_PAD * 2 + portsH + paramsH,
+        h: NODE_HEADER_H + BODY_PAD * 2 + imageH + portsH + paramsH,
         inputs:  inputs.map(layoutPort),
         outputs: outputs.map(layoutPort),
         params,
@@ -89,7 +95,12 @@ function computeLayout(node: NodeInstance): NodeLayout {
 
 // ── Hit-test result ─────────────────────────────────────────────────
 
-export type HitType = 'node-header' | 'node-body' | 'port' | 'param-slider' | 'param-checkbox' | 'remove-btn' | 'none';
+// ── Image node constants ────────────────────────────────────────────
+
+const IMAGE_PREVIEW_SIZE = 80;  // square preview area
+const IMAGE_UPLOAD_H = 20;      // "Click / Drop / Paste" hint row
+
+export type HitType = 'node-header' | 'node-body' | 'port' | 'param-slider' | 'param-checkbox' | 'remove-btn' | 'image-upload' | 'none';
 
 export interface HitResult {
     type: HitType;
@@ -285,6 +296,11 @@ export class CanvasRenderer {
         ctx.fillText('\u00d7', nx + L.w - 6, ny + NODE_HEADER_H / 2);
         ctx.textAlign = 'left';
 
+        // image preview (Image nodes only)
+        if (node.type_id === 'image') {
+            this.drawImagePreview(nx, ny, L.w, node);
+        }
+
         // ports
         for (const p of L.inputs)  this.drawPort(nx, ny, p, 'Input',  L.w, node.id);
         for (const p of L.outputs) this.drawPort(nx, ny, p, 'Output', L.w, node.id);
@@ -379,6 +395,58 @@ export class CanvasRenderer {
         }
     }
 
+    // ── image preview (Image nodes) ───────────────────────────────
+
+    private drawImagePreview(nx: number, ny: number, nodeW: number, node: NodeInstance) {
+        const ctx = this.ctx;
+        const previewY = ny + NODE_HEADER_H + BODY_PAD;
+        const previewX = nx + (nodeW - IMAGE_PREVIEW_SIZE) / 2;
+
+        // Background for preview area.
+        ctx.fillStyle = '#1a1a1a';
+        ctx.fillRect(previewX, previewY, IMAGE_PREVIEW_SIZE, IMAGE_PREVIEW_SIZE);
+
+        // Draw cached thumbnail if available.
+        const resourceName = node.params[0] as string | undefined;
+        const bitmap = resourceName ? brushGraph.imageThumbnails.get(resourceName) : undefined;
+        if (bitmap) {
+            // Fit the image within the preview square, preserving aspect ratio.
+            const aspect = bitmap.width / bitmap.height;
+            let dw: number, dh: number;
+            if (aspect >= 1) {
+                dw = IMAGE_PREVIEW_SIZE;
+                dh = IMAGE_PREVIEW_SIZE / aspect;
+            } else {
+                dh = IMAGE_PREVIEW_SIZE;
+                dw = IMAGE_PREVIEW_SIZE * aspect;
+            }
+            const dx = previewX + (IMAGE_PREVIEW_SIZE - dw) / 2;
+            const dy = previewY + (IMAGE_PREVIEW_SIZE - dh) / 2;
+            ctx.drawImage(bitmap, dx, dy, dw, dh);
+        } else {
+            // Placeholder icon.
+            ctx.fillStyle = '#555';
+            ctx.font = '24px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('\u{1F5BC}', previewX + IMAGE_PREVIEW_SIZE / 2, previewY + IMAGE_PREVIEW_SIZE / 2);
+        }
+
+        // Border around preview.
+        ctx.strokeStyle = '#555';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(previewX, previewY, IMAGE_PREVIEW_SIZE, IMAGE_PREVIEW_SIZE);
+
+        // Upload hint below preview.
+        const hintY = previewY + IMAGE_PREVIEW_SIZE + IMAGE_UPLOAD_H / 2;
+        ctx.font = '8px sans-serif';
+        ctx.fillStyle = '#777';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('Click / Drop / Paste', nx + nodeW / 2, hintY);
+        ctx.textAlign = 'left';
+    }
+
     // ── hit testing ─────────────────────────────────────────────────
 
     hitTest(gx: number, gy: number): HitResult {
@@ -397,6 +465,13 @@ export class CanvasRenderer {
             // header
             if (gy < ny + NODE_HEADER_H)
                 return { type: 'node-header', nodeId: node.id };
+
+            // Image node: click on preview/hint area → upload
+            if (node.type_id === 'image') {
+                const imageAreaEnd = ny + NODE_HEADER_H + BODY_PAD + IMAGE_PREVIEW_SIZE + IMAGE_UPLOAD_H;
+                if (gy < imageAreaEnd)
+                    return { type: 'image-upload', nodeId: node.id };
+            }
 
             // input ports
             for (const p of L.inputs) {

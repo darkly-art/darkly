@@ -1,10 +1,13 @@
-//! Pre-allocated pool of GPU dab textures + cached brush tip textures.
+//! Pre-allocated pool of GPU dab textures + static textures (brush tips, etc.).
 //!
 //! Avoids GPU allocation during painting — dab textures are created once and
-//! reused across dabs.  Brush tip textures are uploaded once on brush load
-//! and cached by name.
-
-use std::collections::HashMap;
+//! reused across dabs.  Static textures (brush tips, patterns) are uploaded
+//! once and live until explicitly cleared.
+//!
+//! Both dab render targets and static textures are accessed through a unified
+//! `TextureHandle`.  Handles with the high bit set (`STATIC_HANDLE_BIT`) refer
+//! to static textures; all others index into the dab render target pool.
+//! `bind_group(handle)` and `texture_size(handle)` work for either kind.
 
 use super::wire::TextureHandle;
 
@@ -12,6 +15,9 @@ use super::wire::TextureHandle;
 /// This is the internal rendering resolution — the quality budget.
 /// Actual brush footprint on canvas can be larger via global_scale.
 pub const MAX_DAB_SIZE: u32 = 512;
+
+/// High bit in TextureHandle distinguishes static textures from dab render targets.
+const STATIC_HANDLE_BIT: u16 = 0x8000;
 
 /// A single pooled dab texture with its pre-built bind group.
 struct DabEntry {
@@ -22,34 +28,36 @@ struct DabEntry {
     in_use: bool,
 }
 
-/// A cached brush tip texture uploaded to the GPU.
-struct BrushTipEntry {
+/// A static texture uploaded to the GPU (brush tip, pattern, etc.).
+struct StaticEntry {
     _texture: wgpu::Texture,
     _view: wgpu::TextureView,
-    /// Bind group for sampling this tip in the stamp pass (same BGL as dab).
     bind_group: wgpu::BindGroup,
     width: u32,
     height: u32,
 }
 
-/// Pool of pre-allocated GPU dab textures plus cached brush tip textures.
+/// Pool of pre-allocated GPU dab textures plus static uploaded textures.
 ///
 /// During a stroke, each dab acquires a texture (procedural/stamp node writes
 /// to it), then the composite node samples it.  After `execute_gpu()` finishes
-/// for one dab, all textures are released back to the pool.
+/// for one dab, all dab textures are released back to the pool.
 ///
-/// Brush tip textures are uploaded once on brush load and cached by name.
-/// They are separate from dab render targets — tips are read-only texture
-/// sources, dabs are write-then-read render targets.
+/// Static textures are uploaded once (at preset load, etc.) and persist until
+/// explicitly cleared.  They are read-only texture sources, while dabs are
+/// write-then-read render targets.  Both are accessed through `TextureHandle`
+/// (see `STATIC_HANDLE_BIT`).
 pub struct DabTexturePool {
     entries: Vec<DabEntry>,
-    /// Bind group layout for sampling dab textures (texture + sampler).
+    /// Bind group layout for sampling textures (texture + sampler).
     bgl: wgpu::BindGroupLayout,
-    /// Shared sampler for all dab texture bind groups.
+    /// Shared sampler for all texture bind groups.
     sampler: wgpu::Sampler,
     max_size: u32,
-    /// Cached brush tip textures, keyed by resource name.
-    tip_cache: HashMap<String, BrushTipEntry>,
+    /// Static textures (brush tips, patterns, etc.).
+    /// `None` entries are tombstones — the GPU resources have been freed
+    /// but the index is preserved so existing handles remain valid.
+    static_entries: Vec<Option<StaticEntry>>,
 }
 
 impl DabTexturePool {
@@ -88,19 +96,21 @@ impl DabTexturePool {
             bgl,
             sampler,
             max_size: MAX_DAB_SIZE,
-            tip_cache: HashMap::new(),
+            static_entries: Vec::new(),
         }
     }
 
-    /// The bind group layout for dab texture sampling (group(1) in composite).
+    /// The bind group layout for texture sampling (group(1) in composite).
     pub fn bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.bgl
     }
 
-    /// Maximum texture dimension (width = height).
+    /// Maximum dab texture dimension (width = height).
     pub fn max_size(&self) -> u32 {
         self.max_size
     }
+
+    // --- Dab render target pool ---
 
     /// Acquire a dab texture for rendering.  Returns a handle that indexes
     /// into the pool.  If no free entries exist, a new texture is allocated.
@@ -155,7 +165,7 @@ impl DabTexturePool {
         TextureHandle(idx as u16)
     }
 
-    /// Release all in-use textures back to the pool.
+    /// Release all in-use dab textures back to the pool.
     ///
     /// Called after each dab's GPU passes are recorded (not submitted —
     /// the textures are still referenced by the command buffer, but wgpu
@@ -166,41 +176,68 @@ impl DabTexturePool {
         }
     }
 
-    /// Get the texture view for a handle (for use as a render target).
+    /// Get the texture view for a dab handle (for use as a render target).
     pub fn view(&self, handle: TextureHandle) -> &wgpu::TextureView {
         &self.entries[handle.0 as usize].view
     }
 
-    /// Get the raw texture for a handle.
+    /// Get the raw texture for a dab handle.
     pub fn texture(&self, handle: TextureHandle) -> &wgpu::Texture {
         &self.entries[handle.0 as usize].texture
     }
 
-    /// Get the pre-built bind group for sampling a dab texture in the
-    /// composite pass.
+    // --- Unified handle access (dab + static) ---
+
+    /// Get the pre-built bind group for sampling any texture by handle.
+    ///
+    /// Panics if the handle refers to a released static texture.
     pub fn bind_group(&self, handle: TextureHandle) -> &wgpu::BindGroup {
-        &self.entries[handle.0 as usize].bind_group
+        if handle.0 & STATIC_HANDLE_BIT != 0 {
+            let idx = (handle.0 & !STATIC_HANDLE_BIT) as usize;
+            &self.static_entries[idx].as_ref().expect("static texture released").bind_group
+        } else {
+            &self.entries[handle.0 as usize].bind_group
+        }
     }
 
-    // --- Brush tip texture cache ---
-
-    /// Upload a brush tip image (RGBA8 bytes) and cache it by name.
+    /// Get the pixel dimensions of any texture by handle.
     ///
-    /// Called once when a brush preset is loaded.  The resulting bind group
-    /// is used by the stamp node to sample the tip texture during dab
-    /// generation.  If a tip with the same name already exists, it is
-    /// replaced.
-    pub fn upload_tip(
+    /// Dab render targets are always `max_size × max_size`; static
+    /// textures have their natural dimensions.
+    pub fn texture_size(&self, handle: TextureHandle) -> (u32, u32) {
+        if handle.0 & STATIC_HANDLE_BIT != 0 {
+            let idx = (handle.0 & !STATIC_HANDLE_BIT) as usize;
+            let e = self.static_entries[idx].as_ref().expect("static texture released");
+            (e.width, e.height)
+        } else {
+            (self.max_size, self.max_size)
+        }
+    }
+
+    /// Check whether a static texture handle is still valid (not released).
+    pub fn is_static_valid(&self, handle: TextureHandle) -> bool {
+        if handle.0 & STATIC_HANDLE_BIT == 0 { return false; }
+        let idx = (handle.0 & !STATIC_HANDLE_BIT) as usize;
+        idx < self.static_entries.len() && self.static_entries[idx].is_some()
+    }
+
+    // --- Static texture uploads ---
+
+    /// Upload an RGBA8 image to the GPU and return a static `TextureHandle`.
+    ///
+    /// The texture persists until `clear_static()` is called.  The returned
+    /// handle works with `bind_group()` and `texture_size()`.
+    pub fn upload_image(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        name: &str,
+        label: &str,
         width: u32,
         height: u32,
         rgba: &[u8],
-    ) {
+    ) -> TextureHandle {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("brush-tip-{name}")),
+            label: Some(label),
             size: wgpu::Extent3d {
                 width,
                 height,
@@ -234,7 +271,7 @@ impl DabTexturePool {
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(&format!("brush-tip-bg-{name}")),
+            label: Some(&format!("{label}-bg")),
             layout: &self.bgl,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -248,37 +285,40 @@ impl DabTexturePool {
             ],
         });
 
-        self.tip_cache.insert(
-            name.to_string(),
-            BrushTipEntry {
-                _texture: texture,
-                _view: view,
-                bind_group,
-                width,
-                height,
-            },
-        );
+        // Reuse a tombstone slot if available.
+        let entry = Some(StaticEntry {
+            _texture: texture,
+            _view: view,
+            bind_group,
+            width,
+            height,
+        });
+        for (i, slot) in self.static_entries.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = entry;
+                return TextureHandle(STATIC_HANDLE_BIT | i as u16);
+            }
+        }
+        let idx = self.static_entries.len() as u16;
+        self.static_entries.push(entry);
+        TextureHandle(STATIC_HANDLE_BIT | idx)
     }
 
-    /// Get the bind group for a cached brush tip texture.
+    /// Release a single static texture, freeing its GPU resources.
     ///
-    /// Returns `None` if the tip hasn't been uploaded.
-    pub fn tip_bind_group(&self, name: &str) -> Option<&wgpu::BindGroup> {
-        self.tip_cache.get(name).map(|e| &e.bind_group)
+    /// The handle becomes invalid — subsequent `bind_group()` or
+    /// `texture_size()` calls on it will panic.  The slot is tombstoned
+    /// and may be reused by a future `upload_image()`.
+    pub fn release_static(&mut self, handle: TextureHandle) {
+        if handle.0 & STATIC_HANDLE_BIT == 0 { return; }
+        let idx = (handle.0 & !STATIC_HANDLE_BIT) as usize;
+        if idx < self.static_entries.len() {
+            self.static_entries[idx] = None; // drops GPU resources
+        }
     }
 
-    /// Get the dimensions of a cached brush tip texture.
-    pub fn tip_size(&self, name: &str) -> Option<(u32, u32)> {
-        self.tip_cache.get(name).map(|e| (e.width, e.height))
-    }
-
-    /// Check if a brush tip is cached.
-    pub fn has_tip(&self, name: &str) -> bool {
-        self.tip_cache.contains_key(name)
-    }
-
-    /// Clear all cached brush tips (e.g. when switching brush presets).
-    pub fn clear_tips(&mut self) {
-        self.tip_cache.clear();
+    /// Clear all static textures (e.g. when switching brush presets).
+    pub fn clear_static(&mut self) {
+        self.static_entries.clear();
     }
 }

@@ -247,6 +247,7 @@ impl DarklyEngine {
                 canvas_height: canvas_h,
                 selection_bind_group: sel_bg,
                 global_scale: self.brush_global_scale,
+                resource_handles: &self.resource_handles,
             };
 
             engine.move_to(info, &mut gpu_ctx);

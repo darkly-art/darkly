@@ -17,6 +17,41 @@
     let isDraggingSlider = false;
     let sliderNodeId = 0, sliderParamIdx = 0;
 
+    // --- Image upload helpers ---
+
+    /** Open a file picker and upload the chosen image to an Image node. */
+    function browseImageForNode(nodeId: number) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = async () => {
+            const file = input.files?.[0];
+            if (file) {
+                await brushGraph.uploadBlobToNode(nodeId, file);
+                renderer?.markDirty();
+            }
+        };
+        input.click();
+    }
+
+    /** Upload an image Blob (from drop or paste) to the focused Image node. */
+    async function uploadBlobToImageNode(nodeId: number, blob: Blob) {
+        await brushGraph.uploadBlobToNode(nodeId, blob);
+        renderer?.markDirty();
+    }
+
+    /** Find the Image node under a drop point, or the selected Image node. */
+    function imageNodeAt(gx: number, gy: number): number | null {
+        const hit = renderer?.hitTest(gx, gy);
+        if (hit?.type === 'image-upload' && hit.nodeId != null) return hit.nodeId;
+        // Fallback: selected node if it's an Image node.
+        if (brushGraph.selectedNode != null) {
+            const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];
+            if (node?.type_id === 'image') return brushGraph.selectedNode;
+        }
+        return null;
+    }
+
     onMount(() => {
         renderer = new CanvasRenderer(canvasEl);
         renderer.start();
@@ -133,6 +168,11 @@
                 renderer.markDirty();
                 break;
 
+            case 'image-upload':
+                brushGraph.selectedNode = hit.nodeId!;
+                browseImageForNode(hit.nodeId!);
+                break;
+
             case 'node-body':
                 brushGraph.selectedNode = hit.nodeId!;
                 break;
@@ -221,8 +261,36 @@
     }
 
     function onContextMenu(e: MouseEvent) { e.preventDefault(); }
+
+    // --- Drag & drop image onto Image nodes ---
+
+    function onDragOver(e: DragEvent) {
+        if (e.dataTransfer?.types.some(t => t === 'Files' || t.startsWith('image/'))) {
+            e.preventDefault();
+            e.dataTransfer!.dropEffect = 'copy';
+        }
+    }
+
+    async function onDrop(e: DragEvent) {
+        e.preventDefault();
+        if (!renderer || !e.dataTransfer) return;
+        const g = renderer.screenToGraph(e.clientX, e.clientY);
+        const nodeId = imageNodeAt(g.x, g.y);
+        if (nodeId == null) return;
+
+        // Check for image files.
+        for (const file of Array.from(e.dataTransfer.files)) {
+            if (file.type.startsWith('image/')) {
+                await uploadBlobToImageNode(nodeId, file);
+                return;
+            }
+        }
+    }
+
+
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <canvas
     class="node-canvas"
@@ -232,6 +300,8 @@
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
     oncontextmenu={onContextMenu}
+    ondragover={onDragOver}
+    ondrop={onDrop}
 ></canvas>
 
 <style>

@@ -55,12 +55,40 @@ impl DarklyEngine {
 
     // --- Fine-grained graph commands ---
 
-    /// Compile the active graph in-place.  Returns Ok on success or an
-    /// error string.  On failure the graph is unchanged.
-    fn compile_active(&self) -> Result<(), String> {
+    /// Compile the active graph in-place, then release any static GPU
+    /// textures that are no longer referenced by an Image node.
+    ///
+    /// Returns Ok on success or an error string.
+    fn compile_active(&mut self) -> Result<(), String> {
         crate::brush::compile_graph(&self.active_brush_graph)
-            .map(|_| ())
-            .map_err(|e| format!("{e}"))
+            .map_err(|e| format!("{e}"))?;
+
+        // Collect resource names still referenced by Image nodes.
+        let live: std::collections::HashSet<String> = self
+            .active_brush_graph
+            .nodes
+            .values()
+            .filter(|n| n.type_id == "image")
+            .filter_map(|n| match n.params.first() {
+                Some(ParamValue::String(s)) if !s.is_empty() => Some(s.clone()),
+                _ => None,
+            })
+            .collect();
+
+        // Release static textures whose resource name is no longer live.
+        let stale: Vec<String> = self
+            .resource_handles
+            .keys()
+            .filter(|name| !live.contains(name.as_str()))
+            .cloned()
+            .collect();
+        for name in stale {
+            if let Some(handle) = self.resource_handles.remove(&name) {
+                self.dab_pool.release_static(handle);
+            }
+        }
+
+        Ok(())
     }
 
     /// Serialize the active graph as JSON.
@@ -176,6 +204,34 @@ impl DarklyEngine {
     /// Update a node's position (UI-only, no compile).
     pub fn brush_graph_move_node(&mut self, node_id: u64, x: f32, y: f32) {
         let _ = self.active_brush_graph.set_node_position(NodeId(node_id), [x, y]);
+    }
+
+    /// Upload an RGBA8 image and associate it with a resource name.
+    ///
+    /// The image is stored as a static GPU texture.  Image nodes that
+    /// reference `resource_name` will output this texture's handle.
+    /// If a resource with the same name already exists, it is replaced.
+    pub fn brush_upload_image(
+        &mut self,
+        resource_name: &str,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> Result<(), String> {
+        // Release the old texture if replacing.
+        if let Some(old) = self.resource_handles.remove(resource_name) {
+            self.dab_pool.release_static(old);
+        }
+        let handle = self.dab_pool.upload_image(
+            &self.gpu.device,
+            &self.gpu.queue,
+            resource_name,
+            width,
+            height,
+            rgba,
+        );
+        self.resource_handles.insert(resource_name.to_string(), handle);
+        Ok(())
     }
 
     /// Set the global brush scale multiplier.

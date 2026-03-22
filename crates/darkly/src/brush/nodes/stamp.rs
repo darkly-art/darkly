@@ -1,12 +1,12 @@
 //! Stamp dab generation GPU node.
 //!
-//! Image-based dab source — loads a brush tip texture cached in the
-//! `DabTexturePool` and stamps it onto a dab texture with size, rotation,
-//! mirror, ratio, opacity, and color transforms via the `stamp.wgsl` shader.
+//! Image-based dab source — receives a brush tip texture handle on its
+//! `tip` input (typically from an Image node) and stamps it onto a dab
+//! texture with size, rotation, mirror, ratio, opacity, and color
+//! transforms via the `stamp.wgsl` shader.
 //!
-//! This replaces `procedural.rs` as the dab source for image-based brushes.
-//! The brush tip texture is uploaded once on brush load (by the preset
-//! loading flow) and referenced by name through the `tip_name` parameter.
+//! If the `tip` input is disconnected (no upstream image), the node
+//! produces no output — no tip means no dab.
 //!
 //! The dab viewport may be non-square: if the tip texture has a non-square
 //! aspect ratio, the viewport preserves it so the tip is sampled without
@@ -30,6 +30,8 @@ pub fn register() -> BrushNodeRegistration {
         category: "gpu",
         display_name: "Stamp Tip",
         ports: vec![
+            // Tip texture from an upstream Image node.
+            PortDef::input("tip", BrushWireType::Texture),
             // Inputs (0-1 normalized, mapped to actual ranges internally).
             PortDef::input("size", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5),
@@ -54,7 +56,6 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::output("scatter_offset", BrushWireType::Vec2),
         ],
         params: &[
-            ParamDef::String { name: "tip_name", default: "" },
             ParamDef::Int { name: "application", min: 0, max: 3, default: 0 },
         ],
         is_gpu: true,
@@ -74,6 +75,12 @@ impl BrushNodeEvaluator for StampEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
+        // Tip texture must be connected — no tip means no dab.
+        let tip_handle = match ctx.input("tip") {
+            ScalarValue::Texture(h) => h,
+            _ => return vec![],
+        };
+
         let size = ctx.input_f32("size");
         let rotation_input = ctx.input_f32("rotation");
         let mirror_x_input = ctx.input_f32("mirror_x");
@@ -84,9 +91,8 @@ impl BrushNodeEvaluator for StampEvaluator {
         let scatter_x = ctx.input_f32("scatter_x");
         let scatter_y = ctx.input_f32("scatter_y");
 
-        // Read params.
-        let tip_name = ctx.param_str(0);
-        let application_int = match ctx.params.get(1) {
+        // Read application mode param.
+        let application_int = match ctx.params.get(0) {
             Some(crate::gpu::params::ParamValue::Int(v)) => *v as u32,
             _ => 0,
         };
@@ -97,17 +103,11 @@ impl BrushNodeEvaluator for StampEvaluator {
             _ => BrushTipApplication::AlphaMask,
         };
 
-        // Check that the tip texture is cached before proceeding.
-        if !gpu.dab_pool.has_tip(tip_name) {
-            log::warn!("stamp node: tip '{}' not found in cache", tip_name);
-            return vec![];
-        }
-
         // Compute dab dimensions preserving tip aspect ratio.
         // The `size` input (0-1) scales the longer axis up to MAX_DAB_SIZE;
         // the shorter axis follows from the tip's natural aspect ratio.
         let max = MAX_DAB_SIZE as f32;
-        let (tip_w, tip_h) = gpu.dab_pool.tip_size(tip_name).unwrap_or((1, 1));
+        let (tip_w, tip_h) = gpu.dab_pool.texture_size(tip_handle);
         let tip_aspect = tip_w as f32 / tip_h as f32;
 
         let (dab_w, dab_h) = if tip_aspect >= 1.0 {
@@ -127,7 +127,7 @@ impl BrushNodeEvaluator for StampEvaluator {
         let scatter_px_x = scatter_x * dab_major;
         let scatter_px_y = scatter_y * dab_major;
 
-        // Rotation: 0-1 maps to 0-2π radians.
+        // Rotation: 0-1 maps to 0-2pi radians.
         let rotation_rad = rotation_input * std::f32::consts::TAU;
 
         // Mirror: threshold at 0.5.
@@ -138,8 +138,8 @@ impl BrushNodeEvaluator for StampEvaluator {
         let handle = gpu.dab_pool.acquire(gpu.device);
         let dab_view = gpu.dab_pool.view(handle);
 
-        // Now safe to borrow immutably for the tip bind group.
-        let tip_bind_group = gpu.dab_pool.tip_bind_group(tip_name).unwrap();
+        // Get the tip's bind group for sampling.
+        let tip_bind_group = gpu.dab_pool.bind_group(tip_handle);
 
         // Write uniforms.
         let uniforms = StampUniforms {
