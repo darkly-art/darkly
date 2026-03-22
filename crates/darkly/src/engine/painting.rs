@@ -476,9 +476,9 @@ impl DarklyEngine {
     }
 
     /// Upload a cropped region of the GPU selection as an R8 texture bind group.
-    /// Reads from the cpu_cache (ensures cache valid first).
+    /// Does a blocking GPU readback to get the selection data.
     pub(crate) fn upload_cropped_selection_r8(
-        &mut self,
+        &self,
         origin: (i32, i32),
         width: u32,
         height: u32,
@@ -486,10 +486,9 @@ impl DarklyEngine {
         if !self.gpu_selection.active {
             return None;
         }
-        self.gpu_selection.ensure_cache_valid(&self.gpu.device, &self.gpu.queue);
 
+        let full = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
         let (ox, oy) = origin;
-        let cache = &self.gpu_selection.cpu_cache;
         let cw = self.gpu_selection.width;
         let ch = self.gpu_selection.height;
 
@@ -499,7 +498,7 @@ impl DarklyEngine {
                 let sx = ox + px as i32;
                 let sy = oy + py as i32;
                 if sx >= 0 && sy >= 0 && (sx as u32) < cw && (sy as u32) < ch {
-                    pixels[(py * width + px) as usize] = cache[(sy as u32 * cw + sx as u32) as usize];
+                    pixels[(py * width + px) as usize] = full[(sy as u32 * cw + sx as u32) as usize];
                 }
             }
         }

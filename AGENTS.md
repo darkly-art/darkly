@@ -50,6 +50,12 @@ Past lessons that illustrate the pattern:
 
 See `gpu-lessons-learned.md` for full details. The specifics vary but the theme is the same: the naive approach has a hidden multiplier, and there's a structural fix that eliminates it.
 
+## Testing Principle
+
+Every feature must have a test. Every bug must have a regression test. Regression tests must be verified against the unfixed code before the fix — if the test doesn't fail without the fix, it doesn't count. The workflow is: write the test, stash/revert the fix, run the test, confirm it fails, restore the fix, confirm it passes. No exceptions.
+
+Performance regression tests should assert concrete timing bounds (e.g., `assert!(ms < 50.0)`) so they catch algorithmic regressions, not just logical ones.
+
 ## Engineering Principle
 
 Every system that is implemented must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. It's okay to take a step back from the current task, in order to do things right. This relates directly to the modularity principle above.

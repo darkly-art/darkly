@@ -287,7 +287,7 @@ impl DarklyEngine {
                     self.complete_copy(is_mask, region, selection_data, is_cut, layer_id, pixels);
                 }
                 ReadbackContext::SelectionReadback => {
-                    self.gpu_selection.update_cache(pixels);
+                    self.update_selection_overlay_from_readback(pixels);
                 }
                 _ => {}
             }

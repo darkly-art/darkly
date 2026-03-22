@@ -170,8 +170,7 @@ impl DarklyEngine {
                     self.complete_mask_to_selection(was_active, pixels);
                 }
                 ReadbackContext::SelectionReadback => {
-                    self.gpu_selection.update_cache(pixels);
-                    self.update_selection_overlay();
+                    self.update_selection_overlay_from_readback(pixels);
                 }
                 ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
                     let doc_w = self.doc.width;
@@ -316,7 +315,7 @@ impl DarklyEngine {
                 });
             }
 
-            self.gpu_selection.cache_valid = false;
+            self.gpu_selection.pixel_bounds = None; // will be recomputed from readback
             self.kick_selection_readback();
         }
 
@@ -325,7 +324,6 @@ impl DarklyEngine {
             UndoDirection::Redo => self.undo_stack.complete_redo(action),
         }
         self.compositor.mark_dirty();
-        self.update_selection_overlay();
     }
 
     // --- Internal helpers ---

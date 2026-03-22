@@ -76,7 +76,12 @@ impl DarklyEngine {
     /// Determine the copy region from the selection (or full canvas).
     fn copy_region_from_selection(&mut self, canvas_w: u32, canvas_h: u32) -> [u32; 4] {
         if self.gpu_selection.active {
-            self.gpu_selection.ensure_cache_valid(&self.gpu.device, &self.gpu.queue);
+            if self.gpu_selection.pixel_bounds.is_none() {
+                let data = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
+                self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
+                    &data, self.gpu_selection.width, self.gpu_selection.height,
+                );
+            }
             if let Some([x, y, w, h]) = self.gpu_selection.pixel_bounds {
                 let w = w.min(canvas_w.saturating_sub(x));
                 let h = h.min(canvas_h.saturating_sub(y));
@@ -86,16 +91,14 @@ impl DarklyEngine {
         [0, 0, canvas_w, canvas_h]
     }
 
-    /// Read selection coverage for a given region from GPU selection CPU cache.
-    /// Returns None if there's no selection.
-    fn readback_selection_region(&mut self, region: [u32; 4]) -> Option<Vec<u8>> {
+    /// Read selection coverage for a given region via blocking GPU readback.
+    fn readback_selection_region(&self, region: [u32; 4]) -> Option<Vec<u8>> {
         if !self.gpu_selection.active {
             return None;
         }
-        self.gpu_selection.ensure_cache_valid(&self.gpu.device, &self.gpu.queue);
 
+        let full = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
         let [rx, ry, rw, rh] = region;
-        let cache = &self.gpu_selection.cpu_cache;
         let cw = self.gpu_selection.width;
         let ch = self.gpu_selection.height;
 
@@ -105,7 +108,7 @@ impl DarklyEngine {
                 let sx = rx + px;
                 let sy = ry + py;
                 if sx < cw && sy < ch {
-                    pixels[(py * rw + px) as usize] = cache[(sy * cw + sx) as usize];
+                    pixels[(py * rw + px) as usize] = full[(sy * cw + sx) as usize];
                 }
             }
         }

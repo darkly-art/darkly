@@ -365,7 +365,7 @@ impl DarklyHandle {
     pub fn select_lasso(&self, vertices: JsValue, mode: &str, antialias: bool, feather: f32) {
         let Some(mut e) = self.engine_mut() else { return };
         let verts: Vec<[f32; 2]> = serde_wasm_bindgen::from_value(vertices).unwrap_or_default();
-        e.select_lasso(&verts, parse_selection_mode(mode), antialias, feather)
+        e.select_lasso(&verts, parse_selection_mode(mode), antialias, feather);
     }
 
     pub fn select_magic_wand(&self, layer_id: u64, seed_x: i32, seed_y: i32, tolerance: u8, mode: &str) {

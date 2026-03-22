@@ -104,7 +104,12 @@ impl DarklyEngine {
         // Determine source bounds.
         if self.gpu_selection.active {
             // Selection provides bounds synchronously from cached pixel bounds.
-            self.gpu_selection.ensure_cache_valid(&self.gpu.device, &self.gpu.queue);
+            if self.gpu_selection.pixel_bounds.is_none() {
+                let data = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
+                self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
+                    &data, self.gpu_selection.width, self.gpu_selection.height,
+                );
+            }
             let [bx, by, bw, bh] = match self.gpu_selection.pixel_bounds {
                 Some(b) => b,
                 None => return false,
@@ -285,7 +290,8 @@ impl DarklyEngine {
         if has_selection {
             self.gpu_selection.clear(&self.gpu.queue);
 
-            self.update_selection_overlay();
+            self.selection_overlay.clear();
+            self.push_merged_overlay();
         }
     }
 

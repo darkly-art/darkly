@@ -350,16 +350,23 @@ fn no_selection_paints_normally() {
 
 #[test]
 fn rasterize_sdf_r8_rect() {
-    let (w, h) = (64, 64);
-    let pixels = mask::rasterize_sdf_r8(
+    let (w, h) = (64u32, 64u32);
+    let result = mask::rasterize_sdf_r8(
         w, h,
         (10, 10, 20, 20),
         |px, py| darkly::sdf::sdf_rect(px, py, 20.0, 20.0, 10.0, 10.0),
         false, 0.0,
     );
 
-    assert_eq!(pixels[(20 * w + 20) as usize], 255, "inside rect should be 255");
-    assert_eq!(pixels[(5 * w + 5) as usize], 0, "outside rect should be 0");
+    // The result is a tight-bounds buffer. Check a pixel inside the rect
+    // relative to the region origin.
+    assert!(result.width == 20 && result.height == 20, "region should be 20x20");
+    assert_eq!(result.x, 10);
+    assert_eq!(result.y, 10);
+    // Center of the shape = (20, 20) in canvas space = (10, 10) in region space.
+    assert_eq!(result.data[(10 * result.width + 10) as usize], 255, "inside rect should be 255");
+    // (0, 0) in region space = (10, 10) in canvas space = corner of shape, should be inside.
+    assert_eq!(result.data[0], 255, "corner should be inside");
 }
 
 #[test]
@@ -475,12 +482,20 @@ fn contour_segments_r8_circle_geometry() {
     let (w, h) = (128u32, 128u32);
     let (cx, cy, r) = (64.0_f32, 64.0_f32, 20.0_f32);
 
-    let pixels = mask::rasterize_sdf_r8(
+    let result = mask::rasterize_sdf_r8(
         w, h,
         ((cx - r) as i32, (cy - r) as i32, (2.0 * r) as i32, (2.0 * r) as i32),
         |px, py| darkly::sdf::sdf_circle(px, py, cx, cy, r),
         true, 0.0,
     );
+    // Expand to full canvas for contour extraction.
+    let mut pixels = vec![0u8; (w * h) as usize];
+    for y in 0..result.height {
+        let src = (y * result.width) as usize;
+        let dst = ((result.y + y) * w + result.x) as usize;
+        pixels[dst..dst + result.width as usize]
+            .copy_from_slice(&result.data[src..src + result.width as usize]);
+    }
 
     let segments = mask::contour_segments_r8(&pixels, w, h, 127);
     assert!(!segments.is_empty(), "circle should produce contour segments");
@@ -613,4 +628,73 @@ fn cut_paste_no_border() {
     assert!(mismatches == 0,
         "{mismatches} channel mismatches (worst error: {worst_error}). \
          remaining + pasted should exactly reconstruct original.");
+}
+
+// ============================================================================
+// Lasso selection performance (regression test for scanline fill)
+// ============================================================================
+
+/// Lasso-select a 200-vertex polygon through the engine and verify it completes
+/// in bounded time. The old SDF path was O(pixels × edges) — 489ms for 182 verts
+/// on WASM. The scanline path is O(pixels + edges × height).
+///
+/// Also verifies correctness: painting inside the lasso works, painting outside
+/// is masked.
+#[test]
+fn lasso_selection_performance_and_correctness() {
+    let (w, h) = (1024, 1024);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+
+    // Generate a circle polygon with 200 vertices — similar to a real lasso.
+    let cx = 500.0_f32;
+    let cy = 500.0_f32;
+    let r = 200.0_f32;
+    let n_verts = 200;
+    let vertices: Vec<[f32; 2]> = (0..n_verts)
+        .map(|i| {
+            let angle = 2.0 * std::f32::consts::PI * i as f32 / n_verts as f32;
+            [cx + r * angle.cos(), cy + r * angle.sin()]
+        })
+        .collect();
+
+    // Time the full select_lasso call.
+    let start = std::time::Instant::now();
+    engine.select_lasso(&vertices, SelectionMode::Replace, true, 0.0);
+    let elapsed = start.elapsed();
+
+    let ms = elapsed.as_secs_f64() * 1000.0;
+    eprintln!("select_lasso({n_verts} verts, {w}x{h}): {ms:.1}ms");
+
+    // Must complete in <50ms on native. The old SDF path took ~200ms+ here.
+    assert!(ms < 50.0,
+        "select_lasso with {n_verts} verts took {ms:.1}ms, expected <50ms");
+
+    assert!(engine.has_selection());
+
+    // Correctness: paint across canvas, verify masking works.
+    engine.begin_stroke(layer_id);
+    for x_step in 0..40 {
+        let x = x_step as f32 * (w as f32 / 40.0);
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y: cy,
+            pressure: 1.0,
+            x_tilt: 0.0, y_tilt: 0.0,
+            rotation: 0.0, tangential_pressure: 0.0,
+            time_ms: x_step as f64 * 16.0,
+            cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+
+    let pixels = engine.test_readback_layer(layer_id);
+
+    // Center of polygon (500, 500) — should have paint.
+    assert!(alpha_at(&pixels, w, cx as u32, cy as u32) > 0,
+        "center of lasso should have paint");
+
+    // Well outside polygon (50, 500) — 450px left of center, outside r=200.
+    assert_eq!(alpha_at(&pixels, w, 50, cy as u32), 0,
+        "outside lasso should be transparent");
 }

@@ -1,6 +1,8 @@
-//! GPU-authoritative selection mask — owns the R8 texture, bind groups, and CPU cache.
+//! GPU-authoritative selection mask — owns the R8 texture and bind groups.
+//! No persistent CPU cache. Contour extraction runs on async readback data.
 
 use crate::document::SelectionMode;
+use crate::mask::RasterizedMask;
 
 /// Reusable pipelines for selection boolean operations.
 /// Created once in `DarklyEngine::new()`.
@@ -222,11 +224,9 @@ impl SelectionPipelines {
         // Swap ping-pong and rebuild bind groups.
         selection.current = dst;
         selection.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
-        selection.cache_valid = false;
     }
 
-    /// Run the combine shader in "invert" mode (no shape texture needed — binds
-    /// the existing texture as a dummy for slot 1).
+    /// Run the combine shader in "invert" mode.
     pub fn invert(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -241,7 +241,6 @@ impl SelectionPipelines {
             _pad: [0; 3],
         }));
 
-        // Bind the existing texture in both slots (shape is unused by invert mode).
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sel-invert-bg"),
             layout: &self.combine_bgl,
@@ -288,7 +287,6 @@ impl SelectionPipelines {
 
         selection.current = dst;
         selection.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
-        selection.cache_valid = false;
     }
 }
 
@@ -317,9 +315,9 @@ impl CombineMode {
 
 /// GPU-authoritative selection mask.
 ///
-/// Always allocated on `DarklyEngine`; the `active` flag tracks whether a
-/// selection exists. When not active, the brush falls back to the default
-/// (1×1 white) bind group.
+/// No persistent CPU cache. The GPU texture is the single source of truth.
+/// Pixel bounds are tracked from rasterization parameters. CPU reads happen
+/// via on-demand blocking readback when needed (copy, transform).
 pub(crate) struct GpuSelection {
     /// Ping-pong pair of R8Unorm textures (canvas-sized).
     pub textures: [wgpu::Texture; 2],
@@ -327,18 +325,14 @@ pub(crate) struct GpuSelection {
     /// Index into `textures` for the current selection data.
     pub current: usize,
 
-    /// Bind group for `BrushPipelines::selection_bgl` (slot 2 in brush composite).
+    /// Bind group for `BrushPipelines::selection_bgl`.
     brush_bind_group: wgpu::BindGroup,
-    /// Bind group for `PaintPipelines::selection_bind_group_layout` (selection slot in paint ops).
+    /// Bind group for `PaintPipelines::selection_bind_group_layout`.
     paint_bind_group: wgpu::BindGroup,
 
-    /// CPU readback cache (flat R8, canvas-sized). Populated on every selection
-    /// change for contour extraction, bounds, and single-pixel sampling.
-    pub cpu_cache: Vec<u8>,
-    /// Cached tight pixel bounds from `cpu_cache`. None = empty/no selection.
+    /// Cached tight pixel bounds. Set from rasterization params on Replace,
+    /// cleared on boolean ops / invert (recomputed from readback when needed).
     pub pixel_bounds: Option<[u32; 4]>,
-    /// True when `cpu_cache` matches the GPU texture contents.
-    pub cache_valid: bool,
     /// True when a selection is logically active.
     pub active: bool,
 
@@ -392,9 +386,7 @@ impl GpuSelection {
             current: 0,
             brush_bind_group,
             paint_bind_group,
-            cpu_cache: vec![0u8; (width * height) as usize],
             pixel_bounds: None,
-            cache_valid: true,
             active: false,
             width,
             height,
@@ -413,8 +405,71 @@ impl GpuSelection {
         &self.paint_bind_group
     }
 
-    /// Upload R8 data directly (Replace mode). Sets cache immediately.
+    /// Upload a tight-bounds R8 region (Replace mode).
+    /// Clears the previous selection region, writes the new subregion.
     pub fn upload_replace(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        mask: &RasterizedMask,
+        brush_bgl: &wgpu::BindGroupLayout,
+        paint_bgl: &wgpu::BindGroupLayout,
+    ) {
+        // Clear the old selection region on GPU (if any).
+        if let Some([ox, oy, ow, oh]) = self.pixel_bounds {
+            let zeros = vec![0u8; (ow * oh) as usize];
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.textures[self.current],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: ox, y: oy, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &zeros,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(ow),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d { width: ow, height: oh, depth_or_array_layers: 1 },
+            );
+        }
+
+        // Write the new shape subregion.
+        if mask.width > 0 && mask.height > 0 {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.textures[self.current],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: mask.x, y: mask.y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &mask.data,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(mask.width),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d { width: mask.width, height: mask.height, depth_or_array_layers: 1 },
+            );
+        }
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sel-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
+
+        self.pixel_bounds = Some([mask.x, mask.y, mask.width, mask.height]);
+        self.active = true;
+    }
+
+    /// Upload full-canvas R8 data (used by magic wand, mask-to-selection).
+    pub fn upload_replace_full(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -438,7 +493,6 @@ impl GpuSelection {
             wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
         );
 
-        // Rebuild bind groups in case `current` was swapped by a prior boolean op.
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("sel-sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -449,59 +503,41 @@ impl GpuSelection {
         });
         self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
 
-        // We have the data — set cache immediately (no readback needed).
-        self.cpu_cache = data.to_vec();
-        self.pixel_bounds = crate::mask::pixel_bounds_r8(&self.cpu_cache, self.width, self.height);
-        self.cache_valid = true;
+        self.pixel_bounds = crate::mask::pixel_bounds_r8(data, self.width, self.height);
         self.active = true;
     }
 
-    /// Clear the selection: zero the texture, mark inactive.
-    pub fn clear(
-        &mut self,
-        queue: &wgpu::Queue,
-    ) {
-        // Write zeros to the texture (clear_texture requires a feature flag).
-        let zeros = vec![0u8; (self.width * self.height) as usize];
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.textures[self.current],
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &zeros,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(self.width),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
-        );
-        self.cpu_cache.fill(0);
+    /// Clear the selection: zero the active region, mark inactive.
+    pub fn clear(&mut self, queue: &wgpu::Queue) {
+        if let Some([ox, oy, ow, oh]) = self.pixel_bounds {
+            let zeros = vec![0u8; (ow * oh) as usize];
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.textures[self.current],
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: ox, y: oy, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &zeros,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(ow),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d { width: ow, height: oh, depth_or_array_layers: 1 },
+            );
+        }
         self.pixel_bounds = None;
-        self.cache_valid = true;
         self.active = false;
     }
 
-    /// Update cpu_cache from readback data, recompute bounds.
-    pub fn update_cache(&mut self, data: Vec<u8>) {
-        self.cpu_cache = data;
-        self.pixel_bounds = crate::mask::pixel_bounds_r8(&self.cpu_cache, self.width, self.height);
-        self.cache_valid = true;
-    }
-
-    /// Ensure the CPU cache is valid. If stale, does a blocking readback.
-    pub fn ensure_cache_valid(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        if self.cache_valid {
-            return;
-        }
-        self.cpu_cache = crate::gpu::test_utils::readback_texture(
+    /// Blocking readback of the full selection texture. Used by operations
+    /// that need CPU access (copy, transform bounds).
+    pub fn blocking_readback(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
+        crate::gpu::test_utils::readback_texture(
             device, queue, self.texture(),
             wgpu::TextureFormat::R8Unorm, self.width, self.height,
-        );
-        self.pixel_bounds = crate::mask::pixel_bounds_r8(&self.cpu_cache, self.width, self.height);
-        self.cache_valid = true;
+        )
     }
 
     /// Rebuild bind groups after a ping-pong swap.
@@ -521,47 +557,29 @@ impl GpuSelection {
     }
 
     fn create_brush_bind_group(
-        device: &wgpu::Device,
-        view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-        layout: &wgpu::BindGroupLayout,
+        device: &wgpu::Device, view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler, layout: &wgpu::BindGroupLayout,
     ) -> wgpu::BindGroup {
-        // BrushPipelines selection BGL: binding 0 = texture, binding 1 = sampler
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sel-brush-bg"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
             ],
         })
     }
 
     fn create_paint_bind_group(
-        device: &wgpu::Device,
-        view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-        layout: &wgpu::BindGroupLayout,
+        device: &wgpu::Device, view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler, layout: &wgpu::BindGroupLayout,
     ) -> wgpu::BindGroup {
-        // PaintPipelines selection BGL: binding 0 = texture, binding 1 = sampler
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sel-paint-bg"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
             ],
         })
     }

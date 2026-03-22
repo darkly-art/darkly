@@ -194,16 +194,10 @@ impl DarklyEngine {
 
         // Upload selection data from GPU selection CPU cache to the mask texture.
         if self.gpu_selection.active {
-            self.gpu_selection.ensure_cache_valid(&self.gpu.device, &self.gpu.queue);
             if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
                 let canvas_w = self.doc.width;
                 let canvas_h = self.doc.height;
-                // Convert cpu_cache (0=unselected) to mask (255=reveal, 0=hide).
-                // For selection→mask, selection coverage maps directly to mask alpha.
-                let mut buf = vec![255u8; (canvas_w * canvas_h) as usize];
-                for (i, &v) in self.gpu_selection.cpu_cache.iter().enumerate() {
-                    buf[i] = v;
-                }
+                let buf = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
                 self.gpu.queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &mask_tex.texture,
@@ -256,14 +250,14 @@ impl DarklyEngine {
     /// Complete mask-to-selection after async readback.
     pub(crate) fn complete_mask_to_selection(&mut self, was_active: bool, pixels: Vec<u8>) {
         // Upload the mask data directly to the GPU selection texture.
-        self.gpu_selection.upload_replace(
+        self.gpu_selection.upload_replace_full(
             &self.gpu.device, &self.gpu.queue, &pixels,
             self.brush_pipelines.selection_bind_group_layout(),
             &self.paint_pipelines.selection_bind_group_layout,
         );
 
         self.commit_selection_undo(was_active);
-        self.update_selection_overlay();
+        self.kick_selection_readback();
     }
 
     /// Sync compositor mask state (bind group + uniforms) for a layer or group.

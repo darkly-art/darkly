@@ -295,12 +295,26 @@ impl AlphaMask {
 // Flat-buffer SDF rasterization (no tile indirection)
 // ---------------------------------------------------------------------------
 
-/// Rasterize an SDF shape directly into a flat R8 buffer (canvas-sized).
+/// Result of rasterizing an SDF shape to a flat R8 buffer.
+/// Contains only the tight bounding region, not the full canvas.
+pub struct RasterizedMask {
+    /// R8 pixel data, `region_w * region_h` bytes.
+    pub data: Vec<u8>,
+    /// Origin of the region in canvas coordinates.
+    pub x: u32,
+    pub y: u32,
+    /// Dimensions of the region.
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Rasterize an SDF shape into a tight-bounds R8 buffer.
 ///
-/// This is the tile-free equivalent of `AlphaMask::rasterize()`, producing a
-/// `Vec<u8>` ready for `queue.write_texture()` to a GPU R8 texture.
+/// Returns only the region that the shape covers (plus margin for AA/feather),
+/// clamped to canvas bounds. The caller uploads this as a subregion of the
+/// GPU texture via `queue.write_texture()` with an origin offset.
 ///
-/// - `canvas_width`, `canvas_height`: full canvas dimensions
+/// - `canvas_width`, `canvas_height`: full canvas dimensions (for clamping)
 /// - `bounds`: (x, y, w, h) pixel bounding box of the shape
 /// - `sdf_fn`: signed distance at pixel center (negative = inside)
 /// - `antialias`: smooth 1px edge transition
@@ -312,8 +326,7 @@ pub fn rasterize_sdf_r8(
     sdf_fn: impl Fn(f32, f32) -> f32,
     antialias: bool,
     feather: f32,
-) -> Vec<u8> {
-    let mut pixels = vec![0u8; (canvas_width * canvas_height) as usize];
+) -> RasterizedMask {
     let (bx, by, bw, bh) = bounds;
 
     let margin = if feather > 0.0 {
@@ -328,18 +341,139 @@ pub fn rasterize_sdf_r8(
     let y0 = (by - margin).max(0) as u32;
     let x1 = ((bx + bw + margin) as u32).min(canvas_width);
     let y1 = ((by + bh + margin) as u32).min(canvas_height);
+    let rw = x1 - x0;
+    let rh = y1 - y0;
+
+    let mut pixels = vec![0u8; (rw * rh) as usize];
 
     for py in y0..y1 {
         for px in x0..x1 {
             let sdf = sdf_fn(px as f32 + 0.5, py as f32 + 0.5);
             let coverage = crate::sdf::sdf_coverage(sdf, antialias, feather);
             if coverage > 0.0 {
-                pixels[(py * canvas_width + px) as usize] = (coverage * 255.0) as u8;
+                pixels[((py - y0) * rw + (px - x0)) as usize] = (coverage * 255.0) as u8;
             }
         }
     }
 
-    pixels
+    RasterizedMask { data: pixels, x: x0, y: y0, width: rw, height: rh }
+}
+
+// ---------------------------------------------------------------------------
+// Scanline polygon rasterization (no SDF)
+// ---------------------------------------------------------------------------
+
+/// Rasterize a polygon into a tight-bounds R8 buffer using scanline fill.
+///
+/// O(height × edges + pixels) — no per-pixel distance computation.
+/// Antialiasing uses 4× vertical supersampling.
+pub fn rasterize_polygon_r8(
+    canvas_width: u32,
+    canvas_height: u32,
+    vertices: &[[f32; 2]],
+    antialias: bool,
+) -> RasterizedMask {
+    if vertices.len() < 3 {
+        return RasterizedMask { data: Vec::new(), x: 0, y: 0, width: 0, height: 0 };
+    }
+
+    // Bounding box.
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for v in vertices {
+        min_x = min_x.min(v[0]);
+        min_y = min_y.min(v[1]);
+        max_x = max_x.max(v[0]);
+        max_y = max_y.max(v[1]);
+    }
+
+    let margin = if antialias { 1 } else { 0 };
+    let x0 = ((min_x.floor() as i32) - margin).max(0) as u32;
+    let y0 = ((min_y.floor() as i32) - margin).max(0) as u32;
+    let x1 = ((max_x.ceil() as i32) + margin + 1).min(canvas_width as i32) as u32;
+    let y1 = ((max_y.ceil() as i32) + margin + 1).min(canvas_height as i32) as u32;
+    let rw = x1 - x0;
+    let rh = y1 - y0;
+
+    if rw == 0 || rh == 0 {
+        return RasterizedMask { data: Vec::new(), x: x0, y: y0, width: 0, height: 0 };
+    }
+
+    let n = vertices.len();
+    let sub_samples: &[f32] = if antialias { &[0.125, 0.375, 0.625, 0.875] } else { &[0.5] };
+    let scale = if antialias { 255.0 / sub_samples.len() as f32 } else { 255.0 };
+
+    // Accumulator: one u8 per pixel for non-AA, one u16 per pixel for AA.
+    let mut accum = vec![0u16; (rw * rh) as usize];
+    let mut intersections = Vec::with_capacity(n / 2 + 4);
+
+    for py in y0..y1 {
+        let local_y = (py - y0) as usize;
+
+        for &sub_offset in sub_samples {
+            let scan_y = py as f32 + sub_offset;
+
+            // Compute edge intersections with this scanline.
+            intersections.clear();
+            let mut j = n - 1;
+            for i in 0..n {
+                let yi = vertices[i][1];
+                let yj = vertices[j][1];
+
+                // Edge crosses scanline? (one endpoint strictly above, one at or below)
+                if (yi <= scan_y && yj > scan_y) || (yj <= scan_y && yi > scan_y) {
+                    let t = (scan_y - yi) / (yj - yi);
+                    let x = vertices[i][0] + t * (vertices[j][0] - vertices[i][0]);
+                    intersections.push(x);
+                }
+                j = i;
+            }
+
+            // Sort intersections.
+            intersections.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+
+            // Fill between pairs (even-odd rule).
+            for pair in intersections.chunks_exact(2) {
+                let xl = pair[0];
+                let xr = pair[1];
+
+                // Integer pixel range fully inside the span.
+                let px_start = (xl.ceil() as i32).max(x0 as i32) as u32;
+                let px_end = (xr.floor() as i32 + 1).min(x1 as i32) as u32;
+
+                for px in px_start..px_end {
+                    accum[local_y * rw as usize + (px - x0) as usize] += 1;
+                }
+
+                // Sub-pixel coverage at left edge.
+                if antialias {
+                    let left_px = (xl.floor() as i32).max(x0 as i32) as u32;
+                    if left_px < px_start && left_px >= x0 && left_px < x1 {
+                        // Fraction of pixel that's inside: right edge of pixel minus intersection x
+                        let coverage = (left_px as f32 + 1.0 - xl).clamp(0.0, 1.0);
+                        accum[local_y * rw as usize + (left_px - x0) as usize] +=
+                            (coverage * 1.0) as u16; // each sub-sample contributes fractionally
+                    }
+                    // Sub-pixel coverage at right edge.
+                    let right_px = (xr.floor() as i32).max(x0 as i32) as u32;
+                    if right_px >= px_end && right_px >= x0 && right_px < x1 {
+                        let coverage = (xr - right_px as f32).clamp(0.0, 1.0);
+                        accum[local_y * rw as usize + (right_px - x0) as usize] +=
+                            (coverage * 1.0) as u16;
+                    }
+                }
+            }
+        }
+    }
+
+    // Convert accumulator to R8.
+    let data: Vec<u8> = accum.iter().map(|&v| {
+        (v as f32 * scale).round().min(255.0) as u8
+    }).collect();
+
+    RasterizedMask { data, x: x0, y: y0, width: rw, height: rh }
 }
 
 // ---------------------------------------------------------------------------

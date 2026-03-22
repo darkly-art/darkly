@@ -1,8 +1,7 @@
 //! Selection operations — rect, ellipse, lasso, magic wand, clear, invert.
 //!
-//! All selection state is GPU-authoritative. Tools rasterize shapes to flat
-//! R8 buffers, which are uploaded directly to the GPU selection texture.
-//! Boolean ops (add/subtract/intersect) run as GPU shader passes.
+//! GPU-authoritative. No persistent CPU cache — the GPU texture is truth.
+//! Contour extraction (marching ants) runs on async readback data.
 
 use super::{DarklyEngine, ReadbackContext};
 use crate::document::SelectionMode;
@@ -10,6 +9,7 @@ use crate::engine::gpu_selection::CombineMode;
 use crate::gpu::flood_fill;
 use crate::gpu::overlay::{OverlayPrimitive, KIND_DASHED_LINE, FLAG_CANVAS_SPACE};
 use crate::gpu::readback;
+use crate::mask::RasterizedMask;
 use crate::undo::SelectionAction;
 
 impl DarklyEngine {
@@ -25,13 +25,13 @@ impl DarklyEngine {
         let half_w = w * 0.5;
         let half_h = h * 0.5;
 
-        let pixels = crate::mask::rasterize_sdf_r8(
+        let mask = crate::mask::rasterize_sdf_r8(
             self.doc.width, self.doc.height,
             (x as i32, y as i32, w.ceil() as i32, h.ceil() as i32),
             |px, py| crate::sdf::sdf_rect(px, py, cx, cy, half_w, half_h),
             antialias, feather,
         );
-        self.apply_selection_r8(pixels, mode);
+        self.apply_selection_mask(mask, mode);
     }
 
     pub fn select_ellipse(
@@ -46,13 +46,13 @@ impl DarklyEngine {
         let rx = w * 0.5;
         let ry = h * 0.5;
 
-        let pixels = crate::mask::rasterize_sdf_r8(
+        let mask = crate::mask::rasterize_sdf_r8(
             self.doc.width, self.doc.height,
             (x as i32, y as i32, w.ceil() as i32, h.ceil() as i32),
             |px, py| crate::sdf::sdf_ellipse(px, py, cx, cy, rx, ry),
             antialias, feather,
         );
-        self.apply_selection_r8(pixels, mode);
+        self.apply_selection_mask(mask, mode);
     }
 
     pub fn select_lasso(
@@ -60,35 +60,16 @@ impl DarklyEngine {
         vertices: &[[f32; 2]],
         mode: SelectionMode,
         antialias: bool,
-        feather: f32,
+        _feather: f32,
     ) {
         if vertices.len() < 3 {
             return;
         }
 
-        let mut min_x = f32::INFINITY;
-        let mut min_y = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-        let mut max_y = f32::NEG_INFINITY;
-        for v in vertices {
-            min_x = min_x.min(v[0]);
-            min_y = min_y.min(v[1]);
-            max_x = max_x.max(v[0]);
-            max_y = max_y.max(v[1]);
-        }
-        let bx = min_x.floor() as i32;
-        let by = min_y.floor() as i32;
-        let bw = (max_x - min_x).ceil() as i32 + 1;
-        let bh = (max_y - min_y).ceil() as i32 + 1;
-
-        let verts: Vec<[f32; 2]> = vertices.to_vec();
-        let pixels = crate::mask::rasterize_sdf_r8(
-            self.doc.width, self.doc.height,
-            (bx, by, bw, bh),
-            |px, py| crate::sdf::sdf_polygon(px, py, &verts),
-            antialias, feather,
+        let mask = crate::mask::rasterize_polygon_r8(
+            self.doc.width, self.doc.height, vertices, antialias,
         );
-        self.apply_selection_r8(pixels, mode);
+        self.apply_selection_mask(mask, mode);
     }
 
     pub fn select_magic_wand(
@@ -106,11 +87,8 @@ impl DarklyEngine {
         let canvas_h = self.doc.height;
 
         let was_active = self.gpu_selection.active;
-
-        // Save selection texture for undo BEFORE the mutation.
         self.save_selection_for_undo();
 
-        // Async GPU readback of layer texture.
         let layer_tex = self.compositor.layer_texture(layer_id).unwrap();
         self.gpu.encode("magic-wand-readback", |encoder| {
             let request = readback::request_readback(
@@ -123,7 +101,6 @@ impl DarklyEngine {
         });
     }
 
-    /// Complete magic wand after async readback.
     pub(crate) fn complete_magic_wand(
         &mut self, was_active: bool, seed_x: i32, seed_y: i32,
         tolerance: u8, mode: SelectionMode, pixels: Vec<u8>,
@@ -131,13 +108,11 @@ impl DarklyEngine {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        // CPU scanline flood fill on the flat pixel data.
         let fill_mask = flood_fill::flood_fill_rgba(
             &pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance,
         );
 
-        // Apply to GPU selection.
-        self.apply_selection_r8_with_undo(fill_mask, mode, was_active);
+        self.apply_selection_full(fill_mask, mode, was_active);
     }
 
     pub fn clear_selection(&mut self) {
@@ -150,7 +125,8 @@ impl DarklyEngine {
         self.gpu_selection.clear(&self.gpu.queue);
 
         self.commit_selection_undo(was_active);
-        self.update_selection_overlay();
+        self.selection_overlay.clear();
+        self.push_merged_overlay();
     }
 
     pub fn select_all(&mut self) {
@@ -159,15 +135,15 @@ impl DarklyEngine {
 
         let w = self.doc.width;
         let h = self.doc.height;
-        let data = vec![255u8; (w * h) as usize];
+        let mask = RasterizedMask { data: vec![255u8; (w * h) as usize], x: 0, y: 0, width: w, height: h };
         self.gpu_selection.upload_replace(
-            &self.gpu.device, &self.gpu.queue, &data,
+            &self.gpu.device, &self.gpu.queue, &mask,
             self.brush_pipelines.selection_bind_group_layout(),
             &self.paint_pipelines.selection_bind_group_layout,
         );
 
         self.commit_selection_undo(was_active);
-        self.update_selection_overlay();
+        self.generate_contours_from_mask(&mask);
     }
 
     pub fn invert_selection(&mut self) {
@@ -185,9 +161,10 @@ impl DarklyEngine {
                 &self.paint_pipelines.selection_bind_group_layout,
             );
         });
+        // Bounds unknown after invert — readback will recompute.
+        self.gpu_selection.pixel_bounds = None;
         self.commit_selection_undo(was_active);
         self.kick_selection_readback();
-        self.update_selection_overlay();
     }
 
     pub fn clear_selection_contents(&mut self, layer_id: u64) {
@@ -204,77 +181,158 @@ impl DarklyEngine {
 
     // --- Core selection application ---
 
-    /// Apply a rasterized R8 shape to the GPU selection, with full undo support.
-    fn apply_selection_r8(&mut self, shape_pixels: Vec<u8>, mode: SelectionMode) {
-        self.save_selection_for_undo();
+    /// Apply a tight-bounds rasterized mask (from SDF tools).
+    ///
+    /// Hot path: rasterize (already done) → upload subregion → done.
+    /// Undo save, undo commit, and marching-ants readback are batched into
+    /// a single GPU submission so they don't add latency.
+    fn apply_selection_mask(&mut self, mask: RasterizedMask, mode: SelectionMode) {
         let was_active = self.gpu_selection.active;
-        self.apply_selection_r8_with_undo(shape_pixels, mode, was_active);
+        self.save_selection_for_undo();
+
+        match mode {
+            SelectionMode::Replace => {
+                self.gpu_selection.upload_replace(
+                    &self.gpu.device, &self.gpu.queue, &mask,
+                    self.brush_pipelines.selection_bind_group_layout(),
+                    &self.paint_pipelines.selection_bind_group_layout,
+                );
+                self.generate_contours_from_mask(&mask);
+            }
+            _ => {
+                let cw = self.doc.width;
+                let ch = self.doc.height;
+                let mut full = vec![0u8; (cw * ch) as usize];
+                for y in 0..mask.height {
+                    let src = (y * mask.width) as usize;
+                    let dst = ((mask.y + y) * cw + mask.x) as usize;
+                    full[dst..dst + mask.width as usize]
+                        .copy_from_slice(&mask.data[src..src + mask.width as usize]);
+                }
+                self.apply_combine(&full, mode);
+                self.kick_selection_readback();
+            }
+        }
+
+        self.commit_selection_undo(was_active);
     }
 
-    /// Apply shape after undo has already been saved (used by async paths like magic wand).
-    fn apply_selection_r8_with_undo(
+    /// Generate marching ants contours directly from a RasterizedMask (no readback).
+    fn generate_contours_from_mask(&mut self, mask: &RasterizedMask) {
+        self.selection_overlay.clear();
+
+        if mask.width == 0 || mask.height == 0 {
+            self.push_merged_overlay();
+            return;
+        }
+
+        // contour_segments_r8 expects a full-canvas buffer, but we only have
+        // the tight region. Build a minimal padded buffer — just the region
+        // plus 1px border for marching squares boundary detection.
+        let pad = 1u32;
+        let bw = mask.width + 2 * pad;
+        let bh = mask.height + 2 * pad;
+        let mut buf = vec![0u8; (bw * bh) as usize];
+        for y in 0..mask.height {
+            let src = (y * mask.width) as usize;
+            let dst = ((y + pad) * bw + pad) as usize;
+            buf[dst..dst + mask.width as usize]
+                .copy_from_slice(&mask.data[src..src + mask.width as usize]);
+        }
+
+        let segments = crate::mask::contour_segments_r8(&buf, bw, bh, 127);
+
+        // Offset segments from local coords back to canvas coords.
+        let ox = mask.x as f32 - pad as f32;
+        let oy = mask.y as f32 - pad as f32;
+        for (a, b) in &segments {
+            let ca = [a[0] + ox, a[1] + oy];
+            let cb = [b[0] + ox, b[1] + oy];
+            let mut bg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, ca, cb);
+            bg.color = [0.0, 0.0, 0.0, 1.0];
+            bg.thickness = 1.5;
+            bg.dash_len = 0.0;
+            self.selection_overlay.push(bg);
+        }
+        for (a, b) in &segments {
+            let ca = [a[0] + ox, a[1] + oy];
+            let cb = [b[0] + ox, b[1] + oy];
+            let mut fg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, ca, cb);
+            fg.color = [1.0, 1.0, 1.0, 1.0];
+            fg.thickness = 1.0;
+            fg.dash_len = 8.0;
+            self.selection_overlay.push(fg);
+        }
+
+        self.push_merged_overlay();
+    }
+
+    /// Apply a full-canvas R8 buffer (from magic wand, mask-to-selection).
+    fn apply_selection_full(
         &mut self, shape_pixels: Vec<u8>, mode: SelectionMode, was_active: bool,
     ) {
         match mode {
             SelectionMode::Replace => {
-                self.gpu_selection.upload_replace(
+                self.gpu_selection.upload_replace_full(
                     &self.gpu.device, &self.gpu.queue, &shape_pixels,
                     self.brush_pipelines.selection_bind_group_layout(),
                     &self.paint_pipelines.selection_bind_group_layout,
                 );
             }
             _ => {
-                let combine_mode = CombineMode::from_selection_mode(&mode);
-                self.gpu.encode("sel-combine", |encoder| {
-                    self.selection_pipelines.combine(
-                        encoder, &self.gpu.device, &self.gpu.queue,
-                        &mut self.gpu_selection,
-                        &shape_pixels,
-                        combine_mode,
-                        self.brush_pipelines.selection_bind_group_layout(),
-                        &self.paint_pipelines.selection_bind_group_layout,
-                    );
-                });
-                // Boolean ops produce result on GPU — kick readback for CPU cache.
-                self.kick_selection_readback();
+                self.apply_combine(&shape_pixels, mode);
             }
         }
 
-
         self.commit_selection_undo(was_active);
-        self.update_selection_overlay();
+        self.kick_selection_readback();
+    }
+
+    /// Run the GPU combine shader for boolean modes.
+    fn apply_combine(&mut self, shape_pixels: &[u8], mode: SelectionMode) {
+        let combine_mode = CombineMode::from_selection_mode(&mode);
+        self.gpu.encode("sel-combine", |encoder| {
+            self.selection_pipelines.combine(
+                encoder, &self.gpu.device, &self.gpu.queue,
+                &mut self.gpu_selection,
+                shape_pixels,
+                combine_mode,
+                self.brush_pipelines.selection_bind_group_layout(),
+                &self.paint_pipelines.selection_bind_group_layout,
+            );
+        });
+        // Bounds unknown after boolean op.
+        self.gpu_selection.pixel_bounds = None;
     }
 
     // --- Undo helpers ---
 
-    /// Save the current selection GPU texture to the region store scratch.
     pub(crate) fn save_selection_for_undo(&mut self) {
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
+        let rect = self.selection_dirty_rect();
         let texture = self.gpu_selection.texture();
         self.gpu.encode("sel-undo-save", |encoder| {
             self.region_store.save_region(
-                encoder, texture, wgpu::TextureFormat::R8Unorm,
-                [0, 0, canvas_w, canvas_h],
+                encoder, texture, wgpu::TextureFormat::R8Unorm, rect,
             );
         });
     }
 
-    /// Commit the saved region and push a SelectionAction to the undo stack.
     pub(crate) fn commit_selection_undo(&mut self, was_active: bool) {
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
-        // Use layer_id 0 as sentinel — the engine dispatches via selection_region_entry_mut.
+        let rect = self.selection_dirty_rect();
         self.gpu.encode("sel-undo-commit", |encoder| {
             let entry = self.region_store.commit_region(
-                encoder, 0, wgpu::TextureFormat::R8Unorm,
-                [0, 0, canvas_w, canvas_h],
+                encoder, 0, wgpu::TextureFormat::R8Unorm, rect,
             );
             self.undo_stack.push(Box::new(SelectionAction::new(was_active, entry)));
         });
     }
 
-    /// Kick an async readback of the GPU selection texture to update the CPU cache.
+    fn selection_dirty_rect(&self) -> [u32; 4] {
+        self.gpu_selection.pixel_bounds
+            .unwrap_or([0, 0, self.doc.width, self.doc.height])
+    }
+
+    /// Kick an async readback for contour extraction (marching ants).
     pub(crate) fn kick_selection_readback(&mut self) {
         let w = self.doc.width;
         let h = self.doc.height;
@@ -290,39 +348,41 @@ impl DarklyEngine {
 
     // --- Selection overlay ---
 
-    /// Regenerate marching ants overlay from the current selection.
-    pub(crate) fn update_selection_overlay(&mut self) {
+    /// Regenerate marching ants from readback data.
+    pub(crate) fn update_selection_overlay_from_readback(&mut self, pixels: Vec<u8>) {
         self.selection_overlay.clear();
 
-        if self.gpu_selection.active && self.gpu_selection.cache_valid {
-            let segments = crate::mask::contour_segments_r8(
-                &self.gpu_selection.cpu_cache,
-                self.gpu_selection.width,
-                self.gpu_selection.height,
-                127, // threshold at ~0.5
+        if !self.gpu_selection.active {
+            self.push_merged_overlay();
+            return;
+        }
+
+        // Update pixel_bounds from readback if not already known.
+        if self.gpu_selection.pixel_bounds.is_none() {
+            self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
+                &pixels, self.gpu_selection.width, self.gpu_selection.height,
             );
-            for (a, b) in &segments {
-                let mut bg = OverlayPrimitive::new(
-                    KIND_DASHED_LINE,
-                    FLAG_CANVAS_SPACE,
-                    *a, *b,
-                );
-                bg.color = [0.0, 0.0, 0.0, 1.0];
-                bg.thickness = 1.5;
-                bg.dash_len = 0.0;
-                self.selection_overlay.push(bg);
-            }
-            for (a, b) in &segments {
-                let mut fg = OverlayPrimitive::new(
-                    KIND_DASHED_LINE,
-                    FLAG_CANVAS_SPACE,
-                    *a, *b,
-                );
-                fg.color = [1.0, 1.0, 1.0, 1.0];
-                fg.thickness = 1.0;
-                fg.dash_len = 8.0;
-                self.selection_overlay.push(fg);
-            }
+        }
+
+        let segments = crate::mask::contour_segments_r8(
+            &pixels,
+            self.gpu_selection.width,
+            self.gpu_selection.height,
+            127,
+        );
+        for (a, b) in &segments {
+            let mut bg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, *a, *b);
+            bg.color = [0.0, 0.0, 0.0, 1.0];
+            bg.thickness = 1.5;
+            bg.dash_len = 0.0;
+            self.selection_overlay.push(bg);
+        }
+        for (a, b) in &segments {
+            let mut fg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, *a, *b);
+            fg.color = [1.0, 1.0, 1.0, 1.0];
+            fg.thickness = 1.0;
+            fg.dash_len = 8.0;
+            self.selection_overlay.push(fg);
         }
 
         self.push_merged_overlay();
