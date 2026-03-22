@@ -348,7 +348,7 @@ impl DarklyEngine {
 
     // --- Selection overlay ---
 
-    /// Regenerate marching ants from readback data.
+    /// Regenerate marching ants from readback data and update CPU cache.
     pub(crate) fn update_selection_overlay_from_readback(&mut self, pixels: Vec<u8>) {
         self.selection_overlay.clear();
 
@@ -363,6 +363,9 @@ impl DarklyEngine {
                 &pixels, self.gpu_selection.width, self.gpu_selection.height,
             );
         }
+
+        // Populate the CPU cache from the readback data.
+        self.gpu_selection.cpu_cache = Some(pixels.clone());
 
         let segments = crate::mask::contour_segments_r8(
             &pixels,

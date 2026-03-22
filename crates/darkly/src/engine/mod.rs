@@ -44,6 +44,12 @@ pub(crate) struct PendingTransform {
     pub target_is_mask: bool,
 }
 
+/// Deferred copy/cut — waiting for selection CPU cache to be populated.
+pub(crate) struct PendingCopy {
+    pub layer_id: u64,
+    pub is_cut: bool,
+}
+
 /// Tracks the bounding rect of a GPU stroke in progress.
 pub(crate) struct GpuStrokeState {
     pub format: wgpu::TextureFormat,
@@ -95,7 +101,6 @@ pub(crate) enum ReadbackContext {
     Copy {
         is_mask: bool,
         region: [u32; 4],
-        selection_data: Option<Vec<u8>>,
         is_cut: bool,
         layer_id: u64,
     },
@@ -192,6 +197,8 @@ pub struct DarklyEngine {
     // --- Deferred operations ---
     /// Pending transform waiting for content bounds computation.
     pub(crate) pending_transform: Option<PendingTransform>,
+    /// Pending copy/cut waiting for selection CPU cache.
+    pub(crate) pending_copy: Option<PendingCopy>,
 
     // --- Async readback ---
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
@@ -246,6 +253,7 @@ impl DarklyEngine {
             gpu_selection,
             selection_pipelines,
             pending_transform: None,
+            pending_copy: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],
@@ -283,8 +291,8 @@ impl DarklyEngine {
         let completed = self.readbacks.poll(&self.gpu.device);
         for (ctx, pixels) in completed {
             match ctx {
-                ReadbackContext::Copy { is_mask, region, selection_data, is_cut, layer_id } => {
-                    self.complete_copy(is_mask, region, selection_data, is_cut, layer_id, pixels);
+                ReadbackContext::Copy { is_mask, region, is_cut, layer_id } => {
+                    self.complete_copy(is_mask, region, is_cut, layer_id, pixels);
                 }
                 ReadbackContext::SelectionReadback => {
                     self.update_selection_overlay_from_readback(pixels);

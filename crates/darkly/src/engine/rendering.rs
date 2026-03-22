@@ -160,8 +160,8 @@ impl DarklyEngine {
                         self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
                     }
                 }
-                ReadbackContext::Copy { is_mask, region, selection_data, is_cut, layer_id } => {
-                    self.complete_copy(is_mask, region, selection_data, is_cut, layer_id, pixels);
+                ReadbackContext::Copy { is_mask, region, is_cut, layer_id } => {
+                    self.complete_copy(is_mask, region, is_cut, layer_id, pixels);
                 }
                 ReadbackContext::MagicWand { was_active, seed_x, seed_y, tolerance, mode } => {
                     self.complete_magic_wand(was_active, seed_x, seed_y, tolerance, mode, pixels);
@@ -171,6 +171,18 @@ impl DarklyEngine {
                 }
                 ReadbackContext::SelectionReadback => {
                     self.update_selection_overlay_from_readback(pixels);
+                    // Resume deferred operations that were waiting for
+                    // selection cpu_cache / pixel_bounds.
+                    if let Some(pc) = self.pending_copy.take() {
+                        self.start_copy_readback(pc.layer_id, pc.is_cut);
+                    }
+                    if self.gpu_selection.pixel_bounds.is_some() {
+                        if let Some(pt) = self.pending_transform.take() {
+                            if self.floating.is_none() {
+                                self.begin_transform(pt.layer_id);
+                            }
+                        }
+                    }
                 }
                 ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
                     let doc_w = self.doc.width;

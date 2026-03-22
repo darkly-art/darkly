@@ -1,5 +1,5 @@
 //! GPU-authoritative selection mask — owns the R8 texture and bind groups.
-//! No persistent CPU cache. Contour extraction runs on async readback data.
+//! CPU cache populated eagerly on upload and lazily from async readback.
 
 use crate::document::SelectionMode;
 use crate::mask::RasterizedMask;
@@ -224,6 +224,7 @@ impl SelectionPipelines {
         // Swap ping-pong and rebuild bind groups.
         selection.current = dst;
         selection.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
+        selection.cpu_cache = None;
     }
 
     /// Run the combine shader in "invert" mode.
@@ -287,6 +288,7 @@ impl SelectionPipelines {
 
         selection.current = dst;
         selection.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
+        selection.cpu_cache = None;
     }
 }
 
@@ -315,9 +317,11 @@ impl CombineMode {
 
 /// GPU-authoritative selection mask.
 ///
-/// No persistent CPU cache. The GPU texture is the single source of truth.
-/// Pixel bounds are tracked from rasterization parameters. CPU reads happen
-/// via on-demand blocking readback when needed (copy, transform).
+/// The GPU texture is the single source of truth. A CPU cache is maintained
+/// for operations that need pixel-level access (copy region bounds, selection
+/// masking for transforms). The cache is populated eagerly on `upload_replace`
+/// / `upload_replace_full` (where CPU data is already in hand) and lazily
+/// from async `SelectionReadback` completion (after boolean ops / invert).
 pub(crate) struct GpuSelection {
     /// Ping-pong pair of R8Unorm textures (canvas-sized).
     pub textures: [wgpu::Texture; 2],
@@ -338,6 +342,11 @@ pub(crate) struct GpuSelection {
 
     pub width: u32,
     pub height: u32,
+
+    /// CPU mirror of the current selection texture (full-canvas R8).
+    /// Populated eagerly on upload, lazily from async `SelectionReadback`.
+    /// `None` after `combine()` / `invert()` until the next readback completes.
+    pub cpu_cache: Option<Vec<u8>>,
 }
 
 impl GpuSelection {
@@ -390,6 +399,7 @@ impl GpuSelection {
             active: false,
             width,
             height,
+            cpu_cache: None,
         }
     }
 
@@ -466,6 +476,16 @@ impl GpuSelection {
 
         self.pixel_bounds = Some([mask.x, mask.y, mask.width, mask.height]);
         self.active = true;
+
+        // Build full-canvas CPU cache from the tight-bounds mask.
+        let mut cache = vec![0u8; (self.width * self.height) as usize];
+        for y in 0..mask.height {
+            let src = (y * mask.width) as usize;
+            let dst = ((mask.y + y) * self.width + mask.x) as usize;
+            cache[dst..dst + mask.width as usize]
+                .copy_from_slice(&mask.data[src..src + mask.width as usize]);
+        }
+        self.cpu_cache = Some(cache);
     }
 
     /// Upload full-canvas R8 data (used by magic wand, mask-to-selection).
@@ -505,6 +525,7 @@ impl GpuSelection {
 
         self.pixel_bounds = crate::mask::pixel_bounds_r8(data, self.width, self.height);
         self.active = true;
+        self.cpu_cache = Some(data.to_vec());
     }
 
     /// Clear the selection: zero the active region, mark inactive.
@@ -529,10 +550,14 @@ impl GpuSelection {
         }
         self.pixel_bounds = None;
         self.active = false;
+        self.cpu_cache = None;
     }
 
-    /// Blocking readback of the full selection texture. Used by operations
-    /// that need CPU access (copy, transform bounds).
+    /// Blocking readback of the full selection texture.
+    ///
+    /// **Test-only** — deadlocks on WebGPU/WASM (see gpu-lessons-learned.md §5).
+    /// Production code must use `cpu_cache` instead.
+    #[cfg(test)]
     pub fn blocking_readback(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
         crate::gpu::test_utils::readback_texture(
             device, queue, self.texture(),

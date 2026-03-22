@@ -476,7 +476,7 @@ impl DarklyEngine {
     }
 
     /// Upload a cropped region of the GPU selection as an R8 texture bind group.
-    /// Does a blocking GPU readback to get the selection data.
+    /// Reads from the CPU cache (populated by async readback or eagerly on upload).
     pub(crate) fn upload_cropped_selection_r8(
         &self,
         origin: (i32, i32),
@@ -487,7 +487,7 @@ impl DarklyEngine {
             return None;
         }
 
-        let full = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
+        let full = self.gpu_selection.cpu_cache.as_ref()?;
         let (ox, oy) = origin;
         let cw = self.gpu_selection.width;
         let ch = self.gpu_selection.height;

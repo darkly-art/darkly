@@ -172,6 +172,34 @@ impl<'a> GpuPaintTarget<'a> {
         self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
     }
 
+    /// Multiply the target's pixel values by `(1 - mask)`.
+    ///
+    /// `dst.rgba *= (1 - mask_sample)`. Complementary to `multiply_by_mask`:
+    /// `multiply_by_mask(sel) + multiply_by_inverse_mask(sel) == identity`
+    /// in float, ensuring copy + cut-erase reconstructs the original.
+    pub fn multiply_by_inverse_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        mask_bind_group: &wgpu::BindGroup,
+    ) {
+        let pipeline = pipelines.inverse_mask_multiply_pipeline(self.format);
+
+        let uniforms = PaintUniforms {
+            origin: [0.0, 0.0],
+            size: [self.width as f32, self.height as f32],
+            canvas_size: [self.width as f32, self.height as f32],
+            center: [0.0, 0.0],
+            radius: 0.0,
+            softness: 0.0,
+            _pad: [0.0; 2],
+            color: [0.0, 0.0, 0.0, 1.0],
+        };
+
+        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
+    }
+
     /// Clear a rect to transparent (RGBA) or full reveal (R8).
     pub fn clear_rect(
         &self,
@@ -370,6 +398,8 @@ pub struct PaintPipelines {
     gradient_r8: wgpu::RenderPipeline,
     mask_multiply_rgba: wgpu::RenderPipeline,
     mask_multiply_r8: wgpu::RenderPipeline,
+    inverse_mask_multiply_rgba: wgpu::RenderPipeline,
+    inverse_mask_multiply_r8: wgpu::RenderPipeline,
 
     pub(crate) uniform_buf: wgpu::Buffer,
     pub(crate) uniform_bind_group: wgpu::BindGroup,
@@ -624,6 +654,23 @@ impl PaintPipelines {
             },
         };
 
+        // Inverse mask multiply: dst *= (1 - mask_sample). Same shader as
+        // mask_multiply but with OneMinusSrcAlpha blend factor.
+        // Used by cut operations: copy extracts `layer * sel`, cut-erase
+        // applies `layer *= (1 - sel)` so that extracted + remaining = original.
+        let blend_inverse_mask_multiply = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+
         PaintPipelines {
             composite_rgba: make_pipeline("paint-composite-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_composite),
             composite_r8: make_pipeline("paint-composite-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_composite),
@@ -635,6 +682,8 @@ impl PaintPipelines {
             gradient_r8: make_pipeline("gradient-r8", &gradient_layout, &gradient_shader, wgpu::TextureFormat::R8Unorm, blend_gradient),
             mask_multiply_rgba: make_pipeline("mask-multiply-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_mask_multiply),
             mask_multiply_r8: make_pipeline("mask-multiply-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_mask_multiply),
+            inverse_mask_multiply_rgba: make_pipeline("inv-mask-mul-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_inverse_mask_multiply),
+            inverse_mask_multiply_r8: make_pipeline("inv-mask-mul-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_inverse_mask_multiply),
             uniform_buf,
             uniform_bind_group,
             gradient_uniform_buf,
@@ -748,6 +797,13 @@ impl PaintPipelines {
         match format {
             wgpu::TextureFormat::R8Unorm => &self.mask_multiply_r8,
             _ => &self.mask_multiply_rgba,
+        }
+    }
+
+    fn inverse_mask_multiply_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        match format {
+            wgpu::TextureFormat::R8Unorm => &self.inverse_mask_multiply_r8,
+            _ => &self.inverse_mask_multiply_rgba,
         }
     }
 }

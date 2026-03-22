@@ -192,27 +192,29 @@ impl DarklyEngine {
         self.doc.add_mask(layer_id);
         self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
-        // Upload selection data from GPU selection CPU cache to the mask texture.
+        // Copy selection texture → mask texture on GPU. Both are R8, same
+        // canvas dimensions. No CPU round-trip needed.
         if self.gpu_selection.active {
             if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
                 let canvas_w = self.doc.width;
                 let canvas_h = self.doc.height;
-                let buf = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
-                self.gpu.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &mask_tex.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &buf,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(canvas_w),
-                        rows_per_image: None,
-                    },
-                    wgpu::Extent3d { width: canvas_w, height: canvas_h, depth_or_array_layers: 1 },
-                );
+                self.gpu.encode("sel-to-mask-copy", |encoder| {
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: self.gpu_selection.texture(),
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &mask_tex.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d { width: canvas_w, height: canvas_h, depth_or_array_layers: 1 },
+                    );
+                });
             }
         }
 

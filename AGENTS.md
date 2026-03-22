@@ -56,6 +56,14 @@ Every feature must have a test. Every bug must have a regression test. Regressio
 
 Performance regression tests should assert concrete timing bounds (e.g., `assert!(ms < 50.0)`) so they catch algorithmic regressions, not just logical ones.
 
+## No Blocking GPU Readbacks
+
+**Never use `device.poll(Wait)`, `blocking_read()`, `readback_texture()`, or any synchronous GPU→CPU readback in production code.** These deadlock on WebGPU/WASM — the browser event loop is the only mechanism for resolving GPU buffer mappings, and any form of blocking (`recv()`, spin-wait, `thread::park()`) prevents it from running. See `gpu-lessons-learned.md` §5 for the full stack trace of why.
+
+The correct pattern is async readback: `request_readback()` → `readbacks.submit()` → poll on the next frame via `ReadbackScheduler`. If CPU data is needed from a GPU texture that changes infrequently (e.g., the selection mask), maintain a CPU cache populated by the async readback and read from that.
+
+`test_utils::readback_texture()` and `blocking_read()` are **test-only** — they work on native (Vulkan/Metal) where `device.poll(Wait)` drives the completion queue synchronously. They must be gated behind `#[cfg(test)]` and never called from engine, compositor, or WASM bridge code.
+
 ## Engineering Principle
 
 Every system that is implemented must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. It's okay to take a step back from the current task, in order to do things right. This relates directly to the modularity principle above.

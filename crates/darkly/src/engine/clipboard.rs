@@ -1,21 +1,13 @@
 //! Copy, cut, paste operations.
 
-use super::DarklyEngine;
-use super::ReadbackContext;
+use super::{DarklyEngine, PendingCopy, ReadbackContext};
 use super::types::ClipboardExport;
 use crate::clipboard::{Clipboard, ImageClip};
 use crate::document::MoveTarget;
+use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
 use crate::layer::Layer;
 use crate::undo::{GpuRegionAction, LayerAddAction};
-
-/// Integer alpha multiply matching Krita's UINT8_MULT: `(a*b + 128) / 255`.
-/// Guarantees `uint8_mult(a, s) + uint8_mult(a, 255 - s) == a` for all a, s,
-/// so that extracting and erasing with complementary masks is pixel-exact.
-fn uint8_mult(a: u8, b: u8) -> u8 {
-    let c = a as u32 * b as u32 + 0x80;
-    (((c >> 8) + c) >> 8) as u8
-}
 
 impl DarklyEngine {
     /// Copy the active layer's content (masked by selection) into the internal
@@ -23,6 +15,12 @@ impl DarklyEngine {
     /// `poll_copy_result()` on the next frame. Returns `None` immediately.
     pub fn copy(&mut self, layer_id: u64) -> Option<ClipboardExport> {
         if self.doc.layer(layer_id).is_none() {
+            return None;
+        }
+
+        if self.gpu_selection.active && self.gpu_selection.cpu_cache.is_none() {
+            // Selection cache not ready — defer until SelectionReadback completes.
+            self.pending_copy = Some(PendingCopy { layer_id, is_cut: false });
             return None;
         }
 
@@ -36,14 +34,22 @@ impl DarklyEngine {
         self.pending_copy_result.take()
     }
 
-    /// Start a GPU readback for copy (or cut). The readback completes
-    /// asynchronously and is processed in `poll_pending`.
-    fn start_copy_readback(&mut self, layer_id: u64, is_cut: bool) {
+    /// Start a GPU readback for copy (or cut).
+    ///
+    /// When a selection is active, masking is done entirely on GPU:
+    /// 1. Copy the layer region to a staging texture
+    /// 2. Multiply staging by the cropped selection mask (`layer * sel`)
+    /// 3. Async readback the staging texture (pre-masked pixels for clipboard)
+    /// 4. If cut: erase selected pixels on the layer (`layer *= (1 - sel)`)
+    ///
+    /// Both extraction and erase use GPU float math on the same selection
+    /// texture, guaranteeing `extracted + remaining == original`.
+    pub(crate) fn start_copy_readback(&mut self, layer_id: u64, is_cut: bool) {
         let is_mask = self.editing_mask_layer == Some(layer_id);
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        // Determine bounds and check texture exists.
+        // Determine format and check texture exists.
         let format = if is_mask {
             if self.compositor.mask_texture(layer_id).is_none() { return; }
             wgpu::TextureFormat::R8Unorm
@@ -52,132 +58,249 @@ impl DarklyEngine {
             wgpu::TextureFormat::Rgba8Unorm
         };
 
-        // Compute region and selection data first (may do blocking readback).
-        let region = self.copy_region_from_selection(canvas_w, canvas_h);
-        let selection_data = self.readback_selection_region(region);
-
-        // Now borrow compositor for the texture reference.
-        let texture = if is_mask {
-            &self.compositor.mask_texture(layer_id).unwrap().texture
-        } else {
-            &self.compositor.layer_texture(layer_id).unwrap().texture
+        // Compute copy region from selection bounds (or full canvas).
+        let region = match self.copy_region_from_selection(canvas_w, canvas_h) {
+            Some(r) => r,
+            None => {
+                // Selection bounds unknown — defer.
+                self.pending_copy = Some(PendingCopy { layer_id, is_cut });
+                return;
+            }
         };
+        let [rx, ry, rw, rh] = region;
+        if rw == 0 || rh == 0 { return; }
 
-        self.gpu.encode("copy-readback", |encoder| {
-            let request = readback::request_readback(
-                &self.gpu.device, encoder, texture, format, region,
-            );
-            self.readbacks.submit(request, ReadbackContext::Copy {
-                is_mask, region, selection_data, is_cut, layer_id,
+        let has_selection = self.gpu_selection.active;
+
+        if has_selection {
+            // --- GPU extraction path ---
+            // Save undo state for cut before any modification.
+            if is_cut {
+                let texture = if is_mask {
+                    &self.compositor.mask_texture(layer_id).unwrap().texture
+                } else {
+                    &self.compositor.layer_texture(layer_id).unwrap().texture
+                };
+                self.gpu.encode("cut-save", |encoder| {
+                    self.region_store.save_region(
+                        encoder, texture, format, [0, 0, canvas_w, canvas_h],
+                    );
+                });
+            }
+
+            // Create staging texture for the masked copy.
+            let staging_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("copy-staging"),
+                size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_SRC
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
             });
-        });
+            let staging_view = staging_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+            // Create a cropped selection R8 texture for the copy region.
+            let sel_crop_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("copy-sel-crop"),
+                size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let sel_crop_view = sel_crop_tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let sel_sampler = self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("copy-sel-sampler"),
+                mag_filter: wgpu::FilterMode::Nearest,
+                min_filter: wgpu::FilterMode::Nearest,
+                ..Default::default()
+            });
+            let sel_crop_bg = self.paint_pipelines.create_selection_bind_group(
+                &self.gpu.device, &sel_crop_view, &sel_sampler,
+            );
+
+            // Get texture references before entering the encode closure.
+            let layer_tex = if is_mask {
+                &self.compositor.mask_texture(layer_id).unwrap().texture
+            } else {
+                &self.compositor.layer_texture(layer_id).unwrap().texture
+            };
+            let sel_tex = self.gpu_selection.texture();
+
+            // Compute overlap for selection crop (selection and layer are same canvas size).
+            let sel_copy_w = rw.min(self.gpu_selection.width.saturating_sub(rx));
+            let sel_copy_h = rh.min(self.gpu_selection.height.saturating_sub(ry));
+
+            self.gpu.encode("copy-gpu-extract", |encoder| {
+                // 1. Copy layer region → staging texture.
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: layer_tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: rx, y: ry, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &staging_tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                );
+
+                // 2. Copy selection region → cropped selection texture.
+                if sel_copy_w > 0 && sel_copy_h > 0 {
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: sel_tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: rx, y: ry, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &sel_crop_tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d { width: sel_copy_w, height: sel_copy_h, depth_or_array_layers: 1 },
+                    );
+                }
+
+                // 3. Multiply staging by cropped selection: staging *= sel.
+                let staging_target = GpuPaintTarget {
+                    texture: &staging_tex,
+                    view: &staging_view,
+                    format,
+                    width: rw,
+                    height: rh,
+                };
+                staging_target.multiply_by_mask(
+                    encoder, &self.paint_pipelines, &self.gpu.queue, &sel_crop_bg,
+                );
+
+                // 4. If cut: multiply layer by (1 - selection) on all channels.
+                //    This is the complement of the copy extraction (step 3):
+                //    staging = layer * sel, layer *= (1 - sel).
+                //    Both use GPU float math → extracted + remaining = original.
+                if is_cut {
+                    let (layer_target, _) = if is_mask {
+                        let t = self.compositor.mask_texture(layer_id).unwrap();
+                        (GpuPaintTarget::from_mask(t, canvas_w, canvas_h), ())
+                    } else {
+                        let t = self.compositor.layer_texture(layer_id).unwrap();
+                        (GpuPaintTarget::from_layer(t, canvas_w, canvas_h), ())
+                    };
+                    layer_target.multiply_by_inverse_mask(
+                        encoder, &self.paint_pipelines, &self.gpu.queue,
+                        self.gpu_selection.paint_bind_group(),
+                    );
+                }
+
+                // 5. Kick async readback of the masked staging texture.
+                let request = readback::request_readback(
+                    &self.gpu.device, encoder, &staging_tex, format, [0, 0, rw, rh],
+                );
+                self.readbacks.submit(request, ReadbackContext::Copy {
+                    is_mask, region, is_cut, layer_id,
+                });
+            });
+
+            // Commit undo for cut.
+            if is_cut {
+                self.gpu.encode("cut-commit", |encoder| {
+                    let entry = self.region_store.commit_region(
+                        encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
+                    );
+                    self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                });
+                self.compositor.mark_dirty();
+            }
+        } else {
+            // --- No selection: direct readback ---
+            let texture = if is_mask {
+                &self.compositor.mask_texture(layer_id).unwrap().texture
+            } else {
+                &self.compositor.layer_texture(layer_id).unwrap().texture
+            };
+
+            self.gpu.encode("copy-readback", |encoder| {
+                let request = readback::request_readback(
+                    &self.gpu.device, encoder, texture, format, region,
+                );
+                self.readbacks.submit(request, ReadbackContext::Copy {
+                    is_mask, region, is_cut, layer_id,
+                });
+            });
+
+            if is_cut {
+                // gpu_clear_layer handles its own undo save/commit.
+                self.gpu_clear_layer(layer_id);
+            }
+        }
     }
 
     /// Determine the copy region from the selection (or full canvas).
-    fn copy_region_from_selection(&mut self, canvas_w: u32, canvas_h: u32) -> [u32; 4] {
-        if self.gpu_selection.active {
-            if self.gpu_selection.pixel_bounds.is_none() {
-                let data = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
-                self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
-                    &data, self.gpu_selection.width, self.gpu_selection.height,
-                );
-            }
-            if let Some([x, y, w, h]) = self.gpu_selection.pixel_bounds {
-                let w = w.min(canvas_w.saturating_sub(x));
-                let h = h.min(canvas_h.saturating_sub(y));
-                return [x, y, w, h];
-            }
-        }
-        [0, 0, canvas_w, canvas_h]
-    }
-
-    /// Read selection coverage for a given region via blocking GPU readback.
-    fn readback_selection_region(&self, region: [u32; 4]) -> Option<Vec<u8>> {
+    /// Returns `None` if the selection is active but bounds are unknown
+    /// (cache not yet populated from async readback).
+    fn copy_region_from_selection(&mut self, canvas_w: u32, canvas_h: u32) -> Option<[u32; 4]> {
         if !self.gpu_selection.active {
-            return None;
+            return Some([0, 0, canvas_w, canvas_h]);
         }
-
-        let full = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
-        let [rx, ry, rw, rh] = region;
-        let cw = self.gpu_selection.width;
-        let ch = self.gpu_selection.height;
-
-        let mut pixels = vec![0u8; (rw * rh) as usize];
-        for py in 0..rh {
-            for px in 0..rw {
-                let sx = rx + px;
-                let sy = ry + py;
-                if sx < cw && sy < ch {
-                    pixels[(py * rw + px) as usize] = full[(sy * cw + sx) as usize];
-                }
-            }
+        if self.gpu_selection.pixel_bounds.is_none() {
+            let data = self.gpu_selection.cpu_cache.as_ref()?;
+            self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
+                data, self.gpu_selection.width, self.gpu_selection.height,
+            );
         }
-        Some(pixels)
+        if let Some([x, y, w, h]) = self.gpu_selection.pixel_bounds {
+            let w = w.min(canvas_w.saturating_sub(x));
+            let h = h.min(canvas_h.saturating_sub(y));
+            Some([x, y, w, h])
+        } else {
+            Some([0, 0, canvas_w, canvas_h])
+        }
     }
 
     /// Complete a pending copy once GPU readback data is available.
+    /// Pixels arrive pre-masked from the GPU staging texture (when selection
+    /// was active) or raw from the layer (when no selection).
     pub(crate) fn complete_copy(
         &mut self, is_mask: bool, region: [u32; 4],
-        selection_data: Option<Vec<u8>>, is_cut: bool, layer_id: u64, pixels: Vec<u8>,
+        is_cut: bool, layer_id: u64, pixels: Vec<u8>,
     ) {
         let [rx, ry, rw, rh] = region;
 
         // Build RGBA bytes from the readback data.
-        let (rgba, width, height) = if is_mask {
+        let rgba = if is_mask {
             // R8 readback → convert to grayscale RGBA: [v, v, v, 255]
             let mut rgba = vec![0u8; (rw * rh * 4) as usize];
             for i in 0..(rw * rh) as usize {
                 let v = pixels[i];
-                // Skip fully-revealed mask pixels (default state).
-                if v == 255 && selection_data.is_none() {
-                    // For masks, 255 = "reveal all" which is the default.
-                    // Only include if selection forces inclusion.
-                } else {
-                    let sv = if let Some(ref sel) = selection_data {
-                        let coverage = sel[i] as f32 / 255.0;
-                        ((v as f32 * coverage).round()) as u8
-                    } else {
-                        v
-                    };
-                    if sv > 0 {
-                        rgba[i * 4] = sv;
-                        rgba[i * 4 + 1] = sv;
-                        rgba[i * 4 + 2] = sv;
-                        rgba[i * 4 + 3] = 255;
-                    }
+                if v > 0 {
+                    rgba[i * 4] = v;
+                    rgba[i * 4 + 1] = v;
+                    rgba[i * 4 + 2] = v;
+                    rgba[i * 4 + 3] = 255;
                 }
             }
-            (rgba, rw, rh)
+            rgba
         } else {
-            // RGBA readback. Apply selection masking if present.
-            // Multiply ALL channels by selection coverage — the clipboard
-            // stores premultiplied data so that the inverse operation on the
-            // source layer produces pixel-exact complementary values.
-            let mut rgba = pixels;
-            if let Some(ref sel) = selection_data {
-                for i in 0..(rw * rh) as usize {
-                    let s = sel[i];
-                    if s == 0 {
-                        rgba[i * 4] = 0;
-                        rgba[i * 4 + 1] = 0;
-                        rgba[i * 4 + 2] = 0;
-                        rgba[i * 4 + 3] = 0;
-                    } else if s < 255 {
-                        rgba[i * 4]     = uint8_mult(rgba[i * 4], s);
-                        rgba[i * 4 + 1] = uint8_mult(rgba[i * 4 + 1], s);
-                        rgba[i * 4 + 2] = uint8_mult(rgba[i * 4 + 2], s);
-                        rgba[i * 4 + 3] = uint8_mult(rgba[i * 4 + 3], s);
-                    }
-                }
-            }
-            (rgba, rw, rh)
+            // RGBA readback — already masked by GPU if selection was active.
+            pixels
         };
 
-        let offset_x = rx as i32;
-        let offset_y = ry as i32;
-
         // Build ImageClip and store in clipboard.
-        let clip = ImageClip::from_rgba(width, height, rgba, offset_x, offset_y);
+        let clip = ImageClip::from_rgba(rw, rh, rgba, rx as i32, ry as i32);
         let (export_rgba, ew, eh, eox, eoy) = clip.to_rgba();
         self.pending_copy_result = Some(ClipboardExport {
             rgba: export_rgba.to_vec(),
@@ -188,26 +311,22 @@ impl DarklyEngine {
         });
         self.clipboard = Some(Clipboard::ImageData(clip));
 
-        // If this was a cut, erase the source. When a selection is active,
-        // apply the inverse mask on CPU from the same selection bytes used for
-        // the copy — this guarantees extracted + remaining = original with no
-        // border artifacts from float rounding (Krita's applyInverseAlphaU8Mask
-        // approach).
-        if is_cut {
-            if let Some(ref sel) = selection_data {
-                self.cpu_erase_with_selection(layer_id, is_mask, region, sel);
-            } else {
-                self.gpu_clear_layer(layer_id);
-            }
-        }
+        // Cut erase was already done on GPU in start_copy_readback.
+        let _ = (is_cut, layer_id);
     }
 
-    /// Cut = copy + clear. The clear happens after the readback completes.
+    /// Cut = copy + clear. The clear happens on GPU during start_copy_readback.
     /// Returns `None` immediately; result available via `poll_copy_result()`.
     pub fn cut(&mut self, layer_id: u64) -> Option<ClipboardExport> {
         if self.doc.layer(layer_id).is_none() {
             return None;
         }
+
+        if self.gpu_selection.active && self.gpu_selection.cpu_cache.is_none() {
+            self.pending_copy = Some(PendingCopy { layer_id, is_cut: true });
+            return None;
+        }
+
         self.start_copy_readback(layer_id, true);
         None
     }
@@ -301,104 +420,5 @@ impl DarklyEngine {
         let offset_y = clip.offset_y;
         let rgba = clip.data.clone();
         Some(self.paste_image(width, height, &rgba, offset_x, offset_y, active_layer_id))
-    }
-
-    /// Erase selected pixels on CPU using the same integer math as the copy
-    /// extraction, then upload the result back to the GPU texture.
-    ///
-    /// This is the complementary operation to the copy masking: for each pixel,
-    /// `new = old * (255 - sel) / 255` using `uint8_mult`. Because
-    /// `uint8_mult(a, s) + uint8_mult(a, 255-s) == a`, the extracted pixels
-    /// and remaining pixels sum to exactly the original — no border artifacts.
-    fn cpu_erase_with_selection(
-        &mut self, layer_id: u64, is_mask: bool,
-        region: [u32; 4], selection: &[u8],
-    ) {
-        let [rx, ry, rw, rh] = region;
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
-        let mask_editing = self.editing_mask_layer == Some(layer_id);
-
-        let (target, format) = match self.get_paint_target(layer_id, mask_editing) {
-            Some(t) => t,
-            None => return,
-        };
-
-        // Save region for undo before modifying.
-        self.gpu.encode("cut-erase-save", |encoder| {
-            self.region_store.save_region(encoder, target.texture, format, [0, 0, canvas_w, canvas_h]);
-        });
-
-        // Read back the affected region from the GPU texture.
-        let (target, _) = self.get_paint_target(layer_id, mask_editing).unwrap();
-        let bpp = if is_mask { 1u32 } else { 4u32 };
-        let region_pixels = crate::gpu::test_utils::readback_texture(
-            &self.gpu.device, &self.gpu.queue,
-            target.texture, format, canvas_w, canvas_h,
-        );
-
-        // Apply inverse mask in-place using the same selection bytes.
-        let mut modified = region_pixels;
-        for py in 0..rh {
-            for px in 0..rw {
-                let si = (py * rw + px) as usize;
-                let s = selection[si];
-                if s == 0 { continue; } // unselected pixel — unchanged
-
-                let cx = rx + px;
-                let cy = ry + py;
-                if cx >= canvas_w || cy >= canvas_h { continue; }
-                let di = (cy * canvas_w + cx) as usize;
-                let inv = 255 - s;
-
-                if is_mask {
-                    if s == 255 {
-                        modified[di] = 0;
-                    } else {
-                        modified[di] = uint8_mult(modified[di], inv);
-                    }
-                } else {
-                    let base = di * 4;
-                    if s == 255 {
-                        modified[base] = 0;
-                        modified[base + 1] = 0;
-                        modified[base + 2] = 0;
-                        modified[base + 3] = 0;
-                    } else {
-                        modified[base]     = uint8_mult(modified[base], inv);
-                        modified[base + 1] = uint8_mult(modified[base + 1], inv);
-                        modified[base + 2] = uint8_mult(modified[base + 2], inv);
-                        modified[base + 3] = uint8_mult(modified[base + 3], inv);
-                    }
-                }
-            }
-        }
-
-        // Upload the modified pixels back to the GPU texture.
-        let (target, _) = self.get_paint_target(layer_id, mask_editing).unwrap();
-        self.gpu.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: target.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &modified,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(canvas_w * bpp),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d { width: canvas_w, height: canvas_h, depth_or_array_layers: 1 },
-        );
-
-        // Commit undo.
-        self.gpu.encode("cut-erase-commit", |encoder| {
-            let entry = self.region_store.commit_region(
-                encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
-            );
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
-        });
-        self.compositor.mark_dirty();
     }
 }

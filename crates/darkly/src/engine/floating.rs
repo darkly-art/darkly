@@ -1,6 +1,6 @@
 //! Floating content — paste-in-place and interactive transforms.
 
-use super::DarklyEngine;
+use super::{DarklyEngine, PendingTransform};
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY};
 use crate::layer::Layer;
@@ -103,12 +103,18 @@ impl DarklyEngine {
 
         // Determine source bounds.
         if self.gpu_selection.active {
-            // Selection provides bounds synchronously from cached pixel bounds.
+            // Selection bounds come from cpu_cache (populated eagerly on
+            // upload or lazily from async readback).  If unavailable, defer.
             if self.gpu_selection.pixel_bounds.is_none() {
-                let data = self.gpu_selection.blocking_readback(&self.gpu.device, &self.gpu.queue);
-                self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
-                    &data, self.gpu_selection.width, self.gpu_selection.height,
-                );
+                if let Some(ref data) = self.gpu_selection.cpu_cache {
+                    self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
+                        data, self.gpu_selection.width, self.gpu_selection.height,
+                    );
+                } else {
+                    // Cache not ready — defer until SelectionReadback completes.
+                    self.pending_transform = Some(PendingTransform { layer_id, target_is_mask });
+                    return false;
+                }
             }
             let [bx, by, bw, bh] = match self.gpu_selection.pixel_bounds {
                 Some(b) => b,
