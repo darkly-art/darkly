@@ -1,8 +1,8 @@
-//! Phase 2 GPU integration tests: brush stroke → GPU paint target → undo/redo.
+//! Brush stroke GPU integration tests: stroke workflows, undo/redo, erase.
 //!
 //! Tests the end-to-end GPU brush flow using raw components (RegionStore,
 //! GpuPaintTarget, GpuRegionAction) without a full DarklyEngine.
-//! Run with: `cargo test -p darkly --test gpu_phase2`
+//! Run with: `cargo test -p darkly --test stroke`
 
 use darkly::gpu::test_utils::*;
 use darkly::gpu::region_store::RegionStore;

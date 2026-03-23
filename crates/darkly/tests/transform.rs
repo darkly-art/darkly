@@ -1,9 +1,7 @@
-//! Phase 4 GPU integration tests: transform commit, paste commit, undo.
+//! Transform and paste GPU integration tests: translation, rotation, paste, affine math.
 //!
-//! Tests the GPU transform-commit render pass that replaces CPU-side
-//! rasterize_to_tiles(). Exercises TransformPass::commit_to_texture()
-//! with translation, rotation, and paste workflows.
-//! Run with: `cargo test -p darkly --test gpu_phase4`
+//! Tests TransformPass::commit_to_texture() with various transforms and undo.
+//! Run with: `cargo test -p darkly --test transform`
 
 use darkly::gpu::test_utils::*;
 use darkly::gpu::region_store::RegionStore;
@@ -117,7 +115,7 @@ fn transform_commit_translate() {
 
     let mut enc = encoder(&device);
     pass.commit_to_texture(
-        &mut enc, &queue, &target_view, fmt,
+        &device, &mut enc, &queue, &target_tex, &target_view, fmt,
         &matrix, origin, sw, sh, cw, ch,
     );
     submit(&queue, enc);
@@ -177,7 +175,7 @@ fn transform_commit_translate_undo() {
     // Commit with translation (15, 15).
     let matrix = affine_translate(15.0, 15.0);
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&mut enc, &queue, &target_view, fmt, &matrix, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &matrix, origin, sw, sh, cw, ch);
     submit(&queue, enc);
 
     // Commit undo entry.
@@ -238,7 +236,7 @@ fn transform_commit_rotate_90() {
     let matrix: Affine2D = [0.0, 1.0, 0.0, -1.0, 0.0, 5.0];
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&mut enc, &queue, &target_view, fmt, &matrix, (ox, oy), sw, sh, cw, ch);
+    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &matrix, (ox, oy), sw, sh, cw, ch);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -289,7 +287,7 @@ fn paste_commit_identity() {
 
     // Commit with identity — pixels land at their original position.
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&mut enc, &queue, &target_view, fmt, &IDENTITY, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &IDENTITY, origin, sw, sh, cw, ch);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -336,7 +334,7 @@ fn paste_commit_undo() {
 
     // Commit paste.
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&mut enc, &queue, &target_view, fmt, &IDENTITY, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &IDENTITY, origin, sw, sh, cw, ch);
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
@@ -396,7 +394,7 @@ fn commit_composites_over_existing() {
     );
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&mut enc, &queue, &target_view, fmt, &IDENTITY, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &IDENTITY, origin, sw, sh, cw, ch);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -446,7 +444,7 @@ fn transform_commit_on_mask() {
     let matrix = affine_translate(5.0, 5.0);
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&mut enc, &queue, &target_view, mask_fmt, &matrix, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, mask_fmt, &matrix, origin, sw, sh, cw, ch);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, mask_fmt, cw, ch);

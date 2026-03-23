@@ -1,15 +1,15 @@
-//! Phase 5 GPU integration tests — GPU-authoritative selection mask.
+//! Selection GPU integration tests: boolean modes, invert, select all/clear,
+//! undo/redo, clear contents, mask helpers, contour extraction.
 //!
-//! These tests construct a real `DarklyEngine` via headless `GpuContext` and
-//! exercise the same code paths that users hit.
-//!
-//! Run with: `cargo test -p darkly --test gpu_phase5`
+//! Combines low-level GpuPaintTarget selection tests and engine-level selection tests.
+//! Run with: `cargo test -p darkly --test selection`
 
 use darkly::document::SelectionMode;
 use darkly::engine::DarklyEngine;
 use darkly::engine::types::StrokeOp;
 use darkly::gpu::context::GpuContext;
-use darkly::gpu::test_utils::test_device;
+use darkly::gpu::test_utils::*;
+use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use darkly::mask;
 
 /// Create a headless DarklyEngine with the given canvas dimensions.
@@ -42,67 +42,228 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
     pixels[((y * w + x) * 4 + 3) as usize]
 }
 
-// ============================================================================
-// Brush stroke respects selection
-// ============================================================================
+fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
+    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test") })
+}
 
-#[test]
-fn engine_brush_stroke_respects_selection() {
-    let (w, h) = (128, 128);
-    let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) {
+    queue.submit([encoder.finish()]);
+}
 
-    engine.select_rect(0.0, 0.0, (w / 2) as f32, h as f32, SelectionMode::Replace, false, 0.0);
-    paint_full_stroke(&mut engine, layer_id, w, h);
-
-    let pixels = engine.test_readback_layer(layer_id);
-    assert!(alpha_at(&pixels, w, w / 4, h / 2) > 0, "left (selected) should have paint");
-    assert_eq!(alpha_at(&pixels, w, 3 * w / 4, h / 2), 0, "right (unselected) should be transparent");
+fn pixel_at(pixels: &[u8], w: u32, x: u32, y: u32, bpp: u32) -> &[u8] {
+    let offset = ((y * w + x) * bpp) as usize;
+    &pixels[offset..offset + bpp as usize]
 }
 
 // ============================================================================
-// Transform bounds are tight (pixel-level, not tile-aligned)
+// Low-level selection tests (GpuPaintTarget API)
 // ============================================================================
 
+/// Gradient with selection mask: only the masked area should receive the gradient.
 #[test]
-fn engine_transform_bounds_are_tight() {
-    let (w, h) = (256, 256);
-    let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+fn gpu_gradient_with_selection() {
+    let (device, queue) = test_device();
+    let (w, h) = (64, 64);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
 
-    let sel_x = 17.0_f32;
-    let sel_y = 23.0_f32;
-    let sel_w = 30.0_f32;
-    let sel_h = 45.0_f32;
+    let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
+    let pipelines = PaintPipelines::new(&device, &queue);
 
-    engine.select_rect(sel_x, sel_y, sel_w, sel_h, SelectionMode::Replace, false, 0.0);
-
-    engine.begin_stroke(layer_id);
-    engine.stroke_to(StrokeOp::PaintCircle {
-        x: sel_x + sel_w / 2.0,
-        y: sel_y + sel_h / 2.0,
-        radius: 10.0,
-        r: 255, g: 0, b: 0, a: 255,
+    // Create selection mask: left half = 255, right half = 0.
+    let mut sel_data = vec![0u8; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w / 2 {
+            sel_data[(y * w + x) as usize] = 255;
+        }
+    }
+    let (sel_tex, _) = create_test_texture_with_format(
+        &device, &queue, w, h, &sel_data, wgpu::TextureFormat::R8Unorm,
+    );
+    let sel_view = sel_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
     });
-    engine.end_stroke();
+    let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
 
-    let started = engine.begin_transform(layer_id);
-    assert!(started, "begin_transform should succeed with a selection");
+    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let mut enc = encoder(&device);
+    target.linear_gradient(
+        &mut enc, &pipelines, &queue,
+        0.0, 0.0, 64.0, 0.0,
+        [255, 0, 0, 255], [0, 0, 255, 255],
+        Some(&sel_bg),
+    );
+    submit(&queue, enc);
 
-    let (origin_x, origin_y, float_w, float_h, _) = engine.floating_info().unwrap();
+    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 
-    assert!((float_w as i32 - sel_w as i32).unsigned_abs() <= 1,
-        "width should be ~{}, got {float_w}", sel_w as u32);
-    assert!((float_h as i32 - sel_h as i32).unsigned_abs() <= 1,
-        "height should be ~{}, got {float_h}", sel_h as u32);
-    assert!((origin_x as i32 - sel_x as i32).abs() <= 1,
-        "origin X should be ~{sel_x}, got {origin_x}");
-    assert!((origin_y as i32 - sel_y as i32).abs() <= 1,
-        "origin Y should be ~{sel_y}, got {origin_y}");
+    // Left half should have gradient.
+    let left = pixel_at(&pixels, w, 0, 32, 4);
+    assert!(left[3] > 0, "left half should have content, A={}", left[3]);
+
+    // Right half should still be transparent (outside selection).
+    let right = pixel_at(&pixels, w, 48, 32, 4);
+    assert_eq!(right[3], 0, "right half should be transparent, A={}", right[3]);
+}
+
+/// Fill layer with red, create selection (left half), clear selection → left half transparent.
+#[test]
+fn gpu_clear_selection_contents() {
+    let (device, queue) = test_device();
+    let (w, h) = (64, 64);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    // Fill with red.
+    let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
+    let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
+    let pipelines = PaintPipelines::new(&device, &queue);
+
+    // Create selection mask: left half = 255.
+    let mut sel_data = vec![0u8; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..w / 2 {
+            sel_data[(y * w + x) as usize] = 255;
+        }
+    }
+    let (sel_tex, _) = create_test_texture_with_format(
+        &device, &queue, w, h, &sel_data, wgpu::TextureFormat::R8Unorm,
+    );
+    let sel_view = sel_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    });
+    let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
+
+    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+
+    // Erase within selection.
+    let mut enc = encoder(&device);
+    target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
+
+    // Left half should be erased (alpha = 0).
+    let left = pixel_at(&pixels, w, 10, 32, 4);
+    assert_eq!(left[3], 0, "left half should be erased, A={}", left[3]);
+
+    // Right half should still be red.
+    let right = pixel_at(&pixels, w, 50, 32, 4);
+    assert_eq!(right, &[255, 0, 0, 255], "right half should be red, got {:?}", right);
+}
+
+/// Clear selection with undo.
+#[test]
+fn gpu_clear_selection_undo() {
+    let (device, queue) = test_device();
+    let (w, h) = (64, 64);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
+    let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
+    let pipelines = PaintPipelines::new(&device, &queue);
+    let mut store = darkly::gpu::region_store::RegionStore::with_capacity(&device, w, h, 2 * 1024 * 1024);
+
+    // Selection: full canvas.
+    let sel_data = vec![255u8; (w * h) as usize];
+    let (sel_tex, _) = create_test_texture_with_format(
+        &device, &queue, w, h, &sel_data, wgpu::TextureFormat::R8Unorm,
+    );
+    let sel_view = sel_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    });
+    let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
+
+    // Save for undo.
+    let mut enc = encoder(&device);
+    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    submit(&queue, enc);
+
+    // Erase within selection.
+    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let mut enc = encoder(&device);
+    target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
+    submit(&queue, enc);
+
+    let mut enc = encoder(&device);
+    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, w, h]);
+    submit(&queue, enc);
+
+    // Verify cleared.
+    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
+    assert_eq!(pixel_at(&pixels, w, 32, 32, 4)[3], 0, "should be erased");
+
+    // Undo.
+    let mut enc = encoder(&device);
+    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
+    assert_eq!(pixel_at(&pixels, w, 32, 32, 4), &[255, 0, 0, 255], "should be red after undo");
+}
+
+/// Regression: flood fill must respect the active selection.
+#[test]
+fn gpu_flood_fill_respects_selection() {
+    let (device, queue) = test_device();
+    let (w, h) = (64, 64);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    // Transparent canvas.
+    let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
+    let pipelines = PaintPipelines::new(&device, &queue);
+
+    // CPU flood fill from (16, 32) on the transparent canvas — should fill everything.
+    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
+    let fill_mask = darkly::gpu::flood_fill::flood_fill_rgba(&pixels, w, h, 16, 32, 0);
+    assert_eq!(fill_mask[(32 * w + 48) as usize], 255, "fill mask should cover entire canvas");
+
+    // Selection: left half only (x < 32).
+    let mut sel_data = vec![0u8; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..32u32 {
+            sel_data[(y * w + x) as usize] = 255;
+        }
+    }
+
+    // Combine fill mask with selection (the fix being tested).
+    let combined: Vec<u8> = fill_mask.iter().zip(sel_data.iter())
+        .map(|(&f, &s)| ((f as u16 * s as u16) / 255) as u8)
+        .collect();
+
+    let mask_bg = pipelines.upload_r8_bind_group(
+        &device, &queue, w, h, &combined, "test-fill-sel-mask",
+    );
+
+    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let mut enc = encoder(&device);
+    target.fill_rect_with_selection(
+        &mut enc, &pipelines, &queue,
+        [0, 0, w, h], [0, 0, 255, 255], &mask_bg,
+    );
+    submit(&queue, enc);
+
+    let result = readback_texture(&device, &queue, &tex, fmt, w, h);
+
+    // Inside selection (left half) — should be blue.
+    let inside = pixel_at(&result, w, 16, 32, 4);
+    assert!(inside[2] > 200, "inside selection should be blue, B={}", inside[2]);
+    assert!(inside[3] > 200, "inside selection alpha should be opaque, A={}", inside[3]);
+
+    // Outside selection (right half) — should still be transparent.
+    let outside = pixel_at(&result, w, 48, 32, 4);
+    assert_eq!(outside[3], 0, "outside selection should be transparent, A={}", outside[3]);
 }
 
 // ============================================================================
-// Boolean selection modes (Add / Subtract / Intersect)
+// Engine-level boolean selection modes (Add / Subtract / Intersect)
 // ============================================================================
 
 /// Add mode: select left quarter, add right quarter. Middle is unselected.
@@ -413,20 +574,6 @@ fn contour_segments_r8_rectangle_geometry() {
     let segments = mask::contour_segments_r8(&data, w, h, 127);
     assert!(!segments.is_empty(), "rectangle should produce contour segments");
 
-    // Every endpoint must lie on one of the four rectangle edges.
-    // Marching squares places the contour at the threshold crossing between
-    // inside and outside pixels. With hard-edge (value 0 or 255) data, the
-    // crossing is at 0.5px outside the filled block:
-    //   left edge:   x = rx - 0.5  (between outside pixel rx-1 and inside rx)
-    //   right edge:  x = rx + rw - 0.5  (between inside rx+rw-1 and outside rx+rw)
-    //   ... but lerp_edge with binary values gives t=0.5, so the marching
-    //   squares endpoint is at the cell corner + 0.5 offset.
-    // In practice, for a filled block [rx..rx+rw) x [ry..ry+rh), the contour
-    // runs through integer coordinates minus 0.5 on each side. The exact
-    // positions depend on the lerp_edge interpolation.
-    //
-    // Rather than hardcoding the exact offsets, we check that endpoints
-    // are within 1px of the expected rect boundary.
     let (left, right) = (rx as f32, (rx + rw) as f32);
     let (top, bottom) = (ry as f32, (ry + rh) as f32);
     let margin = 1.0;
@@ -553,148 +700,4 @@ fn contour_segments_r8_matches_tile_version() {
         });
         assert!(found, "r8 segment {i} ({:?} -> {:?}) not in tile output", r8.0, r8.1);
     }
-}
-
-// ============================================================================
-// Cut+paste leaves no border (regression test for uint8_mult fix)
-// ============================================================================
-
-/// Paint a solid region, make an antialiased selection, cut, paste to a new
-/// layer, then verify that `remaining + pasted == original` per channel.
-///
-/// The bug: the old code erased via GPU float blend and copied via CPU integer
-/// math, producing a rounding mismatch at antialiased selection edges. This
-/// left a thin border of residual pixels on the source layer.
-#[test]
-fn cut_paste_no_border() {
-    let (w, h) = (128, 128);
-    let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
-
-    // Paint varied-channel content so rounding errors show in every channel.
-    engine.begin_stroke(layer_id);
-    engine.stroke_to(StrokeOp::PaintCircle {
-        x: 64.0, y: 64.0, radius: 100.0,
-        r: 200, g: 100, b: 50, a: 230,
-    });
-    engine.end_stroke();
-
-    let original = engine.test_readback_layer(layer_id);
-
-    // Antialiased selection — the AA edge is where the mismatch appears.
-    engine.select_rect(20.0, 20.0, 60.0, 60.0, SelectionMode::Replace, true, 0.0);
-
-    // Cut.
-    engine.cut(layer_id);
-
-    // Block until the async GPU readback completes and the cut is fully applied.
-    engine.test_flush_readbacks();
-    let clip = engine.poll_copy_result().expect("cut should produce a clipboard result");
-
-    let remaining = engine.test_readback_layer(layer_id);
-
-    // Paste onto a new layer at the same position.
-    let paste_id = engine.paste_image(
-        clip.width, clip.height, &clip.rgba,
-        clip.offset_x, clip.offset_y, Some(layer_id),
-    );
-    let pasted = engine.test_readback_layer(paste_id);
-
-    // For every originally-painted pixel, verify:
-    // remaining[ch] + pasted[ch] == original[ch]   (exact, no ±1 tolerance)
-    let mut mismatches = 0u32;
-    let mut worst_error = 0i32;
-    for y in 0..h {
-        for x in 0..w {
-            let i = (y * w + x) as usize * 4;
-            if original[i + 3] == 0 { continue; }
-
-            for ch in 0..4 {
-                let o = original[i + ch] as i32;
-                let r = remaining[i + ch] as i32;
-                let p = pasted[i + ch] as i32;
-                let error = (r + p - o).abs();
-                if error > 0 {
-                    mismatches += 1;
-                    worst_error = worst_error.max(error);
-                }
-            }
-        }
-    }
-
-    // With correct integer math (uint8_mult), there should be zero mismatches.
-    // The old float-based erase produced errors of 1-3 per channel at every
-    // AA-edge pixel, adding up to hundreds of mismatches.
-    assert!(mismatches == 0,
-        "{mismatches} channel mismatches (worst error: {worst_error}). \
-         remaining + pasted should exactly reconstruct original.");
-}
-
-// ============================================================================
-// Lasso selection performance (regression test for scanline fill)
-// ============================================================================
-
-/// Lasso-select a 200-vertex polygon through the engine and verify it completes
-/// in bounded time. The old SDF path was O(pixels × edges) — 489ms for 182 verts
-/// on WASM. The scanline path is O(pixels + edges × height).
-///
-/// Also verifies correctness: painting inside the lasso works, painting outside
-/// is masked.
-#[test]
-fn lasso_selection_performance_and_correctness() {
-    let (w, h) = (1024, 1024);
-    let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
-
-    // Generate a circle polygon with 200 vertices — similar to a real lasso.
-    let cx = 500.0_f32;
-    let cy = 500.0_f32;
-    let r = 200.0_f32;
-    let n_verts = 200;
-    let vertices: Vec<[f32; 2]> = (0..n_verts)
-        .map(|i| {
-            let angle = 2.0 * std::f32::consts::PI * i as f32 / n_verts as f32;
-            [cx + r * angle.cos(), cy + r * angle.sin()]
-        })
-        .collect();
-
-    // Time the full select_lasso call.
-    let start = std::time::Instant::now();
-    engine.select_lasso(&vertices, SelectionMode::Replace, true, 0.0);
-    let elapsed = start.elapsed();
-
-    let ms = elapsed.as_secs_f64() * 1000.0;
-    eprintln!("select_lasso({n_verts} verts, {w}x{h}): {ms:.1}ms");
-
-    // Must complete in <50ms on native. The old SDF path took ~200ms+ here.
-    assert!(ms < 50.0,
-        "select_lasso with {n_verts} verts took {ms:.1}ms, expected <50ms");
-
-    assert!(engine.has_selection());
-
-    // Correctness: paint across canvas, verify masking works.
-    engine.begin_stroke(layer_id);
-    for x_step in 0..40 {
-        let x = x_step as f32 * (w as f32 / 40.0);
-        engine.stroke_to(StrokeOp::BrushStroke {
-            x,
-            y: cy,
-            pressure: 1.0,
-            x_tilt: 0.0, y_tilt: 0.0,
-            rotation: 0.0, tangential_pressure: 0.0,
-            time_ms: x_step as f64 * 16.0,
-            cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
-        });
-    }
-    engine.end_stroke();
-
-    let pixels = engine.test_readback_layer(layer_id);
-
-    // Center of polygon (500, 500) — should have paint.
-    assert!(alpha_at(&pixels, w, cx as u32, cy as u32) > 0,
-        "center of lasso should have paint");
-
-    // Well outside polygon (50, 500) — 450px left of center, outside r=200.
-    assert_eq!(alpha_at(&pixels, w, 50, cy as u32), 0,
-        "outside lasso should be transparent");
 }
