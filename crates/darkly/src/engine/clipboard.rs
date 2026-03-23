@@ -176,7 +176,9 @@ impl DarklyEngine {
                     );
                 }
 
-                // 3. Multiply staging by cropped selection: staging *= sel.
+                // 3. Multiply staging alpha by cropped selection: staging.a *= sel.
+                //    RGB stays unchanged — straight-alpha convention (see
+                //    compositing-lessons-learned.md §1).
                 let staging_target = GpuPaintTarget {
                     texture: &staging_tex,
                     view: &staging_view,
@@ -184,14 +186,12 @@ impl DarklyEngine {
                     width: rw,
                     height: rh,
                 };
-                staging_target.multiply_by_mask(
+                staging_target.multiply_alpha_by_mask(
                     encoder, &self.paint_pipelines, &self.gpu.queue, &sel_crop_bg,
                 );
 
-                // 4. If cut: multiply layer by (1 - selection) on all channels.
-                //    This is the complement of the copy extraction (step 3):
-                //    staging = layer * sel, layer *= (1 - sel).
-                //    Both use GPU float math → extracted + remaining = original.
+                // 4. If cut: reduce layer alpha by selection on selected pixels.
+                //    layer.a *= (1 - sel), layer.rgb unchanged (straight alpha).
                 if is_cut {
                     let (layer_target, _) = if is_mask {
                         let t = self.compositor.mask_texture(layer_id).unwrap();
@@ -200,7 +200,7 @@ impl DarklyEngine {
                         let t = self.compositor.layer_texture(layer_id).unwrap();
                         (GpuPaintTarget::from_layer(t, canvas_w, canvas_h), ())
                     };
-                    layer_target.multiply_by_inverse_mask(
+                    layer_target.multiply_alpha_by_inverse_mask(
                         encoder, &self.paint_pipelines, &self.gpu.queue,
                         self.gpu_selection.paint_bind_group(),
                     );

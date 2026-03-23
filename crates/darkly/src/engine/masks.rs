@@ -117,7 +117,7 @@ impl DarklyEngine {
         ) {
             let target = GpuPaintTarget::from_layer(layer_tex, canvas_w, canvas_h);
             self.gpu.encode("apply-mask-multiply", |encoder| {
-                target.multiply_by_mask(
+                target.multiply_alpha_by_mask(
                     encoder, &self.paint_pipelines, &self.gpu.queue, mask_bg,
                 );
             });

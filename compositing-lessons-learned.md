@@ -28,6 +28,8 @@ Just copy RGB through, scale only alpha.
 
 **Takeaway**: When manipulating pixel alpha in a straight-alpha pipeline, never touch the RGB channels. The color is the color — alpha is a separate, independent quantity. If you find yourself multiplying RGB by an alpha-related factor and storing the result as straight alpha, you're producing premultiplied values in a straight-alpha container. This is the single most common alpha compositing bug and it's invisible until something downstream reveals it (blending, interpolation, repeated operations).
 
+**Corollary — GPU blend states**: This same bug appears in hardware blend configuration. A blend state with `color.dst_factor = SrcAlpha` does `dst.rgb *= src.a` — the blend-state equivalent of `pixel.rgb *= coverage`. For straight-alpha targets, the color blend component must use `dst_factor = One` to preserve RGB; only the alpha blend component should use `SrcAlpha` or `OneMinusSrcAlpha`. This is easy to miss because blend states feel like a different domain than per-pixel math, but the alpha semantics are identical. The GPU cut/copy mask multiply had this exact bug: `blend_mask_multiply` used `SrcAlpha` for both color and alpha components, darkening extracted and erased content at feathered selection edges.
+
 ## 2. Premultiplied interpolation for GPU texture sampling
 
 **Problem**: Hardware bilinear filtering on `Rgba8Unorm` textures operates in straight-alpha space by default. At content edges (opaque pixel adjacent to transparent-black), interpolating `[255, 0, 0, 255]` with `[0, 0, 0, 0]` at 50% gives `[128, 0, 0, 128]` — which in straight alpha means dark red at half opacity, not bright red at half opacity. This is the classic "dark halo" artifact.
