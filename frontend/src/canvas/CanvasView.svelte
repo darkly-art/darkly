@@ -87,6 +87,7 @@
         if (!app.handle) return null;
         return {
             handle: app.handle,
+            canvasEl: canvas,
             screenToCanvas(sx: number, sy: number) {
                 return screenToCanvas(sx, sy, canvas);
             }
@@ -211,6 +212,7 @@
                 toolRegistry.get(prevToolId)?.onDeactivate?.(ctx);
                 toolRegistry.get(id)?.onActivate?.(ctx);
             }
+            app.toolCursor = null;
             prevToolId = id;
         }
     });
@@ -250,7 +252,7 @@
 <div class="canvas-container">
     <canvas
         bind:this={canvas}
-        style:cursor={nav.cursor}
+        style:cursor={app.toolCursor ?? nav.cursor}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}

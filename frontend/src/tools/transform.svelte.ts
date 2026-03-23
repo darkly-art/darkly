@@ -5,13 +5,18 @@
  * interactive handles for move, scale, and rotate. Enter commits the
  * transform; Escape cancels.
  *
- * Uses the SVG ToolOverlay system for handle rendering. Affine matrix
- * computation happens in JS using the same [a, b, tx, c, d, ty] format
- * as the Rust gpu/transform.rs module.
+ * Handles are rendered via the GPU overlay system (not SVG) for smooth
+ * drag performance. Hit-testing for cursor feedback and drag initiation
+ * is pure JS math (distance checks against known handle positions).
  */
 import type { Tool, ToolContext } from './registry';
-import type { ToolOverlayData, OverlayHandle, OverlayLine } from '../canvas/overlay';
 import { app } from '../state/app.svelte';
+import { canvasToScreen } from '../canvas/coordinates';
+import {
+    KIND_DASHED_LINE, KIND_FILLED_CIRCLE, KIND_CIRCLE,
+    FLAG_CANVAS_SPACE, prim,
+    type GpuPrim,
+} from './selection_helpers';
 
 // ---------------------------------------------------------------------------
 // Affine2D helpers (mirrors Rust gpu/transform.rs)
@@ -150,10 +155,13 @@ let drag = $state<{
     startAngle: number;
 } | null>(null);
 
+/** Canvas element reference for coordinate conversions. */
+let canvasEl: HTMLCanvasElement | null = null;
+
 const ROTATION_ARM_LENGTH = 30; // screen pixels
 
 /** Read floating content info from Rust and populate JS state.
- *  Called ONLY from event handlers (not from getOverlay). */
+ *  Called ONLY from event handlers (not from overlay push). */
 function syncFromRust(): boolean {
     if (!app.handle) return false;
     const raw = app.handle.floating_info();
@@ -172,6 +180,8 @@ function syncFromRust(): boolean {
 function clearState() {
     active = false;
     drag = null;
+    app.handle?.clear_overlay();
+    app.toolCursor = null;
 }
 
 function pushMatrix() {
@@ -230,8 +240,6 @@ function updateDrag(canvasX: number, canvasY: number, shiftKey: boolean) {
             ),
         );
     } else {
-        // Compute scale in source-local space so it follows the object's
-        // edges regardless of rotation, then apply in local space.
         const dragLocal = handleLocal(handle, srcW, srcH);
         const mouseOffset: [number, number] = [canvasX - origin[0], canvasY - origin[1]];
 
@@ -256,7 +264,6 @@ function updateDrag(canvasX: number, canvasY: number, shiftKey: boolean) {
             sy = uniform * Math.sign(sy || 1);
         }
 
-        // Apply scale in local space around the local anchor point
         matrix = affineMultiply(
             initialMatrix,
             affineMultiply(
@@ -277,22 +284,34 @@ function endDrag() {
 }
 
 // ---------------------------------------------------------------------------
-// Overlay generation (pure — only reads $state, no side effects)
+// GPU overlay primitives
 // ---------------------------------------------------------------------------
 
-function buildOverlay(): ToolOverlayData | null {
-    if (!active) return null;
+const LINE_COLOR: [number, number, number, number] = [0.267, 0.667, 1.0, 1.0]; // #4af
+const WHITE: [number, number, number, number] = [1, 1, 1, 1];
 
+function pushOverlayPrimitives() {
+    if (!active || !app.handle || !canvasEl) {
+        app.handle?.clear_overlay();
+        return;
+    }
+
+    const dpr = window.devicePixelRatio || 1;
+    const prims: GpuPrim[] = [];
+
+    // Corner positions in canvas space
     const tl = toCanvas(0, 0);
     const tr = toCanvas(srcW, 0);
     const br = toCanvas(srcW, srcH);
     const bl = toCanvas(0, srcH);
 
-    const tm: [number, number] = [(tl[0] + tr[0]) / 2, (tl[1] + tr[1]) / 2];
-    const rm: [number, number] = [(tr[0] + br[0]) / 2, (tr[1] + br[1]) / 2];
-    const bm: [number, number] = [(br[0] + bl[0]) / 2, (br[1] + bl[1]) / 2];
-    const lm: [number, number] = [(bl[0] + tl[0]) / 2, (bl[1] + tl[1]) / 2];
+    // Edge midpoints
+    const tm = mid(tl, tr);
+    const rm = mid(tr, br);
+    const bm = mid(br, bl);
+    const lm = mid(bl, tl);
 
+    // Rotation handle position (perpendicular to top edge, in canvas space)
     const edgeX = tr[0] - tl[0];
     const edgeY = tr[1] - tl[1];
     const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY);
@@ -301,43 +320,102 @@ function buildOverlay(): ToolOverlayData | null {
     const armCanvas = ROTATION_ARM_LENGTH / (app.zoom || 1);
     const rotPos: [number, number] = [tm[0] + perpX * armCanvas, tm[1] + perpY * armCanvas];
 
-    const lines: OverlayLine[] = [
-        { x1: tl[0], y1: tl[1], x2: tr[0], y2: tr[1], stroke: '#4af', dashArray: '6 4' },
-        { x1: tr[0], y1: tr[1], x2: br[0], y2: br[1], stroke: '#4af', dashArray: '6 4' },
-        { x1: br[0], y1: br[1], x2: bl[0], y2: bl[1], stroke: '#4af', dashArray: '6 4' },
-        { x1: bl[0], y1: bl[1], x2: tl[0], y2: tl[1], stroke: '#4af', dashArray: '6 4' },
-        { x1: tm[0], y1: tm[1], x2: rotPos[0], y2: rotPos[1], stroke: '#4af', dashArray: '4 3' },
+    // --- Lines (canvas space, transformed by shader) ---
+    const lineOpts = { color: LINE_COLOR, thickness: 1, dashLen: 6 };
+    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, tl, tr, lineOpts));
+    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, tr, br, lineOpts));
+    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, br, bl, lineOpts));
+    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, bl, tl, lineOpts));
+    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, tm, rotPos,
+        { color: LINE_COLOR, thickness: 1, dashLen: 4 }));
+
+    // --- Handle circles (screen space, constant pixel size) ---
+    const handles: { pos: [number, number]; radius: number; fill: [number, number, number, number]; stroke: [number, number, number, number] }[] = [
+        // Corners (r=5)
+        { pos: tl, radius: 5, fill: WHITE, stroke: LINE_COLOR },
+        { pos: tr, radius: 5, fill: WHITE, stroke: LINE_COLOR },
+        { pos: br, radius: 5, fill: WHITE, stroke: LINE_COLOR },
+        { pos: bl, radius: 5, fill: WHITE, stroke: LINE_COLOR },
+        // Edge midpoints (r=4)
+        { pos: tm, radius: 4, fill: WHITE, stroke: LINE_COLOR },
+        { pos: rm, radius: 4, fill: WHITE, stroke: LINE_COLOR },
+        { pos: bm, radius: 4, fill: WHITE, stroke: LINE_COLOR },
+        { pos: lm, radius: 4, fill: WHITE, stroke: LINE_COLOR },
+        // Rotation (r=5, colors swapped)
+        { pos: rotPos, radius: 5, fill: LINE_COLOR, stroke: WHITE },
     ];
 
-    const makeHandle = (id: string, pos: [number, number], handle: Handle, radius = 5): OverlayHandle => ({
-        id,
-        x: pos[0],
-        y: pos[1],
-        radius,
-        cursor: cursorForHandle(handle),
-        fill: '#fff',
-        stroke: '#4af',
-        onDrag(cx, cy) { beginDragIfNeeded(handle, cx, cy); updateDrag(cx, cy, false); },
-        onDragEnd() { endDrag(); },
-    });
+    for (const h of handles) {
+        const sp = canvasToScreen(h.pos[0], h.pos[1], canvasEl);
+        // canvasToScreen returns CSS pixels; overlay shader works in buffer pixels
+        const center: [number, number] = [sp.x * dpr, sp.y * dpr];
+        const r: [number, number] = [h.radius * dpr, 0];
+        prims.push(prim(KIND_FILLED_CIRCLE, 0, center, r, { color: h.fill }));
+        prims.push(prim(KIND_CIRCLE, 0, center, r, { color: h.stroke, thickness: 1.5 * dpr }));
+    }
 
-    const handles: OverlayHandle[] = [
-        makeHandle('tl', tl, Handle.TopLeft, 5),
-        makeHandle('tr', tr, Handle.TopRight, 5),
-        makeHandle('br', br, Handle.BottomRight, 5),
-        makeHandle('bl', bl, Handle.BottomLeft, 5),
-        makeHandle('tm', tm, Handle.Top, 4),
-        makeHandle('rm', rm, Handle.Right, 4),
-        makeHandle('bm', bm, Handle.Bottom, 4),
-        makeHandle('lm', lm, Handle.Left, 4),
-        { ...makeHandle('rot', rotPos, Handle.Rotate, 5), fill: '#4af', stroke: '#fff' },
-    ];
-
-    return { lines, handles };
+    app.handle.set_overlay(prims);
 }
 
-function beginDragIfNeeded(handle: Handle, cx: number, cy: number) {
-    if (!drag) beginDrag(handle, cx, cy);
+// ---------------------------------------------------------------------------
+// JS hit-testing (distance checks in screen space)
+// ---------------------------------------------------------------------------
+
+const HIT_THRESHOLD = 10; // CSS pixels
+
+function hitTestHandles(canvasX: number, canvasY: number): Handle | null {
+    if (!active || !canvasEl) return null;
+
+    const sp = canvasToScreen(canvasX, canvasY, canvasEl);
+    const sx = sp.x;
+    const sy = sp.y;
+
+    // Corner positions in canvas space
+    const tl = toCanvas(0, 0);
+    const tr = toCanvas(srcW, 0);
+    const br = toCanvas(srcW, srcH);
+    const bl = toCanvas(0, srcH);
+
+    // Rotation handle
+    const tm = mid(tl, tr);
+    const edgeX = tr[0] - tl[0];
+    const edgeY = tr[1] - tl[1];
+    const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY);
+    const perpX = edgeLen > 0.01 ? edgeY / edgeLen : 0;
+    const perpY = edgeLen > 0.01 ? -edgeX / edgeLen : -1;
+    const armCanvas = ROTATION_ARM_LENGTH / (app.zoom || 1);
+    const rotPos: [number, number] = [tm[0] + perpX * armCanvas, tm[1] + perpY * armCanvas];
+
+    // Test in priority order: rotation, corners, edges
+    if (hitScreen(sx, sy, rotPos)) return Handle.Rotate;
+
+    if (hitScreen(sx, sy, tl)) return Handle.TopLeft;
+    if (hitScreen(sx, sy, tr)) return Handle.TopRight;
+    if (hitScreen(sx, sy, br)) return Handle.BottomRight;
+    if (hitScreen(sx, sy, bl)) return Handle.BottomLeft;
+
+    const rm = mid(tr, br);
+    const bm = mid(br, bl);
+    const lm = mid(bl, tl);
+
+    if (hitScreen(sx, sy, tm)) return Handle.Top;
+    if (hitScreen(sx, sy, rm)) return Handle.Right;
+    if (hitScreen(sx, sy, bm)) return Handle.Bottom;
+    if (hitScreen(sx, sy, lm)) return Handle.Left;
+
+    return null;
+}
+
+/** Test if screen point (sx, sy) in CSS pixels is within threshold of a canvas-space point. */
+function hitScreen(sx: number, sy: number, canvasPos: [number, number]): boolean {
+    const hp = canvasToScreen(canvasPos[0], canvasPos[1], canvasEl!);
+    const dx = sx - hp.x;
+    const dy = sy - hp.y;
+    return dx * dx + dy * dy < HIT_THRESHOLD * HIT_THRESHOLD;
+}
+
+function mid(a: [number, number], b: [number, number]): [number, number] {
+    return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +429,7 @@ export const transformTool: Tool = {
     hotkeyAction: 'transformTool',
 
     onActivate(ctx) {
+        canvasEl = ctx.canvasEl;
         if (!app.activeLayerId || !ctx.handle) return;
         if (!ctx.handle.has_floating()) {
             ctx.handle.begin_transform(app.activeLayerId);
@@ -367,7 +446,7 @@ export const transformTool: Tool = {
         clearState();
     },
 
-    onPointerDown(_ctx, _e, cx, cy) {
+    onPointerDown(ctx, _e, cx, cy) {
         if (!active) {
             if (app.handle && app.activeLayerId != null) {
                 if (!app.handle.has_floating()) {
@@ -377,12 +456,16 @@ export const transformTool: Tool = {
             }
             if (!active) return;
         }
-        beginDrag(Handle.Body, cx, cy);
+        const hit = hitTestHandles(cx, cy);
+        beginDrag(hit ?? Handle.Body, cx, cy);
     },
 
     onPointerMove(_ctx, e, cx, cy) {
         if (drag) {
             updateDrag(cx, cy, e.shiftKey);
+        } else if (active) {
+            const hit = hitTestHandles(cx, cy);
+            app.toolCursor = hit != null ? cursorForHandle(hit) : 'move';
         }
     },
 
@@ -412,10 +495,9 @@ export const transformTool: Tool = {
         if (!active && app.handle?.has_floating()) {
             syncFromRust();
         }
-    },
-
-    getOverlay(): ToolOverlayData | null {
-        return buildOverlay();
+        if (active) {
+            pushOverlayPrimitives();
+        }
     },
 
     dismissOverlay() {

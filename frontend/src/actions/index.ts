@@ -152,7 +152,7 @@ export function registerActions() {
             if (ok) {
                 const prevTool = toolRegistry.get(app.activeToolId);
                 app.activeToolId = 'transform';
-                const ctx = { handle: app.handle, screenToCanvas: (_x: number, _y: number) => ({ x: 0, y: 0 }) };
+                const ctx = { handle: app.handle, canvasEl: document.createElement('canvas'), screenToCanvas: (_x: number, _y: number) => ({ x: 0, y: 0 }) };
                 prevTool?.onDeactivate?.(ctx);
                 toolRegistry.get('transform')?.onActivate?.(ctx);
                 app.requestFrame();

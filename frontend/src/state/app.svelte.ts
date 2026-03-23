@@ -40,6 +40,9 @@ class AppState {
     zoom = $state(1.0);
     rotation = $state(0);   // radians
 
+    // Tool cursor — when non-null, overrides nav cursor on the canvas element.
+    toolCursor = $state<string | null>(null);
+
     swapColors() {
         const tmp = { ...this.foreground };
         this.foreground = { ...this.background };

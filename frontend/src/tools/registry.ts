@@ -4,6 +4,7 @@ import type { ToolOverlayData } from '../canvas/overlay';
 
 export interface ToolContext {
     handle: DarklyHandle;
+    canvasEl: HTMLCanvasElement;
     screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number };
 }
 
