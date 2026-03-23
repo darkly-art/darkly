@@ -15,49 +15,30 @@
 //! unwinds through wasm-bindgen without dropping the borrow guard, permanently
 //! poisoning the RefCell — every subsequent call fails for the rest of the session.
 //!
-//! **Concrete scenario:**
-//! ```text
-//! stroke_to(&mut self)        ← wasm-bindgen borrow #1
-//!   → brush engine → queue.submit()
-//!     → Chromium pumps event queue
-//!       → pending rAF fires
-//!         → render(&mut self)  ← borrow #2 — PANIC
-//!           → borrow guard leaked → handle permanently dead
-//! ```
+//! **Architecture: generalized command queue.**
 //!
-//! **Options considered:**
+//! All methods take `&self` (shared borrow on wasm-bindgen's outer RefCell —
+//! can never conflict).  Internally, methods fall into three categories:
 //!
-//! 1. **JS-side boolean guard** — check a flag before each WASM call, skip if busy.
-//!    Simple but doesn't fix the root cause; every new call site must remember
-//!    to check, and the RefCell is still vulnerable to permanent poisoning on
-//!    any missed guard.
+//! 1. **Queued mutations** (~40 methods): push a [`Command`] variant to a
+//!    `RefCell<Vec<Command>>` without touching the engine.  Fast, zero
+//!    re-entrancy risk.  Covers all fire-and-forget operations: layer props,
+//!    masks, selection, undo/redo, view transform, strokes, overlays, etc.
 //!
-//! 2. **Interior mutability + command queue (chosen)** — two-layer fix:
+//! 2. **Direct mutations** (~15 methods): call [`flush_if_needed`] then
+//!    `self.engine.borrow_mut()`.  These are click-frequency user-initiated
+//!    operations (add layer, brush graph compile, copy/cut, paste) that
+//!    return values.  They **panic** on re-entrancy — if that ever fires,
+//!    it's a bug to fix structurally, not paper over with silent failure.
 //!
-//!    *Layer 1 — interior mutability:* all `#[wasm_bindgen]` methods take `&self`.
-//!    wasm-bindgen's outer RefCell only ever does shared borrows (which can't
-//!    conflict).  We manage mutation through our own RefCells inside the handle,
-//!    using `try_borrow_mut()` so re-entrant calls see "busy" and gracefully skip
-//!    instead of panicking.  This eliminates permanent RefCell poisoning.
+//! 3. **Queries** (~18 methods): call [`flush_if_needed`] then
+//!    `self.engine.borrow()`.  Always succeeds — no competing `borrow_mut()`
+//!    exists outside `render()` and the flush path.
 //!
-//!    *Layer 2 — stroke command queue:* the hot-path conflict is between
-//!    `stroke_to` (GPU dab generation during painting) and `render()` (present
-//!    to screen).  We separate them structurally: `stroke_to`, `begin_stroke`,
-//!    and `end_stroke` push commands to a `RefCell<Vec<StrokeCommand>>` without
-//!    touching the engine.  `render()` drains the queue first, then renders.
-//!    Since the queue and the engine live in separate RefCells, there is no
-//!    borrow conflict — the race is eliminated deterministically, not by luck.
-//!
-//! 3. **Split into multiple WASM handles** — separate `RenderHandle` and
-//!    `PaintHandle` with independent RefCells.  Architecturally cleaner but
-//!    requires splitting `DarklyEngine` and sharing state (GPU context, document)
-//!    across handles — a much larger refactor.
-//!
-//! We chose option 2 because it eliminates the race deterministically (command
-//! queue) while also providing defense-in-depth against any other re-entrancy
-//! vectors we haven't found yet (interior mutability).  If the command queue
-//! pattern proves too limiting (e.g. we need synchronous stroke results), the
-//! next step would be option 3 (split handles).
+//! [`render`] is the **one** method that uses `try_borrow_mut()` — it is the
+//! actual re-entrancy target (rAF fired during GPU event pumping).  Returning
+//! `false` when busy is correct: the outer render call is already in progress
+//! and will handle everything.
 //!
 //! ## Serialization conventions
 //!
@@ -74,7 +55,7 @@
 
 use std::cell::RefCell;
 
-use darkly::document::MoveTarget;
+use darkly::document::{MoveTarget, SelectionMode};
 use darkly::engine::{DarklyEngine, StrokeOp};
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::overlay::OverlayPrimitive;
@@ -82,67 +63,187 @@ use darkly::gpu::params::{ParamDef, ParamValue};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsError;
 
-/// Queued stroke command — stored in a separate RefCell from the engine so
-/// that `stroke_to` (push) and `render` (drain + execute) never conflict.
-enum StrokeCommand {
-    Begin(u64),
-    Op(StrokeOp),
-    End,
+// ---------------------------------------------------------------------------
+// Command queue
+// ---------------------------------------------------------------------------
+
+/// All fire-and-forget mutations.  Pushed by `#[wasm_bindgen]` methods,
+/// drained by [`DarklyHandle::render`] (or [`DarklyHandle::flush_if_needed`]).
+enum Command {
+    // Stroke lifecycle
+    BeginStroke(u64),
+    StrokeOp(StrokeOp),
+    EndStroke,
+
+    // Layer properties
+    SetOpacity(u64, f32),
+    SetBlendMode(u64, u32),
+    SetLayerVisible(u64, bool),
+    SetLayerName(u64, String),
+    SetGroupCollapsed(u64, bool),
+    SetGroupPassthrough(u64, bool),
+
+    // Layer masks
+    AddMask(u64),
+    RemoveMask(u64),
+    ApplyMask(u64),
+    SetMaskEnabled(u64, bool),
+    SetShowMask(u64, bool),
+    SetEditingMask(u64, bool),
+    SelectionToMask(u64),
+    MaskToSelection(u64),
+
+    // Painting
+    FillGradient(u64),
+
+    // Selection
+    SelectRect { x: f32, y: f32, w: f32, h: f32, mode: SelectionMode, antialias: bool, feather: f32 },
+    SelectEllipse { x: f32, y: f32, w: f32, h: f32, mode: SelectionMode, antialias: bool, feather: f32 },
+    SelectLasso { verts: Vec<[f32; 2]>, mode: SelectionMode, antialias: bool, feather: f32 },
+    SelectMagicWand { layer_id: u64, seed_x: i32, seed_y: i32, tolerance: u8, mode: SelectionMode },
+    ClearSelection,
+    ClearSelectionContents(u64),
+    SelectAll,
+    InvertSelection,
+
+    // Undo / Redo
+    Undo,
+    Redo,
+
+    // View transform
+    SetViewTransform { pan_x: f32, pan_y: f32, zoom: f32, rotation: f32, screen_w: f32, screen_h: f32 },
+    Resize(u32, u32),
+
+    // Floating content
+    UpdateFloatingMatrix([f32; 6]),
+    CommitFloating,
+    CancelFloating,
+
+    // Veils
+    RemoveVeil(usize),
+    ClearVeils,
+    SetVeilVisible(usize, bool),
+    MoveVeil(usize, usize),
+
+    // Overlay
+    SetOverlay(Vec<OverlayPrimitive>),
+    ClearOverlay,
+
+    // Brush config
+    SetBrushScale(f32),
+    ResetBrushGraph,
+    BrushGraphMoveNode(u64, f32, f32),
+
+    // Color pick (pointer-frequency, starts async readback)
+    PickColor(f32, f32),
 }
+
+fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
+    let cmds: Vec<Command> = commands.borrow_mut().drain(..).collect();
+    for cmd in cmds {
+        match cmd {
+            Command::BeginStroke(id) => engine.begin_stroke(id),
+            Command::StrokeOp(op) => engine.stroke_to(op),
+            Command::EndStroke => engine.end_stroke(),
+
+            Command::SetOpacity(id, v) => engine.set_opacity(id, v),
+            Command::SetBlendMode(id, v) => engine.set_blend_mode(id, v),
+            Command::SetLayerVisible(id, v) => engine.set_layer_visible(id, v),
+            Command::SetLayerName(id, ref name) => engine.set_layer_name(id, name),
+            Command::SetGroupCollapsed(id, v) => engine.set_group_collapsed(id, v),
+            Command::SetGroupPassthrough(id, v) => engine.set_group_passthrough(id, v),
+
+            Command::AddMask(id) => engine.add_mask(id),
+            Command::RemoveMask(id) => engine.remove_mask(id),
+            Command::ApplyMask(id) => engine.apply_mask(id),
+            Command::SetMaskEnabled(id, v) => engine.set_mask_enabled(id, v),
+            Command::SetShowMask(id, v) => engine.set_show_mask(id, v),
+            Command::SetEditingMask(id, v) => engine.set_editing_mask(id, v),
+            Command::SelectionToMask(id) => engine.selection_to_mask(id),
+            Command::MaskToSelection(id) => engine.mask_to_selection(id),
+
+            Command::FillGradient(id) => engine.fill_gradient(id),
+
+            Command::SelectRect { x, y, w, h, mode, antialias, feather } => {
+                engine.select_rect(x, y, w, h, mode, antialias, feather);
+            }
+            Command::SelectEllipse { x, y, w, h, mode, antialias, feather } => {
+                engine.select_ellipse(x, y, w, h, mode, antialias, feather);
+            }
+            Command::SelectLasso { ref verts, mode, antialias, feather } => {
+                engine.select_lasso(verts, mode, antialias, feather);
+            }
+            Command::SelectMagicWand { layer_id, seed_x, seed_y, tolerance, mode } => {
+                engine.select_magic_wand(layer_id, seed_x, seed_y, tolerance, mode);
+            }
+            Command::ClearSelection => engine.clear_selection(),
+            Command::ClearSelectionContents(id) => engine.clear_selection_contents(id),
+            Command::SelectAll => engine.select_all(),
+            Command::InvertSelection => engine.invert_selection(),
+
+            Command::Undo => engine.undo(),
+            Command::Redo => engine.redo(),
+
+            Command::SetViewTransform { pan_x, pan_y, zoom, rotation, screen_w, screen_h } => {
+                engine.set_view_transform(pan_x, pan_y, zoom, rotation, screen_w, screen_h);
+            }
+            Command::Resize(w, h) => engine.resize(w, h),
+
+            Command::UpdateFloatingMatrix(m) => engine.update_floating_matrix(m),
+            Command::CommitFloating => engine.commit_floating(),
+            Command::CancelFloating => engine.cancel_floating(),
+
+            Command::RemoveVeil(i) => engine.remove_veil(i),
+            Command::ClearVeils => engine.clear_veils(),
+            Command::SetVeilVisible(i, v) => engine.set_veil_visible(i, v),
+            Command::MoveVeil(from, to) => engine.move_veil(from, to),
+
+            Command::SetOverlay(prims) => engine.set_overlay_primitives(prims),
+            Command::ClearOverlay => engine.clear_overlay(),
+
+            Command::SetBrushScale(s) => engine.set_brush_scale(s),
+            Command::ResetBrushGraph => engine.reset_brush_graph(),
+            Command::BrushGraphMoveNode(id, x, y) => engine.brush_graph_move_node(id, x, y),
+
+            Command::PickColor(x, y) => { engine.pick_color(x, y); }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DarklyHandle
+// ---------------------------------------------------------------------------
 
 #[wasm_bindgen]
 pub struct DarklyHandle {
     engine: RefCell<DarklyEngine>,
-    /// Stroke commands queued between frames.  Drained by `render()`.
-    stroke_queue: RefCell<Vec<StrokeCommand>>,
+    /// Unified command queue — all fire-and-forget mutations are queued here.
+    /// Drained by [`render`] or [`flush_if_needed`].
+    commands: RefCell<Vec<Command>>,
 }
 
 impl DarklyHandle {
-    /// Try to borrow the engine mutably.  Returns `None` (and logs) if a
-    /// re-entrant call is in progress — see module docs for why this happens.
-    fn engine_mut(&self) -> Option<std::cell::RefMut<'_, DarklyEngine>> {
-        match self.engine.try_borrow_mut() {
-            Ok(r) => Some(r),
-            Err(_) => {
-                log::debug!("engine_mut: skipping re-entrant call");
-                None
-            }
+    /// Drain the command queue if non-empty, ensuring queries and direct
+    /// mutations see up-to-date state.
+    fn flush_if_needed(&self) {
+        if !self.commands.borrow().is_empty() {
+            let mut engine = self.engine.borrow_mut();
+            drain_commands(&self.commands, &mut engine);
         }
     }
 
-    /// Try to borrow the engine immutably.  Returns `None` if an exclusive
-    /// borrow is held (i.e. a mutation is in progress).
-    fn engine(&self) -> Option<std::cell::Ref<'_, DarklyEngine>> {
-        match self.engine.try_borrow() {
-            Ok(r) => Some(r),
-            Err(_) => {
-                log::debug!("engine: skipping re-entrant query");
-                None
-            }
-        }
-    }
-
-    /// Drain the stroke command queue and execute all pending commands.
-    /// Called at the start of `render()` so stroke GPU work and presentation
-    /// happen in one engine borrow with no re-entrancy window between them.
-    fn drain_stroke_queue(&self, engine: &mut DarklyEngine) {
-        let commands: Vec<StrokeCommand> = self.stroke_queue.borrow_mut().drain(..).collect();
-        for cmd in commands {
-            match cmd {
-                StrokeCommand::Begin(layer_id) => engine.begin_stroke(layer_id),
-                StrokeCommand::Op(op) => engine.stroke_to(op),
-                StrokeCommand::End => engine.end_stroke(),
-            }
-        }
+    /// Push a command to the queue.
+    fn push(&self, cmd: Command) {
+        self.commands.borrow_mut().push(cmd);
     }
 }
 
-fn parse_selection_mode(mode: &str) -> darkly::document::SelectionMode {
+fn parse_selection_mode(mode: &str) -> SelectionMode {
     match mode {
-        "add" => darkly::document::SelectionMode::Add,
-        "subtract" => darkly::document::SelectionMode::Subtract,
-        "intersect" => darkly::document::SelectionMode::Intersect,
-        _ => darkly::document::SelectionMode::Replace,
+        "add" => SelectionMode::Add,
+        "subtract" => SelectionMode::Subtract,
+        "intersect" => SelectionMode::Intersect,
+        _ => SelectionMode::Replace,
     }
 }
 
@@ -180,6 +281,25 @@ fn js_to_param_values(js: &JsValue, defs: &[ParamDef]) -> Vec<ParamValue> {
     }).collect()
 }
 
+fn graph_result(r: Result<String, String>) -> JsValue {
+    match r {
+        Ok(json) => {
+            let obj = js_sys::Object::new();
+            js_sys::Reflect::set(&obj, &"graph".into(), &JsValue::from_str(&json)).unwrap();
+            obj.into()
+        }
+        Err(e) => {
+            let obj = js_sys::Object::new();
+            js_sys::Reflect::set(&obj, &"error".into(), &JsValue::from_str(&e)).unwrap();
+            obj.into()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #[wasm_bindgen] methods
+// ---------------------------------------------------------------------------
+
 #[wasm_bindgen]
 impl DarklyHandle {
     /// Create a new Darkly editor instance from an HTML canvas element.
@@ -203,564 +323,118 @@ impl DarklyHandle {
 
         DarklyHandle {
             engine: RefCell::new(DarklyEngine::new(gpu, doc_width, doc_height)),
-            stroke_queue: RefCell::new(Vec::new()),
+            commands: RefCell::new(Vec::new()),
         }
     }
 
-    // --- Layer CRUD (pass-through) ---
-    // IDs use f64 because JS has no u64 — any JS-facing backend needs this.
+    // =======================================================================
+    // Queued mutations — fire-and-forget, zero re-entrancy risk
+    // =======================================================================
 
-    pub fn add_raster_layer(&self) -> f64 { self.engine_mut().map_or(0.0, |mut e| e.add_raster_layer() as f64) }
-    pub fn add_raster_layer_in(&self, group_id: f64) -> f64 { self.engine_mut().map_or(0.0, |mut e| e.add_raster_layer_in(group_id as u64) as f64) }
-    pub fn add_group(&self) -> f64 { self.engine_mut().map_or(0.0, |mut e| e.add_group() as f64) }
+    // --- Layer properties ---
 
-    pub fn remove_layer(&self, layer_id: f64) -> Result<(), JsError> {
-        match self.engine_mut() {
-            Some(mut e) => e.remove_layer(layer_id as u64).map_err(|e| JsError::new(&e)),
-            None => Ok(()),
-        }
-    }
+    pub fn set_opacity(&self, layer_id: f64, opacity: f32) { self.push(Command::SetOpacity(layer_id as u64, opacity)); }
+    pub fn set_blend_mode(&self, layer_id: f64, mode: u32) { self.push(Command::SetBlendMode(layer_id as u64, mode)); }
+    pub fn set_layer_visible(&self, layer_id: f64, visible: bool) { self.push(Command::SetLayerVisible(layer_id as u64, visible)); }
+    pub fn set_layer_name(&self, layer_id: f64, name: &str) { self.push(Command::SetLayerName(layer_id as u64, name.into())); }
+    pub fn set_group_collapsed(&self, group_id: f64, collapsed: bool) { self.push(Command::SetGroupCollapsed(group_id as u64, collapsed)); }
+    pub fn set_group_passthrough(&self, group_id: f64, passthrough: bool) { self.push(Command::SetGroupPassthrough(group_id as u64, passthrough)); }
 
-    pub fn move_layer(&self, layer_id: f64, target_type: &str, target_id: f64) {
-        let Some(mut e) = self.engine_mut() else { return };
-        let target = match target_type {
-            "before" => MoveTarget::Before(target_id as u64),
-            "after" => MoveTarget::After(target_id as u64),
-            "into_top" => MoveTarget::IntoGroupTop(target_id as u64),
-            "into_bottom" => MoveTarget::IntoGroupBottom(target_id as u64),
-            _ => return,
-        };
-        e.move_layer(layer_id as u64, target)
-    }
+    // --- Layer masks ---
 
-    // --- Layer properties (pass-through) ---
+    pub fn add_mask(&self, layer_id: f64) { self.push(Command::AddMask(layer_id as u64)); }
+    pub fn remove_mask(&self, layer_id: f64) { self.push(Command::RemoveMask(layer_id as u64)); }
+    pub fn apply_mask(&self, layer_id: f64) { self.push(Command::ApplyMask(layer_id as u64)); }
+    pub fn set_mask_enabled(&self, layer_id: f64, enabled: bool) { self.push(Command::SetMaskEnabled(layer_id as u64, enabled)); }
+    pub fn set_show_mask(&self, layer_id: f64, show: bool) { self.push(Command::SetShowMask(layer_id as u64, show)); }
+    pub fn set_editing_mask(&self, layer_id: f64, editing: bool) { self.push(Command::SetEditingMask(layer_id as u64, editing)); }
+    pub fn selection_to_mask(&self, layer_id: f64) { self.push(Command::SelectionToMask(layer_id as u64)); }
+    pub fn mask_to_selection(&self, layer_id: f64) { self.push(Command::MaskToSelection(layer_id as u64)); }
 
-    pub fn set_opacity(&self, layer_id: f64, opacity: f32) { if let Some(mut e) = self.engine_mut() { e.set_opacity(layer_id as u64, opacity) } }
-    pub fn set_blend_mode(&self, layer_id: f64, mode: u32) { if let Some(mut e) = self.engine_mut() { e.set_blend_mode(layer_id as u64, mode) } }
-    pub fn set_layer_visible(&self, layer_id: f64, visible: bool) { if let Some(mut e) = self.engine_mut() { e.set_layer_visible(layer_id as u64, visible) } }
-    pub fn set_layer_name(&self, layer_id: f64, name: &str) { if let Some(mut e) = self.engine_mut() { e.set_layer_name(layer_id as u64, name) } }
-    pub fn set_group_collapsed(&self, group_id: f64, collapsed: bool) { if let Some(mut e) = self.engine_mut() { e.set_group_collapsed(group_id as u64, collapsed) } }
-    pub fn set_group_passthrough(&self, group_id: f64, passthrough: bool) { if let Some(mut e) = self.engine_mut() { e.set_group_passthrough(group_id as u64, passthrough) } }
+    // --- Painting ---
 
-    // --- Layer Masks (pass-through) ---
+    pub fn fill_gradient(&self, layer_id: f64) { self.push(Command::FillGradient(layer_id as u64)); }
 
-    pub fn add_mask(&self, layer_id: f64) { if let Some(mut e) = self.engine_mut() { e.add_mask(layer_id as u64) } }
-    pub fn remove_mask(&self, layer_id: f64) { if let Some(mut e) = self.engine_mut() { e.remove_mask(layer_id as u64) } }
-    pub fn apply_mask(&self, layer_id: f64) { if let Some(mut e) = self.engine_mut() { e.apply_mask(layer_id as u64) } }
-    pub fn set_mask_enabled(&self, layer_id: f64, enabled: bool) { if let Some(mut e) = self.engine_mut() { e.set_mask_enabled(layer_id as u64, enabled) } }
-    pub fn set_show_mask(&self, layer_id: f64, show: bool) { if let Some(mut e) = self.engine_mut() { e.set_show_mask(layer_id as u64, show) } }
-    pub fn set_editing_mask(&self, layer_id: f64, editing: bool) { if let Some(mut e) = self.engine_mut() { e.set_editing_mask(layer_id as u64, editing) } }
-    pub fn selection_to_mask(&self, layer_id: f64) { if let Some(mut e) = self.engine_mut() { e.selection_to_mask(layer_id as u64) } }
-    pub fn mask_to_selection(&self, layer_id: f64) { if let Some(mut e) = self.engine_mut() { e.mask_to_selection(layer_id as u64) } }
+    // --- Stroke lifecycle ---
 
-    // --- Painting (pass-through) ---
-
-    pub fn fill_gradient(&self, layer_id: f64) { if let Some(mut e) = self.engine_mut() { e.fill_gradient(layer_id as u64) } }
-
-    // --- Stroke lifecycle (queued) ---
-    // These push to a command queue (separate RefCell) instead of borrowing the
-    // engine.  The queue is drained at the start of render(), so stroke GPU work
-    // and presentation happen in one engine borrow — no re-entrancy window.
-
-    pub fn begin_stroke(&self, layer_id: f64) {
-        self.stroke_queue.borrow_mut().push(StrokeCommand::Begin(layer_id as u64));
-    }
+    pub fn begin_stroke(&self, layer_id: f64) { self.push(Command::BeginStroke(layer_id as u64)); }
 
     pub fn stroke_to(&self, op_type: &str, params: JsValue) {
-        // Deserialize here (no engine borrow needed) and queue the result.
         js_sys::Reflect::set(&params, &"op".into(), &op_type.into()).ok();
         match serde_wasm_bindgen::from_value::<StrokeOp>(params) {
-            Ok(op) => self.stroke_queue.borrow_mut().push(StrokeCommand::Op(op)),
+            Ok(op) => self.push(Command::StrokeOp(op)),
             Err(e) => log::error!("stroke_to deserialization failed: {e}"),
         }
     }
 
-    pub fn end_stroke(&self) {
-        self.stroke_queue.borrow_mut().push(StrokeCommand::End);
-    }
+    pub fn end_stroke(&self) { self.push(Command::EndStroke); }
 
     // Legacy compat
-    pub fn snapshot(&self, layer_id: f64) {
-        self.stroke_queue.borrow_mut().push(StrokeCommand::Begin(layer_id as u64));
-    }
-    pub fn commit(&self) {
-        self.stroke_queue.borrow_mut().push(StrokeCommand::End);
-    }
-
-    // --- View transform ---
-
-    pub fn set_view_transform(&self, pan_x: f32, pan_y: f32, zoom: f32, rotation: f32, screen_w: f32, screen_h: f32) {
-        if let Some(mut e) = self.engine_mut() { e.set_view_transform(pan_x, pan_y, zoom, rotation, screen_w, screen_h) }
-    }
-
-    pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> Vec<f32> {
-        match self.engine() {
-            Some(e) => {
-                let (cx, cy) = e.screen_to_canvas(screen_x, screen_y);
-                vec![cx, cy]
-            }
-            None => vec![0.0, 0.0],
-        }
-    }
-
-    /// Start an async color pick. Returns the last picked color immediately
-    /// for responsive UI — the real result arrives on the next frame.
-    pub fn pick_color(&self, x: f32, y: f32) -> Vec<u8> {
-        match self.engine_mut() {
-            Some(mut e) => e.pick_color(x, y).to_vec(),
-            None => vec![0, 0, 0, 0],
-        }
-    }
-
-    /// Get the most recently resolved color pick result.
-    pub fn last_picked_color(&self) -> Vec<u8> {
-        match self.engine() {
-            Some(e) => e.last_picked_color().to_vec(),
-            None => vec![0, 0, 0, 0],
-        }
-    }
-
-    /// True if a color pick readback is still in flight.
-    pub fn has_pending_color_pick(&self) -> bool {
-        self.engine().map_or(false, |e| e.has_pending_color_pick())
-    }
-
-    // --- Rendering ---
-
-    /// Render the current frame. Returns true if animations need another frame.
-    ///
-    /// Drains the stroke command queue first, then renders.  All GPU work
-    /// (dab generation, compositing, presentation) happens in this single
-    /// engine borrow — no other method needs the engine during a stroke.
-    ///
-    /// If the engine is busy (re-entrant call from WebGPU event pumping),
-    /// returns false — the outer render call is already in progress and will
-    /// handle everything.  Returning true here would cause the JS side to
-    /// schedule another rAF, which Chromium's event pump fires immediately,
-    /// creating an infinite loop that freezes the UI (especially with
-    /// high-frequency pen input that keeps refilling the event queue).
-    pub fn render(&self, time_secs: f32) -> bool {
-        let Some(mut e) = self.engine_mut() else { return false };
-        self.drain_stroke_queue(&mut e);
-        e.render(time_secs)
-    }
-
-    pub fn resize(&self, width: u32, height: u32) { if let Some(mut e) = self.engine_mut() { e.resize(width, height) } }
-
-    // --- Undo / Redo ---
-
-    pub fn undo(&self) { if let Some(mut e) = self.engine_mut() { e.undo() } }
-    pub fn redo(&self) { if let Some(mut e) = self.engine_mut() { e.redo() } }
+    pub fn snapshot(&self, layer_id: f64) { self.push(Command::BeginStroke(layer_id as u64)); }
+    pub fn commit(&self) { self.push(Command::EndStroke); }
 
     // --- Selection ---
 
     pub fn select_rect(&self, x: f32, y: f32, w: f32, h: f32, mode: &str, antialias: bool, feather: f32) {
-        if let Some(mut e) = self.engine_mut() { e.select_rect(x, y, w, h, parse_selection_mode(mode), antialias, feather) }
+        self.push(Command::SelectRect { x, y, w, h, mode: parse_selection_mode(mode), antialias, feather });
     }
 
     pub fn select_ellipse(&self, x: f32, y: f32, w: f32, h: f32, mode: &str, antialias: bool, feather: f32) {
-        if let Some(mut e) = self.engine_mut() { e.select_ellipse(x, y, w, h, parse_selection_mode(mode), antialias, feather) }
+        self.push(Command::SelectEllipse { x, y, w, h, mode: parse_selection_mode(mode), antialias, feather });
     }
 
     pub fn select_lasso(&self, vertices: JsValue, mode: &str, antialias: bool, feather: f32) {
-        let Some(mut e) = self.engine_mut() else { return };
         let verts: Vec<[f32; 2]> = serde_wasm_bindgen::from_value(vertices).unwrap_or_default();
-        e.select_lasso(&verts, parse_selection_mode(mode), antialias, feather);
+        self.push(Command::SelectLasso { verts, mode: parse_selection_mode(mode), antialias, feather });
     }
 
     pub fn select_magic_wand(&self, layer_id: u64, seed_x: i32, seed_y: i32, tolerance: u8, mode: &str) {
-        if let Some(mut e) = self.engine_mut() { e.select_magic_wand(layer_id, seed_x, seed_y, tolerance, parse_selection_mode(mode)) }
+        self.push(Command::SelectMagicWand {
+            layer_id, seed_x, seed_y, tolerance, mode: parse_selection_mode(mode),
+        });
     }
 
-    pub fn clear_selection(&self) { if let Some(mut e) = self.engine_mut() { e.clear_selection() } }
-    pub fn clear_selection_contents(&self, layer_id: f64) { if let Some(mut e) = self.engine_mut() { e.clear_selection_contents(layer_id as u64) } }
-    pub fn select_all(&self) { if let Some(mut e) = self.engine_mut() { e.select_all() } }
-    pub fn invert_selection(&self) { if let Some(mut e) = self.engine_mut() { e.invert_selection() } }
-    pub fn has_selection(&self) -> bool { self.engine().map_or(false, |e| e.has_selection()) }
+    pub fn clear_selection(&self) { self.push(Command::ClearSelection); }
+    pub fn clear_selection_contents(&self, layer_id: f64) { self.push(Command::ClearSelectionContents(layer_id as u64)); }
+    pub fn select_all(&self) { self.push(Command::SelectAll); }
+    pub fn invert_selection(&self) { self.push(Command::InvertSelection); }
 
-    // --- Copy / Cut / Paste ---
+    // --- Undo / Redo ---
 
-    /// Copy active layer content (masked by selection).
-    /// Returns a JS object `{rgba, width, height, offsetX, offsetY}` or null.
-    pub fn copy(&self, layer_id: f64) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return JsValue::NULL };
-        match e.copy(layer_id as u64) {
-            Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
-            None => JsValue::NULL,
-        }
+    pub fn undo(&self) { self.push(Command::Undo); }
+    pub fn redo(&self) { self.push(Command::Redo); }
+
+    // --- View transform ---
+
+    pub fn set_view_transform(&self, pan_x: f32, pan_y: f32, zoom: f32, rotation: f32, screen_w: f32, screen_h: f32) {
+        self.push(Command::SetViewTransform { pan_x, pan_y, zoom, rotation, screen_w, screen_h });
     }
 
-    /// Cut = copy + clear. Returns the same object as copy, or null.
-    pub fn cut(&self, layer_id: f64) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return JsValue::NULL };
-        match e.cut(layer_id as u64) {
-            Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
-            None => JsValue::NULL,
-        }
-    }
+    pub fn resize(&self, width: u32, height: u32) { self.push(Command::Resize(width, height)); }
 
-    /// Poll for a completed copy/cut result (async readback).
-    /// Returns the ClipboardExport object, or null if not ready yet.
-    pub fn poll_copy_result(&self) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return JsValue::NULL };
-        match e.poll_copy_result() {
-            Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
-            None => JsValue::NULL,
-        }
-    }
+    // --- Floating content ---
 
-    /// Paste raw RGBA bytes as a new layer. Returns the new layer ID.
-    pub fn paste_image(
-        &self,
-        width: u32,
-        height: u32,
-        rgba: &[u8],
-        offset_x: i32,
-        offset_y: i32,
-        active_layer_id: f64,
-    ) -> f64 {
-        let Some(mut e) = self.engine_mut() else { return 0.0 };
-        let active = if active_layer_id >= 0.0 { Some(active_layer_id as u64) } else { None };
-        e.paste_image(width, height, rgba, offset_x, offset_y, active) as f64
-    }
-
-    /// Paste from internal clipboard at original position. Returns layer ID or -1.
-    pub fn paste_in_place(&self, active_layer_id: f64) -> f64 {
-        let Some(mut e) = self.engine_mut() else { return -1.0 };
-        let active = if active_layer_id >= 0.0 { Some(active_layer_id as u64) } else { None };
-        match e.paste_in_place(active) {
-            Some(id) => id as f64,
-            None => -1.0,
-        }
-    }
-
-    // --- Floating Content (Phase 7) ---
-
-    /// Paste from internal clipboard as floating content on the target layer.
-    /// Returns true if floating content was created.
-    pub fn paste_in_place_floating(&self, layer_id: f64) -> bool {
-        self.engine_mut().map_or(false, |mut e| e.paste_in_place_floating(layer_id as u64))
-    }
-
-    /// Begin interactive transform on the target layer's content.
-    /// Returns true if floating content was created.
-    pub fn begin_transform(&self, layer_id: f64) -> bool {
-        self.engine_mut().map_or(false, |mut e| e.begin_transform(layer_id as u64))
-    }
-
-    /// Update the floating content's affine transform matrix.
-    /// Matrix is [a, b, tx, c, d, ty] (2D affine, 6 floats).
     pub fn update_floating_matrix(&self, matrix: &[f32]) {
         if matrix.len() >= 6 {
-            if let Some(mut e) = self.engine_mut() {
-                let m = [matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]];
-                e.update_floating_matrix(m);
-            }
+            self.push(Command::UpdateFloatingMatrix(
+                [matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]]
+            ));
         }
     }
 
-    /// Commit floating content (rasterize into target layer/mask).
-    pub fn commit_floating(&self) { if let Some(mut e) = self.engine_mut() { e.commit_floating() } }
-
-    /// Cancel floating content (discard or restore original tiles).
-    pub fn cancel_floating(&self) { if let Some(mut e) = self.engine_mut() { e.cancel_floating() } }
-
-    /// Check if there is active floating content.
-    pub fn has_floating(&self) -> bool { self.engine().map_or(false, |e| e.has_floating()) }
-
-    /// Return floating content info as a Float32Array of 10 values:
-    /// [origin_x, origin_y, width, height, m0, m1, m2, m3, m4, m5]
-    /// Returns null/undefined if no floating content is active.
-    pub fn floating_info(&self) -> Option<Box<[f32]>> {
-        let e = self.engine()?;
-        e.floating_info().map(|(ox, oy, w, h, m)| {
-            vec![ox, oy, w, h, m[0], m[1], m[2], m[3], m[4], m[5]].into_boxed_slice()
-        })
-    }
+    pub fn commit_floating(&self) { self.push(Command::CommitFloating); }
+    pub fn cancel_floating(&self) { self.push(Command::CancelFloating); }
 
     // --- Veils ---
 
-    pub fn add_veil(&self, veil_type: &str, params: JsValue) {
-        let Some(mut e) = self.engine_mut() else { return };
-        let pv = js_to_param_values(&params, e.veil_param_defs(veil_type));
-        e.add_veil(veil_type, &pv)
-    }
+    pub fn remove_veil(&self, index: u32) { self.push(Command::RemoveVeil(index as usize)); }
+    pub fn clear_veils(&self) { self.push(Command::ClearVeils); }
+    pub fn set_veil_visible(&self, index: u32, visible: bool) { self.push(Command::SetVeilVisible(index as usize, visible)); }
+    pub fn move_veil(&self, from: u32, to: u32) { self.push(Command::MoveVeil(from as usize, to as usize)); }
 
-    pub fn remove_veil(&self, index: u32) { if let Some(mut e) = self.engine_mut() { e.remove_veil(index as usize) } }
-    pub fn clear_veils(&self) { if let Some(mut e) = self.engine_mut() { e.clear_veils() } }
-    pub fn set_veil_visible(&self, index: u32, visible: bool) { if let Some(mut e) = self.engine_mut() { e.set_veil_visible(index as usize, visible) } }
-    pub fn move_veil(&self, from: u32, to: u32) { if let Some(mut e) = self.engine_mut() { e.move_veil(from as usize, to as usize) } }
+    // --- Overlay ---
 
-    pub fn update_veil(&self, index: u32, params: JsValue) {
-        let Some(mut e) = self.engine_mut() else { return };
-        let type_id = match e.veil_list().iter().find(|v| v.index == index as usize) {
-            Some(v) => v.type_id.clone(),
-            None => return,
-        };
-        let pv = js_to_param_values(&params, e.veil_param_defs(&type_id));
-        e.update_veil(index as usize, &pv)
-    }
-
-    // --- Brush Graph (Phase 5) ---
-
-    /// Return metadata for all registered brush node types as a JSON string.
-    pub fn brush_node_types(&self) -> String {
-        match self.engine() {
-            Some(e) => {
-                let val = e.brush_node_types();
-                serde_json::to_string(&val).unwrap_or_else(|_| "[]".into())
-            }
-            None => "[]".into(),
-        }
-    }
-
-    /// Return the default brush graph as a JSON string.
-    pub fn brush_graph_default(&self) -> String {
-        match self.engine() {
-            Some(e) => {
-                let val = e.default_brush_graph();
-                serde_json::to_string(&val).unwrap_or_else(|_| "null".into())
-            }
-            None => "null".into(),
-        }
-    }
-
-    /// Return the currently active brush graph as a JSON string.
-    pub fn brush_graph_active(&self) -> String {
-        match self.engine() {
-            Some(e) => serde_json::to_string(e.active_brush_graph_ref()).unwrap_or_else(|_| "null".into()),
-            None => "null".into(),
-        }
-    }
-
-    /// Validate a brush graph JSON string.  Returns null on success or an error string.
-    pub fn brush_graph_validate(&self, json: &str) -> JsValue {
-        let Some(e) = self.engine() else { return JsValue::from_str("engine busy") };
-        match e.validate_brush_graph(json) {
-            Ok(()) => JsValue::NULL,
-            Err(e) => JsValue::from_str(&e),
-        }
-    }
-
-    /// Compile a brush graph from JSON and set it as the active brush.
-    /// Returns null on success or an error string.
-    pub fn brush_graph_compile(&self, json: &str) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return JsValue::from_str("engine busy") };
-        match e.set_brush_graph(json) {
-            Ok(()) => JsValue::NULL,
-            Err(e) => JsValue::from_str(&e),
-        }
-    }
-
-    /// Reset the active brush graph to the built-in default.
-    pub fn brush_graph_reset(&self) { if let Some(mut e) = self.engine_mut() { e.reset_brush_graph() } }
-
-    /// Set the global brush scale multiplier.
-    /// Controls the canvas footprint independently from the node graph's
-    /// internal rendering resolution.  1.0 = 1:1 mapping.
-    pub fn set_brush_scale(&self, scale: f32) {
-        if let Some(mut e) = self.engine_mut() { e.set_brush_scale(scale) }
-    }
-
-    /// Get the current global brush scale.
-    pub fn brush_scale(&self) -> f32 {
-        self.engine_mut().map_or(1.0, |e| e.brush_scale())
-    }
-
-    // --- Fine-grained graph commands ---
-    // Each returns a JsValue: on success, a JS object { graph: "<json>" }.
-    // On failure, a JS object { error: "<message>" }.
-    // If the engine is busy, returns { error: "engine busy" }.
-
-    fn graph_result(r: Result<String, String>) -> JsValue {
-        match r {
-            Ok(json) => {
-                let obj = js_sys::Object::new();
-                js_sys::Reflect::set(&obj, &"graph".into(), &JsValue::from_str(&json)).unwrap();
-                obj.into()
-            }
-            Err(e) => {
-                let obj = js_sys::Object::new();
-                js_sys::Reflect::set(&obj, &"error".into(), &JsValue::from_str(&e)).unwrap();
-                obj.into()
-            }
-        }
-    }
-
-    pub fn brush_graph_add_node(&self, type_id: &str, x: f32, y: f32) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
-        Self::graph_result(e.brush_graph_add_node(type_id, x, y))
-    }
-
-    pub fn brush_graph_remove_node(&self, node_id: u32) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
-        Self::graph_result(e.brush_graph_remove_node(node_id as u64))
-    }
-
-    pub fn brush_graph_connect(
-        &self,
-        from_node: u32,
-        from_port: &str,
-        to_node: u32,
-        to_port: &str,
-    ) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
-        Self::graph_result(e.brush_graph_connect(from_node as u64, from_port, to_node as u64, to_port))
-    }
-
-    pub fn brush_graph_disconnect(
-        &self,
-        from_node: u32,
-        from_port: &str,
-        to_node: u32,
-        to_port: &str,
-    ) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
-        Self::graph_result(e.brush_graph_disconnect(from_node as u64, from_port, to_node as u64, to_port))
-    }
-
-    pub fn brush_graph_set_param(&self, node_id: u32, param_index: u32, kind: &str, value: JsValue) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return Self::graph_result(Err("engine busy".into())) };
-        let pv = match kind {
-            "float" => darkly::gpu::params::ParamValue::Float(value.as_f64().unwrap_or(0.0) as f32),
-            "int" => darkly::gpu::params::ParamValue::Int(value.as_f64().unwrap_or(0.0) as i32),
-            "bool" => darkly::gpu::params::ParamValue::Bool(value.as_bool().unwrap_or(false)),
-            "string" => darkly::gpu::params::ParamValue::String(value.as_string().unwrap_or_default()),
-            _ => return Self::graph_result(Err(format!("unknown param kind: {kind}"))),
-        };
-        Self::graph_result(e.brush_graph_set_param(node_id as u64, param_index as usize, pv))
-    }
-
-    pub fn brush_graph_move_node(&self, node_id: u32, x: f32, y: f32) {
-        if let Some(mut e) = self.engine_mut() {
-            e.brush_graph_move_node(node_id as u64, x, y);
-        }
-    }
-
-    /// Upload an RGBA8 image and associate it with a resource name.
-    ///
-    /// Image nodes referencing this `resource_name` will output the
-    /// uploaded texture.  Returns null on success or an error string.
-    pub fn brush_upload_image(
-        &self,
-        resource_name: &str,
-        width: u32,
-        height: u32,
-        rgba: &[u8],
-    ) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return JsValue::from_str("engine busy") };
-        match e.brush_upload_image(resource_name, width, height, rgba) {
-            Ok(()) => JsValue::NULL,
-            Err(e) => JsValue::from_str(&e),
-        }
-    }
-
-    /// Return info about all `user_input` nodes in the active brush as JSON.
-    /// Each entry has { nodeId, label, value, position }.
-    pub fn brush_user_inputs(&self) -> String {
-        match self.engine() {
-            Some(e) => serde_json::to_string(&e.brush_user_inputs()).unwrap_or_else(|_| "[]".into()),
-            None => "[]".into(),
-        }
-    }
-
-    // --- Brush Preset API (Phase 7) ---
-
-    /// List all brush presets in the library as a JSON array of `PresetInfo`.
-    pub fn brush_preset_list(&self) -> String {
-        match self.engine() {
-            Some(e) => serde_json::to_string(&e.brush_preset_list()).unwrap_or_else(|_| "[]".into()),
-            None => "[]".into(),
-        }
-    }
-
-    /// Load a brush preset by name and set it as the active brush.
-    /// Returns null on success or an error string.
-    pub fn brush_preset_load(&self, name: &str) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return JsValue::from_str("engine busy") };
-        match e.brush_preset_load(name) {
-            Ok(()) => JsValue::NULL,
-            Err(e) => JsValue::from_str(&e),
-        }
-    }
-
-    /// Save the active brush graph as a preset.
-    /// Takes a JSON string with `name` and `category` fields.
-    /// Returns null on success or an error string.
-    pub fn brush_preset_save(&self, name: &str, category: &str) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return JsValue::from_str("engine busy") };
-        match e.brush_preset_save(name, category) {
-            Ok(()) => JsValue::NULL,
-            Err(e) => JsValue::from_str(&e),
-        }
-    }
-
-    /// Export a preset as `.darkly-brush` ZIP bytes.
-    /// Returns a Uint8Array on success or an error string.
-    pub fn brush_preset_export(&self, name: &str) -> JsValue {
-        let Some(e) = self.engine() else { return JsValue::from_str("engine busy") };
-        match e.brush_preset_export(name) {
-            Ok(bytes) => {
-                let arr = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
-                arr.copy_from(&bytes);
-                arr.into()
-            }
-            Err(e) => JsValue::from_str(&e),
-        }
-    }
-
-    /// Import a preset from `.darkly-brush` ZIP bytes.
-    /// Returns the preset name on success or an error string.
-    pub fn brush_preset_import(&self, bytes: &[u8]) -> JsValue {
-        let Some(mut e) = self.engine_mut() else { return JsValue::from_str("engine busy") };
-        match e.brush_preset_import(bytes) {
-            Ok(name) => JsValue::from_str(&name),
-            Err(e) => JsValue::from_str(&e),
-        }
-    }
-
-    // --- Queries ---
-    // Rust→JS serialization uses JSON strings (serde_json).  This avoids
-    // serde_wasm_bindgen edge cases (e.g. HashMap with non-string keys
-    // becomes a JS Map instead of a plain object) and gives a single,
-    // predictable convention: all query methods return `String`, JS calls
-    // `JSON.parse()`.
-
-    pub fn layer_tree(&self) -> String {
-        match self.engine() {
-            Some(e) => serde_json::to_string(&e.layer_tree()).unwrap_or_else(|_| "[]".into()),
-            None => "[]".into(),
-        }
-    }
-
-    pub fn veil_list(&self) -> String {
-        match self.engine() {
-            Some(e) => serde_json::to_string(&e.veil_list()).unwrap_or_else(|_| "[]".into()),
-            None => "[]".into(),
-        }
-    }
-
-    pub fn veil_types(&self) -> String {
-        match self.engine() {
-            Some(e) => serde_json::to_string(&e.veil_types()).unwrap_or_else(|_| "[]".into()),
-            None => "[]".into(),
-        }
-    }
-
-    // --- Thumbnails ---
-
-    pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
-        self.engine_mut().map_or_else(Vec::new, |mut e| e.layer_thumbnail(layer_id as u64, width, height))
-    }
-    pub fn mask_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
-        self.engine_mut().map_or_else(Vec::new, |mut e| e.mask_thumbnail(layer_id as u64, width, height))
-    }
-
-    // --- Tool Overlay ---
-
-    /// Set overlay primitives from a JS array of primitive objects.
     pub fn set_overlay(&self, primitives: JsValue) {
-        let Some(mut e) = self.engine_mut() else { return };
         let arr: js_sys::Array = match primitives.dyn_into() {
             Ok(a) => a,
             Err(_) => return,
@@ -772,22 +446,365 @@ impl DarklyHandle {
                 prims.push(p);
             }
         }
-        e.set_overlay_primitives(prims);
+        self.push(Command::SetOverlay(prims));
     }
 
-    /// Clear all overlay primitives.
-    pub fn clear_overlay(&self) { if let Some(mut e) = self.engine_mut() { e.clear_overlay() } }
+    pub fn clear_overlay(&self) { self.push(Command::ClearOverlay); }
 
-    /// Hit-test overlay primitives at screen coordinates.
-    /// Returns the index of the hit primitive, or -1 if none.
+    // --- Brush config ---
+
+    pub fn set_brush_scale(&self, scale: f32) { self.push(Command::SetBrushScale(scale)); }
+    pub fn brush_graph_reset(&self) { self.push(Command::ResetBrushGraph); }
+    pub fn brush_graph_move_node(&self, node_id: u32, x: f32, y: f32) { self.push(Command::BrushGraphMoveNode(node_id as u64, x, y)); }
+
+    // --- Color pick ---
+
+    /// Start an async color pick. Returns the last picked color immediately
+    /// for responsive UI — the real result arrives on the next frame.
+    pub fn pick_color(&self, x: f32, y: f32) -> Vec<u8> {
+        self.push(Command::PickColor(x, y));
+        // Return cached value without flushing — pick_color is pointer-frequency
+        // and the cached value provides immediate feedback.
+        self.engine.borrow().last_picked_color().to_vec()
+    }
+
+    // =======================================================================
+    // Direct mutations — return values, panic on re-entrancy
+    // =======================================================================
+
+    // --- Layer CRUD ---
+    // IDs use f64 because JS has no u64 — any JS-facing backend needs this.
+
+    pub fn add_raster_layer(&self) -> f64 {
+        self.flush_if_needed();
+        self.engine.borrow_mut().add_raster_layer() as f64
+    }
+
+    pub fn add_raster_layer_in(&self, group_id: f64) -> f64 {
+        self.flush_if_needed();
+        self.engine.borrow_mut().add_raster_layer_in(group_id as u64) as f64
+    }
+
+    pub fn add_group(&self) -> f64 {
+        self.flush_if_needed();
+        self.engine.borrow_mut().add_group() as f64
+    }
+
+    pub fn remove_layer(&self, layer_id: f64) -> Result<(), JsError> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().remove_layer(layer_id as u64).map_err(|e| JsError::new(&e))
+    }
+
+    pub fn move_layer(&self, layer_id: f64, target_type: &str, target_id: f64) {
+        self.flush_if_needed();
+        let target = match target_type {
+            "before" => MoveTarget::Before(target_id as u64),
+            "after" => MoveTarget::After(target_id as u64),
+            "into_top" => MoveTarget::IntoGroupTop(target_id as u64),
+            "into_bottom" => MoveTarget::IntoGroupBottom(target_id as u64),
+            _ => return,
+        };
+        self.engine.borrow_mut().move_layer(layer_id as u64, target)
+    }
+
+    // --- Copy / Cut / Paste ---
+
+    pub fn copy(&self, layer_id: f64) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().copy(layer_id as u64) {
+            Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
+            None => JsValue::NULL,
+        }
+    }
+
+    pub fn cut(&self, layer_id: f64) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().cut(layer_id as u64) {
+            Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
+            None => JsValue::NULL,
+        }
+    }
+
+    pub fn poll_copy_result(&self) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().poll_copy_result() {
+            Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
+            None => JsValue::NULL,
+        }
+    }
+
+    pub fn paste_image(
+        &self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        offset_x: i32,
+        offset_y: i32,
+        active_layer_id: f64,
+    ) -> f64 {
+        self.flush_if_needed();
+        let active = if active_layer_id >= 0.0 { Some(active_layer_id as u64) } else { None };
+        self.engine.borrow_mut().paste_image(width, height, rgba, offset_x, offset_y, active) as f64
+    }
+
+    pub fn paste_in_place(&self, active_layer_id: f64) -> f64 {
+        self.flush_if_needed();
+        let active = if active_layer_id >= 0.0 { Some(active_layer_id as u64) } else { None };
+        match self.engine.borrow_mut().paste_in_place(active) {
+            Some(id) => id as f64,
+            None => -1.0,
+        }
+    }
+
+    // --- Floating content (direct) ---
+
+    pub fn paste_in_place_floating(&self, layer_id: f64) -> bool {
+        self.flush_if_needed();
+        self.engine.borrow_mut().paste_in_place_floating(layer_id as u64)
+    }
+
+    pub fn begin_transform(&self, layer_id: f64) -> bool {
+        self.flush_if_needed();
+        self.engine.borrow_mut().begin_transform(layer_id as u64)
+    }
+
+    // --- Veils (direct — need engine access for param defs) ---
+
+    pub fn add_veil(&self, veil_type: &str, params: JsValue) {
+        self.flush_if_needed();
+        let mut e = self.engine.borrow_mut();
+        let pv = js_to_param_values(&params, e.veil_param_defs(veil_type));
+        e.add_veil(veil_type, &pv)
+    }
+
+    pub fn update_veil(&self, index: u32, params: JsValue) {
+        self.flush_if_needed();
+        let mut e = self.engine.borrow_mut();
+        let type_id = match e.veil_list().iter().find(|v| v.index == index as usize) {
+            Some(v) => v.type_id.clone(),
+            None => return,
+        };
+        let pv = js_to_param_values(&params, e.veil_param_defs(&type_id));
+        e.update_veil(index as usize, &pv)
+    }
+
+    // --- Brush graph (direct — return results) ---
+
+    pub fn brush_graph_compile(&self, json: &str) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().set_brush_graph(json) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    pub fn brush_graph_add_node(&self, type_id: &str, x: f32, y: f32) -> JsValue {
+        self.flush_if_needed();
+        graph_result(self.engine.borrow_mut().brush_graph_add_node(type_id, x, y))
+    }
+
+    pub fn brush_graph_remove_node(&self, node_id: u32) -> JsValue {
+        self.flush_if_needed();
+        graph_result(self.engine.borrow_mut().brush_graph_remove_node(node_id as u64))
+    }
+
+    pub fn brush_graph_connect(&self, from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> JsValue {
+        self.flush_if_needed();
+        graph_result(self.engine.borrow_mut().brush_graph_connect(from_node as u64, from_port, to_node as u64, to_port))
+    }
+
+    pub fn brush_graph_disconnect(&self, from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> JsValue {
+        self.flush_if_needed();
+        graph_result(self.engine.borrow_mut().brush_graph_disconnect(from_node as u64, from_port, to_node as u64, to_port))
+    }
+
+    pub fn brush_graph_set_param(&self, node_id: u32, param_index: u32, kind: &str, value: JsValue) -> JsValue {
+        let pv = match kind {
+            "float" => ParamValue::Float(value.as_f64().unwrap_or(0.0) as f32),
+            "int" => ParamValue::Int(value.as_f64().unwrap_or(0.0) as i32),
+            "bool" => ParamValue::Bool(value.as_bool().unwrap_or(false)),
+            "string" => ParamValue::String(value.as_string().unwrap_or_default()),
+            _ => return graph_result(Err(format!("unknown param kind: {kind}"))),
+        };
+        self.flush_if_needed();
+        graph_result(self.engine.borrow_mut().brush_graph_set_param(node_id as u64, param_index as usize, pv))
+    }
+
+    pub fn brush_upload_image(&self, resource_name: &str, width: u32, height: u32, rgba: &[u8]) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().brush_upload_image(resource_name, width, height, rgba) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    // --- Brush presets (direct) ---
+
+    pub fn brush_preset_load(&self, name: &str) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().brush_preset_load(name) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    pub fn brush_preset_save(&self, name: &str, category: &str) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().brush_preset_save(name, category) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    pub fn brush_preset_import(&self, bytes: &[u8]) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().brush_preset_import(bytes) {
+            Ok(name) => JsValue::from_str(&name),
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    // --- Thumbnails (direct — kick off async readback) ---
+
+    pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().layer_thumbnail(layer_id as u64, width, height)
+    }
+
+    pub fn mask_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().mask_thumbnail(layer_id as u64, width, height)
+    }
+
+    // =======================================================================
+    // Queries — immutable borrow, always safe
+    // =======================================================================
+
+    pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> Vec<f32> {
+        self.flush_if_needed();
+        let (cx, cy) = self.engine.borrow().screen_to_canvas(screen_x, screen_y);
+        vec![cx, cy]
+    }
+
+    pub fn last_picked_color(&self) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow().last_picked_color().to_vec()
+    }
+
+    pub fn has_pending_color_pick(&self) -> bool {
+        self.flush_if_needed();
+        self.engine.borrow().has_pending_color_pick()
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.flush_if_needed();
+        self.engine.borrow().has_selection()
+    }
+
+    pub fn has_floating(&self) -> bool {
+        self.flush_if_needed();
+        self.engine.borrow().has_floating()
+    }
+
+    pub fn floating_info(&self) -> Option<Box<[f32]>> {
+        self.flush_if_needed();
+        self.engine.borrow().floating_info().map(|(ox, oy, w, h, m)| {
+            vec![ox, oy, w, h, m[0], m[1], m[2], m[3], m[4], m[5]].into_boxed_slice()
+        })
+    }
+
+    pub fn brush_node_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().brush_node_types()).unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn brush_graph_default(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().default_brush_graph()).unwrap_or_else(|_| "null".into())
+    }
+
+    pub fn brush_graph_active(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(self.engine.borrow().active_brush_graph_ref()).unwrap_or_else(|_| "null".into())
+    }
+
+    pub fn brush_graph_validate(&self, json: &str) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow().validate_brush_graph(json) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    pub fn brush_user_inputs(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().brush_user_inputs()).unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn brush_preset_list(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().brush_preset_list()).unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn brush_preset_export(&self, name: &str) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow().brush_preset_export(name) {
+            Ok(bytes) => {
+                let arr = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
+                arr.copy_from(&bytes);
+                arr.into()
+            }
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    pub fn brush_scale(&self) -> f32 {
+        self.flush_if_needed();
+        self.engine.borrow().brush_scale()
+    }
+
+    pub fn layer_tree(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().layer_tree()).unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn veil_list(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().veil_list()).unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn veil_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().veil_types()).unwrap_or_else(|_| "[]".into())
+    }
+
     pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> i32 {
-        match self.engine() {
-            Some(e) => match e.overlay_hit_test(screen_x, screen_y) {
-                Some(i) => i as i32,
-                None => -1,
-            },
+        self.flush_if_needed();
+        match self.engine.borrow().overlay_hit_test(screen_x, screen_y) {
+            Some(i) => i as i32,
             None => -1,
         }
+    }
+
+    // =======================================================================
+    // Rendering — the ONE method that uses try_borrow_mut
+    // =======================================================================
+
+    /// Render the current frame. Returns true if animations need another frame.
+    ///
+    /// Drains the command queue first, then renders.  All GPU work
+    /// (dab generation, compositing, presentation) happens in this single
+    /// engine borrow — no other method needs the engine during a stroke.
+    ///
+    /// If the engine is busy (re-entrant call from WebGPU event pumping),
+    /// returns false — the outer render call is already in progress and will
+    /// handle everything.  Returning true here would cause the JS side to
+    /// schedule another rAF, which Chromium's event pump fires immediately,
+    /// creating an infinite loop that freezes the UI.
+    pub fn render(&self, time_secs: f32) -> bool {
+        let Ok(mut e) = self.engine.try_borrow_mut() else { return false };
+        drain_commands(&self.commands, &mut e);
+        e.render(time_secs)
     }
 }
 
