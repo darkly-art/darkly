@@ -575,3 +575,61 @@ fn gpu_fill_rect_with_mask() {
     let outside = pixel_at(&pixels, w, 0, 0, 4);
     assert_eq!(outside[3], 0, "outside mask should be transparent, A={}", outside[3]);
 }
+
+/// Regression: flood fill must respect the active selection.
+///
+/// Setup: transparent 64×64 canvas. Selection covers left half (x < 32).
+/// Flood fill from (16, 32) with blue — the fill mask covers the entire canvas
+/// (all pixels are transparent = same color as seed). But the selection should
+/// restrict the stamped result to the left half only.
+#[test]
+fn gpu_flood_fill_respects_selection() {
+    let (device, queue) = test_device();
+    let (w, h) = (64, 64);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    // Transparent canvas.
+    let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
+    let pipelines = PaintPipelines::new(&device, &queue);
+
+    // CPU flood fill from (16, 32) on the transparent canvas — should fill everything.
+    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
+    let fill_mask = darkly::gpu::flood_fill::flood_fill_rgba(&pixels, w, h, 16, 32, 0);
+    assert_eq!(fill_mask[(32 * w + 48) as usize], 255, "fill mask should cover entire canvas");
+
+    // Selection: left half only (x < 32).
+    let mut sel_data = vec![0u8; (w * h) as usize];
+    for y in 0..h {
+        for x in 0..32u32 {
+            sel_data[(y * w + x) as usize] = 255;
+        }
+    }
+
+    // Combine fill mask with selection (the fix being tested).
+    let combined: Vec<u8> = fill_mask.iter().zip(sel_data.iter())
+        .map(|(&f, &s)| ((f as u16 * s as u16) / 255) as u8)
+        .collect();
+
+    let mask_bg = pipelines.upload_r8_bind_group(
+        &device, &queue, w, h, &combined, "test-fill-sel-mask",
+    );
+
+    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let mut enc = encoder(&device);
+    target.fill_rect_with_selection(
+        &mut enc, &pipelines, &queue,
+        [0, 0, w, h], [0, 0, 255, 255], &mask_bg,
+    );
+    submit(&queue, enc);
+
+    let result = readback_texture(&device, &queue, &tex, fmt, w, h);
+
+    // Inside selection (left half) — should be blue.
+    let inside = pixel_at(&result, w, 16, 32, 4);
+    assert!(inside[2] > 200, "inside selection should be blue, B={}", inside[2]);
+    assert!(inside[3] > 200, "inside selection alpha should be opaque, A={}", inside[3]);
+
+    // Outside selection (right half) — should still be transparent.
+    let outside = pixel_at(&result, w, 48, 32, 4);
+    assert_eq!(outside[3], 0, "outside selection should be transparent, A={}", outside[3]);
+}

@@ -311,10 +311,22 @@ impl DarklyEngine {
             flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
         };
 
-        // 2. Upload fill mask and stamp onto target.
+        // 2. Combine fill mask with active selection (if any), then upload.
+        let effective_mask = if self.gpu_selection.active {
+            if let Some(sel) = &self.gpu_selection.cpu_cache {
+                fill_mask.iter().zip(sel.iter())
+                    .map(|(&f, &s)| ((f as u16 * s as u16) / 255) as u8)
+                    .collect()
+            } else {
+                fill_mask
+            }
+        } else {
+            fill_mask
+        };
+
         let mask_bind_group = self.paint_pipelines.upload_r8_bind_group(
             &self.gpu.device, &self.gpu.queue, canvas_w, canvas_h,
-            &fill_mask, "flood-fill-mask",
+            &effective_mask, "flood-fill-mask",
         );
 
         let (target, _) = match self.get_paint_target(layer_id, mask_editing) {
