@@ -1,6 +1,5 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
 import type { Component } from 'svelte';
-import type { ToolOverlayData } from '../canvas/overlay';
 
 export interface ToolContext {
     handle: DarklyHandle;
@@ -33,10 +32,6 @@ export interface Tool {
      *  Tools that initiate async GPU operations (readbacks, etc.) use this
      *  to detect when results arrive. */
     onFrame?(): void;
-
-    /** Return overlay shapes to render on top of the canvas.
-     *  Called reactively — return null to hide the overlay. */
-    getOverlay?(): ToolOverlayData | null;
 
     /** Called by the system to dismiss the tool's overlay (e.g. on any
      *  unhandled key press). Tools that show overlays should clear their

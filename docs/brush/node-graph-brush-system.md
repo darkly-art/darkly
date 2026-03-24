@@ -376,7 +376,32 @@ A `user_input` node is a source node (like `constant`) that the brush creator pl
 
 ---
 
-## Phase 10 — KPP Import
+## Phase 10 — Smoothing + Stabilizer
+
+**Goal:** Stroke smoothing algorithms for clean lines. Not required for Krita import compatibility, but dramatically improves stroke quality. Moved before KPP import because the taffy feel is a core differentiator and shouldn't wait behind import plumbing.
+
+### Create
+
+- `crates/darkly/src/brush/smoothing.rs` — `SmoothingMode` enum:
+  - `WeightedAverage { factor }` — exponential moving average on position (current basic impl)
+  - `PulledString { distance }` — cursor must travel `distance` pixels before the brush follows; produces very smooth curves
+  - `SpringDynamics { mass, drag }` — physical spring simulation; the Procreate taffy feel
+- Retroactive smoothing via `StrokeRecord::replay()` — change smoothing mid-stroke and watch it update
+
+### Modify
+
+- `crates/darkly/src/brush/stroke_engine.rs` — plug in smoothing modes, replace current hardcoded weighted average
+
+### Verify
+
+- Each mode produces visibly different stroke character
+- Pulled string: sharp corners become smooth curves
+- Spring dynamics: overshoots and settles like physical brush
+- Retroactive: change smoothing params → stroke re-renders with new smoothing
+
+---
+
+## Phase 11 — KPP Import
 
 **Goal:** Load Krita `.kpp` preset files and convert them to `.darkly-brush` presets. This is the "download from krita-artists.org and paint" milestone.
 
@@ -419,7 +444,7 @@ A `user_input` node is a source node (like `constant`) that the brush creator pl
 
 ---
 
-## Phase 11 — Color Smudge
+## Phase 12 — Color Smudge
 
 **Goal:** Canvas readback + paint blending. This unlocks the second most popular Krita engine (~25% of community presets).
 
@@ -442,31 +467,6 @@ A `user_input` node is a source node (like `constant`) that the brush creator pl
 - Color rate controls paint/canvas mix ratio
 - Import Krita color smudge preset → verify reasonable output
 - Performance: smudge readback should not significantly degrade painting FPS
-
----
-
-## Phase 12 — Smoothing + Stabilizer
-
-**Goal:** Stroke smoothing algorithms for clean lines. Not required for Krita import compatibility, but dramatically improves stroke quality.
-
-### Create
-
-- `crates/darkly/src/brush/smoothing.rs` — `SmoothingMode` enum:
-  - `WeightedAverage { factor }` — exponential moving average on position (current basic impl)
-  - `PulledString { distance }` — cursor must travel `distance` pixels before the brush follows; produces very smooth curves
-  - `SpringDynamics { mass, drag }` — physical spring simulation; the Procreate taffy feel
-- Retroactive smoothing via `StrokeRecord::replay()` — change smoothing mid-stroke and watch it update
-
-### Modify
-
-- `crates/darkly/src/brush/stroke_engine.rs` — plug in smoothing modes, replace current hardcoded weighted average
-
-### Verify
-
-- Each mode produces visibly different stroke character
-- Pulled string: sharp corners become smooth curves
-- Spring dynamics: overshoots and settles like physical brush
-- Retroactive: change smoothing params → stroke re-renders with new smoothing
 
 ---
 
@@ -503,11 +503,11 @@ Phase 8 (stamp tips + user-exposed properties) ✓ complete
     ↓
 Phase 9 (texture overlay)                    ← CURRENT
     ↓
-Phase 10 (KPP import)                        ← "download and paint" milestone
+Phase 10 (smoothing + stabilizer)            ← stroke quality / taffy feel
     ↓
-Phase 11 (color smudge)                      ← ~90% of Krita brush packs work
+Phase 11 (KPP import)                        ← "download and paint" milestone
     ↓
-Phase 12 (smoothing + stabilizer)            ← stroke quality
+Phase 12 (color smudge)                      ← ~90% of Krita brush packs work
     ↓
 Phase 13-16 (color dynamics, re-rendering, UI polish, default library)
 ```
@@ -516,8 +516,8 @@ Phase 13-16 (color dynamics, re-rendering, UI polish, default library)
 
 Some phases can overlap:
 - **Phase 7 + 8** can be developed together — stamp node is a new node type that immediately tests the preset resource system
-- **Phase 9 + 10** can overlap — texture overlay is needed by KPP import, but basic KPP import (brushes without texture) can land first
-- **Phase 12** is independent of phases 10-11 and can be done any time after phase 6
+- **Phase 9 + 10** can overlap — texture overlay and smoothing are independent of each other
+- **Phase 9 + 11** can overlap — texture overlay is needed by KPP import, but basic KPP import (brushes without texture) can land first
 - **Phase 8a + 8b** are independent of each other and can be developed in parallel
 
 ## Critical Existing Files

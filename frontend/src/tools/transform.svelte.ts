@@ -11,12 +11,7 @@
  */
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
-import { canvasToScreen } from '../canvas/coordinates';
-import {
-    KIND_DASHED_LINE, KIND_FILLED_CIRCLE, KIND_CIRCLE,
-    FLAG_CANVAS_SPACE, prim,
-    type GpuPrim,
-} from './selection_helpers';
+import { OverlayBuilder } from '../canvas/gpu_overlay';
 
 // ---------------------------------------------------------------------------
 // Affine2D helpers (mirrors Rust gpu/transform.rs)
@@ -284,20 +279,23 @@ function endDrag() {
 }
 
 // ---------------------------------------------------------------------------
-// GPU overlay primitives
+// GPU overlay (built via OverlayBuilder, rendered by GPU, hit-tested by JS)
 // ---------------------------------------------------------------------------
 
-const LINE_COLOR: [number, number, number, number] = [0.267, 0.667, 1.0, 1.0]; // #4af
-const WHITE: [number, number, number, number] = [1, 1, 1, 1];
+/** Last-built overlay — kept for hit-testing between frames. */
+let overlay: OverlayBuilder | null = null;
 
-function pushOverlayPrimitives() {
+function mid(a: [number, number], b: [number, number]): [number, number] {
+    return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+}
+
+function buildOverlay(): OverlayBuilder | null {
     if (!active || !app.handle || !canvasEl) {
         app.handle?.clear_overlay();
-        return;
+        return null;
     }
 
-    const dpr = window.devicePixelRatio || 1;
-    const prims: GpuPrim[] = [];
+    const o = new OverlayBuilder(canvasEl);
 
     // Corner positions in canvas space
     const tl = toCanvas(0, 0);
@@ -320,102 +318,30 @@ function pushOverlayPrimitives() {
     const armCanvas = ROTATION_ARM_LENGTH / (app.zoom || 1);
     const rotPos: [number, number] = [tm[0] + perpX * armCanvas, tm[1] + perpY * armCanvas];
 
-    // --- Lines (canvas space, transformed by shader) ---
-    const lineOpts = { color: LINE_COLOR, thickness: 1, dashLen: 6 };
-    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, tl, tr, lineOpts));
-    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, tr, br, lineOpts));
-    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, br, bl, lineOpts));
-    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, bl, tl, lineOpts));
-    prims.push(prim(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, tm, rotPos,
-        { color: LINE_COLOR, thickness: 1, dashLen: 4 }));
+    // Bounding box + rotation arm
+    o.line(tl, tr, { color: '#4af', dash: 6 });
+    o.line(tr, br, { color: '#4af', dash: 6 });
+    o.line(br, bl, { color: '#4af', dash: 6 });
+    o.line(bl, tl, { color: '#4af', dash: 6 });
+    o.line(tm, rotPos, { color: '#4af', dash: 4 });
 
-    // --- Handle circles (screen space, constant pixel size) ---
-    const handles: { pos: [number, number]; radius: number; fill: [number, number, number, number]; stroke: [number, number, number, number] }[] = [
-        // Corners (r=5)
-        { pos: tl, radius: 5, fill: WHITE, stroke: LINE_COLOR },
-        { pos: tr, radius: 5, fill: WHITE, stroke: LINE_COLOR },
-        { pos: br, radius: 5, fill: WHITE, stroke: LINE_COLOR },
-        { pos: bl, radius: 5, fill: WHITE, stroke: LINE_COLOR },
-        // Edge midpoints (r=4)
-        { pos: tm, radius: 4, fill: WHITE, stroke: LINE_COLOR },
-        { pos: rm, radius: 4, fill: WHITE, stroke: LINE_COLOR },
-        { pos: bm, radius: 4, fill: WHITE, stroke: LINE_COLOR },
-        { pos: lm, radius: 4, fill: WHITE, stroke: LINE_COLOR },
-        // Rotation (r=5, colors swapped)
-        { pos: rotPos, radius: 5, fill: LINE_COLOR, stroke: WHITE },
-    ];
+    // Corner handles
+    o.handle(tl, { id: Handle.TopLeft,     cursor: 'nwse-resize' });
+    o.handle(tr, { id: Handle.TopRight,    cursor: 'nesw-resize' });
+    o.handle(br, { id: Handle.BottomRight, cursor: 'nwse-resize' });
+    o.handle(bl, { id: Handle.BottomLeft,  cursor: 'nesw-resize' });
 
-    for (const h of handles) {
-        const sp = canvasToScreen(h.pos[0], h.pos[1], canvasEl);
-        // canvasToScreen returns CSS pixels; overlay shader works in buffer pixels
-        const center: [number, number] = [sp.x * dpr, sp.y * dpr];
-        const r: [number, number] = [h.radius * dpr, 0];
-        prims.push(prim(KIND_FILLED_CIRCLE, 0, center, r, { color: h.fill }));
-        prims.push(prim(KIND_CIRCLE, 0, center, r, { color: h.stroke, thickness: 1.5 * dpr }));
-    }
+    // Edge handles
+    o.handle(tm, { id: Handle.Top,    cursor: 'ns-resize', radius: 4 });
+    o.handle(rm, { id: Handle.Right,  cursor: 'ew-resize', radius: 4 });
+    o.handle(bm, { id: Handle.Bottom, cursor: 'ns-resize', radius: 4 });
+    o.handle(lm, { id: Handle.Left,   cursor: 'ew-resize', radius: 4 });
 
-    app.handle.set_overlay(prims);
-}
+    // Rotation handle (colors swapped)
+    o.handle(rotPos, { id: Handle.Rotate, cursor: 'grab', fill: '#4af', stroke: '#fff' });
 
-// ---------------------------------------------------------------------------
-// JS hit-testing (distance checks in screen space)
-// ---------------------------------------------------------------------------
-
-const HIT_THRESHOLD = 10; // CSS pixels
-
-function hitTestHandles(canvasX: number, canvasY: number): Handle | null {
-    if (!active || !canvasEl) return null;
-
-    const sp = canvasToScreen(canvasX, canvasY, canvasEl);
-    const sx = sp.x;
-    const sy = sp.y;
-
-    // Corner positions in canvas space
-    const tl = toCanvas(0, 0);
-    const tr = toCanvas(srcW, 0);
-    const br = toCanvas(srcW, srcH);
-    const bl = toCanvas(0, srcH);
-
-    // Rotation handle
-    const tm = mid(tl, tr);
-    const edgeX = tr[0] - tl[0];
-    const edgeY = tr[1] - tl[1];
-    const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY);
-    const perpX = edgeLen > 0.01 ? edgeY / edgeLen : 0;
-    const perpY = edgeLen > 0.01 ? -edgeX / edgeLen : -1;
-    const armCanvas = ROTATION_ARM_LENGTH / (app.zoom || 1);
-    const rotPos: [number, number] = [tm[0] + perpX * armCanvas, tm[1] + perpY * armCanvas];
-
-    // Test in priority order: rotation, corners, edges
-    if (hitScreen(sx, sy, rotPos)) return Handle.Rotate;
-
-    if (hitScreen(sx, sy, tl)) return Handle.TopLeft;
-    if (hitScreen(sx, sy, tr)) return Handle.TopRight;
-    if (hitScreen(sx, sy, br)) return Handle.BottomRight;
-    if (hitScreen(sx, sy, bl)) return Handle.BottomLeft;
-
-    const rm = mid(tr, br);
-    const bm = mid(br, bl);
-    const lm = mid(bl, tl);
-
-    if (hitScreen(sx, sy, tm)) return Handle.Top;
-    if (hitScreen(sx, sy, rm)) return Handle.Right;
-    if (hitScreen(sx, sy, bm)) return Handle.Bottom;
-    if (hitScreen(sx, sy, lm)) return Handle.Left;
-
-    return null;
-}
-
-/** Test if screen point (sx, sy) in CSS pixels is within threshold of a canvas-space point. */
-function hitScreen(sx: number, sy: number, canvasPos: [number, number]): boolean {
-    const hp = canvasToScreen(canvasPos[0], canvasPos[1], canvasEl!);
-    const dx = sx - hp.x;
-    const dy = sy - hp.y;
-    return dx * dx + dy * dy < HIT_THRESHOLD * HIT_THRESHOLD;
-}
-
-function mid(a: [number, number], b: [number, number]): [number, number] {
-    return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    o.push(app.handle);
+    return o;
 }
 
 // ---------------------------------------------------------------------------
@@ -456,16 +382,16 @@ export const transformTool: Tool = {
             }
             if (!active) return;
         }
-        const hit = hitTestHandles(cx, cy);
-        beginDrag(hit ?? Handle.Body, cx, cy);
+        const hit = overlay?.hitTest(cx, cy);
+        beginDrag(hit?.id ?? Handle.Body, cx, cy);
     },
 
     onPointerMove(_ctx, e, cx, cy) {
         if (drag) {
             updateDrag(cx, cy, e.shiftKey);
         } else if (active) {
-            const hit = hitTestHandles(cx, cy);
-            app.toolCursor = hit != null ? cursorForHandle(hit) : 'move';
+            const hit = overlay?.hitTest(cx, cy);
+            app.toolCursor = hit?.cursor ?? 'move';
         }
     },
 
@@ -496,7 +422,7 @@ export const transformTool: Tool = {
             syncFromRust();
         }
         if (active) {
-            pushOverlayPrimitives();
+            overlay = buildOverlay();
         }
     },
 

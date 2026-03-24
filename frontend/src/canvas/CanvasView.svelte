@@ -7,7 +7,6 @@
     import { toolRegistry } from '../tools/registry';
     import type { ToolContext } from '../tools/registry';
     import { screenToCanvas } from './coordinates';
-    import ToolOverlay from './ToolOverlay.svelte';
     import { toast } from '../state/toast.svelte';
 
     let canvas = $state<HTMLCanvasElement>(undefined!);
@@ -259,9 +258,6 @@
         onpointercancel={onPointerCancel}
         onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); app.requestFrame(); }}
     ></canvas>
-    {#if canvas}
-        <ToolOverlay canvasEl={canvas} />
-    {/if}
 </div>
 
 <style>

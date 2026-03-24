@@ -1,8 +1,8 @@
 import type { Tool, ToolContext } from './registry';
-import type { ToolOverlayData } from '../canvas/overlay';
 import { app } from '../state/app.svelte';
+import { OverlayBuilder } from '../canvas/gpu_overlay';
 
-// --- Reactive overlay state ---
+// --- Reactive state ---
 
 let startX = $state(0);
 let startY = $state(0);
@@ -16,6 +16,12 @@ let hasPlacement = $state(false);
 // exceeded.  If the pointer releases first, we just dismiss.
 const DRAG_THRESHOLD = 4; // screen pixels
 let pending: { screenX: number; screenY: number; cx: number; cy: number } | null = null;
+
+/** Which handle is being dragged ('start' | 'end'), or null. */
+let draggingHandle: string | null = null;
+
+let canvasEl: HTMLCanvasElement | null = null;
+let overlay: OverlayBuilder | null = null;
 
 function applyGradient() {
     const layerId = app.activeLayerId;
@@ -38,6 +44,10 @@ function clearPlacement() {
     isDrawing = false;
     hasPlacement = false;
     pending = null;
+    draggingHandle = null;
+    overlay = null;
+    app.handle?.clear_overlay();
+    app.toolCursor = null;
 }
 
 function beginDrawing(cx: number, cy: number) {
@@ -48,6 +58,17 @@ function beginDrawing(cx: number, cy: number) {
     isDrawing = true;
 }
 
+function buildOverlay(): OverlayBuilder | null {
+    if ((!isDrawing && !hasPlacement) || !canvasEl || !app.handle) return null;
+
+    const o = new OverlayBuilder(canvasEl);
+    o.line([startX, startY], [endX, endY]);
+    o.handle([startX, startY], { id: 'start', cursor: 'grab', fill: '#4af', stroke: '#fff' });
+    o.handle([endX, endY],     { id: 'end',   cursor: 'grab', fill: '#fa4', stroke: '#fff' });
+    o.push(app.handle);
+    return o;
+}
+
 // --- Tool definition ---
 
 export const gradientTool: Tool = {
@@ -55,6 +76,10 @@ export const gradientTool: Tool = {
     name: 'Gradient',
     icon: 'G',
     hotkeyAction: 'gradientTool',
+
+    onActivate(ctx) {
+        canvasEl = ctx.canvasEl;
+    },
 
     onDeactivate() {
         clearPlacement();
@@ -67,6 +92,15 @@ export const gradientTool: Tool = {
     onPointerDown(_ctx, e, cx, cy) {
         if (!app.activeLayerId) return;
 
+        // Check if clicking on an existing handle
+        if (hasPlacement && overlay) {
+            const hit = overlay.hitTest(cx, cy);
+            if (hit) {
+                draggingHandle = hit.id;
+                return;
+            }
+        }
+
         if (hasPlacement) {
             // Defer: might be click-to-dismiss or drag-to-start-new
             pending = { screenX: e.clientX, screenY: e.clientY, cx, cy };
@@ -77,11 +111,18 @@ export const gradientTool: Tool = {
     },
 
     onPointerMove(_ctx, e, cx, cy) {
+        // Handle drag on an endpoint
+        if (draggingHandle) {
+            if (draggingHandle === 'start') { startX = cx; startY = cy; }
+            else { endX = cx; endY = cy; }
+            app.requestFrame();
+            return;
+        }
+
         if (pending) {
             const dx = e.clientX - pending.screenX;
             const dy = e.clientY - pending.screenY;
             if (dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD) {
-                // Exceeded threshold — start a new gradient from the pending position
                 const start = pending;
                 clearPlacement();
                 beginDrawing(start.cx, start.cy);
@@ -90,14 +131,26 @@ export const gradientTool: Tool = {
             }
             return;
         }
-        if (!isDrawing) return;
-        endX = cx;
-        endY = cy;
+
+        if (isDrawing) {
+            endX = cx;
+            endY = cy;
+        } else if (hasPlacement && overlay) {
+            // Hover cursor feedback
+            const hit = overlay.hitTest(cx, cy);
+            app.toolCursor = hit?.cursor ?? null;
+        }
     },
 
     onPointerUp(ctx, e) {
+        if (draggingHandle) {
+            draggingHandle = null;
+            if (hasPlacement) applyGradient();
+            app.requestFrame();
+            return;
+        }
+
         if (pending) {
-            // Click without drag — dismiss
             clearPlacement();
             return;
         }
@@ -110,29 +163,9 @@ export const gradientTool: Tool = {
         applyGradient();
     },
 
-    getOverlay(): ToolOverlayData | null {
-        if (!isDrawing && !hasPlacement) return null;
-
-        return {
-            lines: [
-                { x1: startX, y1: startY, x2: endX, y2: endY },
-            ],
-            handles: [
-                {
-                    id: 'gradient-start',
-                    x: startX, y: startY,
-                    fill: '#4af', stroke: '#fff',
-                    onDrag(cx, cy) { startX = cx; startY = cy; },
-                    onDragEnd() { if (hasPlacement) applyGradient(); },
-                },
-                {
-                    id: 'gradient-end',
-                    x: endX, y: endY,
-                    fill: '#fa4', stroke: '#fff',
-                    onDrag(cx, cy) { endX = cx; endY = cy; },
-                    onDragEnd() { if (hasPlacement) applyGradient(); },
-                },
-            ],
-        };
+    onFrame() {
+        if (isDrawing || hasPlacement) {
+            overlay = buildOverlay();
+        }
     },
 };
