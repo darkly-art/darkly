@@ -3,6 +3,7 @@
 // that exports `pub fn register() -> crate::brush::BrushNodeRegistration`.
 
 pub mod add;
+pub mod circle;
 pub mod clamp;
 pub mod color_output;
 pub mod constant;
@@ -13,7 +14,6 @@ pub mod mix;
 pub mod multiply;
 pub mod paint_color;
 pub mod pen_input;
-pub mod procedural;
 pub mod remap;
 pub mod split_vec2;
 pub mod stamp;
@@ -24,6 +24,7 @@ use crate::brush::BrushNodeRegistration;
 pub fn registrations() -> Vec<BrushNodeRegistration> {
     vec![
         add::register(),
+        circle::register(),
         clamp::register(),
         color_output::register(),
         constant::register(),
@@ -34,7 +35,6 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         multiply::register(),
         paint_color::register(),
         pen_input::register(),
-        procedural::register(),
         remap::register(),
         split_vec2::register(),
         stamp::register(),

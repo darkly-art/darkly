@@ -106,10 +106,10 @@ Unit tests with a test-only `TestWireKind` enum:
 
 - `crates/darkly/src/brush/dab_pool.rs` — `DabTexturePool` (pre-allocated RGBA8 textures at max dab size, acquire/release)
 - `crates/darkly/src/brush/gpu_context.rs` — `BrushGpuContext` (encoder, device, queue, dab_pool, canvas target, pipelines)
-- `crates/darkly/src/brush/pipelines.rs` — `BrushPipelines` (procedural + composite render pipelines, follows `PaintPipelines` pattern)
-- `crates/darkly/src/brush/nodes/procedural.rs` — GPU source node: size/softness/opacity/color inputs → Texture output, renders SDF circle/gaussian to dab texture
+- `crates/darkly/src/brush/pipelines.rs` — `BrushPipelines` (circle + stamp + composite render pipelines, follows `PaintPipelines` pattern)
+- `crates/darkly/src/brush/nodes/circle.rs` — GPU shape node: softness input → Texture output, renders SDF circle mask to dab texture
 - `crates/darkly/src/brush/nodes/color_output.rs` — GPU terminal node: dab Texture + position Vec2 inputs, composites dab onto canvas layer
-- `shaders/brush/procedural.wgsl` — SDF circle/gaussian dab generation
+- `shaders/brush/circle.wgsl` — SDF circle mask generation
 - `shaders/brush/composite.wgsl` — dab texture compositing onto canvas (positioned quad, alpha-over blend)
 
 ### Modify
@@ -124,7 +124,7 @@ Unit tests with a test-only `TestWireKind` enum:
 
 ### Verify
 
-- GPU integration test: build minimal graph (pen_input → procedural → color_output), seed sensors, execute, readback canvas, verify non-zero pixels at expected position
+- GPU integration test: build minimal graph (circle → stamp ← pen_input, paint_color → color_output), seed sensors, execute, readback canvas, verify non-zero pixels at expected position
 
 ---
 
@@ -197,7 +197,7 @@ Unit tests with a test-only `TestWireKind` enum:
 
 ### Verify
 
-- Load Darkly, open brush builder, see default graph (pen_input → procedural → color_output)
+- Load Darkly, open brush builder, see default graph (circle → stamp ← pen_input, paint_color → color_output)
 - Draw strokes with the default brush
 - Drag-connect pressure to size, see pressure sensitivity change live
 
@@ -219,7 +219,7 @@ Unit tests with a test-only `TestWireKind` enum:
 ### Modify
 
 - `pen_input.rs` — ensure all 16 sensors properly seeded (fuzzy_dab/fuzzy_stroke via deterministic PRNG)
-- `procedural.rs` — add scatter_x, scatter_y, rotation input ports
+- `stamp.rs` — scatter_x, scatter_y, rotation input ports (moved from former procedural node)
 
 ### Verify
 
@@ -287,7 +287,7 @@ A `.darkly-brush` file is a ZIP archive containing:
 
 #### Create
 
-- `crates/darkly/src/brush/nodes/stamp.rs` — GPU source node: loads brush tip texture, stamps it at dab position with size/rotation/mirror/ratio transforms. Inputs: size, rotation, mirror_x, mirror_y, ratio, opacity, color. Outputs: Texture, dab_size. Replaces `procedural.rs` as the dab source for image-based brushes.
+- `crates/darkly/src/brush/nodes/stamp.rs` — Universal GPU stamper: takes any tip texture (from `circle` or `image`), stamps it with size/rotation/mirror/ratio/opacity/color transforms. Inputs: tip, size, rotation, mirror_x, mirror_y, ratio, opacity, color, scatter_x, scatter_y. Outputs: dab, dab_size, scatter_offset.
 - `crates/darkly/src/brush/brush_tip.rs` — `BrushTip` enum (Auto { hardness, shape, spikes, ratio, fade }, Predefined { image, application_mode }), `BrushTipApplication` enum (AlphaMask, ImageStamp, LightnessMap, GradientMap — per Krita's `enumBrushApplication`)
 - `shaders/brush/stamp.wgsl` — Sample brush tip texture, apply color + opacity, handle rotation/mirror/ratio transforms
 

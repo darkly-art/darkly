@@ -93,7 +93,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("make_color".into(), Box::new(nodes::make_color::MakeColorEvaluator));
     map.insert("user_input".into(), Box::new(nodes::user_input::UserInputEvaluator));
     // GPU nodes.
-    map.insert("procedural".into(), Box::new(nodes::procedural::ProceduralEvaluator));
+    map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
     map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
     map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
@@ -103,10 +103,12 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
 /// Build the default brush graph: pressure-sensitive dab painting.
 ///
 /// Graph topology:
-///   pen_input ──pressure──→ procedural.size
-///   paint_color ──color──→  procedural.color
-///   procedural ──dab──→     color_output.dab
-///   procedural ──dab_size──→ color_output.dab_size
+///   circle ──texture──→     stamp.tip
+///   pen_input ──pressure──→ stamp.size
+///   paint_color ──color──→  stamp.color
+///   stamp ──dab──→          color_output.dab
+///   stamp ──dab_size──→     color_output.dab_size
+///   stamp ──scatter_offset──→ color_output.scatter_offset
 ///   pen_input ──position──→ color_output.position
 ///
 /// Produces a basic round brush with pressure → size dynamics.
@@ -124,35 +126,45 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     let paint_color = graph.add_node("paint_color", color_reg.ports.clone(), vec![]);
     graph.nodes.get_mut(&paint_color).unwrap().position = [40.0, 200.0];
 
-    let proc_reg = registry.get("procedural").unwrap();
-    let procedural = graph.add_node("procedural", proc_reg.ports.clone(), vec![]);
-    graph.nodes.get_mut(&procedural).unwrap().position = [280.0, 40.0];
+    let circle_reg = registry.get("circle").unwrap();
+    let circle = graph.add_node("circle", circle_reg.ports.clone(), vec![]);
+    graph.nodes.get_mut(&circle).unwrap().position = [40.0, 360.0];
+
+    let stamp_reg = registry.get("stamp").unwrap();
+    let stamp = graph.add_node("stamp", stamp_reg.ports.clone(), vec![]);
+    graph.nodes.get_mut(&stamp).unwrap().position = [280.0, 40.0];
 
     let out_reg = registry.get("color_output").unwrap();
     let color_output = graph.add_node("color_output", out_reg.ports.clone(), vec![]);
     graph.nodes.get_mut(&color_output).unwrap().position = [520.0, 40.0];
 
-    // pressure → procedural.size
+    // circle.texture → stamp.tip
+    graph.connect(
+        PortRef { node: circle, port: "texture".into() },
+        PortRef { node: stamp, port: "tip".into() },
+    ).unwrap();
+
+    // pressure → stamp.size
     graph.connect(
         PortRef { node: pen, port: "pressure".into() },
-        PortRef { node: procedural, port: "size".into() },
+        PortRef { node: stamp, port: "size".into() },
     ).unwrap();
 
-    // paint_color → procedural.color
+    // paint_color → stamp.color
     graph.connect(
         PortRef { node: paint_color, port: "color".into() },
-        PortRef { node: procedural, port: "color".into() },
+        PortRef { node: stamp, port: "color".into() },
     ).unwrap();
 
-    // procedural.dab → color_output.dab
+    // stamp.dab → color_output.dab
     graph.connect(
-        PortRef { node: procedural, port: "dab".into() },
+        PortRef { node: stamp, port: "dab".into() },
         PortRef { node: color_output, port: "dab".into() },
     ).unwrap();
 
-    // procedural.dab_size → color_output.dab_size
+    // stamp.dab_size → color_output.dab_size
     graph.connect(
-        PortRef { node: procedural, port: "dab_size".into() },
+        PortRef { node: stamp, port: "dab_size".into() },
         PortRef { node: color_output, port: "dab_size".into() },
     ).unwrap();
 
@@ -162,9 +174,9 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
         PortRef { node: color_output, port: "position".into() },
     ).unwrap();
 
-    // procedural.scatter_offset → color_output.scatter_offset
+    // stamp.scatter_offset → color_output.scatter_offset
     graph.connect(
-        PortRef { node: procedural, port: "scatter_offset".into() },
+        PortRef { node: stamp, port: "scatter_offset".into() },
         PortRef { node: color_output, port: "scatter_offset".into() },
     ).unwrap();
 

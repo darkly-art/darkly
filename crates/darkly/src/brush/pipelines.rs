@@ -1,7 +1,7 @@
 //! Pre-built GPU pipelines for the brush system.
 //!
 //! Three pipelines:
-//! - **Procedural**: renders SDF circle/gaussian to a dab texture (REPLACE blend).
+//! - **Circle**: renders an SDF circle mask to a dab texture (REPLACE blend).
 //! - **Stamp**: renders a brush tip texture to a dab texture with transforms.
 //! - **Composite**: composites a dab texture onto the canvas with correct
 //!   straight-alpha Porter-Duff source-over (REPLACE blend, shader-side composite).
@@ -15,16 +15,11 @@
 //! dab compositing vs. SDF circle painting + gradient fill).
 
 
-/// Uniform data for the procedural dab generation shader.
+/// Uniform data for the circle mask generation shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct DabUniforms {
-    pub dab_size: f32,       // actual dab diameter in pixels
-    pub radius: f32,         // SDF circle radius
-    pub softness: f32,       // edge softness in pixels
-    pub opacity: f32,        // dab opacity (0-1)
-    pub color: [f32; 4],     // RGBA paint color (straight alpha, premultiplied on output)
-    pub rotation: f32,       // dab rotation in radians
+pub struct CircleUniforms {
+    pub softness: f32,       // 0-1 fraction of radius
     pub _pad: [f32; 3],      // padding to 16-byte alignment
 }
 
@@ -56,12 +51,12 @@ pub struct CompositeUniforms {
 
 /// Pre-built render pipelines for the brush system.
 pub struct BrushPipelines {
-    procedural_pipeline: wgpu::RenderPipeline,
+    circle_pipeline: wgpu::RenderPipeline,
     stamp_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
 
-    procedural_uniform_buf: wgpu::Buffer,
-    pub(crate) procedural_uniform_bind_group: wgpu::BindGroup,
+    circle_uniform_buf: wgpu::Buffer,
+    pub(crate) circle_uniform_bind_group: wgpu::BindGroup,
 
     stamp_uniform_buf: wgpu::Buffer,
     pub(crate) stamp_uniform_bind_group: wgpu::BindGroup,
@@ -98,10 +93,10 @@ impl BrushPipelines {
         canvas_h: u32,
     ) -> Self {
         // --- Shaders ---
-        let procedural_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("brush-procedural"),
+        let circle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("brush-circle"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/brush/procedural.wgsl").into(),
+                include_str!("../../../../shaders/brush/circle.wgsl").into(),
             ),
         });
 
@@ -183,9 +178,9 @@ impl BrushPipelines {
         });
 
         // --- Pipeline layouts ---
-        // Procedural: group(0) = uniforms only (renders to dab texture).
-        let procedural_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("brush-procedural-layout"),
+        // Circle: group(0) = uniforms only (renders to dab texture).
+        let circle_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("brush-circle-layout"),
             bind_group_layouts: &[&uniform_bgl],
             immediate_size: 0,
         });
@@ -206,19 +201,19 @@ impl BrushPipelines {
         });
 
         // --- Uniform buffers ---
-        let procedural_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("brush-procedural-uniforms"),
-            size: std::mem::size_of::<DabUniforms>() as u64,
+        let circle_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("brush-circle-uniforms"),
+            size: std::mem::size_of::<CircleUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
-        let procedural_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("brush-procedural-uniform-bg"),
+        let circle_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("brush-circle-uniform-bg"),
             layout: &uniform_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: procedural_uniform_buf.as_entire_binding(),
+                resource: circle_uniform_buf.as_entire_binding(),
             }],
         });
 
@@ -343,12 +338,12 @@ impl BrushPipelines {
 
         // --- Pipelines ---
 
-        // Procedural: REPLACE blend — we clear the dab texture and write fresh pixels.
-        let procedural_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("brush-procedural"),
-            layout: Some(&procedural_layout),
+        // Circle: REPLACE blend — we clear the dab texture and write the SDF mask.
+        let circle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("brush-circle"),
+            layout: Some(&circle_layout),
             vertex: wgpu::VertexState {
-                module: &procedural_shader,
+                module: &circle_shader,
                 entry_point: Some("vs_main"),
                 buffers: &[],
                 compilation_options: Default::default(),
@@ -360,7 +355,7 @@ impl BrushPipelines {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &procedural_shader,
+                module: &circle_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba8Unorm,
@@ -435,11 +430,11 @@ impl BrushPipelines {
         });
 
         Self {
-            procedural_pipeline,
+            circle_pipeline,
             stamp_pipeline,
             composite_pipeline,
-            procedural_uniform_buf,
-            procedural_uniform_bind_group,
+            circle_uniform_buf,
+            circle_uniform_bind_group,
             stamp_uniform_buf,
             stamp_uniform_bind_group,
             composite_uniform_buf,
@@ -453,8 +448,8 @@ impl BrushPipelines {
         }
     }
 
-    pub fn procedural_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.procedural_pipeline
+    pub fn circle_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.circle_pipeline
     }
 
     pub fn stamp_pipeline(&self) -> &wgpu::RenderPipeline {
@@ -473,9 +468,9 @@ impl BrushPipelines {
         &self.canvas_copy_texture
     }
 
-    /// Write procedural dab uniforms to the GPU buffer.
-    pub fn write_dab_uniforms(&self, queue: &wgpu::Queue, uniforms: &DabUniforms) {
-        queue.write_buffer(&self.procedural_uniform_buf, 0, bytemuck::bytes_of(uniforms));
+    /// Write circle mask uniforms to the GPU buffer.
+    pub fn write_circle_uniforms(&self, queue: &wgpu::Queue, uniforms: &CircleUniforms) {
+        queue.write_buffer(&self.circle_uniform_buf, 0, bytemuck::bytes_of(uniforms));
     }
 
     /// Write stamp dab uniforms to the GPU buffer.
