@@ -42,16 +42,13 @@ pub struct StrokeEngine {
     /// Distance remaining from the last move_to that didn't reach the next
     /// spacing threshold — carried forward to the next move_to.
     leftover_distance: f32,
-    /// Dab size [w, h] from the last evaluated dab (for spacing and bounding rect).
+    /// Dab size [w, h] from the last evaluated dab (for spacing).
     last_dab_size: [f32; 2],
     /// Running dab index within the stroke.
     dab_count: u32,
 
     /// Time of the first event (seconds), for normalizing time to stroke-relative.
     stroke_start_time: Option<f32>,
-
-    /// Bounding rect of all dabs placed: [x, y, w, h]. None until first dab.
-    stroke_rect: Option<[u32; 4]>,
 
     /// Per-stroke random value (0-1), constant across all dabs.
     fuzzy_stroke: f32,
@@ -92,7 +89,6 @@ impl StrokeEngine {
             last_dab_size: [d, d],
             dab_count: 0,
             stroke_start_time: None,
-            stroke_rect: None,
             fuzzy_stroke,
             stroke_seed,
         }
@@ -249,46 +245,12 @@ impl StrokeEngine {
             }
         }
 
-        // Read scatter offset from the graph output (if any).
-        // scatter_offset is in dab-texture pixels (same units color_output
-        // adds to the canvas position), so no additional scaling needed.
-        let scatter = self.runner.find_output_slot("stamp", "scatter_offset")
-            .and_then(|slot| self.runner.read_slot(slot))
-            .map(|v| v.as_vec2())
-            .unwrap_or([0.0; 2]);
-
-        // Expand bounding rect using scattered position and scaled diameter.
-        let eff_d = self.effective_diameter(gpu.global_scale);
-        let radius = eff_d * 0.5 + 2.0;
-        let cx = info.pos[0] + scatter[0];
-        let cy = info.pos[1] + scatter[1];
-        self.expand_rect(cx, cy, radius, gpu.canvas_width, gpu.canvas_height);
-
         self.dab_count += 1;
     }
 
-    /// Expand the stroke bounding rect to include a circle.
-    fn expand_rect(&mut self, cx: f32, cy: f32, radius: f32, canvas_w: u32, canvas_h: u32) {
-        let x0 = (cx - radius).max(0.0) as u32;
-        let y0 = (cy - radius).max(0.0) as u32;
-        let x1 = ((cx + radius).ceil() as u32).min(canvas_w);
-        let y1 = ((cy + radius).ceil() as u32).min(canvas_h);
-
-        self.stroke_rect = Some(match self.stroke_rect {
-            None => [x0, y0, x1 - x0, y1 - y0],
-            Some([sx, sy, sw, sh]) => {
-                let nx = sx.min(x0);
-                let ny = sy.min(y0);
-                let nx1 = (sx + sw).max(x1);
-                let ny1 = (sy + sh).max(y1);
-                [nx, ny, nx1 - nx, ny1 - ny]
-            }
-        });
-    }
-
     /// Finish the stroke, consuming the engine and returning the record.
-    pub fn end(self) -> (StrokeRecord, Option<[u32; 4]>) {
-        (self.record, self.stroke_rect)
+    pub fn end(self) -> StrokeRecord {
+        self.record
     }
 
     /// Replay a stroke record through this engine (for re-rendering).
@@ -307,18 +269,12 @@ impl StrokeEngine {
         self.last_dab_size = [d, d];
         self.dab_count = 0;
         self.stroke_start_time = None;
-        self.stroke_rect = None;
         self.smoothed_pos = [0.0; 2];
         // Preserve stroke_seed and fuzzy_stroke for deterministic replay.
 
         for event in &record.events {
             self.move_to(*event, gpu);
         }
-    }
-
-    /// The accumulated bounding rect (for undo region tracking).
-    pub fn stroke_rect(&self) -> Option<[u32; 4]> {
-        self.stroke_rect
     }
 
     /// Number of dabs placed so far.

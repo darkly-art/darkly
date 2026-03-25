@@ -5,6 +5,7 @@
 //! Run with: `cargo test -p darkly --test stroke`
 
 use darkly::gpu::test_utils::*;
+use darkly::gpu::diff_rect::DiffRectPass;
 use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 
@@ -524,4 +525,126 @@ fn gpu_erase_stroke_undo() {
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     assert_eq!(pixel_at(&pixels, w, 64, 64, 4), &[255, 0, 0, 255], "center should be restored to red");
+}
+
+// ============================================================================
+// DiffRectPass: GPU diff-based undo region
+// ============================================================================
+
+/// Paint a circle far from the origin, use DiffRectPass to find the changed
+/// region, and verify the diff rect covers the painted pixels. This is the
+/// mechanism that fixes scatter brush undo — the diff finds the actual changed
+/// pixels regardless of where the stroke engine thought they were.
+#[test]
+fn diff_rect_finds_painted_region() {
+    let (device, queue) = test_device();
+    let (w, h) = (128, 128);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    // Two identical transparent textures.
+    let blank = vec![0u8; (w * h * 4) as usize];
+    let (scratch_tex, scratch_view) = create_test_texture(&device, &queue, w, h, &blank);
+    let (canvas_tex, canvas_view) = create_test_texture(&device, &queue, w, h, &blank);
+
+    // Paint a circle at (100, 100) on the canvas only — simulating a
+    // scattered dab that landed far from where the stroke engine tracked.
+    let pipelines = PaintPipelines::new(&device, &queue);
+    let target = GpuPaintTarget {
+        texture: &canvas_tex, view: &canvas_view, format: fmt, width: w, height: h,
+    };
+    let mut enc = encoder(&device);
+    target.composite_circle(&mut enc, &pipelines, &queue, 100.0, 100.0, 8.0, [255, 0, 0, 255], 1.0);
+    submit(&queue, enc);
+
+    // Dispatch the diff.
+    let mut diff = DiffRectPass::new(&device);
+    diff.request(&device, &queue, &scratch_view, &canvas_view, w, h);
+
+    // Poll until ready (native/test — blocking poll is fine).
+    let rect = loop {
+        if let Some(result) = diff.poll(&device) {
+            break result;
+        }
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    };
+
+    let rect = rect.expect("diff should find changed pixels");
+    let [rx, ry, rw, rh] = rect;
+
+    // The circle is at (100, 100) with radius 8. The diff rect should
+    // contain the circle — center must be inside the rect.
+    assert!(rx <= 100 && 100 < rx + rw, "diff rect x range [{}, {}) should contain 100", rx, rx + rw);
+    assert!(ry <= 100 && 100 < ry + rh, "diff rect y range [{}, {}) should contain 100", ry, ry + rh);
+
+    // Rect should be reasonably tight (not the full canvas).
+    assert!(rw < 30, "diff rect width should be tight, got {rw}");
+    assert!(rh < 30, "diff rect height should be tight, got {rh}");
+}
+
+/// Verify that undo fully restores the canvas when the diff rect is used
+/// instead of a hand-tracked stroke rect — the key regression test for
+/// the scatter brush undo bug.
+#[test]
+fn diff_rect_undo_restores_offset_paint() {
+    let (device, queue) = test_device();
+    let (w, h) = (128, 128);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    let blank = vec![0u8; (w * h * 4) as usize];
+    let (tex, view) = create_test_texture(&device, &queue, w, h, &blank);
+    let pipelines = PaintPipelines::new(&device, &queue);
+    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+
+    // begin_stroke: save full canvas to scratch.
+    let mut enc = encoder(&device);
+    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    submit(&queue, enc);
+
+    // Paint a circle at (100, 100) — far from origin, simulating scatter.
+    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let mut enc = encoder(&device);
+    target.composite_circle(&mut enc, &pipelines, &queue, 100.0, 100.0, 8.0, [255, 0, 0, 255], 1.0);
+    submit(&queue, enc);
+
+    // Verify paint landed.
+    let painted = readback_texture(&device, &queue, &tex, fmt, w, h);
+    assert!(pixel_at(&painted, w, 100, 100, 4)[3] > 0, "paint should be visible at (100,100)");
+
+    // Compute diff rect via GPU (instead of hand-tracking).
+    let scratch_view = store.scratch_view(fmt);
+    let mut diff = DiffRectPass::new(&device);
+    diff.request(&device, &queue, &scratch_view, &view, w, h);
+
+    let rect = loop {
+        if let Some(result) = diff.poll(&device) {
+            break result;
+        }
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    };
+    let rect = rect.expect("should have a diff rect");
+
+    // Commit with the diff-derived rect.
+    let mut enc = encoder(&device);
+    let entry = store.commit_region(&mut enc, 1, fmt, rect);
+    submit(&queue, enc);
+
+    // Undo: restore the pre-stroke state.
+    let mut enc = encoder(&device);
+    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    submit(&queue, enc);
+
+    // The entire canvas should be back to transparent.
+    let restored = readback_texture(&device, &queue, &tex, fmt, w, h);
+    assert_eq!(
+        pixel_at(&restored, w, 100, 100, 4)[3], 0,
+        "after undo, scattered paint at (100,100) should be gone"
+    );
+
+    // Verify the whole canvas is clean.
+    for y in 0..h {
+        for x in 0..w {
+            let a = pixel_at(&restored, w, x, y, 4)[3];
+            assert_eq!(a, 0, "pixel ({x},{y}) should be transparent after undo, got A={a}");
+        }
+    }
 }

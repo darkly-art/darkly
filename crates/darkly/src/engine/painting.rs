@@ -398,7 +398,7 @@ impl DarklyEngine {
             // Brush stroke path: finalize the StrokeEngine and dispatch
             // a GPU diff to find the exact changed region for undo.
             if let Some(engine) = self.brush_stroke_engine.take() {
-                let _ = engine.end();
+                let _record = engine.end();
                 let format = if self.editing_mask_layer == Some(layer_id) {
                     wgpu::TextureFormat::R8Unorm
                 } else {
