@@ -247,7 +247,13 @@ impl DarklyEngine {
             brush_pipelines,
             brush_stroke_engine: None,
             active_brush_graph: crate::brush::default_graph(),
-            preset_library: PresetLibrary::new(),
+            preset_library: {
+                let mut lib = PresetLibrary::new();
+                for bundle in crate::brush::builtin_presets::all() {
+                    lib.insert(bundle);
+                }
+                lib
+            },
             resource_handles: std::collections::HashMap::new(),
             brush_global_scale: 1.0,
             gpu_selection,

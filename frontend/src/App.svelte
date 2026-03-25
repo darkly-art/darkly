@@ -2,10 +2,9 @@
     import LeftSidebar from './ui/LeftSidebar.svelte';
     import CanvasView from './canvas/CanvasView.svelte';
     import RightSidebar from './ui/RightSidebar.svelte';
-    import BrushBuilder from './ui/brush_builder/BrushBuilder.svelte';
+    import BrushBar from './ui/BrushBar.svelte';
     import Toast from './ui/Toast.svelte';
     import PresetPicker from './ui/PresetPicker.svelte';
-    import { brushGraph } from './state/brush_graph.svelte';
     // Register all tools
     import './tools/index';
     // Initialize hotkeys
@@ -16,11 +15,7 @@
     <LeftSidebar />
     <div class="center-column">
         <CanvasView />
-        {#if brushGraph.isOpen}
-            <div class="brush-builder-panel">
-                <BrushBuilder />
-            </div>
-        {/if}
+        <BrushBar />
     </div>
     <RightSidebar />
 </div>
@@ -53,9 +48,4 @@
         overflow: hidden;
     }
 
-    .brush-builder-panel {
-        height: 280px;
-        min-height: 200px;
-        flex-shrink: 0;
-    }
 </style>

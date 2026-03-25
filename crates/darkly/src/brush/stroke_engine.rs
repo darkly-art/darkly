@@ -249,10 +249,20 @@ impl StrokeEngine {
             }
         }
 
-        // Expand bounding rect using scaled diameter.
+        // Read scatter offset from the graph output (if any).
+        // scatter_offset is in dab-texture pixels (same units color_output
+        // adds to the canvas position), so no additional scaling needed.
+        let scatter = self.runner.find_output_slot("stamp", "scatter_offset")
+            .and_then(|slot| self.runner.read_slot(slot))
+            .map(|v| v.as_vec2())
+            .unwrap_or([0.0; 2]);
+
+        // Expand bounding rect using scattered position and scaled diameter.
         let eff_d = self.effective_diameter(gpu.global_scale);
         let radius = eff_d * 0.5 + 2.0;
-        self.expand_rect(info.pos[0], info.pos[1], radius, gpu.canvas_width, gpu.canvas_height);
+        let cx = info.pos[0] + scatter[0];
+        let cy = info.pos[1] + scatter[1];
+        self.expand_rect(cx, cy, radius, gpu.canvas_width, gpu.canvas_height);
 
         self.dab_count += 1;
     }

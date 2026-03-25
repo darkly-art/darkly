@@ -49,6 +49,21 @@ export interface NodeTypeInfo {
 
 // --- Wire type colors ---
 
+export interface PresetInfo {
+    name: string;
+    category: string;
+    author: string;
+    description: string;
+    tags: string[];
+}
+
+export interface UserInputInfo {
+    nodeId: number;
+    label: string;
+    value: number;
+    position: [number, number];
+}
+
 export const WIRE_COLORS: Record<string, string> = {
     Scalar: '#a0a0a0',
     Int: '#4a9eff',
@@ -93,6 +108,15 @@ class BrushGraphState {
     /** Cached image thumbnails for Image nodes, keyed by resource_name. */
     imageThumbnails = new Map<string, ImageBitmap>();
 
+    /** Available brush presets. */
+    presets = $state<PresetInfo[]>([]);
+
+    /** Currently loaded preset name (null = custom/modified). */
+    activePreset = $state<string | null>(null);
+
+    /** User input sliders exposed by the current brush graph. */
+    userInputs = $state<UserInputInfo[]>([]);
+
     // --- WASM command helpers ---
 
     /** Apply a WASM command result: update graph snapshot and error state. */
@@ -107,6 +131,8 @@ class BrushGraphState {
                 if (graph && graph.nodes) {
                     this.graph = graph as BrushGraph;
                     this.error = null;
+                    this.activePreset = null; // graph was modified
+                    this.refreshUserInputs();
                 }
             } catch {
                 // Parse failed — leave current state.
@@ -130,7 +156,7 @@ class BrushGraphState {
 
     // --- Public API ---
 
-    /** Initialize from WASM — load node types and default graph. */
+    /** Initialize from WASM — load node types, presets, and default graph. */
     init() {
         if (!app.handle) return;
         const typesJson = app.handle.brush_node_types();
@@ -141,6 +167,8 @@ class BrushGraphState {
             this.nodeTypes = [];
         }
         this.fetchGraph();
+        this.refreshPresets();
+        this.refreshUserInputs();
     }
 
     /** Reset to the default brush graph. */
@@ -148,6 +176,44 @@ class BrushGraphState {
         if (!app.handle) return;
         app.handle.brush_graph_reset();
         this.fetchGraph();
+        this.refreshUserInputs();
+        this.error = null;
+        this.activePreset = null;
+    }
+
+    /** Refresh the preset list from WASM. */
+    refreshPresets() {
+        if (!app.handle) return;
+        try {
+            const list = JSON.parse(app.handle.brush_preset_list());
+            this.presets = Array.isArray(list) ? list : [];
+        } catch {
+            this.presets = [];
+        }
+    }
+
+    /** Refresh user input sliders from the active brush graph. */
+    refreshUserInputs() {
+        if (!app.handle) return;
+        try {
+            const inputs = JSON.parse(app.handle.brush_user_inputs());
+            this.userInputs = Array.isArray(inputs) ? inputs : [];
+        } catch {
+            this.userInputs = [];
+        }
+    }
+
+    /** Load a preset by name. */
+    loadPreset(name: string) {
+        if (!app.handle) return;
+        const err = app.handle.brush_preset_load(name);
+        if (err !== null) {
+            this.error = String(err);
+            return;
+        }
+        this.activePreset = name;
+        this.fetchGraph();
+        this.refreshUserInputs();
         this.error = null;
     }
 

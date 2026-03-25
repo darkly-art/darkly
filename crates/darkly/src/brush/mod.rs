@@ -2,6 +2,7 @@
 //!
 //! Phase 8: Stamp tips + user-exposed properties.
 
+pub mod builtin_presets;
 pub mod brush_tip;
 pub mod dab_pool;
 pub mod eval;

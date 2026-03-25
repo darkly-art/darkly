@@ -1,6 +1,5 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
-    import { brushGraph } from '../state/brush_graph.svelte';
     import { toolRegistry } from '../tools/registry';
     import ColorPicker from './ColorPicker.svelte';
 
@@ -51,35 +50,7 @@
         {/each}
     </div>
 
-    <!-- Brush controls -->
-    <div class="slider-group">
-        <span class="slider-label">Size: {app.brushSize}</span>
-        <input
-            type="range"
-            class="sidebar-slider"
-            min="1" max="500" step="1"
-            bind:value={app.brushSize}
-        />
-    </div>
-    <div class="slider-group">
-        <span class="slider-label">Opacity: {Math.round(app.brushOpacity * 100)}%</span>
-        <input
-            type="range"
-            class="sidebar-slider"
-            min="0" max="1" step="0.01"
-            bind:value={app.brushOpacity}
-        />
-    </div>
 
-    <!-- Brush builder toggle -->
-    <button
-        class="tool-btn brush-builder-btn"
-        class:active={brushGraph.isOpen}
-        onclick={() => { brushGraph.isOpen = !brushGraph.isOpen; if (brushGraph.isOpen && !brushGraph.graph) brushGraph.init(); }}
-        title="Brush Builder"
-    >
-        N
-    </button>
 </div>
 
 <style>
@@ -176,54 +147,5 @@
         border-color: #6a6aff;
     }
 
-    .brush-builder-btn {
-        margin-top: 8px;
-    }
 
-    .slider-group {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        width: 100%;
-        padding: 0 4px;
-        margin-top: 6px;
-    }
-
-    .slider-label {
-        font-size: 8px;
-        color: #888;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-bottom: 2px;
-    }
-
-    .sidebar-slider {
-        width: 40px;
-        height: 4px;
-        -webkit-appearance: none;
-        appearance: none;
-        background: #444;
-        border-radius: 2px;
-        outline: none;
-        cursor: pointer;
-    }
-
-    .sidebar-slider::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        appearance: none;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #6a6aff;
-        cursor: pointer;
-    }
-
-    .sidebar-slider::-moz-range-thumb {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #6a6aff;
-        border: none;
-        cursor: pointer;
-    }
 </style>

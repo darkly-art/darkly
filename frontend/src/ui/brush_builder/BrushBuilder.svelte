@@ -33,9 +33,6 @@
         <NodePalette onaddnode={handleAddNode} />
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
         <div class="spacer"></div>
-        {#if brushGraph.error}
-            <span class="error-badge" title={brushGraph.error}>Error</span>
-        {/if}
         <button
             class="fullscreen-btn"
             onclick={() => fullscreen = !fullscreen}
@@ -45,11 +42,6 @@
             {:else}
                 <svg width="14" height="14" viewBox="0 0 14 14"><path d="M1 5V1h4M13 5V1H9M1 9v4h4M13 9v4H9" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
             {/if}</button>
-        <button
-            class="close-btn"
-            onclick={() => brushGraph.isOpen = false}
-            title="Close brush builder"
-        >&times;</button>
     </div>
 
     <NodeCanvas />
@@ -92,14 +84,6 @@
     .spacer {
         flex: 1;
     }
-    .error-badge {
-        font-size: 9px;
-        color: #ff6b6b;
-        background: #3a2020;
-        padding: 2px 6px;
-        border-radius: 3px;
-        cursor: help;
-    }
     .fullscreen-btn {
         background: none;
         border: none;
@@ -111,18 +95,6 @@
     }
     .fullscreen-btn:hover {
         color: #ccc;
-    }
-    .close-btn {
-        background: none;
-        border: none;
-        color: #888;
-        cursor: pointer;
-        font-size: 16px;
-        padding: 0 4px;
-        line-height: 1;
-    }
-    .close-btn:hover {
-        color: #ff6b6b;
     }
     .brush-builder.fullscreen {
         position: fixed;
