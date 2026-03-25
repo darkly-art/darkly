@@ -27,6 +27,7 @@ use crate::gpu::context::GpuContext;
 use crate::gpu::overlay::OverlayPrimitive;
 use crate::gpu::paint_target::PaintPipelines;
 use crate::gpu::readback::ReadbackScheduler;
+use crate::gpu::diff_rect::DiffRectPass;
 use crate::gpu::region_store::RegionStore;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::view::ViewTransform;
@@ -48,6 +49,12 @@ pub(crate) struct PendingTransform {
 pub(crate) struct PendingCopy {
     pub layer_id: u64,
     pub is_cut: bool,
+}
+
+/// Deferred undo commit — waiting for async GPU diff rect result.
+pub(crate) struct PendingUndoCommit {
+    pub layer_id: u64,
+    pub format: wgpu::TextureFormat,
 }
 
 /// Tracks the bounding rect of a GPU stroke in progress.
@@ -187,6 +194,10 @@ pub struct DarklyEngine {
     /// node graph's internal rendering resolution.  Default 1.0.
     pub(crate) brush_global_scale: f32,
 
+    // --- Diff rect (undo region computation) ---
+    pub(crate) diff_rect: DiffRectPass,
+    pub(crate) pending_undo_commit: Option<PendingUndoCommit>,
+
     // --- GPU Selection (Phase 5) ---
     /// GPU-authoritative selection mask — owns the R8 texture and bind groups.
     /// Always allocated; `gpu_selection.active` tracks whether a selection exists.
@@ -222,6 +233,7 @@ impl DarklyEngine {
         let dab_pool = DabTexturePool::new(&gpu.device);
         let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout(), doc_width, doc_height);
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
+        let diff_rect = DiffRectPass::new(&gpu.device);
         let gpu_selection = GpuSelection::new(
             &gpu.device, doc_width, doc_height,
             brush_pipelines.selection_bind_group_layout(),
@@ -256,6 +268,8 @@ impl DarklyEngine {
             },
             resource_handles: std::collections::HashMap::new(),
             brush_global_scale: 1.0,
+            diff_rect,
+            pending_undo_commit: None,
             gpu_selection,
             selection_pipelines,
             pending_transform: None,

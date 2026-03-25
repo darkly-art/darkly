@@ -4,6 +4,7 @@ use super::{DarklyEngine, ReadbackContext};
 use crate::gpu::readback;
 use crate::gpu::view::ViewTransform;
 use crate::layer::BlendMode;
+use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
     // --- View transform ---
@@ -118,6 +119,23 @@ impl DarklyEngine {
     /// Called at the start of each frame. Returns true if any operation
     /// completed (and therefore the compositor should re-render).
     fn poll_pending(&mut self) -> bool {
+        // Poll pending diff rect for deferred undo commit.
+        if self.diff_rect.is_pending() {
+            if let Some(result) = self.diff_rect.poll(&self.gpu.device) {
+                if let Some(commit) = self.pending_undo_commit.take() {
+                    if let Some(rect) = result {
+                        self.gpu.encode("brush-stroke-end", |encoder| {
+                            let entry = self.region_store.commit_region(
+                                encoder, commit.layer_id, commit.format, rect,
+                            );
+                            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                        });
+                    }
+                    // else: textures identical, no undo entry needed.
+                }
+            }
+        }
+
         // Poll content bounds compute readbacks.
         let bounds_completed = self.compositor.poll_content_bounds(&self.gpu.device);
         let mut any_completed = false;
@@ -226,7 +244,8 @@ impl DarklyEngine {
             (Some(s), Some(c)) => (s, c),
             _ => {
                 return self.readbacks.has_pending()
-                    || self.compositor.has_pending_content_bounds();
+                    || self.compositor.has_pending_content_bounds()
+                    || self.diff_rect.is_pending();
             }
         };
 
@@ -251,6 +270,7 @@ impl DarklyEngine {
         self.compositor.needs_animation()
             || self.readbacks.has_pending()
             || self.compositor.has_pending_content_bounds()
+            || self.diff_rect.is_pending()
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {

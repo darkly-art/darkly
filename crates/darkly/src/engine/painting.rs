@@ -1,6 +1,6 @@
 //! Stroke lifecycle, flood fill, erase helpers, and paint infrastructure.
 
-use super::{DarklyEngine, GpuStrokeState, ReadbackContext};
+use super::{DarklyEngine, GpuStrokeState, PendingUndoCommit, ReadbackContext};
 use super::types::StrokeOp;
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::paint_info::PaintInformation;
@@ -12,6 +12,35 @@ use crate::gpu::readback;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
+    /// Flush any pending diff-based undo commit. Called before overwriting the
+    /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait)
+    /// — if the diff hasn't completed yet, falls back to a full-canvas rect.
+    fn flush_pending_undo_commit(&mut self) {
+        if !self.diff_rect.is_pending() {
+            return;
+        }
+        let Some(commit) = self.pending_undo_commit.take() else { return };
+
+        // Try to collect the result without blocking.
+        let _ = self.gpu.device.poll(wgpu::PollType::Poll);
+        let rect = match self.diff_rect.poll(&self.gpu.device) {
+            Some(Some(rect)) => rect,
+            Some(None) => return, // Textures identical — no commit needed.
+            None => {
+                // Diff not ready — fall back to full canvas.
+                let (w, h) = self.region_store.scratch_dimensions();
+                [0, 0, w, h]
+            }
+        };
+
+        self.gpu.encode("brush-stroke-end-flush", |encoder| {
+            let entry = self.region_store.commit_region(
+                encoder, commit.layer_id, commit.format, rect,
+            );
+            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        });
+    }
+
     // --- Painting ---
 
     pub fn fill_gradient(&mut self, layer_id: u64) {
@@ -78,6 +107,8 @@ impl DarklyEngine {
 
         // Lazy init: save the region on first stroke_to.
         if self.gpu_stroke.is_none() {
+            // Flush any pending undo commit before overwriting the scratch texture.
+            self.flush_pending_undo_commit();
             let (texture, format) = if mask_editing {
                 match self.compositor.mask_texture(layer_id) {
                     Some(t) => (&t.texture, wgpu::TextureFormat::R8Unorm),
@@ -364,20 +395,31 @@ impl DarklyEngine {
                 return;
             }
 
-            // Brush stroke path: finalize the StrokeEngine and commit undo.
+            // Brush stroke path: finalize the StrokeEngine and dispatch
+            // a GPU diff to find the exact changed region for undo.
             if let Some(engine) = self.brush_stroke_engine.take() {
-                let (_, stroke_rect) = engine.end();
-                if let Some(rect) = stroke_rect {
-                    let format = if self.editing_mask_layer == Some(layer_id) {
-                        wgpu::TextureFormat::R8Unorm
-                    } else {
-                        wgpu::TextureFormat::Rgba8Unorm
-                    };
-                    self.gpu.encode("brush-stroke-end", |encoder| {
-                        let entry = self.region_store.commit_region(
-                            encoder, layer_id, format, rect,
-                        );
-                        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                let _ = engine.end();
+                let format = if self.editing_mask_layer == Some(layer_id) {
+                    wgpu::TextureFormat::R8Unorm
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                };
+
+                // Get the current canvas texture view and the pre-stroke scratch view.
+                let current_view = if self.editing_mask_layer == Some(layer_id) {
+                    self.compositor.mask_texture(layer_id).map(|t| &t.view)
+                } else {
+                    self.compositor.layer_texture(layer_id).map(|t| &t.view)
+                };
+                if let Some(current_view) = current_view {
+                    let scratch_view = self.region_store.scratch_view(format);
+                    let (w, h) = self.region_store.scratch_dimensions();
+                    self.diff_rect.request(
+                        &self.gpu.device, &self.gpu.queue,
+                        &scratch_view, current_view, w, h,
+                    );
+                    self.pending_undo_commit = Some(PendingUndoCommit {
+                        layer_id, format,
                     });
                 }
             }

@@ -141,6 +141,9 @@ impl Config {
         d!("animation.veil_divisor", int 2);
         d!("animation.overlay_divisor", int 4);
 
+        // Navigation
+        d!("nav.panSensitivity",  float 0.5);
+
         // Hotkeys — navigation
         d!("hotkeys.nav.trigger", str "Space");
         d!("hotkeys.nav.rotate",  str "Shift");
