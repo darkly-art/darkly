@@ -19,3 +19,10 @@ fn source_over(fg_pre: vec3f, fg_a: f32, bg: vec4f) -> vec4f {
     );
     return vec4f(out_rgb, out_a);
 }
+
+/// Porter-Duff destination-out (erase): remove foreground coverage from background.
+/// fg_a is the eraser's alpha (how much to remove). bg is straight-alpha.
+fn destination_out(fg_a: f32, bg: vec4f) -> vec4f {
+    let out_a = bg.a * (1.0 - fg_a);
+    return vec4f(bg.rgb, out_a);
+}

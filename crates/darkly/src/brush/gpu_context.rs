@@ -36,6 +36,9 @@ pub struct BrushGpuContext<'a> {
     /// Resource name → TextureHandle for images uploaded by the preset loader.
     /// Image nodes read from this to resolve their `resource_name` param.
     pub resource_handles: &'a HashMap<String, TextureHandle>,
+    /// Composite blend mode override: 0 = source-over (paint), 1 = destination-out (erase).
+    /// Set per-stroke by the engine based on the active tool.
+    pub blend_mode: u32,
 }
 
 impl<'a> BrushGpuContext<'a> {

@@ -13,6 +13,8 @@ struct CompositeUniforms {
     canvas_size: vec2f,  // canvas dimensions
     uv_min: vec2f,       // min UV in dab texture (nonzero when clipped at top/left)
     uv_max: vec2f,       // max UV in dab texture
+    blend_mode: u32,     // 0 = source-over, 1 = erase (destination-out)
+    _pad: u32,
 }
 
 @group(0) @binding(0) var<uniform> u: CompositeUniforms;
@@ -70,6 +72,9 @@ struct VertexOutput {
     let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_canvas_copy));
     let bg = textureSample(t_canvas_copy, s_canvas_copy, copy_uv);
 
-    // Porter-Duff source-over (premultiplied fg, straight bg → straight output).
+    // Composite: source-over (paint) or destination-out (erase).
+    if u.blend_mode == 1u {
+        return destination_out(fg_a, bg);
+    }
     return source_over(fg_rgb_pre, fg_a, bg);
 }

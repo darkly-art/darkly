@@ -11,6 +11,20 @@ use darkly::engine::types::StrokeOp;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 
+/// Paint a solid-color brush stroke at a given position (test helper replacing legacy PaintCircle).
+fn paint_at(engine: &mut DarklyEngine, layer_id: u64, x: f32, y: f32, r: f32, g: f32, b: f32) {
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::BrushStroke {
+        x, y, pressure: 1.0,
+        x_tilt: 0.0, y_tilt: 0.0, rotation: 0.0, tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: r, cg: g, cb: b, ca: 1.0,
+    });
+    engine.end_stroke();
+    // Flush the pending diff-based undo commit.
+    engine.render(0.0);
+}
+
 /// Create a headless DarklyEngine with the given canvas dimensions.
 fn test_engine(width: u32, height: u32) -> DarklyEngine {
     let (device, queue) = test_device();
@@ -76,14 +90,7 @@ fn engine_transform_bounds_are_tight() {
 
     engine.select_rect(sel_x, sel_y, sel_w, sel_h, SelectionMode::Replace, false, 0.0);
 
-    engine.begin_stroke(layer_id);
-    engine.stroke_to(StrokeOp::PaintCircle {
-        x: sel_x + sel_w / 2.0,
-        y: sel_y + sel_h / 2.0,
-        radius: 10.0,
-        r: 255, g: 0, b: 0, a: 255,
-    });
-    engine.end_stroke();
+    paint_at(&mut engine, layer_id, sel_x + sel_w / 2.0, sel_y + sel_h / 2.0, 1.0, 0.0, 0.0);
 
     let started = engine.begin_transform(layer_id);
     assert!(started, "begin_transform should succeed with a selection");

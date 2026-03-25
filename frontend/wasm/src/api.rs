@@ -131,6 +131,7 @@ enum Command {
 
     // Brush config
     SetBrushScale(f32),
+    SetBrushBlendMode(u32),
     ResetBrushGraph,
     BrushGraphMoveNode(u64, f32, f32),
 
@@ -202,6 +203,7 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::ClearOverlay => engine.clear_overlay(),
 
             Command::SetBrushScale(s) => engine.set_brush_scale(s),
+            Command::SetBrushBlendMode(m) => engine.set_brush_blend_mode(m),
             Command::ResetBrushGraph => engine.reset_brush_graph(),
             Command::BrushGraphMoveNode(id, x, y) => engine.brush_graph_move_node(id, x, y),
 
@@ -454,6 +456,7 @@ impl DarklyHandle {
     // --- Brush config ---
 
     pub fn set_brush_scale(&self, scale: f32) { self.push(Command::SetBrushScale(scale)); }
+    pub fn set_brush_blend_mode(&self, mode: u32) { self.push(Command::SetBrushBlendMode(mode)); }
     pub fn brush_graph_reset(&self) { self.push(Command::ResetBrushGraph); }
     pub fn brush_graph_move_node(&self, node_id: u32, x: f32, y: f32) { self.push(Command::BrushGraphMoveNode(node_id as u64, x, y)); }
 

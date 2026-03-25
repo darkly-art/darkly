@@ -249,6 +249,11 @@ impl DarklyEngine {
         self.brush_global_scale
     }
 
+    /// Set the composite blend mode: 0 = source-over (paint), 1 = destination-out (erase).
+    pub fn set_brush_blend_mode(&mut self, mode: u32) {
+        self.brush_blend_mode = mode;
+    }
+
     /// Return info about all `user_input` nodes in the active brush graph.
     ///
     /// The result is ordered by node position (top-to-bottom, left-to-right)

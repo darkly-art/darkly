@@ -86,8 +86,6 @@ impl ParamInfo {
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum StrokeOp {
-    PaintCircle { x: f32, y: f32, radius: f32, r: u8, g: u8, b: u8, a: u8 },
-    EraseCircle { x: f32, y: f32, radius: f32 },
     FloodFill { x: f32, y: f32, r: u8, g: u8, b: u8, a: u8, tolerance: u8 },
     LinearGradient {
         x0: f32, y0: f32, x1: f32, y1: f32,

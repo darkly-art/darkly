@@ -37,6 +37,8 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("dab_size", BrushWireType::Vec2),
             PortDef::input("position", BrushWireType::Vec2),
             PortDef::input("scatter_offset", BrushWireType::Vec2),
+            PortDef::input("blend_mode", BrushWireType::Int)
+                .with_range(0.0, 1.0, 0.0),
         ],
         params: &[],
         is_gpu: true,
@@ -64,6 +66,9 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         let base_position = ctx.input("position").as_vec2();
         let scatter = ctx.input("scatter_offset").as_vec2();
         let position = [base_position[0] + scatter[0], base_position[1] + scatter[1]];
+        // Port value if explicitly wired, otherwise use engine-level override.
+        let port_blend = ctx.input("blend_mode").as_f32() as u32;
+        let blend_mode = port_blend.max(gpu.blend_mode);
 
         let dab_w = dab_size[0];
         let dab_h = dab_size[1];
@@ -150,6 +155,8 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             canvas_size: [gpu.canvas_width as f32, gpu.canvas_height as f32],
             uv_min: [uv_min_x, uv_min_y],
             uv_max: [uv_max_x, uv_max_y],
+            blend_mode,
+            _pad: 0,
         };
         gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
 

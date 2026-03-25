@@ -1,6 +1,6 @@
 //! Stroke lifecycle, flood fill, erase helpers, and paint infrastructure.
 
-use super::{DarklyEngine, GpuStrokeState, PendingUndoCommit, ReadbackContext};
+use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use super::types::StrokeOp;
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::paint_info::PaintInformation;
@@ -105,9 +105,8 @@ impl DarklyEngine {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
 
-        // Lazy init: save the region on first stroke_to.
-        if self.gpu_stroke.is_none() {
-            // Flush any pending undo commit before overwriting the scratch texture.
+        // Lazy init: save the canvas to scratch for undo on first stroke_to.
+        if !self.scratch_saved {
             self.flush_pending_undo_commit();
             let (texture, format) = if mask_editing {
                 match self.compositor.mask_texture(layer_id) {
@@ -121,16 +120,13 @@ impl DarklyEngine {
                 }
             };
 
-            // Save the entire canvas to scratch for undo.
             self.gpu.encode("stroke-begin", |encoder| {
                 self.region_store.save_region(encoder, texture, format, [0, 0, canvas_w, canvas_h]);
             });
 
-            self.gpu_stroke = Some(GpuStrokeState::new(format));
+            self.scratch_saved = true;
         }
 
-        // Helper closure to create a paint target from compositor textures.
-        // Defined as a macro to avoid holding borrows across match arms.
         macro_rules! paint_target {
             () => {
                 if mask_editing {
@@ -144,30 +140,6 @@ impl DarklyEngine {
         }
 
         match op {
-            StrokeOp::PaintCircle { x, y, radius, r, g, b, a } => {
-                let target = match paint_target!() { Some(t) => t, None => return };
-                self.gpu.encode("stroke-to", |encoder| {
-                    target.composite_circle(
-                        encoder, &self.paint_pipelines, &self.gpu.queue,
-                        x, y, radius, [r, g, b, a], 1.0,
-                    );
-                });
-                if let Some(gs) = &mut self.gpu_stroke {
-                    gs.expand(x, y, radius, canvas_w, canvas_h);
-                }
-            }
-            StrokeOp::EraseCircle { x, y, radius } => {
-                let target = match paint_target!() { Some(t) => t, None => return };
-                self.gpu.encode("stroke-to", |encoder| {
-                    target.erase_circle(
-                        encoder, &self.paint_pipelines, &self.gpu.queue,
-                        x, y, radius,
-                    );
-                });
-                if let Some(gs) = &mut self.gpu_stroke {
-                    gs.expand(x, y, radius, canvas_w, canvas_h);
-                }
-            }
             StrokeOp::LinearGradient { x0, y0, x1, y1, r0, g0, b0, a0, r1, g1, b1, a1 } => {
                 let target = match paint_target!() { Some(t) => t, None => return };
                 self.gpu.encode("stroke-gradient", |encoder| {
@@ -176,13 +148,8 @@ impl DarklyEngine {
                         x0, y0, x1, y1, [r0, g0, b0, a0], [r1, g1, b1, a1], None,
                     );
                 });
-                // Gradient covers the full canvas.
-                if let Some(gs) = &mut self.gpu_stroke {
-                    gs.stroke_rect = Some([0, 0, canvas_w, canvas_h]);
-                }
             }
             StrokeOp::FloodFill { x, y, r, g, b, a, tolerance } => {
-                // Flood fill needs mutable self access, so the target is obtained inside.
                 self.gpu_flood_fill(layer_id, mask_editing,
                     x as i32, y as i32, [r, g, b, a], tolerance,
                     canvas_w, canvas_h);
@@ -283,6 +250,7 @@ impl DarklyEngine {
                 selection_bind_group: sel_bg,
                 global_scale: self.brush_global_scale,
                 resource_handles: &self.resource_handles,
+                blend_mode: self.brush_blend_mode,
             };
 
             engine.move_to(info, &mut gpu_ctx);
@@ -372,16 +340,20 @@ impl DarklyEngine {
             );
         });
 
-        // 4. Commit undo — the stroke lifecycle was deferred for async fill.
-        if let Some(gs) = self.gpu_stroke.take() {
-            let rect = [0u32, 0, canvas_w, canvas_h];
-            self.gpu.encode("flood-fill-undo", |encoder| {
-                let entry = self.region_store.commit_region(
-                    encoder, layer_id, gs.format, rect,
-                );
-                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
-            });
-        }
+        // 4. Commit undo — use full canvas rect (flood fill can change any pixel).
+        let format = if mask_editing {
+            wgpu::TextureFormat::R8Unorm
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+        let rect = [0u32, 0, canvas_w, canvas_h];
+        self.gpu.encode("flood-fill-undo", |encoder| {
+            let entry = self.region_store.commit_region(
+                encoder, layer_id, format, rect,
+            );
+            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        });
+        self.scratch_saved = false;
 
         self.compositor.mark_dirty();
     }
@@ -395,17 +367,18 @@ impl DarklyEngine {
                 return;
             }
 
-            // Brush stroke path: finalize the StrokeEngine and dispatch
-            // a GPU diff to find the exact changed region for undo.
+            // Finalize brush stroke engine if active.
             if let Some(engine) = self.brush_stroke_engine.take() {
                 let _record = engine.end();
+            }
+
+            // Dispatch GPU diff to find the exact changed region for undo.
+            if self.scratch_saved && self.pending_undo_commit.is_none() {
                 let format = if self.editing_mask_layer == Some(layer_id) {
                     wgpu::TextureFormat::R8Unorm
                 } else {
                     wgpu::TextureFormat::Rgba8Unorm
                 };
-
-                // Get the current canvas texture view and the pre-stroke scratch view.
                 let current_view = if self.editing_mask_layer == Some(layer_id) {
                     self.compositor.mask_texture(layer_id).map(|t| &t.view)
                 } else {
@@ -423,19 +396,7 @@ impl DarklyEngine {
                     });
                 }
             }
-
-            if let Some(gs) = self.gpu_stroke.take() {
-                // Legacy GPU path: commit the changed region to the undo buffer.
-                if let Some(rect) = gs.stroke_rect {
-                    self.gpu.encode("stroke-end", |encoder| {
-                        let entry = self.region_store.commit_region(
-                            encoder, layer_id, gs.format, rect,
-                        );
-                        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
-                    });
-                }
-                // else: no paint was applied (empty stroke), nothing to undo.
-            }
+            self.scratch_saved = false;
             self.doc.set_mask_editing(None);
         }
     }

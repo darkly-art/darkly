@@ -258,6 +258,7 @@ fn textured_ink() -> PresetBundle {
     b.add_image("ink_dry.png");
     b.wire_pressure_to_size();
     b.wire_pressure_to_opacity();
+    b.wire(b.pen, "fuzzy_dab", b.stamp, "rotation");
     b.wire_color();
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");

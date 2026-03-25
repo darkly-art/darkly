@@ -463,13 +463,17 @@ fn clear_selection_contents() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
 
-    // Paint the full canvas.
+    // Paint at center — default brush at pressure=1.0 is 256px diameter,
+    // which covers the entire 128x128 canvas.
     engine.begin_stroke(layer_id);
-    engine.stroke_to(StrokeOp::PaintCircle {
-        x: 64.0, y: 64.0, radius: 100.0,
-        r: 255, g: 0, b: 0, a: 255,
+    engine.stroke_to(StrokeOp::BrushStroke {
+        x: 64.0, y: 64.0, pressure: 1.0,
+        x_tilt: 0.0, y_tilt: 0.0, rotation: 0.0, tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
     });
     engine.end_stroke();
+    engine.render(0.0); // flush pending diff undo
 
     // Select left half and delete.
     engine.select_rect(0.0, 0.0, 64.0, h as f32, SelectionMode::Replace, false, 0.0);

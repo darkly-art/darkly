@@ -57,40 +57,6 @@ pub(crate) struct PendingUndoCommit {
     pub format: wgpu::TextureFormat,
 }
 
-/// Tracks the bounding rect of a GPU stroke in progress.
-pub(crate) struct GpuStrokeState {
-    pub format: wgpu::TextureFormat,
-    /// Tight bounding rect of all circles composited so far: [x, y, w, h].
-    /// None until the first stroke_to call.
-    pub stroke_rect: Option<[u32; 4]>,
-}
-
-impl GpuStrokeState {
-    pub fn new(format: wgpu::TextureFormat) -> Self {
-        GpuStrokeState { format, stroke_rect: None }
-    }
-
-    /// Expand the stroke rect to include a circle at (cx, cy) with the given radius.
-    pub fn expand(&mut self, cx: f32, cy: f32, radius: f32, canvas_w: u32, canvas_h: u32) {
-        let pad = 2.0; // softness + 1 pixel margin
-        let x0 = (cx - radius - pad).max(0.0) as u32;
-        let y0 = (cy - radius - pad).max(0.0) as u32;
-        let x1 = ((cx + radius + pad).ceil() as u32).min(canvas_w);
-        let y1 = ((cy + radius + pad).ceil() as u32).min(canvas_h);
-
-        self.stroke_rect = Some(match self.stroke_rect {
-            None => [x0, y0, x1 - x0, y1 - y0],
-            Some([sx, sy, sw, sh]) => {
-                let nx = sx.min(x0);
-                let ny = sy.min(y0);
-                let nx1 = (sx + sw).max(x1);
-                let ny1 = (sy + sh).max(y1);
-                [nx, ny, nx1 - nx, ny1 - ny]
-            }
-        });
-    }
-}
-
 /// Context for a pending async GPU readback — travels with the request and
 /// is returned alongside the pixel data on completion.
 pub(crate) enum ReadbackContext {
@@ -171,8 +137,8 @@ pub struct DarklyEngine {
     // --- GPU Paint Infrastructure (Phase 2) ---
     pub(crate) region_store: RegionStore,
     pub(crate) paint_pipelines: PaintPipelines,
-    /// Active GPU stroke state (replaces CPU transaction for PaintCircle/EraseCircle).
-    pub(crate) gpu_stroke: Option<GpuStrokeState>,
+    /// True when the scratch texture has been saved for the current stroke.
+    pub(crate) scratch_saved: bool,
 
     // --- Brush Engine (Phase 4-5) ---
     pub(crate) dab_pool: DabTexturePool,
@@ -193,6 +159,8 @@ pub struct DarklyEngine {
     /// Controls the canvas footprint of the brush independently from the
     /// node graph's internal rendering resolution.  Default 1.0.
     pub(crate) brush_global_scale: f32,
+    /// Composite blend mode for the current stroke: 0 = paint, 1 = erase.
+    pub(crate) brush_blend_mode: u32,
 
     // --- Diff rect (undo region computation) ---
     pub(crate) diff_rect: DiffRectPass,
@@ -254,7 +222,7 @@ impl DarklyEngine {
             floating: None,
             region_store,
             paint_pipelines,
-            gpu_stroke: None,
+            scratch_saved: false,
             dab_pool,
             brush_pipelines,
             brush_stroke_engine: None,
@@ -268,6 +236,7 @@ impl DarklyEngine {
             },
             resource_handles: std::collections::HashMap::new(),
             brush_global_scale: 1.0,
+            brush_blend_mode: 0,
             diff_rect,
             pending_undo_commit: None,
             gpu_selection,
