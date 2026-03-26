@@ -656,10 +656,19 @@ impl DarklyHandle {
 
     // --- Brush presets (direct) ---
 
+    /// Load a preset.  Returns `null` on success (no auto-layout needed),
+    /// `true` if auto-layout was applied (frontend should re-layout with
+    /// DOM sizes), or an error string.
     pub fn brush_preset_load(&self, name: &str) -> JsValue {
         self.flush_if_needed();
         match self.engine.borrow_mut().brush_preset_load(name) {
-            Ok(()) => JsValue::NULL,
+            Ok(needs_layout) => {
+                if needs_layout {
+                    JsValue::TRUE
+                } else {
+                    JsValue::NULL
+                }
+            }
             Err(e) => JsValue::from_str(&e),
         }
     }

@@ -1,9 +1,23 @@
 <script lang="ts">
-    import { setContext } from 'svelte';
+    import { setContext, tick } from 'svelte';
     import { brushGraph, WIRE_COLORS } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
+
+    // --- Auto-layout when nodes have no positions ---
+    // $effect runs after DOM is updated, so node elements can be measured.
+    $effect(() => {
+        if (!brushGraph.needsLayout) return;
+        const sizes: Record<string, [number, number]> = {};
+        for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
+            const id = el.dataset.nodeId;
+            if (id) sizes[id] = [el.offsetWidth, el.offsetHeight];
+        }
+        if (Object.keys(sizes).length > 0) {
+            brushGraph.autoLayout(sizes);
+        }
+    });
 
     // --- Port offset registration ---
     // PortWidget measures its dot's offset relative to its node on mount
@@ -172,13 +186,31 @@
             containerEl.releasePointerCapture(e.pointerId);
             return;
         }
-        // Wire drag released on background (no port hit) → cancel
         if (brushGraph.draggingFrom) {
-            brushGraph.draggingFrom = null;
-            brushGraph.dragMouse = null;
+            // Pointer capture prevents the target port from seeing pointerup.
+            // Release capture and hit-test to find the port dot under the pointer.
             if (containerEl.hasPointerCapture(e.pointerId)) {
                 containerEl.releasePointerCapture(e.pointerId);
             }
+            const target = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+            const portEl = target?.closest('[data-port-node]') as HTMLElement | null;
+            if (portEl) {
+                const drag = brushGraph.draggingFrom;
+                const targetNode = Number(portEl.dataset.portNode);
+                const targetPort = portEl.dataset.portName!;
+                const targetDir = portEl.dataset.portDir as 'Input' | 'Output';
+
+                // Don't connect to self.
+                if (!(drag.node === targetNode && drag.port === targetPort)) {
+                    if (drag.dir === 'Output' && targetDir === 'Input') {
+                        brushGraph.connect(drag.node, drag.port, targetNode, targetPort);
+                    } else if (drag.dir === 'Input' && targetDir === 'Output') {
+                        brushGraph.connect(targetNode, targetPort, drag.node, drag.port);
+                    }
+                }
+            }
+            brushGraph.draggingFrom = null;
+            brushGraph.dragMouse = null;
         }
     }
 

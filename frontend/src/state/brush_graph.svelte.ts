@@ -206,15 +206,24 @@ class BrushGraphState {
     /** Load a preset by name. */
     loadPreset(name: string) {
         if (!app.handle) return;
-        const err = app.handle.brush_preset_load(name);
-        if (err !== null) {
-            this.error = String(err);
+        const result = app.handle.brush_preset_load(name);
+        // Error string → load failed.
+        if (result !== null && result !== true) {
+            this.error = String(result);
             return;
         }
         this.activePreset = name;
         this.fetchGraph();
         this.refreshUserInputs();
         this.error = null;
+    }
+
+    /** True when all node positions are at the origin (no layout assigned). */
+    get needsLayout(): boolean {
+        if (!this.graph) return false;
+        const nodes = Object.values(this.graph.nodes);
+        if (nodes.length === 0) return false;
+        return nodes.every(n => n.position[0] === 0 && n.position[1] === 0);
     }
 
     /**

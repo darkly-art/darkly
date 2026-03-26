@@ -99,6 +99,9 @@
         onpointerdown={onPointerDown}
         onpointerup={onPointerUp}
         bind:this={dotEl}
+        data-port-node={nodeId}
+        data-port-name={port.name}
+        data-port-dir={port.dir}
     ></div>
     <span class="port-label">{port.name}</span>
 </div>

@@ -13,7 +13,9 @@ impl DarklyEngine {
     /// Load a preset by name and set it as the active brush graph.
     ///
     /// Also uploads any brush tip resources to the GPU dab pool cache.
-    pub fn brush_preset_load(&mut self, name: &str) -> Result<(), String> {
+    /// Returns `true` if the preset has no saved positions and the
+    /// frontend should run auto-layout with DOM-measured sizes.
+    pub fn brush_preset_load(&mut self, name: &str) -> Result<bool, String> {
         let bundle = self
             .preset_library
             .get(name)
@@ -27,11 +29,7 @@ impl DarklyEngine {
             .map_err(|e| format!("failed to serialize graph: {e}"))?;
         self.set_brush_graph(&json)?;
 
-        // If the preset has no saved positions, compute them now.
-        if self.active_brush_graph.needs_layout() {
-            self.active_brush_graph.auto_layout();
-        }
-        Ok(())
+        Ok(self.active_brush_graph.needs_layout())
     }
 
     /// Save the active brush graph as a preset in the library.
