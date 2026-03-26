@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
+    import { app } from '../../state/app.svelte';
     import { CanvasRenderer } from './canvas_renderer';
 
     let canvasEl: HTMLCanvasElement;
@@ -16,6 +17,23 @@
 
     let isDraggingSlider = false;
     let sliderNodeId = 0, sliderParamIdx = 0;
+
+    /** Whether we've suppressed the main canvas animation loop.
+     *  Tied to pointer capture: set on setPointerCapture, cleared on
+     *  lostpointercapture.  The browser guarantees lostpointercapture
+     *  fires when capture ends for ANY reason (release, pointer up,
+     *  window blur, tab switch, element removal) — so this can never
+     *  leak.  Same guarantee as Python's `with:`. */
+    let interactionActive = false;
+
+    /** Capture the pointer and suppress the main canvas animation loop. */
+    function capturePointer(e: PointerEvent) {
+        canvasEl.setPointerCapture(e.pointerId);
+        if (!interactionActive) {
+            interactionActive = true;
+            app.beginInteraction();
+        }
+    }
 
     // --- Image upload helpers ---
 
@@ -92,7 +110,7 @@
             renderer.panX -= e.deltaX;
             renderer.panY -= e.deltaY;
         }
-        renderer.markDirty();
+        renderer.markDirty(true);
     }
 
     function onPointerDown(e: PointerEvent) {
@@ -104,7 +122,7 @@
             isPanning = true;
             panStartX = e.clientX; panStartY = e.clientY;
             panOriginX = renderer.panX; panOriginY = renderer.panY;
-            canvasEl.setPointerCapture(e.pointerId);
+            capturePointer(e);
             return;
         }
         if (e.button !== 0) return;
@@ -124,7 +142,7 @@
                 dragStartGX = g.x; dragStartGY = g.y;
                 const n = brushGraph.graph?.nodes[String(hit.nodeId!)];
                 if (n) { nodeStartX = n.position[0]; nodeStartY = n.position[1]; }
-                canvasEl.setPointerCapture(e.pointerId);
+                capturePointer(e);
                 break;
             }
 
@@ -138,12 +156,12 @@
                     if (conn) {
                         brushGraph.disconnect(conn.from.node, conn.from.port, conn.to.node, conn.to.port);
                         brushGraph.draggingFrom = { node: conn.from.node, port: conn.from.port, dir: 'Output' };
-                        canvasEl.setPointerCapture(e.pointerId);
+                        capturePointer(e);
                         break;
                     }
                 }
                 brushGraph.draggingFrom = { node: nodeId!, port: portName!, dir: portDir! };
-                canvasEl.setPointerCapture(e.pointerId);
+                capturePointer(e);
                 break;
             }
 
@@ -154,7 +172,7 @@
                     brushGraph.setParamLocal(hit.nodeId!, hit.paramIndex!, v);
                     brushGraph.setParam(hit.nodeId!, hit.paramIndex!, 'bool', v);
                 }
-                renderer.markDirty();
+                renderer.markDirty(true);
                 break;
             }
 
@@ -162,10 +180,10 @@
                 isDraggingSlider = true;
                 sliderNodeId = hit.nodeId!;
                 sliderParamIdx = hit.paramIndex!;
-                canvasEl.setPointerCapture(e.pointerId);
+                capturePointer(e);
                 { const v = renderer.sliderValueAt(hit.nodeId!, hit.paramIndex!, g.x);
                   if (v !== null) brushGraph.setParamLocal(hit.nodeId!, hit.paramIndex!, v); }
-                renderer.markDirty();
+                renderer.markDirty(true);
                 break;
 
             case 'image-upload':
@@ -189,7 +207,7 @@
         if (isPanning) {
             renderer.panX = panOriginX + (e.clientX - panStartX);
             renderer.panY = panOriginY + (e.clientY - panStartY);
-            renderer.markDirty();
+            renderer.markDirty(true);
             return;
         }
 
@@ -197,25 +215,29 @@
 
         if (isDraggingNode) {
             brushGraph.moveNode(dragNodeId, nodeStartX + (g.x - dragStartGX), nodeStartY + (g.y - dragStartGY));
-            renderer.markDirty();
+            renderer.markDirty(true);
             return;
         }
 
         if (isDraggingSlider) {
             const v = renderer.sliderValueAt(sliderNodeId, sliderParamIdx, g.x);
             if (v !== null) brushGraph.setParamLocal(sliderNodeId, sliderParamIdx, v);
-            renderer.markDirty();
+            renderer.markDirty(true);
             return;
         }
 
         if (brushGraph.draggingFrom) {
             brushGraph.dragMouse = { x: g.x, y: g.y };
-            renderer.markDirty();
+            renderer.markDirty(true);
         }
     }
 
     function onPointerUp(e: PointerEvent) {
         if (!renderer) return;
+
+        // Semantic cleanup for each drag type.  The interaction gating
+        // cleanup (endInteraction) happens in onLostCapture below —
+        // guaranteed by the browser regardless of how capture ends.
 
         if (isPanning) {
             isPanning = false;
@@ -260,6 +282,20 @@
         }
     }
 
+    /** Guaranteed cleanup — fires when pointer capture ends for ANY
+     *  reason: explicit release, pointer up, window blur, tab switch,
+     *  element removal.  This is the single place that resumes the
+     *  main canvas animation loop. */
+    function onLostCapture() {
+        isPanning = false;
+        isDraggingNode = false;
+        isDraggingSlider = false;
+        if (interactionActive) {
+            interactionActive = false;
+            app.endInteraction();
+        }
+    }
+
     function onContextMenu(e: MouseEvent) { e.preventDefault(); }
 
     // --- Drag & drop image onto Image nodes ---
@@ -299,6 +335,7 @@
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
+    onlostpointercapture={onLostCapture}
     oncontextmenu={onContextMenu}
     ondragover={onDragOver}
     ondrop={onDrop}

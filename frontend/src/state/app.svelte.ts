@@ -86,6 +86,25 @@ class AppState {
 
     private _framePending = false;
 
+    /**
+     * Number of active UI interactions (panel drags, slider adjustments,
+     * etc.) that should suppress continuous animation rendering.  While
+     * non-zero, `requestFrame()` still runs one-shot requests (e.g. from
+     * tool actions) but will NOT self-schedule the next animation frame.
+     * This keeps the main thread free for pointer events so that panels
+     * like the brush builder remain responsive during animated veils.
+     */
+    private _interactionCount = 0;
+
+    /** Call when a sustained UI interaction starts (e.g. node drag). */
+    beginInteraction() { this._interactionCount++; }
+
+    /** Call when it ends.  Resumes animation rendering if needed. */
+    endInteraction() {
+        this._interactionCount = Math.max(0, this._interactionCount - 1);
+        if (this._interactionCount === 0) this.requestFrame();
+    }
+
     /** Schedule a render frame if one isn't already pending. */
     requestFrame() {
         if (this._framePending) return;
@@ -108,7 +127,14 @@ class AppState {
                 }
             }
 
-            if (needsMore || this._copyCallback) this.requestFrame();
+            // Continue animation loop only when no UI interaction is
+            // monopolizing the main thread.  One-shot renders (tool
+            // actions, resize, etc.) always go through — only the
+            // self-scheduling continuous loop is suppressed.
+            const shouldContinue = needsMore || this._copyCallback;
+            if (shouldContinue && this._interactionCount === 0) {
+                this.requestFrame();
+            }
         });
     }
 }

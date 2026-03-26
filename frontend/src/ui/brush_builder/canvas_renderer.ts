@@ -148,7 +148,23 @@ export class CanvasRenderer {
     }
 
     stop() { cancelAnimationFrame(this.rafId); }
-    markDirty() { this.dirty = true; }
+
+    /**
+     * Mark the canvas as needing a redraw.  When `immediate` is true the
+     * draw happens synchronously — right inside the current event handler —
+     * so the browser paints the result on the very next
+     * composite, without waiting for a RAF callback that might be queued
+     * behind heavy WASM work.  Use this for pointer-driven updates (drag,
+     * pan, slider) where latency matters.
+     */
+    markDirty(immediate = false) {
+        if (immediate) {
+            this.draw();
+            this.dirty = false;
+        } else {
+            this.dirty = true;
+        }
+    }
 
     // ── coordinate conversion ───────────────────────────────────────
 
