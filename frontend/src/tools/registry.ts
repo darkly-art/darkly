@@ -10,7 +10,10 @@ export interface ToolContext {
 export interface Tool {
     readonly id: string;
     readonly name: string;
-    readonly icon: string;
+    /** Font Awesome icon class (e.g. 'fa-solid fa-paintbrush'). */
+    readonly faIcon: string;
+    /** Tool group for toolbar visual separation (e.g. 'paint', 'select'). */
+    readonly group: string;
 
     /** Key name in HotkeyMap that activates this tool (e.g. 'brushTool').
      *  Used by hotkey registration to wire up tool switching automatically. */

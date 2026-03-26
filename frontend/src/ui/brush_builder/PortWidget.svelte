@@ -129,7 +129,7 @@
     }
     .port-label {
         font-size: 9px;
-        color: #bbb;
+        color: var(--text-muted);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;

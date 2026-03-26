@@ -42,20 +42,69 @@
         }
         return groups;
     }
+
+    // --- Scrub drag logic ---
+
+    interface ScrubDef {
+        label: string;
+        icon: string;
+        min: number;
+        max: number;
+        unit: string;
+        speed: number;
+        get: () => number;
+        set: (v: number) => void;
+        fmt: (v: number) => string;
+    }
+
+    const scrubs: ScrubDef[] = [
+        {
+            label: 'Size', icon: 'fa-solid fa-circle',
+            min: 1, max: 500, unit: 'px', speed: 2,
+            get: () => app.brushSize,
+            set: (v) => { app.brushSize = v; },
+            fmt: (v) => `${Math.round(v)} px`,
+        },
+        {
+            label: 'Opacity', icon: 'fa-solid fa-droplet',
+            min: 0, max: 100, unit: '%', speed: 0.5,
+            get: () => Math.round(app.brushOpacity * 100),
+            set: (v) => { app.brushOpacity = v / 100; },
+            fmt: (v) => `${Math.round(v)}%`,
+        },
+    ];
+
+    let draggingScrub = $state<ScrubDef | null>(null);
+    let scrubStartX = 0;
+    let scrubStartVal = 0;
+
+    function onScrubDown(e: PointerEvent, scrub: ScrubDef) {
+        e.preventDefault();
+        scrubStartX = e.clientX;
+        scrubStartVal = scrub.get();
+        draggingScrub = scrub;
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    }
+
+    function onScrubMove(e: PointerEvent, scrub: ScrubDef) {
+        if (draggingScrub !== scrub) return;
+        const dx = e.clientX - scrubStartX;
+        const v = Math.round(Math.min(scrub.max, Math.max(scrub.min, scrubStartVal + dx * scrub.speed)));
+        scrub.set(v);
+    }
+
+    function onScrubUp(e: PointerEvent, scrub: ScrubDef) {
+        if (draggingScrub !== scrub) return;
+        draggingScrub = null;
+        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    }
 </script>
 
 <svelte:window onclick={handleClickOutside} />
 
-<div class="brush-bar-wrapper">
-    <!-- Brush builder panel (expands above the bar) -->
-    {#if brushGraph.isOpen}
-        <div class="builder-panel">
-            <BrushBuilder />
-        </div>
-    {/if}
-
-    <!-- Persistent bottom bar -->
-    <div class="brush-bar">
+<div class="bottom-area">
+    <!-- Tool options bar (always visible) -->
+    <div class="tool-options">
         <!-- Preset selector -->
         <div class="preset-section">
             <button
@@ -70,7 +119,8 @@
             </button>
 
             {#if presetDropdownOpen}
-                <div class="preset-dropdown" onclick={(e) => e.stopPropagation()}>
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="preset-dropdown dropdown-surface" onclick={(e) => e.stopPropagation()}>
                     {#each [...groupedPresets()] as [category, presets]}
                         <div class="preset-category">{category}</div>
                         {#each presets as preset}
@@ -90,45 +140,55 @@
             {/if}
         </div>
 
-        <div class="separator"></div>
+        <!-- Scrub controls -->
+        {#each scrubs as scrub}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+                class="scrub"
+                class:dragging={draggingScrub === scrub}
+                onpointerdown={(e) => onScrubDown(e, scrub)}
+                onpointermove={(e) => onScrubMove(e, scrub)}
+                onpointerup={(e) => onScrubUp(e, scrub)}
+            >
+                <i class="{scrub.icon} scrub-icon"></i>
+                <div class="scrub-text">
+                    <span class="scrub-label">{scrub.label}</span>
+                    <span class="scrub-value">{scrub.fmt(scrub.get())}</span>
+                </div>
+            </div>
+        {/each}
 
-        <!-- Brush size -->
-        <div class="slider-control">
-            <span class="control-label">Size</span>
-            <input
-                type="range"
-                class="bar-slider"
-                min="1" max="500" step="1"
-                bind:value={app.brushSize}
-            />
-            <span class="control-value">{app.brushSize}</span>
-        </div>
-
-        <!-- Brush opacity -->
-        <div class="slider-control">
-            <span class="control-label">Opacity</span>
-            <input
-                type="range"
-                class="bar-slider"
-                min="0" max="1" step="0.01"
-                bind:value={app.brushOpacity}
-            />
-            <span class="control-value">{Math.round(app.brushOpacity * 100)}%</span>
-        </div>
-
-        <!-- User input sliders from the brush graph -->
+        <!-- User input scrubs from the brush graph -->
         {#each brushGraph.userInputs as input}
-            <div class="separator"></div>
-            <div class="slider-control">
-                <span class="control-label">{input.label}</span>
-                <input
-                    type="range"
-                    class="bar-slider"
-                    min="0" max="1" step="0.01"
-                    value={input.value}
-                    oninput={(e) => handleUserInput(input.nodeId, 1, parseFloat((e.target as HTMLInputElement).value))}
-                />
-                <span class="control-value">{Math.round(input.value * 100)}%</span>
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+                class="scrub"
+                onpointerdown={(e) => {
+                    e.preventDefault();
+                    const startX = e.clientX;
+                    const startVal = input.value;
+                    const el = e.currentTarget as HTMLElement;
+                    el.setPointerCapture(e.pointerId);
+                    el.classList.add('dragging');
+                    const onMove = (ev: PointerEvent) => {
+                        const dx = ev.clientX - startX;
+                        const v = Math.min(1, Math.max(0, startVal + dx * 0.005));
+                        handleUserInput(input.nodeId, 1, v);
+                    };
+                    const onUp = () => {
+                        el.classList.remove('dragging');
+                        el.removeEventListener('pointermove', onMove);
+                        el.removeEventListener('pointerup', onUp);
+                    };
+                    el.addEventListener('pointermove', onMove);
+                    el.addEventListener('pointerup', onUp);
+                }}
+            >
+                <i class="fa-solid fa-sliders scrub-icon"></i>
+                <div class="scrub-text">
+                    <span class="scrub-label">{input.label}</span>
+                    <span class="scrub-value">{Math.round(input.value * 100)}%</span>
+                </div>
             </div>
         {/each}
 
@@ -139,68 +199,119 @@
             <span class="error-badge" title={brushGraph.error}>Error</span>
         {/if}
 
-        <!-- Builder toggle -->
+        <!-- Bottom bar toggle -->
         <button
-            class="builder-toggle"
-            class:active={brushGraph.isOpen}
+            class="bottom-bar-toggle"
             onclick={toggleBuilder}
-            title={brushGraph.isOpen ? 'Close brush builder' : 'Open brush builder'}
+            title={brushGraph.isOpen ? 'Collapse brush builder' : 'Expand brush builder'}
         >
-            <svg width="14" height="14" viewBox="0 0 14 14">
-                {#if brushGraph.isOpen}
-                    <path d="M1 10l6-6 6 6" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                {:else}
-                    <path d="M1 4l6 6 6-6" stroke="currentColor" stroke-width="1.5" fill="none"/>
-                {/if}
-            </svg>
+            <i class="fa-solid fa-chevron-up" class:flipped={brushGraph.isOpen}></i>
         </button>
     </div>
+
+    <!-- Expandable brush builder -->
+    {#if brushGraph.isOpen}
+        <div class="builder-panel">
+            <BrushBuilder />
+        </div>
+    {/if}
 </div>
 
 <style>
-    .brush-bar-wrapper {
+    .bottom-area {
         display: flex;
         flex-direction: column;
         flex-shrink: 0;
     }
 
-    .builder-panel {
-        height: 280px;
-        min-height: 200px;
-    }
+    /* ── Tool Options Bar ── */
 
-    .brush-bar {
+    .tool-options {
         display: flex;
         align-items: center;
-        gap: 8px;
+        justify-content: center;
+        gap: 4px;
         padding: 4px 8px;
-        background: #252525;
-        border-top: 1px solid #333;
-        min-height: 32px;
-        position: relative;
+        background: var(--bg-raised);
+        flex-shrink: 0;
     }
 
-    /* Preset selector */
+    /* ── Scrub Controls ── */
+
+    .scrub {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 6px;
+        cursor: col-resize;
+        background: var(--bg-hover);
+        transition: background 0.1s;
+    }
+
+    .scrub:hover {
+        background: var(--bg-active);
+    }
+
+    .scrub.dragging {
+        background: var(--accent);
+    }
+
+    .scrub.dragging :global(.scrub-icon),
+    .scrub.dragging .scrub-label,
+    .scrub.dragging .scrub-value {
+        color: #ffffff;
+    }
+
+    :global(.scrub-icon) {
+        font-size: 14px;
+        color: var(--text-muted);
+    }
+
+    .scrub-text {
+        display: flex;
+        flex-direction: column;
+    }
+
+    .scrub-label {
+        font-size: 9px;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        line-height: 1;
+    }
+
+    .scrub-value {
+        font-size: 12px;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.3;
+    }
+
+    /* ── Preset Selector ── */
+
     .preset-section {
         position: relative;
+        flex-shrink: 0;
     }
 
     .preset-button {
         display: flex;
         align-items: center;
         gap: 4px;
-        background: #2a2a2a;
-        border: 1px solid #444;
-        border-radius: 4px;
-        color: #ddd;
+        background: var(--bg-hover);
+        border: none;
+        border-radius: 6px;
+        color: var(--text);
         cursor: pointer;
         font-size: 11px;
         padding: 4px 8px;
         min-width: 100px;
+        transition: background 0.1s;
     }
     .preset-button:hover {
-        background: #333;
-        border-color: #555;
+        background: var(--bg-active);
     }
 
     .preset-name {
@@ -213,7 +324,7 @@
 
     .chevron {
         flex-shrink: 0;
-        color: #888;
+        color: var(--text-muted);
     }
 
     .preset-dropdown {
@@ -223,18 +334,14 @@
         min-width: 180px;
         max-height: 300px;
         overflow-y: auto;
-        background: #2a2a2a;
-        border: 1px solid #444;
-        border-radius: 4px;
         margin-bottom: 4px;
         padding: 4px 0;
         z-index: 100;
-        box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.4);
     }
 
     .preset-category {
         font-size: 9px;
-        color: #888;
+        color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.5px;
         padding: 6px 12px 2px;
@@ -246,85 +353,26 @@
         text-align: left;
         background: none;
         border: none;
-        color: #ccc;
+        color: var(--text);
         cursor: pointer;
         font-size: 11px;
         padding: 4px 12px;
     }
     .preset-item:hover {
-        background: #3a3a3a;
+        background: var(--bg-hover);
     }
     .preset-item.active {
-        color: #7a7aff;
-        background: #2a2a3a;
+        color: var(--accent);
     }
 
     .preset-empty {
         font-size: 11px;
-        color: #666;
+        color: var(--text-dim);
         padding: 8px 12px;
         font-style: italic;
     }
 
-    /* Separator */
-    .separator {
-        width: 1px;
-        height: 20px;
-        background: #444;
-        flex-shrink: 0;
-    }
-
-    /* Slider controls */
-    .slider-control {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-    }
-
-    .control-label {
-        font-size: 10px;
-        color: #888;
-        white-space: nowrap;
-        min-width: 32px;
-    }
-
-    .bar-slider {
-        width: 80px;
-        height: 4px;
-        -webkit-appearance: none;
-        appearance: none;
-        background: #444;
-        border-radius: 2px;
-        outline: none;
-        cursor: pointer;
-    }
-
-    .bar-slider::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        appearance: none;
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        background: #6a6aff;
-        cursor: pointer;
-    }
-
-    .bar-slider::-moz-range-thumb {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        background: #6a6aff;
-        border: none;
-        cursor: pointer;
-    }
-
-    .control-value {
-        font-size: 10px;
-        color: #aaa;
-        min-width: 28px;
-        text-align: right;
-        font-variant-numeric: tabular-nums;
-    }
+    /* ── Spacer & Toggle ── */
 
     .spacer {
         flex: 1;
@@ -332,31 +380,48 @@
 
     .error-badge {
         font-size: 9px;
-        color: #ff6b6b;
-        background: #3a2020;
+        color: var(--danger);
+        background: var(--bg-active);
         padding: 2px 6px;
         border-radius: 3px;
         cursor: help;
+        flex-shrink: 0;
     }
 
-    /* Builder toggle */
-    .builder-toggle {
-        background: #2a2a2a;
-        border: 1px solid transparent;
-        border-radius: 4px;
-        color: #888;
-        cursor: pointer;
-        padding: 4px 6px;
+    .bottom-bar-toggle {
+        width: 28px;
+        height: 28px;
         display: flex;
         align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        border-radius: 6px;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 10px;
+        flex-shrink: 0;
+        transition: color 0.1s, background 0.1s;
     }
-    .builder-toggle:hover {
-        background: #333;
-        color: #ccc;
+
+    .bottom-bar-toggle:hover {
+        background: var(--bg-active);
+        color: var(--text);
     }
-    .builder-toggle.active {
-        background: #3a3a3a;
-        border-color: #6a6aff;
-        color: #ccc;
+
+    .bottom-bar-toggle i {
+        transition: transform 0.2s ease-out;
+    }
+
+    .bottom-bar-toggle .flipped {
+        transform: rotate(180deg);
+    }
+
+    /* ── Builder Panel ── */
+
+    .builder-panel {
+        height: 33vh;
+        min-height: 200px;
+        border-top: 1px solid var(--bg-hover);
     }
 </style>

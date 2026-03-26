@@ -1,0 +1,13 @@
+.dark {
+    --bg:          #000000;
+    --bg-raised:   #000000;
+    --bg-hover:    #111111;
+    --bg-active:   #1a1a1a;
+    --text:        #cccccc;
+    --text-muted:  #666666;
+    --text-dim:    #444444;
+    --accent:      #5b7ff5;
+    --danger:      #e05555;
+    --thumb-bg:    #333333;
+    --canvas-bg:   #2a2a2a;
+}

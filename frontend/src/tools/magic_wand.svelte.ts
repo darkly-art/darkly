@@ -19,7 +19,8 @@ const DEFAULT_TOLERANCE = 15;
 export const magicWandTool: Tool = {
     id: 'magic_wand',
     name: 'Magic Wand',
-    icon: '✦',
+    faIcon: 'fa-solid fa-wand-magic-sparkles',
+    group: 'select',
     hotkeyAction: 'magicWandTool',
 
     onPointerDown(_ctx, e, cx, cy) {

@@ -173,21 +173,21 @@
         left: 0;
         top: 0;
         min-width: 140px;
-        background: #2a2a2a;
-        border: 1px solid #444;
+        background: var(--canvas-bg);
+        border: 1px solid var(--text-dim);
         border-radius: 6px;
         font-size: 11px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.4);
     }
     .node-widget.selected {
-        border-color: #6a6aff;
+        border-color: var(--accent);
     }
     .node-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
         padding: 4px 6px;
-        background: #333;
+        background: var(--bg-hover);
         border-radius: 5px 5px 0 0;
         cursor: grab;
         user-select: none;
@@ -197,20 +197,21 @@
     }
     .node-title {
         font-weight: 600;
-        color: #ddd;
+        color: var(--text);
         font-size: 10px;
     }
     .remove-btn {
         background: none;
         border: none;
-        color: #888;
+        color: var(--text-muted);
         cursor: pointer;
         font-size: 14px;
         padding: 0 2px;
         line-height: 1;
+        transition: color 0.1s;
     }
     .remove-btn:hover {
-        color: #ff6b6b;
+        color: var(--danger);
     }
     .node-body {
         padding: 4px 0;
@@ -228,7 +229,7 @@
     }
     .params {
         padding: 4px 6px;
-        border-top: 1px solid #3a3a3a;
+        border-top: 1px solid var(--bg-hover);
         margin-top: 4px;
     }
     .param-row {
@@ -239,30 +240,20 @@
     }
     .param-label {
         font-size: 9px;
-        color: #999;
+        color: var(--text-muted);
         min-width: 40px;
     }
     .param-slider {
         flex: 1;
         height: 3px;
-        -webkit-appearance: none;
-        appearance: none;
-        background: #444;
-        border-radius: 2px;
-        outline: none;
-        cursor: pointer;
     }
     .param-slider::-webkit-slider-thumb {
-        -webkit-appearance: none;
         width: 8px;
         height: 8px;
-        border-radius: 50%;
-        background: #6a6aff;
-        cursor: pointer;
     }
     .param-value {
         font-size: 8px;
-        color: #888;
+        color: var(--text-muted);
         min-width: 28px;
         text-align: right;
     }

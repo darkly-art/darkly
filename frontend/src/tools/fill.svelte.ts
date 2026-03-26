@@ -4,7 +4,8 @@ import { app } from '../state/app.svelte';
 export const fillTool: Tool = {
     id: 'fill',
     name: 'Fill',
-    icon: 'F',
+    faIcon: 'fa-solid fa-fill-drip',
+    group: 'paint',
     hotkeyAction: 'fillTool',
 
     onPointerDown(ctx, e, cx, cy) {

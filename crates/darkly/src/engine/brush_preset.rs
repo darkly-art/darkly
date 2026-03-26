@@ -25,7 +25,13 @@ impl DarklyEngine {
 
         let json = serde_json::to_string(&bundle.preset.graph)
             .map_err(|e| format!("failed to serialize graph: {e}"))?;
-        self.set_brush_graph(&json)
+        self.set_brush_graph(&json)?;
+
+        // If the preset has no saved positions, compute them now.
+        if self.active_brush_graph.needs_layout() {
+            self.active_brush_graph.auto_layout();
+        }
+        Ok(())
     }
 
     /// Save the active brush graph as a preset in the library.

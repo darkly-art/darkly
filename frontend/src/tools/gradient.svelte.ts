@@ -74,7 +74,8 @@ function buildOverlay(): OverlayBuilder | null {
 export const gradientTool: Tool = {
     id: 'gradient',
     name: 'Gradient',
-    icon: 'G',
+    faIcon: 'fa-solid fa-bars-staggered',
+    group: 'paint',
     hotkeyAction: 'gradientTool',
 
     onActivate(ctx) {

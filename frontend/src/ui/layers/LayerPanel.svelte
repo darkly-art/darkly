@@ -81,88 +81,102 @@
     }
 </script>
 
-<div class="layer-panel">
+<div class="panel expanded">
     <div class="panel-header">
-        <span>Layers</span>
+        <span class="panel-title">Layers</span>
+        <div class="panel-actions">
+            <button class="panel-btn" onclick={addLayer} title="Add Layer"><i class="fa-solid fa-plus"></i></button>
+            <button class="panel-btn" onclick={addGroup} title="Add Group"><i class="fa-solid fa-folder-plus"></i></button>
+            <button class="panel-btn" onclick={addMask} title="Add Mask"><i class="fa-solid fa-mask"></i></button>
+            <button class="panel-btn danger" onclick={removeLayer} title="Delete Layer"><i class="fa-solid fa-trash"></i></button>
+        </div>
     </div>
 
     <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div class="layer-list" ondragover={onDragOver} ondrop={onDrop}>
-        {#each app.layerTree as node (node.id)}
-            {#if node.type === 'group'}
-                <LayerGroup group={node} onupdate={refresh} />
-            {:else}
-                <LayerItem layer={node} onupdate={refresh} />
+    <div class="panel-body">
+        <div class="layer-list" ondragover={onDragOver} ondrop={onDrop}>
+            {#each app.layerTree as node (node.id)}
+                {#if node.type === 'group'}
+                    <LayerGroup group={node} onupdate={refresh} />
+                {:else}
+                    <LayerItem layer={node} onupdate={refresh} />
+                {/if}
+            {/each}
+
+            {#if app.layerTree.length === 0}
+                <div class="empty-message">No layers</div>
             {/if}
-        {/each}
-
-        {#if app.layerTree.length === 0}
-            <div class="empty-message">No layers</div>
-        {/if}
-    </div>
-
-    <div class="panel-actions">
-        <button class="action-btn" onclick={addLayer} title="Add layer">+</button>
-        <button class="action-btn" onclick={addGroup} title="Add group">&#x1F4C1;</button>
-        <button class="action-btn" onclick={addMask} disabled={!canAddMask()} title="Add layer mask">&#x25D0;</button>
-        <button class="action-btn" onclick={removeLayer} title="Delete layer">&#x1F5D1;</button>
+        </div>
     </div>
 </div>
 
 <style>
-    .layer-panel {
+    .panel {
         display: flex;
         flex-direction: column;
-        height: 100%;
+        flex: 1;
     }
 
     .panel-header {
-        padding: 8px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 12px;
+        background: var(--bg-hover);
+    }
+
+    .panel-title {
         font-size: 11px;
         font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #888;
-        border-bottom: 1px solid #333;
+        letter-spacing: 1px;
+        color: var(--text);
+    }
+
+    .panel-actions {
+        display: flex;
+        gap: 2px;
+    }
+
+    .panel-btn {
+        width: 26px;
+        height: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        border-radius: 5px;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 12px;
+        transition: background 0.1s, color 0.1s;
+    }
+
+    .panel-btn:hover {
+        background: var(--bg-hover);
+        color: var(--text);
+    }
+
+    .panel-btn.danger:hover {
+        color: var(--danger);
+    }
+
+    .panel-body {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
     }
 
     .layer-list {
         flex: 1;
         overflow-y: auto;
-        padding: 4px 0;
     }
 
     .empty-message {
         padding: 16px;
         text-align: center;
-        color: #555;
+        color: var(--text-dim);
         font-size: 12px;
-    }
-
-    .panel-actions {
-        display: flex;
-        gap: 4px;
-        padding: 8px;
-        border-top: 1px solid #333;
-    }
-
-    .action-btn {
-        flex: 1;
-        background: #2a2a2a;
-        border: 1px solid #444;
-        border-radius: 4px;
-        color: #ccc;
-        cursor: pointer;
-        padding: 4px;
-        font-size: 14px;
-    }
-
-    .action-btn:hover:not(:disabled) {
-        background: #333;
-    }
-
-    .action-btn:disabled {
-        opacity: 0.35;
-        cursor: default;
     }
 </style>

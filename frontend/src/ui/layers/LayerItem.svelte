@@ -232,7 +232,7 @@
         onpointerleave={() => { draggable = true; }}
         title="Toggle visibility"
     >
-        {layer.visible ? '\u{1F441}' : '\u{2014}'}
+        <i class={layer.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
     </button>
 
     {#if layer.type === 'raster' && layerThumb}
@@ -310,21 +310,20 @@
     .layer-item {
         display: flex;
         align-items: center;
-        gap: 4px;
-        padding: 4px 8px;
+        gap: 8px;
+        padding: 6px 12px;
         cursor: pointer;
-        border-left: 3px solid transparent;
         min-height: 28px;
         position: relative;
+        transition: background 0.1s;
     }
 
     .layer-item:hover {
-        background: #2a2a2a;
+        background: var(--bg-hover);
     }
 
     .layer-item.active {
-        background: #2a2a3a;
-        border-left-color: #6a6aff;
+        background: var(--bg-active);
     }
 
     .layer-item.drop-above::before {
@@ -334,7 +333,7 @@
         left: 8px;
         right: 4px;
         height: 2px;
-        background: #6a6aff;
+        background: var(--accent);
         pointer-events: none;
     }
 
@@ -345,34 +344,41 @@
         left: 8px;
         right: 4px;
         height: 2px;
-        background: #6a6aff;
+        background: var(--accent);
         pointer-events: none;
     }
 
     .vis-btn {
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         background: none;
         border: none;
-        color: #888;
+        color: var(--text-muted);
         cursor: pointer;
-        padding: 4px 6px;
-        margin: -4px 0 -4px -6px;
         font-size: 12px;
-        min-width: 28px;
-        text-align: center;
         flex-shrink: 0;
+        border-radius: 4px;
+        transition: color 0.1s;
     }
-    .vis-btn.hidden { color: #444; }
+    .vis-btn:hover { color: var(--text); }
+    .vis-btn.hidden { color: var(--text-dim); }
 
     .thumb {
-        border: 2px solid #444;
-        border-radius: 2px;
+        width: 32px;
+        height: 32px;
+        border: 2px solid var(--text-dim);
+        border-radius: 4px;
         flex-shrink: 0;
         cursor: pointer;
         image-rendering: pixelated;
+        background: var(--thumb-bg);
     }
 
     .thumb-active {
-        border-color: #6a6aff;
+        border-color: var(--accent);
     }
 
     .mask-disabled {
@@ -382,7 +388,7 @@
     .layer-name {
         flex: 1;
         font-size: 12px;
-        color: #ccc;
+        color: var(--text);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -391,10 +397,10 @@
 
     .name-input {
         flex: 1;
-        background: #1a1a2a;
-        border: 1px solid #6a6aff;
+        background: var(--bg);
+        border: 1px solid var(--accent);
         border-radius: 2px;
-        color: #ccc;
+        color: var(--text);
         font-size: 12px;
         padding: 1px 4px;
         outline: none;
@@ -403,17 +409,16 @@
 
     .opacity-slider {
         width: 50px;
-        height: 12px;
-        accent-color: #6a6aff;
+        height: 4px;
         flex-shrink: 0;
     }
 
     .mask-menu {
         position: fixed;
         z-index: 1000;
-        background: #2a2a2a;
-        border: 1px solid #555;
-        border-radius: 4px;
+        background: var(--bg-active);
+        border: 1px solid var(--bg-hover);
+        border-radius: 6px;
         padding: 4px 0;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
     }
@@ -423,7 +428,7 @@
         width: 100%;
         background: none;
         border: none;
-        color: #ccc;
+        color: var(--text);
         font-size: 12px;
         padding: 6px 16px;
         text-align: left;
@@ -432,6 +437,6 @@
     }
 
     .mask-menu button:hover {
-        background: #3a3a4a;
+        background: var(--bg-hover);
     }
 </style>

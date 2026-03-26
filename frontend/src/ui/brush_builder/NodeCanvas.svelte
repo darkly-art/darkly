@@ -251,8 +251,8 @@
         position: relative;
         flex: 1;
         overflow: hidden;
-        background-color: #1a1a1a;
-        background-image: radial-gradient(circle, #333 1px, transparent 1px);
+        background-color: var(--bg-active);
+        background-image: radial-gradient(circle, var(--bg-hover) 1px, transparent 1px);
         background-size: 20px 20px;
         cursor: default;
     }

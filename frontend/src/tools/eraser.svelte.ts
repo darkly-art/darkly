@@ -29,7 +29,8 @@ function eraserStrokeParams(e: PointerEvent, cx: number, cy: number) {
 export const eraserTool: Tool = {
     id: 'eraser',
     name: 'Eraser',
-    icon: 'E',
+    faIcon: 'fa-solid fa-eraser',
+    group: 'paint',
     hotkeyAction: 'eraserTool',
 
     onActivate(_ctx) {

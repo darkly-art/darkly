@@ -23,16 +23,6 @@
 <PresetPicker />
 
 <style>
-    :global(body) {
-        margin: 0;
-        padding: 0;
-        background: #1a1a1a;
-        overflow: hidden;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        color: #e0e0e0;
-        user-select: none;
-    }
-
     .app-layout {
         display: flex;
         width: 100vw;
@@ -47,5 +37,4 @@
         min-width: 0;
         overflow: hidden;
     }
-
 </style>

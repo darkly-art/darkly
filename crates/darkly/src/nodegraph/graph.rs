@@ -246,6 +246,12 @@ impl<W: WireKind> Graph<W> {
             .filter(move |c| c.from.node == node_id)
     }
 
+    /// Returns `true` if every node sits at the origin — i.e. no positions
+    /// have been assigned yet and auto-layout should run.
+    pub fn needs_layout(&self) -> bool {
+        self.nodes.values().all(|n| n.position == [0.0, 0.0])
+    }
+
     /// Update a node's UI position.
     pub fn set_node_position(&mut self, id: NodeId, pos: [f32; 2]) -> Result<(), GraphError> {
         let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;

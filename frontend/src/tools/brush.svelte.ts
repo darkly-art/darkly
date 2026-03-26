@@ -38,7 +38,8 @@ function brushStrokeParams(e: PointerEvent, cx: number, cy: number) {
 export const brushTool: Tool = {
     id: 'brush',
     name: 'Brush',
-    icon: 'B',
+    faIcon: 'fa-solid fa-paintbrush',
+    group: 'paint',
     hotkeyAction: 'brushTool',
 
     onActivate(_ctx) {

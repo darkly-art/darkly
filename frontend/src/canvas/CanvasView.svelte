@@ -270,6 +270,7 @@
         position: relative;
         min-height: 64px;
         height: 100%;
+        background: var(--canvas-bg);
     }
 
     canvas {

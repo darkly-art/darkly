@@ -160,8 +160,7 @@ impl PresetBuilder {
     }
 
     /// Build the preset (no resources).
-    fn build(mut self, name: &str, category: &str) -> PresetBundle {
-        self.graph.auto_layout();
+    fn build(self, name: &str, category: &str) -> PresetBundle {
         let mut preset = BrushPreset::from_graph(name, self.graph);
         preset.category = category.to_string();
         PresetBundle::without_resources(preset)
@@ -169,12 +168,11 @@ impl PresetBuilder {
 
     /// Build the preset with embedded PNG resources.
     fn build_with_resources(
-        mut self,
+        self,
         name: &str,
         category: &str,
         resources: Vec<(&str, &[u8])>,
     ) -> PresetBundle {
-        self.graph.auto_layout();
         let mut preset = BrushPreset::from_graph(name, self.graph);
         preset.category = category.to_string();
 
@@ -309,7 +307,11 @@ mod tests {
 
     #[test]
     fn builtin_presets_no_overlapping_nodes() {
-        for bundle in all() {
+        for mut bundle in all() {
+            // Presets ship without positions; auto-layout before checking.
+            if bundle.preset.graph.needs_layout() {
+                bundle.preset.graph.auto_layout();
+            }
             let positions: Vec<[i32; 2]> = bundle
                 .preset
                 .graph

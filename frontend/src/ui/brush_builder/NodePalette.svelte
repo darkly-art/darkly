@@ -51,25 +51,27 @@
         position: relative;
     }
     .palette-toggle {
-        background: #3a3a3a;
-        border: 1px solid #555;
+        background: var(--bg-hover);
+        border: none;
         border-radius: 4px;
-        color: #ccc;
+        color: var(--text-muted);
         cursor: pointer;
         font-size: 11px;
         padding: 4px 10px;
+        transition: background 0.1s, color 0.1s;
     }
     .palette-toggle:hover {
-        background: #444;
+        background: var(--bg-active);
+        color: var(--text);
     }
     .palette-dropdown {
         position: absolute;
         top: 100%;
         left: 0;
         margin-top: 4px;
-        background: #2a2a2a;
-        border: 1px solid #555;
-        border-radius: 4px;
+        background: var(--bg-active);
+        border: 1px solid var(--bg-hover);
+        border-radius: 6px;
         padding: 4px;
         min-width: 140px;
         z-index: 100;
@@ -81,7 +83,7 @@
     .category-label {
         display: block;
         font-size: 9px;
-        color: #888;
+        color: var(--text-muted);
         text-transform: uppercase;
         letter-spacing: 0.5px;
         padding: 2px 4px;
@@ -92,13 +94,14 @@
         text-align: left;
         background: none;
         border: none;
-        color: #ccc;
+        color: var(--text);
         cursor: pointer;
         font-size: 11px;
         padding: 3px 8px;
         border-radius: 3px;
+        transition: background 0.1s;
     }
     .node-type-btn:hover {
-        background: #3a3a3a;
+        background: var(--bg-hover);
     }
 </style>
