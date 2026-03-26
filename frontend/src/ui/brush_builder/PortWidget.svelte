@@ -35,7 +35,8 @@
     });
 
     function onPointerDown(e: PointerEvent) {
-        e.stopPropagation();
+        // Don't stopPropagation — the container needs to see this event
+        // to set up pointer capture for wire drag mouse tracking.
         e.preventDefault();
 
         // If dragging from a connected input, detach the wire and drag from the output end.

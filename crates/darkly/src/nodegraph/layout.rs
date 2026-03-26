@@ -94,7 +94,17 @@ impl<W: WireKind> Graph<W> {
     /// Data flows left-to-right: source nodes at x=0, downstream nodes
     /// at increasing x.  Nodes within a layer are spaced vertically and
     /// ordered to minimize edge crossings.
+    ///
+    /// When no measured sizes are available (tests, presets), falls back
+    /// to port-count-based height estimation.
     pub fn auto_layout(&mut self) {
+        self.auto_layout_with_sizes(&HashMap::new());
+    }
+
+    /// Like [`auto_layout`], but uses measured `[width, height]` from
+    /// the DOM for any node present in `sizes`.  Nodes not in the map
+    /// fall back to port-count estimation.
+    pub fn auto_layout_with_sizes(&mut self, sizes: &HashMap<NodeId, [f32; 2]>) {
         if self.nodes.is_empty() {
             return;
         }
@@ -201,24 +211,39 @@ impl<W: WireKind> Graph<W> {
             }
         }
 
-        // ── Compute node heights ─────────────────────────────────────
+        // ── Compute node sizes ─────────────────────────────────────
+        // Use DOM-measured sizes when available, else estimate from ports.
 
-        let heights: HashMap<NodeId, f32> = self
-            .nodes
-            .iter()
-            .map(|(&id, node)| {
+        let mut widths: HashMap<NodeId, f32> = HashMap::new();
+        let mut heights: HashMap<NodeId, f32> = HashMap::new();
+        for (&id, node) in &self.nodes {
+            if let Some(&[w, h]) = sizes.get(&id) {
+                widths.insert(id, w);
+                heights.insert(id, h);
+            } else {
                 let n_in = node.ports.iter().filter(|p| p.dir == PortDir::Input).count();
                 let n_out = node.ports.iter().filter(|p| p.dir == PortDir::Output).count();
                 let max_ports = n_in.max(n_out);
                 let h = NODE_HEADER_H + BODY_PAD * 2.0 + max_ports as f32 * PORT_ROW_H;
-                (id, h.max(MIN_NODE_H))
-            })
-            .collect();
+                heights.insert(id, h.max(MIN_NODE_H));
+            }
+        }
 
         // ── Assign positions ────────────────────────────────────────
+        // Per-layer x uses the widest node in the preceding layer + gap,
+        // falling back to SPACING_X when no widths are measured.
 
+        let mut x = 0.0f32;
         for (l, layer_nodes) in layers.iter().enumerate() {
-            let x = l as f32 * SPACING_X;
+            if l > 0 {
+                // Width of widest node in the previous layer.
+                let prev_max_w = layers[l - 1]
+                    .iter()
+                    .filter_map(|id| widths.get(id))
+                    .copied()
+                    .fold(0.0f32, f32::max);
+                x += if prev_max_w > 0.0 { prev_max_w + GAP_Y * 2.0 } else { SPACING_X };
+            }
             assign_column(&mut self.nodes, layer_nodes, x, &heights);
         }
 
@@ -233,12 +258,13 @@ impl<W: WireKind> Graph<W> {
         disconnected.sort_by_key(|id| id.0);
 
         if !disconnected.is_empty() {
-            let x = if connected.is_empty() {
+            let disc_x = if connected.is_empty() {
                 0.0
             } else {
-                (max_layer as f32 + 2.0) * SPACING_X
+                // Place after the last connected layer.
+                x + SPACING_X
             };
-            assign_column(&mut self.nodes, &disconnected, x, &heights);
+            assign_column(&mut self.nodes, &disconnected, disc_x, &heights);
         }
     }
 }

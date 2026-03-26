@@ -207,8 +207,12 @@ impl DarklyEngine {
     }
 
     /// Run auto-layout on the active brush graph and return updated JSON.
-    pub fn brush_graph_auto_layout(&mut self) -> String {
-        self.active_brush_graph.auto_layout();
+    /// `sizes` maps `NodeId` → `[width, height]` measured from the DOM.
+    pub fn brush_graph_auto_layout(
+        &mut self,
+        sizes: &std::collections::HashMap<NodeId, [f32; 2]>,
+    ) -> String {
+        self.active_brush_graph.auto_layout_with_sizes(sizes);
         self.active_graph_json()
     }
 

@@ -217,10 +217,15 @@ class BrushGraphState {
         this.error = null;
     }
 
-    /** Run auto-layout on the active graph. */
-    autoLayout() {
+    /**
+     * Run auto-layout on the active graph.
+     * `sizes` maps node ID → `[width, height]` measured from the DOM.
+     * When omitted, Rust estimates sizes from port counts.
+     */
+    autoLayout(sizes?: Record<string, [number, number]>) {
         if (!app.handle) return;
-        const graphStr = app.handle.brush_graph_auto_layout();
+        const sizesJson = JSON.stringify(sizes ?? {});
+        const graphStr = app.handle.brush_graph_auto_layout(sizesJson);
         try {
             const graph = JSON.parse(graphStr);
             if (graph && graph.nodes) {

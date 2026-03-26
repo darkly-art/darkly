@@ -16,6 +16,16 @@
         brushGraph.resetToDefault();
     }
 
+    /** Measure all node widgets in the DOM and run auto-layout with real sizes. */
+    function handleAutoLayout() {
+        const sizes: Record<string, [number, number]> = {};
+        for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
+            const id = el.dataset.nodeId;
+            if (id) sizes[id] = [el.offsetWidth, el.offsetHeight];
+        }
+        brushGraph.autoLayout(sizes);
+    }
+
     let fullscreen = $state(false);
 
     function onKeydown(e: KeyboardEvent) {
@@ -32,7 +42,7 @@
         <span class="builder-title">Brush Graph</span>
         <NodePalette onaddnode={handleAddNode} />
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
-        <button class="toolbar-btn" onclick={() => brushGraph.autoLayout()} title="Auto-layout nodes">Layout</button>
+        <button class="toolbar-btn" onclick={handleAutoLayout} title="Auto-layout nodes">Layout</button>
         <div class="spacer"></div>
         <button
             class="fullscreen-btn"

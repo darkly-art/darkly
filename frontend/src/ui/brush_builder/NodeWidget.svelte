@@ -1,5 +1,6 @@
 <script lang="ts">
     import { brushGraph, type NodeInstance, type PortDef } from '../../state/brush_graph.svelte';
+    import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
 
     interface Props {
@@ -33,7 +34,9 @@
         dragStartY = e.clientY;
         nodeStartX = node.position[0];
         nodeStartY = node.position[1];
-        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        const el = e.target as HTMLElement;
+        el.setPointerCapture(e.pointerId);
+        app.beginInteraction();
     }
 
     function onHeaderMove(e: PointerEvent) {
@@ -44,10 +47,16 @@
     }
 
     function onHeaderUp(e: PointerEvent) {
+        if (!dragging) return;
         dragging = false;
         (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-        // Sync final position to Rust.
         brushGraph.syncNodePosition(node.id);
+    }
+
+    /** Guaranteed cleanup — fires when capture ends for any reason. */
+    function onHeaderLostCapture() {
+        dragging = false;
+        app.endInteraction();
     }
 
     /** Local update for responsive slider feedback. */
@@ -95,6 +104,7 @@
         onpointerdown={onHeaderDown}
         onpointermove={onHeaderMove}
         onpointerup={onHeaderUp}
+        onlostpointercapture={onHeaderLostCapture}
     >
         <span class="node-title">{displayName}</span>
         <button class="remove-btn" onclick={onRemove} title="Remove node">&times;</button>

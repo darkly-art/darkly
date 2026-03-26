@@ -633,9 +633,17 @@ impl DarklyHandle {
         graph_result(self.engine.borrow_mut().brush_graph_set_param(node_id as u64, param_index as usize, pv))
     }
 
-    pub fn brush_graph_auto_layout(&self) -> String {
+    /// Run auto-layout.  `sizes_json` is a JSON object mapping node ID
+    /// strings to `[width, height]` arrays, measured from the DOM.
+    pub fn brush_graph_auto_layout(&self, sizes_json: &str) -> String {
         self.flush_if_needed();
-        self.engine.borrow_mut().brush_graph_auto_layout()
+        let sizes: std::collections::HashMap<u64, [f32; 2]> =
+            serde_json::from_str(sizes_json).unwrap_or_default();
+        let sizes = sizes
+            .into_iter()
+            .map(|(id, wh)| (darkly::nodegraph::NodeId(id), wh))
+            .collect();
+        self.engine.borrow_mut().brush_graph_auto_layout(&sizes)
     }
 
     pub fn brush_upload_image(&self, resource_name: &str, width: u32, height: u32, rgba: &[u8]) -> JsValue {
