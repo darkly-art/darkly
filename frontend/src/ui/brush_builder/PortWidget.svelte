@@ -132,7 +132,7 @@
     }
     .port-label {
         font-size: 9px;
-        color: var(--text-muted);
+        color: rgba(255,255,255,0.55);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;

@@ -69,7 +69,24 @@
     function portWorldPos(nodeId: number, portName: string, dir: string) {
         const node = brushGraph.graph?.nodes[String(nodeId)];
         if (!node) return null;
-        const offset = portOffsets.get(`${nodeId}:${portName}:${dir}`);
+        const key = `${nodeId}:${portName}:${dir}`;
+        let offset = portOffsets.get(key);
+        if (!offset) {
+            // onMount hasn't fired yet — measure directly from the DOM.
+            const dotEl = document.querySelector(
+                `[data-port-node="${nodeId}"][data-port-name="${portName}"][data-port-dir="${dir}"]`
+            ) as HTMLElement | null;
+            const nodeEl = dotEl?.closest('[data-node-id]') as HTMLElement | null;
+            if (dotEl && nodeEl) {
+                const dotRect = dotEl.getBoundingClientRect();
+                const nodeRect = nodeEl.getBoundingClientRect();
+                offset = {
+                    x: (dotRect.left + dotRect.width / 2) - nodeRect.left,
+                    y: (dotRect.top + dotRect.height / 2) - nodeRect.top,
+                };
+                portOffsets.set(key, offset);
+            }
+        }
         if (!offset) return null;
         return { x: node.position[0] + offset.x, y: node.position[1] + offset.y };
     }
@@ -283,8 +300,8 @@
         position: relative;
         flex: 1;
         overflow: hidden;
-        background-color: var(--bg-active);
-        background-image: radial-gradient(circle, var(--bg-hover) 1px, transparent 1px);
+        background-color: #2e2e2e;
+        background-image: radial-gradient(circle, rgba(255,255,255,0.13) 1px, transparent 1px);
         background-size: 20px 20px;
         cursor: default;
     }

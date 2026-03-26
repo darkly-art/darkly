@@ -173,8 +173,8 @@
         left: 0;
         top: 0;
         min-width: 140px;
-        background: var(--canvas-bg);
-        border: 1px solid var(--text-dim);
+        background: #1a1a1a;
+        border: 1px solid rgba(255,255,255,0.15);
         border-radius: 6px;
         font-size: 11px;
         box-shadow: 0 2px 8px rgba(0,0,0,0.4);
@@ -187,7 +187,7 @@
         justify-content: space-between;
         align-items: center;
         padding: 4px 6px;
-        background: var(--bg-hover);
+        background: #0d0d0d;
         border-radius: 5px 5px 0 0;
         cursor: grab;
         user-select: none;
@@ -197,7 +197,7 @@
     }
     .node-title {
         font-weight: 600;
-        color: var(--text);
+        color: rgba(255,255,255,0.85);
         font-size: 10px;
     }
     .remove-btn {
@@ -229,7 +229,7 @@
     }
     .params {
         padding: 4px 6px;
-        border-top: 1px solid var(--bg-hover);
+        border-top: 1px solid rgba(255,255,255,0.08);
         margin-top: 4px;
     }
     .param-row {
@@ -240,7 +240,7 @@
     }
     .param-label {
         font-size: 9px;
-        color: var(--text-muted);
+        color: rgba(255,255,255,0.55);
         min-width: 40px;
     }
     .param-slider {
@@ -253,7 +253,7 @@
     }
     .param-value {
         font-size: 8px;
-        color: var(--text-muted);
+        color: rgba(255,255,255,0.55);
         min-width: 28px;
         text-align: right;
     }
