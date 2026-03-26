@@ -160,7 +160,8 @@ impl PresetBuilder {
     }
 
     /// Build the preset (no resources).
-    fn build(self, name: &str, category: &str) -> PresetBundle {
+    fn build(mut self, name: &str, category: &str) -> PresetBundle {
+        self.graph.auto_layout();
         let mut preset = BrushPreset::from_graph(name, self.graph);
         preset.category = category.to_string();
         PresetBundle::without_resources(preset)
@@ -168,11 +169,12 @@ impl PresetBuilder {
 
     /// Build the preset with embedded PNG resources.
     fn build_with_resources(
-        self,
+        mut self,
         name: &str,
         category: &str,
         resources: Vec<(&str, &[u8])>,
     ) -> PresetBundle {
+        self.graph.auto_layout();
         let mut preset = BrushPreset::from_graph(name, self.graph);
         preset.category = category.to_string();
 
@@ -302,6 +304,28 @@ mod tests {
             let bytes = bundle.to_bytes().unwrap();
             let loaded = PresetBundle::from_bytes(&bytes).unwrap();
             assert_eq!(loaded.preset.name, name);
+        }
+    }
+
+    #[test]
+    fn builtin_presets_no_overlapping_nodes() {
+        for bundle in all() {
+            let positions: Vec<[i32; 2]> = bundle
+                .preset
+                .graph
+                .nodes
+                .values()
+                .map(|n| [n.position[0] as i32, n.position[1] as i32])
+                .collect();
+            for (i, a) in positions.iter().enumerate() {
+                for b in &positions[i + 1..] {
+                    assert_ne!(
+                        a, b,
+                        "preset '{}' has overlapping nodes at {:?}",
+                        bundle.preset.name, a,
+                    );
+                }
+            }
         }
     }
 

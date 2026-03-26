@@ -7,6 +7,7 @@
 
 mod compiler;
 mod graph;
+mod layout;
 mod registration;
 
 pub use compiler::{ExecStep, ExecutionPlan};
