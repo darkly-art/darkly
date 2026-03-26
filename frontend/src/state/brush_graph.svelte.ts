@@ -217,6 +217,20 @@ class BrushGraphState {
         this.error = null;
     }
 
+    /** Run auto-layout on the active graph. */
+    autoLayout() {
+        if (!app.handle) return;
+        const graphStr = app.handle.brush_graph_auto_layout();
+        try {
+            const graph = JSON.parse(graphStr);
+            if (graph && graph.nodes) {
+                this.graph = graph as BrushGraph;
+            }
+        } catch {
+            // Parse failed.
+        }
+    }
+
     /** Add a node of the given type at the given position. */
     addNode(typeId: string, x: number, y: number) {
         if (!app.handle) return;

@@ -32,6 +32,7 @@
         <span class="builder-title">Brush Graph</span>
         <NodePalette onaddnode={handleAddNode} />
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
+        <button class="toolbar-btn" onclick={() => brushGraph.autoLayout()} title="Auto-layout nodes">Layout</button>
         <div class="spacer"></div>
         <button
             class="fullscreen-btn"

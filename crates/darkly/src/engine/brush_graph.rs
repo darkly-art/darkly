@@ -206,6 +206,12 @@ impl DarklyEngine {
         let _ = self.active_brush_graph.set_node_position(NodeId(node_id), [x, y]);
     }
 
+    /// Run auto-layout on the active brush graph and return updated JSON.
+    pub fn brush_graph_auto_layout(&mut self) -> String {
+        self.active_brush_graph.auto_layout();
+        self.active_graph_json()
+    }
+
     /// Upload an RGBA8 image and associate it with a resource name.
     ///
     /// The image is stored as a static GPU texture.  Image nodes that

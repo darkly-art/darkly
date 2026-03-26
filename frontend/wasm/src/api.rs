@@ -633,6 +633,11 @@ impl DarklyHandle {
         graph_result(self.engine.borrow_mut().brush_graph_set_param(node_id as u64, param_index as usize, pv))
     }
 
+    pub fn brush_graph_auto_layout(&self) -> String {
+        self.flush_if_needed();
+        self.engine.borrow_mut().brush_graph_auto_layout()
+    }
+
     pub fn brush_upload_image(&self, resource_name: &str, width: u32, height: u32, rgba: &[u8]) -> JsValue {
         self.flush_if_needed();
         match self.engine.borrow_mut().brush_upload_image(resource_name, width, height, rgba) {

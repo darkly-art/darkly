@@ -27,6 +27,67 @@ const BODY_PAD: f32 = 4.0;
 /// Number of barycenter sweeps for crossing minimization.
 const SWEEPS: usize = 4;
 
+/// Build a position index: node → position within its layer.
+fn build_index(layers: &[Vec<NodeId>]) -> HashMap<NodeId, usize> {
+    let mut idx = HashMap::new();
+    for layer in layers {
+        for (pos, &id) in layer.iter().enumerate() {
+            idx.insert(id, pos);
+        }
+    }
+    idx
+}
+
+/// Reorder `layers[layer_idx]` by barycenter positions from `neighbor_layer`.
+/// `adj` maps each node to its neighbors in the reference layer.
+fn reorder_by_barycenter(
+    layers: &mut [Vec<NodeId>],
+    layer_idx: usize,
+    adj: &HashMap<NodeId, Vec<NodeId>>,
+    index: &HashMap<NodeId, usize>,
+) {
+    let mut barycenters: Vec<(NodeId, f64)> = Vec::new();
+    for &node in &layers[layer_idx] {
+        let bc = if let Some(neighbors) = adj.get(&node) {
+            let positions: Vec<f64> = neighbors
+                .iter()
+                .filter_map(|&n| index.get(&n).map(|&i| i as f64))
+                .collect();
+            if positions.is_empty() {
+                index.get(&node).copied().unwrap_or(0) as f64
+            } else {
+                positions.iter().sum::<f64>() / positions.len() as f64
+            }
+        } else {
+            index.get(&node).copied().unwrap_or(0) as f64
+        };
+        barycenters.push((node, bc));
+    }
+    barycenters.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    layers[layer_idx] = barycenters.into_iter().map(|(id, _)| id).collect();
+}
+
+/// Assign y positions to a vertical column of nodes, centered around y=0.
+fn assign_column(
+    nodes: &mut HashMap<NodeId, super::graph::NodeInstance<impl WireKind>>,
+    ids: &[NodeId],
+    x: f32,
+    heights: &HashMap<NodeId, f32>,
+) {
+    let h: Vec<f32> = ids
+        .iter()
+        .map(|id| heights.get(id).copied().unwrap_or(MIN_NODE_H))
+        .collect();
+    let total_h: f32 = h.iter().sum::<f32>() + ids.len().saturating_sub(1) as f32 * GAP_Y;
+    let mut y = -total_h / 2.0;
+    for (i, &id) in ids.iter().enumerate() {
+        if let Some(node) = nodes.get_mut(&id) {
+            node.position = [x, y];
+        }
+        y += h[i] + GAP_Y;
+    }
+}
+
 impl<W: WireKind> Graph<W> {
     /// Compute and assign positions for all nodes using a layered layout.
     ///
@@ -127,73 +188,22 @@ impl<W: WireKind> Graph<W> {
 
         // ── Barycenter crossing minimization ────────────────────────
 
-        // Build index lookup: node → position within its layer.
-        let index_of = |layers: &[Vec<NodeId>], layer_idx: usize, node: NodeId| -> Option<usize> {
-            layers[layer_idx].iter().position(|&id| id == node)
-        };
-
         for sweep in 0..SWEEPS {
+            let index = build_index(&layers);
             if sweep % 2 == 0 {
-                // Left-to-right: order layer l by barycenters in layer l-1.
                 for l in 1..layers.len() {
-                    let mut barycenters: Vec<(NodeId, f64)> = Vec::new();
-                    for &node in &layers[l] {
-                        if let Some(preds) = reverse.get(&node) {
-                            let positions: Vec<f64> = preds
-                                .iter()
-                                .filter_map(|&p| {
-                                    index_of(&layers, l - 1, p).map(|i| i as f64)
-                                })
-                                .collect();
-                            if positions.is_empty() {
-                                // Keep current index as fallback.
-                                let cur = index_of(&layers, l, node).unwrap_or(0);
-                                barycenters.push((node, cur as f64));
-                            } else {
-                                let avg = positions.iter().sum::<f64>() / positions.len() as f64;
-                                barycenters.push((node, avg));
-                            }
-                        } else {
-                            let cur = index_of(&layers, l, node).unwrap_or(0);
-                            barycenters.push((node, cur as f64));
-                        }
-                    }
-                    barycenters.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                    layers[l] = barycenters.into_iter().map(|(id, _)| id).collect();
+                    reorder_by_barycenter(&mut layers, l, &reverse, &index);
                 }
             } else {
-                // Right-to-left: order layer l by barycenters in layer l+1.
                 for l in (0..layers.len().saturating_sub(1)).rev() {
-                    let mut barycenters: Vec<(NodeId, f64)> = Vec::new();
-                    for &node in &layers[l] {
-                        if let Some(succs) = forward.get(&node) {
-                            let positions: Vec<f64> = succs
-                                .iter()
-                                .filter_map(|&s| {
-                                    index_of(&layers, l + 1, s).map(|i| i as f64)
-                                })
-                                .collect();
-                            if positions.is_empty() {
-                                let cur = index_of(&layers, l, node).unwrap_or(0);
-                                barycenters.push((node, cur as f64));
-                            } else {
-                                let avg = positions.iter().sum::<f64>() / positions.len() as f64;
-                                barycenters.push((node, avg));
-                            }
-                        } else {
-                            let cur = index_of(&layers, l, node).unwrap_or(0);
-                            barycenters.push((node, cur as f64));
-                        }
-                    }
-                    barycenters.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                    layers[l] = barycenters.into_iter().map(|(id, _)| id).collect();
+                    reorder_by_barycenter(&mut layers, l, &forward, &index);
                 }
             }
         }
 
         // ── Compute node heights ─────────────────────────────────────
 
-        let heights_map: HashMap<NodeId, f32> = self
+        let heights: HashMap<NodeId, f32> = self
             .nodes
             .iter()
             .map(|(&id, node)| {
@@ -204,25 +214,12 @@ impl<W: WireKind> Graph<W> {
                 (id, h.max(MIN_NODE_H))
             })
             .collect();
-        let node_height = |id: NodeId| -> f32 {
-            heights_map.get(&id).copied().unwrap_or(MIN_NODE_H)
-        };
 
         // ── Assign positions ────────────────────────────────────────
 
         for (l, layer_nodes) in layers.iter().enumerate() {
             let x = l as f32 * SPACING_X;
-            // Total column height = sum of node heights + gaps between.
-            let heights: Vec<f32> = layer_nodes.iter().map(|&id| node_height(id)).collect();
-            let total_h: f32 = heights.iter().sum::<f32>()
-                + (layer_nodes.len().saturating_sub(1)) as f32 * GAP_Y;
-            let mut y = -total_h / 2.0;
-            for (i, &id) in layer_nodes.iter().enumerate() {
-                if let Some(node) = self.nodes.get_mut(&id) {
-                    node.position = [x, y];
-                }
-                y += heights[i] + GAP_Y;
-            }
+            assign_column(&mut self.nodes, layer_nodes, x, &heights);
         }
 
         // ── Disconnected nodes ──────────────────────────────────────
@@ -241,16 +238,7 @@ impl<W: WireKind> Graph<W> {
             } else {
                 (max_layer as f32 + 2.0) * SPACING_X
             };
-            let heights: Vec<f32> = disconnected.iter().map(|&id| node_height(id)).collect();
-            let total_h: f32 = heights.iter().sum::<f32>()
-                + (disconnected.len().saturating_sub(1)) as f32 * GAP_Y;
-            let mut y = -total_h / 2.0;
-            for (i, &id) in disconnected.iter().enumerate() {
-                if let Some(node) = self.nodes.get_mut(&id) {
-                    node.position = [x, y];
-                }
-                y += heights[i] + GAP_Y;
-            }
+            assign_column(&mut self.nodes, &disconnected, x, &heights);
         }
     }
 }
