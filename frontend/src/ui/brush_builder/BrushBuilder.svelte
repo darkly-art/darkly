@@ -112,10 +112,10 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: rgba(0, 0, 0, 0.4);
+        background: color-mix(in srgb, var(--bg) 40%, transparent);
         border: none;
         border-radius: 6px;
-        color: var(--text-muted);
+        color: var(--text);
         cursor: pointer;
         font-size: 12px;
         z-index: 10;
@@ -123,7 +123,7 @@
     }
     .fullscreen-btn:hover {
         background: var(--accent);
-        color: #fff;
+        color: var(--text);
     }
     .brush-builder.fullscreen {
         position: fixed;

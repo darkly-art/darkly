@@ -173,11 +173,11 @@
         left: 0;
         top: 0;
         min-width: 140px;
-        background: #1a1a1a;
-        border: 1px solid rgba(255,255,255,0.15);
+        background: var(--bg-active);
+        border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
         border-radius: 6px;
         font-size: 11px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+
     }
     .node-widget.selected {
         border-color: var(--accent);
@@ -187,7 +187,7 @@
         justify-content: space-between;
         align-items: center;
         padding: 4px 6px;
-        background: #0d0d0d;
+        background: var(--bg);
         border-radius: 5px 5px 0 0;
         cursor: grab;
         user-select: none;
@@ -197,13 +197,13 @@
     }
     .node-title {
         font-weight: 600;
-        color: rgba(255,255,255,0.85);
+        color: var(--text);
         font-size: 10px;
     }
     .remove-btn {
         background: none;
         border: none;
-        color: var(--text-muted);
+        color: var(--text);
         cursor: pointer;
         font-size: 14px;
         padding: 0 2px;
@@ -229,7 +229,7 @@
     }
     .params {
         padding: 4px 6px;
-        border-top: 1px solid rgba(255,255,255,0.08);
+        border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
         margin-top: 4px;
     }
     .param-row {
@@ -240,7 +240,7 @@
     }
     .param-label {
         font-size: 9px;
-        color: rgba(255,255,255,0.55);
+        color: var(--text);
         min-width: 40px;
     }
     .param-slider {
@@ -253,7 +253,7 @@
     }
     .param-value {
         font-size: 8px;
-        color: rgba(255,255,255,0.55);
+        color: var(--text);
         min-width: 28px;
         text-align: right;
     }

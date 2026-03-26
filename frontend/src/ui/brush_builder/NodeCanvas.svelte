@@ -273,7 +273,7 @@
 <div
     class="graph-container"
     bind:this={containerEl}
-    style="background-position: {panX}px {panY}px;"
+    style="background-position: {panX}px {panY}px; background-size: {20 * zoom}px {20 * zoom}px;"
     onwheel={onWheel}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
@@ -300,8 +300,8 @@
         position: relative;
         flex: 1;
         overflow: hidden;
-        background-color: #2e2e2e;
-        background-image: radial-gradient(circle, rgba(255,255,255,0.13) 1px, transparent 1px);
+        background-color: var(--bg);
+        background-image: radial-gradient(circle, color-mix(in srgb, var(--text) 20%, transparent) 1px, transparent 1px);
         background-size: 20px 20px;
         cursor: default;
     }
