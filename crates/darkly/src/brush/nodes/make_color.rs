@@ -15,11 +15,20 @@ pub fn register() -> BrushNodeRegistration {
         category: "color",
         display_name: "Make Color",
         ports: vec![
-            PortDef::input("r", BrushWireType::Scalar).with_range(0.0, 1.0, 0.0),
-            PortDef::input("g", BrushWireType::Scalar).with_range(0.0, 1.0, 0.0),
-            PortDef::input("b", BrushWireType::Scalar).with_range(0.0, 1.0, 0.0),
-            PortDef::input("a", BrushWireType::Scalar).with_range(0.0, 1.0, 1.0),
-            PortDef::output("color", BrushWireType::Color),
+            PortDef::input("r", BrushWireType::Scalar)
+                .with_range(0.0, 1.0, 0.0)
+                .with_description("Red channel (0\u{2013}1)"),
+            PortDef::input("g", BrushWireType::Scalar)
+                .with_range(0.0, 1.0, 0.0)
+                .with_description("Green channel (0\u{2013}1)"),
+            PortDef::input("b", BrushWireType::Scalar)
+                .with_range(0.0, 1.0, 0.0)
+                .with_description("Blue channel (0\u{2013}1)"),
+            PortDef::input("a", BrushWireType::Scalar)
+                .with_range(0.0, 1.0, 1.0)
+                .with_description("Alpha channel (0 = transparent, 1 = opaque)"),
+            PortDef::output("color", BrushWireType::Color)
+                .with_description("Combined RGBA color value"),
         ],
         params: &[],
         is_gpu: false,

@@ -633,6 +633,11 @@ impl DarklyHandle {
         graph_result(self.engine.borrow_mut().brush_graph_set_param(node_id as u64, param_index as usize, pv))
     }
 
+    pub fn brush_graph_set_port_default(&self, node_id: u32, port_name: &str, value: f32) -> JsValue {
+        self.flush_if_needed();
+        graph_result(self.engine.borrow_mut().brush_graph_set_port_default(node_id as u64, port_name, value))
+    }
+
     /// Run auto-layout.  `sizes_json` is a JSON object mapping node ID
     /// strings to `[width, height]` arrays, measured from the DOM.
     pub fn brush_graph_auto_layout(&self, sizes_json: &str) -> String {

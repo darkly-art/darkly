@@ -17,6 +17,7 @@ export interface PortDef {
     min: number;
     max: number;
     default: number;
+    description: string;
 }
 
 export interface NodeInstance {
@@ -306,6 +307,21 @@ class BrushGraphState {
     setParam(nodeId: number, paramIndex: number, kind: string, value: any) {
         if (!app.handle) return;
         this.applyResult(app.handle.brush_graph_set_param(nodeId, paramIndex, kind, value));
+    }
+
+    /** Update a port's default value locally (for responsive slider feedback). */
+    setPortDefaultLocal(nodeId: number, portName: string, value: number) {
+        if (!this.graph) return;
+        const node = this.graph.nodes[String(nodeId)];
+        if (!node) return;
+        const port = node.ports.find(p => p.name === portName && p.dir === 'Input');
+        if (port) port.default = value;
+    }
+
+    /** Update a port's default value via Rust (compiles the graph). */
+    setPortDefault(nodeId: number, portName: string, value: number) {
+        if (!app.handle) return;
+        this.applyResult(app.handle.brush_graph_set_port_default(nodeId, portName, value));
     }
 
     /** Get a flat array of all node instances. */

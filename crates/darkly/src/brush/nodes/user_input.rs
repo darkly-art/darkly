@@ -20,7 +20,8 @@ pub fn register() -> BrushNodeRegistration {
         category: "input",
         display_name: "User Input",
         ports: vec![
-            PortDef::output("value", BrushWireType::Scalar),
+            PortDef::output("value", BrushWireType::Scalar)
+                .with_description("The user-controlled slider value (0\u{2013}1)"),
         ],
         params: &[
             ParamDef::String { name: "label", default: "" },

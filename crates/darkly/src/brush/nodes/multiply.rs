@@ -13,9 +13,14 @@ pub fn register() -> BrushNodeRegistration {
         category: "math",
         display_name: "Multiply",
         ports: vec![
-            PortDef::input("a", BrushWireType::Scalar).with_range(0.0, 1.0, 1.0),
-            PortDef::input("b", BrushWireType::Scalar).with_range(0.0, 1.0, 1.0),
-            PortDef::output("result", BrushWireType::Scalar),
+            PortDef::input("a", BrushWireType::Scalar)
+                .with_range(0.0, 1.0, 1.0)
+                .with_description("First factor"),
+            PortDef::input("b", BrushWireType::Scalar)
+                .with_range(0.0, 1.0, 1.0)
+                .with_description("Second factor"),
+            PortDef::output("result", BrushWireType::Scalar)
+                .with_description("Product of a \u{00d7} b"),
         ],
         params: &[],
         is_gpu: false,

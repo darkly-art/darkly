@@ -198,7 +198,7 @@
             <i class={group.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
         </button>
 
-        <button class="collapse-btn" onclick={toggleCollapsed}>
+        <button class="collapse-btn" onclick={toggleCollapsed} title="Toggle collapsed">
             <i class={group.collapsed ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'}></i>
         </button>
 

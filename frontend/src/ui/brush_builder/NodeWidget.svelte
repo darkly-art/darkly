@@ -19,14 +19,23 @@
     let displayName = $derived(typeInfo?.display_name ?? node.type_id);
     let paramDefs = $derived(typeInfo?.params ?? []);
 
-    // --- Drag to move ---
+    // --- Drag to move (from any point on the node) ---
     let dragging = false;
     let dragStartX = 0;
     let dragStartY = 0;
     let nodeStartX = 0;
     let nodeStartY = 0;
+    let nodeEl: HTMLDivElement;
 
-    function onHeaderDown(e: PointerEvent) {
+    /** Returns true if the event target is an interactive child that should
+     *  handle its own pointer events (port dots, sliders, buttons). */
+    function isInteractiveTarget(e: PointerEvent): boolean {
+        const t = e.target as HTMLElement;
+        return !!t.closest('.port-dot, .port-slider, input, button');
+    }
+
+    function onNodeDown(e: PointerEvent) {
+        if (isInteractiveTarget(e)) return;
         e.stopPropagation();
         brushGraph.selectedNode = node.id;
         dragging = true;
@@ -34,27 +43,26 @@
         dragStartY = e.clientY;
         nodeStartX = node.position[0];
         nodeStartY = node.position[1];
-        const el = e.target as HTMLElement;
-        el.setPointerCapture(e.pointerId);
+        nodeEl.setPointerCapture(e.pointerId);
         app.beginInteraction();
     }
 
-    function onHeaderMove(e: PointerEvent) {
+    function onNodeMove(e: PointerEvent) {
         if (!dragging) return;
         const dx = (e.clientX - dragStartX) / zoom;
         const dy = (e.clientY - dragStartY) / zoom;
         brushGraph.moveNode(node.id, nodeStartX + dx, nodeStartY + dy);
     }
 
-    function onHeaderUp(e: PointerEvent) {
+    function onNodeUp(e: PointerEvent) {
         if (!dragging) return;
         dragging = false;
-        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+        nodeEl.releasePointerCapture(e.pointerId);
         brushGraph.syncNodePosition(node.id);
     }
 
     /** Guaranteed cleanup — fires when capture ends for any reason. */
-    function onHeaderLostCapture() {
+    function onNodeLostCapture() {
         dragging = false;
         app.endInteraction();
     }
@@ -92,37 +100,38 @@
     }
 </script>
 
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="node-widget"
     class:selected={isSelected}
     style="transform: translate({node.position[0]}px, {node.position[1]}px);"
     data-node-id={node.id}
+    bind:this={nodeEl}
+    onpointerdown={onNodeDown}
+    onpointermove={onNodeMove}
+    onpointerup={onNodeUp}
+    onlostpointercapture={onNodeLostCapture}
 >
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
-    <div
-        class="node-header"
-        onpointerdown={onHeaderDown}
-        onpointermove={onHeaderMove}
-        onpointerup={onHeaderUp}
-        onlostpointercapture={onHeaderLostCapture}
-    >
+    <div class="node-header">
         <span class="node-title">{displayName}</span>
         <button class="remove-btn" onclick={onRemove} title="Remove node">&times;</button>
     </div>
 
     <div class="node-body">
-        <div class="ports-columns">
-            <div class="ports-left">
-                {#each inputPorts as port}
-                    <PortWidget {port} nodeId={node.id} side="left" />
-                {/each}
-            </div>
-            <div class="ports-right">
+        {#if outputPorts.length > 0}
+            <div class="ports-outputs">
                 {#each outputPorts as port}
                     <PortWidget {port} nodeId={node.id} side="right" />
                 {/each}
             </div>
-        </div>
+        {/if}
+        {#if inputPorts.length > 0}
+            <div class="ports-inputs">
+                {#each inputPorts as port}
+                    <PortWidget {port} nodeId={node.id} side="left" />
+                {/each}
+            </div>
+        {/if}
 
         {#if paramDefs.length > 0}
             <div class="params">
@@ -177,7 +186,11 @@
         border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
         border-radius: 6px;
         font-size: 11px;
-
+        cursor: grab;
+        user-select: none;
+    }
+    .node-widget:active {
+        cursor: grabbing;
     }
     .node-widget.selected {
         border-color: var(--accent);
@@ -189,11 +202,6 @@
         padding: 4px 6px;
         background: var(--bg);
         border-radius: 5px 5px 0 0;
-        cursor: grab;
-        user-select: none;
-    }
-    .node-header:active {
-        cursor: grabbing;
     }
     .node-title {
         font-weight: 600;
@@ -216,16 +224,18 @@
     .node-body {
         padding: 4px 0;
     }
-    .ports-columns {
+    .ports-outputs {
         display: flex;
-        justify-content: space-between;
-        gap: 8px;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 2px;
         padding: 0 2px;
     }
-    .ports-left, .ports-right {
+    .ports-inputs {
         display: flex;
         flex-direction: column;
         gap: 2px;
+        padding: 0 2px;
     }
     .params {
         padding: 4px 6px;
@@ -241,7 +251,7 @@
     .param-label {
         font-size: 9px;
         color: var(--text);
-        min-width: 40px;
+        cursor: default;
     }
     .param-slider {
         flex: 1;
@@ -254,7 +264,7 @@
     .param-value {
         font-size: 8px;
         color: var(--text);
-        min-width: 28px;
         text-align: right;
+        cursor: default;
     }
 </style>

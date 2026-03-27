@@ -74,28 +74,28 @@
         },
     ];
 
-    let draggingScrub = $state<ScrubDef | null>(null);
+    let draggingScrubIdx = $state<number>(-1);
     let scrubStartX = 0;
     let scrubStartVal = 0;
 
-    function onScrubDown(e: PointerEvent, scrub: ScrubDef) {
+    function onScrubDown(e: PointerEvent, scrub: ScrubDef, idx: number) {
         e.preventDefault();
         scrubStartX = e.clientX;
         scrubStartVal = scrub.get();
-        draggingScrub = scrub;
+        draggingScrubIdx = idx;
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     }
 
-    function onScrubMove(e: PointerEvent, scrub: ScrubDef) {
-        if (draggingScrub !== scrub) return;
+    function onScrubMove(e: PointerEvent, scrub: ScrubDef, idx: number) {
+        if (draggingScrubIdx !== idx) return;
         const dx = e.clientX - scrubStartX;
         const v = Math.round(Math.min(scrub.max, Math.max(scrub.min, scrubStartVal + dx * scrub.speed)));
         scrub.set(v);
     }
 
-    function onScrubUp(e: PointerEvent, scrub: ScrubDef) {
-        if (draggingScrub !== scrub) return;
-        draggingScrub = null;
+    function onScrubUp(e: PointerEvent, idx: number) {
+        if (draggingScrubIdx !== idx) return;
+        draggingScrubIdx = -1;
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     }
 </script>
@@ -141,14 +141,14 @@
         </div>
 
         <!-- Scrub controls -->
-        {#each scrubs as scrub}
+        {#each scrubs as scrub, idx}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
                 class="scrub"
-                class:dragging={draggingScrub === scrub}
-                onpointerdown={(e) => onScrubDown(e, scrub)}
-                onpointermove={(e) => onScrubMove(e, scrub)}
-                onpointerup={(e) => onScrubUp(e, scrub)}
+                class:dragging={draggingScrubIdx === idx}
+                onpointerdown={(e) => onScrubDown(e, scrub, idx)}
+                onpointermove={(e) => onScrubMove(e, scrub, idx)}
+                onpointerup={(e) => onScrubUp(e, idx)}
             >
                 <i class="{scrub.icon} scrub-icon"></i>
                 <div class="scrub-text">

@@ -30,30 +30,40 @@ pub fn register() -> BrushNodeRegistration {
         category: "gpu",
         display_name: "Stamp Tip",
         ports: vec![
-            // Tip texture from an upstream Image node.
-            PortDef::input("tip", BrushWireType::Texture),
-            // Inputs (0-1 normalized, mapped to actual ranges internally).
+            PortDef::input("tip", BrushWireType::Texture)
+                .with_description("Brush tip texture (from Image or Circle node)"),
             PortDef::input("size", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.5),
+                .with_range(0.0, 1.0, 0.5)
+                .with_description("Dab size as a fraction of max (0 = 1px, 1 = max)"),
             PortDef::input("rotation", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0),
+                .with_range(0.0, 1.0, 0.0)
+                .with_description("Dab rotation (0 = 0\u{00b0}, 1 = 360\u{00b0})"),
             PortDef::input("mirror_x", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0),
+                .with_range(0.0, 1.0, 0.0)
+                .with_description("Flip the tip horizontally (> 0.5 = mirrored)"),
             PortDef::input("mirror_y", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0),
+                .with_range(0.0, 1.0, 0.0)
+                .with_description("Flip the tip vertically (> 0.5 = mirrored)"),
             PortDef::input("ratio", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 1.0),
+                .with_range(0.0, 1.0, 1.0)
+                .with_description("Aspect ratio squash (1 = circle, lower = ellipse)"),
             PortDef::input("opacity", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 1.0),
-            PortDef::input("color", BrushWireType::Color),
+                .with_range(0.0, 1.0, 1.0)
+                .with_description("Per-dab opacity (0 = transparent, 1 = fully opaque)"),
+            PortDef::input("color", BrushWireType::Color)
+                .with_description("Dab color (RGBA)"),
             PortDef::input("scatter_x", BrushWireType::Scalar)
-                .with_range(-1.0, 1.0, 0.0),
+                .with_range(-1.0, 1.0, 0.0)
+                .with_description("Horizontal scatter offset relative to dab size"),
             PortDef::input("scatter_y", BrushWireType::Scalar)
-                .with_range(-1.0, 1.0, 0.0),
-            // Outputs.
-            PortDef::output("dab", BrushWireType::Texture),
-            PortDef::output("dab_size", BrushWireType::Vec2),
-            PortDef::output("scatter_offset", BrushWireType::Vec2),
+                .with_range(-1.0, 1.0, 0.0)
+                .with_description("Vertical scatter offset relative to dab size"),
+            PortDef::output("dab", BrushWireType::Texture)
+                .with_description("The stamped dab texture ready for compositing"),
+            PortDef::output("dab_size", BrushWireType::Vec2)
+                .with_description("Actual pixel dimensions of the generated dab"),
+            PortDef::output("scatter_offset", BrushWireType::Vec2)
+                .with_description("Computed scatter offset in canvas pixels"),
         ],
         params: &[
             ParamDef::Int { name: "application", min: 0, max: 3, default: 0 },

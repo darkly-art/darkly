@@ -14,7 +14,8 @@ pub fn register() -> BrushNodeRegistration {
         category: "math",
         display_name: "Constant",
         ports: vec![
-            PortDef::output("value", BrushWireType::Scalar),
+            PortDef::output("value", BrushWireType::Scalar)
+                .with_description("Fixed scalar value set by the parameter below"),
         ],
         params: &[
             ParamDef::Float { name: "value", min: 0.0, max: 1.0, default: 0.5 },

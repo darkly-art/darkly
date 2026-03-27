@@ -300,8 +300,8 @@
         position: relative;
         flex: 1;
         overflow: hidden;
-        background-color: var(--bg);
-        background-image: radial-gradient(circle, color-mix(in srgb, var(--text) 20%, transparent) 1px, transparent 1px);
+        background-color: var(--thumb-bg);
+        background-image: radial-gradient(circle, color-mix(in srgb, var(--text) 40%, transparent) 1px, transparent 1px);
         background-size: 20px 20px;
         cursor: default;
     }

@@ -33,12 +33,17 @@ pub fn register() -> BrushNodeRegistration {
         category: "gpu",
         display_name: "Color Output",
         ports: vec![
-            PortDef::input("dab", BrushWireType::Texture),
-            PortDef::input("dab_size", BrushWireType::Vec2),
-            PortDef::input("position", BrushWireType::Vec2),
-            PortDef::input("scatter_offset", BrushWireType::Vec2),
+            PortDef::input("dab", BrushWireType::Texture)
+                .with_description("The rendered dab texture to composite onto the canvas"),
+            PortDef::input("dab_size", BrushWireType::Vec2)
+                .with_description("Width and height of the dab in pixels"),
+            PortDef::input("position", BrushWireType::Vec2)
+                .with_description("Canvas position where the dab center is placed"),
+            PortDef::input("scatter_offset", BrushWireType::Vec2)
+                .with_description("Random offset added to the position for scatter effects"),
             PortDef::input("blend_mode", BrushWireType::Int)
-                .with_range(0.0, 1.0, 0.0),
+                .with_range(0.0, 1.0, 0.0)
+                .with_description("Compositing blend mode (0 = source over, 1 = erase)"),
         ],
         params: &[],
         is_gpu: true,

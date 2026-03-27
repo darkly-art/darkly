@@ -201,6 +201,20 @@ impl DarklyEngine {
         Ok(self.active_graph_json())
     }
 
+    /// Update a port's default value and compile.
+    pub fn brush_graph_set_port_default(
+        &mut self,
+        node_id: u64,
+        port_name: &str,
+        value: f32,
+    ) -> Result<String, String> {
+        self.active_brush_graph
+            .set_port_default(NodeId(node_id), port_name, value)
+            .map_err(|e| format!("{e}"))?;
+        self.compile_active()?;
+        Ok(self.active_graph_json())
+    }
+
     /// Update a node's position (UI-only, no compile).
     pub fn brush_graph_move_node(&mut self, node_id: u64, x: f32, y: f32) {
         let _ = self.active_brush_graph.set_node_position(NodeId(node_id), [x, y]);

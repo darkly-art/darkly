@@ -19,8 +19,10 @@ pub fn register() -> BrushNodeRegistration {
         category: "math",
         display_name: "Curve",
         ports: vec![
-            PortDef::input("input", BrushWireType::Scalar),
-            PortDef::output("output", BrushWireType::Scalar),
+            PortDef::input("input", BrushWireType::Scalar)
+                .with_description("Input value (0\u{2013}1) to apply the power curve to"),
+            PortDef::output("output", BrushWireType::Scalar)
+                .with_description("Curved output (input raised to the gamma power)"),
         ],
         params: &[
             ParamDef::Float { name: "gamma", min: 0.1, max: 10.0, default: 1.0 },

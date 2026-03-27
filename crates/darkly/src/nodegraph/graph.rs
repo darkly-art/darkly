@@ -47,6 +47,9 @@ pub struct PortDef<W: WireKind> {
     pub max: f32,
     /// Default value when the port is disconnected.
     pub default: f32,
+    /// Human-readable description shown as a tooltip in the node editor.
+    #[serde(default)]
+    pub description: String,
 }
 
 impl<W: WireKind> PortDef<W> {
@@ -58,6 +61,7 @@ impl<W: WireKind> PortDef<W> {
             min: 0.0,
             max: 1.0,
             default: 0.0,
+            description: String::new(),
         }
     }
 
@@ -69,6 +73,7 @@ impl<W: WireKind> PortDef<W> {
             min: 0.0,
             max: 1.0,
             default: 0.0,
+            description: String::new(),
         }
     }
 
@@ -76,6 +81,11 @@ impl<W: WireKind> PortDef<W> {
         self.min = min;
         self.max = max;
         self.default = default;
+        self
+    }
+
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = desc.into();
         self
     }
 }
@@ -256,6 +266,28 @@ impl<W: WireKind> Graph<W> {
     pub fn set_node_position(&mut self, id: NodeId, pos: [f32; 2]) -> Result<(), GraphError> {
         let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;
         node.position = pos;
+        Ok(())
+    }
+
+    /// Update a port's default value on a node instance.
+    ///
+    /// This changes the value used when the port is disconnected.
+    pub fn set_port_default(
+        &mut self,
+        id: NodeId,
+        port_name: &str,
+        value: f32,
+    ) -> Result<(), GraphError> {
+        let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;
+        let port = node
+            .ports
+            .iter_mut()
+            .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            .ok_or_else(|| GraphError::PortNotFound {
+                node: id,
+                port: port_name.to_string(),
+            })?;
+        port.default = value;
         Ok(())
     }
 

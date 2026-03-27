@@ -66,9 +66,9 @@
     }
     .palette-dropdown {
         position: absolute;
-        top: 100%;
+        bottom: 100%;
         left: 0;
-        margin-top: 4px;
+        margin-bottom: 4px;
         background: var(--bg-active);
         border: 1px solid var(--bg-hover);
         border-radius: 6px;

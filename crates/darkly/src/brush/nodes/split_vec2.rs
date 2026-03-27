@@ -15,9 +15,12 @@ pub fn register() -> BrushNodeRegistration {
         category: "math",
         display_name: "Split Vec2",
         ports: vec![
-            PortDef::input("vec", BrushWireType::Vec2),
-            PortDef::output("x", BrushWireType::Scalar),
-            PortDef::output("y", BrushWireType::Scalar),
+            PortDef::input("vec", BrushWireType::Vec2)
+                .with_description("The 2D vector to split into components"),
+            PortDef::output("x", BrushWireType::Scalar)
+                .with_description("Horizontal (X) component of the vector"),
+            PortDef::output("y", BrushWireType::Scalar)
+                .with_description("Vertical (Y) component of the vector"),
         ],
         params: &[],
         is_gpu: false,

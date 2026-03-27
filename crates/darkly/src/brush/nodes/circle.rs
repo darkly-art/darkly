@@ -21,8 +21,10 @@ pub fn register() -> BrushNodeRegistration {
         display_name: "Circle",
         ports: vec![
             PortDef::input("softness", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.5),
-            PortDef::output("texture", BrushWireType::Texture),
+                .with_range(0.0, 1.0, 0.5)
+                .with_description("Edge softness (0 = hard edge, 1 = fully feathered)"),
+            PortDef::output("texture", BrushWireType::Texture)
+                .with_description("SDF circle mask texture"),
         ],
         params: &[],
         is_gpu: true,

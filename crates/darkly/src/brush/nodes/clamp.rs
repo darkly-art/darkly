@@ -14,8 +14,10 @@ pub fn register() -> BrushNodeRegistration {
         category: "math",
         display_name: "Clamp",
         ports: vec![
-            PortDef::input("value", BrushWireType::Scalar),
-            PortDef::output("result", BrushWireType::Scalar),
+            PortDef::input("value", BrushWireType::Scalar)
+                .with_description("Input value to clamp"),
+            PortDef::output("result", BrushWireType::Scalar)
+                .with_description("Clamped output value"),
         ],
         params: &[
             ParamDef::Float { name: "min", min: 0.0, max: 1.0, default: 0.0 },

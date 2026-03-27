@@ -18,8 +18,10 @@ pub fn register() -> BrushNodeRegistration {
         category: "math",
         display_name: "Remap",
         ports: vec![
-            PortDef::input("value", BrushWireType::Scalar),
-            PortDef::output("result", BrushWireType::Scalar),
+            PortDef::input("value", BrushWireType::Scalar)
+                .with_description("Input value to remap"),
+            PortDef::output("result", BrushWireType::Scalar)
+                .with_description("Remapped output value"),
         ],
         params: &[
             ParamDef::Float { name: "in_min", min: 0.0, max: 1.0, default: 0.0 },

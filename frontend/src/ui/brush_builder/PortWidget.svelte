@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount, onDestroy, getContext } from 'svelte';
     import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
+    import { app } from '../../state/app.svelte';
     import type { PortRegistration } from './NodeCanvas.svelte';
 
     interface Props {
@@ -14,9 +15,15 @@
     let color = $derived(WIRE_COLORS[port.wire_type] ?? '#888');
     let connected = $derived(brushGraph.isPortConnected(nodeId, port.name, port.dir));
 
+    /** Whether this port should show an inline slider when disconnected. */
+    const SLIDER_TYPES = new Set(['Scalar', 'Int', 'Bool']);
+    let showSlider = $derived(
+        port.dir === 'Input' && !connected && SLIDER_TYPES.has(port.wire_type)
+    );
+
     // --- Port offset registration ---
     const { register, unregister } = getContext<PortRegistration>('port-registration');
-    let dotEl: HTMLDivElement;
+    let dotEl = $state<HTMLDivElement>();
 
     onMount(() => {
         // Measure offset of dot center relative to the ancestor node-widget.
@@ -84,11 +91,74 @@
         brushGraph.draggingFrom = null;
         brushGraph.dragMouse = null;
     }
+
+    // --- Inline slider for disconnected inputs ---
+
+    let sliderEl = $state<HTMLDivElement>();
+    let sliding = false;
+
+    /** Normalized position (0–1) from a pointer event relative to the slider bar. */
+    function sliderFraction(e: PointerEvent): number {
+        const rect = sliderEl.getBoundingClientRect();
+        return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    }
+
+    function valueFromFraction(frac: number): number {
+        const raw = port.min + frac * (port.max - port.min);
+        if (port.wire_type === 'Int') return Math.round(raw);
+        if (port.wire_type === 'Bool') return frac >= 0.5 ? 1 : 0;
+        return raw;
+    }
+
+    function onSliderDown(e: PointerEvent) {
+        // Stop propagation so the node doesn't start dragging.
+        e.stopPropagation();
+        e.preventDefault();
+        sliding = true;
+        sliderEl.setPointerCapture(e.pointerId);
+        app.beginInteraction();
+        const value = valueFromFraction(sliderFraction(e));
+        brushGraph.setPortDefaultLocal(nodeId, port.name, value);
+    }
+
+    function onSliderMove(e: PointerEvent) {
+        if (!sliding) return;
+        const value = valueFromFraction(sliderFraction(e));
+        brushGraph.setPortDefaultLocal(nodeId, port.name, value);
+    }
+
+    function onSliderUp(e: PointerEvent) {
+        if (!sliding) return;
+        sliding = false;
+        sliderEl.releasePointerCapture(e.pointerId);
+        brushGraph.setPortDefault(nodeId, port.name, port.default);
+    }
+
+    function onSliderLostCapture() {
+        sliding = false;
+        app.endInteraction();
+    }
+
+    let sliderPercent = $derived(
+        port.max > port.min
+            ? ((port.default - port.min) / (port.max - port.min)) * 100
+            : 0
+    );
+
+    let displayValue = $derived(
+        port.wire_type === 'Bool'
+            ? (port.default >= 0.5 ? 'on' : 'off')
+            : port.wire_type === 'Int'
+                ? String(Math.round(port.default))
+                : port.default.toFixed(2)
+    );
 </script>
 
 <div
     class="port-row"
     class:port-right={side === 'right'}
+    class:has-slider={showSlider}
+    title={port.description || ''}
 >
     <div
         class="port-dot"
@@ -103,7 +173,26 @@
         data-port-name={port.name}
         data-port-dir={port.dir}
     ></div>
-    <span class="port-label">{port.name}</span>
+    {#if showSlider}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+            class="port-slider"
+            bind:this={sliderEl}
+            onpointerdown={onSliderDown}
+            onpointermove={onSliderMove}
+            onpointerup={onSliderUp}
+            onlostpointercapture={onSliderLostCapture}
+        >
+            <div
+                class="port-slider-fill"
+                style="width: {sliderPercent}%; background: {color};"
+            ></div>
+            <span class="port-slider-label">{port.name}</span>
+            <span class="port-slider-value">{displayValue}</span>
+        </div>
+    {:else}
+        <span class="port-label">{port.name}</span>
+    {/if}
 </div>
 
 <style>
@@ -116,6 +205,11 @@
     .port-right {
         flex-direction: row-reverse;
     }
+    .port-row.has-slider {
+        /* Span full node width so the slider bar stretches across. */
+        position: relative;
+        margin-right: 2px;
+    }
     .port-dot {
         width: 10px;
         height: 10px;
@@ -123,6 +217,7 @@
         border: 2px solid;
         cursor: crosshair;
         flex-shrink: 0;
+        z-index: 1;
     }
     .port-dot.connected {
         /* filled by inline style */
@@ -134,7 +229,45 @@
         font-size: 9px;
         color: var(--text);
         white-space: nowrap;
+        cursor: default;
+    }
+
+    /* --- Inline slider (Blender-style colored bar) --- */
+    .port-slider {
+        position: relative;
+        flex: 1;
+        height: 14px;
+        background: color-mix(in srgb, var(--text) 8%, transparent);
+        border-radius: 3px;
         overflow: hidden;
-        text-overflow: ellipsis;
+        cursor: ew-resize;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 4px;
+    }
+    .port-slider-fill {
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        opacity: 0.3;
+        border-radius: 3px;
+        pointer-events: none;
+    }
+    .port-slider-label {
+        font-size: 8px;
+        color: var(--text);
+        position: relative;
+        pointer-events: none;
+        white-space: nowrap;
+    }
+    .port-slider-value {
+        font-size: 8px;
+        color: var(--text);
+        position: relative;
+        pointer-events: none;
+        white-space: nowrap;
+        opacity: 0.7;
     }
 </style>
