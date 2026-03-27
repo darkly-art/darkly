@@ -2,6 +2,7 @@
     import { brushGraph, type NodeInstance, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
+    import CurveEditor from '../CurveEditor.svelte';
 
     interface Props {
         node: NodeInstance;
@@ -31,7 +32,7 @@
      *  handle its own pointer events (port dots, sliders, buttons). */
     function isInteractiveTarget(e: PointerEvent): boolean {
         const t = e.target as HTMLElement;
-        return !!t.closest('.port-dot, .port-slider, input, button');
+        return !!t.closest('.port-dot, .port-slider, .curve-editor, input, button');
     }
 
     function onNodeDown(e: PointerEvent) {
@@ -136,40 +137,48 @@
         {#if paramDefs.length > 0}
             <div class="params">
                 {#each paramDefs as pdef, i}
-                    <div class="param-row">
-                        <span class="param-label">{pdef.name}</span>
-                        {#if pdef.kind === 'bool'}
-                            <input
-                                type="checkbox"
-                                checked={node.params[i]}
-                                onchange={(e) => onParamChange(i, e)}
-                            />
-                        {:else if pdef.kind === 'float'}
-                            <input
-                                type="range"
-                                class="param-slider"
-                                min={pdef.min}
-                                max={pdef.max}
-                                step={((pdef.max - pdef.min) / 100)}
-                                value={node.params[i] ?? pdef.default}
-                                oninput={(e) => onParamInput(i, e)}
-                                onchange={(e) => onParamChange(i, e)}
-                            />
-                            <span class="param-value">{(node.params[i] ?? pdef.default).toFixed(2)}</span>
-                        {:else if pdef.kind === 'int'}
-                            <input
-                                type="range"
-                                class="param-slider"
-                                min={pdef.min}
-                                max={pdef.max}
-                                step="1"
-                                value={node.params[i] ?? pdef.default}
-                                oninput={(e) => onParamInput(i, e)}
-                                onchange={(e) => onParamChange(i, e)}
-                            />
-                            <span class="param-value">{node.params[i] ?? pdef.default}</span>
-                        {/if}
-                    </div>
+                    {#if pdef.kind === 'curve'}
+                        <CurveEditor
+                            points={node.params[i] ?? pdef.default}
+                            oninput={(pts) => brushGraph.setParamLocal(node.id, i, pts)}
+                            onchange={(pts) => brushGraph.setParam(node.id, i, 'curve', JSON.stringify(pts))}
+                        />
+                    {:else}
+                        <div class="param-row">
+                            <span class="param-label">{pdef.name}</span>
+                            {#if pdef.kind === 'bool'}
+                                <input
+                                    type="checkbox"
+                                    checked={node.params[i]}
+                                    onchange={(e) => onParamChange(i, e)}
+                                />
+                            {:else if pdef.kind === 'float'}
+                                <input
+                                    type="range"
+                                    class="param-slider"
+                                    min={pdef.min}
+                                    max={pdef.max}
+                                    step={((pdef.max - pdef.min) / 100)}
+                                    value={node.params[i] ?? pdef.default}
+                                    oninput={(e) => onParamInput(i, e)}
+                                    onchange={(e) => onParamChange(i, e)}
+                                />
+                                <span class="param-value">{(node.params[i] ?? pdef.default).toFixed(2)}</span>
+                            {:else if pdef.kind === 'int'}
+                                <input
+                                    type="range"
+                                    class="param-slider"
+                                    min={pdef.min}
+                                    max={pdef.max}
+                                    step="1"
+                                    value={node.params[i] ?? pdef.default}
+                                    oninput={(e) => onParamInput(i, e)}
+                                    onchange={(e) => onParamChange(i, e)}
+                                />
+                                <span class="param-value">{node.params[i] ?? pdef.default}</span>
+                            {/if}
+                        </div>
+                    {/if}
                 {/each}
             </div>
         {/if}

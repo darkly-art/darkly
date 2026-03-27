@@ -280,6 +280,14 @@ fn js_to_param_values(js: &JsValue, defs: &[ParamDef]) -> Vec<ParamValue> {
                 .unwrap_or_else(|| default.to_string());
             ParamValue::String(v)
         }
+        ParamDef::Curve { name, default } => {
+            let v = js_sys::Reflect::get(js, &(*name).into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .and_then(|s| serde_json::from_str::<Vec<[f32; 2]>>(&s).ok())
+                .unwrap_or_else(|| default.to_vec());
+            ParamValue::Curve(v)
+        }
     }).collect()
 }
 
@@ -627,6 +635,12 @@ impl DarklyHandle {
             "int" => ParamValue::Int(value.as_f64().unwrap_or(0.0) as i32),
             "bool" => ParamValue::Bool(value.as_bool().unwrap_or(false)),
             "string" => ParamValue::String(value.as_string().unwrap_or_default()),
+            "curve" => {
+                let json_str = value.as_string().unwrap_or_default();
+                let points: Vec<[f32; 2]> = serde_json::from_str(&json_str)
+                    .unwrap_or_else(|_| vec![[0.0, 0.0], [1.0, 1.0]]);
+                ParamValue::Curve(points)
+            }
             _ => return graph_result(Err(format!("unknown param kind: {kind}"))),
         };
         self.flush_if_needed();

@@ -4,6 +4,7 @@
 
 pub mod builtin_presets;
 pub mod brush_tip;
+pub mod curve_math;
 pub mod dab_pool;
 pub mod eval;
 pub mod gpu_context;
@@ -290,19 +291,19 @@ mod tests {
     }
 
     #[test]
-    fn curve_gamma() {
+    fn curve_spline_identity() {
         let registry = BrushNodeRegistry::new();
         let mut graph = Graph::new();
 
         let pen_reg = registry.get("pen_input").unwrap();
         let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
 
-        // gamma = 2.0 → output = input^2
+        // Default identity curve: [(0,0), (1,1)] → output ≈ input
         let curve_reg = registry.get("curve").unwrap();
         let curve = graph.add_node(
             "curve",
             curve_reg.ports.clone(),
-            vec![ParamValue::Float(2.0)],
+            vec![ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])],
         );
 
         graph.connect(
@@ -324,8 +325,48 @@ mod tests {
         let result = runner.read_slot(slot).unwrap();
         match result {
             ScalarValue::Scalar(v) => {
-                let expected = 0.25; // 0.5^2
-                assert!((v - expected).abs() < 1e-6, "expected {expected}, got {v}");
+                assert!((v - 0.5).abs() < 0.02, "identity curve at 0.5: got {v}");
+            }
+            other => panic!("expected Scalar, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn curve_spline_s_curve() {
+        let registry = BrushNodeRegistry::new();
+        let mut graph = Graph::new();
+
+        let pen_reg = registry.get("pen_input").unwrap();
+        let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+
+        // S-curve: compress low values
+        let curve_reg = registry.get("curve").unwrap();
+        let curve = graph.add_node(
+            "curve",
+            curve_reg.ports.clone(),
+            vec![ParamValue::Curve(vec![[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]])],
+        );
+
+        graph.connect(
+            PortRef { node: pen, port: "pressure".into() },
+            PortRef { node: curve, port: "input".into() },
+        ).unwrap();
+
+        let evaluators = default_evaluators();
+        let mut runner = BrushGraphRunner::new(&graph, registry.as_map(), evaluators).unwrap();
+
+        let info = PaintInformation {
+            pressure: 0.5,
+            ..Default::default()
+        };
+        runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0]);
+        runner.execute_cpu();
+
+        let slot = runner.find_node_output_slot(curve, "output").unwrap();
+        let result = runner.read_slot(slot).unwrap();
+        match result {
+            ScalarValue::Scalar(v) => {
+                assert!((v - 0.2).abs() < 0.05, "s-curve at 0.5: expected ~0.2, got {v}");
             }
             other => panic!("expected Scalar, got {:?}", other),
         }

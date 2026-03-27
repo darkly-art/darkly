@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::{ExecutionPlan, Graph, NodeId, NodeRegistration, PortDef, PortDir};
 
+use super::curve_math::CurveLut;
+
 use super::gpu_context::BrushGpuContext;
 use super::paint_info::PaintInformation;
 use super::wire::{BrushWireType, ScalarValue};
@@ -31,6 +33,8 @@ pub struct EvalContext<'a> {
     pub params: &'a [ParamValue],
     /// Port definitions for this node instance (for reading defaults).
     pub port_defs: &'a [PortDef<BrushWireType>],
+    /// Precomputed curve LUT, if this node has a Curve parameter.
+    pub lut: Option<&'a CurveLut>,
 }
 
 impl EvalContext<'_> {
@@ -67,6 +71,24 @@ impl EvalContext<'_> {
         match self.params.get(index) {
             Some(ParamValue::String(s)) => s.as_str(),
             _ => "",
+        }
+    }
+
+    /// Read a parameter by index as curve control points.
+    pub fn param_curve(&self, index: usize) -> &[[f32; 2]] {
+        match self.params.get(index) {
+            Some(ParamValue::Curve(pts)) => pts.as_slice(),
+            _ => &[[0.0, 0.0], [1.0, 1.0]],
+        }
+    }
+
+    /// O(1) curve lookup using the precomputed LUT.
+    /// Falls back to identity (returns `t` unchanged) if no LUT is cached.
+    #[inline]
+    pub fn curve_lookup(&self, t: f32) -> f32 {
+        match self.lut {
+            Some(lut) => lut.evaluate(t),
+            None => t,
         }
     }
 }
@@ -147,6 +169,7 @@ pub struct BrushGraphRunner {
 struct NodeData {
     params: Vec<ParamValue>,
     port_defs: Vec<PortDef<BrushWireType>>,
+    lut: Option<CurveLut>,
 }
 
 impl BrushGraphRunner {
@@ -160,12 +183,18 @@ impl BrushGraphRunner {
         let slots = vec![None; plan.slot_count];
 
         // Cache per-node instance data for fast access during eval.
+        // Precompute curve LUTs for nodes with Curve parameters.
         let mut node_data = HashMap::new();
         for step in &plan.steps {
             if let Some(node) = graph.nodes.get(&step.node_id) {
+                let lut = node.params.iter().find_map(|p| match p {
+                    ParamValue::Curve(pts) if pts.len() >= 2 => Some(CurveLut::from_points(pts)),
+                    _ => None,
+                });
                 node_data.insert(step.node_id, NodeData {
                     params: node.params.clone(),
                     port_defs: node.ports.clone(),
+                    lut,
                 });
             }
         }
@@ -260,6 +289,7 @@ impl BrushGraphRunner {
                 inputs: &inputs,
                 params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
                 port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
+                lut: node.and_then(|n| n.lut.as_ref()),
             };
 
             let outputs = evaluator.evaluate_cpu(&ctx);
@@ -310,6 +340,7 @@ impl BrushGraphRunner {
                 inputs: &inputs,
                 params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
                 port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
+                lut: node.and_then(|n| n.lut.as_ref()),
             };
 
             let outputs = evaluator.evaluate_gpu(&ctx, gpu);

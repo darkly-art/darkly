@@ -118,12 +118,12 @@ impl PresetBuilder {
         )
     }
 
-    /// Add a curve node with the given gamma.
-    fn add_curve(&mut self, gamma: f32) -> NodeId {
+    /// Add a curve node with control points defining the transfer function.
+    fn add_curve(&mut self, points: Vec<[f32; 2]>) -> NodeId {
         self.graph.add_node(
             "curve",
             self.registry.get("curve").unwrap().ports.clone(),
-            vec![ParamValue::Float(gamma)],
+            vec![ParamValue::Curve(points)],
         )
     }
 
@@ -213,8 +213,10 @@ fn hard_round() -> PresetBundle {
 fn ink_pen() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.1);
-    // pressure → curve(gamma=0.5) → stamp.size
-    let curve = b.add_curve(0.5);
+    // pressure → curve (approx sqrt) → stamp.size
+    let curve = b.add_curve(vec![
+        [0.0, 0.0], [0.25, 0.5], [0.5, 0.71], [0.75, 0.87], [1.0, 1.0],
+    ]);
     b.wire(b.pen, "pressure", curve, "input");
     b.wire(curve, "output", b.stamp, "size");
     b.wire_pressure_to_opacity();

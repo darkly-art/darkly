@@ -79,6 +79,12 @@ impl ParamInfo {
                 default: ParamValue::String(default.to_string()),
                 value: value.cloned(),
             },
+            ParamDef::Curve { name, default } => ParamInfo {
+                kind: "curve", name,
+                min: None, max: None,
+                default: ParamValue::Curve(default.to_vec()),
+                value: value.cloned(),
+            },
         }
     }
 }
