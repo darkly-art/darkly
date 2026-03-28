@@ -24,6 +24,8 @@ struct Params {
     resolution_y: f32,
     direction: f32,
     fog_amount: f32,
+    scale: f32,
+    _pad: f32,
 }
 
 @group(0) @binding(0) var t_input: texture_2d<f32>;
@@ -175,7 +177,7 @@ fn sample_fog(uv: vec2f, radius: f32, aspect: f32) -> vec3f {
 }
 
 @fragment fn fs_rainy_glass(in: VertexOutput) -> @location(0) vec4f {
-    let scale = max(params.resolution_x, params.resolution_y);
+    let dim_scale = max(params.resolution_x, params.resolution_y);
     let aspect = params.resolution_x / params.resolution_y;
     let dir = params.direction;
 
@@ -183,7 +185,7 @@ fn sample_fog(uv: vec2f, radius: f32, aspect: f32) -> vec3f {
     // so the drop density stays stable regardless of aspect ratio.
     // Then rotate into rain-space so the pattern falls in the
     // configured direction.
-    var uv = (in.uv - 0.5) * vec2f(params.resolution_x / scale, params.resolution_y / scale);
+    var uv = (in.uv - 0.5) * vec2f(params.resolution_x / dim_scale, params.resolution_y / dim_scale) / params.scale;
     uv = rotate2d(uv, dir);
 
     let UV = in.uv;
