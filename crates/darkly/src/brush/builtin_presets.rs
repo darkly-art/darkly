@@ -170,6 +170,15 @@ impl PresetBuilder {
         self.wire(self.paint_color, "color", self.stamp, "color");
     }
 
+    /// Add a random node. `mode`: 0 = per-dab, 1 = per-stroke.
+    fn add_random(&mut self, mode: i32) -> NodeId {
+        self.graph.add_node(
+            "random",
+            self.registry.get("random").unwrap().ports.clone(),
+            vec![ParamValue::Int(mode)],
+        )
+    }
+
     /// Generic wire helper.
     fn wire(&mut self, from: NodeId, from_port: &str, to: NodeId, to_port: &str) {
         self.graph.connect(
@@ -257,8 +266,10 @@ fn scatter_brush() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.3);
     b.wire_pressure_to_size();
-    b.wire(b.pen, "fuzzy_dab", b.stamp, "scatter_x");
-    b.wire(b.pen, "fuzzy_dab", b.stamp, "scatter_y");
+    let rand_x = b.add_random(0);
+    let rand_y = b.add_random(0);
+    b.wire(rand_x, "value", b.stamp, "scatter_x");
+    b.wire(rand_y, "value", b.stamp, "scatter_y");
     b.wire_color();
     b.build("Scatter Brush", "effects")
 }
@@ -279,7 +290,8 @@ fn textured_ink() -> PresetBundle {
     b.add_image("ink_dry.png");
     b.wire_pressure_to_size();
     b.wire_pressure_to_opacity();
-    b.wire(b.pen, "fuzzy_dab", b.stamp, "rotation");
+    let rand_rot = b.add_random(0);
+    b.wire(rand_rot, "value", b.stamp, "rotation");
     b.wire_color();
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");

@@ -21,25 +21,24 @@
         presetDropdownOpen = false;
     }
 
-    function handleUserInput(nodeId: number, paramIndex: number, value: number) {
-        brushGraph.setParamLocal(nodeId, paramIndex, value);
-        brushGraph.setParam(nodeId, paramIndex, 'float', value);
+    function handleExposedPort(nodeId: number, portName: string, displayValue: number) {
+        brushGraph.setExposedPortValueLocal(nodeId, portName, displayValue);
+        brushGraph.setExposedPortValue(nodeId, portName, displayValue);
     }
 
-    /** Format a user input value based on its units enum. */
-    function formatUserInput(value: number, units: number): string {
-        switch (units) {
-            case 1: return `${Math.round(value)} px`;
-            case 2: return `${Math.round(value)}°`;
-            case 3: return value.toFixed(2);
-            default: return `${Math.round(value * 100)}%`;
+    /** Format an exposed scalar value based on its unit type. */
+    function formatExposedValue(value: number, unitType: string): string {
+        switch (unitType) {
+            case 'Percent': return `${Math.round(value)}%`;
+            case 'Degrees': return `${Math.round(value)}°`;
+            case 'Raw': return value.toFixed(2);
+            default: return value.toFixed(2); // Normalized
         }
     }
 
-    /** Drag speed scaled to the input's range. */
-    function userInputDragSpeed(min: number, max: number, units: number): number {
+    /** Drag speed scaled to the display range. */
+    function exposedDragSpeed(min: number, max: number): number {
         const range = max - min;
-        if (units === 0) return 0.005; // percent: 0-1 range, slow drag
         return range / 400; // ~400px of drag to cover the full range
     }
 
@@ -47,6 +46,28 @@
         if (presetDropdownOpen) {
             presetDropdownOpen = false;
         }
+    }
+
+    let builderHeight = $state(33); // vh units
+
+    function handleResizeStart(e: PointerEvent) {
+        e.preventDefault();
+        const el = e.currentTarget as HTMLElement;
+        el.setPointerCapture(e.pointerId);
+        const startY = e.clientY;
+        const startHeight = builderHeight;
+        const vh = window.innerHeight / 100;
+
+        const onMove = (ev: PointerEvent) => {
+            const dy = startY - ev.clientY; // dragging up = increase height
+            builderHeight = Math.min(80, Math.max(15, startHeight + dy / vh));
+        };
+        const onUp = () => {
+            el.removeEventListener('pointermove', onMove);
+            el.removeEventListener('pointerup', onUp);
+        };
+        el.addEventListener('pointermove', onMove);
+        el.addEventListener('pointerup', onUp);
     }
 
     // Group presets by category
@@ -65,6 +86,15 @@
 <svelte:window onclick={handleClickOutside} />
 
 <div class="bottom-area">
+    <!-- Expandable brush builder -->
+    {#if brushGraph.isOpen}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="resize-handle" onpointerdown={handleResizeStart}></div>
+        <div class="builder-panel" style="height: {builderHeight}vh">
+            <BrushBuilder />
+        </div>
+    {/if}
+
     <!-- Tool options bar (always visible) -->
     <div class="tool-options">
         <!-- Preset selector -->
@@ -103,40 +133,43 @@
             {/if}
         </div>
 
-        <!-- User input scrubs from the brush graph -->
-        {#each brushGraph.userInputs as input}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-                class="scrub"
-                title={input.description || undefined}
-                onpointerdown={(e) => {
-                    e.preventDefault();
-                    const startX = e.clientX;
-                    const startVal = input.value;
-                    const speed = userInputDragSpeed(input.min, input.max, input.units);
-                    const el = e.currentTarget as HTMLElement;
-                    el.setPointerCapture(e.pointerId);
-                    el.classList.add('dragging');
-                    const onMove = (ev: PointerEvent) => {
-                        const dx = ev.clientX - startX;
-                        const v = Math.min(input.max, Math.max(input.min, startVal + dx * speed));
-                        handleUserInput(input.nodeId, 1, v);
-                    };
-                    const onUp = () => {
-                        el.classList.remove('dragging');
-                        el.removeEventListener('pointermove', onMove);
-                        el.removeEventListener('pointerup', onUp);
-                    };
-                    el.addEventListener('pointermove', onMove);
-                    el.addEventListener('pointerup', onUp);
-                }}
-            >
-                <i class="{input.icon || 'fa-solid fa-sliders'} scrub-icon"></i>
-                <div class="scrub-text">
-                    <span class="scrub-label">{input.label}</span>
-                    <span class="scrub-value">{formatUserInput(input.value, input.units)}</span>
+        <!-- Exposed port scrubs from the brush graph -->
+        {#each brushGraph.exposedPorts as port}
+            {#if port.data.kind === 'scalar'}
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                    class="scrub"
+                    title={port.description || undefined}
+                    onpointerdown={(e) => {
+                        e.preventDefault();
+                        const d = port.data as { kind: 'scalar'; value: number; min: number; max: number; unitType: string };
+                        const startX = e.clientX;
+                        const startVal = d.value;
+                        const speed = exposedDragSpeed(d.min, d.max);
+                        const el = e.currentTarget as HTMLElement;
+                        el.setPointerCapture(e.pointerId);
+                        el.classList.add('dragging');
+                        const onMove = (ev: PointerEvent) => {
+                            const dx = ev.clientX - startX;
+                            const v = Math.min(d.max, Math.max(d.min, startVal + dx * speed));
+                            handleExposedPort(port.nodeId, port.portName, v);
+                        };
+                        const onUp = () => {
+                            el.classList.remove('dragging');
+                            el.removeEventListener('pointermove', onMove);
+                            el.removeEventListener('pointerup', onUp);
+                        };
+                        el.addEventListener('pointermove', onMove);
+                        el.addEventListener('pointerup', onUp);
+                    }}
+                >
+                    <i class="{port.icon || 'fa-solid fa-sliders'} scrub-icon"></i>
+                    <div class="scrub-text">
+                        <span class="scrub-label">{port.label}</span>
+                        <span class="scrub-value">{formatExposedValue(port.data.value, port.data.unitType)}</span>
+                    </div>
                 </div>
-            </div>
+            {/if}
         {/each}
 
         <div class="spacer"></div>
@@ -155,13 +188,6 @@
             <i class="fa-solid fa-chevron-up" class:flipped={brushGraph.isOpen}></i>
         </button>
     </div>
-
-    <!-- Expandable brush builder -->
-    {#if brushGraph.isOpen}
-        <div class="builder-panel">
-            <BrushBuilder />
-        </div>
-    {/if}
 </div>
 
 <style>
@@ -366,9 +392,20 @@
 
     /* ── Builder Panel ── */
 
+    .resize-handle {
+        height: 5px;
+        cursor: ns-resize;
+        background: transparent;
+        flex-shrink: 0;
+        transition: background 0.1s;
+    }
+    .resize-handle:hover,
+    .resize-handle:active {
+        background: var(--accent);
+    }
+
     .builder-panel {
-        height: 33vh;
-        min-height: 200px;
-        border-top: 1px solid var(--bg-hover);
+        min-height: 100px;
+        border-bottom: 1px solid var(--bg-hover);
     }
 </style>

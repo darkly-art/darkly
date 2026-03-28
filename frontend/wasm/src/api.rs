@@ -300,6 +300,13 @@ fn js_to_param_values(js: &JsValue, defs: &[ParamDef]) -> Vec<ParamValue> {
                 .unwrap_or_else(|| default.to_string());
             ParamValue::String(v)
         }
+        ParamDef::FloatInput { name, default, .. } => {
+            let v = js_sys::Reflect::get(js, &(*name).into())
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(*default as f64) as f32;
+            ParamValue::Float(v)
+        }
     }).collect()
 }
 
@@ -791,9 +798,19 @@ impl DarklyHandle {
         }
     }
 
-    pub fn brush_user_inputs(&self) -> String {
+    pub fn brush_exposed_ports(&self) -> String {
         self.flush_if_needed();
-        serde_json::to_string(&self.engine.borrow().brush_user_inputs()).unwrap_or_else(|_| "[]".into())
+        serde_json::to_string(&self.engine.borrow().brush_exposed_ports()).unwrap_or_else(|_| "[]".into())
+    }
+
+    pub fn brush_set_exposed_port(&self, node_id: u32, port_name: &str, display_value: f32) -> JsValue {
+        self.flush_if_needed();
+        graph_result(self.engine.borrow_mut().brush_set_exposed_port(node_id as u64, port_name, display_value))
+    }
+
+    pub fn brush_graph_set_port_exposed(&self, node_id: u32, port_name: &str, exposed: bool) -> JsValue {
+        self.flush_if_needed();
+        graph_result(self.engine.borrow_mut().brush_graph_set_port_exposed(node_id as u64, port_name, exposed))
     }
 
     pub fn brush_preset_list(&self) -> String {

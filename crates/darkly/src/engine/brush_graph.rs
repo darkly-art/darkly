@@ -7,7 +7,7 @@ use super::DarklyEngine;
 use crate::brush::wire::BrushWireType;
 use crate::brush::{BrushNodeRegistration, BrushNodeRegistry};
 use crate::gpu::params::ParamValue;
-use crate::nodegraph::{NodeId, PortRef};
+use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
 use crate::nodegraph::Graph;
 
 impl DarklyEngine {
@@ -263,61 +263,87 @@ impl DarklyEngine {
         self.brush_blend_mode = mode;
     }
 
-    /// Return info about all `user_input` nodes in the active brush graph.
+    /// Return info about all exposed ports in the active brush graph.
+    ///
+    /// Scans all nodes for input ports with `exposed == true`, and also
+    /// includes legacy `user_input` nodes for backward compatibility.
     ///
     /// The result is ordered by node position (top-to-bottom, left-to-right)
     /// for a stable, creator-controlled layout in the properties panel.
-    pub fn brush_user_inputs(&self) -> Vec<UserInputInfo> {
-        let mut inputs: Vec<UserInputInfo> = self
-            .active_brush_graph
-            .nodes
-            .iter()
-            .filter(|(_, node)| node.type_id == "user_input")
-            .map(|(_, node)| {
-                let label = match node.params.first() {
-                    Some(ParamValue::String(s)) => s.clone(),
-                    _ => String::new(),
-                };
-                let value = match node.params.get(1) {
-                    Some(ParamValue::Float(v)) => *v,
-                    _ => 0.5,
-                };
-                let min = match node.params.get(2) {
-                    Some(ParamValue::Float(v)) => *v,
-                    _ => 0.0,
-                };
-                let max = match node.params.get(3) {
-                    Some(ParamValue::Float(v)) => *v,
-                    _ => 1.0,
-                };
-                let units = match node.params.get(4) {
-                    Some(ParamValue::Int(v)) => *v as u32,
-                    _ => 0,
-                };
-                let icon = match node.params.get(5) {
-                    Some(ParamValue::String(s)) => s.clone(),
-                    _ => String::new(),
-                };
-                let description = match node.params.get(6) {
-                    Some(ParamValue::String(s)) => s.clone(),
-                    _ => String::new(),
-                };
-                UserInputInfo {
+    pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
+        let registry = BrushNodeRegistry::new();
+        let mut result: Vec<ExposedPortInfo> = Vec::new();
+
+        for node in self.active_brush_graph.nodes.values() {
+            // Legacy user_input nodes: synthesize as exposed scalar entries.
+            if node.type_id == "user_input" {
+                if let Some(info) = self.legacy_user_input_to_exposed(node) {
+                    result.push(info);
+                    continue;
+                }
+            }
+
+            let reg = registry.get(&node.type_id);
+            let display_name = reg.map(|r| r.display_name).unwrap_or("");
+
+            for port in &node.ports {
+                if !port.exposed || port.dir != PortDir::Input {
+                    continue;
+                }
+
+                // Only Scalar ports for now.
+                if port.wire_type != BrushWireType::Scalar {
+                    continue;
+                }
+
+                // A connected input is driven by its wire, not the user.
+                let connected = self.active_brush_graph.connections.iter().any(|c| {
+                    c.to.node == node.id && c.to.port == port.name
+                });
+                if connected {
+                    continue;
+                }
+
+                // Display metadata comes from the registration (canonical),
+                // per-instance state (default, exposed) from the instance.
+                let reg_port = reg.and_then(|r| {
+                    r.ports.iter().find(|rp| rp.name == port.name && rp.dir == port.dir)
+                });
+                let unit_type = reg_port.map_or(port.unit_type, |rp| rp.unit_type);
+                let label = reg_port
+                    .map(|rp| &rp.label)
+                    .filter(|l| !l.is_empty())
+                    .cloned()
+                    .unwrap_or_else(|| port.name.clone());
+                let icon = reg_port.map_or_else(
+                    || port.icon.clone(),
+                    |rp| rp.icon.clone(),
+                );
+                let description = reg_port.map_or_else(
+                    || port.description.clone(),
+                    |rp| rp.description.clone(),
+                );
+
+                result.push(ExposedPortInfo {
                     node_id: node.id.0,
+                    port_name: port.name.clone(),
                     label,
-                    value,
-                    min,
-                    max,
-                    units,
                     icon,
                     description,
                     position: node.position,
-                }
-            })
-            .collect();
+                    node_display_name: display_name.to_string(),
+                    data: ExposedValue::Scalar {
+                        value: unit_type.to_display(port.default),
+                        min: unit_type.to_display(port.min),
+                        max: unit_type.to_display(port.max),
+                        unit_type,
+                    },
+                });
+            }
+        }
 
         // Sort by position: top-to-bottom (y), then left-to-right (x).
-        inputs.sort_by(|a, b| {
+        result.sort_by(|a, b| {
             a.position[1]
                 .partial_cmp(&b.position[1])
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -328,25 +354,163 @@ impl DarklyEngine {
                 })
         });
 
-        inputs
+        result
+    }
+
+    /// Backward compat: synthesize an `ExposedPortInfo` from a legacy
+    /// `user_input` node by reading its params.
+    fn legacy_user_input_to_exposed(
+        &self,
+        node: &crate::nodegraph::NodeInstance<BrushWireType>,
+    ) -> Option<ExposedPortInfo> {
+        let label = match node.params.first() {
+            Some(ParamValue::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let value = match node.params.get(1) {
+            Some(ParamValue::Float(v)) => *v,
+            _ => 0.5,
+        };
+        let min = match node.params.get(2) {
+            Some(ParamValue::Float(v)) => *v,
+            _ => 0.0,
+        };
+        let max = match node.params.get(3) {
+            Some(ParamValue::Float(v)) => *v,
+            _ => 1.0,
+        };
+        let units = match node.params.get(4) {
+            Some(ParamValue::Int(v)) => *v as u32,
+            _ => 0,
+        };
+        let icon = match node.params.get(5) {
+            Some(ParamValue::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+        let description = match node.params.get(6) {
+            Some(ParamValue::String(s)) => s.clone(),
+            _ => String::new(),
+        };
+
+        // Map legacy units enum to UnitType.
+        let unit_type = match units {
+            1 => UnitType::Raw,     // pixels (display as-is)
+            2 => UnitType::Degrees,
+            3 => UnitType::Raw,
+            _ => UnitType::Percent, // 0 = percent
+        };
+
+        Some(ExposedPortInfo {
+            node_id: node.id.0,
+            port_name: "value".to_string(),
+            label,
+            icon,
+            description,
+            position: node.position,
+            node_display_name: "User Input".to_string(),
+            data: ExposedValue::Scalar {
+                value,
+                min,
+                max,
+                unit_type,
+            },
+        })
+    }
+
+    /// Set an exposed port's value from display-space, converting to
+    /// port-space via the port's UnitType.  Compiles afterward.
+    pub fn brush_set_exposed_port(
+        &mut self,
+        node_id: u64,
+        port_name: &str,
+        display_value: f32,
+    ) -> Result<String, String> {
+        let nid = NodeId(node_id);
+
+        // For legacy user_input nodes, delegate to param update.
+        if let Some(node) = self.active_brush_graph.nodes.get(&nid) {
+            if node.type_id == "user_input" && port_name == "value" {
+                return self.brush_graph_set_param(
+                    node_id,
+                    1, // param index 1 = value
+                    ParamValue::Float(display_value),
+                );
+            }
+        }
+
+        // Look up UnitType from the registration (canonical source).
+        let node = self
+            .active_brush_graph
+            .nodes
+            .get(&nid)
+            .ok_or_else(|| format!("node {node_id} not found"))?;
+        let registry = BrushNodeRegistry::new();
+        let unit_type = registry
+            .get(&node.type_id)
+            .and_then(|r| r.ports.iter().find(|rp| rp.name == port_name && rp.dir == PortDir::Input))
+            .map_or(UnitType::default(), |rp| rp.unit_type);
+
+        let port_value = unit_type.from_display(display_value);
+
+        self.active_brush_graph
+            .set_port_default(nid, port_name, port_value)
+            .map_err(|e| format!("{e}"))?;
+        self.compile_active()?;
+        Ok(self.active_graph_json())
+    }
+
+    /// Toggle whether a port is exposed in the brush properties panel.
+    /// Metadata-only — no compile needed, but returns updated graph JSON.
+    pub fn brush_graph_set_port_exposed(
+        &mut self,
+        node_id: u64,
+        port_name: &str,
+        exposed: bool,
+    ) -> Result<String, String> {
+        self.active_brush_graph
+            .set_port_exposed(NodeId(node_id), port_name, exposed)
+            .map_err(|e| format!("{e}"))?;
+        Ok(self.active_graph_json())
     }
 }
 
-/// Info about a `user_input` node — exposed to the frontend for the
-/// brush properties panel.
+// ── Exposed port types ──────────────────────────────────────────────
+
+/// Type-specific value data for an exposed port.
+///
+/// Tagged enum so the frontend can switch on `kind` to render the
+/// appropriate widget (scrub slider, toggle, color picker, etc.).
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ExposedValue {
+    /// Float scrub slider with unit conversion.
+    Scalar {
+        /// Current value in display-space.
+        value: f32,
+        /// Display-space minimum.
+        min: f32,
+        /// Display-space maximum.
+        max: f32,
+        /// Unit type for formatting and conversion.
+        #[serde(rename = "unitType")]
+        unit_type: UnitType,
+    },
+    // Future variants:
+    // Int { value: i32, min: i32, max: i32 },
+    // Bool { value: bool },
+    // Color { value: [f32; 4] },
+}
+
+/// Info about an exposed port — sent to the frontend for the BrushBar.
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UserInputInfo {
+pub struct ExposedPortInfo {
     pub node_id: u64,
+    pub port_name: String,
     pub label: String,
-    pub value: f32,
-    pub min: f32,
-    pub max: f32,
-    /// Display unit: 0 = percent, 1 = px, 2 = degrees, 3 = raw.
-    pub units: u32,
-    /// Font Awesome icon class (e.g. `"fa-solid fa-circle"`), or empty.
     pub icon: String,
-    /// Tooltip description, or empty.
     pub description: String,
     pub position: [f32; 2],
+    pub node_display_name: String,
+    pub data: ExposedValue,
 }

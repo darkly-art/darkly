@@ -38,6 +38,14 @@
 <svelte:window on:keydown={onKeydown} />
 
 <div class="brush-builder" class:fullscreen>
+    <div class="builder-toolbar">
+        <span class="builder-title">Brush Builder</span>
+        <NodePalette onaddnode={handleAddNode} />
+        <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
+        <button class="toolbar-btn" onclick={handleAutoLayout} title="Auto-layout nodes">Layout</button>
+        <div class="spacer"></div>
+    </div>
+
     <div class="canvas-wrapper">
         <NodeCanvas />
         <button
@@ -47,14 +55,6 @@
         >
             <i class={fullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand'}></i>
         </button>
-    </div>
-
-    <div class="builder-toolbar">
-        <span class="builder-title">Brush Builder</span>
-        <NodePalette onaddnode={handleAddNode} />
-        <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
-        <button class="toolbar-btn" onclick={handleAutoLayout} title="Auto-layout nodes">Layout</button>
-        <div class="spacer"></div>
     </div>
 </div>
 
@@ -71,7 +71,7 @@
         gap: 6px;
         padding: 4px 8px;
         background: var(--bg-raised);
-        border-top: 1px solid var(--bg-hover);
+        border-bottom: 1px solid var(--bg-hover);
         min-height: 28px;
     }
     .builder-title {

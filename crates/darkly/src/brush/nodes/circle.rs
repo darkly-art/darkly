@@ -10,7 +10,7 @@ use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::pipelines::CircleUniforms;
 use crate::brush::wire::{BrushWireType, ScalarValue};
-use crate::nodegraph::{NodeRegistration, PortDef};
+use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 
@@ -22,9 +22,12 @@ pub fn register() -> BrushNodeRegistration {
         ports: vec![
             PortDef::input("softness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
-                .with_description("Edge softness (0 = hard edge, 1 = fully feathered)"),
+                .with_label("Softness")
+                .with_unit(UnitType::Percent)
+                .with_icon("fa-solid fa-feather")
+                .with_description("Edge softness (0% = hard, 100% = feathered)"),
             PortDef::output("texture", BrushWireType::Texture)
-                .with_description("SDF circle mask texture"),
+                .with_description("Circle mask texture"),
         ],
         params: &[],
         is_gpu: true,

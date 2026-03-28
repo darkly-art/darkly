@@ -11,7 +11,7 @@ mod layout;
 mod registration;
 
 pub use compiler::{ExecStep, ExecutionPlan};
-pub use graph::{Connection, Graph, GraphError, NodeId, NodeInstance, PortDef, PortDir, PortRef};
+pub use graph::{Connection, Graph, GraphError, NodeId, NodeInstance, PortDef, PortDir, PortRef, UnitType};
 pub use registration::NodeRegistration;
 
 /// Trait implemented by the wire-type enum of each domain (e.g. `BrushWireType`).

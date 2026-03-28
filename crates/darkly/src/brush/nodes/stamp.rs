@@ -20,7 +20,7 @@ use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::pipelines::StampUniforms;
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
-use crate::nodegraph::{NodeRegistration, PortDef};
+use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 
@@ -31,36 +31,57 @@ pub fn register() -> BrushNodeRegistration {
         display_name: "Stamp Tip",
         ports: vec![
             PortDef::input("tip", BrushWireType::Texture)
-                .with_description("Brush tip texture (from Image or Circle node)"),
+                .with_description("Brush tip image"),
             PortDef::input("size", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
-                .with_description("Dab size as a fraction of max (0 = 1px, 1 = max)"),
+                .with_label("Size")
+                .with_unit(UnitType::Percent)
+                .with_icon("fa-solid fa-circle")
+                .with_description("Base brush size"),
             PortDef::input("scale", BrushWireType::Scalar)
                 .with_range(0.0, 4.0, 1.0)
-                .with_description("Multiplier on the final dab size — typically driven by a User Input node to let the user scale the brush"),
+                .with_label("Scale")
+                .with_unit(UnitType::Percent)
+                .with_icon("fa-solid fa-up-right-and-down-left-from-center")
+                .exposed()
+                .with_description("Size multiplier"),
             PortDef::input("rotation", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
-                .with_description("Dab rotation (0 = 0\u{00b0}, 1 = 360\u{00b0})"),
+                .with_label("Rotation")
+                .with_unit(UnitType::Degrees)
+                .with_icon("fa-solid fa-rotate")
+                .with_description("Brush rotation angle"),
             PortDef::input("mirror_x", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
-                .with_description("Flip the tip horizontally (> 0.5 = mirrored)"),
+                .with_description("Flip horizontally"),
             PortDef::input("mirror_y", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
-                .with_description("Flip the tip vertically (> 0.5 = mirrored)"),
+                .with_description("Flip vertically"),
             PortDef::input("ratio", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
-                .with_description("Aspect ratio squash (1 = circle, lower = ellipse)"),
+                .with_label("Ratio")
+                .with_unit(UnitType::Percent)
+                .with_icon("fa-solid fa-arrows-left-right")
+                .with_description("Aspect ratio (100% = round)"),
             PortDef::input("opacity", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
-                .with_description("Per-dab opacity (0 = transparent, 1 = fully opaque)"),
+                .with_label("Opacity")
+                .with_unit(UnitType::Percent)
+                .with_icon("fa-solid fa-droplet")
+                .exposed()
+                .with_description("Brush opacity"),
             PortDef::input("color", BrushWireType::Color)
-                .with_description("Dab color (RGBA)"),
+                .with_description("Brush color"),
             PortDef::input("scatter_x", BrushWireType::Scalar)
                 .with_range(-1.0, 1.0, 0.0)
-                .with_description("Horizontal scatter offset relative to dab size"),
+                .with_label("Scatter X")
+                .with_unit(UnitType::Percent)
+                .with_description("Horizontal scatter"),
             PortDef::input("scatter_y", BrushWireType::Scalar)
                 .with_range(-1.0, 1.0, 0.0)
-                .with_description("Vertical scatter offset relative to dab size"),
+                .with_label("Scatter Y")
+                .with_unit(UnitType::Percent)
+                .with_description("Vertical scatter"),
             PortDef::output("dab", BrushWireType::Texture)
                 .with_description("The stamped dab texture ready for compositing"),
             PortDef::output("dab_size", BrushWireType::Vec2)

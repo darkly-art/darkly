@@ -50,9 +50,8 @@ pub struct StrokeEngine {
     /// Time of the first event (seconds), for normalizing time to stroke-relative.
     stroke_start_time: Option<f32>,
 
-    /// Per-stroke random value (0-1), constant across all dabs.
-    fuzzy_stroke: f32,
-    /// Stroke seed for deterministic per-dab randomness.
+    /// Stroke seed for deterministic per-dab randomness.  Passed to
+    /// the runner so random nodes can generate independent sequences.
     stroke_seed: u32,
 }
 
@@ -74,7 +73,6 @@ impl StrokeEngine {
             .duration_since(web_time::SystemTime::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u32)
             .unwrap_or(42);
-        let fuzzy_stroke = Self::prng_f32(stroke_seed, 0);
 
         let d = Self::default_diameter();
         Self {
@@ -89,21 +87,8 @@ impl StrokeEngine {
             last_dab_size: [d, d],
             dab_count: 0,
             stroke_start_time: None,
-            fuzzy_stroke,
             stroke_seed,
         }
-    }
-
-    /// Deterministic PRNG: hash seed + index to produce a 0-1 float.
-    /// Uses a simple xorshift-style hash for speed.
-    fn prng_f32(seed: u32, index: u32) -> f32 {
-        let mut h = seed.wrapping_add(index.wrapping_mul(2654435761));
-        h ^= h >> 16;
-        h = h.wrapping_mul(0x45d9f3b);
-        h ^= h >> 16;
-        h = h.wrapping_mul(0x45d9f3b);
-        h ^= h >> 16;
-        (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
     }
 
     /// Default dab diameter for initial spacing (before the first dab is evaluated).
@@ -217,14 +202,16 @@ impl StrokeEngine {
 
     /// Evaluate the brush graph for a single dab at the given position.
     fn place_dab(&mut self, info: &PaintInformation, gpu: &mut BrushGpuContext) {
-        // Set per-dab randomness and fade sensor.
         let mut dab_info = *info;
-        dab_info.fuzzy_dab = Self::prng_f32(self.stroke_seed, self.dab_count);
-        dab_info.fuzzy_stroke = self.fuzzy_stroke;
         dab_info.fade = (dab_info.distance / FADE_DISTANCE_PX).min(1.0);
 
         self.runner.clear_slots();
-        self.runner.seed_sensors(&dab_info, self.record.color);
+        self.runner.seed_sensors(
+            &dab_info,
+            self.record.color,
+            self.stroke_seed,
+            self.dab_count,
+        );
         self.runner.execute_cpu();
         self.runner.execute_gpu(gpu);
         gpu.submit_and_reset();
@@ -269,7 +256,7 @@ impl StrokeEngine {
         self.dab_count = 0;
         self.stroke_start_time = None;
         self.smoothed_pos = [0.0; 2];
-        // Preserve stroke_seed and fuzzy_stroke for deterministic replay.
+        // Preserve stroke_seed for deterministic replay.
 
         for event in &record.events {
             self.move_to(*event, gpu);

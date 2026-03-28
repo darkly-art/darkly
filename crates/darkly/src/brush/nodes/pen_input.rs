@@ -1,6 +1,6 @@
 //! Pen Input sensor node — source of all tablet data.
 //!
-//! Outputs 16 sensor values.  This node is special-cased in the runner:
+//! Outputs 14 sensor values.  This node is special-cased in the runner:
 //! `seed_sensors()` writes directly to its output slots (no virtual
 //! dispatch).  The evaluator is a no-op.
 
@@ -43,10 +43,6 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Current cursor position in canvas coordinates (x, y)"),
             PortDef::output("index", BrushWireType::Int)
                 .with_description("Dab index within the current stroke (0, 1, 2, ...)"),
-            PortDef::output("fuzzy_dab", BrushWireType::Scalar)
-                .with_description("Per-dab random value (0\u{2013}1), changes every dab"),
-            PortDef::output("fuzzy_stroke", BrushWireType::Scalar)
-                .with_description("Per-stroke random value (0\u{2013}1), constant within a stroke"),
             PortDef::output("fade", BrushWireType::Scalar)
                 .with_description("Stroke fade-out (0 at start, 1 at stroke end)"),
         ],

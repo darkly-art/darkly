@@ -25,9 +25,6 @@ pub fn lerp_paint_info(a: &PaintInformation, b: &PaintInformation, t: f32) -> Pa
         tilt_direction: lerp_angle(a.tilt_direction, b.tilt_direction, t),
         // Index is not meaningful for interpolated points — use b's index.
         index: b.index,
-        // Fuzzy values are set per-dab by the stroke engine, not interpolated.
-        fuzzy_dab: 0.0,
-        fuzzy_stroke: a.fuzzy_stroke,
         // Fade lerps with distance.
         fade: lerp(a.fade, b.fade, t),
     }

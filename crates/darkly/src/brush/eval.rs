@@ -13,7 +13,6 @@ use crate::nodegraph::{ExecutionPlan, Graph, NodeId, NodeRegistration, PortDef, 
 use super::curve_math::CurveLut;
 
 use super::gpu_context::BrushGpuContext;
-use super::paint_info::PaintInformation;
 use super::wire::{BrushWireType, ScalarValue};
 
 // ── Evaluator trait ─────────────────────────────────────────────────
@@ -35,6 +34,12 @@ pub struct EvalContext<'a> {
     pub port_defs: &'a [PortDef<BrushWireType>],
     /// Precomputed curve LUT, if this node has a Curve parameter.
     pub lut: Option<&'a CurveLut>,
+    /// PRNG seed for this stroke (deterministic per-stroke randomness).
+    pub stroke_seed: u32,
+    /// Index of the current dab within the stroke (0-based).
+    pub dab_index: u32,
+    /// This node instance's ID (used to salt PRNG for independence).
+    pub node_id: NodeId,
 }
 
 impl EvalContext<'_> {
@@ -164,6 +169,10 @@ pub struct BrushGraphRunner {
     /// Pre-resolved slot index for paint_color's output.  Same rationale
     /// as `pen_input_slots` — avoid plan traversal on the hot path.
     paint_color_slot: Option<usize>,
+    /// PRNG seed for the current stroke, set by `seed_sensors()`.
+    stroke_seed: u32,
+    /// Index of the current dab, set by `seed_sensors()`.
+    dab_index: u32,
 }
 
 struct NodeData {
@@ -222,14 +231,26 @@ impl BrushGraphRunner {
             node_data,
             pen_input_slots,
             paint_color_slot,
+            stroke_seed: 0,
+            dab_index: 0,
         })
     }
 
     /// Seed sensor output slots directly from pen data.
     ///
     /// This is the hot path — no virtual dispatch, just memcpy into
-    /// pre-known slot indices.
-    pub fn seed_sensors(&mut self, info: &PaintInformation, color: [f32; 4]) {
+    /// pre-known slot indices.  `stroke_seed` and `dab_index` are stored
+    /// for random nodes to read during evaluation.
+    pub fn seed_sensors(
+        &mut self,
+        info: &super::paint_info::PaintInformation,
+        color: [f32; 4],
+        stroke_seed: u32,
+        dab_index: u32,
+    ) {
+        self.stroke_seed = stroke_seed;
+        self.dab_index = dab_index;
+
         for (name, slot) in &self.pen_input_slots {
             let value = match name.as_str() {
                 "pressure" => ScalarValue::Scalar(info.pressure),
@@ -245,8 +266,6 @@ impl BrushGraphRunner {
                 "time" => ScalarValue::Scalar(info.time),
                 "position" => ScalarValue::Vec2(info.pos),
                 "index" => ScalarValue::Int(info.index as i32),
-                "fuzzy_dab" => ScalarValue::Scalar(info.fuzzy_dab),
-                "fuzzy_stroke" => ScalarValue::Scalar(info.fuzzy_stroke),
                 "fade" => ScalarValue::Scalar(info.fade),
                 _ => continue,
             };
@@ -290,6 +309,9 @@ impl BrushGraphRunner {
                 params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
                 port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
                 lut: node.and_then(|n| n.lut.as_ref()),
+                stroke_seed: self.stroke_seed,
+                dab_index: self.dab_index,
+                node_id: step.node_id,
             };
 
             let outputs = evaluator.evaluate_cpu(&ctx);
@@ -341,6 +363,9 @@ impl BrushGraphRunner {
                 params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
                 port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
                 lut: node.and_then(|n| n.lut.as_ref()),
+                stroke_seed: self.stroke_seed,
+                dab_index: self.dab_index,
+                node_id: step.node_id,
             };
 
             let outputs = evaluator.evaluate_gpu(&ctx, gpu);

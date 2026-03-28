@@ -94,6 +94,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("split_vec2".into(), Box::new(nodes::split_vec2::SplitVec2Evaluator));
     map.insert("make_color".into(), Box::new(nodes::make_color::MakeColorEvaluator));
     map.insert("user_input".into(), Box::new(nodes::user_input::UserInputEvaluator));
+    map.insert("random".into(), Box::new(nodes::random::RandomEvaluator));
     // GPU nodes.
     map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
     map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
@@ -278,7 +279,7 @@ mod tests {
             pressure: 0.8,
             ..Default::default()
         };
-        runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0]);
+        runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0], 42, 0);
         runner.execute_cpu();
 
         // multiply.result should be 0.8 * 0.5 = 0.4.
@@ -318,7 +319,7 @@ mod tests {
             pressure: 0.5,
             ..Default::default()
         };
-        runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0]);
+        runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0], 42, 0);
         runner.execute_cpu();
 
         let slot = runner.find_node_output_slot(curve, "output").unwrap();
@@ -359,7 +360,7 @@ mod tests {
             pressure: 0.5,
             ..Default::default()
         };
-        runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0]);
+        runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0], 42, 0);
         runner.execute_cpu();
 
         let slot = runner.find_node_output_slot(curve, "output").unwrap();
@@ -429,7 +430,7 @@ mod tests {
 
         let fg_color = [1.0, 0.2, 0.3, 1.0];
         let info = PaintInformation::default();
-        runner.seed_sensors(&info, fg_color);
+        runner.seed_sensors(&info, fg_color, 42, 0);
         runner.execute_cpu();
 
         let slot = runner.find_node_output_slot(color_node, "color").unwrap();

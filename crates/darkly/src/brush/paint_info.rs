@@ -47,14 +47,6 @@ pub struct PaintInformation {
     /// Index of this sample within the current stroke (0-based).
     pub index: u32,
 
-    // ── Randomness sensors (computed by stroke engine) ───────────────
-
-    /// Per-dab random value (0-1), different for each dab in the stroke.
-    /// Deterministic: seeded from stroke seed + dab index.
-    pub fuzzy_dab: f32,
-    /// Per-stroke random value (0-1), constant across all dabs in one stroke.
-    /// Seeded once at stroke start.
-    pub fuzzy_stroke: f32,
     /// Fade sensor (0-1): normalized distance along the stroke, 0 at start,
     /// 1 at the configured fade length.  Clamps to 1 beyond the fade distance.
     pub fade: f32,

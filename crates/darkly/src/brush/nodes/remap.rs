@@ -24,10 +24,10 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Remapped output value"),
         ],
         params: &[
-            ParamDef::Float { name: "in_min", min: 0.0, max: 1.0, default: 0.0 },
-            ParamDef::Float { name: "in_max", min: 0.0, max: 1.0, default: 1.0 },
-            ParamDef::Float { name: "out_min", min: 0.0, max: 1.0, default: 0.0 },
-            ParamDef::Float { name: "out_max", min: 0.0, max: 1.0, default: 1.0 },
+            ParamDef::Float { name: "in_min", min: -1.0, max: 1.0, default: 0.0 },
+            ParamDef::Float { name: "in_max", min: -1.0, max: 1.0, default: 1.0 },
+            ParamDef::Float { name: "out_min", min: -1.0, max: 1.0, default: 0.0 },
+            ParamDef::Float { name: "out_max", min: -1.0, max: 1.0, default: 1.0 },
         ],
         is_gpu: false,
     }

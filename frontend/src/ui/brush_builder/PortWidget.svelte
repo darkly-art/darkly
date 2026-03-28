@@ -12,6 +12,16 @@
 
     let { nodeId, port, side }: Props = $props();
 
+    /** Canonical port definition from the node type registration.
+     *  Display metadata (unit_type, icon, label, description) comes from
+     *  here — not the instance — so it stays current even for old graphs. */
+    let regPort = $derived.by(() => {
+        const node = brushGraph.graph?.nodes[String(nodeId)];
+        if (!node) return null;
+        const nodeType = brushGraph.getNodeType(node.type_id);
+        return nodeType?.ports.find(p => p.name === port.name && p.dir === port.dir) ?? null;
+    });
+
     let color = $derived(WIRE_COLORS[port.wire_type] ?? '#888');
     let connected = $derived(brushGraph.isPortConnected(nodeId, port.name, port.dir));
 
@@ -139,18 +149,47 @@
         app.endInteraction();
     }
 
+    /** Whether this port can be exposed in the brush bar. */
+    const EXPOSABLE_TYPES = new Set(['Scalar']);
+    let canExpose = $derived(
+        port.dir === 'Input' && !connected && EXPOSABLE_TYPES.has(port.wire_type)
+    );
+
+    function toggleExposed(e: MouseEvent) {
+        e.stopPropagation();
+        brushGraph.togglePortExposed(nodeId, port.name, !port.exposed);
+    }
+
     let sliderPercent = $derived(
         port.max > port.min
             ? ((port.default - port.min) / (port.max - port.min)) * 100
             : 0
     );
 
+    /** Convert a port-space value to display using unit_type from the registration. */
+    function toDisplay(value: number): number {
+        switch (regPort?.unit_type) {
+            case 'Percent': return value * 100;
+            case 'Degrees': return value * 360;
+            default: return value;
+        }
+    }
+
+    /** Unit suffix string. */
+    function unitSuffix(): string {
+        switch (regPort?.unit_type) {
+            case 'Percent': return '%';
+            case 'Degrees': return '°';
+            default: return '';
+        }
+    }
+
     let displayValue = $derived(
         port.wire_type === 'Bool'
             ? (port.default >= 0.5 ? 'on' : 'off')
             : port.wire_type === 'Int'
                 ? String(Math.round(port.default))
-                : port.default.toFixed(2)
+                : `${Math.round(toDisplay(port.default))}${unitSuffix()}`
     );
 
     // --- Double-click to type a value ---
@@ -185,13 +224,12 @@
 <div
     class="port-row"
     class:port-right={side === 'right'}
-    class:has-slider={showSlider}
-    title={port.description || ''}
+    title={regPort?.description || port.description || ''}
 >
     <div
         class="port-dot"
         class:connected
-        style="background: {connected ? color : 'transparent'}; border-color: {color};"
+        style="background: {connected ? color : 'var(--bg-active)'}; border-color: {color};"
         role="button"
         tabindex="-1"
         onpointerdown={onPointerDown}
@@ -228,31 +266,41 @@
                     class="port-slider-fill"
                     style="width: {sliderPercent}%; background: {color};"
                 ></div>
-                <span class="port-slider-label">{port.name}</span>
+                <span class="port-slider-label">{regPort?.label || port.name}</span>
                 <span class="port-slider-value">{displayValue}</span>
             </div>
         {/if}
     {:else}
         <span class="port-label">{port.name}</span>
     {/if}
+    {#if canExpose}
+        <button
+            class="expose-toggle"
+            class:exposed={port.exposed}
+            title={port.exposed ? 'Hide from brush bar' : 'Expose in brush bar'}
+            onclick={toggleExposed}
+        >
+            <i class="fa-solid fa-eye"></i>
+        </button>
+    {/if}
 </div>
 
 <style>
     .port-row {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 4px;
         height: 18px;
+        padding-left: 10px;
     }
     .port-right {
         flex-direction: row-reverse;
-    }
-    .port-row.has-slider {
-        /* Span full node width so the slider bar stretches across. */
-        position: relative;
-        margin-right: 2px;
+        padding-left: 0;
+        padding-right: 10px;
     }
     .port-dot {
+        position: absolute;
         width: 10px;
         height: 10px;
         border-radius: 50%;
@@ -260,6 +308,15 @@
         cursor: crosshair;
         flex-shrink: 0;
         z-index: 1;
+        top: 50%;
+        transform: translateY(-50%);
+    }
+    /* Pin dots to node edge, protruding slightly. */
+    .port-row:not(.port-right) .port-dot {
+        left: -5px;
+    }
+    .port-right .port-dot {
+        right: -5px;
     }
     .port-dot.connected {
         /* filled by inline style */
@@ -323,5 +380,31 @@
         padding: 0 4px;
         outline: none;
         font-family: inherit;
+    }
+
+    /* --- Expose toggle --- */
+    .expose-toggle {
+        width: 14px;
+        height: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        border-radius: 3px;
+        color: var(--text-dim);
+        cursor: pointer;
+        font-size: 8px;
+        flex-shrink: 0;
+        padding: 0;
+        opacity: 0.5;
+        transition: opacity 0.1s, color 0.1s;
+    }
+    .expose-toggle:hover {
+        opacity: 0.8;
+    }
+    .expose-toggle.exposed {
+        opacity: 1;
+        color: var(--accent);
     }
 </style>

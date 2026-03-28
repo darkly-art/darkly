@@ -436,18 +436,11 @@
     .node-body {
         padding: 4px 0;
     }
-    .ports-outputs {
-        display: flex;
-        flex-direction: column;
-        align-items: flex-end;
-        gap: 2px;
-        padding: 0 2px;
-    }
+    .ports-outputs,
     .ports-inputs {
         display: flex;
         flex-direction: column;
         gap: 2px;
-        padding: 0 2px;
     }
     .params {
         padding: 4px 6px;

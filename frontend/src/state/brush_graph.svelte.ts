@@ -18,6 +18,10 @@ export interface PortDef {
     max: number;
     default: number;
     description: string;
+    unit_type: string;  // "Normalized" | "Percent" | "Degrees" | "Raw"
+    icon: string;
+    label: string;
+    exposed: boolean;
 }
 
 export interface NodeInstance {
@@ -58,19 +62,21 @@ export interface PresetInfo {
     tags: string[];
 }
 
-export interface UserInputInfo {
+export type ExposedValue =
+    | { kind: 'scalar'; value: number; min: number; max: number; unitType: string }
+    // Future: | { kind: 'int'; value: number; min: number; max: number }
+    // Future: | { kind: 'bool'; value: boolean }
+    ;
+
+export interface ExposedPortInfo {
     nodeId: number;
+    portName: string;
     label: string;
-    value: number;
-    min: number;
-    max: number;
-    /** Display unit: 0 = percent, 1 = px, 2 = degrees, 3 = raw. */
-    units: number;
-    /** Font Awesome icon class, or empty string. */
     icon: string;
-    /** Tooltip description, or empty string. */
     description: string;
     position: [number, number];
+    nodeDisplayName: string;
+    data: ExposedValue;
 }
 
 export const WIRE_COLORS: Record<string, string> = {
@@ -123,8 +129,8 @@ class BrushGraphState {
     /** Currently loaded preset name (null = custom/modified). */
     activePreset = $state<string | null>(null);
 
-    /** User input sliders exposed by the current brush graph. */
-    userInputs = $state<UserInputInfo[]>([]);
+    /** Ports exposed in the brush properties panel. */
+    exposedPorts = $state<ExposedPortInfo[]>([]);
 
     // --- WASM command helpers ---
 
@@ -141,7 +147,7 @@ class BrushGraphState {
                     this.graph = graph as BrushGraph;
                     this.error = null;
                     this.activePreset = null; // graph was modified
-                    this.refreshUserInputs();
+                    this.refreshExposedPorts();
                 }
             } catch {
                 // Parse failed — leave current state.
@@ -177,7 +183,7 @@ class BrushGraphState {
         }
         this.fetchGraph();
         this.refreshPresets();
-        this.refreshUserInputs();
+        this.refreshExposedPorts();
     }
 
     /** Reset to the default brush graph. */
@@ -185,7 +191,7 @@ class BrushGraphState {
         if (!app.handle) return;
         app.handle.brush_graph_reset();
         this.fetchGraph();
-        this.refreshUserInputs();
+        this.refreshExposedPorts();
         this.error = null;
         this.activePreset = null;
     }
@@ -201,15 +207,37 @@ class BrushGraphState {
         }
     }
 
-    /** Refresh user input sliders from the active brush graph. */
-    refreshUserInputs() {
+    /** Refresh exposed ports from the active brush graph. */
+    refreshExposedPorts() {
         if (!app.handle) return;
         try {
-            const inputs = JSON.parse(app.handle.brush_user_inputs());
-            this.userInputs = Array.isArray(inputs) ? inputs : [];
+            const ports = JSON.parse(app.handle.brush_exposed_ports());
+            this.exposedPorts = Array.isArray(ports) ? ports : [];
         } catch {
-            this.userInputs = [];
+            this.exposedPorts = [];
         }
+    }
+
+    /** Set an exposed port's value (display-space) via Rust. */
+    setExposedPortValue(nodeId: number, portName: string, displayValue: number) {
+        if (!app.handle) return;
+        this.applyResult(app.handle.brush_set_exposed_port(nodeId, portName, displayValue));
+    }
+
+    /** Optimistic local update for an exposed port's display value. */
+    setExposedPortValueLocal(nodeId: number, portName: string, displayValue: number) {
+        const port = this.exposedPorts.find(
+            p => p.nodeId === nodeId && p.portName === portName
+        );
+        if (port && port.data.kind === 'scalar') {
+            port.data.value = displayValue;
+        }
+    }
+
+    /** Toggle whether a port is exposed in the brush properties panel. */
+    togglePortExposed(nodeId: number, portName: string, exposed: boolean) {
+        if (!app.handle) return;
+        this.applyResult(app.handle.brush_graph_set_port_exposed(nodeId, portName, exposed));
     }
 
     /** Load a preset by name. */
@@ -223,7 +251,7 @@ class BrushGraphState {
         }
         this.activePreset = name;
         this.fetchGraph();
-        this.refreshUserInputs();
+        this.refreshExposedPorts();
         this.error = null;
     }
 

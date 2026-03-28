@@ -34,6 +34,55 @@ pub enum PortDir {
     Output,
 }
 
+/// Display unit for numeric ports.
+///
+/// Defines how a port's internal value is converted for display in the UI.
+/// The conversion methods use `f32` math — any numeric wire type (Scalar,
+/// Int) can round-trip through them.  Non-numeric types (Bool, Color)
+/// ignore this field.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnitType {
+    /// Identity — display and internal are both raw values (shown as `0.50`).
+    #[default]
+    Normalized,
+    /// Display as percentage: `display = value × 100`, suffix `%`.
+    Percent,
+    /// Display as degrees: `display = value × 360`, suffix `°`.
+    Degrees,
+    /// Identity with no suffix — useful for dimensionless multipliers.
+    Raw,
+}
+
+impl UnitType {
+    /// Convert from port-space to display-space.
+    pub fn to_display(self, value: f32) -> f32 {
+        match self {
+            Self::Normalized | Self::Raw => value,
+            Self::Percent => value * 100.0,
+            Self::Degrees => value * 360.0,
+        }
+    }
+
+    /// Convert from display-space back to port-space.
+    pub fn from_display(self, display: f32) -> f32 {
+        match self {
+            Self::Normalized | Self::Raw => display,
+            Self::Percent => display / 100.0,
+            Self::Degrees => display / 360.0,
+        }
+    }
+
+    /// Suffix string for display formatting.
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Self::Normalized => "",
+            Self::Percent => "%",
+            Self::Degrees => "°",
+            Self::Raw => "",
+        }
+    }
+}
+
 /// Schema for a single port on a node type.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
@@ -50,6 +99,18 @@ pub struct PortDef<W: WireKind> {
     /// Human-readable description shown as a tooltip in the node editor.
     #[serde(default)]
     pub description: String,
+    /// Display unit for numeric ports (controls UI conversion and suffix).
+    #[serde(default)]
+    pub unit_type: UnitType,
+    /// Font Awesome icon class (e.g. `"fa-solid fa-circle"`), or empty.
+    #[serde(default)]
+    pub icon: String,
+    /// User-facing display label.  Falls back to `name` if empty.
+    #[serde(default)]
+    pub label: String,
+    /// Whether this port is exposed in the brush properties panel.
+    #[serde(default)]
+    pub exposed: bool,
 }
 
 impl<W: WireKind> PortDef<W> {
@@ -62,6 +123,10 @@ impl<W: WireKind> PortDef<W> {
             max: 1.0,
             default: 0.0,
             description: String::new(),
+            unit_type: UnitType::default(),
+            icon: String::new(),
+            label: String::new(),
+            exposed: false,
         }
     }
 
@@ -74,6 +139,10 @@ impl<W: WireKind> PortDef<W> {
             max: 1.0,
             default: 0.0,
             description: String::new(),
+            unit_type: UnitType::default(),
+            icon: String::new(),
+            label: String::new(),
+            exposed: false,
         }
     }
 
@@ -86,6 +155,27 @@ impl<W: WireKind> PortDef<W> {
 
     pub fn with_description(mut self, desc: impl Into<String>) -> Self {
         self.description = desc.into();
+        self
+    }
+
+    pub fn with_unit(mut self, unit_type: UnitType) -> Self {
+        self.unit_type = unit_type;
+        self
+    }
+
+    pub fn with_icon(mut self, icon: impl Into<String>) -> Self {
+        self.icon = icon.into();
+        self
+    }
+
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
+        self
+    }
+
+    /// Mark this port as exposed in the brush properties panel by default.
+    pub fn exposed(mut self) -> Self {
+        self.exposed = true;
         self
     }
 }
@@ -288,6 +378,26 @@ impl<W: WireKind> Graph<W> {
                 port: port_name.to_string(),
             })?;
         port.default = value;
+        Ok(())
+    }
+
+    /// Toggle whether an input port is exposed in the brush properties panel.
+    pub fn set_port_exposed(
+        &mut self,
+        id: NodeId,
+        port_name: &str,
+        exposed: bool,
+    ) -> Result<(), GraphError> {
+        let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;
+        let port = node
+            .ports
+            .iter_mut()
+            .find(|p| p.name == port_name && p.dir == PortDir::Input)
+            .ok_or_else(|| GraphError::PortNotFound {
+                node: id,
+                port: port_name.to_string(),
+            })?;
+        port.exposed = exposed;
         Ok(())
     }
 
@@ -501,5 +611,111 @@ mod tests {
         let g2: Graph<TestWireKind> = serde_json::from_str(&json).unwrap();
         assert_eq!(g2.nodes.len(), 2);
         assert_eq!(g2.connections.len(), 1);
+    }
+
+    // ── UnitType tests ──────────────────────────────────────────────
+
+    #[test]
+    fn unit_type_conversion_round_trip() {
+        for unit in [UnitType::Normalized, UnitType::Percent, UnitType::Degrees, UnitType::Raw] {
+            for &val in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+                let display = unit.to_display(val);
+                let back = unit.from_display(display);
+                assert!(
+                    (back - val).abs() < 1e-6,
+                    "{:?}: to_display({}) = {}, from_display({}) = {} (expected {})",
+                    unit, val, display, display, back, val,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unit_type_display_values() {
+        assert!((UnitType::Percent.to_display(0.5) - 50.0).abs() < 1e-6);
+        assert!((UnitType::Degrees.to_display(0.5) - 180.0).abs() < 1e-6);
+        assert!((UnitType::Normalized.to_display(0.5) - 0.5).abs() < 1e-6);
+        assert!((UnitType::Raw.to_display(0.5) - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn unit_type_suffix() {
+        assert_eq!(UnitType::Percent.suffix(), "%");
+        assert_eq!(UnitType::Degrees.suffix(), "°");
+        assert_eq!(UnitType::Normalized.suffix(), "");
+        assert_eq!(UnitType::Raw.suffix(), "");
+    }
+
+    #[test]
+    fn unit_type_serde_round_trip() {
+        for unit in [UnitType::Normalized, UnitType::Percent, UnitType::Degrees, UnitType::Raw] {
+            let json = serde_json::to_string(&unit).unwrap();
+            let back: UnitType = serde_json::from_str(&json).unwrap();
+            assert_eq!(unit, back);
+        }
+    }
+
+    // ── PortDef backward compat ─────────────────────────────────────
+
+    #[test]
+    fn port_def_serde_backward_compat() {
+        // Old-format JSON without the new fields should deserialize with defaults.
+        let old_json = r#"{
+            "name": "scale",
+            "dir": "Input",
+            "wire_type": "Scalar",
+            "min": 0.0,
+            "max": 4.0,
+            "default": 1.0
+        }"#;
+        let port: PortDef<TestWireKind> = serde_json::from_str(old_json).unwrap();
+        assert_eq!(port.name, "scale");
+        assert_eq!(port.unit_type, UnitType::Normalized);
+        assert_eq!(port.icon, "");
+        assert_eq!(port.label, "");
+        assert!(!port.exposed);
+        assert_eq!(port.description, "");
+    }
+
+    #[test]
+    fn port_def_serde_with_new_fields() {
+        let port = PortDef::input("opacity", TestWireKind::Scalar)
+            .with_range(0.0, 1.0, 1.0)
+            .with_unit(UnitType::Percent)
+            .with_icon("fa-solid fa-sun")
+            .with_label("Opacity")
+            .exposed()
+            .with_description("Per-dab opacity");
+
+        let json = serde_json::to_string(&port).unwrap();
+        let back: PortDef<TestWireKind> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.unit_type, UnitType::Percent);
+        assert_eq!(back.icon, "fa-solid fa-sun");
+        assert_eq!(back.label, "Opacity");
+        assert!(back.exposed);
+        assert_eq!(back.description, "Per-dab opacity");
+    }
+
+    // ── set_port_exposed ────────────────────────────────────────────
+
+    #[test]
+    fn set_port_exposed_toggles() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_in("val")], vec![]);
+
+        assert!(!g.nodes[&id].ports[0].exposed);
+        g.set_port_exposed(id, "val", true).unwrap();
+        assert!(g.nodes[&id].ports[0].exposed);
+        g.set_port_exposed(id, "val", false).unwrap();
+        assert!(!g.nodes[&id].ports[0].exposed);
+    }
+
+    #[test]
+    fn set_port_exposed_wrong_port() {
+        let mut g = Graph::<TestWireKind>::new();
+        let id = g.add_node("node", vec![scalar_out("out")], vec![]);
+        // Output ports can't be exposed (set_port_exposed looks for Input).
+        let err = g.set_port_exposed(id, "out", true).unwrap_err();
+        matches!(err, GraphError::PortNotFound { .. });
     }
 }
