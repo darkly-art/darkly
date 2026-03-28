@@ -152,6 +152,34 @@
                 ? String(Math.round(port.default))
                 : port.default.toFixed(2)
     );
+
+    // --- Double-click to type a value ---
+    let editing = $state(false);
+
+    function onSliderDblClick(e: MouseEvent) {
+        e.stopPropagation();
+        e.preventDefault();
+        editing = true;
+    }
+
+    function onEditKeyDown(e: KeyboardEvent) {
+        if (e.key === 'Enter') commitEdit(e.currentTarget as HTMLInputElement);
+        if (e.key === 'Escape') editing = false;
+    }
+
+    function onEditBlur(e: FocusEvent) {
+        commitEdit(e.currentTarget as HTMLInputElement);
+    }
+
+    function commitEdit(input: HTMLInputElement) {
+        editing = false;
+        const parsed = parseFloat(input.value);
+        if (isNaN(parsed)) return;
+        const clamped = Math.max(port.min, Math.min(port.max, parsed));
+        const value = port.wire_type === 'Int' ? Math.round(clamped) : clamped;
+        brushGraph.setPortDefaultLocal(nodeId, port.name, value);
+        brushGraph.setPortDefault(nodeId, port.name, value);
+    }
 </script>
 
 <div
@@ -174,22 +202,36 @@
         data-port-dir={port.dir}
     ></div>
     {#if showSlider}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-            class="port-slider"
-            bind:this={sliderEl}
-            onpointerdown={onSliderDown}
-            onpointermove={onSliderMove}
-            onpointerup={onSliderUp}
-            onlostpointercapture={onSliderLostCapture}
-        >
+        {#if editing}
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+                class="port-slider-edit"
+                type="text"
+                value={port.wire_type === 'Int' ? Math.round(port.default) : port.default}
+                autofocus
+                onkeydown={onEditKeyDown}
+                onblur={onEditBlur}
+                onclick={(e) => e.stopPropagation()}
+            />
+        {:else}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
-                class="port-slider-fill"
-                style="width: {sliderPercent}%; background: {color};"
-            ></div>
-            <span class="port-slider-label">{port.name}</span>
-            <span class="port-slider-value">{displayValue}</span>
-        </div>
+                class="port-slider"
+                bind:this={sliderEl}
+                onpointerdown={onSliderDown}
+                onpointermove={onSliderMove}
+                onpointerup={onSliderUp}
+                onlostpointercapture={onSliderLostCapture}
+                ondblclick={onSliderDblClick}
+            >
+                <div
+                    class="port-slider-fill"
+                    style="width: {sliderPercent}%; background: {color};"
+                ></div>
+                <span class="port-slider-label">{port.name}</span>
+                <span class="port-slider-value">{displayValue}</span>
+            </div>
+        {/if}
     {:else}
         <span class="port-label">{port.name}</span>
     {/if}
@@ -269,5 +311,17 @@
         pointer-events: none;
         white-space: nowrap;
         opacity: 0.7;
+    }
+    .port-slider-edit {
+        flex: 1;
+        height: 14px;
+        border: 1px solid var(--accent);
+        border-radius: 3px;
+        background: var(--bg);
+        color: var(--text);
+        font-size: 9px;
+        padding: 0 4px;
+        outline: none;
+        font-family: inherit;
     }
 </style>

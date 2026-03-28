@@ -50,6 +50,10 @@ pub struct ParamInfo {
     pub default: ParamValue,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<ParamValue>,
+    /// Enum: `["Label1", "Label2", ...]`.
+    /// Icon: `[["fa-class", "Label"], ...]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<serde_json::Value>,
 }
 
 impl ParamInfo {
@@ -60,30 +64,56 @@ impl ParamInfo {
                 min: Some(*min as f64), max: Some(*max as f64),
                 default: ParamValue::Float(*default),
                 value: value.cloned(),
+                options: None,
             },
             ParamDef::Int { name, min, max, default } => ParamInfo {
                 kind: "int", name,
                 min: Some(*min as f64), max: Some(*max as f64),
                 default: ParamValue::Int(*default),
                 value: value.cloned(),
+                options: None,
             },
             ParamDef::Bool { name, default } => ParamInfo {
                 kind: "bool", name,
                 min: None, max: None,
                 default: ParamValue::Bool(*default),
                 value: value.cloned(),
+                options: None,
             },
             ParamDef::String { name, default } => ParamInfo {
                 kind: "string", name,
                 min: None, max: None,
                 default: ParamValue::String(default.to_string()),
                 value: value.cloned(),
+                options: None,
             },
             ParamDef::Curve { name, default } => ParamInfo {
                 kind: "curve", name,
                 min: None, max: None,
                 default: ParamValue::Curve(default.to_vec()),
                 value: value.cloned(),
+                options: None,
+            },
+            ParamDef::Enum { name, options, default } => ParamInfo {
+                kind: "enum", name,
+                min: None, max: None,
+                default: ParamValue::Int(*default),
+                value: value.cloned(),
+                options: Some(serde_json::json!(options)),
+            },
+            ParamDef::FloatInput { name, min, max, default } => ParamInfo {
+                kind: "floatInput", name,
+                min: Some(*min as f64), max: Some(*max as f64),
+                default: ParamValue::Float(*default),
+                value: value.cloned(),
+                options: None,
+            },
+            ParamDef::Icon { name, options, default } => ParamInfo {
+                kind: "icon", name,
+                min: None, max: None,
+                default: ParamValue::String(default.to_string()),
+                value: value.cloned(),
+                options: Some(serde_json::json!(options)),
             },
         }
     }

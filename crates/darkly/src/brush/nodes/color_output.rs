@@ -5,11 +5,9 @@
 //! This is the final node in a brush graph — it produces visible output.
 //!
 //! The dab texture contains the brush content rendered at internal resolution
-//! (up to `MAX_DAB_SIZE`).  The `global_scale` from `BrushGpuContext` controls
-//! the final canvas footprint: the composite quad is sized to
-//! `dab_size * global_scale`, and the GPU bilinear samples the dab texture
-//! into the larger (or smaller) quad.  This decouples brush size from
-//! internal rendering resolution.
+//! (up to `MAX_DAB_SIZE`).  The `dab_size` input determines the final canvas
+//! footprint — the composite quad is sized to `dab_size`, and the GPU bilinear
+//! samples the dab texture into the quad.
 //!
 //! Before the composite render pass, the canvas region under the dab is
 //! copied to a temporary texture.  The shader reads both the dab and the
@@ -81,10 +79,8 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             return vec![];
         }
 
-        // Apply global_scale to get the canvas footprint.
-        let scale = gpu.global_scale;
-        let foot_w = dab_w * scale;
-        let foot_h = dab_h * scale;
+        let foot_w = dab_w;
+        let foot_h = dab_h;
 
         // Position the composite quad centered on the dab position,
         // clamped to canvas bounds.

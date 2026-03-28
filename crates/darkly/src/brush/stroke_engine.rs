@@ -112,10 +112,9 @@ impl StrokeEngine {
         MAX_DAB_SIZE as f32 * 0.5
     }
 
-    /// The effective canvas-space diameter for spacing and bounding rect,
-    /// accounting for global_scale.
-    fn effective_diameter(&self, global_scale: f32) -> f32 {
-        self.last_dab_size[0].max(self.last_dab_size[1]) * global_scale
+    /// The effective canvas-space diameter for spacing and bounding rect.
+    fn effective_diameter(&self) -> f32 {
+        self.last_dab_size[0].max(self.last_dab_size[1])
     }
 
     /// Process a raw pointer event — store, smooth, derive, interpolate, and
@@ -208,7 +207,7 @@ impl StrokeEngine {
 
             // Recompute spacing after each dab — dynamic size may change it.
             // Use the effective (scaled) diameter for canvas-space spacing.
-            traveled += self.spacing.distance(self.effective_diameter(gpu.global_scale));
+            traveled += self.spacing.distance(self.effective_diameter());
         }
 
         // Store leftover for next move_to.

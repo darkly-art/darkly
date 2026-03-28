@@ -22,7 +22,7 @@ function eraserStrokeParams(e: PointerEvent, cx: number, cy: number) {
         cr: 1.0,
         cg: 1.0,
         cb: 1.0,
-        ca: app.brushOpacity,
+        ca: 1.0,
     };
 }
 

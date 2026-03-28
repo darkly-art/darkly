@@ -29,7 +29,7 @@ function brushStrokeParams(e: PointerEvent, cx: number, cy: number) {
         cr: srgbToLinear(c.r),
         cg: srgbToLinear(c.g),
         cb: srgbToLinear(c.b),
-        ca: (c.a / 255) * app.brushOpacity,
+        ca: c.a / 255,
     };
 }
 

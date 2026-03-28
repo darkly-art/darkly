@@ -248,7 +248,6 @@ impl DarklyEngine {
                 canvas_width: canvas_w,
                 canvas_height: canvas_h,
                 selection_bind_group: sel_bg,
-                global_scale: self.brush_global_scale,
                 resource_handles: &self.resource_handles,
                 blend_mode: self.brush_blend_mode,
             };

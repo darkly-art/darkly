@@ -155,10 +155,6 @@ pub struct DarklyEngine {
     /// Built by `upload_preset_resources()`, read by Image nodes via BrushGpuContext.
     pub(crate) resource_handles: std::collections::HashMap<String, crate::brush::wire::TextureHandle>,
 
-    /// Global brush scale multiplier applied at composite time.
-    /// Controls the canvas footprint of the brush independently from the
-    /// node graph's internal rendering resolution.  Default 1.0.
-    pub(crate) brush_global_scale: f32,
     /// Composite blend mode for the current stroke: 0 = paint, 1 = erase.
     pub(crate) brush_blend_mode: u32,
 
@@ -235,7 +231,6 @@ impl DarklyEngine {
                 lib
             },
             resource_handles: std::collections::HashMap::new(),
-            brush_global_scale: 1.0,
             brush_blend_mode: 0,
             diff_rect,
             pending_undo_commit: None,

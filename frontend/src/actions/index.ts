@@ -3,7 +3,6 @@ import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
-import { MIN_SIZE, MAX_SIZE, SIZE_STEP } from '../tools/brush.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 
 export function registerActions() {
@@ -192,40 +191,6 @@ export function registerActions() {
             handler: () => { app.activeToolId = tool.id; },
         });
     }
-
-    // -- Brush controls --
-    actions.register({
-        id: 'brushSizeUp',
-        displayName: 'Increase Brush Size',
-        category: 'brush',
-        handler: () => {
-            app.brushSize = Math.min(app.brushSize + SIZE_STEP, MAX_SIZE);
-        },
-    });
-    actions.register({
-        id: 'brushSizeDown',
-        displayName: 'Decrease Brush Size',
-        category: 'brush',
-        handler: () => {
-            app.brushSize = Math.max(app.brushSize - SIZE_STEP, MIN_SIZE);
-        },
-    });
-    actions.register({
-        id: 'opacityUp',
-        displayName: 'Increase Opacity',
-        category: 'brush',
-        handler: () => {
-            app.brushOpacity = Math.min(1.0, app.brushOpacity + 0.1);
-        },
-    });
-    actions.register({
-        id: 'opacityDown',
-        displayName: 'Decrease Opacity',
-        category: 'brush',
-        handler: () => {
-            app.brushOpacity = Math.max(0.0, app.brushOpacity - 0.1);
-        },
-    });
 
     // -- Layers --
     actions.register({

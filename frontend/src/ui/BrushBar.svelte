@@ -26,6 +26,23 @@
         brushGraph.setParam(nodeId, paramIndex, 'float', value);
     }
 
+    /** Format a user input value based on its units enum. */
+    function formatUserInput(value: number, units: number): string {
+        switch (units) {
+            case 1: return `${Math.round(value)} px`;
+            case 2: return `${Math.round(value)}°`;
+            case 3: return value.toFixed(2);
+            default: return `${Math.round(value * 100)}%`;
+        }
+    }
+
+    /** Drag speed scaled to the input's range. */
+    function userInputDragSpeed(min: number, max: number, units: number): number {
+        const range = max - min;
+        if (units === 0) return 0.005; // percent: 0-1 range, slow drag
+        return range / 400; // ~400px of drag to cover the full range
+    }
+
     function handleClickOutside(e: MouseEvent) {
         if (presetDropdownOpen) {
             presetDropdownOpen = false;
@@ -43,61 +60,6 @@
         return groups;
     }
 
-    // --- Scrub drag logic ---
-
-    interface ScrubDef {
-        label: string;
-        icon: string;
-        min: number;
-        max: number;
-        unit: string;
-        speed: number;
-        get: () => number;
-        set: (v: number) => void;
-        fmt: (v: number) => string;
-    }
-
-    const scrubs: ScrubDef[] = [
-        {
-            label: 'Size', icon: 'fa-solid fa-circle',
-            min: 1, max: 500, unit: 'px', speed: 2,
-            get: () => app.brushSize,
-            set: (v) => { app.brushSize = v; },
-            fmt: (v) => `${Math.round(v)} px`,
-        },
-        {
-            label: 'Opacity', icon: 'fa-solid fa-droplet',
-            min: 0, max: 100, unit: '%', speed: 0.5,
-            get: () => Math.round(app.brushOpacity * 100),
-            set: (v) => { app.brushOpacity = v / 100; },
-            fmt: (v) => `${Math.round(v)}%`,
-        },
-    ];
-
-    let draggingScrubIdx = $state<number>(-1);
-    let scrubStartX = 0;
-    let scrubStartVal = 0;
-
-    function onScrubDown(e: PointerEvent, scrub: ScrubDef, idx: number) {
-        e.preventDefault();
-        scrubStartX = e.clientX;
-        scrubStartVal = scrub.get();
-        draggingScrubIdx = idx;
-        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    }
-
-    function onScrubMove(e: PointerEvent, scrub: ScrubDef, idx: number) {
-        if (draggingScrubIdx !== idx) return;
-        const dx = e.clientX - scrubStartX;
-        const v = Math.round(Math.min(scrub.max, Math.max(scrub.min, scrubStartVal + dx * scrub.speed)));
-        scrub.set(v);
-    }
-
-    function onScrubUp(e: PointerEvent, idx: number) {
-        if (draggingScrubIdx !== idx) return;
-        draggingScrubIdx = -1;
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    }
 </script>
 
 <svelte:window onclick={handleClickOutside} />
@@ -120,6 +82,7 @@
 
             {#if presetDropdownOpen}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <div class="preset-dropdown dropdown-surface" onclick={(e) => e.stopPropagation()}>
                     {#each [...groupedPresets()] as [category, presets]}
                         <div class="preset-category">{category}</div>
@@ -140,39 +103,23 @@
             {/if}
         </div>
 
-        <!-- Scrub controls -->
-        {#each scrubs as scrub, idx}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div
-                class="scrub"
-                class:dragging={draggingScrubIdx === idx}
-                onpointerdown={(e) => onScrubDown(e, scrub, idx)}
-                onpointermove={(e) => onScrubMove(e, scrub, idx)}
-                onpointerup={(e) => onScrubUp(e, idx)}
-            >
-                <i class="{scrub.icon} scrub-icon"></i>
-                <div class="scrub-text">
-                    <span class="scrub-label">{scrub.label}</span>
-                    <span class="scrub-value">{scrub.fmt(scrub.get())}</span>
-                </div>
-            </div>
-        {/each}
-
         <!-- User input scrubs from the brush graph -->
         {#each brushGraph.userInputs as input}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
                 class="scrub"
+                title={input.description || undefined}
                 onpointerdown={(e) => {
                     e.preventDefault();
                     const startX = e.clientX;
                     const startVal = input.value;
+                    const speed = userInputDragSpeed(input.min, input.max, input.units);
                     const el = e.currentTarget as HTMLElement;
                     el.setPointerCapture(e.pointerId);
                     el.classList.add('dragging');
                     const onMove = (ev: PointerEvent) => {
                         const dx = ev.clientX - startX;
-                        const v = Math.min(1, Math.max(0, startVal + dx * 0.005));
+                        const v = Math.min(input.max, Math.max(input.min, startVal + dx * speed));
                         handleUserInput(input.nodeId, 1, v);
                     };
                     const onUp = () => {
@@ -184,10 +131,10 @@
                     el.addEventListener('pointerup', onUp);
                 }}
             >
-                <i class="fa-solid fa-sliders scrub-icon"></i>
+                <i class="{input.icon || 'fa-solid fa-sliders'} scrub-icon"></i>
                 <div class="scrub-text">
                     <span class="scrub-label">{input.label}</span>
-                    <span class="scrub-value">{Math.round(input.value * 100)}%</span>
+                    <span class="scrub-value">{formatUserInput(input.value, input.units)}</span>
                 </div>
             </div>
         {/each}
@@ -258,9 +205,9 @@
         background: var(--accent);
     }
 
-    .scrub.dragging :global(.scrub-icon),
-    .scrub.dragging .scrub-label,
-    .scrub.dragging .scrub-value {
+    :global(.scrub.dragging .scrub-icon),
+    :global(.scrub.dragging .scrub-label),
+    :global(.scrub.dragging .scrub-value) {
         color: #ffffff;
     }
 

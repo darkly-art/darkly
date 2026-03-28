@@ -130,7 +130,6 @@ enum Command {
     ClearOverlay,
 
     // Brush config
-    SetBrushScale(f32),
     SetBrushBlendMode(u32),
     ResetBrushGraph,
     BrushGraphMoveNode(u64, f32, f32),
@@ -202,7 +201,6 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::SetOverlay(prims) => engine.set_overlay_primitives(prims),
             Command::ClearOverlay => engine.clear_overlay(),
 
-            Command::SetBrushScale(s) => engine.set_brush_scale(s),
             Command::SetBrushBlendMode(m) => engine.set_brush_blend_mode(m),
             Command::ResetBrushGraph => engine.reset_brush_graph(),
             Command::BrushGraphMoveNode(id, x, y) => engine.brush_graph_move_node(id, x, y),
@@ -287,6 +285,20 @@ fn js_to_param_values(js: &JsValue, defs: &[ParamDef]) -> Vec<ParamValue> {
                 .and_then(|s| serde_json::from_str::<Vec<[f32; 2]>>(&s).ok())
                 .unwrap_or_else(|| default.to_vec());
             ParamValue::Curve(v)
+        }
+        ParamDef::Enum { name, default, .. } => {
+            let v = js_sys::Reflect::get(js, &(*name).into())
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(*default as f64) as i32;
+            ParamValue::Int(v)
+        }
+        ParamDef::Icon { name, default, .. } => {
+            let v = js_sys::Reflect::get(js, &(*name).into())
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_else(|| default.to_string());
+            ParamValue::String(v)
         }
     }).collect()
 }
@@ -463,7 +475,6 @@ impl DarklyHandle {
 
     // --- Brush config ---
 
-    pub fn set_brush_scale(&self, scale: f32) { self.push(Command::SetBrushScale(scale)); }
     pub fn set_brush_blend_mode(&self, mode: u32) { self.push(Command::SetBrushBlendMode(mode)); }
     pub fn brush_graph_reset(&self) { self.push(Command::ResetBrushGraph); }
     pub fn brush_graph_move_node(&self, node_id: u32, x: f32, y: f32) { self.push(Command::BrushGraphMoveNode(node_id as u64, x, y)); }
@@ -800,11 +811,6 @@ impl DarklyHandle {
             }
             Err(e) => JsValue::from_str(&e),
         }
-    }
-
-    pub fn brush_scale(&self) -> f32 {
-        self.flush_if_needed();
-        self.engine.borrow().brush_scale()
     }
 
     pub fn layer_tree(&self) -> String {

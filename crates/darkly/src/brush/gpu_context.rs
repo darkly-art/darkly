@@ -29,10 +29,6 @@ pub struct BrushGpuContext<'a> {
     pub canvas_height: u32,
     /// Selection mask bind group (or default 1x1 white when no selection).
     pub selection_bind_group: &'a wgpu::BindGroup,
-    /// Global brush scale multiplier applied at composite time.
-    /// The node graph renders dabs at internal resolution; this scales the
-    /// final canvas footprint.  1.0 = dab pixels map 1:1 to canvas pixels.
-    pub global_scale: f32,
     /// Resource name → TextureHandle for images uploaded by the preset loader.
     /// Image nodes read from this to resolve their `resource_name` param.
     pub resource_handles: &'a HashMap<String, TextureHandle>,

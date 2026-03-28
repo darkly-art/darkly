@@ -8,6 +8,14 @@ pub enum ParamDef {
     Bool  { name: &'static str, default: bool },
     String { name: &'static str, default: &'static str },
     Curve { name: &'static str, default: &'static [[f32; 2]] },
+    /// Enum displayed as a dropdown.  Stored as Int (index into `options`).
+    Enum  { name: &'static str, options: &'static [&'static str], default: i32 },
+    /// Float displayed as a plain text input instead of a scrub bar.
+    /// Use for values where dragging is impractical (large ranges, precise entry).
+    FloatInput { name: &'static str, min: f32, max: f32, default: f32 },
+    /// Icon picker displayed as a dropdown with FA icon previews.
+    /// Stored as String (FA class name).  `options` lists the available icons.
+    Icon  { name: &'static str, options: &'static [(&'static str, &'static str)], default: &'static str },
 }
 
 /// A concrete runtime parameter value, read from an effect instance.
@@ -64,6 +72,25 @@ pub fn param_values_from_json(obj: &serde_json::Value, defs: &[ParamDef]) -> Vec
                 .unwrap_or_else(|| default.to_vec());
             ParamValue::Curve(points)
         }
+        ParamDef::Enum { name, default, .. } => {
+            let v = map.get(*name)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(*default as f64) as i32;
+            ParamValue::Int(v)
+        }
+        ParamDef::FloatInput { name, default, .. } => {
+            let v = map.get(*name)
+                .and_then(|v| v.as_f64())
+                .unwrap_or(*default as f64) as f32;
+            ParamValue::Float(v)
+        }
+        ParamDef::Icon { name, default, .. } => {
+            let v = map.get(*name)
+                .and_then(|v| v.as_str())
+                .unwrap_or(default)
+                .to_string();
+            ParamValue::String(v)
+        }
     }).collect()
 }
 
@@ -75,6 +102,9 @@ impl ParamDef {
             ParamDef::Bool { default, .. } => ParamValue::Bool(*default),
             ParamDef::String { default, .. } => ParamValue::String(default.to_string()),
             ParamDef::Curve { default, .. } => ParamValue::Curve(default.to_vec()),
+            ParamDef::Enum { default, .. } => ParamValue::Int(*default),
+            ParamDef::FloatInput { default, .. } => ParamValue::Float(*default),
+            ParamDef::Icon { default, .. } => ParamValue::String(default.to_string()),
         }
     }
 }

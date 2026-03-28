@@ -62,6 +62,14 @@ export interface UserInputInfo {
     nodeId: number;
     label: string;
     value: number;
+    min: number;
+    max: number;
+    /** Display unit: 0 = percent, 1 = px, 2 = degrees, 3 = raw. */
+    units: number;
+    /** Font Awesome icon class, or empty string. */
+    icon: string;
+    /** Tooltip description, or empty string. */
+    description: string;
     position: [number, number];
 }
 

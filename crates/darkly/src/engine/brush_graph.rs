@@ -258,21 +258,6 @@ impl DarklyEngine {
         Ok(())
     }
 
-    /// Set the global brush scale multiplier.
-    ///
-    /// This controls the canvas footprint of the brush independently from
-    /// the node graph's internal rendering resolution.  The value is
-    /// multiplicative: 1.0 = dab pixels map 1:1, 2.0 = brush is twice
-    /// as large on canvas, etc.
-    pub fn set_brush_scale(&mut self, scale: f32) {
-        self.brush_global_scale = scale.max(0.01);
-    }
-
-    /// Get the current global brush scale.
-    pub fn brush_scale(&self) -> f32 {
-        self.brush_global_scale
-    }
-
     /// Set the composite blend mode: 0 = source-over (paint), 1 = destination-out (erase).
     pub fn set_brush_blend_mode(&mut self, mode: u32) {
         self.brush_blend_mode = mode;
@@ -289,26 +274,43 @@ impl DarklyEngine {
             .iter()
             .filter(|(_, node)| node.type_id == "user_input")
             .map(|(_, node)| {
-                let label = node
-                    .params
-                    .first()
-                    .and_then(|p| match p {
-                        ParamValue::String(s) => Some(s.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_default();
-                let value = node
-                    .params
-                    .get(1)
-                    .and_then(|p| match p {
-                        ParamValue::Float(v) => Some(*v),
-                        _ => None,
-                    })
-                    .unwrap_or(0.5);
+                let label = match node.params.first() {
+                    Some(ParamValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let value = match node.params.get(1) {
+                    Some(ParamValue::Float(v)) => *v,
+                    _ => 0.5,
+                };
+                let min = match node.params.get(2) {
+                    Some(ParamValue::Float(v)) => *v,
+                    _ => 0.0,
+                };
+                let max = match node.params.get(3) {
+                    Some(ParamValue::Float(v)) => *v,
+                    _ => 1.0,
+                };
+                let units = match node.params.get(4) {
+                    Some(ParamValue::Int(v)) => *v as u32,
+                    _ => 0,
+                };
+                let icon = match node.params.get(5) {
+                    Some(ParamValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let description = match node.params.get(6) {
+                    Some(ParamValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
                 UserInputInfo {
                     node_id: node.id.0,
                     label,
                     value,
+                    min,
+                    max,
+                    units,
+                    icon,
+                    description,
                     position: node.position,
                 }
             })
@@ -338,5 +340,13 @@ pub struct UserInputInfo {
     pub node_id: u64,
     pub label: String,
     pub value: f32,
+    pub min: f32,
+    pub max: f32,
+    /// Display unit: 0 = percent, 1 = px, 2 = degrees, 3 = raw.
+    pub units: u32,
+    /// Font Awesome icon class (e.g. `"fa-solid fa-circle"`), or empty.
+    pub icon: String,
+    /// Tooltip description, or empty.
+    pub description: String,
     pub position: [f32; 2],
 }

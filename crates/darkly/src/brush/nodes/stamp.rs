@@ -35,6 +35,9 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("size", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_description("Dab size as a fraction of max (0 = 1px, 1 = max)"),
+            PortDef::input("scale", BrushWireType::Scalar)
+                .with_range(0.0, 4.0, 1.0)
+                .with_description("Multiplier on the final dab size — typically driven by a User Input node to let the user scale the brush"),
             PortDef::input("rotation", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
                 .with_description("Dab rotation (0 = 0\u{00b0}, 1 = 360\u{00b0})"),
@@ -92,6 +95,7 @@ impl BrushNodeEvaluator for StampEvaluator {
         };
 
         let size = ctx.input_f32("size");
+        let scale = ctx.input_f32("scale");
         let rotation_input = ctx.input_f32("rotation");
         let mirror_x_input = ctx.input_f32("mirror_x");
         let mirror_y_input = ctx.input_f32("mirror_y");
@@ -115,19 +119,21 @@ impl BrushNodeEvaluator for StampEvaluator {
 
         // Compute dab dimensions preserving tip aspect ratio.
         // The `size` input (0-1) scales the longer axis up to MAX_DAB_SIZE;
-        // the shorter axis follows from the tip's natural aspect ratio.
+        // `scale` multiplies the result, letting a User Input node control
+        // the overall brush size.  The product is clamped to MAX_DAB_SIZE.
+        let effective_size = (size * scale).clamp(0.0, 1.0);
         let max = MAX_DAB_SIZE as f32;
         let (tip_w, tip_h) = gpu.dab_pool.texture_size(tip_handle);
         let tip_aspect = tip_w as f32 / tip_h as f32;
 
         let (dab_w, dab_h) = if tip_aspect >= 1.0 {
             // Wide tip: width is the long axis.
-            let w = (size * max).max(1.0);
+            let w = (effective_size * max).max(1.0);
             let h = (w / tip_aspect).max(1.0);
             (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
         } else {
             // Tall tip: height is the long axis.
-            let h = (size * max).max(1.0);
+            let h = (effective_size * max).max(1.0);
             let w = (h * tip_aspect).max(1.0);
             (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
         };

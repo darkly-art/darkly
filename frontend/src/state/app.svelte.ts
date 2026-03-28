@@ -22,8 +22,6 @@ class AppState {
     editingMaskLayerId = $state<number | null>(null);
 
     // Tool runtime state -- working values adjusted while painting.
-    brushSize = $state(24);
-    brushOpacity = $state(1.0);
     fillTolerance = $state(32);     // 0-255
     fillAll = $state(false);
     gradientType = $state<'linear' | 'radial'>('linear');

@@ -127,12 +127,31 @@ impl PresetBuilder {
         )
     }
 
-    /// Add a user_input node with the given label.
-    fn add_user_input(&mut self, label: &str) -> NodeId {
+    /// Add a user_input node with full metadata.
+    ///
+    /// `units`: 0 = percent, 1 = px, 2 = degrees, 3 = raw.
+    fn add_user_input(
+        &mut self,
+        label: &str,
+        value: f32,
+        min: f32,
+        max: f32,
+        units: i32,
+        icon: &str,
+        description: &str,
+    ) -> NodeId {
         self.graph.add_node(
             "user_input",
             self.registry.get("user_input").unwrap().ports.clone(),
-            vec![ParamValue::String(label.to_string()), ParamValue::Float(0.5)],
+            vec![
+                ParamValue::String(label.to_string()),
+                ParamValue::Float(value),
+                ParamValue::Float(min),
+                ParamValue::Float(max),
+                ParamValue::Int(units),
+                ParamValue::String(icon.to_string()),
+                ParamValue::String(description.to_string()),
+            ],
         )
     }
 
@@ -270,7 +289,9 @@ fn textured_ink() -> PresetBundle {
 fn size_slider() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.5);
-    let slider = b.add_user_input("Size");
+    let slider = b.add_user_input(
+        "Size", 128.0, 1.0, 500.0, 1, "fa-solid fa-circle", "Brush diameter in pixels",
+    );
     b.wire(slider, "value", b.stamp, "size");
     b.wire_color();
     b.build("Size Slider", "basic")
