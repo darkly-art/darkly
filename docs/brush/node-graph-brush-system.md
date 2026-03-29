@@ -501,9 +501,9 @@ Phase 7 (preset format + round-trip)         ✓ complete
     ↓
 Phase 8 (stamp tips + user-exposed properties) ✓ complete
     ↓
-Phase 9 (texture overlay)                    ← CURRENT
+Phase 9 (texture overlay)                    ✓ complete
     ↓
-Phase 10 (smoothing + stabilizer)            ← stroke quality / taffy feel
+Phase 10 (smoothing + stabilizer)            ← CURRENT
     ↓
 Phase 11 (KPP import)                        ← "download and paint" milestone
     ↓

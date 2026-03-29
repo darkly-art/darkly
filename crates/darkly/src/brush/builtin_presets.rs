@@ -22,6 +22,9 @@ pub fn all() -> Vec<PresetBundle> {
         calligraphy(),
         textured_ink(),
         size_slider(),
+        pencil(),
+        charcoal(),
+        canvas_brush(),
     ]
 }
 
@@ -194,21 +197,66 @@ impl PresetBuilder {
         PresetBundle::without_resources(preset)
     }
 
+    /// Insert a texture_overlay node between stamp and color_output.
+    ///
+    /// Rewires: stamp.dab → texture_overlay.dab → color_output.dab,
+    /// stamp.dab_size → texture_overlay.dab_size → color_output.dab_size.
+    /// Wires pen_input.position → texture_overlay.position for tiling.
+    /// Returns the texture_overlay node ID for further wiring (e.g. pattern input).
+    fn add_texture_overlay(&mut self, blend_mode: i32) -> NodeId {
+        let tex = self.graph.add_node(
+            "texture_overlay",
+            self.registry.get("texture_overlay").unwrap().ports.clone(),
+            vec![ParamValue::Int(blend_mode)],
+        );
+
+        // Disconnect stamp → color_output for dab and dab_size.
+        self.graph.disconnect(
+            &PortRef { node: self.stamp, port: "dab".into() },
+            &PortRef { node: self.color_output, port: "dab".into() },
+        );
+        self.graph.disconnect(
+            &PortRef { node: self.stamp, port: "dab_size".into() },
+            &PortRef { node: self.color_output, port: "dab_size".into() },
+        );
+
+        // Wire stamp → texture_overlay → color_output.
+        self.wire(self.stamp, "dab", tex, "dab");
+        self.wire(self.stamp, "dab_size", tex, "dab_size");
+        self.wire(tex, "dab", self.color_output, "dab");
+        self.wire(tex, "dab_size", self.color_output, "dab_size");
+
+        // Wire position for pattern tiling.
+        self.wire(self.pen, "position", tex, "position");
+
+        tex
+    }
+
+    /// Add a pattern image node and wire it to a texture_overlay's pattern input.
+    fn add_pattern(&mut self, resource_name: &str, tex_overlay: NodeId) {
+        let image = self.graph.add_node(
+            "image",
+            self.registry.get("image").unwrap().ports.clone(),
+            vec![ParamValue::String(resource_name.to_string())],
+        );
+        self.wire(image, "texture", tex_overlay, "pattern");
+    }
+
     /// Build the preset with embedded PNG resources.
     fn build_with_resources(
         self,
         name: &str,
         category: &str,
-        resources: Vec<(&str, &[u8])>,
+        resources: Vec<(&str, ResourceKind, &[u8])>,
     ) -> PresetBundle {
         let mut preset = BrushPreset::from_graph(name, self.graph);
         preset.category = category.to_string();
 
         let mut resource_data = Vec::new();
-        for (res_name, data) in &resources {
+        for (res_name, kind, data) in &resources {
             preset.resources.push(PresetResourceMeta {
                 name: res_name.to_string(),
-                kind: ResourceKind::BrushTip,
+                kind: kind.clone(),
                 path: format!("resources/{}", res_name),
             });
             resource_data.push((res_name.to_string(), data.to_vec()));
@@ -282,7 +330,9 @@ fn calligraphy() -> PresetBundle {
     b.wire_color();
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/calligraphy.png");
-    b.build_with_resources("Calligraphy", "inking", vec![("calligraphy.png", tip_bytes)])
+    b.build_with_resources("Calligraphy", "inking", vec![
+        ("calligraphy.png", ResourceKind::BrushTip, tip_bytes),
+    ])
 }
 
 fn textured_ink() -> PresetBundle {
@@ -295,7 +345,9 @@ fn textured_ink() -> PresetBundle {
     b.wire_color();
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");
-    b.build_with_resources("Textured Ink", "effects", vec![("ink_dry.png", tip_bytes)])
+    b.build_with_resources("Textured Ink", "effects", vec![
+        ("ink_dry.png", ResourceKind::BrushTip, tip_bytes),
+    ])
 }
 
 fn size_slider() -> PresetBundle {
@@ -307,6 +359,77 @@ fn size_slider() -> PresetBundle {
     b.wire(slider, "value", b.stamp, "size");
     b.wire_color();
     b.build("Size Slider", "basic")
+}
+
+fn pencil() -> PresetBundle {
+    let mut b = PresetBuilder::new();
+    b.add_circle(0.15);
+    b.wire_pressure_to_size();
+    b.wire_pressure_to_opacity();
+    b.wire_color();
+
+    // Insert texture overlay with Multiply blend (pencil grain).
+    let tex = b.add_texture_overlay(0); // 0 = Multiply
+    b.add_pattern("paper_grain.png", tex);
+
+    // Scale + strength wired to constants for a subtle pencil feel.
+    let scale = b.add_constant(0.5);
+    let strength = b.add_constant(0.8);
+    b.wire(scale, "value", tex, "scale");
+    b.wire(strength, "value", tex, "strength");
+
+    let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/paper_grain.png");
+    b.build_with_resources("Pencil", "sketching", vec![
+        ("paper_grain.png", ResourceKind::Pattern, pattern_bytes),
+    ])
+}
+
+fn charcoal() -> PresetBundle {
+    let mut b = PresetBuilder::new();
+    b.add_circle(0.6);
+    b.wire_pressure_to_size();
+    b.wire_pressure_to_opacity();
+    b.wire_color();
+
+    // Texture overlay with Subtract blend (charcoal grain — cuts into dab).
+    let tex = b.add_texture_overlay(1); // 1 = Subtract
+    b.add_pattern("canvas_grain.png", tex);
+
+    let scale = b.add_constant(0.7);
+    let strength = b.add_constant(0.9);
+    b.wire(scale, "value", tex, "scale");
+    b.wire(strength, "value", tex, "strength");
+
+    let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/canvas_grain.png");
+    b.build_with_resources("Charcoal", "sketching", vec![
+        ("canvas_grain.png", ResourceKind::Pattern, pattern_bytes),
+    ])
+}
+
+fn canvas_brush() -> PresetBundle {
+    let mut b = PresetBuilder::new();
+    b.add_circle(0.4);
+    b.wire_pressure_to_size();
+    b.wire_color();
+
+    // Texture overlay with Multiply blend and user-adjustable strength.
+    let tex = b.add_texture_overlay(0); // 0 = Multiply
+    b.add_pattern("canvas_grain.png", tex);
+
+    let scale = b.add_constant(1.0);
+    b.wire(scale, "value", tex, "scale");
+
+    // User-exposed strength slider.
+    let strength_slider = b.add_user_input(
+        "Grain", 0.6, 0.0, 1.0, 0,
+        "fa-solid fa-mountain", "Canvas grain strength",
+    );
+    b.wire(strength_slider, "value", tex, "strength");
+
+    let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/canvas_grain.png");
+    b.build_with_resources("Canvas Brush", "painting", vec![
+        ("canvas_grain.png", ResourceKind::Pattern, pattern_bytes),
+    ])
 }
 
 // ---------------------------------------------------------------------------

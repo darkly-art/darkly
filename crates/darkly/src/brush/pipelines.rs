@@ -38,6 +38,22 @@ pub struct StampUniforms {
     pub ratio: f32,          // user-controlled aspect ratio squeeze (1.0 = none)
 }
 
+/// Uniform data for the texture overlay shader.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TexOverlayUniforms {
+    pub dab_width: f32,
+    pub dab_height: f32,
+    pub position_x: f32,
+    pub position_y: f32,
+    pub pattern_width: f32,
+    pub pattern_height: f32,
+    pub scale: f32,
+    pub strength: f32,
+    pub blend_mode: u32,
+    pub _pad: [f32; 3],
+}
+
 /// Uniform data for the dab compositing shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -55,6 +71,7 @@ pub struct CompositeUniforms {
 pub struct BrushPipelines {
     circle_pipeline: wgpu::RenderPipeline,
     stamp_pipeline: wgpu::RenderPipeline,
+    tex_overlay_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
 
     circle_uniform_buf: wgpu::Buffer,
@@ -62,6 +79,9 @@ pub struct BrushPipelines {
 
     stamp_uniform_buf: wgpu::Buffer,
     pub(crate) stamp_uniform_bind_group: wgpu::BindGroup,
+
+    tex_overlay_uniform_buf: wgpu::Buffer,
+    pub(crate) tex_overlay_uniform_bind_group: wgpu::BindGroup,
 
     composite_uniform_buf: wgpu::Buffer,
     pub(crate) composite_uniform_bind_group: wgpu::BindGroup,
@@ -106,6 +126,13 @@ impl BrushPipelines {
             label: Some("brush-stamp"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../../../shaders/brush/stamp.wgsl").into(),
+            ),
+        });
+
+        let tex_overlay_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("brush-tex-overlay"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/brush/texture_overlay.wgsl").into(),
             ),
         });
 
@@ -194,6 +221,13 @@ impl BrushPipelines {
             immediate_size: 0,
         });
 
+        // Texture overlay: group(0) = uniforms, group(1) = dab texture, group(2) = pattern texture.
+        let tex_overlay_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("brush-tex-overlay-layout"),
+            bind_group_layouts: &[&uniform_bgl, dab_bgl, dab_bgl],
+            immediate_size: 0,
+        });
+
         // Composite: group(0) = uniforms, group(1) = dab texture, group(2) = selection,
         //            group(3) = canvas copy (for shader-side Porter-Duff).
         let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -232,6 +266,22 @@ impl BrushPipelines {
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: stamp_uniform_buf.as_entire_binding(),
+            }],
+        });
+
+        let tex_overlay_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("brush-tex-overlay-uniforms"),
+            size: std::mem::size_of::<TexOverlayUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let tex_overlay_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("brush-tex-overlay-uniform-bg"),
+            layout: &uniform_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: tex_overlay_uniform_buf.as_entire_binding(),
             }],
         });
 
@@ -400,6 +450,36 @@ impl BrushPipelines {
             cache: None,
         });
 
+        // Texture overlay: REPLACE blend — reads dab + pattern, writes textured dab.
+        let tex_overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("brush-tex-overlay"),
+            layout: Some(&tex_overlay_layout),
+            vertex: wgpu::VertexState {
+                module: &tex_overlay_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &tex_overlay_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // Composite: REPLACE blend — the shader does Porter-Duff source-over
         // manually by reading the canvas copy, producing correct straight-alpha output.
         let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -434,11 +514,14 @@ impl BrushPipelines {
         Self {
             circle_pipeline,
             stamp_pipeline,
+            tex_overlay_pipeline,
             composite_pipeline,
             circle_uniform_buf,
             circle_uniform_bind_group,
             stamp_uniform_buf,
             stamp_uniform_bind_group,
+            tex_overlay_uniform_buf,
+            tex_overlay_uniform_bind_group,
             composite_uniform_buf,
             composite_uniform_bind_group,
             default_selection_bind_group,
@@ -456,6 +539,10 @@ impl BrushPipelines {
 
     pub fn stamp_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.stamp_pipeline
+    }
+
+    pub fn tex_overlay_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.tex_overlay_pipeline
     }
 
     pub fn composite_pipeline(&self) -> &wgpu::RenderPipeline {
@@ -478,6 +565,11 @@ impl BrushPipelines {
     /// Write stamp dab uniforms to the GPU buffer.
     pub fn write_stamp_uniforms(&self, queue: &wgpu::Queue, uniforms: &StampUniforms) {
         queue.write_buffer(&self.stamp_uniform_buf, 0, bytemuck::bytes_of(uniforms));
+    }
+
+    /// Write texture overlay uniforms to the GPU buffer.
+    pub fn write_tex_overlay_uniforms(&self, queue: &wgpu::Queue, uniforms: &TexOverlayUniforms) {
+        queue.write_buffer(&self.tex_overlay_uniform_buf, 0, bytemuck::bytes_of(uniforms));
     }
 
     /// Write composite uniforms to the GPU buffer.
