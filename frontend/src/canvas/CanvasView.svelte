@@ -108,7 +108,7 @@
         if (e.pointerType === 'touch') {
             canvas.setPointerCapture(e.pointerId);
             if (nav.onTouchPointerDown(e)) {
-                // Two-finger gesture started — end any in-progress tool stroke
+                // Touch consumed by navigation — end any in-progress tool stroke
                 const ctx = getToolContext();
                 if (ctx) {
                     const tool = toolRegistry.get(app.activeToolId);

@@ -143,12 +143,16 @@ class NavigationState {
     }
 
     /**
-     * Track a touch pointer down. Returns true if a two-finger gesture is
-     * now active (event should not be dispatched to tools).
+     * Track a touch pointer down. Returns true if the touch is consumed
+     * by navigation (two-finger gesture, or single-finger pan when finger
+     * painting is disabled).
      */
     onTouchPointerDown(e: PointerEvent): boolean {
         this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (this.touches.size >= 2) {
+            this.touchGestureOccurred = true;
+        } else if (!(config.get('input.fingerPainting') as boolean)) {
+            // Single-finger touch → navigate (pan) instead of draw
             this.touchGestureOccurred = true;
         }
         return this.touchGestureOccurred;
@@ -162,8 +166,12 @@ class NavigationState {
         if (!this.touches.has(e.pointerId)) return;
 
         if (this.touches.size < 2) {
-            // Not in gesture — just keep position current for when/if a
-            // second finger arrives.
+            const prev = this.touches.get(e.pointerId)!;
+            // Single-finger touch pan when finger painting is disabled
+            if (this.touchGestureOccurred) {
+                app.panX += e.clientX - prev.x;
+                app.panY += e.clientY - prev.y;
+            }
             this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
             return;
         }
