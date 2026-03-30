@@ -104,6 +104,10 @@
     }
 
     function onPointerDown(e: PointerEvent) {
+        // Prevent browser from synthesising fling/scroll gestures from pen
+        // input — touch-action:none only covers touch, not pen (Chromium bug).
+        e.preventDefault();
+
         // Touch: always capture and track for gesture detection
         if (e.pointerType === 'touch') {
             canvas.setPointerCapture(e.pointerId);
@@ -132,6 +136,8 @@
     }
 
     function onPointerMove(e: PointerEvent) {
+        e.preventDefault();
+
         // Touch gesture: update position and apply gesture transform
         if (e.pointerType === 'touch') {
             nav.onTouchPointerMove(e, canvas);
@@ -152,6 +158,8 @@
     }
 
     function onPointerUp(e: PointerEvent) {
+        e.preventDefault();
+
         // Touch: clean up gesture state; skip tool dispatch if gesture occurred
         if (e.pointerType === 'touch') {
             const wasGesture = nav.isTouchGesture;
@@ -172,6 +180,8 @@
     }
 
     function onPointerCancel(e: PointerEvent) {
+        e.preventDefault();
+
         // Pen/touch can fire pointercancel instead of pointerup (pen lifted
         // out of range, system gesture, browser intervention).  Clean up
         // the same state that onPointerUp would.
