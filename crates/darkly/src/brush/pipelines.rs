@@ -97,7 +97,7 @@ pub struct BrushPipelines {
     // View and BGL are held alive for the bind group's internal Arc references.
     _canvas_copy_view: wgpu::TextureView,
     pub(crate) canvas_copy_bind_group: wgpu::BindGroup,
-    _canvas_copy_bgl: wgpu::BindGroupLayout,
+    canvas_copy_bgl: wgpu::BindGroupLayout,
 }
 
 impl BrushPipelines {
@@ -529,7 +529,7 @@ impl BrushPipelines {
             canvas_copy_texture,
             _canvas_copy_view: canvas_copy_view,
             canvas_copy_bind_group,
-            _canvas_copy_bgl: canvas_copy_bgl,
+            canvas_copy_bgl,
         }
     }
 
@@ -555,6 +555,10 @@ impl BrushPipelines {
 
     pub fn canvas_copy_texture(&self) -> &wgpu::Texture {
         &self.canvas_copy_texture
+    }
+
+    pub fn canvas_copy_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.canvas_copy_bgl
     }
 
     /// Write circle mask uniforms to the GPU buffer.

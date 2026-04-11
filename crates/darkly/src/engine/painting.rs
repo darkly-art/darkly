@@ -5,6 +5,7 @@ use super::types::StrokeOp;
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::paint_info::PaintInformation;
 use crate::brush::spacing::SpacingConfig;
+use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::gpu::flood_fill;
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -169,9 +170,9 @@ impl DarklyEngine {
 
     /// Handle a BrushStroke event through the node-graph brush engine.
     ///
-    /// Lazy-inits a `StrokeEngine` with the default brush graph on the first
-    /// event.  Each event feeds through the stroke engine which smooths,
-    /// interpolates, and places dabs via the compiled brush graph.
+    /// Lazy-inits a `StrokeEngine` + `StrokeBuffer` on the first event.
+    /// Each event feeds through the stabilizer, which may trigger rewind
+    /// and re-rendering of the stroke from scratch.
     fn brush_stroke_to(
         &mut self,
         layer_id: u64,
@@ -185,7 +186,7 @@ impl DarklyEngine {
         color: [f32; 4],
         canvas_w: u32, canvas_h: u32,
     ) {
-        // Lazy-init: compile the active brush graph on first BrushStroke event.
+        // Lazy-init: compile the active brush graph + create stroke buffer.
         if self.brush_stroke_engine.is_none() {
             let runner = match crate::brush::compile_graph(&self.active_brush_graph) {
                 Ok(r) => r,
@@ -194,9 +195,36 @@ impl DarklyEngine {
                     return;
                 }
             };
+
+            // Create the stabilizer from the active config.
+            let stabilizer = self.stabilizer_registry.create_from_config(
+                &self.active_stabilizer_config,
+            );
+
             self.brush_stroke_engine = Some(StrokeEngine::new(
-                runner, color, SpacingConfig::default(), 0.3,
+                runner, color, SpacingConfig::default(), stabilizer,
             ));
+
+            // Create the stroke buffer and save the pre-stroke snapshot.
+            let layer_tex = if mask_editing {
+                self.compositor.mask_texture(layer_id)
+            } else {
+                self.compositor.layer_texture(layer_id)
+            };
+            if let Some(layer_tex) = layer_tex {
+                let stroke_buffer = StrokeBuffer::new(
+                    &self.gpu.device,
+                    canvas_w,
+                    canvas_h,
+                    self.dab_pool.bind_group_layout(),
+                    self.brush_pipelines.canvas_copy_bind_group_layout(),
+                );
+                self.gpu.encode("stroke-buffer-init", |encoder| {
+                    stroke_buffer.save_pre_stroke(encoder, &layer_tex.texture);
+                    stroke_buffer.clear(encoder);
+                });
+                self.stroke_buffer = Some(stroke_buffer);
+            }
         }
 
         // Build PaintInformation from the raw tablet data.
@@ -211,7 +239,7 @@ impl DarklyEngine {
             ..Default::default()
         };
 
-        // Get the canvas texture and view for compositing.
+        // Get the canvas texture and view.
         let layer_tex = if mask_editing {
             match self.compositor.mask_texture(layer_id) {
                 Some(t) => t,
@@ -223,40 +251,122 @@ impl DarklyEngine {
                 None => return,
             }
         };
-        let canvas_view = layer_tex.view.clone();
-        let canvas_texture = &layer_tex.texture;
+        let layer_view = layer_tex.view.clone();
 
-        // Take the stroke engine out to avoid borrow conflicts.
+        // Take the stroke engine and buffer out to avoid borrow conflicts.
         let mut engine = self.brush_stroke_engine.take().unwrap();
+        let stroke_buffer = self.stroke_buffer.take();
 
         let sel_bg = if self.gpu_selection.active {
             self.gpu_selection.brush_bind_group()
         } else {
             &self.brush_pipelines.default_selection_bind_group
         };
-        {
-            let mut gpu_ctx = BrushGpuContext {
-                encoder: self.gpu.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
-                ),
-                device: &self.gpu.device,
-                queue: &self.gpu.queue,
-                dab_pool: &mut self.dab_pool,
-                pipelines: &self.brush_pipelines,
-                canvas_view: &canvas_view,
-                canvas_texture,
-                canvas_width: canvas_w,
-                canvas_height: canvas_h,
-                selection_bind_group: sel_bg,
-                resource_handles: &self.resource_handles,
-                blend_mode: self.brush_blend_mode,
-            };
 
-            engine.move_to(info, &mut gpu_ctx);
+        if let Some(ref stroke_buffer) = stroke_buffer {
+            // Stabilized path: dabs render to stroke buffer, then composite onto layer.
+            let result = engine.stabilize(info);
+
+            if result.divergence_index.is_some() {
+                // Divergence — rewind stroke buffer and re-render all dabs.
+                self.gpu.encode("stroke-rewind", |encoder| {
+                    // Rewind: clear stroke buffer back to pre-stroke state.
+                    if let Some(bbox) = engine.save_points.full_bbox() {
+                        stroke_buffer.restore_region(encoder, bbox);
+                    }
+                });
+
+                engine.reset_render_state();
+
+                // Re-render all stabilized dabs into the stroke buffer.
+                let mut gpu_ctx = BrushGpuContext {
+                    encoder: self.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("brush-rerender") },
+                    ),
+                    device: &self.gpu.device,
+                    queue: &self.gpu.queue,
+                    dab_pool: &mut self.dab_pool,
+                    pipelines: &self.brush_pipelines,
+                    canvas_view: stroke_buffer.stroke_view(),
+                    canvas_texture: stroke_buffer.stroke_texture(),
+                    canvas_width: canvas_w,
+                    canvas_height: canvas_h,
+                    selection_bind_group: sel_bg,
+                    resource_handles: &self.resource_handles,
+                    blend_mode: self.brush_blend_mode,
+                };
+                engine.render_from_stabilized(&mut gpu_ctx);
+            } else {
+                // No divergence — just render the new segment into stroke buffer.
+                // Re-run move_to logic for the latest stabilized point only.
+                // Since we already called stabilize(), the stabilizer has the new point.
+                // We need to render only the new dabs.
+                let mut gpu_ctx = BrushGpuContext {
+                    encoder: self.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
+                    ),
+                    device: &self.gpu.device,
+                    queue: &self.gpu.queue,
+                    dab_pool: &mut self.dab_pool,
+                    pipelines: &self.brush_pipelines,
+                    canvas_view: stroke_buffer.stroke_view(),
+                    canvas_texture: stroke_buffer.stroke_texture(),
+                    canvas_width: canvas_w,
+                    canvas_height: canvas_h,
+                    selection_bind_group: sel_bg,
+                    resource_handles: &self.resource_handles,
+                    blend_mode: self.brush_blend_mode,
+                };
+                // Render the latest segment by walking the stabilized polyline
+                // from the last rendered point.  Since no divergence occurred,
+                // we can continue from where we left off — the engine's internal
+                // state (last_point, leftover_distance) is still valid.
+                engine.render_from_stabilized_tail(&mut gpu_ctx);
+            }
+
+            // Composite stroke buffer onto the layer.
+            self.gpu.encode("stroke-composite", |encoder| {
+                stroke_buffer.composite_onto_layer(
+                    encoder,
+                    &self.brush_pipelines,
+                    &self.gpu.queue,
+                    &layer_view,
+                    sel_bg,
+                );
+            });
+        } else {
+            // Fallback: no stroke buffer — render directly to layer (shouldn't happen).
+            let layer_tex = if mask_editing {
+                self.compositor.mask_texture(layer_id)
+            } else {
+                self.compositor.layer_texture(layer_id)
+            };
+            if let Some(layer_tex) = layer_tex {
+                let canvas_view = layer_tex.view.clone();
+                let canvas_texture = &layer_tex.texture;
+                let mut gpu_ctx = BrushGpuContext {
+                    encoder: self.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
+                    ),
+                    device: &self.gpu.device,
+                    queue: &self.gpu.queue,
+                    dab_pool: &mut self.dab_pool,
+                    pipelines: &self.brush_pipelines,
+                    canvas_view: &canvas_view,
+                    canvas_texture,
+                    canvas_width: canvas_w,
+                    canvas_height: canvas_h,
+                    selection_bind_group: sel_bg,
+                    resource_handles: &self.resource_handles,
+                    blend_mode: self.brush_blend_mode,
+                };
+                engine.move_to(info, &mut gpu_ctx);
+            }
         }
 
-        // Put the engine back.
+        // Put the engine and buffer back.
         self.brush_stroke_engine = Some(engine);
+        self.stroke_buffer = stroke_buffer;
     }
 
     /// Start async GPU flood fill: readback layer texture, then complete on a
@@ -366,10 +476,11 @@ impl DarklyEngine {
                 return;
             }
 
-            // Finalize brush stroke engine if active.
+            // Finalize brush stroke engine and destroy stroke buffer.
             if let Some(engine) = self.brush_stroke_engine.take() {
                 let _record = engine.end();
             }
+            self.stroke_buffer = None;
 
             // Dispatch GPU diff to find the exact changed region for undo.
             if self.scratch_saved && self.pending_undo_commit.is_none() {

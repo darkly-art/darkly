@@ -29,6 +29,9 @@ impl DarklyEngine {
             .map_err(|e| format!("failed to serialize graph: {e}"))?;
         self.set_brush_graph(&json)?;
 
+        // Update stabilizer configuration from the preset.
+        self.active_stabilizer_config = bundle.preset.stabilizer.clone();
+
         Ok(self.active_brush_graph.needs_layout())
     }
 

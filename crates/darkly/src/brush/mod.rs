@@ -14,7 +14,11 @@ pub mod paint_info;
 pub mod pipelines;
 pub mod preset;
 pub mod preset_library;
+pub mod save_points;
 pub mod spacing;
+pub mod stabilizer;
+pub mod stabilizers;
+pub mod stroke_buffer;
 pub mod stroke_engine;
 pub mod wire;
 
