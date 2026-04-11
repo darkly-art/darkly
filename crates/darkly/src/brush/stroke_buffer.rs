@@ -246,6 +246,11 @@ impl StrokeBuffer {
                 })],
                 ..Default::default()
             });
+            pass.set_viewport(
+                0.0, 0.0,
+                self.width as f32, self.height as f32,
+                0.0, 1.0,
+            );
             pass.set_pipeline(pipelines.composite_pipeline());
             pass.set_bind_group(0, &pipelines.composite_uniform_bind_group, &[]);
             pass.set_bind_group(1, &self.stroke_bind_group, &[]);

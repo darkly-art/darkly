@@ -212,7 +212,7 @@
     }
 
     // Call onDeactivate/onActivate when the active tool changes.
-    let prevToolId = app.activeToolId;
+    let prevToolId = '';
     $effect(() => {
         const id = app.activeToolId;
         if (id !== prevToolId) {
@@ -220,9 +220,9 @@
             if (ctx) {
                 toolRegistry.get(prevToolId)?.onDeactivate?.(ctx);
                 toolRegistry.get(id)?.onActivate?.(ctx);
+                app.toolCursor = null;
+                prevToolId = id;
             }
-            app.toolCursor = null;
-            prevToolId = id;
         }
     });
 
