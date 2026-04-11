@@ -279,6 +279,12 @@ impl DarklyEngine {
                     let cp_render_state = cp.render_state.clone();
                     let cp_vector_index = cp.vector_index;
 
+                    // Clear the stroke buffer first — dabs placed after the
+                    // checkpoint that extend outside pixel_bbox would otherwise
+                    // survive as orphaned fragments (half-circle artifacts).
+                    self.gpu.encode("stroke-checkpoint-clear", |encoder| {
+                        stroke_buffer.clear(encoder);
+                    });
                     stroke_buffer.write_checkpoint(&self.gpu.queue, cp_pixel_bbox, &cp_pixels);
 
                     // Restore render state and truncate save points after checkpoint.
