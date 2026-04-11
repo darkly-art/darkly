@@ -39,6 +39,11 @@ pub trait StabilizerAlgorithm: Send {
         self.stabilized().len()
     }
 
+    /// Conservative upper bound on how far back from the tip divergence
+    /// can reach (in vector indices). Used to space checkpoints so the
+    /// oldest one is past the divergence boundary.
+    fn max_divergence_window(&self) -> usize { 0 }
+
     /// Reset for a new stroke.
     fn clear(&mut self);
 }

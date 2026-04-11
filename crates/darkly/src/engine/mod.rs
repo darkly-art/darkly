@@ -15,6 +15,7 @@ pub use types::{
     ClipboardExport, LayerInfo, ParamInfo, StrokeOp, VeilInfo, VeilTypeInfo,
 };
 
+use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
 use crate::brush::pipelines::BrushPipelines;
 use crate::brush::preset_library::PresetLibrary;
@@ -160,6 +161,9 @@ pub struct DarklyEngine {
     /// Stroke buffer for stabilizer-driven rewind + re-render.
     pub(crate) stroke_buffer: Option<StrokeBuffer>,
 
+    /// Ring buffer of GPU texture checkpoints for partial re-render on divergence.
+    pub(crate) checkpoint_ring: CheckpointRing,
+
     // --- Stabilizer ---
     pub(crate) stabilizer_registry: StabilizerRegistry,
     pub(crate) active_stabilizer_config: StabilizerConfig,
@@ -241,6 +245,7 @@ impl DarklyEngine {
             },
             resource_handles: std::collections::HashMap::new(),
             stroke_buffer: None,
+            checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),
             active_stabilizer_config: StabilizerConfig::default(),
             brush_blend_mode: 0,

@@ -4,6 +4,7 @@
 
 pub mod builtin_presets;
 pub mod brush_tip;
+pub mod checkpoint_ring;
 pub mod curve_math;
 pub mod dab_pool;
 pub mod eval;

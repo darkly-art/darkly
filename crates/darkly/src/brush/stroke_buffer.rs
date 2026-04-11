@@ -1,19 +1,17 @@
 //! Stroke buffer — separate texture for dab rendering during a stroke,
 //! enabling mid-stroke rewind and re-rendering for the stabilizer.
 //!
-//! Three textures:
+//! Two textures:
 //! - **stroke texture**: dabs render here instead of directly to the layer.
 //! - **pre-stroke texture**: snapshot of the layer before the stroke started,
 //!   used to restore both the stroke buffer and the layer on rewind.
-//! - **checkpoint texture**: snapshot of the stroke buffer at the last checkpoint,
-//!   used for O(1) restore on divergence via same-frame GPU→GPU copy.
 //!
 //! The composite step writes the final result to the layer each frame:
 //! source-over blend of the stroke buffer onto the pre-stroke snapshot.
 
 use super::pipelines::{BrushPipelines, CompositeUniforms};
 
-/// Manages the stroke-in-progress, pre-stroke, and checkpoint textures.
+/// Manages the stroke-in-progress and pre-stroke textures.
 pub struct StrokeBuffer {
     /// Dabs render into this texture (instead of directly to the layer).
     stroke_texture: wgpu::Texture,
@@ -23,11 +21,6 @@ pub struct StrokeBuffer {
     pre_stroke_texture: wgpu::Texture,
     #[allow(dead_code)] // Kept alive for bind group references.
     pre_stroke_view: wgpu::TextureView,
-
-    /// Snapshot of the stroke buffer at the last checkpoint.
-    /// Written by `save_checkpoint`, read by `restore_checkpoint`.
-    /// Never touched by dab rendering — only by explicit copy commands.
-    checkpoint_texture: wgpu::Texture,
 
     /// Bind group for the stroke texture, compatible with the dab texture BGL
     /// so the existing composite pipeline can read it.
@@ -82,17 +75,6 @@ impl StrokeBuffer {
         });
         let pre_stroke_view = pre_stroke_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let checkpoint_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("stroke-checkpoint"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("stroke-buffer-sampler"),
             mag_filter: wgpu::FilterMode::Nearest,
@@ -135,7 +117,6 @@ impl StrokeBuffer {
             stroke_view,
             pre_stroke_texture,
             pre_stroke_view,
-            checkpoint_texture,
             stroke_bind_group,
             pre_stroke_bind_group,
             width,
@@ -279,45 +260,4 @@ impl StrokeBuffer {
         }
     }
 
-    /// GPU-copy the stroke buffer into the checkpoint texture.
-    /// Same-frame, same encoder — no async delay.
-    pub fn save_checkpoint(&self, encoder: &mut wgpu::CommandEncoder) {
-        let size = wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 };
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.stroke_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.checkpoint_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            size,
-        );
-    }
-
-    /// GPU-copy the checkpoint texture back into the stroke buffer.
-    /// Restores the stroke buffer to the checkpoint state.
-    pub fn restore_checkpoint(&self, encoder: &mut wgpu::CommandEncoder) {
-        let size = wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 };
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.checkpoint_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.stroke_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            size,
-        );
-    }
 }

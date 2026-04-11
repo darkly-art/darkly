@@ -5,12 +5,9 @@
 //! This lets the stabilizer rewind to any dab index by looking up the
 //! region that needs to be restored — no GPU readback required.
 //!
-//! Save points also serve as **checkpoints** for partial re-render: each
-//! stores a `RenderCheckpoint` (the stroke engine's render state at that dab)
-//! and a flag indicating whether the checkpoint texture contains a snapshot
-//! taken at this save point. When divergence occurs, the engine can restore
-//! the stroke buffer from the checkpoint texture and re-render only from
-//! there to the tip.
+//! Save points also store a `RenderCheckpoint` (the stroke engine's render
+//! state at that dab) so the checkpoint ring can restore engine state and
+//! resume rendering from any save point.
 
 use super::stroke_engine::RenderCheckpoint;
 
@@ -22,8 +19,6 @@ pub struct DabSavePoint {
     pub cumulative_bbox: [u32; 4],
     /// Index into the stabilized polyline that this dab was placed on.
     pub vector_index: usize,
-    /// True if the checkpoint texture contains a snapshot taken at this save point.
-    pub has_checkpoint: bool,
     /// Checkpoint: render state at this dab.
     pub render_state: RenderCheckpoint,
 }
@@ -48,41 +43,8 @@ impl SavePointStore {
         self.points.push(DabSavePoint {
             cumulative_bbox: cumulative,
             vector_index,
-            has_checkpoint: false,
             render_state,
         });
-    }
-
-    /// Find the nearest checkpoint strictly before the given vector index
-    /// that has pixel data. Returns the save point index (not vector index).
-    ///
-    /// Strict less-than is critical: the divergence_index marks the first
-    /// vector index whose stabilized position changed.  A checkpoint AT that
-    /// index would contain dabs at the old (stale) positions.  Only
-    /// checkpoints BEFORE the divergence are guaranteed to have unchanged
-    /// pixel content.
-    pub fn checkpoint_before(&self, vector_index: usize) -> Option<usize> {
-        for (i, sp) in self.points.iter().enumerate().rev() {
-            if sp.vector_index < vector_index && sp.has_checkpoint {
-                return Some(i);
-            }
-        }
-        None
-    }
-
-    /// Mark the save point at `index` as having a checkpoint texture snapshot.
-    pub fn mark_checkpoint(&mut self, index: usize) {
-        if let Some(sp) = self.points.get_mut(index) {
-            sp.has_checkpoint = true;
-        }
-    }
-
-    /// Clear checkpoint flags on all save points after `index`.
-    /// Used after truncation, since those checkpoints are invalidated.
-    pub fn clear_checkpoints_after(&mut self, index: usize) {
-        for sp in self.points.iter_mut().skip(index + 1) {
-            sp.has_checkpoint = false;
-        }
     }
 
     /// Cumulative bounding box up to (and including) the given dab index.
@@ -126,8 +88,8 @@ impl SavePointStore {
     /// Update the render state on ALL save points that share the given
     /// vector index.  Called at the end of each vector index iteration so
     /// every save point for that segment represents "everything through
-    /// this vector index is fully processed" — regardless of which one an
-    /// async readback delivers pixels to.
+    /// this vector index is fully processed" — the checkpoint restore
+    /// starts from the next vector index.
     pub fn finalize_render_state(&mut self, vector_index: usize, render_state: RenderCheckpoint) {
         for sp in self.points.iter_mut().rev() {
             if sp.vector_index == vector_index {
@@ -224,50 +186,5 @@ mod tests {
         store.push([10, 10, 5, 5], 99, dummy_checkpoint());
         assert_eq!(store.get(0).unwrap().vector_index, 42);
         assert_eq!(store.get(1).unwrap().vector_index, 99);
-    }
-
-    #[test]
-    fn checkpoint_before_finds_marked() {
-        let mut store = SavePointStore::new();
-        for i in 0..5 {
-            store.push([i * 10, 0, 5, 5], i as usize, dummy_checkpoint());
-        }
-        // No checkpoints — should return None.
-        assert!(store.checkpoint_before(4).is_none());
-
-        // Mark save point 2 (vector_index=2) as having a checkpoint.
-        store.mark_checkpoint(2);
-        // Looking for checkpoint before vector_index 4 → should find index 2.
-        assert_eq!(store.checkpoint_before(4), Some(2));
-        // Looking for checkpoint before vector_index 2 → None (strict less-than).
-        assert!(store.checkpoint_before(2).is_none());
-        // Looking for checkpoint before vector_index 3 → index 2.
-        assert_eq!(store.checkpoint_before(3), Some(2));
-        // Looking for checkpoint before vector_index 1 → None.
-        assert!(store.checkpoint_before(1).is_none());
-    }
-
-    #[test]
-    fn mark_checkpoint_sets_flag() {
-        let mut store = SavePointStore::new();
-        store.push([0, 0, 5, 5], 0, dummy_checkpoint());
-        assert!(!store.get(0).unwrap().has_checkpoint);
-        store.mark_checkpoint(0);
-        assert!(store.get(0).unwrap().has_checkpoint);
-    }
-
-    #[test]
-    fn clear_checkpoints_after() {
-        let mut store = SavePointStore::new();
-        for i in 0..5 {
-            store.push([i * 10, 0, 5, 5], i as usize, dummy_checkpoint());
-            store.mark_checkpoint(i as usize);
-        }
-        store.clear_checkpoints_after(2);
-        assert!(store.get(0).unwrap().has_checkpoint);
-        assert!(store.get(1).unwrap().has_checkpoint);
-        assert!(store.get(2).unwrap().has_checkpoint);
-        assert!(!store.get(3).unwrap().has_checkpoint);
-        assert!(!store.get(4).unwrap().has_checkpoint);
     }
 }

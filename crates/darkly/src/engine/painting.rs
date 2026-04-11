@@ -2,6 +2,7 @@
 
 use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use super::types::StrokeOp;
+use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::paint_info::PaintInformation;
 use crate::brush::spacing::SpacingConfig;
@@ -266,26 +267,15 @@ impl DarklyEngine {
         if let Some(ref stroke_buffer) = stroke_buffer {
             // Stabilized path: dabs render to stroke buffer, then composite onto layer.
             let result = engine.stabilize(info);
+            let max_div = engine.max_divergence_window();
+            let tip_vi = engine.stabilizer_len().saturating_sub(1);
 
-            if let Some(div_idx) = result.divergence_index {
-                // Divergence — try checkpoint-based partial re-render.
-                if let Some(cp_idx) = engine.save_points.checkpoint_before(div_idx) {
-                    // Restore stroke buffer from checkpoint texture (same-frame GPU copy).
-                    self.gpu.encode("stroke-checkpoint-restore", |encoder| {
-                        stroke_buffer.restore_checkpoint(encoder);
-                    });
-
-                    // Restore render state and truncate save points after checkpoint.
-                    let cp = &engine.save_points.points()[cp_idx];
-                    let cp_render_state = cp.render_state.clone();
-                    let cp_vector_index = cp.vector_index;
-                    engine.save_points.truncate(cp_idx + 1);
-                    engine.restore_render_state(&cp_render_state);
-
-                    // Re-render only from after the checkpoint to tip.
-                    let mut gpu_ctx = BrushGpuContext {
+            // Helper macro: create a BrushGpuContext for rendering a segment.
+            macro_rules! make_gpu_ctx {
+                ($label:expr) => {
+                    BrushGpuContext {
                         encoder: self.gpu.device.create_command_encoder(
-                            &wgpu::CommandEncoderDescriptor { label: Some("brush-rerender-partial") },
+                            &wgpu::CommandEncoderDescriptor { label: Some($label) },
                         ),
                         device: &self.gpu.device,
                         queue: &self.gpu.queue,
@@ -298,63 +288,96 @@ impl DarklyEngine {
                         selection_bind_group: sel_bg,
                         resource_handles: &self.resource_handles,
                         blend_mode: self.brush_blend_mode,
-                    };
-                    engine.render_from_stabilized_range(&mut gpu_ctx, cp_vector_index + 1);
+                    }
+                };
+            }
+
+            if let Some(div_idx) = result.divergence_index {
+                // Divergence — try checkpoint-based partial re-render.
+                let restore = self.gpu.encode_ret("stroke-checkpoint-restore", |encoder| {
+                    self.checkpoint_ring.restore_before(
+                        encoder,
+                        stroke_buffer.stroke_texture(),
+                        stroke_buffer.stroke_view(),
+                        div_idx,
+                    )
+                });
+
+                let start_vi = if let Some(cp) = restore {
+                    // Restored from checkpoint — truncate and resume.
+                    engine.save_points.truncate(cp.save_point_index + 1);
+                    engine.restore_render_state(&cp.render_state);
+                    self.checkpoint_ring.invalidate_from(cp.vector_index + 1);
+                    cp.vector_index + 1
                 } else {
                     // No checkpoint before divergence — full re-render.
                     self.gpu.encode("stroke-rewind", |encoder| {
                         stroke_buffer.clear(encoder);
                     });
-
                     engine.reset_render_state();
+                    self.checkpoint_ring.clear();
+                    0
+                };
 
-                    let mut gpu_ctx = BrushGpuContext {
-                        encoder: self.gpu.device.create_command_encoder(
-                            &wgpu::CommandEncoderDescriptor { label: Some("brush-rerender") },
-                        ),
-                        device: &self.gpu.device,
-                        queue: &self.gpu.queue,
-                        dab_pool: &mut self.dab_pool,
-                        pipelines: &self.brush_pipelines,
-                        canvas_view: stroke_buffer.stroke_view(),
-                        canvas_texture: stroke_buffer.stroke_texture(),
-                        canvas_width: canvas_w,
-                        canvas_height: canvas_h,
-                        selection_bind_group: sel_bg,
-                        resource_handles: &self.resource_handles,
-                        blend_mode: self.brush_blend_mode,
-                    };
-                    engine.render_from_stabilized_range(&mut gpu_ctx, 0);
+                // Render in segments with checkpoints at boundaries.
+                let boundaries = CheckpointRing::compute_segment_boundaries(
+                    start_vi, tip_vi, max_div,
+                );
+
+                let mut seg_start = start_vi;
+                for &boundary in &boundaries {
+                    if boundary <= seg_start || boundary > tip_vi { continue; }
+
+                    // Render segment.
+                    let mut gpu_ctx = make_gpu_ctx!("brush-rerender-seg");
+                    engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, boundary);
+                    drop(gpu_ctx);
+
+                    // Save checkpoint at this boundary.
+                    if let Some(bbox) = engine.save_points.full_bbox() {
+                        let sp_idx = engine.save_points.len().saturating_sub(1);
+                        let render_state = engine.capture_render_state();
+                        self.gpu.encode("checkpoint-save", |encoder| {
+                            self.checkpoint_ring.save(
+                                &self.gpu.device, encoder,
+                                stroke_buffer.stroke_texture(),
+                                sp_idx, boundary, bbox, render_state,
+                            );
+                        });
+                    }
+
+                    seg_start = boundary + 1;
+                }
+
+                // Render any remaining dabs past the last boundary.
+                if seg_start <= tip_vi {
+                    let mut gpu_ctx = make_gpu_ctx!("brush-rerender-tail");
+                    engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, tip_vi);
                 }
             } else {
                 // No divergence — render tail only.
-                let mut gpu_ctx = BrushGpuContext {
-                    encoder: self.gpu.device.create_command_encoder(
-                        &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
-                    ),
-                    device: &self.gpu.device,
-                    queue: &self.gpu.queue,
-                    dab_pool: &mut self.dab_pool,
-                    pipelines: &self.brush_pipelines,
-                    canvas_view: stroke_buffer.stroke_view(),
-                    canvas_texture: stroke_buffer.stroke_texture(),
-                    canvas_width: canvas_w,
-                    canvas_height: canvas_h,
-                    selection_bind_group: sel_bg,
-                    resource_handles: &self.resource_handles,
-                    blend_mode: self.brush_blend_mode,
-                };
+                let mut gpu_ctx = make_gpu_ctx!("brush-dab");
                 engine.render_from_stabilized_tail(&mut gpu_ctx);
-            }
 
-            // After rendering, snapshot the stroke buffer into the checkpoint
-            // texture and mark the latest save point.
-            if !engine.save_points.is_empty() {
-                self.gpu.encode("stroke-checkpoint-save", |encoder| {
-                    stroke_buffer.save_checkpoint(encoder);
-                });
-                let last = engine.save_points.len() - 1;
-                engine.save_points.mark_checkpoint(last);
+                // Periodically save a checkpoint to keep the ring fresh.
+                let spacing = CheckpointRing::spacing(max_div);
+                let should_save = match self.checkpoint_ring.newest_vector_index() {
+                    Some(newest_vi) => tip_vi.saturating_sub(newest_vi) >= spacing,
+                    None => true,
+                };
+                if should_save && !engine.save_points.is_empty() {
+                    if let Some(bbox) = engine.save_points.full_bbox() {
+                        let sp_idx = engine.save_points.len() - 1;
+                        let render_state = engine.capture_render_state();
+                        self.gpu.encode("checkpoint-save", |encoder| {
+                            self.checkpoint_ring.save(
+                                &self.gpu.device, encoder,
+                                stroke_buffer.stroke_texture(),
+                                sp_idx, tip_vi, bbox, render_state,
+                            );
+                        });
+                    }
+                }
             }
 
             // Composite stroke buffer onto the layer.
@@ -509,11 +532,12 @@ impl DarklyEngine {
                 return;
             }
 
-            // Finalize brush stroke engine and destroy stroke buffer.
+            // Finalize brush stroke engine and destroy stroke buffer + checkpoints.
             if let Some(engine) = self.brush_stroke_engine.take() {
                 let _record = engine.end();
             }
             self.stroke_buffer = None;
+            self.checkpoint_ring.clear();
 
             // Dispatch GPU diff to find the exact changed region for undo.
             if self.scratch_saved && self.pending_undo_commit.is_none() {

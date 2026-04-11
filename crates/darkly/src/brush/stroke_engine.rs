@@ -121,6 +121,16 @@ impl StrokeEngine {
         self.stabilizer.push(raw)
     }
 
+    /// The stabilizer's conservative max divergence window (vector indices).
+    pub fn max_divergence_window(&self) -> usize {
+        self.stabilizer.max_divergence_window()
+    }
+
+    /// Number of points in the stabilized polyline.
+    pub fn stabilizer_len(&self) -> usize {
+        self.stabilizer.len()
+    }
+
     /// Capture the current render state as a checkpoint.
     pub fn capture_render_state(&self) -> RenderCheckpoint {
         RenderCheckpoint {
@@ -169,6 +179,21 @@ impl StrokeEngine {
     /// values (speed, distance, angle) between consecutive points, and
     /// placing dabs at spacing intervals.
     pub fn render_from_stabilized_range(&mut self, gpu: &mut BrushGpuContext, start_vector_index: usize) {
+        let end = self.stabilizer.len().saturating_sub(1);
+        self.render_from_stabilized_range_to(gpu, start_vector_index, end);
+    }
+
+    /// Render dabs along the stabilized polyline from `start_vector_index`
+    /// to `end_vector_index` (inclusive).
+    ///
+    /// Used for segmented rendering with checkpoints between segments.
+    /// The engine's render state is left ready to continue from end+1.
+    pub fn render_from_stabilized_range_to(
+        &mut self,
+        gpu: &mut BrushGpuContext,
+        start_vector_index: usize,
+        end_vector_index: usize,
+    ) {
         // Copy the stabilized polyline to avoid borrow conflict with &mut self.
         let stabilized: Vec<PaintInformation> = self.stabilizer.stabilized().to_vec();
         if stabilized.is_empty() {
@@ -176,6 +201,7 @@ impl StrokeEngine {
         }
 
         let start = start_vector_index.min(stabilized.len());
+        let end = end_vector_index.min(stabilized.len() - 1);
 
         // When resuming from a checkpoint, snap last_point.pos to the current
         // stabilized position.  Between checkpoint capture and now, intermediate
@@ -192,7 +218,7 @@ impl StrokeEngine {
         }
 
         // Walk the polyline, computing derived values and placing dabs.
-        for i in start..stabilized.len() {
+        for i in start..=end {
             let raw = stabilized[i];
             let mut info = raw;
 

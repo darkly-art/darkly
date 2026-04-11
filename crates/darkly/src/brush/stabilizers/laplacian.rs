@@ -163,6 +163,12 @@ impl StabilizerAlgorithm for LaplacianStabilizer {
         &self.stabilized
     }
 
+    fn max_divergence_window(&self) -> usize {
+        if self.strength == 0.0 { return 0; }
+        let iterations = (self.strength * 5.0).ceil() as usize;
+        iterations * 10 + 5
+    }
+
     fn clear(&mut self) {
         self.raw_points.clear();
         self.stabilized.clear();
