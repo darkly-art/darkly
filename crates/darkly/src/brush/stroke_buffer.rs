@@ -173,33 +173,6 @@ impl StrokeBuffer {
         );
     }
 
-    /// Restore the stroke buffer from the pre-stroke snapshot within a region.
-    /// This is the "rewind" operation — clears dabs from the stroke buffer.
-    pub fn restore_region(&self, encoder: &mut wgpu::CommandEncoder, bbox: [u32; 4]) {
-        let [x, y, w, h] = bbox;
-        if w == 0 || h == 0 { return; }
-        // Clamp to texture bounds.
-        let w = w.min(self.width.saturating_sub(x));
-        let h = h.min(self.height.saturating_sub(y));
-        if w == 0 || h == 0 { return; }
-
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.pre_stroke_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.stroke_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        );
-    }
-
     /// Composite the stroke buffer onto the layer texture.
     ///
     /// The composite is: source-over blend of stroke_buffer onto pre_stroke,

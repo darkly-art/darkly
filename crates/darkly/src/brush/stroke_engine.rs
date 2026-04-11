@@ -165,13 +165,6 @@ impl StrokeEngine {
         self.save_points.clear();
     }
 
-    /// Render dabs along the full stabilized polyline.
-    ///
-    /// Equivalent to `render_from_stabilized_range(gpu, 0)`.
-    pub fn render_from_stabilized(&mut self, gpu: &mut BrushGpuContext) {
-        self.render_from_stabilized_range(gpu, 0);
-    }
-
     /// Render dabs along the stabilized polyline starting from `start_vector_index`.
     ///
     /// Used for partial re-render after checkpoint restoration. Walks the

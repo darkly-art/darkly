@@ -47,12 +47,6 @@ impl SavePointStore {
         });
     }
 
-    /// Cumulative bounding box up to (and including) the given dab index.
-    /// Returns `None` if the index is out of range.
-    pub fn rewind_bbox(&self, dab_index: usize) -> Option<[u32; 4]> {
-        self.points.get(dab_index).map(|sp| sp.cumulative_bbox)
-    }
-
     /// Cumulative bounding box of all dabs (= last save point's bbox).
     pub fn full_bbox(&self) -> Option<[u32; 4]> {
         self.points.last().map(|sp| sp.cumulative_bbox)
@@ -73,11 +67,6 @@ impl SavePointStore {
 
     pub fn is_empty(&self) -> bool {
         self.points.is_empty()
-    }
-
-    /// Access individual save points (for divergence-based rewind).
-    pub fn get(&self, index: usize) -> Option<&DabSavePoint> {
-        self.points.get(index)
     }
 
     /// Access the underlying save point slice.
@@ -135,7 +124,6 @@ mod tests {
         store.push([10, 20, 30, 40], 0, dummy_checkpoint());
         assert_eq!(store.len(), 1);
         assert_eq!(store.full_bbox(), Some([10, 20, 30, 40]));
-        assert_eq!(store.rewind_bbox(0), Some([10, 20, 30, 40]));
     }
 
     #[test]
@@ -143,11 +131,6 @@ mod tests {
         let mut store = SavePointStore::new();
         store.push([10, 10, 5, 5], 0, dummy_checkpoint());
         store.push([20, 20, 5, 5], 1, dummy_checkpoint());
-
-        // First dab: just [10, 10, 5, 5].
-        assert_eq!(store.rewind_bbox(0), Some([10, 10, 5, 5]));
-        // Second dab: union = [10, 10, 15, 15].
-        assert_eq!(store.rewind_bbox(1), Some([10, 10, 15, 15]));
         assert_eq!(store.full_bbox(), Some([10, 10, 15, 15]));
     }
 
@@ -160,7 +143,6 @@ mod tests {
         assert_eq!(store.len(), 5);
         store.truncate(3);
         assert_eq!(store.len(), 3);
-        assert!(store.rewind_bbox(3).is_none());
     }
 
     #[test]
@@ -184,7 +166,8 @@ mod tests {
         let mut store = SavePointStore::new();
         store.push([0, 0, 5, 5], 42, dummy_checkpoint());
         store.push([10, 10, 5, 5], 99, dummy_checkpoint());
-        assert_eq!(store.get(0).unwrap().vector_index, 42);
-        assert_eq!(store.get(1).unwrap().vector_index, 99);
+        let pts = store.points();
+        assert_eq!(pts[0].vector_index, 42);
+        assert_eq!(pts[1].vector_index, 99);
     }
 }
