@@ -2,7 +2,7 @@
 
 Stabilization retroactively reshapes a stroke as the user draws. The tip is always pinned at the cursor (zero lag), but the path behind the pen continuously smooths — the "taffy" feel, like pulling a thread through honey.
 
-This creates a problem: every frame, the stabilizer changes positions of points behind the pen, so those dabs need to be re-rendered. Without optimization, every frame re-renders the *entire* stroke from scratch, which destroys framerate after a few hundred dabs.
+The key insight: instead of re-rendering the entire stroke every frame when earlier positions shift, a ring of GPU checkpoints tracks the stroke at segment boundaries. On each frame, the system restores the nearest checkpoint before the divergence point and re-renders only the changed tail — typically ~1/7th of the smoothing window. This keeps stabilization O(window_slice) per frame rather than O(total_stroke), so a long stroke at full strength costs the same as a short one.
 
 ## Architecture
 
@@ -106,8 +106,8 @@ Each tablet event follows one of three paths:
 
 ## Performance Characteristics
 
-| Metric | Without optimization | With checkpoint ring |
-|--------|---------------------|---------------------|
+| Metric | Naive approach | With checkpoint ring |
+|--------|---------------|---------------------|
 | Re-render cost per frame | O(total_stroke_dabs) | O(divergence_window / 8) |
 | VRAM per checkpoint | N/A | bbox_area * 4 bytes |
 | Total checkpoint VRAM | N/A | 8 * bbox_area * 4 bytes |

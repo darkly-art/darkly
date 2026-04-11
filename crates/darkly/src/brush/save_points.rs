@@ -111,6 +111,7 @@ mod tests {
     fn dummy_checkpoint() -> RenderCheckpoint {
         RenderCheckpoint {
             last_point: None,
+            prev_prev_point: None,
             accumulated_distance: 0.0,
             leftover_distance: 0.0,
             last_dab_size: [10.0, 10.0],
