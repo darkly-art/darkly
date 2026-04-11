@@ -269,7 +269,7 @@ impl DarklyEngine {
 
             if let Some(div_idx) = result.divergence_index {
                 // Divergence — try checkpoint-based partial re-render.
-                if let Some(cp_idx) = engine.save_points.checkpoint_at_or_before(div_idx) {
+                if let Some(cp_idx) = engine.save_points.checkpoint_before(div_idx) {
                     // Restore stroke buffer from checkpoint pixels.
                     // Use pixel_bbox (the clamped bbox from readback time) to
                     // ensure pixel data dimensions match the write region.
@@ -291,7 +291,9 @@ impl DarklyEngine {
                     engine.save_points.truncate(cp_idx + 1);
                     engine.restore_render_state(&cp_render_state);
 
-                    // Re-render only from checkpoint to tip.
+                    // Re-render only from after the checkpoint to tip.
+                    // The checkpoint's render state represents end-of-segment for
+                    // cp_vector_index, so we resume from the next vector index.
                     let mut gpu_ctx = BrushGpuContext {
                         encoder: self.gpu.device.create_command_encoder(
                             &wgpu::CommandEncoderDescriptor { label: Some("brush-rerender-partial") },
@@ -308,13 +310,14 @@ impl DarklyEngine {
                         resource_handles: &self.resource_handles,
                         blend_mode: self.brush_blend_mode,
                     };
-                    engine.render_from_stabilized_range(&mut gpu_ctx, cp_vector_index);
+                    engine.render_from_stabilized_range(&mut gpu_ctx, cp_vector_index + 1);
                 } else {
-                    // No checkpoint has pixels yet — fall back to pre-stroke + full re-render.
+                    // No checkpoint has pixels yet — fall back to full re-render.
+                    // Clear the entire stroke buffer (not just full_bbox) because
+                    // a previous checkpoint truncation may have shrunk full_bbox,
+                    // leaving old dabs outside it from pre-truncation renders.
                     self.gpu.encode("stroke-rewind", |encoder| {
-                        if let Some(bbox) = engine.save_points.full_bbox() {
-                            stroke_buffer.restore_region(encoder, bbox);
-                        }
+                        stroke_buffer.clear(encoder);
                     });
 
                     engine.reset_render_state();

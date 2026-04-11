@@ -59,26 +59,17 @@ impl SavePointStore {
         });
     }
 
-    /// Find the nearest checkpoint at or before the given vector index
+    /// Find the nearest checkpoint strictly before the given vector index
     /// that has pixel data. Returns the save point index (not vector index).
-    /// Walk backward until we find one with pixels. Returns None if no
-    /// checkpoint has pixels (fall back to pre-stroke + full re-render).
-    pub fn checkpoint_at_or_before(&self, vector_index: usize) -> Option<usize> {
-        // Find the last save point whose vector_index <= the given one.
-        // Then walk backward from there to find one with pixels.
-        let mut idx = None;
+    ///
+    /// Strict less-than is critical: the divergence_index marks the first
+    /// vector index whose stabilized position changed.  A checkpoint AT that
+    /// index would contain dabs at the old (stale) positions.  Only
+    /// checkpoints BEFORE the divergence are guaranteed to have unchanged
+    /// pixel content.
+    pub fn checkpoint_before(&self, vector_index: usize) -> Option<usize> {
         for (i, sp) in self.points.iter().enumerate().rev() {
-            if sp.vector_index <= vector_index {
-                if idx.is_none() {
-                    idx = Some(i);
-                }
-                if sp.pixels.is_some() {
-                    return Some(i);
-                }
-            }
-            // If we already passed the vector_index boundary, keep walking
-            // backward looking for pixels.
-            if idx.is_some() && sp.pixels.is_some() {
+            if sp.vector_index < vector_index && sp.pixels.is_some() {
                 return Some(i);
             }
         }
@@ -131,6 +122,21 @@ impl SavePointStore {
     /// Access the underlying save point slice.
     pub fn points(&self) -> &[DabSavePoint] {
         &self.points
+    }
+
+    /// Update the render state on ALL save points that share the given
+    /// vector index.  Called at the end of each vector index iteration so
+    /// every save point for that segment represents "everything through
+    /// this vector index is fully processed" — regardless of which one an
+    /// async readback delivers pixels to.
+    pub fn finalize_render_state(&mut self, vector_index: usize, render_state: RenderCheckpoint) {
+        for sp in self.points.iter_mut().rev() {
+            if sp.vector_index == vector_index {
+                sp.render_state = render_state.clone();
+            } else if sp.vector_index < vector_index {
+                break;
+            }
+        }
     }
 }
 
@@ -222,22 +228,24 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_at_or_before_finds_pixels() {
+    fn checkpoint_before_finds_pixels() {
         let mut store = SavePointStore::new();
         for i in 0..5 {
             store.push([i * 10, 0, 5, 5], i as usize, dummy_checkpoint());
         }
         // No pixels anywhere — should return None.
-        assert!(store.checkpoint_at_or_before(4).is_none());
+        assert!(store.checkpoint_before(4).is_none());
 
         // Set pixels on save point 2 (vector_index=2).
         store.set_pixels(2, [20, 0, 5, 5], vec![0u8; 16]);
-        // Looking for checkpoint at or before vector_index 4 → should find index 2.
-        assert_eq!(store.checkpoint_at_or_before(4), Some(2));
-        // Looking for checkpoint at or before vector_index 1 → None (index 2 is after).
-        assert!(store.checkpoint_at_or_before(1).is_none());
-        // Looking for checkpoint at or before vector_index 2 → exactly index 2.
-        assert_eq!(store.checkpoint_at_or_before(2), Some(2));
+        // Looking for checkpoint before vector_index 4 → should find index 2.
+        assert_eq!(store.checkpoint_before(4), Some(2));
+        // Looking for checkpoint before vector_index 2 → None (strict less-than).
+        assert!(store.checkpoint_before(2).is_none());
+        // Looking for checkpoint before vector_index 3 → index 2.
+        assert_eq!(store.checkpoint_before(3), Some(2));
+        // Looking for checkpoint before vector_index 1 → None.
+        assert!(store.checkpoint_before(1).is_none());
     }
 
     #[test]

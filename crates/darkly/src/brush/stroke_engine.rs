@@ -177,6 +177,20 @@ impl StrokeEngine {
 
         let start = start_vector_index.min(stabilized.len());
 
+        // When resuming from a checkpoint, snap last_point.pos to the current
+        // stabilized position.  Between checkpoint capture and now, intermediate
+        // frames may have shifted the polyline — the checkpoint's last_point
+        // reflects the old position.  Without this, the first segment bridges
+        // from the old position to the new next point, creating a tangent
+        // discontinuity ("broken chain" artifact at corners).
+        if start > 0 {
+            if let Some(ref mut lp) = self.last_point {
+                if let Some(current) = stabilized.get(start - 1) {
+                    lp.pos = current.pos;
+                }
+            }
+        }
+
         // Walk the polyline, computing derived values and placing dabs.
         for i in start..stabilized.len() {
             let raw = stabilized[i];
@@ -208,6 +222,8 @@ impl StrokeEngine {
             if self.last_point.is_none() {
                 self.place_dab(&info, gpu, i);
                 self.last_point = Some(info);
+                // Capture end-of-segment state on the last save point.
+                self.save_points.finalize_render_state(i, self.capture_render_state());
                 continue;
             }
 
@@ -231,6 +247,11 @@ impl StrokeEngine {
 
             self.leftover_distance = traveled - segment_dist;
             self.last_point = Some(info);
+
+            // Capture end-of-segment state on ALL save points for this vector
+            // index.  This represents "everything through vector index i is
+            // fully processed" — the checkpoint restore starts from i+1.
+            self.save_points.finalize_render_state(i, self.capture_render_state());
         }
     }
 
@@ -286,7 +307,16 @@ impl StrokeEngine {
         let y2 = (info.pos[1] + half).ceil() as u32;
         let w = x2.saturating_sub(x);
         let h = y2.saturating_sub(y);
-        self.save_points.push([x, y, w, h], vector_index, self.capture_render_state());
+        // Render state is captured at end-of-segment, not per-dab.
+        // Push a placeholder; the loop in render_from_stabilized_range
+        // overwrites the last save point's render_state after each segment.
+        self.save_points.push([x, y, w, h], vector_index, RenderCheckpoint {
+            last_point: None,
+            accumulated_distance: 0.0,
+            leftover_distance: 0.0,
+            last_dab_size: [0.0, 0.0],
+            dab_count: 0,
+        });
 
         self.dab_count += 1;
     }
@@ -330,6 +360,7 @@ impl StrokeEngine {
         if self.last_point.is_none() {
             self.place_dab(&info, gpu, len - 1);
             self.last_point = Some(info);
+            self.save_points.finalize_render_state(len - 1, self.capture_render_state());
             return;
         }
 
@@ -353,6 +384,7 @@ impl StrokeEngine {
 
         self.leftover_distance = traveled - segment_dist;
         self.last_point = Some(info);
+        self.save_points.finalize_render_state(len - 1, self.capture_render_state());
     }
 
     /// Finish the stroke, consuming the engine and returning the record.

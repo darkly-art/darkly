@@ -196,3 +196,105 @@ Deferred. Each checkpoint stores a cumulative bbox of pixels. For long strokes t
 - Partial re-render from checkpoint matches full re-render output
 - Fallback to pre-stroke + full re-render works when no checkpoint has pixels
 - Performance: long strokes maintain constant framerate
+
+## Implementation Attempt (2026-04-11) — Failed
+
+The plan above was implemented end-to-end. All existing tests passed at every step, but live testing with an actual pen revealed a cascade of visual artifacts that proved difficult to resolve. The optimization code is all active, but in practice the readback cancel (Bug 7 fix B) prevents checkpoints from ever accumulating pixels — divergence cancels every in-flight readback before it completes, so `checkpoint_before()` always returns `None` and the full-re-render fallback runs every frame. Below is a record of every bug encountered and every fix attempted.
+
+### Bug 1: `write_texture` size mismatch
+
+**Symptom:** WebGPU error: "Required size for texture data layout exceeds the linear data size." Artifacts inside the bbox.
+
+**Cause:** Async readback is kicked off on frame N for dab_index=len-1 with full_bbox(). By frame N+1, divergence truncates save points and re-renders. The old dab_index now points to a rebuilt save point with a different cumulative_bbox. The readback delivers pixels sized for the old bbox, but `write_checkpoint` uses the new (different-sized) cumulative_bbox.
+
+**Fix:** Added `pixel_bbox` field to `DabSavePoint`. The actual clamped readback bbox is stored alongside the pixels and carried through `ReadbackContext::StrokeCheckpoint`. `write_checkpoint` uses `pixel_bbox` (not `cumulative_bbox`) so pixel data dimensions always match.
+
+### Bug 2: Half-circle dab artifacts along stroke edges
+
+**Symptom:** Circular dabs cut in half by a bbox boundary along the edges of the stroke.
+
+**Cause:** When restoring from a checkpoint, `write_checkpoint` only overwrites the `pixel_bbox` region. Dabs placed after the checkpoint that extend outside `pixel_bbox` survive in the stroke buffer as orphaned fragments.
+
+**Fix:** Clear the entire stroke buffer to transparent before writing checkpoint pixels. Applied to both the checkpoint path and the fallback path.
+
+### Bug 3: Dabs diverging from the main stroke at corners
+
+**Symptom:** At corners where the stabilizer shifts positions most, visible forking — old dabs at old positions alongside new dabs at new positions.
+
+**Cause (part A — double rendering):** The checkpoint pixels already contain dabs for `cp_vector_index`. `render_from_stabilized_range(gpu, cp_vector_index)` re-renders from that same index, placing dabs on top of the checkpoint pixels. For changed positions (at/near divergence), both old (pixel) and new (re-rendered) dabs are visible.
+
+**Cause (part B — stale render state):** `capture_render_state()` was called inside `place_dab`, which runs mid-segment. At that point `last_point` is from the previous segment and `leftover_distance` hasn't been updated. Restoring this state and re-running the loop double-counts `accumulated_distance` and replays the segment incorrectly.
+
+**Fix:** Moved render state capture to end-of-segment boundaries (after `leftover_distance` and `last_point` updates). Added `finalize_render_state(vector_index, state)` to stamp the correct state on all save points sharing that vector index. Changed re-render to start from `cp_vector_index + 1`.
+
+### Bug 4: Huge gaps in the stroke at every curve
+
+**Symptom:** After the Bug 3 fix, large sections of the stroke were missing wherever the path curved.
+
+**Cause:** `finalize_render_state` only updated the LAST save point (via `update_last_render_state`). Multiple dabs share the same vector_index. An async readback could land on a mid-segment save point that still had placeholder render state. Restoring garbage state caused the engine to skip dabs.
+
+**Fix:** Changed `finalize_render_state` to walk backward and update ALL save points sharing the same vector_index, not just the last one.
+
+### Bug 5: Stale dabs around corners (didn't rewind far enough)
+
+**Symptom:** Slightly less severe than Bug 3, but still visible — stale dabs from old positions at corners.
+
+**Cause:** `checkpoint_at_or_before` used `<=` for the divergence index comparison. When `cp_vector_index == divergence_index`, the checkpoint pixels contain dabs at the old (stale) positions for that index. Re-rendering starts from `cp_vector_index + 1`, leaving the stale dabs visible.
+
+**Fix:** Renamed to `checkpoint_before` with strict `<` comparison. Checkpoints must be from strictly before the divergence point so their pixels only contain unchanged positions.
+
+### Bug 6: Orphaned dabs from pre-truncation renders (gaps at fast corners)
+
+**Symptom:** Gaps in the stroke at sharp corners when moving the pen quickly.
+
+**Cause:** The fallback (full re-render) path used `restore_region(full_bbox())` to clear the stroke buffer. But after a previous checkpoint truncation, `full_bbox()` was smaller than the full stroke extent. Old dabs outside the reduced bbox survived from pre-truncation renders.
+
+**Fix:** Changed the fallback path to use `stroke_buffer.clear(encoder)` (full-texture clear) instead of `restore_region(full_bbox())`, matching the checkpoint path's behavior.
+
+### Bug 7: Broken chain — tangent discontinuity at corners
+
+**Symptom:** The stroke looks like a broken chain link at corners — two ends that don't face each other.
+
+**Cause (part A — drifted last_point):** The checkpoint's `last_point.pos` reflects the stabilized position at `cp_vector_index` from the frame the checkpoint was captured. Between capture and use, intermediate frames may have shifted that position. The first re-rendered segment bridges from the old position to the current next point, creating a tangent discontinuity.
+
+**Cause (part B — stale readback pixels):** Async readbacks from previous frames can land on rebuilt save points (after full re-render). The render state is correct (from `finalize`), but the pixels show old positions, creating inconsistency between pixel content and re-rendered content.
+
+**Fix (part A):** Added position snap in `render_from_stabilized_range`: when starting from a non-zero index, update `last_point.pos` to the current `stabilized[start - 1]` position.
+
+**Fix (part B):** Cancel all pending `StrokeCheckpoint` readbacks on divergence. **This fix disabled the optimization entirely** — divergence happens nearly every frame, so every readback is canceled before it completes, no checkpoint ever accumulates pixels, and the fallback (full re-render) runs every frame.
+
+### Current State
+
+The checkpoint infrastructure is implemented and compiles, but the optimization is effectively disabled. The `last_point` snap (Bug 7 fix A) remains active. The readback cancel (Bug 7 fix B) ensures correctness but prevents checkpoints from ever having pixel data.
+
+### Root Cause Analysis
+
+The plan had a fundamental flaw: **it assumed checkpoint pixels could cleanly represent "all dabs up to index N."**
+
+The stroke buffer is a single alpha-blended texture. When you snapshot a rectangle, you get the composited result of every dab that touched that region — not a separable per-dab history. The plan says "restore the stroke buffer from checkpoint pixels and re-render only from there to tip." But the checkpoint pixels were read from the stroke buffer at a moment when it contained dabs *beyond* the checkpoint index (because the readback is async — by the time it completes, more dabs have been rendered). You can't un-composite those extra dabs from the pixel snapshot.
+
+This single flaw cascaded into every bug encountered:
+
+- **Bugs 1, 2, 3, 5** are all variants of "the checkpoint pixels contain content they shouldn't" — extra dabs beyond the checkpoint, dabs at stale positions, dabs that extend outside the bbox. Every fix tried to carve out the right subset of pixel data, but you can't — it's a flat rasterized snapshot.
+
+- **Bug 7** is the async timing problem. The readback is always 1+ frames behind. The stabilizer changes positions every frame. By the time pixels arrive, they're stale. Canceling stale readbacks is correct but kills the optimization.
+
+- **Bugs 4, 6** are collateral damage from fixes to the above — truncation and clearing logic that was needed to work around the pixel contamination problem.
+
+The plan's implicit assumption was that the readback would complete *before* any more dabs were rendered into the stroke buffer, so the pixel snapshot would contain exactly dabs 0..N. On native with synchronous readback, this might work. With async readback (mandatory for WebGPU), it's a race condition by design.
+
+The render state checkpointing work (Bug 3/4 fixes — end-of-segment capture, `finalize_render_state`, `last_point` snap) was actually correct and sound. The problem was never the render state. It was the pixels.
+
+### Lessons Learned
+
+1. **Pixel snapshots of alpha-blended content cannot be partially reused.** The stroke buffer accumulates dabs with alpha blending. A rectangular pixel snapshot captures the composited result of all dabs within the bbox — there is no way to separate "dabs before index N" from "dabs after index N" in a pixel snapshot. This makes it impossible to cleanly splice checkpoint pixels with re-rendered content without either double-blending or visible seams.
+
+2. **Async readback + retroactive mutation = stale data.** The stabilizer retroactively changes the polyline on nearly every frame. Readbacks are 1+ frames behind. By the time pixels arrive, save points may have been truncated and rebuilt. The dab_index in the readback context points to a different save point than the one the readback was initiated for. Every attempted fix for this (pixel_bbox, render state finalization, selective cancellation) addressed one symptom while leaving others.
+
+3. **The divergence window is too wide for per-frame checkpoints.** The stabilizer's divergence reach at corners can extend back many vector indices. `checkpoint_before(div_idx)` with strict `<` rarely finds a usable checkpoint because the most recent checkpoint (from the previous frame) typically has a vector_index at or after the divergence point.
+
+4. **The render state is deeply entangled with the traversal order.** `last_point`, `accumulated_distance`, `leftover_distance`, and `dab_count` form an incremental state machine that depends on processing points in exact order. Checkpointing and resuming from the middle introduces subtle inconsistencies (double-counted distance, stale derived values, mid-segment vs end-of-segment state) that are difficult to reason about and test.
+
+5. **Unit tests didn't catch any of these bugs.** All 224 tests passed at every step. The bugs were only visible during live pen input with the stabilizer active. The test suite lacks integration tests that exercise the stabilizer divergence + checkpoint restore + async readback pipeline end-to-end with position verification.
+
+6. **A correct pixel checkpoint requires a dedicated texture.** To snapshot "exactly dabs 0..N" you would need to render those dabs into a separate texture that is never touched by later dabs. The single shared stroke buffer cannot serve this purpose because it is continuously mutated by subsequent rendering.
