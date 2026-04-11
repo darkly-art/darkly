@@ -1,11 +1,13 @@
-// Dab texture compositing: positions a textured quad on the canvas and
-// composites the dab with Porter-Duff source-over in the shader.
+// Compositing: positions a textured quad on the canvas and composites the
+// foreground onto the background with Porter-Duff source-over in the shader.
 //
-// The canvas region under the dab is copied to a separate texture before
-// this pass runs.  The shader reads both the dab and canvas copy, computes
-// correct straight-alpha source-over, and outputs with REPLACE blend.
-// This avoids the premultiplied-stored-as-straight bug that hardware alpha
-// blending causes on straight-alpha layer textures.
+// Used in two contexts:
+//   1. Per-dab:        fg = dab texture (premultiplied), bg = canvas copy (straight)
+//   2. Stroke→layer:   fg = stroke buffer (straight),    bg = pre-stroke (straight)
+// The fg_premultiplied uniform tells the shader which convention fg uses.
+//
+// Outputs straight alpha with REPLACE blend — no hardware alpha blending.
+// See compositing-lessons-learned.md #4 (why REPLACE) and #6 (why the flag).
 
 struct CompositeUniforms {
     origin: vec2f,       // quad top-left in canvas pixels
@@ -14,7 +16,7 @@ struct CompositeUniforms {
     uv_min: vec2f,       // min UV in dab texture (nonzero when clipped at top/left)
     uv_max: vec2f,       // max UV in dab texture
     blend_mode: u32,     // 0 = source-over, 1 = erase (destination-out)
-    _pad: u32,
+    fg_premultiplied: u32, // 1 = dab is premultiplied, 0 = straight alpha
 }
 
 @group(0) @binding(0) var<uniform> u: CompositeUniforms;
@@ -57,14 +59,15 @@ struct VertexOutput {
 }
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    // Sample dab (premultiplied alpha — correct for bilinear filtering).
+    // Sample foreground (premultiplied or straight — see fg_premultiplied).
     let dab = textureSample(t_dab, s_dab, in.dab_uv);
 
     // Selection masking: modulate dab by selection coverage.
     let sel_uv = in.canvas_pos / u.canvas_size;
     let sel = textureSample(t_selection, s_selection, sel_uv).r;
     let fg_a = dab.a * sel;
-    let fg_rgb_pre = dab.rgb * sel;
+    // When fg_premultiplied == 0, the dab is straight alpha — premultiply now.
+    let fg_rgb_pre = select(dab.rgb * dab.a, dab.rgb, u.fg_premultiplied == 1u) * sel;
 
     // Background: read canvas copy (straight alpha).
     // The copy_texture_to_texture origin is floor(u.origin) — integer pixel coords.

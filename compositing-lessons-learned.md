@@ -137,3 +137,39 @@ pub fn submit_and_reset(&mut self) {
 ```
 
 **Takeaway**: `queue.write_buffer()` is not a command encoder operation — it's a queue-level staging write that flushes at the next `submit()`. If multiple render passes in one encoder depend on different uniform values written via `write_buffer`, only the last write is visible to all of them. When using REPLACE blend (or any pattern where correct per-pass uniform data is critical), submit after each logical unit of work. The per-submit overhead is negligible compared to the GPU work in each dab.
+
+## 6. Reusing a shader across alpha-convention boundaries
+
+**Problem**: Painting white on a transparent layer looked correct, but painting white on black produced hard, pixelated edges where soft gradients should have been. Every partially-transparent pixel at the brush edge rendered at full white intensity instead of blending proportionally with the background.
+
+**Root cause**: The brush composite shader (`composite.wgsl`) was written for per-dab compositing, where the foreground ("dab") input is premultiplied alpha (output of the stamp shader). When the stroke buffer system was added, `composite_onto_layer` reused the same shader — binding the stroke buffer as the "dab" and the pre-stroke snapshot as the "canvas copy". But the stroke buffer contains straight alpha (that's what `source_over()` returns). The shader treated un-attenuated straight-alpha RGB as if it were premultiplied:
+
+```wgsl
+let fg_rgb_pre = dab.rgb * sel;  // assumes dab.rgb is already premultiplied
+```
+
+For white at α=0.1 in straight alpha: RGB = (1.0, 1.0, 1.0). The shader used this directly as the premultiplied color contribution. Correct premultiplied would be (0.1, 0.1, 0.1). On a black background, `source_over` computed:
+
+```
+out_rgb = (1.0 + 0.9 * 0.0) / 1.0 = 1.0   (should be 0.1)
+```
+
+Every partially-transparent pixel became fully white — the soft gradient collapsed into a hard, aliased edge.
+
+**Why it was invisible on transparent backgrounds**: With bg = (0, 0, 0, 0):
+
+```
+out_a = 0.1,  out_rgb = 1.0 / 0.1 = 10.0 → clamped to 1.0
+```
+
+Result: (1.0, 1.0, 1.0, 0.1) — correct straight-alpha white at 10% opacity. The wrong RGB is masked by the correct alpha when displayed. The bug only manifests when the background has nonzero alpha, because then `out_a` is large enough that the inflated RGB isn't divided back down.
+
+**Why it wasn't caught by lesson #3**: Lesson #3 warns about cross-space blends in the formula. Here the formula was correct — for its original calling context. The bug appeared when the shader was reused at a new call site (`composite_onto_layer`) where the foreground input had a different alpha convention. The shader's implicit contract ("dab input is premultiplied") wasn't encoded anywhere machine-checkable, so the new caller silently violated it.
+
+**Fix**: Added a `fg_premultiplied` flag to `CompositeUniforms`. The per-dab path sets it to 1 (stamp output is premultiplied). The stroke→layer path sets it to 0 (stroke buffer is straight alpha). The shader conditionally premultiplies:
+
+```wgsl
+let fg_rgb_pre = select(dab.rgb * dab.a, dab.rgb, u.fg_premultiplied == 1u) * sel;
+```
+
+**Takeaway**: When reusing a shader or pipeline at a new call site, audit every input's alpha convention at that call site — not just the formula. A shader that is correct for premultiplied input is wrong for straight-alpha input even though the code is identical. The convention is part of the interface contract, not just an implementation detail. If a shader accepts textures that could be either convention depending on the caller, make the convention an explicit uniform rather than an implicit assumption.

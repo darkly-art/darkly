@@ -64,7 +64,7 @@ pub struct CompositeUniforms {
     pub uv_min: [f32; 2],     // min UV in dab texture (nonzero when clipped at top/left)
     pub uv_max: [f32; 2],     // max UV in dab texture
     pub blend_mode: u32,       // 0 = source-over, 1 = erase (destination-out)
-    pub _pad: u32,
+    pub fg_premultiplied: u32, // 1 = dab input is premultiplied, 0 = straight alpha
 }
 
 /// Pre-built render pipelines for the brush system.

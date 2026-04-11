@@ -199,7 +199,7 @@ impl StrokeBuffer {
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
             blend_mode: 0, // source-over
-            _pad: 0,
+            fg_premultiplied: 0, // stroke buffer is straight alpha
         });
 
         // Composite: render the stroke buffer onto the layer using the existing
