@@ -202,11 +202,6 @@ impl DarklyEngine {
                         }
                     }
                 }
-                ReadbackContext::StrokeCheckpoint { dab_index, bbox } => {
-                    if let Some(ref mut engine) = self.brush_stroke_engine {
-                        engine.save_points.set_pixels(dab_index, bbox, pixels);
-                    }
-                }
                 ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
                     let doc_w = self.doc.width;
                     let doc_h = self.doc.height;

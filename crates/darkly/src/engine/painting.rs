@@ -270,30 +270,19 @@ impl DarklyEngine {
             if let Some(div_idx) = result.divergence_index {
                 // Divergence — try checkpoint-based partial re-render.
                 if let Some(cp_idx) = engine.save_points.checkpoint_before(div_idx) {
-                    // Restore stroke buffer from checkpoint pixels.
-                    // Use pixel_bbox (the clamped bbox from readback time) to
-                    // ensure pixel data dimensions match the write region.
-                    let cp = &engine.save_points.points()[cp_idx];
-                    let cp_pixel_bbox = cp.pixel_bbox;
-                    let cp_pixels = cp.pixels.clone().unwrap();
-                    let cp_render_state = cp.render_state.clone();
-                    let cp_vector_index = cp.vector_index;
-
-                    // Clear the stroke buffer first — dabs placed after the
-                    // checkpoint that extend outside pixel_bbox would otherwise
-                    // survive as orphaned fragments (half-circle artifacts).
-                    self.gpu.encode("stroke-checkpoint-clear", |encoder| {
-                        stroke_buffer.clear(encoder);
+                    // Restore stroke buffer from checkpoint texture (same-frame GPU copy).
+                    self.gpu.encode("stroke-checkpoint-restore", |encoder| {
+                        stroke_buffer.restore_checkpoint(encoder);
                     });
-                    stroke_buffer.write_checkpoint(&self.gpu.queue, cp_pixel_bbox, &cp_pixels);
 
                     // Restore render state and truncate save points after checkpoint.
+                    let cp = &engine.save_points.points()[cp_idx];
+                    let cp_render_state = cp.render_state.clone();
+                    let cp_vector_index = cp.vector_index;
                     engine.save_points.truncate(cp_idx + 1);
                     engine.restore_render_state(&cp_render_state);
 
                     // Re-render only from after the checkpoint to tip.
-                    // The checkpoint's render state represents end-of-segment for
-                    // cp_vector_index, so we resume from the next vector index.
                     let mut gpu_ctx = BrushGpuContext {
                         encoder: self.gpu.device.create_command_encoder(
                             &wgpu::CommandEncoderDescriptor { label: Some("brush-rerender-partial") },
@@ -312,10 +301,7 @@ impl DarklyEngine {
                     };
                     engine.render_from_stabilized_range(&mut gpu_ctx, cp_vector_index + 1);
                 } else {
-                    // No checkpoint has pixels yet — fall back to full re-render.
-                    // Clear the entire stroke buffer (not just full_bbox) because
-                    // a previous checkpoint truncation may have shrunk full_bbox,
-                    // leaving old dabs outside it from pre-truncation renders.
+                    // No checkpoint before divergence — full re-render.
                     self.gpu.encode("stroke-rewind", |encoder| {
                         stroke_buffer.clear(encoder);
                     });
@@ -361,23 +347,14 @@ impl DarklyEngine {
                 engine.render_from_stabilized_tail(&mut gpu_ctx);
             }
 
-            // After rendering, request async checkpoint readback for the latest save point.
-            // Pixel data arrives next frame via ReadbackContext::StrokeCheckpoint.
+            // After rendering, snapshot the stroke buffer into the checkpoint
+            // texture and mark the latest save point.
             if !engine.save_points.is_empty() {
-                let dab_index = engine.save_points.len() - 1;
-                if let Some(bbox) = engine.save_points.full_bbox() {
-                    let mut encoder = self.gpu.device.create_command_encoder(
-                        &wgpu::CommandEncoderDescriptor { label: Some("checkpoint-readback") },
-                    );
-                    let (request, clamped_bbox) = stroke_buffer.request_checkpoint_readback(
-                        &self.gpu.device, &mut encoder, bbox,
-                    );
-                    self.gpu.queue.submit([encoder.finish()]);
-                    self.readbacks.submit(request, ReadbackContext::StrokeCheckpoint {
-                        dab_index,
-                        bbox: clamped_bbox,
-                    });
-                }
+                self.gpu.encode("stroke-checkpoint-save", |encoder| {
+                    stroke_buffer.save_checkpoint(encoder);
+                });
+                let last = engine.save_points.len() - 1;
+                engine.save_points.mark_checkpoint(last);
             }
 
             // Composite stroke buffer onto the layer.
