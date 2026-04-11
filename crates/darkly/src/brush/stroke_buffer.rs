@@ -10,6 +10,7 @@
 //! source-over blend of the stroke buffer onto the pre-stroke snapshot.
 
 use super::pipelines::{BrushPipelines, CompositeUniforms};
+use crate::gpu::readback::{self, ReadbackRequest};
 
 /// Manages the stroke-in-progress and pre-stroke textures.
 pub struct StrokeBuffer {
@@ -258,5 +259,61 @@ impl StrokeBuffer {
             pass.set_bind_group(3, &self.pre_stroke_bind_group, &[]);
             pass.draw(0..6, 0..1);
         }
+    }
+
+    /// Request async readback of stroke buffer pixels within bbox.
+    ///
+    /// Returns a `ReadbackRequest` to submit to the scheduler.
+    /// The caller stores the resulting pixels in the save point when the
+    /// readback completes.
+    /// Returns `(request, clamped_bbox)` — the clamped bbox must be stored
+    /// alongside the pixel data so `write_checkpoint` uses matching dimensions.
+    pub fn request_checkpoint_readback(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        bbox: [u32; 4],
+    ) -> (ReadbackRequest, [u32; 4]) {
+        let [x, y, w, h] = bbox;
+        let w = w.min(self.width.saturating_sub(x));
+        let h = h.min(self.height.saturating_sub(y));
+        let clamped = [x, y, w, h];
+        let request = readback::request_readback(
+            device, encoder, &self.stroke_texture,
+            wgpu::TextureFormat::Rgba8Unorm, clamped,
+        );
+        (request, clamped)
+    }
+
+    /// Upload checkpoint pixels back into the stroke buffer at bbox.
+    ///
+    /// Used to restore the stroke buffer to a checkpoint state.
+    pub fn write_checkpoint(
+        &self,
+        queue: &wgpu::Queue,
+        bbox: [u32; 4],
+        pixels: &[u8],
+    ) {
+        let [x, y, w, h] = bbox;
+        if w == 0 || h == 0 { return; }
+        let w = w.min(self.width.saturating_sub(x));
+        let h = h.min(self.height.saturating_sub(y));
+        if w == 0 || h == 0 { return; }
+
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.stroke_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4), // RGBA8 = 4 bytes per pixel
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
     }
 }

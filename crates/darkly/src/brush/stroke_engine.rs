@@ -20,6 +20,19 @@ use super::stabilizer::{StabilizerAlgorithm, StabilizeResult};
 /// Reference maximum speed in px/sec for normalizing speed to 0-1.
 const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
 
+/// Snapshot of the stroke engine's render state at a specific dab.
+///
+/// Used by the checkpoint system to restore the engine to a known state
+/// and re-render only from that point forward, instead of from scratch.
+#[derive(Clone)]
+pub struct RenderCheckpoint {
+    pub last_point: Option<PaintInformation>,
+    pub accumulated_distance: f32,
+    pub leftover_distance: f32,
+    pub last_dab_size: [f32; 2],
+    pub dab_count: u32,
+}
+
 /// Reference fade distance in pixels.  The fade sensor goes from 0 to 1
 /// over this distance, then clamps at 1.  Configurable per-brush later.
 const FADE_DISTANCE_PX: f32 = 1000.0;
@@ -108,6 +121,26 @@ impl StrokeEngine {
         self.stabilizer.push(raw)
     }
 
+    /// Capture the current render state as a checkpoint.
+    pub fn capture_render_state(&self) -> RenderCheckpoint {
+        RenderCheckpoint {
+            last_point: self.last_point,
+            accumulated_distance: self.accumulated_distance,
+            leftover_distance: self.leftover_distance,
+            last_dab_size: self.last_dab_size,
+            dab_count: self.dab_count,
+        }
+    }
+
+    /// Restore render state from a checkpoint.
+    pub fn restore_render_state(&mut self, checkpoint: &RenderCheckpoint) {
+        self.last_point = checkpoint.last_point;
+        self.accumulated_distance = checkpoint.accumulated_distance;
+        self.leftover_distance = checkpoint.leftover_distance;
+        self.last_dab_size = checkpoint.last_dab_size;
+        self.dab_count = checkpoint.dab_count;
+    }
+
     /// Reset rendering state for a full re-render from scratch.
     ///
     /// Call this before `render_from_stabilized()` when the stabilizer
@@ -124,22 +157,28 @@ impl StrokeEngine {
 
     /// Render dabs along the full stabilized polyline.
     ///
-    /// Walks the stabilized polyline from start to tip, computing derived
+    /// Equivalent to `render_from_stabilized_range(gpu, 0)`.
+    pub fn render_from_stabilized(&mut self, gpu: &mut BrushGpuContext) {
+        self.render_from_stabilized_range(gpu, 0);
+    }
+
+    /// Render dabs along the stabilized polyline starting from `start_vector_index`.
+    ///
+    /// Used for partial re-render after checkpoint restoration. Walks the
+    /// stabilized polyline from `start_vector_index` to tip, computing derived
     /// values (speed, distance, angle) between consecutive points, and
     /// placing dabs at spacing intervals.
-    ///
-    /// For v1, this re-renders ALL dabs from scratch on every input event.
-    /// The stabilizer guarantees the polyline is the same length as the
-    /// raw input — indices are stable.
-    pub fn render_from_stabilized(&mut self, gpu: &mut BrushGpuContext) {
+    pub fn render_from_stabilized_range(&mut self, gpu: &mut BrushGpuContext, start_vector_index: usize) {
         // Copy the stabilized polyline to avoid borrow conflict with &mut self.
         let stabilized: Vec<PaintInformation> = self.stabilizer.stabilized().to_vec();
         if stabilized.is_empty() {
             return;
         }
 
+        let start = start_vector_index.min(stabilized.len());
+
         // Walk the polyline, computing derived values and placing dabs.
-        for i in 0..stabilized.len() {
+        for i in start..stabilized.len() {
             let raw = stabilized[i];
             let mut info = raw;
 
@@ -247,7 +286,7 @@ impl StrokeEngine {
         let y2 = (info.pos[1] + half).ceil() as u32;
         let w = x2.saturating_sub(x);
         let h = y2.saturating_sub(y);
-        self.save_points.push([x, y, w, h], vector_index);
+        self.save_points.push([x, y, w, h], vector_index, self.capture_render_state());
 
         self.dab_count += 1;
     }

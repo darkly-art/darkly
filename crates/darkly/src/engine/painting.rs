@@ -267,40 +267,72 @@ impl DarklyEngine {
             // Stabilized path: dabs render to stroke buffer, then composite onto layer.
             let result = engine.stabilize(info);
 
-            if result.divergence_index.is_some() {
-                // Divergence — rewind stroke buffer and re-render all dabs.
-                self.gpu.encode("stroke-rewind", |encoder| {
-                    // Rewind: clear stroke buffer back to pre-stroke state.
-                    if let Some(bbox) = engine.save_points.full_bbox() {
-                        stroke_buffer.restore_region(encoder, bbox);
-                    }
-                });
+            if let Some(div_idx) = result.divergence_index {
+                // Divergence — try checkpoint-based partial re-render.
+                if let Some(cp_idx) = engine.save_points.checkpoint_at_or_before(div_idx) {
+                    // Restore stroke buffer from checkpoint pixels.
+                    // Use pixel_bbox (the clamped bbox from readback time) to
+                    // ensure pixel data dimensions match the write region.
+                    let cp = &engine.save_points.points()[cp_idx];
+                    let cp_pixel_bbox = cp.pixel_bbox;
+                    let cp_pixels = cp.pixels.clone().unwrap();
+                    let cp_render_state = cp.render_state.clone();
+                    let cp_vector_index = cp.vector_index;
 
-                engine.reset_render_state();
+                    stroke_buffer.write_checkpoint(&self.gpu.queue, cp_pixel_bbox, &cp_pixels);
 
-                // Re-render all stabilized dabs into the stroke buffer.
-                let mut gpu_ctx = BrushGpuContext {
-                    encoder: self.gpu.device.create_command_encoder(
-                        &wgpu::CommandEncoderDescriptor { label: Some("brush-rerender") },
-                    ),
-                    device: &self.gpu.device,
-                    queue: &self.gpu.queue,
-                    dab_pool: &mut self.dab_pool,
-                    pipelines: &self.brush_pipelines,
-                    canvas_view: stroke_buffer.stroke_view(),
-                    canvas_texture: stroke_buffer.stroke_texture(),
-                    canvas_width: canvas_w,
-                    canvas_height: canvas_h,
-                    selection_bind_group: sel_bg,
-                    resource_handles: &self.resource_handles,
-                    blend_mode: self.brush_blend_mode,
-                };
-                engine.render_from_stabilized(&mut gpu_ctx);
+                    // Restore render state and truncate save points after checkpoint.
+                    engine.save_points.truncate(cp_idx + 1);
+                    engine.restore_render_state(&cp_render_state);
+
+                    // Re-render only from checkpoint to tip.
+                    let mut gpu_ctx = BrushGpuContext {
+                        encoder: self.gpu.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor { label: Some("brush-rerender-partial") },
+                        ),
+                        device: &self.gpu.device,
+                        queue: &self.gpu.queue,
+                        dab_pool: &mut self.dab_pool,
+                        pipelines: &self.brush_pipelines,
+                        canvas_view: stroke_buffer.stroke_view(),
+                        canvas_texture: stroke_buffer.stroke_texture(),
+                        canvas_width: canvas_w,
+                        canvas_height: canvas_h,
+                        selection_bind_group: sel_bg,
+                        resource_handles: &self.resource_handles,
+                        blend_mode: self.brush_blend_mode,
+                    };
+                    engine.render_from_stabilized_range(&mut gpu_ctx, cp_vector_index);
+                } else {
+                    // No checkpoint has pixels yet — fall back to pre-stroke + full re-render.
+                    self.gpu.encode("stroke-rewind", |encoder| {
+                        if let Some(bbox) = engine.save_points.full_bbox() {
+                            stroke_buffer.restore_region(encoder, bbox);
+                        }
+                    });
+
+                    engine.reset_render_state();
+
+                    let mut gpu_ctx = BrushGpuContext {
+                        encoder: self.gpu.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor { label: Some("brush-rerender") },
+                        ),
+                        device: &self.gpu.device,
+                        queue: &self.gpu.queue,
+                        dab_pool: &mut self.dab_pool,
+                        pipelines: &self.brush_pipelines,
+                        canvas_view: stroke_buffer.stroke_view(),
+                        canvas_texture: stroke_buffer.stroke_texture(),
+                        canvas_width: canvas_w,
+                        canvas_height: canvas_h,
+                        selection_bind_group: sel_bg,
+                        resource_handles: &self.resource_handles,
+                        blend_mode: self.brush_blend_mode,
+                    };
+                    engine.render_from_stabilized_range(&mut gpu_ctx, 0);
+                }
             } else {
-                // No divergence — just render the new segment into stroke buffer.
-                // Re-run move_to logic for the latest stabilized point only.
-                // Since we already called stabilize(), the stabilizer has the new point.
-                // We need to render only the new dabs.
+                // No divergence — render tail only.
                 let mut gpu_ctx = BrushGpuContext {
                     encoder: self.gpu.device.create_command_encoder(
                         &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
@@ -317,11 +349,26 @@ impl DarklyEngine {
                     resource_handles: &self.resource_handles,
                     blend_mode: self.brush_blend_mode,
                 };
-                // Render the latest segment by walking the stabilized polyline
-                // from the last rendered point.  Since no divergence occurred,
-                // we can continue from where we left off — the engine's internal
-                // state (last_point, leftover_distance) is still valid.
                 engine.render_from_stabilized_tail(&mut gpu_ctx);
+            }
+
+            // After rendering, request async checkpoint readback for the latest save point.
+            // Pixel data arrives next frame via ReadbackContext::StrokeCheckpoint.
+            if !engine.save_points.is_empty() {
+                let dab_index = engine.save_points.len() - 1;
+                if let Some(bbox) = engine.save_points.full_bbox() {
+                    let mut encoder = self.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("checkpoint-readback") },
+                    );
+                    let (request, clamped_bbox) = stroke_buffer.request_checkpoint_readback(
+                        &self.gpu.device, &mut encoder, bbox,
+                    );
+                    self.gpu.queue.submit([encoder.finish()]);
+                    self.readbacks.submit(request, ReadbackContext::StrokeCheckpoint {
+                        dab_index,
+                        bbox: clamped_bbox,
+                    });
+                }
             }
 
             // Composite stroke buffer onto the layer.

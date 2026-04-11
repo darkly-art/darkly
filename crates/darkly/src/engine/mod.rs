@@ -91,6 +91,13 @@ pub(crate) enum ReadbackContext {
     },
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,
+    /// Async readback of stroke buffer pixels for a checkpoint.
+    StrokeCheckpoint {
+        /// Which dab index this checkpoint belongs to.
+        dab_index: usize,
+        /// The actual (clamped) bbox that was read back.
+        bbox: [u32; 4],
+    },
     Thumbnail {
         layer_id: u64,
         is_mask: bool,
@@ -292,6 +299,11 @@ impl DarklyEngine {
                 }
                 ReadbackContext::SelectionReadback => {
                     self.update_selection_overlay_from_readback(pixels);
+                }
+                ReadbackContext::StrokeCheckpoint { dab_index, bbox } => {
+                    if let Some(ref mut engine) = self.brush_stroke_engine {
+                        engine.save_points.set_pixels(dab_index, bbox, pixels);
+                    }
                 }
                 _ => {}
             }

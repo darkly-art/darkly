@@ -4,15 +4,33 @@
 //! up to that point and the polyline vector index the dab was placed on.
 //! This lets the stabilizer rewind to any dab index by looking up the
 //! region that needs to be restored — no GPU readback required.
+//!
+//! Save points also serve as **checkpoints** for partial re-render: each
+//! stores a `RenderCheckpoint` (the stroke engine's render state at that dab)
+//! and optionally the stroke buffer pixel data within the cumulative bbox.
+//! When divergence occurs, the engine can restore from the nearest checkpoint
+//! that has pixel data and re-render only from there to the tip.
+
+use super::stroke_engine::RenderCheckpoint;
 
 /// A single save point recorded when a dab is placed.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub struct DabSavePoint {
     /// Union of all dab bounding boxes from dab 0..=this one.
     /// `[x, y, width, height]` in canvas pixels.
     pub cumulative_bbox: [u32; 4],
     /// Index into the stabilized polyline that this dab was placed on.
     pub vector_index: usize,
+    /// Checkpoint: stroke buffer pixels at this dab.
+    /// None until async GPU readback completes (arrives next frame).
+    /// The pixel data covers `pixel_bbox`, which may differ from
+    /// `cumulative_bbox` due to clamping or bbox changes after truncation.
+    pub pixels: Option<Vec<u8>>,
+    /// The actual bbox the pixel data covers (clamped to texture bounds
+    /// at readback time). Used by `write_checkpoint` to restore correctly.
+    pub pixel_bbox: [u32; 4],
+    /// Checkpoint: render state at this dab.
+    pub render_state: RenderCheckpoint,
 }
 
 /// Accumulator of per-dab save points for the current stroke.
@@ -26,13 +44,55 @@ impl SavePointStore {
     }
 
     /// Record a new dab.  `dab_bbox` is `[x, y, w, h]` in canvas pixels.
-    pub fn push(&mut self, dab_bbox: [u32; 4], vector_index: usize) {
+    pub fn push(&mut self, dab_bbox: [u32; 4], vector_index: usize, render_state: RenderCheckpoint) {
         let cumulative = if let Some(prev) = self.points.last() {
             union_bbox(prev.cumulative_bbox, dab_bbox)
         } else {
             dab_bbox
         };
-        self.points.push(DabSavePoint { cumulative_bbox: cumulative, vector_index });
+        self.points.push(DabSavePoint {
+            cumulative_bbox: cumulative,
+            vector_index,
+            pixels: None,
+            pixel_bbox: [0, 0, 0, 0],
+            render_state,
+        });
+    }
+
+    /// Find the nearest checkpoint at or before the given vector index
+    /// that has pixel data. Returns the save point index (not vector index).
+    /// Walk backward until we find one with pixels. Returns None if no
+    /// checkpoint has pixels (fall back to pre-stroke + full re-render).
+    pub fn checkpoint_at_or_before(&self, vector_index: usize) -> Option<usize> {
+        // Find the last save point whose vector_index <= the given one.
+        // Then walk backward from there to find one with pixels.
+        let mut idx = None;
+        for (i, sp) in self.points.iter().enumerate().rev() {
+            if sp.vector_index <= vector_index {
+                if idx.is_none() {
+                    idx = Some(i);
+                }
+                if sp.pixels.is_some() {
+                    return Some(i);
+                }
+            }
+            // If we already passed the vector_index boundary, keep walking
+            // backward looking for pixels.
+            if idx.is_some() && sp.pixels.is_some() {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Store pixel data for the save point at the given index.
+    /// `bbox` is the actual region the pixels cover (clamped at readback time).
+    /// Called when async GPU readback completes.
+    pub fn set_pixels(&mut self, dab_index: usize, bbox: [u32; 4], pixels: Vec<u8>) {
+        if let Some(sp) = self.points.get_mut(dab_index) {
+            sp.pixels = Some(pixels);
+            sp.pixel_bbox = bbox;
+        }
     }
 
     /// Cumulative bounding box up to (and including) the given dab index.
@@ -67,6 +127,11 @@ impl SavePointStore {
     pub fn get(&self, index: usize) -> Option<&DabSavePoint> {
         self.points.get(index)
     }
+
+    /// Access the underlying save point slice.
+    pub fn points(&self) -> &[DabSavePoint] {
+        &self.points
+    }
 }
 
 /// Compute the union of two `[x, y, w, h]` bounding boxes.
@@ -87,10 +152,20 @@ fn union_bbox(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
 mod tests {
     use super::*;
 
+    fn dummy_checkpoint() -> RenderCheckpoint {
+        RenderCheckpoint {
+            last_point: None,
+            accumulated_distance: 0.0,
+            leftover_distance: 0.0,
+            last_dab_size: [10.0, 10.0],
+            dab_count: 0,
+        }
+    }
+
     #[test]
     fn single_dab() {
         let mut store = SavePointStore::new();
-        store.push([10, 20, 30, 40], 0);
+        store.push([10, 20, 30, 40], 0, dummy_checkpoint());
         assert_eq!(store.len(), 1);
         assert_eq!(store.full_bbox(), Some([10, 20, 30, 40]));
         assert_eq!(store.rewind_bbox(0), Some([10, 20, 30, 40]));
@@ -99,8 +174,8 @@ mod tests {
     #[test]
     fn cumulative_bbox_grows() {
         let mut store = SavePointStore::new();
-        store.push([10, 10, 5, 5], 0);
-        store.push([20, 20, 5, 5], 1);
+        store.push([10, 10, 5, 5], 0, dummy_checkpoint());
+        store.push([20, 20, 5, 5], 1, dummy_checkpoint());
 
         // First dab: just [10, 10, 5, 5].
         assert_eq!(store.rewind_bbox(0), Some([10, 10, 5, 5]));
@@ -113,7 +188,7 @@ mod tests {
     fn truncate_removes_tail() {
         let mut store = SavePointStore::new();
         for i in 0..5 {
-            store.push([i * 10, 0, 5, 5], i as usize);
+            store.push([i * 10, 0, 5, 5], i as usize, dummy_checkpoint());
         }
         assert_eq!(store.len(), 5);
         store.truncate(3);
@@ -124,7 +199,7 @@ mod tests {
     #[test]
     fn clear_empties() {
         let mut store = SavePointStore::new();
-        store.push([0, 0, 10, 10], 0);
+        store.push([0, 0, 10, 10], 0, dummy_checkpoint());
         store.clear();
         assert!(store.is_empty());
         assert!(store.full_bbox().is_none());
@@ -140,9 +215,38 @@ mod tests {
     #[test]
     fn vector_index_preserved() {
         let mut store = SavePointStore::new();
-        store.push([0, 0, 5, 5], 42);
-        store.push([10, 10, 5, 5], 99);
+        store.push([0, 0, 5, 5], 42, dummy_checkpoint());
+        store.push([10, 10, 5, 5], 99, dummy_checkpoint());
         assert_eq!(store.get(0).unwrap().vector_index, 42);
         assert_eq!(store.get(1).unwrap().vector_index, 99);
+    }
+
+    #[test]
+    fn checkpoint_at_or_before_finds_pixels() {
+        let mut store = SavePointStore::new();
+        for i in 0..5 {
+            store.push([i * 10, 0, 5, 5], i as usize, dummy_checkpoint());
+        }
+        // No pixels anywhere — should return None.
+        assert!(store.checkpoint_at_or_before(4).is_none());
+
+        // Set pixels on save point 2 (vector_index=2).
+        store.set_pixels(2, [20, 0, 5, 5], vec![0u8; 16]);
+        // Looking for checkpoint at or before vector_index 4 → should find index 2.
+        assert_eq!(store.checkpoint_at_or_before(4), Some(2));
+        // Looking for checkpoint at or before vector_index 1 → None (index 2 is after).
+        assert!(store.checkpoint_at_or_before(1).is_none());
+        // Looking for checkpoint at or before vector_index 2 → exactly index 2.
+        assert_eq!(store.checkpoint_at_or_before(2), Some(2));
+    }
+
+    #[test]
+    fn set_pixels_stores_data() {
+        let mut store = SavePointStore::new();
+        store.push([0, 0, 5, 5], 0, dummy_checkpoint());
+        assert!(store.get(0).unwrap().pixels.is_none());
+        store.set_pixels(0, [0, 0, 5, 5], vec![1, 2, 3, 4]);
+        assert_eq!(store.get(0).unwrap().pixels.as_ref().unwrap(), &[1, 2, 3, 4]);
+        assert_eq!(store.get(0).unwrap().pixel_bbox, [0, 0, 5, 5]);
     }
 }
