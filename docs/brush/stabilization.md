@@ -79,7 +79,23 @@ A ring buffer of 8 GPU texture slots, each storing the stroke buffer's **bbox re
 
 At max stabilization strength (window = 55), that's ~8 vector indices of dabs re-rendered per frame instead of the entire stroke.
 
-**Invalidation**: When restoring from a checkpoint, all checkpoints after it are invalidated (their positions are now stale). The re-render pass saves fresh checkpoints at segment boundaries as it goes.
+**Slot selection**: When saving a new checkpoint and all 8 slots are occupied, the ring overwrites the slot with the **lowest vector_index** — the one furthest from the tip and least useful for future divergences. This naturally keeps all slots concentrated within the divergence window near the tip. Do NOT use FIFO (write-cursor) slot selection or "even spread" heuristics — both cause the ring to lose coverage of the divergence window, leading to catastrophic full re-renders (see invariants below).
+
+**Invalidation**: When restoring from a checkpoint, only checkpoints **at or after the divergence index** are invalidated — not checkpoints after the restore point. This distinction is critical:
+
+- Checkpoints between the restore point and the divergence index are **still valid** — the stroke buffer content there didn't change (only positions >= `div_idx` diverged). Preserving them allows the restore point to advance forward on subsequent frames.
+
+- If you invalidate from the restore point instead, those intermediate checkpoints are destroyed. New checkpoints saved during re-render land within the divergence zone and get invalidated next frame. The restore point never advances — it's stuck at the same old checkpoint while the tip moves further away, causing the re-render range to grow linearly over time.
+
+### Checkpoint Ring Invariants
+
+The ring's correctness depends on three invariants that interact in non-obvious ways. Violating any one of them causes the re-render cost to degrade from O(window/8) to O(total_stroke) over time:
+
+1. **Slot selection must favor the tip.** Overwrite the checkpoint furthest from the tip (lowest vector_index). This keeps all 8 slots within the divergence window. FIFO selection fails because during a full re-render with many segment boundaries, the ring wraps many times and only the last 8 saves survive — all clustered at the very tip, with no coverage further back. "Even spread" selection fails because it preserves useless checkpoints from early in the stroke while starving the tip region.
+
+2. **Invalidation must be scoped to the divergence zone.** `invalidate_from(div_idx)`, not `invalidate_from(restore_point + 1)`. The stroke buffer content between the restore point and the divergence index is identical before and after the re-render (same raw positions → same dabs). Over-invalidating destroys these valid checkpoints, preventing the restore point from advancing toward the tip on subsequent frames.
+
+3. **The restore point must advance.** On each divergence frame, the system restores from the best checkpoint before `div_idx`, re-renders to the tip, and saves new checkpoints at segment boundaries. The new checkpoints that fall between the old restore point and `div_idx` are outside the divergence zone, so they survive the next frame's invalidation. On the next frame, `restore_before` finds one of these closer checkpoints, reducing the re-render range. After a few frames, the ring converges to covering exactly the divergence window. If the restore point doesn't advance (because intermediate checkpoints are invalidated or overwritten), the re-render range grows by 1 vector index per frame indefinitely.
 
 ### Per-Frame Flow (`painting.rs`)
 

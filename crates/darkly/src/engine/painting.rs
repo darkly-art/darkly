@@ -289,6 +289,7 @@ impl DarklyEngine {
 
         if let Some(ref stroke_buffer) = stroke_buffer {
             // Stabilized path: dabs render to stroke buffer, then composite onto layer.
+            self.brush_pipelines.reset_uniform_rings();
             let result = engine.stabilize(info);
             let max_div = engine.max_divergence_window();
             let tip_vi = engine.stabilizer_len().saturating_sub(1);
@@ -333,7 +334,11 @@ impl DarklyEngine {
                     // Restored from checkpoint — truncate and resume.
                     engine.save_points.truncate(cp.save_point_index + 1);
                     engine.restore_render_state(&cp.render_state);
-                    self.checkpoint_ring.invalidate_from(cp.vector_index + 1);
+                    // Only invalidate from the divergence point onward —
+                    // checkpoints between the restore point and div_idx
+                    // are still valid (the stroke buffer content there
+                    // didn't change, only positions >= div_idx diverged).
+                    self.checkpoint_ring.invalidate_from(div_idx);
                     cp.vector_index + 1
                 } else {
                     // No checkpoint before divergence — full re-render.
@@ -344,7 +349,6 @@ impl DarklyEngine {
                     self.checkpoint_ring.clear();
                     0
                 };
-
                 // Render in segments with checkpoints at boundaries.
                 let boundaries = CheckpointRing::compute_segment_boundaries(
                     start_vi, tip_vi, max_div,
@@ -357,7 +361,7 @@ impl DarklyEngine {
                     // Render segment.
                     let mut gpu_ctx = make_gpu_ctx!("brush-rerender-seg");
                     engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, boundary);
-                    drop(gpu_ctx);
+                    gpu_ctx.submit_final();
 
                     // Save checkpoint at this boundary.
                     if let Some(bbox) = engine.save_points.full_bbox() {
@@ -379,11 +383,13 @@ impl DarklyEngine {
                 if seg_start <= tip_vi {
                     let mut gpu_ctx = make_gpu_ctx!("brush-rerender-tail");
                     engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, tip_vi);
+                    gpu_ctx.submit_final();
                 }
             } else {
                 // No divergence — render tail only.
                 let mut gpu_ctx = make_gpu_ctx!("brush-dab");
                 engine.render_from_stabilized_tail(&mut gpu_ctx);
+                gpu_ctx.submit_final();
 
                 // Periodically save a checkpoint to keep the ring fresh.
                 let spacing = CheckpointRing::spacing(max_div);
@@ -443,7 +449,9 @@ impl DarklyEngine {
                     resource_handles: &self.resource_handles,
                     blend_mode: self.brush_blend_mode,
                 };
+                self.brush_pipelines.reset_uniform_rings();
                 engine.move_to(info, &mut gpu_ctx);
+                gpu_ctx.submit_final();
             }
         }
 

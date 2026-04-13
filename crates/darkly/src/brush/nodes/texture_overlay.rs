@@ -127,7 +127,7 @@ impl BrushNodeEvaluator for TextureOverlayEvaluator {
             blend_mode,
             _pad: [0.0; 3],
         };
-        gpu.pipelines.write_tex_overlay_uniforms(gpu.queue, &uniforms);
+        let offset = gpu.pipelines.write_tex_overlay_uniforms(gpu.queue, &uniforms);
 
         // Get bind groups for sampling the dab and pattern textures.
         let dab_bind_group = gpu.dab_pool.bind_group(dab_handle);
@@ -151,7 +151,7 @@ impl BrushNodeEvaluator for TextureOverlayEvaluator {
 
             pass.set_viewport(0.0, 0.0, dab_w as f32, dab_h as f32, 0.0, 1.0);
             pass.set_pipeline(gpu.pipelines.tex_overlay_pipeline());
-            pass.set_bind_group(0, &gpu.pipelines.tex_overlay_uniform_bind_group, &[]);
+            pass.set_bind_group(0, &gpu.pipelines.tex_overlay_uniform_bind_group, &[offset]);
             pass.set_bind_group(1, dab_bind_group, &[]);
             pass.set_bind_group(2, pattern_bind_group, &[]);
             pass.draw(0..3, 0..1);

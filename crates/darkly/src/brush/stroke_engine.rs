@@ -349,8 +349,8 @@ impl StrokeEngine {
         );
         self.runner.execute_cpu();
         self.runner.execute_gpu(gpu);
-        gpu.submit_and_reset();
         gpu.dab_pool.release_all();
+        gpu.flush_if_needed();
 
         // Update dab size from dab source node output (procedural or stamp).
         for node_type in &["procedural", "stamp"] {

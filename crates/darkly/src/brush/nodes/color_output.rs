@@ -159,7 +159,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             blend_mode,
             fg_premultiplied: 1, // dab from stamp shader is premultiplied
         };
-        gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
+        let offset = gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
 
         let dab_bind_group = gpu.dab_pool.bind_group(dab_handle);
 
@@ -185,7 +185,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
                 0.0, 1.0,
             );
             pass.set_pipeline(gpu.pipelines.composite_pipeline());
-            pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[]);
+            pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[offset]);
             pass.set_bind_group(1, dab_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
             pass.set_bind_group(3, &gpu.pipelines.canvas_copy_bind_group, &[]);

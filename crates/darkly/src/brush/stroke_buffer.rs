@@ -178,9 +178,6 @@ impl StrokeBuffer {
     /// The composite is: source-over blend of stroke_buffer onto pre_stroke,
     /// written to the layer texture.  Uses the existing brush composite pipeline
     /// with the stroke buffer as the "dab" and pre_stroke as the "canvas copy".
-    ///
-    /// For v1, always composites the full canvas.  Dirty-rect optimization
-    /// (Phase D) would restrict this to the union of rewind + new dabs regions.
     pub fn composite_onto_layer(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -190,10 +187,7 @@ impl StrokeBuffer {
         selection_bind_group: &wgpu::BindGroup,
         blend_mode: u32,
     ) {
-        // Full-canvas composite.  origin=[0,0] so the composite shader's
-        // copy_uv = canvas_pos / textureDimensions(pre_stroke) = correct UV
-        // into the full-canvas pre_stroke texture.
-        pipelines.write_composite_uniforms(queue, &CompositeUniforms {
+        let offset = pipelines.write_composite_uniforms(queue, &CompositeUniforms {
             origin: [0.0, 0.0],
             size: [self.width as f32, self.height as f32],
             canvas_size: [self.width as f32, self.height as f32],
@@ -203,9 +197,6 @@ impl StrokeBuffer {
             fg_premultiplied: 0, // stroke buffer is straight alpha
         });
 
-        // Composite: render the stroke buffer onto the layer using the existing
-        // brush composite pipeline.  The stroke buffer serves as the "dab texture"
-        // (group 1) and the pre_stroke serves as the "canvas copy" (group 3).
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("stroke-buffer-composite"),
@@ -226,7 +217,7 @@ impl StrokeBuffer {
                 0.0, 1.0,
             );
             pass.set_pipeline(pipelines.composite_pipeline());
-            pass.set_bind_group(0, &pipelines.composite_uniform_bind_group, &[]);
+            pass.set_bind_group(0, &pipelines.composite_uniform_bind_group, &[offset]);
             pass.set_bind_group(1, &self.stroke_bind_group, &[]);
             pass.set_bind_group(2, selection_bind_group, &[]);
             pass.set_bind_group(3, &self.pre_stroke_bind_group, &[]);

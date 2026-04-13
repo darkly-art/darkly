@@ -55,7 +55,7 @@ impl BrushNodeEvaluator for CircleEvaluator {
             softness,
             _pad: [0.0; 3],
         };
-        gpu.pipelines.write_circle_uniforms(gpu.queue, &uniforms);
+        let offset = gpu.pipelines.write_circle_uniforms(gpu.queue, &uniforms);
 
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -75,7 +75,7 @@ impl BrushNodeEvaluator for CircleEvaluator {
             let size = MAX_DAB_SIZE as f32;
             pass.set_viewport(0.0, 0.0, size, size, 0.0, 1.0);
             pass.set_pipeline(gpu.pipelines.circle_pipeline());
-            pass.set_bind_group(0, &gpu.pipelines.circle_uniform_bind_group, &[]);
+            pass.set_bind_group(0, &gpu.pipelines.circle_uniform_bind_group, &[offset]);
             pass.draw(0..3, 0..1);
         }
 
