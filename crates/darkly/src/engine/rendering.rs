@@ -295,6 +295,12 @@ impl DarklyEngine {
     }
 
     fn apply_undo(&mut self, direction: UndoDirection) {
+        // Force-flush any pending diff-based undo commit so the most recent
+        // stroke's entry is on the stack before we pop.  Without this, an
+        // undo fired in the same frame as end_stroke (or before poll_pending
+        // runs) would skip the just-finished stroke entirely.
+        self.flush_pending_undo_commit();
+
         let action = match direction {
             UndoDirection::Undo => self.undo_stack.pop_for_undo(),
             UndoDirection::Redo => self.undo_stack.pop_for_redo(),

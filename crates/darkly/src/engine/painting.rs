@@ -33,7 +33,7 @@ impl DarklyEngine {
     /// Flush any pending diff-based undo commit. Called before overwriting the
     /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait)
     /// — if the diff hasn't completed yet, falls back to a full-canvas rect.
-    fn flush_pending_undo_commit(&mut self) {
+    pub(crate) fn flush_pending_undo_commit(&mut self) {
         if !self.diff_rect.is_pending() {
             return;
         }
