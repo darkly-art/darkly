@@ -310,7 +310,10 @@ impl DarklyEngine {
                         canvas_height: canvas_h,
                         selection_bind_group: sel_bg,
                         resource_handles: &self.resource_handles,
-                        blend_mode: self.brush_blend_mode,
+                        // Per-dab compositing always uses source-over into the
+                        // stroke buffer.  For erase, the blend mode is applied
+                        // in the stroke→layer composite pass instead.
+                        blend_mode: 0,
                     }
                 };
             }
@@ -411,6 +414,7 @@ impl DarklyEngine {
                     &self.gpu.queue,
                     &layer_view,
                     sel_bg,
+                    self.brush_blend_mode,
                 );
             });
         } else {

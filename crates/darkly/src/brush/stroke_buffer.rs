@@ -188,6 +188,7 @@ impl StrokeBuffer {
         queue: &wgpu::Queue,
         layer_view: &wgpu::TextureView,
         selection_bind_group: &wgpu::BindGroup,
+        blend_mode: u32,
     ) {
         // Full-canvas composite.  origin=[0,0] so the composite shader's
         // copy_uv = canvas_pos / textureDimensions(pre_stroke) = correct UV
@@ -198,7 +199,7 @@ impl StrokeBuffer {
             canvas_size: [self.width as f32, self.height as f32],
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
-            blend_mode: 0, // source-over
+            blend_mode,
             fg_premultiplied: 0, // stroke buffer is straight alpha
         });
 
