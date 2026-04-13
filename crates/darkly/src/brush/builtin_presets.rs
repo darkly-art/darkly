@@ -6,7 +6,6 @@
 //! at engine startup.
 
 use crate::brush::preset::{BrushPreset, PresetBundle, PresetResourceMeta, ResourceKind};
-use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::brush::BrushNodeRegistry;
 use crate::gpu::params::ParamValue;
@@ -41,7 +40,6 @@ struct PresetBuilder {
     stamp: NodeId,
     #[allow(dead_code)] // Used in new() for wiring, not read afterwards.
     color_output: NodeId,
-    stabilizer: StabilizerConfig,
 }
 
 impl PresetBuilder {
@@ -89,15 +87,13 @@ impl PresetBuilder {
             ).unwrap();
         }
 
-        PresetBuilder { graph, registry, pen, paint_color, stamp, color_output, stabilizer: StabilizerConfig::default() }
+        PresetBuilder { graph, registry, pen, paint_color, stamp, color_output }
     }
 
-    /// Set the stabilizer algorithm and parameters for this preset.
-    fn set_stabilizer(&mut self, algorithm: &str, params: Vec<ParamValue>) {
-        self.stabilizer = StabilizerConfig {
-            algorithm: algorithm.to_string(),
-            params,
-        };
+    /// Set the stabilization strength and expose it in the toolbar.
+    fn set_stabilize(&mut self, strength: f32) {
+        self.graph.set_port_default(self.pen, "stabilize", strength).unwrap();
+        self.graph.set_port_exposed(self.pen, "stabilize", true).unwrap();
     }
 
     /// Add a circle node with the given softness, wired to stamp.tip.
@@ -204,7 +200,6 @@ impl PresetBuilder {
     fn build(self, name: &str, category: &str) -> PresetBundle {
         let mut preset = BrushPreset::from_graph(name, self.graph);
         preset.category = category.to_string();
-        preset.stabilizer = self.stabilizer;
         PresetBundle::without_resources(preset)
     }
 
@@ -262,7 +257,6 @@ impl PresetBuilder {
     ) -> PresetBundle {
         let mut preset = BrushPreset::from_graph(name, self.graph);
         preset.category = category.to_string();
-        preset.stabilizer = self.stabilizer;
 
         let mut resource_data = Vec::new();
         for (res_name, kind, data) in &resources {
@@ -309,7 +303,7 @@ fn ink_pen() -> PresetBundle {
     b.wire(curve, "output", b.stamp, "size");
     b.wire_pressure_to_opacity();
     b.wire_color();
-    b.set_stabilizer("laplacian", vec![ParamValue::Float(0.6)]);
+    b.set_stabilize(0.6);
     b.build("Ink Pen", "inking")
 }
 
@@ -341,7 +335,7 @@ fn calligraphy() -> PresetBundle {
     b.wire_pressure_to_size();
     b.wire(b.pen, "tilt_direction", b.stamp, "rotation");
     b.wire_color();
-    b.set_stabilizer("laplacian", vec![ParamValue::Float(0.6)]);
+    b.set_stabilize(0.6);
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/calligraphy.png");
     b.build_with_resources("Calligraphy", "inking", vec![

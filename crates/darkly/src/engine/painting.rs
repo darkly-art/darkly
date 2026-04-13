@@ -14,6 +14,22 @@ use crate::gpu::readback;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
+    /// Read the stabilize strength from the pen_input node's "stabilize" port
+    /// default in the active brush graph.  Returns 0.0 if not found.
+    fn pen_input_stabilize_strength(&self) -> f32 {
+        use crate::nodegraph::PortDir;
+        for node in self.active_brush_graph.nodes.values() {
+            if node.type_id == "pen_input" {
+                for port in &node.ports {
+                    if port.name == "stabilize" && port.dir == PortDir::Input {
+                        return port.default;
+                    }
+                }
+            }
+        }
+        0.0
+    }
+
     /// Flush any pending diff-based undo commit. Called before overwriting the
     /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait)
     /// — if the diff hasn't completed yet, falls back to a full-canvas rect.
@@ -197,10 +213,17 @@ impl DarklyEngine {
                 }
             };
 
-            // Create the stabilizer from the active config.
-            let stabilizer = self.stabilizer_registry.create_from_config(
-                &self.active_stabilizer_config,
-            );
+            // Derive stabilizer from the pen_input node's "stabilize" port.
+            let strength = self.pen_input_stabilize_strength();
+            let stabilizer_config = if strength > 0.0 {
+                crate::brush::stabilizer::StabilizerConfig {
+                    algorithm: "laplacian".into(),
+                    params: vec![crate::gpu::params::ParamValue::Float(strength)],
+                }
+            } else {
+                crate::brush::stabilizer::StabilizerConfig::default()
+            };
+            let stabilizer = self.stabilizer_registry.create_from_config(&stabilizer_config);
 
             self.brush_stroke_engine = Some(StrokeEngine::new(
                 runner, color, SpacingConfig::default(), stabilizer,
