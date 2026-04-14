@@ -19,15 +19,14 @@ The result is a speedier and more creative ideation process, which unearths arti
 
 ## Architecture
 
-Darkly's Rust core (`crates/darkly/`) is platform-agnostic. It contains the document model, GPU compositor, filters, veils, undo system, and the `DarklyEngine` — all with zero platform dependencies. Thin FFI bridges wrap the engine for each target:
+Darkly's Rust core (`crates/darkly/`) is platform-agnostic. It contains the document model, GPU compositor, filters, veils, undo system, and the `DarklyEngine` — all with zero platform dependencies. A WASM bridge wraps the engine for the browser:
 
 ```
 crates/darkly/          Platform-agnostic core (wgpu, pure Rust)
   src/engine.rs         DarklyEngine — all editor logic
   src/gpu/              Compositor, filters, veils, shaders
 frontend/wasm/          WASM bridge (wasm-bindgen) → browser
-frontend/napi/          napi-rs bridge (planned) → Electron
-frontend/src/           Svelte UI (shared by both modes)
+frontend/src/           Svelte UI
 ```
 
 ## Getting started
@@ -37,10 +36,6 @@ frontend/src/           Svelte UI (shared by both modes)
 - [Rust](https://rustup.rs/) (stable)
 - [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/)
 - [Node.js](https://nodejs.org/) >= 18
-
-### Browser mode (WASM + WebGPU)
-
-Runs in the browser via WebAssembly and the WebGPU API.
 
 ```sh
 # Build the WASM package
@@ -61,18 +56,6 @@ chromium --enable-features=Vulkan --enable-unsafe-webgpu
 ```
 
 You can verify the active backend at `chrome://gpu` — look for "Vulkan" under Graphics Feature Status. On macOS and Windows this is generally not needed (Metal and D3D12 are used by default).
-
-### Electron mode (napi-rs + native GPU) — planned
-
-Runs as a desktop app with direct GPU access via Vulkan/Metal/DX12. The `frontend/napi/` crate will wrap `DarklyEngine` using napi-rs, loaded as a native Node addon inside Electron.
-
-```sh
-# (Once frontend/napi/ exists)
-cd frontend/napi && npm run build   # napi-rs → native .node addon
-cd frontend && npm run electron     # Launch Electron shell
-```
-
-The Svelte UI is identical in both modes — only the backend import differs.
 
 ## Adding filters and veils
 

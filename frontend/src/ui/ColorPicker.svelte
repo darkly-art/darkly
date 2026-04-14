@@ -173,10 +173,10 @@
 <style>
     .color-picker {
         position: absolute;
-        left: 52px;
+        left: 48px;
         top: 4px;
-        background: #2a2a2a;
-        border: 1px solid #444;
+        background: var(--bg-active);
+        border: 1px solid var(--bg-hover);
         border-radius: 6px;
         padding: 8px;
         z-index: 100;
@@ -208,9 +208,9 @@
 
     .hex-input {
         width: 100%;
-        background: #1a1a1a;
-        border: 1px solid #444;
-        color: #e0e0e0;
+        background: var(--bg);
+        border: 1px solid var(--bg-hover);
+        color: var(--text);
         padding: 4px 6px;
         border-radius: 3px;
         font-family: monospace;

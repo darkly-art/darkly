@@ -1,5 +1,3 @@
-use crate::tile::{MaskSurface, RasterSurface};
-
 pub type LayerId = u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -23,15 +21,17 @@ impl BlendMode {
     }
 }
 
+/// A raster (pixel) layer. Pixel data lives exclusively on GPU textures;
+/// this struct holds only metadata and compositing properties.
 pub struct RasterLayer {
     pub id: LayerId,
     pub name: String,
-    pub surface: RasterSurface,
     pub opacity: f32,
     pub blend_mode: BlendMode,
     pub visible: bool,
-    /// Optional layer mask (white=reveal, black=hide). Modulates alpha during compositing.
-    pub mask: Option<MaskSurface>,
+    /// Whether this layer has an associated mask texture on the GPU.
+    /// The mask pixel data is GPU-authoritative — this is just a flag.
+    pub has_mask: bool,
     /// Whether the mask affects compositing (GIMP's `apply_mask`).
     pub mask_enabled: bool,
     /// Display the mask as grayscale instead of layer content.
@@ -43,11 +43,10 @@ impl RasterLayer {
         RasterLayer {
             id,
             name: format!("Layer {id}"),
-            surface: RasterSurface::new(),
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             visible: true,
-            mask: None,
+            has_mask: false,
             mask_enabled: true,
             show_mask: false,
         }
@@ -63,8 +62,8 @@ pub struct LayerGroup {
     pub visible: bool,
     pub passthrough: bool,  // true = passthrough (default), false = normal group
     pub collapsed: bool,    // UI state: whether the group is visually collapsed
-    /// Optional group mask. For passthrough groups, applied via snapshot-lerp (Photoshop behavior).
-    pub mask: Option<MaskSurface>,
+    /// Whether this group has an associated mask texture on the GPU.
+    pub has_mask: bool,
     pub mask_enabled: bool,
     pub show_mask: bool,
 }
@@ -80,28 +79,46 @@ impl LayerGroup {
             visible: true,
             passthrough: true,
             collapsed: false,
-            mask: None,
+            has_mask: false,
             mask_enabled: true,
             show_mask: false,
         }
     }
 }
 
+/// Snapshot of mask boolean state — used for undo actions.
+#[derive(Clone, Copy)]
+pub struct MaskSnapshot {
+    pub has_mask: bool,
+    pub mask_enabled: bool,
+    pub show_mask: bool,
+}
+
 /// Common mask interface shared by RasterLayer and LayerGroup.
+/// Mask pixel data is GPU-authoritative — these methods only track
+/// the boolean flag and compositing toggles.
 pub trait Masked {
-    fn mask(&self) -> &Option<MaskSurface>;
-    fn mask_mut(&mut self) -> &mut Option<MaskSurface>;
+    fn has_mask(&self) -> bool;
+    fn set_has_mask(&mut self, has: bool);
     fn mask_enabled(&self) -> bool;
     fn set_mask_enabled(&mut self, enabled: bool);
     fn show_mask(&self) -> bool;
     fn set_show_mask(&mut self, show: bool);
+
+    fn mask_snapshot(&self) -> MaskSnapshot {
+        MaskSnapshot {
+            has_mask: self.has_mask(),
+            mask_enabled: self.mask_enabled(),
+            show_mask: self.show_mask(),
+        }
+    }
 }
 
 macro_rules! impl_masked {
     ($t:ty) => {
         impl Masked for $t {
-            fn mask(&self) -> &Option<MaskSurface> { &self.mask }
-            fn mask_mut(&mut self) -> &mut Option<MaskSurface> { &mut self.mask }
+            fn has_mask(&self) -> bool { self.has_mask }
+            fn set_has_mask(&mut self, has: bool) { self.has_mask = has; }
             fn mask_enabled(&self) -> bool { self.mask_enabled }
             fn set_mask_enabled(&mut self, enabled: bool) { self.mask_enabled = enabled; }
             fn show_mask(&self) -> bool { self.show_mask }

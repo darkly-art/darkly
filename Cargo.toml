@@ -3,6 +3,9 @@ members = [
     "crates/darkly",
     "frontend/wasm",
 ]
+default-members = [
+    "crates/darkly",
+]
 resolver = "2"
 
 [workspace.dependencies]
@@ -17,6 +20,8 @@ bytemuck = { version = "1.13", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 log = "0.4"
+zip = { version = "8.3", default-features = false, features = ["deflate"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # WASM
 wasm-bindgen = "=0.2.114"
@@ -31,6 +36,7 @@ web-sys = { version = "=0.3.91", features = [
     "OffscreenCanvas",
     "console",
 ] }
+web-time = "1.1.0"
 console_error_panic_hook = "0.1"
 console_log = "1"
 

@@ -1,6 +1,5 @@
 pub mod context;
 pub mod atlas;
-pub mod staging;
 pub mod compositor;
 pub mod blend;
 pub mod effect;
@@ -11,3 +10,11 @@ pub mod veils;
 pub mod view;
 pub mod overlay;
 pub mod transform;
+pub mod region_store;
+pub mod paint_target;
+pub mod readback;
+pub mod content_bounds;
+pub mod diff_rect;
+pub mod flood_fill;
+pub mod straight_composite;
+pub mod test_utils;

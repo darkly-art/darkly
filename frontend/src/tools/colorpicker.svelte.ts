@@ -4,7 +4,8 @@ import { app } from '../state/app.svelte';
 export const colorPickerTool: Tool = {
     id: 'colorpicker',
     name: 'Color Picker',
-    icon: 'P',
+    faIcon: 'fa-solid fa-eye-dropper',
+    group: 'paint',
     hotkeyAction: 'colorPickerTool',
 
     onPointerDown(ctx, e, cx, cy) {

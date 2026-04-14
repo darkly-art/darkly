@@ -1,4 +1,5 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import { toolRegistry } from '../tools/registry';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -21,8 +22,6 @@ class AppState {
     editingMaskLayerId = $state<number | null>(null);
 
     // Tool runtime state -- working values adjusted while painting.
-    brushSize = $state(24);
-    brushOpacity = $state(1.0);
     fillTolerance = $state(32);     // 0-255
     fillAll = $state(false);
     gradientType = $state<'linear' | 'radial'>('linear');
@@ -39,6 +38,9 @@ class AppState {
     zoom = $state(1.0);
     rotation = $state(0);   // radians
 
+    // Tool cursor — when non-null, overrides nav cursor on the canvas element.
+    toolCursor = $state<string | null>(null);
+
     swapColors() {
         const tmp = { ...this.foreground };
         this.foreground = { ...this.background };
@@ -52,21 +54,54 @@ class AppState {
 
     refreshLayerTree() {
         if (this.handle) {
-            const tree = this.handle.layer_tree();
-            this.layerTree = Array.isArray(tree) ? tree : [];
+            try {
+                const tree = JSON.parse(this.handle.layer_tree());
+                this.layerTree = Array.isArray(tree) ? tree : [];
+            } catch { this.layerTree = []; }
         }
     }
 
     refreshVeilList() {
         if (this.handle) {
-            const list = this.handle.veil_list();
-            this.veilList = Array.isArray(list) ? list : [];
+            try {
+                const list = JSON.parse(this.handle.veil_list());
+                this.veilList = Array.isArray(list) ? list : [];
+            } catch { this.veilList = []; }
         }
+    }
+
+    // --- Async copy result callback ---
+
+    private _copyCallback: ((result: any) => void) | null = null;
+
+    /** Register a one-shot callback for when the async copy readback completes. */
+    onCopyResult(cb: (result: any) => void) {
+        this._copyCallback = cb;
+        this.requestFrame();
     }
 
     // --- Demand-driven rendering ---
 
     private _framePending = false;
+
+    /**
+     * Number of active UI interactions (panel drags, slider adjustments,
+     * etc.) that should suppress continuous animation rendering.  While
+     * non-zero, `requestFrame()` still runs one-shot requests (e.g. from
+     * tool actions) but will NOT self-schedule the next animation frame.
+     * This keeps the main thread free for pointer events so that panels
+     * like the brush builder remain responsive during animated veils.
+     */
+    private _interactionCount = 0;
+
+    /** Call when a sustained UI interaction starts (e.g. node drag). */
+    beginInteraction() { this._interactionCount++; }
+
+    /** Call when it ends.  Resumes animation rendering if needed. */
+    endInteraction() {
+        this._interactionCount = Math.max(0, this._interactionCount - 1);
+        if (this._interactionCount === 0) this.requestFrame();
+    }
 
     /** Schedule a render frame if one isn't already pending. */
     requestFrame() {
@@ -76,7 +111,28 @@ class AppState {
             this._framePending = false;
             if (!this.handle) return;
             const needsMore = this.handle.render(ts / 1000.0);
-            if (needsMore) this.requestFrame();
+
+            // Per-frame tool hook — async state sync (e.g. GPU readback completion).
+            toolRegistry.get(this.activeToolId)?.onFrame?.();
+
+            // Check for completed async copy/cut readback.
+            if (this._copyCallback) {
+                const result = this.handle.poll_copy_result();
+                if (result) {
+                    const cb = this._copyCallback;
+                    this._copyCallback = null;
+                    cb(result);
+                }
+            }
+
+            // Continue animation loop only when no UI interaction is
+            // monopolizing the main thread.  One-shot renders (tool
+            // actions, resize, etc.) always go through — only the
+            // self-scheduling continuous loop is suppressed.
+            const shouldContinue = needsMore || this._copyCallback;
+            if (shouldContinue && this._interactionCount === 0) {
+                this.requestFrame();
+            }
         });
     }
 }

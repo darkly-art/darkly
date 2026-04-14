@@ -7,23 +7,39 @@
     import { toolRegistry } from '../tools/registry';
     import type { ToolContext } from '../tools/registry';
     import { screenToCanvas } from './coordinates';
-    import ToolOverlay from './ToolOverlay.svelte';
     import { toast } from '../state/toast.svelte';
 
     let canvas = $state<HTMLCanvasElement>(undefined!);
 
+    // Deferred to avoid re-entering the WASM handle while it's borrowed
+    // (ResizeObserver can fire synchronously during layout, mid-render).
+    let resizePending = false;
     function syncCanvasSize() {
-        if (!canvas) return;
-        const dpr = window.devicePixelRatio || 1;
-        const rect = canvas.getBoundingClientRect();
-        const w = Math.round(rect.width * dpr);
-        const h = Math.round(rect.height * dpr);
-        if (canvas.width !== w || canvas.height !== h) {
-            canvas.width = w;
-            canvas.height = h;
-            app.handle?.resize(w, h);
-            app.requestFrame();
-        }
+        if (resizePending) return;
+        resizePending = true;
+        requestAnimationFrame(() => {
+            resizePending = false;
+            if (!canvas) return;
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.getBoundingClientRect();
+            const w = Math.round(rect.width * dpr);
+            const h = Math.round(rect.height * dpr);
+            if (w < 1 || h < 1) return;
+            if (canvas.width !== w || canvas.height !== h) {
+                canvas.width = w;
+                canvas.height = h;
+                app.handle?.resize(w, h);
+                // Re-sync the Rust view transform with the new screen dimensions
+                // so the compositor and JS coordinate conversion agree.
+                const dpr2 = dpr;
+                app.handle?.set_view_transform(
+                    app.panX * dpr2, app.panY * dpr2,
+                    app.zoom, app.rotation,
+                    w, h,
+                );
+                app.requestFrame();
+            }
+        });
     }
 
     onMount(async () => {
@@ -70,6 +86,7 @@
         if (!app.handle) return null;
         return {
             handle: app.handle,
+            canvasEl: canvas,
             screenToCanvas(sx: number, sy: number) {
                 return screenToCanvas(sx, sy, canvas);
             }
@@ -87,11 +104,15 @@
     }
 
     function onPointerDown(e: PointerEvent) {
+        // Prevent browser from synthesising fling/scroll gestures from pen
+        // input — touch-action:none only covers touch, not pen (Chromium bug).
+        e.preventDefault();
+
         // Touch: always capture and track for gesture detection
         if (e.pointerType === 'touch') {
             canvas.setPointerCapture(e.pointerId);
             if (nav.onTouchPointerDown(e)) {
-                // Two-finger gesture started — end any in-progress tool stroke
+                // Touch consumed by navigation — end any in-progress tool stroke
                 const ctx = getToolContext();
                 if (ctx) {
                     const tool = toolRegistry.get(app.activeToolId);
@@ -115,6 +136,8 @@
     }
 
     function onPointerMove(e: PointerEvent) {
+        e.preventDefault();
+
         // Touch gesture: update position and apply gesture transform
         if (e.pointerType === 'touch') {
             nav.onTouchPointerMove(e, canvas);
@@ -135,6 +158,8 @@
     }
 
     function onPointerUp(e: PointerEvent) {
+        e.preventDefault();
+
         // Touch: clean up gesture state; skip tool dispatch if gesture occurred
         if (e.pointerType === 'touch') {
             const wasGesture = nav.isTouchGesture;
@@ -147,6 +172,26 @@
             return;
         }
 
+        const ctx = getToolContext();
+        if (!ctx) return;
+        const tool = toolRegistry.get(app.activeToolId);
+        tool?.onPointerUp(ctx, e);
+        app.requestFrame();
+    }
+
+    function onPointerCancel(e: PointerEvent) {
+        e.preventDefault();
+
+        // Pen/touch can fire pointercancel instead of pointerup (pen lifted
+        // out of range, system gesture, browser intervention).  Clean up
+        // the same state that onPointerUp would.
+        if (e.pointerType === 'touch') {
+            nav.onTouchPointerUp(e);
+        }
+        if (nav.isNavigating) {
+            nav.onPointerUp();
+            return;
+        }
         const ctx = getToolContext();
         if (!ctx) return;
         const tool = toolRegistry.get(app.activeToolId);
@@ -167,7 +212,7 @@
     }
 
     // Call onDeactivate/onActivate when the active tool changes.
-    let prevToolId = app.activeToolId;
+    let prevToolId = '';
     $effect(() => {
         const id = app.activeToolId;
         if (id !== prevToolId) {
@@ -175,8 +220,9 @@
             if (ctx) {
                 toolRegistry.get(prevToolId)?.onDeactivate?.(ctx);
                 toolRegistry.get(id)?.onActivate?.(ctx);
+                app.toolCursor = null;
+                prevToolId = id;
             }
-            prevToolId = id;
         }
     });
 
@@ -215,15 +261,13 @@
 <div class="canvas-container">
     <canvas
         bind:this={canvas}
-        style:cursor={nav.cursor}
+        style:cursor={app.toolCursor ?? nav.cursor}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
+        onpointercancel={onPointerCancel}
         onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); app.requestFrame(); }}
     ></canvas>
-    {#if canvas}
-        <ToolOverlay canvasEl={canvas} />
-    {/if}
 </div>
 
 <style>
@@ -234,8 +278,9 @@
         align-items: center;
         overflow: hidden;
         position: relative;
-        min-height: 0;
+        min-height: 64px;
         height: 100%;
+        background: var(--canvas-bg);
     }
 
     canvas {

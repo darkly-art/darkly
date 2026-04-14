@@ -39,11 +39,11 @@
     }
 
     .toast {
-        background: #2a2a2a;
-        color: #e0e0e0;
-        border: 1px solid #444;
+        background: var(--bg-active);
+        color: var(--text);
+        border: 1px solid var(--bg-hover);
         border-left: 4px solid;
-        border-radius: 4px;
+        border-radius: 6px;
         padding: 10px 16px;
         font-size: 13px;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);

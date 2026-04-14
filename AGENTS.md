@@ -26,15 +26,17 @@ This same pattern applies to all modular systems in the project.
 
 Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. Extract shared logic into a common abstraction rather than duplicating the pattern. This applies across modules, across layers (Rust, WASM bridge, JS), and across systems. When you notice structural similarity, unify it.
 
+**Place functionality where it generalizes.** Before writing logic, ask: "where does this belong so that it works for all cases, not just this one?" If a behavior applies to any tool, it belongs in the tool system's generic hooks — not inside one specific tool. If a behavior applies to any async operation, it belongs in the async completion pipeline — not special-cased at one call site. Putting the right logic in the right architectural layer eliminates the need to repeat it, and prevents future features from having to rediscover where to plug in. A good signal you've placed something wrong: it only works for one workflow, or a second caller would have to copy-paste the same pattern.
+
 ## Ownership Principle
 
 State belongs to the thing it describes — not to a parent that manages it on its behalf. Don't let Rust's borrow checker dictate the data model. If splitting state out of a struct makes borrowing easier but scatters a logical concept across multiple locations, find a different way to satisfy the borrow checker (helper methods, borrow-splitting, restructured access) and keep the data model clean.
 
 ## Prior Art Principle
 
-Before deciding on an implementation approach — even when the solution seems obvious — research how established editors handle it. Krita and GIMP source code are checked out under `gimp/` and `krita/` in the project root specifically for this purpose. Read the relevant source, understand the algorithm and data structures they chose, and base our design on that understanding. These are mature codebases with decades of real-world usage; they've already hit and solved the edge cases we'd discover the hard way.
+Before deciding on an approach, research how established editors handle it. Krita and GIMP are checked out under the project root (`krita/`, `gimp/`), along with other references (MyPaint, libmypaint, Aseprite, etc.). Read the actual source — never rely on web searches, docs, or LLM training data for architectural claims. If a reference repo isn't checked out, clone it. Never claim "Krita does X" without pointing to a specific file and function.
 
-Our implementation will often differ in specifics (e.g. GPU-centric pipelines, tile format differences, Rust idioms), but the core algorithm and architectural decisions should be informed by prior art, not invented from scratch.
+Our implementation will differ in specifics (GPU pipelines, tile formats, Rust idioms), but core algorithms and architectural decisions should be informed by prior art, not invented from scratch.
 
 ## Performance Principle
 
@@ -46,7 +48,23 @@ Past lessons that illustrate the pattern:
 - **Selection overlay** generated one GPU primitive per boundary pixel (~800 instances for a rectangle). Fix: merge collinear segments and simplify polylines once when the selection changes — down to ~4-30 primitives.
 - **Animation scheduling** had independent per-system timers that forced extra frame renders. Fix: a single master clock with integer divisors so slower systems' ticks always align with faster ones — zero extra renders.
 
-See `gpu-perf-lessons-learned.md` for full details. The specifics vary but the theme is the same: the naive approach has a hidden multiplier, and there's a structural fix that eliminates it.
+See `gpu-lessons-learned.md` for full details. The specifics vary but the theme is the same: the naive approach has a hidden multiplier, and there's a structural fix that eliminates it.
+
+## Testing Principle
+
+Every feature must have a test. Every bug must have a regression test.
+
+**Bug fix workflow: write the failing test FIRST. Do not edit any non-test file until the regression test exists and fails. Then fix the bug and confirm the test passes.** Regression tests must be verified against the unfixed code — if the test doesn't fail without the fix, it doesn't count. The workflow is: write the test, run it, confirm it fails, then fix the bug, run the test again, confirm it passes. No exceptions.
+
+Performance regression tests should assert concrete timing bounds (e.g., `assert!(ms < 50.0)`) so they catch algorithmic regressions, not just logical ones.
+
+## No Blocking GPU Readbacks
+
+**Never use `device.poll(Wait)`, `blocking_read()`, `readback_texture()`, or any synchronous GPU→CPU readback in production code.** These deadlock on WebGPU/WASM — the browser event loop is the only mechanism for resolving GPU buffer mappings, and any form of blocking (`recv()`, spin-wait, `thread::park()`) prevents it from running. See `gpu-lessons-learned.md` §5 for the full stack trace of why.
+
+The correct pattern is async readback: `request_readback()` → `readbacks.submit()` → poll on the next frame via `ReadbackScheduler`. If CPU data is needed from a GPU texture that changes infrequently (e.g., the selection mask), maintain a CPU cache populated by the async readback and read from that.
+
+`test_utils::readback_texture()` and `blocking_read()` are **test-only** — they work on native (Vulkan/Metal) where `device.poll(Wait)` drives the completion queue synchronously. They must be gated behind `#[cfg(test)]` and never called from engine, compositor, or WASM bridge code.
 
 ## Engineering Principle
 

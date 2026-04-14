@@ -62,3 +62,88 @@ Similarly, the GPU hardware bilinear sampler uses `u × N − 0.5` to convert UV
 2. `sample_bilinear`: convert from pixel-center to texel-index space via `sx - 0.5`, with bounds check adjusted to `[-0.5, w-0.5]` to allow the half-texel clamp-to-edge border.
 
 **Takeaway**: Any CPU code that replicates what a GPU shader does must use pixel-center coordinates `(i + 0.5, j + 0.5)`, not integer positions `(i, j)`. The 0.5 offset is not a fudge factor — it's a spec-defined convention. This applies to any future CPU-side rasterization, ray casting, or texture sampling that needs to match GPU output.
+
+## 5. GPU buffer readback deadlocks on WebGPU/WASM
+
+**Problem**: Flood fill and color picker froze the Chrome tab permanently, pegging one CPU core at 100%. Both operations used `blocking_read()` to synchronously wait for a GPU→CPU buffer mapping.
+
+**Root cause — traced through the full stack**:
+
+`blocking_read` does three things: `slice.map_async(...)`, `device.poll(Wait)`, `rx.recv()`.
+
+On **native** (Vulkan, Metal, DX12), `device.poll(Wait)` drives the GPU driver's completion queue. The `map_async` callback fires *during* the poll call, sends on the channel, and `recv()` returns immediately. This is synchronous end-to-end.
+
+On **WebGPU/WASM**, three layers conspire to deadlock:
+
+1. **wgpu's web backend**: `device.poll()` is a **no-op** — it returns `Ok(QueueEmpty)` immediately regardless of the `PollType` argument (wgpu 28.0.0, `src/backend/webgpu.rs:2542`). This is correct: on the web, the browser's GPU process handles command completion automatically. There's nothing to poll.
+
+2. **WebGPU's async model**: `GPUBuffer.mapAsync()` returns a JavaScript Promise. The browser resolves this Promise through the event loop when the GPU copy completes. The `map_async` Rust callback fires when that Promise resolves — but only if the JS event loop is running.
+
+3. **Rust std on `wasm32-unknown-unknown`**: `mpsc::Receiver::recv()` internally calls `Thread::park()` in a loop, checking an atomic flag each iteration. On wasm32 without the `atomics` target feature, `Thread::park()` delegates to `unsupported::Parker::park()` — an **empty function body** (Rust std, `sys/sync/thread_parking/unsupported.rs`). So `recv()` becomes an infinite busy-loop: check atomic → not ready → `park()` (no-op) → check atomic → not ready → ... at 100% CPU.
+
+The deadlock: `recv()` spin-waits for the callback. The callback can only fire when the JS Promise resolves. The Promise can only resolve when the browser event loop runs. The event loop can't run because `recv()` has seized the only thread. 100% CPU, zero progress.
+
+The buffer size doesn't matter — color picker (1×1 pixel) and flood fill (full-canvas) both deadlock identically.
+
+**Why it wasn't caught earlier**: The blocking pattern works perfectly on native (tests run on Vulkan), and `device.poll(Wait)` is the documented way to synchronously wait for GPU work. Nothing warns you that `poll(Wait)` is a no-op on web, or that `recv()` becomes a spin loop on wasm32. Both are correct behavior for their respective platforms — the combination is what kills you.
+
+**Fix — async readback with frame-driven polling**: Split readback into three phases:
+1. **Encode + submit**: `request_readback()` encodes the `copy_texture_to_buffer` command. Caller submits.
+2. **Begin mapping**: `begin_mapping()` calls `map_async` once, stores the `mpsc::Receiver`.
+3. **Frame poll**: `poll(device)` calls `device.poll(Poll)` (no-op on web, processes callbacks on native) then `try_recv()` (non-blocking). Between frames, the browser event loop runs, the Promise resolves, the callback fires, sends on the channel, and `try_recv()` picks it up next frame.
+
+For flood fill: `gpu_flood_fill` starts the readback and stores a `PendingFloodFill`. On the next frame, `render()` polls for completion, then runs the CPU scanline fill + GPU stamp + undo commit. For color picker: `pick_color` returns the cached last-picked color immediately (one-frame latency, imperceptible for UI) and resolves on the next frame.
+
+**Takeaway**: You cannot synchronously wait for GPU results on WebGPU/WASM. It's not a wgpu limitation — the web platform fundamentally does not offer synchronous GPU readback. The browser event loop is the *only* mechanism for getting data back from the GPU, and any form of blocking (`recv()`, `thread::park()`, busy-wait) prevents the event loop from running. All GPU→CPU data transfers must be async: start the mapping, return control to JS, poll on the next frame. This applies to any future readback use case (save/export, histogram, clipboard copy, thumbnails). Native-only code paths (tests, headless rendering) can still use `blocking_read` safely.
+
+## 6. NDC coordinate stretch from padded render targets
+
+**Problem**: All paint operations (brush, fill, gradient, erase) were offset from the cursor. ~4px vertical at the canvas center, ~8px at the bottom, 0px at the top. The offset varied with zoom level and canvas dimensions.
+
+**Root cause**: Layer textures are padded to tile boundaries (e.g., 1920×1080 becomes 1920×1088 with TILE_SIZE=64). Paint shaders convert canvas pixels to NDC:
+
+```wgsl
+canvas_pos.x / uniforms.canvas_size.x * 2.0 - 1.0,
+1.0 - canvas_pos.y / uniforms.canvas_size.y * 2.0,
+```
+
+`canvas_size` was the unpadded document size (1080), but the render target was the padded texture (1088). Without an explicit viewport, wgpu defaults to the full texture dimensions. NDC [-1, +1] maps to viewport [0, 1088], so the unpadded canvas range [0, 1080] stretches across 1088 texels — a scale factor of 1088/1080 ≈ 1.0074. At the center pixel (y=540), the stretch shifts content by 540 × (1088/1080 - 1) ≈ 4 pixels. The distortion grows linearly from 0 at the origin to (padded - unpadded) at the far edge.
+
+The compositor's own render passes were unaffected because they consistently use padded dimensions for both `canvas_size` and the render target — the two cancel out.
+
+**Fix**: Set the render pass viewport to the unpadded canvas dimensions before drawing:
+
+```rust
+pass.set_viewport(0.0, 0.0, self.width as f32, self.height as f32, 0.0, 1.0);
+```
+
+This restricts rasterization to the unpadded region of the padded texture. NDC [-1, +1] now maps to [0, canvas_h], and the padding area receives no fragments.
+
+**Takeaway**: When rendering geometry positioned in "canvas pixel" coordinates via NDC conversion, the viewport dimensions must match the coordinate system's range. If the render target is larger (padded, power-of-two, atlas), the viewport must be set explicitly. The default viewport (full render target) is only correct when the coordinate system spans the entire texture. This is easy to miss when textures are padded for alignment — everything works until the padding is non-zero.
+
+## 7. Integer/float origin mismatch in copy-then-sample pattern
+
+**Problem**: Brush dabs "smeared" surrounding canvas content in the stroke direction. Each dab shifted the background by ~1 pixel, accumulating along overlapping dabs into a visible directional drag.
+
+**Root cause**: The composite pass copies the canvas region under the dab to a scratch texture, then the shader samples the scratch to do Porter-Duff blending. The copy uses integer pixel coordinates (`copy_texture_to_texture` truncates the origin to `u32`), but the shader computed the sample UV using the original float origin:
+
+```wgsl
+let copy_uv = (canvas_pos - origin) / texture_size;
+```
+
+When the dab position was fractional (e.g., origin = 100.7), the copy started at pixel 100 but the UV mapped pixel 101's fragment to `(101.5 - 100.7) / W = 0.8/W` → texel 0 (Nearest filtering) → canvas pixel 100. So the shader read pixel 100's data while writing to pixel 101 — a 1-pixel shift. With overlapping dabs, this accumulated into directional smearing.
+
+**The fix had two parts** — aligning one side without the other made things worse:
+
+1. **Shader**: Use `floor(origin)` in the copy UV to match the integer copy origin:
+   ```wgsl
+   let copy_uv = (canvas_pos - floor(origin)) / texture_size;
+   ```
+
+2. **Copy extent**: The floored UV shifts the addressable range right/down, so the copy region must expand to cover it. Changed from `ceil(quad_width)` to `ceil(x1) - floor(x0)`:
+   ```rust
+   let copy_w = (x1.ceil() as u32).saturating_sub(copy_x);
+   ```
+   Without this, the rightmost column/bottommost row sampled stale data from a previous dab, producing 1px missing lines at the bottom-right edge.
+
+**Takeaway**: `copy_texture_to_texture` is an integer-pixel operation; shader UVs are float. When a shader samples data placed by a texture copy, the UV calculation must use the same (integer) origin the copy used, and the copy extent must cover every texel the shifted UV can reach. Neither side is wrong in isolation — the bug lives at the seam between integer and float coordinate domains. Any copy-then-sample pattern needs both sides to agree on the origin, and the extent to cover the range implied by that origin.

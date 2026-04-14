@@ -1,0 +1,13 @@
+.light {
+    --bg:          #ffffff;
+    --bg-raised:   #f0f0f0;
+    --bg-hover:    #e8e8e8;
+    --bg-active:   #dddddd;
+    --text:        #333333;
+    --text-muted:  #999999;
+    --text-dim:    #bbbbbb;
+    --accent:      #4a6ef5;
+    --danger:      #d04040;
+    --thumb-bg:    #cccccc;
+    --canvas-bg:   #d0d0d0;
+}

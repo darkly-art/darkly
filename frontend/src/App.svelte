@@ -2,6 +2,7 @@
     import LeftSidebar from './ui/LeftSidebar.svelte';
     import CanvasView from './canvas/CanvasView.svelte';
     import RightSidebar from './ui/RightSidebar.svelte';
+    import BrushBar from './ui/BrushBar.svelte';
     import Toast from './ui/Toast.svelte';
     import PresetPicker from './ui/PresetPicker.svelte';
     // Register all tools
@@ -12,27 +13,28 @@
 
 <div class="app-layout">
     <LeftSidebar />
-    <CanvasView />
+    <div class="center-column">
+        <CanvasView />
+        <BrushBar />
+    </div>
     <RightSidebar />
 </div>
 <Toast />
 <PresetPicker />
 
 <style>
-    :global(body) {
-        margin: 0;
-        padding: 0;
-        background: #1a1a1a;
-        overflow: hidden;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        color: #e0e0e0;
-        user-select: none;
-    }
-
     .app-layout {
         display: flex;
         width: 100vw;
         height: 100vh;
+        overflow: hidden;
+    }
+
+    .center-column {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-width: 0;
         overflow: hidden;
     }
 </style>

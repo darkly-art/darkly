@@ -1,14 +1,16 @@
 use super::UndoAction;
 use crate::document::Document;
 use crate::layer::LayerId;
-use crate::tile::MaskSurface;
 use std::collections::{HashMap, HashSet};
 
 /// Undo action for mask structural changes (add/remove mask, toggle mask_enabled/show_mask).
-/// Swaps the full mask state on undo/redo. Works for both raster layers and groups.
+///
+/// Stores only boolean flags — mask pixel data is GPU-authoritative and
+/// preserved via `RegionStore` + `GpuRegionAction` (wrapped in a `CompoundAction`
+/// alongside this action when removing a mask).
 pub struct MaskPropertyAction {
     layer_id: LayerId,
-    mask: Option<MaskSurface>,
+    had_mask: bool,
     mask_enabled: bool,
     show_mask: bool,
 }
@@ -16,11 +18,11 @@ pub struct MaskPropertyAction {
 impl MaskPropertyAction {
     pub fn new(
         layer_id: LayerId,
-        mask: Option<MaskSurface>,
+        had_mask: bool,
         mask_enabled: bool,
         show_mask: bool,
     ) -> Self {
-        MaskPropertyAction { layer_id, mask, mask_enabled, show_mask }
+        MaskPropertyAction { layer_id, had_mask, mask_enabled, show_mask }
     }
 }
 
@@ -40,7 +42,9 @@ impl MaskPropertyAction {
     fn swap(&mut self, doc: &mut Document) {
         if let Some(node) = doc.find_node_mut(self.layer_id) {
             let m = node.as_masked_mut();
-            std::mem::swap(m.mask_mut(), &mut self.mask);
+            let mut has = m.has_mask();
+            std::mem::swap(&mut has, &mut self.had_mask);
+            m.set_has_mask(has);
             let mut enabled = m.mask_enabled();
             std::mem::swap(&mut enabled, &mut self.mask_enabled);
             m.set_mask_enabled(enabled);

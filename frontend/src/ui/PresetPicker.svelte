@@ -43,8 +43,8 @@
     }
 
     .modal {
-        background: #222;
-        border: 1px solid #444;
+        background: var(--bg-active);
+        border: 1px solid var(--bg-hover);
         border-radius: 8px;
         padding: 32px;
         max-width: 400px;
@@ -56,13 +56,13 @@
         margin: 0 0 8px;
         font-size: 18px;
         font-weight: 600;
-        color: #e0e0e0;
+        color: var(--text);
     }
 
     p {
         margin: 0 0 24px;
         font-size: 13px;
-        color: #888;
+        color: var(--text-muted);
     }
 
     .presets {
@@ -76,8 +76,8 @@
         flex-direction: column;
         align-items: center;
         gap: 2px;
-        background: #2a2a2a;
-        border: 1px solid #444;
+        background: var(--bg-hover);
+        border: 1px solid var(--bg-hover);
         border-radius: 6px;
         padding: 14px 16px;
         cursor: pointer;
@@ -85,18 +85,18 @@
     }
 
     .preset-btn:hover {
-        background: #333;
-        border-color: #6a6aff;
+        background: var(--bg-active);
+        border-color: var(--accent);
     }
 
     .preset-name {
         font-size: 15px;
         font-weight: 600;
-        color: #e0e0e0;
+        color: var(--text);
     }
 
     .preset-desc {
         font-size: 12px;
-        color: #888;
+        color: var(--text-muted);
     }
 </style>

@@ -129,13 +129,13 @@
             onclick={toggleVisibility}
             title="Toggle visibility"
         >
-            {veil.visible ? '\u{1F441}' : '\u{2014}'}
+            <i class={veil.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
         </button>
 
         <span class="veil-name">{veil.type}</span>
 
         {#if veil.params.length > 0}
-            <span class="expand-indicator">{expanded ? '\u25B4' : '\u25BE'}</span>
+            <span class="expand-indicator"><i class={expanded ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down'}></i></span>
         {/if}
 
         <button
@@ -143,7 +143,7 @@
             onclick={remove}
             title="Remove veil"
         >
-            &times;
+            <i class="fa-solid fa-trash"></i>
         </button>
     </div>
 
@@ -195,7 +195,7 @@
         left: 8px;
         right: 4px;
         height: 2px;
-        background: #6a6aff;
+        background: var(--accent);
         pointer-events: none;
     }
 
@@ -206,7 +206,7 @@
         left: 8px;
         right: 4px;
         height: 2px;
-        background: #6a6aff;
+        background: var(--accent);
         pointer-events: none;
     }
 
@@ -214,31 +214,34 @@
         display: flex;
         align-items: center;
         gap: 4px;
-        padding: 4px 8px;
+        padding: 6px 12px;
         min-height: 24px;
         cursor: pointer;
+        transition: background 0.1s;
     }
 
     .veil-header:hover {
-        background: #2a2a2a;
+        background: var(--bg-hover);
     }
 
     .vis-btn {
         background: none;
         border: none;
-        color: #888;
+        color: var(--text-muted);
         cursor: pointer;
         padding: 0;
         font-size: 12px;
         width: 18px;
         text-align: center;
+        transition: color 0.1s;
     }
-    .vis-btn.hidden { color: #444; }
+    .vis-btn:hover { color: var(--text); }
+    .vis-btn.hidden { color: var(--text-dim); }
 
     .veil-name {
         flex: 1;
         font-size: 12px;
-        color: #ccc;
+        color: var(--text);
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -246,22 +249,23 @@
 
     .expand-indicator {
         font-size: 10px;
-        color: #666;
+        color: var(--text-muted);
         margin-right: 2px;
     }
 
     .remove-btn {
         background: none;
         border: none;
-        color: #555;
+        color: var(--text-dim);
         cursor: pointer;
         padding: 0;
         font-size: 14px;
         width: 18px;
         text-align: center;
         line-height: 1;
+        transition: color 0.1s;
     }
-    .remove-btn:hover { color: #e44; }
+    .remove-btn:hover { color: var(--danger); }
 
     .veil-params {
         padding: 4px 8px 8px 28px;
@@ -278,24 +282,24 @@
 
     .param-label {
         font-size: 11px;
-        color: #999;
+        color: var(--text-muted);
         min-width: 40px;
     }
 
     .param-slider {
         flex: 1;
-        height: 12px;
-        accent-color: #6a6aff;
+        height: 4px;
     }
 
     .param-value {
         font-size: 10px;
-        color: #777;
+        color: var(--text-muted);
         min-width: 28px;
         text-align: right;
+        font-variant-numeric: tabular-nums;
     }
 
     .param-checkbox {
-        accent-color: #6a6aff;
+        accent-color: var(--accent);
     }
 </style>

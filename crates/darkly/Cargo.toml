@@ -12,6 +12,9 @@ bytemuck = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+web-time = { workspace = true }
+zip = { workspace = true }
+image = { workspace = true }
 
 [dev-dependencies]
 pollster = "0.4"

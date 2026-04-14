@@ -7,6 +7,7 @@ const PARAMS: &[ParamDef] = &[
     ParamDef::Float { name: "rain_amount", min: 0.0, max: 1.0, default: 0.7 },
     ParamDef::Float { name: "direction",   min: 0.0, max: 360.0, default: 0.0 },
     ParamDef::Float { name: "fog_amount",  min: 0.0, max: 1.0, default: 0.0 },
+    ParamDef::Float { name: "scale",       min: 0.1, max: 5.0, default: 0.8 },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -19,7 +20,8 @@ pub fn register() -> VeilRegistration {
             let rain_amount = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 0.7 };
             let direction = match params.get(2) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
             let fog_amount = match params.get(3) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
-            Box::new(RainyGlass::new(speed, rain_amount, direction, fog_amount, shared))
+            let scale = match params.get(4) { Some(ParamValue::Float(v)) => *v, _ => 0.8 };
+            Box::new(RainyGlass::new(speed, rain_amount, direction, fog_amount, scale, shared))
         },
     }
 }
@@ -38,6 +40,9 @@ struct RainyGlassUniforms {
     direction: f32,
     /// 0 = clear glass, 1 = fully foggy. Drops and trails cut through.
     fog_amount: f32,
+    /// Zoom level for the raindrop pattern. 1.0 = default, higher = more drops.
+    scale: f32,
+    _pad: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -48,18 +53,21 @@ pub struct RainyGlass {
     pub direction: f32,
     /// 0 = clear glass (default), 1 = fully foggy. Drops and trails cut through.
     pub fog_amount: f32,
+    /// Zoom level for the raindrop pattern. 1.0 = default, higher = more drops.
+    pub scale: f32,
     /// Accumulated effective time (speed-scaled).
     time: f32,
     shared: Arc<EffectPipeline>,
 }
 
 impl RainyGlass {
-    pub fn new(speed: f32, rain_amount: f32, direction: f32, fog_amount: f32, shared: Arc<EffectPipeline>) -> Self {
+    pub fn new(speed: f32, rain_amount: f32, direction: f32, fog_amount: f32, scale: f32, shared: Arc<EffectPipeline>) -> Self {
         RainyGlass {
             speed,
             rain_amount,
             direction,
             fog_amount,
+            scale,
             time: 0.0,
             shared,
         }
@@ -85,6 +93,7 @@ impl Veil for RainyGlass {
             ParamValue::Float(self.rain_amount),
             ParamValue::Float(self.direction),
             ParamValue::Float(self.fog_amount),
+            ParamValue::Float(self.scale),
         ]
     }
 
@@ -118,6 +127,8 @@ impl Veil for RainyGlass {
             resolution_y: render_height as f32,
             direction: dir_rad,
             fog_amount: self.fog_amount,
+            scale: self.scale,
+            _pad: 0.0,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rainy-glass-uniforms"),

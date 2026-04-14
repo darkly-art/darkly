@@ -32,8 +32,7 @@ fn headless_device() -> (wgpu::Device, wgpu::Queue) {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("darkly-test-device"),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults()
-                    .using_resolution(adapter.limits()),
+                required_limits: adapter.limits(),
                 ..Default::default()
             })
             .await
@@ -59,13 +58,10 @@ fn run_paint_benchmark(
 ) -> Vec<FrameTiming> {
     let mut timings = Vec::with_capacity(num_frames);
 
-    for i in 0..num_frames {
-        // Simulate a brush dab at varying positions (256px radius = 512x512 dab)
-        let x = 200.0 + ((i as f32) * 2.0) % 1500.0;
-        let y = 300.0 + ((i as f32) * 0.7).sin() * 20.0;
-
+    for _i in 0..num_frames {
         let t_paint = Instant::now();
-        doc.paint_circle(paint_layer_id, x, y, 256.0, [220, 180, 60, 200]);
+        // No CPU paint — GPU strokes bypass Document. Mark dirty to trigger composite.
+        compositor.mark_dirty();
         let paint_us = t_paint.elapsed().as_micros();
 
         let t_render = Instant::now();
@@ -97,10 +93,8 @@ fn profile_render_pipeline() {
     let mut compositor = Compositor::new(&device, &queue, surface_format, width, height, false);
     let mut doc = Document::new(width, height);
 
-    // Set up layers matching App.svelte: gradient bg + noise filter + paint layer
-    let bg_id = doc.add_raster_layer();
-    compositor.ensure_raster_layer(&device, &queue, bg_id);
-    doc.fill_gradient(bg_id);
+    // Set up layers: bg + paint layer (gradient fill removed — GPU-only now).
+    let _bg_id = doc.add_raster_layer();
 
     let paint_id = doc.add_raster_layer();
     compositor.ensure_raster_layer(&device, &queue, paint_id);

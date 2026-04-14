@@ -9,7 +9,7 @@
 //! tools provide an SDF closure to `rasterize()`, which evaluates it at each
 //! pixel center and writes coverage values into tiles.
 
-use crate::tile::{AlphaF32, AlphaF32Data, AlphaMask, Tile, TileGrid, TILE_SIZE};
+use crate::tile::{AlphaF32, AlphaF32Data, AlphaMask, Tile, TILE_SIZE};
 
 // ---------------------------------------------------------------------------
 // Boolean operations
@@ -125,6 +125,47 @@ impl AlphaMask {
 
         if any {
             Some((min_x, min_y, max_x, max_y))
+        } else {
+            None
+        }
+    }
+
+    /// Tight pixel-level bounding rect of non-zero coverage: `[x, y, w, h]`.
+    ///
+    /// Scans every tile's actual pixel data, so this is more expensive than
+    /// `bounding_rect()` but gives exact bounds with no tile-alignment padding.
+    pub fn pixel_bounding_rect(&self) -> Option<[u32; 4]> {
+        let ts = TILE_SIZE as i32;
+        let mut px_min_x = i32::MAX;
+        let mut px_min_y = i32::MAX;
+        let mut px_max_x = i32::MIN;
+        let mut px_max_y = i32::MIN;
+
+        for ((tx, ty), tile) in self.iter() {
+            let data = tile.data();
+            let origin_x = tx * ts;
+            let origin_y = ty * ts;
+
+            for ly in 0..TILE_SIZE {
+                for lx in 0..TILE_SIZE {
+                    if data.0[ly * TILE_SIZE + lx] > 0.0 {
+                        let px = origin_x + lx as i32;
+                        let py = origin_y + ly as i32;
+                        px_min_x = px_min_x.min(px);
+                        px_min_y = px_min_y.min(py);
+                        px_max_x = px_max_x.max(px);
+                        px_max_y = px_max_y.max(py);
+                    }
+                }
+            }
+        }
+
+        if px_min_x <= px_max_x {
+            let x = px_min_x.max(0) as u32;
+            let y = px_min_y.max(0) as u32;
+            let w = (px_max_x - px_min_x + 1) as u32;
+            let h = (px_max_y - px_min_y + 1) as u32;
+            Some([x, y, w, h])
         } else {
             None
         }
@@ -249,283 +290,298 @@ impl AlphaMask {
     }
 }
 
+
 // ---------------------------------------------------------------------------
-// Scanline flood fill — generic over PaintSurface
-//
-// All scanning and filling operates tile-by-tile: one HashMap lookup per tile
-// boundary crossing. Within a tile, pixels are accessed via direct array
-// indexing on the tile data. This matches Krita's numContiguousColumns()
-// optimization and is critical for performance on large fills.
+// Flat-buffer SDF rasterization (no tile indirection)
 // ---------------------------------------------------------------------------
 
-use crate::paint::PaintSurface;
+/// Result of rasterizing an SDF shape to a flat R8 buffer.
+/// Contains only the tight bounding region, not the full canvas.
+pub struct RasterizedMask {
+    /// R8 pixel data, `region_w * region_h` bytes.
+    pub data: Vec<u8>,
+    /// Origin of the region in canvas coordinates.
+    pub x: u32,
+    pub y: u32,
+    /// Dimensions of the region.
+    pub width: u32,
+    pub height: u32,
+}
 
-impl AlphaMask {
-    /// Scanline flood fill from a seed point on any `PaintSurface`.
-    ///
-    /// Returns a mask with 1.0 for all contiguous pixels whose native value
-    /// is within `tolerance` of the seed pixel's value.
-    pub fn flood_fill_on<S: PaintSurface>(
-        source: &S,
-        seed_x: i32,
-        seed_y: i32,
-        canvas_w: i32,
-        canvas_h: i32,
-        tolerance: u8,
-    ) -> AlphaMask {
-        let mut mask = AlphaMask::new();
+/// Rasterize an SDF shape into a tight-bounds R8 buffer.
+///
+/// Returns only the region that the shape covers (plus margin for AA/feather),
+/// clamped to canvas bounds. The caller uploads this as a subregion of the
+/// GPU texture via `queue.write_texture()` with an origin offset.
+///
+/// - `canvas_width`, `canvas_height`: full canvas dimensions (for clamping)
+/// - `bounds`: (x, y, w, h) pixel bounding box of the shape
+/// - `sdf_fn`: signed distance at pixel center (negative = inside)
+/// - `antialias`: smooth 1px edge transition
+/// - `feather`: if > 0, smooth transition over this many pixels
+pub fn rasterize_sdf_r8(
+    canvas_width: u32,
+    canvas_height: u32,
+    bounds: (i32, i32, i32, i32),
+    sdf_fn: impl Fn(f32, f32) -> f32,
+    antialias: bool,
+    feather: f32,
+) -> RasterizedMask {
+    let (bx, by, bw, bh) = bounds;
 
-        if seed_x < 0 || seed_y < 0 || seed_x >= canvas_w || seed_y >= canvas_h {
-            return mask;
-        }
+    let margin = if feather > 0.0 {
+        feather.ceil() as i32
+    } else if antialias {
+        1
+    } else {
+        0
+    };
 
-        let seed = source.read_seed(seed_x, seed_y);
-        let tol = tolerance as i16;
+    let x0 = (bx - margin).max(0) as u32;
+    let y0 = (by - margin).max(0) as u32;
+    let x1 = ((bx + bw + margin) as u32).min(canvas_width);
+    let y1 = ((by + bh + margin) as u32).min(canvas_height);
+    let rw = x1 - x0;
+    let rh = y1 - y0;
 
-        let (seg_start, seg_end) = find_segment::<S>(source, &seed, tol, seed_x, seed_y, canvas_w);
-        fill_span(&mut mask, seg_start, seg_end, seed_y);
+    let mut pixels = vec![0u8; (rw * rh) as usize];
 
-        let mut queue = std::collections::VecDeque::new();
-        queue.push_back((seed_y, seg_start, seg_end));
-
-        while let Some((y, start, end)) = queue.pop_front() {
-            for dy in [-1i32, 1] {
-                let ny = y + dy;
-                if ny < 0 || ny >= canvas_h {
-                    continue;
-                }
-                scan_row::<S>(
-                    source, &seed, tol,
-                    &mut mask, &mut queue,
-                    ny, start, end, canvas_w,
-                );
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let sdf = sdf_fn(px as f32 + 0.5, py as f32 + 0.5);
+            let coverage = crate::sdf::sdf_coverage(sdf, antialias, feather);
+            if coverage > 0.0 {
+                pixels[((py - y0) * rw + (px - x0)) as usize] = (coverage * 255.0) as u8;
             }
         }
-
-        mask
     }
 
-    /// Convenience: flood fill reading from a TileGrid via a temporary PaintTarget.
-    /// This is the legacy signature used by Document::flood_fill in non-mask mode.
-    pub fn flood_fill(
-        source: &TileGrid,
-        seed_x: i32,
-        seed_y: i32,
-        canvas_w: i32,
-        canvas_h: i32,
-        tolerance: u8,
-    ) -> AlphaMask {
-        // Construct a read-only view. The PaintTarget needs &mut but flood_fill_on
-        // only calls read methods (&self). We use a thin wrapper to avoid the
-        // &mut requirement.
-        Self::flood_fill_on(
-            &ReadOnlyTileGrid(source),
-            seed_x, seed_y, canvas_w, canvas_h, tolerance,
-        )
-    }
+    RasterizedMask { data: pixels, x: x0, y: y0, width: rw, height: rh }
 }
 
-/// Read-only wrapper around &TileGrid that implements PaintSurface for flood fill.
-/// Write methods panic — they should never be called during flood fill source reading.
-struct ReadOnlyTileGrid<'a>(&'a TileGrid);
+// ---------------------------------------------------------------------------
+// Scanline polygon rasterization (no SDF)
+// ---------------------------------------------------------------------------
 
-impl PaintSurface for ReadOnlyTileGrid<'_> {
-    type Seed = [u8; 4];
-    type TileData = crate::tile::RgbaData;
-
-    fn read_seed(&self, x: i32, y: i32) -> [u8; 4] {
-        let ts = TILE_SIZE as i32;
-        let (tx, ty) = TileGrid::tile_coords_for_pixel(x, y);
-        match self.0.get(tx, ty) {
-            Some(t) => *t.data().pixel((x - tx * ts) as usize, (y - ty * ts) as usize),
-            None => [0, 0, 0, 0],
-        }
+/// Rasterize a polygon into a tight-bounds R8 buffer using scanline fill.
+///
+/// O(height × edges + pixels) — no per-pixel distance computation.
+/// Antialiasing uses 4× vertical supersampling.
+pub fn rasterize_polygon_r8(
+    canvas_width: u32,
+    canvas_height: u32,
+    vertices: &[[f32; 2]],
+    antialias: bool,
+) -> RasterizedMask {
+    if vertices.len() < 3 {
+        return RasterizedMask { data: Vec::new(), x: 0, y: 0, width: 0, height: 0 };
     }
 
-    fn get_tile_data(&self, tx: i32, ty: i32) -> Option<&crate::tile::RgbaData> {
-        self.0.get(tx, ty).map(|t| t.data())
+    // Bounding box.
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for v in vertices {
+        min_x = min_x.min(v[0]);
+        min_y = min_y.min(v[1]);
+        max_x = max_x.max(v[0]);
+        max_y = max_y.max(v[1]);
     }
 
-    fn pixel_matches(data: &crate::tile::RgbaData, lx: usize, ly: usize, seed: &[u8; 4], tol: i16) -> bool {
-        let px = data.pixel(lx, ly);
-        (px[0] as i16 - seed[0] as i16).abs() <= tol
-            && (px[1] as i16 - seed[1] as i16).abs() <= tol
-            && (px[2] as i16 - seed[2] as i16).abs() <= tol
-            && (px[3] as i16 - seed[3] as i16).abs() <= tol
+    let margin = if antialias { 1 } else { 0 };
+    let x0 = ((min_x.floor() as i32) - margin).max(0) as u32;
+    let y0 = ((min_y.floor() as i32) - margin).max(0) as u32;
+    let x1 = ((max_x.ceil() as i32) + margin + 1).min(canvas_width as i32) as u32;
+    let y1 = ((max_y.ceil() as i32) + margin + 1).min(canvas_height as i32) as u32;
+    let rw = x1 - x0;
+    let rh = y1 - y0;
+
+    if rw == 0 || rh == 0 {
+        return RasterizedMask { data: Vec::new(), x: x0, y: y0, width: 0, height: 0 };
     }
 
-    fn empty_matches(seed: &[u8; 4], tol: i16) -> bool {
-        Self::pixel_matches(&crate::tile::RgbaData::default(), 0, 0, seed, tol)
-    }
+    let n = vertices.len();
+    let sub_samples: &[f32] = if antialias { &[0.125, 0.375, 0.625, 0.875] } else { &[0.5] };
+    let scale = if antialias { 255.0 / sub_samples.len() as f32 } else { 255.0 };
 
-    fn composite(&mut self, _: i32, _: i32, _: [u8; 4]) { unreachable!() }
-    fn erase(&mut self, _: i32, _: i32, _: f32) { unreachable!() }
-    fn replace(&mut self, _: i32, _: i32, _: [u8; 4]) { unreachable!() }
-}
+    // Accumulator: one u8 per pixel for non-AA, one u16 per pixel for AA.
+    let mut accum = vec![0u16; (rw * rh) as usize];
+    let mut intersections = Vec::with_capacity(n / 2 + 4);
 
-/// Scan left and right from `x` on row `y` to find the full contiguous
-/// matching segment. Tile-aware: one tile lookup per tile boundary.
-/// Returns (start_inclusive, end_exclusive).
-fn find_segment<S: PaintSurface>(
-    source: &S,
-    seed: &S::Seed,
-    tol: i16,
-    x: i32,
-    y: i32,
-    canvas_w: i32,
-) -> (i32, i32) {
-    let ts = TILE_SIZE as i32;
-    let ty = y.div_euclid(ts);
-    let ly = (y - ty * ts) as usize;
+    for py in y0..y1 {
+        let local_y = (py - y0) as usize;
 
-    // Scan right from x.
-    let mut end = x;
-    while end < canvas_w {
-        let tx = end.div_euclid(ts);
-        let tile_end = ((tx + 1) * ts).min(canvas_w);
-        let base = tx * ts;
+        for &sub_offset in sub_samples {
+            let scan_y = py as f32 + sub_offset;
 
-        match source.get_tile_data(tx, ty) {
-            Some(data) => {
-                while end < tile_end {
-                    if !S::pixel_matches(data, (end - base) as usize, ly, seed, tol) {
-                        break;
+            // Compute edge intersections with this scanline.
+            intersections.clear();
+            let mut j = n - 1;
+            for i in 0..n {
+                let yi = vertices[i][1];
+                let yj = vertices[j][1];
+
+                // Edge crosses scanline? (one endpoint strictly above, one at or below)
+                if (yi <= scan_y && yj > scan_y) || (yj <= scan_y && yi > scan_y) {
+                    let t = (scan_y - yi) / (yj - yi);
+                    let x = vertices[i][0] + t * (vertices[j][0] - vertices[i][0]);
+                    intersections.push(x);
+                }
+                j = i;
+            }
+
+            // Sort intersections.
+            intersections.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+
+            // Fill between pairs (even-odd rule).
+            for pair in intersections.chunks_exact(2) {
+                let xl = pair[0];
+                let xr = pair[1];
+
+                // Integer pixel range fully inside the span.
+                let px_start = (xl.ceil() as i32).max(x0 as i32) as u32;
+                let px_end = (xr.floor() as i32 + 1).min(x1 as i32) as u32;
+
+                for px in px_start..px_end {
+                    accum[local_y * rw as usize + (px - x0) as usize] += 1;
+                }
+
+                // Sub-pixel coverage at left edge.
+                if antialias {
+                    let left_px = (xl.floor() as i32).max(x0 as i32) as u32;
+                    if left_px < px_start && left_px >= x0 && left_px < x1 {
+                        // Fraction of pixel that's inside: right edge of pixel minus intersection x
+                        let coverage = (left_px as f32 + 1.0 - xl).clamp(0.0, 1.0);
+                        accum[local_y * rw as usize + (left_px - x0) as usize] +=
+                            (coverage * 1.0) as u16; // each sub-sample contributes fractionally
                     }
-                    end += 1;
-                }
-            }
-            None => {
-                if S::empty_matches(seed, tol) {
-                    end = tile_end;
-                }
-            }
-        }
-        if end < tile_end {
-            break;
-        }
-    }
-
-    // Scan left from x - 1.
-    let mut start = x;
-    while start > 0 {
-        let tx = (start - 1).div_euclid(ts);
-        let tile_start = tx * ts;
-        let base = tx * ts;
-
-        match source.get_tile_data(tx, ty) {
-            Some(data) => {
-                while start > tile_start {
-                    if !S::pixel_matches(data, (start - 1 - base) as usize, ly, seed, tol) {
-                        break;
+                    // Sub-pixel coverage at right edge.
+                    let right_px = (xr.floor() as i32).max(x0 as i32) as u32;
+                    if right_px >= px_end && right_px >= x0 && right_px < x1 {
+                        let coverage = (xr - right_px as f32).clamp(0.0, 1.0);
+                        accum[local_y * rw as usize + (right_px - x0) as usize] +=
+                            (coverage * 1.0) as u16;
                     }
-                    start -= 1;
-                }
-            }
-            None => {
-                if S::empty_matches(seed, tol) {
-                    start = tile_start;
                 }
             }
         }
-        if start > tile_start {
-            break;
-        }
     }
 
-    (start, end)
+    // Convert accumulator to R8.
+    let data: Vec<u8> = accum.iter().map(|&v| {
+        (v as f32 * scale).round().min(255.0) as u8
+    }).collect();
+
+    RasterizedMask { data, x: x0, y: y0, width: rw, height: rh }
 }
 
-/// Write 1.0 to the mask for the span [start, end) on row y.
-/// Tile-aware: one get_or_create per tile.
-fn fill_span(mask: &mut AlphaMask, start: i32, end: i32, y: i32) {
-    let ts = TILE_SIZE as i32;
-    let ty = y.div_euclid(ts);
-    let ly = (y - ty * ts) as usize;
+// ---------------------------------------------------------------------------
+// Flat-buffer contour extraction (no tile indirection)
+// ---------------------------------------------------------------------------
 
-    let mut x = start;
-    while x < end {
-        let tx = x.div_euclid(ts);
-        let base = tx * ts;
-        let tile_end = ((tx + 1) * ts).min(end);
+/// Extract contour segments from a flat R8 buffer using marching squares.
+///
+/// Equivalent to `AlphaMask::contour_segments()` but operates on a flat `&[u8]`
+/// from GPU readback instead of tile-based storage.
+pub fn contour_segments_r8(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    threshold: u8,
+) -> Vec<([f32; 2], [f32; 2])> {
+    let [bx, by, bw, bh] = match pixel_bounds_r8(pixels, width, height) {
+        Some(b) => b,
+        None => return Vec::new(),
+    };
 
-        let tile = mask.get_or_create(tx, ty);
-        let data = tile.write();
-        while x < tile_end {
-            data.set((x - base) as usize, ly, 1.0);
-            x += 1;
+    // Extend by 1 pixel for marching squares boundary blocks.
+    let px_min = (bx as i32 - 1).max(0);
+    let py_min = (by as i32 - 1).max(0);
+    let px_max = ((bx + bw) as i32).min(width as i32 - 1);
+    let py_max = ((by + bh) as i32).min(height as i32 - 1);
+
+    let sample = |x: i32, y: i32| -> f32 {
+        if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+            return 0.0;
         }
-    }
-}
+        pixels[(y as u32 * width + x as u32) as usize] as f32 / 255.0
+    };
 
-/// Scan row `ny` in the range [start, end), find un-visited matching
-/// sub-segments, extend them, fill, and push to queue.
-/// Tile-aware: reads source and mask tiles once per tile boundary.
-fn scan_row<S: PaintSurface>(
-    source: &S,
-    seed: &S::Seed,
-    tol: i16,
-    mask: &mut AlphaMask,
-    queue: &mut std::collections::VecDeque<(i32, i32, i32)>,
-    ny: i32,
-    start: i32,
-    end: i32,
-    canvas_w: i32,
-) {
-    let ts = TILE_SIZE as i32;
-    let ty = ny.div_euclid(ts);
-    let ly = (ny - ty * ts) as usize;
+    let threshold_f = threshold as f32 / 255.0;
+    let mut segments = Vec::new();
 
-    let mut x = start;
-    while x < end {
-        let tx = x.div_euclid(ts);
-        let base = tx * ts;
-        let tile_end = ((tx + 1) * ts).min(end);
+    for py in py_min..py_max {
+        for px in px_min..px_max {
+            let tl = sample(px, py) > threshold_f;
+            let tr = sample(px + 1, py) > threshold_f;
+            let bl = sample(px, py + 1) > threshold_f;
+            let br = sample(px + 1, py + 1) > threshold_f;
 
-        // Look up both source and mask tiles once for this tile column.
-        let src_tile = source.get_tile_data(tx, ty);
-        let mask_tile = mask.get(tx, ty);
-
-        while x < tile_end {
-            let lx = (x - base) as usize;
-
-            // Check visited (mask > 0).
-            let visited = match mask_tile {
-                Some(t) => t.data().get(lx, ly) > 0.0,
-                None => false,
-            };
-            if visited {
-                x += 1;
+            let index = (tl as u8) | ((tr as u8) << 1) | ((bl as u8) << 2) | ((br as u8) << 3);
+            if index == 0 || index == 15 {
                 continue;
             }
 
-            // Check pixel match.
-            let matches = match src_tile {
-                Some(data) => S::pixel_matches(data, lx, ly, seed, tol),
-                None => S::empty_matches(seed, tol),
-            };
-            if !matches {
-                x += 1;
-                continue;
+            let x = px as f32;
+            let y = py as f32;
+
+            let top = lerp_edge(sample(px, py), sample(px + 1, py), threshold_f);
+            let bottom = lerp_edge(sample(px, py + 1), sample(px + 1, py + 1), threshold_f);
+            let left = lerp_edge(sample(px, py), sample(px, py + 1), threshold_f);
+            let right = lerp_edge(sample(px + 1, py), sample(px + 1, py + 1), threshold_f);
+
+            let t = [x + top, y];
+            let b = [x + bottom, y + 1.0];
+            let l = [x, y + left];
+            let r = [x + 1.0, y + right];
+
+            match index {
+                1  => segments.push((l, t)),
+                2  => segments.push((t, r)),
+                3  => segments.push((l, r)),
+                4  => segments.push((b, l)),
+                5  => segments.push((b, t)),
+                6  => { segments.push((t, r)); segments.push((b, l)); }
+                7  => segments.push((b, r)),
+                8  => segments.push((r, b)),
+                9  => { segments.push((l, t)); segments.push((r, b)); }
+                10 => segments.push((t, b)),
+                11 => segments.push((l, b)),
+                12 => segments.push((r, l)),
+                13 => segments.push((r, t)),
+                14 => segments.push((t, l)),
+                _  => unreachable!(),
             }
-
-            // Found an unvisited matching pixel — extend to full segment.
-            let (seg_start, seg_end) = find_segment::<S>(source, seed, tol, x, ny, canvas_w);
-            fill_span(mask, seg_start, seg_end, ny);
-            queue.push_back((ny, seg_start, seg_end));
-            x = seg_end;
-
-            // After fill_span mutated the mask, our mask_tile ref is stale
-            // but that's fine: we skip past the filled segment. If x is still
-            // in this tile column, re-enter to get fresh tile refs.
-            break;
         }
+    }
 
-        // If we broke out of the inner loop due to fill_span, re-fetch
-        // the mask tile for the remaining pixels in this tile column.
-        if x < tile_end && x > start {
-            scan_row::<S>(source, seed, tol, mask, queue, ny, x, tile_end, canvas_w);
-            x = tile_end;
+    merge_collinear(segments)
+}
+
+/// Compute tight pixel bounding box from a flat R8 buffer.
+/// Returns `[x, y, w, h]` or None if all pixels are zero.
+pub fn pixel_bounds_r8(pixels: &[u8], width: u32, height: u32) -> Option<[u32; 4]> {
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+
+    for y in 0..height {
+        for x in 0..width {
+            if pixels[(y * width + x) as usize] > 0 {
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
         }
+    }
+
+    if max_x < min_x {
+        None
+    } else {
+        Some([min_x, min_y, max_x - min_x + 1, max_y - min_y + 1])
     }
 }
 
@@ -976,6 +1032,70 @@ fn lerp_edge(v0: f32, v1: f32, threshold: f32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
+// R8 pixel buffer conversions
+// ---------------------------------------------------------------------------
+
+impl AlphaMask {
+    /// Rasterize the mask into a flat R8 (`Vec<u8>`) pixel buffer.
+    ///
+    /// `origin` is the top-left corner in canvas pixel coordinates.
+    /// Pixels outside allocated tiles default to `default_value`.
+    pub fn rasterize_r8(
+        &self,
+        origin: (i32, i32),
+        width: u32,
+        height: u32,
+        default_value: u8,
+    ) -> Vec<u8> {
+        let mut pixels = vec![default_value; (width * height) as usize];
+        let (ox, oy) = origin;
+        let ts = TILE_SIZE;
+
+        for ((tx, ty), tile) in self.iter() {
+            let base_x = tx * ts as i32;
+            let base_y = ty * ts as i32;
+            let data = tile.data();
+            for ly in 0..ts {
+                for lx in 0..ts {
+                    let px = base_x + lx as i32 - ox;
+                    let py = base_y + ly as i32 - oy;
+                    if px >= 0 && py >= 0 && (px as u32) < width && (py as u32) < height {
+                        let v = (data.get(lx, ly).clamp(0.0, 1.0) * 255.0) as u8;
+                        pixels[(py as u32 * width + px as u32) as usize] = v;
+                    }
+                }
+            }
+        }
+
+        pixels
+    }
+
+    /// Construct an AlphaMask from a flat R8 pixel buffer.
+    ///
+    /// Pixels with value 0 are skipped (treated as empty). The buffer covers
+    /// canvas coordinates starting at (0, 0).
+    pub fn from_r8(pixels: &[u8], width: u32, height: u32) -> Self {
+        let ts = TILE_SIZE;
+        let mut mask = AlphaMask::new();
+
+        for py in 0..height {
+            for px in 0..width {
+                let v = pixels[(py * width + px) as usize];
+                if v > 0 {
+                    let tx = (px / ts as u32) as i32;
+                    let ty = (py / ts as u32) as i32;
+                    let lx = (px % ts as u32) as usize;
+                    let ly = (py % ts as u32) as usize;
+                    mask.get_or_create(tx, ty).write().set(lx, ly, v as f32 / 255.0);
+                }
+            }
+        }
+
+        mask
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
@@ -1002,7 +1122,7 @@ impl AlphaMask {
 
 #[cfg(test)]
 mod tests {
-    use crate::tile::{AlphaMask, TileGrid, TILE_SIZE};
+    use crate::tile::AlphaMask;
 
     #[test]
     fn boolean_add() {
@@ -1222,175 +1342,6 @@ mod tests {
         // Well outside
         assert_eq!(mask.sample(95, 30), 0.0);
         assert_eq!(mask.sample(50, 55), 0.0);
-    }
-
-    // --- flood_fill ---
-
-    /// Helper: paint a solid-color rectangle onto a TileGrid.
-    fn paint_rect(grid: &mut TileGrid, x: i32, y: i32, w: i32, h: i32, color: [u8; 4]) {
-        let ts = TILE_SIZE as i32;
-        for py in y..y + h {
-            for px in x..x + w {
-                let (tx, ty) = TileGrid::tile_coords_for_pixel(px, py);
-                let lx = (px - tx * ts) as usize;
-                let ly = (py - ty * ts) as usize;
-                *grid.get_or_create(tx, ty).write().pixel_mut(lx, ly) = color;
-            }
-        }
-    }
-
-    #[test]
-    fn flood_fill_solid_rect() {
-        let mut grid = TileGrid::new();
-        paint_rect(&mut grid, 10, 10, 30, 20, [255, 0, 0, 255]);
-
-        let mask = AlphaMask::flood_fill(&grid, 20, 15, 128, 128, 0);
-
-        // Inside the rect
-        assert_eq!(mask.sample(10, 10), 1.0);
-        assert_eq!(mask.sample(25, 20), 1.0);
-        assert_eq!(mask.sample(39, 29), 1.0);
-        // Outside
-        assert_eq!(mask.sample(9, 15), 0.0);
-        assert_eq!(mask.sample(40, 15), 0.0);
-        assert_eq!(mask.sample(20, 9), 0.0);
-        assert_eq!(mask.sample(20, 30), 0.0);
-    }
-
-    #[test]
-    fn flood_fill_empty_canvas() {
-        let grid = TileGrid::new();
-        // Seed color is [0,0,0,0] — matches all empty tiles.
-        let mask = AlphaMask::flood_fill(&grid, 0, 0, 128, 128, 0);
-
-        // Entire canvas should be filled.
-        assert_eq!(mask.sample(0, 0), 1.0);
-        assert_eq!(mask.sample(64, 64), 1.0);
-        assert_eq!(mask.sample(127, 127), 1.0);
-    }
-
-    #[test]
-    fn flood_fill_seed_out_of_bounds() {
-        let grid = TileGrid::new();
-
-        // Negative coords
-        let mask = AlphaMask::flood_fill(&grid, -1, 0, 64, 64, 0);
-        assert!(mask.is_empty());
-
-        // Beyond canvas
-        let mask = AlphaMask::flood_fill(&grid, 64, 0, 64, 64, 0);
-        assert!(mask.is_empty());
-
-        let mask = AlphaMask::flood_fill(&grid, 0, 64, 64, 64, 0);
-        assert!(mask.is_empty());
-    }
-
-    #[test]
-    fn flood_fill_tolerance() {
-        let mut grid = TileGrid::new();
-        // Left half: red
-        paint_rect(&mut grid, 0, 0, 32, 32, [200, 0, 0, 255]);
-        // Right half: slightly different red (delta=10 on R channel)
-        paint_rect(&mut grid, 32, 0, 32, 32, [210, 0, 0, 255]);
-
-        // tolerance=0: only exact matches
-        let mask = AlphaMask::flood_fill(&grid, 16, 16, 64, 64, 0);
-        assert_eq!(mask.sample(16, 16), 1.0); // left half
-        assert_eq!(mask.sample(48, 16), 0.0); // right half excluded
-
-        // tolerance=10: both halves match
-        let mask = AlphaMask::flood_fill(&grid, 16, 16, 64, 64, 10);
-        assert_eq!(mask.sample(16, 16), 1.0);
-        assert_eq!(mask.sample(48, 16), 1.0);
-    }
-
-    #[test]
-    fn flood_fill_cross_tile_boundary() {
-        let mut grid = TileGrid::new();
-        // Horizontal stripe across 3 tiles (192px wide, 10px tall)
-        paint_rect(&mut grid, 0, 30, 192, 10, [0, 255, 0, 255]);
-
-        let mask = AlphaMask::flood_fill(&grid, 96, 35, 256, 64, 0);
-
-        // Check points in each tile column
-        assert_eq!(mask.sample(10, 35), 1.0);  // tile 0
-        assert_eq!(mask.sample(96, 35), 1.0);  // tile 1
-        assert_eq!(mask.sample(150, 35), 1.0); // tile 2
-        // Outside the stripe
-        assert_eq!(mask.sample(96, 29), 0.0);
-        assert_eq!(mask.sample(96, 40), 0.0);
-    }
-
-    #[test]
-    fn flood_fill_diagonal_does_not_leak() {
-        let mut grid = TileGrid::new();
-        // Two 1px regions touching only diagonally:
-        //   A at (10,10), B at (11,11)
-        // Background is [0,0,0,0], paint both pixels the same color.
-        let color = [100, 100, 100, 255];
-        paint_rect(&mut grid, 10, 10, 1, 1, color);
-        paint_rect(&mut grid, 11, 11, 1, 1, color);
-
-        // Seed on A — should NOT reach B (4-connected)
-        let mask = AlphaMask::flood_fill(&grid, 10, 10, 64, 64, 0);
-        assert_eq!(mask.sample(10, 10), 1.0);
-        assert_eq!(mask.sample(11, 11), 0.0);
-    }
-
-    #[test]
-    fn flood_fill_single_pixel_island() {
-        let mut grid = TileGrid::new();
-        // Fill a 20x20 area with one color
-        paint_rect(&mut grid, 0, 0, 20, 20, [50, 50, 50, 255]);
-        // Place a single different-color pixel in the middle
-        paint_rect(&mut grid, 10, 10, 1, 1, [200, 200, 200, 255]);
-
-        // Seed on the background color
-        let mask = AlphaMask::flood_fill(&grid, 0, 0, 64, 64, 0);
-
-        // The background fills
-        assert_eq!(mask.sample(5, 5), 1.0);
-        assert_eq!(mask.sample(15, 15), 1.0);
-        // The island pixel is excluded
-        assert_eq!(mask.sample(10, 10), 0.0);
-    }
-
-    #[test]
-    fn flood_fill_soft_circle_on_empty_canvas() {
-        // Soft-edged circle on transparent canvas: the fill must stay
-        // inside the circle and not leak through antialiased edges.
-        let mut grid = TileGrid::new();
-        let cx = 64.0_f32;
-        let cy = 64.0_f32;
-        let r = 30.0_f32;
-
-        for py in 30..100 {
-            for px in 30..100 {
-                let dx = px as f32 + 0.5 - cx;
-                let dy = py as f32 + 0.5 - cy;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist > r + 1.0 {
-                    continue;
-                }
-                let alpha = if dist < r - 1.0 {
-                    255u8
-                } else {
-                    ((1.0 - (dist - (r - 1.0)) / 2.0).clamp(0.0, 1.0) * 255.0) as u8
-                };
-                let (tx, ty) = TileGrid::tile_coords_for_pixel(px, py);
-                let ts = TILE_SIZE as i32;
-                let lx = (px - tx * ts) as usize;
-                let ly = (py - ty * ts) as usize;
-                *grid.get_or_create(tx, ty).write().pixel_mut(lx, ly) = [0, 0, 0, alpha];
-            }
-        }
-
-        let mask = AlphaMask::flood_fill(&grid, 64, 64, 256, 256, 15);
-
-        assert_eq!(mask.sample(64, 64), 1.0, "circle center should be selected");
-        assert_eq!(mask.sample(50, 64), 1.0, "inside circle should be selected");
-        assert_eq!(mask.sample(0, 0), 0.0, "transparent bg top-left");
-        assert_eq!(mask.sample(200, 200), 0.0, "transparent bg far away");
     }
 
     // --- feather ---

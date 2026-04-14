@@ -1,5 +1,6 @@
 use super::UndoAction;
 use crate::document::Document;
+use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
 
@@ -36,5 +37,9 @@ impl UndoAction for CompoundAction {
             }
         }
         all
+    }
+
+    fn gpu_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
+        self.actions.iter_mut().find_map(|a| a.gpu_region_entry_mut())
     }
 }

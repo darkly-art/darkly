@@ -34,7 +34,8 @@ function clearPreviewOverlay() {
 export const rectSelectTool: Tool = {
     id: 'rect_select',
     name: 'Rectangle Select',
-    icon: '⬚',
+    faIcon: 'fa-regular fa-square',
+    group: 'select',
     hotkeyAction: 'rectSelectTool',
 
     onDeactivate() {
