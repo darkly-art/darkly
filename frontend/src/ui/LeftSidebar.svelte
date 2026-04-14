@@ -1,7 +1,9 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
     import { toolRegistry } from '../tools/registry';
+    import { config, formatHotkey } from '../config/store.svelte';
     import ColorPicker from './ColorPicker.svelte';
+    import HamburgerMenu from './HamburgerMenu.svelte';
 
     let showColorPicker = $state(false);
 
@@ -12,91 +14,98 @@
     function toggleColorPicker() {
         showColorPicker = !showColorPicker;
     }
+
+    // Group tools by their group property for visual separation
+    interface ToolGroup { tools: ReturnType<typeof toolRegistry.all> }
+    let toolGroups = $derived((() => {
+        const all = toolRegistry.all();
+        const groups: ToolGroup[] = [];
+        let current: ReturnType<typeof toolRegistry.all> = [];
+        let currentGroup: string | undefined = undefined;
+        for (const t of all) {
+            const g = t.group ?? '';
+            if (g !== currentGroup && current.length > 0) {
+                groups.push({ tools: current });
+                current = [];
+            }
+            currentGroup = g;
+            current.push(t);
+        }
+        if (current.length > 0) groups.push({ tools: current });
+        return groups;
+    })());
 </script>
 
-<div class="left-sidebar">
-    <!-- Color swatches -->
-    <div class="color-section">
-        <button class="color-swatches" onclick={toggleColorPicker} title="Pick color">
-            <div
-                class="swatch bg-swatch"
-                style="background: {colorStyle(app.background)}"
-            ></div>
-            <div
-                class="swatch fg-swatch"
-                style="background: {colorStyle(app.foreground)}"
-            ></div>
-        </button>
-        <button class="swap-btn" onclick={() => app.swapColors()} title="Swap colors (X)">
-            &#x21C4;
+<div class="toolbar">
+    <HamburgerMenu />
+
+    <div class="toolbar-spacer"></div>
+
+    <!-- Tool buttons (vertically centered) -->
+    {#each toolGroups as group, i}
+        <div class="tool-group">
+            {#each group.tools as tool}
+                <button
+                    class="tool"
+                    class:active={app.activeToolId === tool.id}
+                    onclick={() => app.activeToolId = tool.id}
+                    title={(() => { const hk = formatHotkey(config.get(`hotkeys.${tool.hotkeyAction}`)); return hk ? `${tool.name} (${hk})` : tool.name; })()}
+                >
+                    <i class={tool.faIcon}></i>
+                </button>
+            {/each}
+        </div>
+    {/each}
+
+    <div class="toolbar-spacer"></div>
+
+    <!-- Color swatches + swap (bottom) -->
+    <div class="toolbar-bottom">
+        <div class="color-swatches">
+            <button class="swatch-stack" onclick={toggleColorPicker} title="Pick color">
+                <div
+                    class="swatch bg"
+                    style="background: {colorStyle(app.background)}"
+                ></div>
+                <div
+                    class="swatch fg"
+                    style="background: {colorStyle(app.foreground)}"
+                ></div>
+            </button>
+        </div>
+        <button class="tool swap" onclick={() => app.swapColors()} title={(() => { const hk = formatHotkey(config.get('hotkeys.swapColors')); return hk ? `Swap colors (${hk})` : 'Swap colors'; })()}>
+            <i class="fa-solid fa-arrow-right-arrow-left"></i>
         </button>
     </div>
 
     {#if showColorPicker}
         <ColorPicker onclose={() => showColorPicker = false} />
     {/if}
-
-    <!-- Tool buttons -->
-    <div class="tool-buttons">
-        {#each toolRegistry.all() as tool}
-            <button
-                class="tool-btn"
-                class:active={app.activeToolId === tool.id}
-                onclick={() => app.activeToolId = tool.id}
-                title="{tool.name} ({tool.icon})"
-            >
-                {tool.icon}
-            </button>
-        {/each}
-    </div>
-
-    <!-- Brush controls -->
-    <div class="slider-group">
-        <span class="slider-label">Size: {app.brushSize}</span>
-        <input
-            type="range"
-            class="sidebar-slider"
-            min="1" max="500" step="1"
-            bind:value={app.brushSize}
-        />
-    </div>
-    <div class="slider-group">
-        <span class="slider-label">Opacity: {Math.round(app.brushOpacity * 100)}%</span>
-        <input
-            type="range"
-            class="sidebar-slider"
-            min="0" max="1" step="0.01"
-            bind:value={app.brushOpacity}
-        />
-    </div>
 </div>
 
 <style>
-    .left-sidebar {
-        width: 48px;
-        min-width: 48px;
-        background: #222;
-        border-right: 1px solid #333;
+    .toolbar {
+        width: 44px;
+        background: var(--bg-raised);
         display: flex;
         flex-direction: column;
         align-items: center;
-        padding: 8px 0;
-        gap: 4px;
-        position: relative;
-    }
-
-    .color-section {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
+        padding: 6px 0;
         gap: 2px;
-        margin-bottom: 8px;
+        flex-shrink: 0;
     }
 
     .color-swatches {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+    }
+
+    .swatch-stack {
         position: relative;
-        width: 32px;
-        height: 32px;
+        width: 28px;
+        height: 28px;
         cursor: pointer;
         background: none;
         border: none;
@@ -105,110 +114,80 @@
 
     .swatch {
         position: absolute;
-        border: 1px solid #555;
-        border-radius: 2px;
+        border-radius: 4px;
+        cursor: pointer;
     }
 
-    .fg-swatch {
+    .swatch.fg {
         width: 20px;
         height: 20px;
         top: 0;
         left: 0;
         z-index: 1;
+        box-shadow: 0 0 0 1px var(--text-dim);
     }
 
-    .bg-swatch {
+    .swatch.bg {
         width: 20px;
         height: 20px;
         bottom: 0;
         right: 0;
+        box-shadow: 0 0 0 1px var(--text-dim);
     }
 
-    .swap-btn {
-        background: none;
-        border: none;
-        color: #888;
-        cursor: pointer;
-        font-size: 10px;
-        padding: 0;
-        line-height: 1;
-    }
-    .swap-btn:hover { color: #ccc; }
-
-    .tool-buttons {
+    .tool-group {
         display: flex;
         flex-direction: column;
         gap: 2px;
+        padding-bottom: 6px;
     }
 
-    .tool-btn {
-        width: 36px;
-        height: 36px;
-        background: #2a2a2a;
-        border: 1px solid transparent;
-        border-radius: 4px;
-        color: #ccc;
-        cursor: pointer;
-        font-size: 14px;
-        font-weight: 600;
+    .tool-group + .tool-group {
+        padding-top: 6px;
+        border-top: 1px solid var(--bg-hover);
+    }
+
+    .tool {
+        width: 32px;
+        height: 32px;
         display: flex;
         align-items: center;
         justify-content: center;
+        background: none;
+        border: none;
+        border-radius: 6px;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 14px;
+        transition: background 0.1s, color 0.1s;
     }
 
-    .tool-btn:hover {
-        background: #333;
+    .tool:hover {
+        background: var(--bg-hover);
+        color: var(--text);
     }
 
-    .tool-btn.active {
-        background: #3a3a3a;
-        border-color: #6a6aff;
+    .tool.active {
+        background: var(--accent);
+        color: #ffffff;
     }
 
-    .slider-group {
+    .tool.swap {
+        width: 28px;
+        height: 20px;
+        font-size: 10px;
+    }
+
+    .toolbar-spacer {
+        flex: 1;
+    }
+
+    .toolbar-bottom {
         display: flex;
         flex-direction: column;
         align-items: center;
-        width: 100%;
-        padding: 0 4px;
-        margin-top: 6px;
-    }
-
-    .slider-label {
-        font-size: 8px;
-        color: #888;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        margin-bottom: 2px;
-    }
-
-    .sidebar-slider {
-        width: 40px;
-        height: 4px;
-        -webkit-appearance: none;
-        appearance: none;
-        background: #444;
-        border-radius: 2px;
-        outline: none;
-        cursor: pointer;
-    }
-
-    .sidebar-slider::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        appearance: none;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #6a6aff;
-        cursor: pointer;
-    }
-
-    .sidebar-slider::-moz-range-thumb {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #6a6aff;
-        border: none;
-        cursor: pointer;
+        gap: 6px;
+        padding-top: 6px;
+        border-top: 1px solid var(--bg-hover);
     }
 </style>

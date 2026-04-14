@@ -1,8 +1,8 @@
 pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    pub surface: wgpu::Surface<'static>,
-    pub surface_config: wgpu::SurfaceConfiguration,
+    pub surface: Option<wgpu::Surface<'static>>,
+    pub surface_config: Option<wgpu::SurfaceConfiguration>,
     /// True when running on a software renderer (e.g. llvmpipe, SwiftShader).
     /// Determined by the caller (platform layer) and passed in at construction.
     pub is_software: bool,
@@ -71,9 +71,21 @@ impl GpuContext {
         GpuContext {
             device,
             queue,
-            surface,
-            surface_config,
+            surface: Some(surface),
+            surface_config: Some(surface_config),
             is_software,
+        }
+    }
+
+    /// Create a headless GPU context — no surface or window needed.
+    /// Used for testing and headless rendering.
+    pub fn new_headless(device: wgpu::Device, queue: wgpu::Queue) -> Self {
+        GpuContext {
+            device,
+            queue,
+            surface: None,
+            surface_config: None,
+            is_software: true,
         }
     }
 
@@ -89,15 +101,38 @@ impl GpuContext {
         self.queue.submit([encoder.finish()]);
     }
 
+    /// Like `encode`, but returns a value from the closure.
+    pub fn encode_ret<T>(&self, label: &str, f: impl FnOnce(&mut wgpu::CommandEncoder) -> T) -> T {
+        let mut encoder = self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some(label) },
+        );
+        let result = f(&mut encoder);
+        self.queue.submit([encoder.finish()]);
+        result
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
-            self.surface_config.width = width;
-            self.surface_config.height = height;
-            self.surface.configure(&self.device, &self.surface_config);
+            if let (Some(surface), Some(config)) = (&self.surface, &mut self.surface_config) {
+                config.width = width;
+                config.height = height;
+                surface.configure(&self.device, config);
+            }
         }
     }
 
     pub fn surface_format(&self) -> wgpu::TextureFormat {
-        self.surface_config.format
+        match &self.surface_config {
+            Some(config) => config.format,
+            // Headless fallback — Bgra8UnormSrgb is the most common desktop
+            // surface format, so pipelines compiled against it will match
+            // production behaviour.
+            None => wgpu::TextureFormat::Bgra8UnormSrgb,
+        }
+    }
+
+    /// True when running headless (no presentation surface).
+    pub fn is_headless(&self) -> bool {
+        self.surface.is_none()
     }
 }

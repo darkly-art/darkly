@@ -4,6 +4,7 @@ use super::{DarklyEngine, ReadbackContext};
 use crate::gpu::readback;
 use crate::gpu::view::ViewTransform;
 use crate::layer::BlendMode;
+use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
     // --- View transform ---
@@ -118,9 +119,49 @@ impl DarklyEngine {
     /// Called at the start of each frame. Returns true if any operation
     /// completed (and therefore the compositor should re-render).
     fn poll_pending(&mut self) -> bool {
+        // Poll pending diff rect for deferred undo commit.
+        if self.diff_rect.is_pending() {
+            if let Some(result) = self.diff_rect.poll(&self.gpu.device) {
+                if let Some(commit) = self.pending_undo_commit.take() {
+                    if let Some(rect) = result {
+                        self.gpu.encode("brush-stroke-end", |encoder| {
+                            let entry = self.region_store.commit_region(
+                                encoder, commit.layer_id, commit.format, rect,
+                            );
+                            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                        });
+                    }
+                    // else: textures identical, no undo entry needed.
+                }
+            }
+        }
+
+        // Poll content bounds compute readbacks.
+        let bounds_completed = self.compositor.poll_content_bounds(&self.gpu.device);
+        let mut any_completed = false;
+
+        // Complete pending transform if content bounds just arrived.
+        if let Some(pt) = &self.pending_transform {
+            if bounds_completed.contains(&pt.layer_id) {
+                let layer_id = pt.layer_id;
+                let target_is_mask = pt.target_is_mask;
+                self.pending_transform = None;
+
+                if self.floating.is_none() {
+                    if let Some(bounds) = self.compositor.content_bounds(layer_id) {
+                        let [bx, by, bw, bh] = bounds;
+                        self.setup_transform(
+                            layer_id, target_is_mask, (bx as i32, by as i32), bw, bh,
+                        );
+                        any_completed = true;
+                    }
+                }
+            }
+        }
+
         let completed = self.readbacks.poll(&self.gpu.device);
         if completed.is_empty() {
-            return false;
+            return any_completed;
         }
 
         for (ctx, pixels) in completed {
@@ -137,14 +178,29 @@ impl DarklyEngine {
                         self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
                     }
                 }
-                ReadbackContext::Copy { is_mask, region, selection_data, is_cut, layer_id } => {
-                    self.complete_copy(is_mask, region, selection_data, is_cut, layer_id, pixels);
+                ReadbackContext::Copy { is_mask, region, is_cut, layer_id } => {
+                    self.complete_copy(is_mask, region, is_cut, layer_id, pixels);
                 }
-                ReadbackContext::MagicWand { old_sel, seed_x, seed_y, tolerance, mode } => {
-                    self.complete_magic_wand(old_sel, seed_x, seed_y, tolerance, mode, pixels);
+                ReadbackContext::MagicWand { was_active, seed_x, seed_y, tolerance, mode } => {
+                    self.complete_magic_wand(was_active, seed_x, seed_y, tolerance, mode, pixels);
                 }
-                ReadbackContext::MaskToSelection { old_sel } => {
-                    self.complete_mask_to_selection(old_sel, pixels);
+                ReadbackContext::MaskToSelection { was_active } => {
+                    self.complete_mask_to_selection(was_active, pixels);
+                }
+                ReadbackContext::SelectionReadback => {
+                    self.update_selection_overlay_from_readback(pixels);
+                    // Resume deferred operations that were waiting for
+                    // selection cpu_cache / pixel_bounds.
+                    if let Some(pc) = self.pending_copy.take() {
+                        self.start_copy_readback(pc.layer_id, pc.is_cut);
+                    }
+                    if self.gpu_selection.pixel_bounds.is_some() {
+                        if let Some(pt) = self.pending_transform.take() {
+                            if self.floating.is_none() {
+                                self.begin_transform(pt.layer_id);
+                            }
+                        }
+                    }
                 }
                 ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
                     let doc_w = self.doc.width;
@@ -183,20 +239,44 @@ impl DarklyEngine {
             self.compositor.mark_dirty();
         }
 
+        // Headless mode (tests): poll pending ops but skip presentation.
+        let (surface, surface_config) = match (&self.gpu.surface, &self.gpu.surface_config) {
+            (Some(s), Some(c)) => (s, c),
+            _ => {
+                return self.readbacks.has_pending()
+                    || self.compositor.has_pending_content_bounds()
+                    || self.diff_rect.is_pending();
+            }
+        };
+
+        // Skip rendering when the surface has zero dimensions (e.g. canvas
+        // squeezed to 0 height by a UI panel).  WebGPU cannot create
+        // 0-dimension textures and attempting to do so corrupts the device.
+        if surface_config.width == 0 || surface_config.height == 0 {
+            return self.readbacks.has_pending()
+                || self.compositor.has_pending_content_bounds();
+        }
+
         self.compositor.update_animations(&self.gpu.queue, time_secs);
         self.compositor.render(
             &self.gpu.device,
             &self.gpu.queue,
-            &self.gpu.surface,
-            &self.gpu.surface_config,
+            surface,
+            surface_config,
             &mut self.doc,
         );
 
         // Keep requesting frames while async operations are in flight.
-        self.compositor.needs_animation() || self.readbacks.has_pending()
+        self.compositor.needs_animation()
+            || self.readbacks.has_pending()
+            || self.compositor.has_pending_content_bounds()
+            || self.diff_rect.is_pending()
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        if width == 0 || height == 0 || self.gpu.is_headless() {
+            return;
+        }
         self.gpu.resize(width, height);
         self.compositor.veil_chain_mut().resize(&self.gpu.device, &self.gpu.queue, width, height);
         self.compositor.mark_needs_present();
@@ -251,12 +331,31 @@ impl DarklyEngine {
             }
         }
 
+        // If this is a selection GPU action, restore the selection texture
+        // and swap the active flag.
+        if let Some(restored_active) = action.swap_selection_active(self.gpu_selection.active) {
+            self.gpu_selection.active = restored_active;
+
+            if let Some(entry) = action.selection_region_entry_mut() {
+                let texture = self.gpu_selection.texture();
+                self.gpu.encode(match direction {
+                    UndoDirection::Undo => "undo-sel-restore",
+                    UndoDirection::Redo => "redo-sel-restore",
+                }, |encoder| {
+                    let swapped = self.region_store.restore_region(encoder, entry, texture);
+                    *entry = swapped;
+                });
+            }
+
+            self.gpu_selection.pixel_bounds = None; // will be recomputed from readback
+            self.kick_selection_readback();
+        }
+
         match direction {
             UndoDirection::Undo => self.undo_stack.complete_undo(action),
             UndoDirection::Redo => self.undo_stack.complete_redo(action),
         }
         self.compositor.mark_dirty();
-        self.update_selection_overlay();
     }
 
     // --- Internal helpers ---

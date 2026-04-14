@@ -4,8 +4,7 @@ use super::{DarklyEngine, ReadbackContext};
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
 use crate::layer::{Layer, LayerNode};
-use crate::tile::AlphaMask;
-use crate::undo::{CompoundAction, GpuRegionAction, MaskPropertyAction, SelectionAction};
+use crate::undo::{CompoundAction, GpuRegionAction, MaskPropertyAction};
 
 impl DarklyEngine {
     pub fn add_mask(&mut self, layer_id: u64) {
@@ -118,7 +117,7 @@ impl DarklyEngine {
         ) {
             let target = GpuPaintTarget::from_layer(layer_tex, canvas_w, canvas_h);
             self.gpu.encode("apply-mask-multiply", |encoder| {
-                target.multiply_by_mask(
+                target.multiply_alpha_by_mask(
                     encoder, &self.paint_pipelines, &self.gpu.queue, mask_bg,
                 );
             });
@@ -187,30 +186,35 @@ impl DarklyEngine {
             None => return,
         };
 
-        self.doc.selection_to_mask(layer_id);
+        // Set mask flags directly (doc.selection_to_mask guards on doc.selection
+        // which we no longer maintain — the guard is now gpu_selection.active,
+        // checked by the caller).
+        self.doc.add_mask(layer_id);
         self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
-        // Upload selection data directly to the GPU mask texture.
-        if let Some(sel) = &self.doc.selection {
+        // Copy selection texture → mask texture on GPU. Both are R8, same
+        // canvas dimensions. No CPU round-trip needed.
+        if self.gpu_selection.active {
             if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
                 let canvas_w = self.doc.width;
                 let canvas_h = self.doc.height;
-                let buf = sel.rasterize_r8((0, 0), canvas_w, canvas_h, 255);
-                self.gpu.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &mask_tex.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &buf,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(canvas_w),
-                        rows_per_image: None,
-                    },
-                    wgpu::Extent3d { width: canvas_w, height: canvas_h, depth_or_array_layers: 1 },
-                );
+                self.gpu.encode("sel-to-mask-copy", |encoder| {
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: self.gpu_selection.texture(),
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &mask_tex.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d { width: canvas_w, height: canvas_h, depth_or_array_layers: 1 },
+                    );
+                });
             }
         }
 
@@ -223,33 +227,39 @@ impl DarklyEngine {
     }
 
     pub fn mask_to_selection(&mut self, layer_id: u64) {
-        let mask_tex = match self.compositor.mask_texture(layer_id) {
-            Some(t) => t,
-            None => return,
-        };
+        if self.compositor.mask_texture(layer_id).is_none() {
+            return;
+        }
 
-        let old_sel = self.doc.selection.clone();
+        let was_active = self.gpu_selection.active;
+        // Save selection for undo before mutation.
+        self.save_selection_for_undo();
+
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
+        let mask_tex = self.compositor.mask_texture(layer_id).unwrap();
         self.gpu.encode("mask-to-sel-readback", |encoder| {
             let request = readback::request_readback(
                 &self.gpu.device, encoder, &mask_tex.texture,
                 wgpu::TextureFormat::R8Unorm,
                 [0, 0, canvas_w, canvas_h],
             );
-            self.readbacks.submit(request, ReadbackContext::MaskToSelection { old_sel });
+            self.readbacks.submit(request, ReadbackContext::MaskToSelection { was_active });
         });
     }
 
     /// Complete mask-to-selection after async readback.
-    pub(crate) fn complete_mask_to_selection(&mut self, old_sel: Option<AlphaMask>, pixels: Vec<u8>) {
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
+    pub(crate) fn complete_mask_to_selection(&mut self, was_active: bool, pixels: Vec<u8>) {
+        // Upload the mask data directly to the GPU selection texture.
+        self.gpu_selection.upload_replace_full(
+            &self.gpu.device, &self.gpu.queue, &pixels,
+            self.brush_pipelines.selection_bind_group_layout(),
+            &self.paint_pipelines.selection_bind_group_layout,
+        );
 
-        self.doc.selection = Some(AlphaMask::from_r8(&pixels, canvas_w, canvas_h));
-        self.undo_stack.push(Box::new(SelectionAction::new(old_sel)));
-        self.update_selection_overlay();
+        self.commit_selection_undo(was_active);
+        self.kick_selection_readback();
     }
 
     /// Sync compositor mask state (bind group + uniforms) for a layer or group.

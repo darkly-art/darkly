@@ -141,6 +141,12 @@ impl Config {
         d!("animation.veil_divisor", int 2);
         d!("animation.overlay_divisor", int 4);
 
+        // Input
+        d!("input.fingerPainting", bool false);
+
+        // Navigation
+        d!("nav.panSensitivity",  float 0.5);
+
         // Hotkeys — navigation
         d!("hotkeys.nav.trigger", str "Space");
         d!("hotkeys.nav.rotate",  str "Shift");
@@ -328,6 +334,7 @@ mod tests {
         assert_eq!(get_i64("animation.overlay_divisor"), 4);
         assert_eq!(get_str("hotkeys.nav.trigger"), "Space");
         assert_eq!(get_i64("canvas.width"), 1920);
+        assert_eq!(get_bool("input.fingerPainting"), false);
     }
 
     #[test]

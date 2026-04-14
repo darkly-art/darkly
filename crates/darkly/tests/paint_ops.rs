@@ -1,7 +1,7 @@
-//! Phase 3 GPU integration tests: gradient, flood fill, clear_selection, color picker.
+//! Paint operation GPU integration tests: gradient, flood fill, color picker, fill rect.
 //!
-//! Tests the remaining paint operations migrated from CPU to GPU.
-//! Run with: `cargo test -p darkly --test gpu_phase3`
+//! Tests the GPU paint operations that don't involve selection masking.
+//! Run with: `cargo test -p darkly --test paint_ops`
 
 use darkly::gpu::test_utils::*;
 use darkly::gpu::region_store::RegionStore;
@@ -110,55 +110,6 @@ fn gpu_gradient_undo() {
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     assert_eq!(pixel_at(&pixels, w, 0, 0, 4)[3], 0, "after undo, should be transparent");
     assert_eq!(pixel_at(&pixels, w, 63, 0, 4)[3], 0, "after undo, should be transparent");
-}
-
-/// Gradient with selection mask: only the masked area should receive the gradient.
-#[test]
-fn gpu_gradient_with_selection() {
-    let (device, queue) = test_device();
-    let (w, h) = (64, 64);
-    let fmt = wgpu::TextureFormat::Rgba8Unorm;
-
-    let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
-    let pipelines = PaintPipelines::new(&device, &queue);
-
-    // Create selection mask: left half = 255, right half = 0.
-    let mut sel_data = vec![0u8; (w * h) as usize];
-    for y in 0..h {
-        for x in 0..w / 2 {
-            sel_data[(y * w + x) as usize] = 255;
-        }
-    }
-    let (sel_tex, _) = create_test_texture_with_format(
-        &device, &queue, w, h, &sel_data, wgpu::TextureFormat::R8Unorm,
-    );
-    let sel_view = sel_tex.create_view(&wgpu::TextureViewDescriptor::default());
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
-        ..Default::default()
-    });
-    let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
-
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
-    let mut enc = encoder(&device);
-    target.linear_gradient(
-        &mut enc, &pipelines, &queue,
-        0.0, 0.0, 64.0, 0.0,
-        [255, 0, 0, 255], [0, 0, 255, 255],
-        Some(&sel_bg),
-    );
-    submit(&queue, enc);
-
-    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-
-    // Left half should have gradient.
-    let left = pixel_at(&pixels, w, 0, 32, 4);
-    assert!(left[3] > 0, "left half should have content, A={}", left[3]);
-
-    // Right half should still be transparent (outside selection).
-    let right = pixel_at(&pixels, w, 48, 32, 4);
-    assert_eq!(right[3], 0, "right half should be transparent, A={}", right[3]);
 }
 
 // ============================================================================
@@ -331,111 +282,6 @@ fn gpu_flood_fill_undo() {
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     assert_eq!(pixel_at(&pixels, w, 32, 32, 4)[3], 0, "after undo, should be transparent");
-}
-
-// ============================================================================
-// GPU Clear Selection Contents
-// ============================================================================
-
-/// Fill layer with red, create selection (left half), clear selection → left half transparent.
-#[test]
-fn gpu_clear_selection_contents() {
-    let (device, queue) = test_device();
-    let (w, h) = (64, 64);
-    let fmt = wgpu::TextureFormat::Rgba8Unorm;
-
-    // Fill with red.
-    let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
-    let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
-    let pipelines = PaintPipelines::new(&device, &queue);
-
-    // Create selection mask: left half = 255.
-    let mut sel_data = vec![0u8; (w * h) as usize];
-    for y in 0..h {
-        for x in 0..w / 2 {
-            sel_data[(y * w + x) as usize] = 255;
-        }
-    }
-    let (sel_tex, _) = create_test_texture_with_format(
-        &device, &queue, w, h, &sel_data, wgpu::TextureFormat::R8Unorm,
-    );
-    let sel_view = sel_tex.create_view(&wgpu::TextureViewDescriptor::default());
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
-        ..Default::default()
-    });
-    let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
-
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
-
-    // Erase within selection.
-    let mut enc = encoder(&device);
-    target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
-    submit(&queue, enc);
-
-    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-
-    // Left half should be erased (alpha = 0).
-    let left = pixel_at(&pixels, w, 10, 32, 4);
-    assert_eq!(left[3], 0, "left half should be erased, A={}", left[3]);
-
-    // Right half should still be red.
-    let right = pixel_at(&pixels, w, 50, 32, 4);
-    assert_eq!(right, &[255, 0, 0, 255], "right half should be red, got {:?}", right);
-}
-
-/// Clear selection with undo.
-#[test]
-fn gpu_clear_selection_undo() {
-    let (device, queue) = test_device();
-    let (w, h) = (64, 64);
-    let fmt = wgpu::TextureFormat::Rgba8Unorm;
-
-    let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
-    let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
-    let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 2 * 1024 * 1024);
-
-    // Selection: full canvas.
-    let sel_data = vec![255u8; (w * h) as usize];
-    let (sel_tex, _) = create_test_texture_with_format(
-        &device, &queue, w, h, &sel_data, wgpu::TextureFormat::R8Unorm,
-    );
-    let sel_view = sel_tex.create_view(&wgpu::TextureViewDescriptor::default());
-    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-        mag_filter: wgpu::FilterMode::Nearest,
-        min_filter: wgpu::FilterMode::Nearest,
-        ..Default::default()
-    });
-    let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
-
-    // Save for undo.
-    let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
-    submit(&queue, enc);
-
-    // Erase within selection.
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
-    let mut enc = encoder(&device);
-    target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
-    submit(&queue, enc);
-
-    let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, w, h]);
-    submit(&queue, enc);
-
-    // Verify cleared.
-    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 32, 32, 4)[3], 0, "should be erased");
-
-    // Undo.
-    let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
-    submit(&queue, enc);
-
-    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 32, 32, 4), &[255, 0, 0, 255], "should be red after undo");
 }
 
 // ============================================================================

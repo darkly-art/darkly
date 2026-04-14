@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Darkly UI Mockup</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="dark">
+
+<div class="app">
+    <!-- Left toolbar -->
+    <div class="toolbar">
+        <!-- Hamburger menu -->
+        <button class="tool hamburger" title="Menu">
+            <i class="fa-solid fa-bars"></i>
+        </button>
+
+        <div class="toolbar-spacer"></div>
+
+        <div class="color-swatches">
+            <div class="swatch-stack">
+                <div class="swatch bg" style="background: #ffffff"></div>
+                <div class="swatch fg" style="background: #000000"></div>
+            </div>
+            <button class="tool swap" title="Swap Colors (X)">
+                <i class="fa-solid fa-arrow-right-arrow-left"></i>
+            </button>
+        </div>
+
+        <div class="tool-group">
+            <button class="tool active" title="Brush (B)">
+                <i class="fa-solid fa-paintbrush"></i>
+            </button>
+            <button class="tool" title="Eraser (E)">
+                <i class="fa-solid fa-eraser"></i>
+            </button>
+            <button class="tool" title="Fill (G)">
+                <i class="fa-solid fa-fill-drip"></i>
+            </button>
+            <button class="tool" title="Gradient">
+                <i class="fa-solid fa-bars-staggered"></i>
+            </button>
+            <button class="tool" title="Color Picker (I)">
+                <i class="fa-solid fa-eye-dropper"></i>
+            </button>
+        </div>
+
+        <div class="tool-group">
+            <button class="tool" title="Rectangle Select (R)">
+                <i class="fa-regular fa-square"></i>
+            </button>
+            <button class="tool" title="Ellipse Select">
+                <i class="fa-regular fa-circle"></i>
+            </button>
+            <button class="tool" title="Lasso Select (L)">
+                <i class="fa-solid fa-draw-polygon"></i>
+            </button>
+            <button class="tool" title="Magic Wand (W)">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+            </button>
+        </div>
+
+        <div class="tool-group">
+            <button class="tool" title="Transform (T)">
+                <i class="fa-solid fa-up-down-left-right"></i>
+            </button>
+        </div>
+
+        <div class="toolbar-spacer"></div>
+    </div>
+
+    <div class="left-column">
+
+    <!-- Canvas area -->
+    <div class="canvas-area">
+        <div class="canvas-placeholder">
+            <span class="canvas-label">Canvas</span>
+        </div>
+    </div>
+
+    <!-- Tool options bar -->
+    <div class="tool-options">
+        <div class="scrub" data-min="1" data-max="500" data-value="24" data-unit="px" data-speed="2">
+            <i class="fa-solid fa-circle scrub-icon"></i>
+            <div class="scrub-text">
+                <span class="scrub-label">Size</span>
+                <span class="scrub-value">24 px</span>
+            </div>
+        </div>
+        <div class="scrub" data-min="0" data-max="100" data-value="100" data-unit="%" data-speed="0.5">
+            <i class="fa-solid fa-droplet scrub-icon"></i>
+            <div class="scrub-text">
+                <span class="scrub-label">Opacity</span>
+                <span class="scrub-value">100%</span>
+            </div>
+        </div>
+        <div class="scrub" data-min="0" data-max="100" data-value="100" data-unit="%" data-speed="0.5">
+            <i class="fa-solid fa-faucet-drip scrub-icon"></i>
+            <div class="scrub-text">
+                <span class="scrub-label">Flow</span>
+                <span class="scrub-value">100%</span>
+            </div>
+        </div>
+        <div class="scrub" data-min="0" data-max="100" data-value="80" data-unit="%" data-speed="0.5">
+            <i class="fa-solid fa-bullseye scrub-icon"></i>
+            <div class="scrub-text">
+                <span class="scrub-label">Hardness</span>
+                <span class="scrub-value">80%</span>
+            </div>
+        </div>
+        <div class="scrub" data-min="1" data-max="100" data-value="25" data-unit="%" data-speed="0.5">
+            <i class="fa-solid fa-ellipsis scrub-icon"></i>
+            <div class="scrub-text">
+                <span class="scrub-label">Spacing</span>
+                <span class="scrub-value">25%</span>
+            </div>
+        </div>
+        <div class="tool-options-spacer"></div>
+        <button class="bottom-bar-toggle" title="Toggle bottom panel">
+            <i class="fa-solid fa-chevron-up"></i>
+        </button>
+    </div>
+
+    <!-- Bottom bar — Node Builder -->
+    <div class="bottom-bar">
+        <button class="node-editor-fullscreen" title="Fullscreen">
+            <i class="fa-solid fa-expand"></i>
+        </button>
+        <div class="bottom-bar-content node-editor">
+            <svg class="node-curves"></svg>
+            <div class="node" style="left: 60px; top: 40px;" data-id="tex">
+                <div class="node-header" style="background: #5b7ff5;">Texture</div>
+                <div class="node-body">
+                    <div class="node-row"><span>Scale</span><span class="node-val">1.0</span></div>
+                </div>
+                <div class="node-port output" data-port="tex-out"></div>
+            </div>
+            <div class="node" style="left: 300px; top: 30px;" data-id="mix">
+                <div class="node-header" style="background: #e0a030;">Mix</div>
+                <div class="node-body">
+                    <div class="node-row"><span>Factor</span><span class="node-val">0.5</span></div>
+                </div>
+                <div class="node-port input" data-port="mix-a"></div>
+                <div class="node-port input second" data-port="mix-b"></div>
+                <div class="node-port output" data-port="mix-out"></div>
+            </div>
+            <div class="node" style="left: 120px; top: 150px;" data-id="color">
+                <div class="node-header" style="background: #e05555;">Color</div>
+                <div class="node-body">
+                    <div class="node-row"><span>Hue</span><span class="node-val">0.6</span></div>
+                </div>
+                <div class="node-port output" data-port="color-out"></div>
+            </div>
+            <div class="node" style="left: 540px; top: 60px;" data-id="out">
+                <div class="node-header" style="background: #50b860;">Output</div>
+                <div class="node-body">
+                    <div class="node-row"><span>Surface</span></div>
+                </div>
+                <div class="node-port input" data-port="out-in"></div>
+            </div>
+        </div>
+    </div>
+
+    </div><!-- /left-column -->
+
+    <!-- Right sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-resize"></div>
+        <!-- Veils panel -->
+        <div class="panel collapsed">
+            <div class="panel-header">
+                <span class="panel-title">Veils</span>
+                <div class="panel-actions">
+                    <button class="panel-btn" title="Add Veil">
+                        <i class="fa-solid fa-plus"></i>
+                    </button>
+                    <button class="panel-btn danger" title="Delete Veil">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="panel-body">
+                <div class="layer-controls">
+                    <select class="layer-blend">
+                        <option selected>Normal</option>
+                        <option>Multiply</option>
+                        <option>Screen</option>
+                        <option>Overlay</option>
+                        <option>Soft Light</option>
+                        <option>Hard Light</option>
+                        <option>Color Dodge</option>
+                        <option>Color Burn</option>
+                        <option>Darken</option>
+                        <option>Lighten</option>
+                        <option>Difference</option>
+                        <option>Hue</option>
+                        <option>Saturation</option>
+                        <option>Color</option>
+                        <option>Luminosity</option>
+                    </select>
+                    <input type="range" class="layer-opacity-slider" min="0" max="100" value="100">
+                    <span class="layer-opacity-value">100%</span>
+                </div>
+
+                <div class="layer-list">
+                    <div class="layer active">
+                        <button class="layer-vis">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                        <div class="layer-thumb"></div>
+                        <span class="layer-name">Veil 1</span>
+                        <button class="layer-lock"><i class="fa-solid fa-lock-open"></i></button><button class="layer-props" title="Properties"><i class="fa-solid fa-sliders"></i></button>
+                    </div>
+                    <div class="layer">
+                        <button class="layer-vis">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                        <div class="layer-thumb"></div>
+                        <span class="layer-name">Veil 2</span>
+                        <button class="layer-lock"><i class="fa-solid fa-lock-open"></i></button><button class="layer-props" title="Properties"><i class="fa-solid fa-sliders"></i></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Layers panel -->
+        <div class="panel expanded">
+            <div class="panel-header">
+                <span class="panel-title">Layers</span>
+                <div class="panel-actions">
+                    <button class="panel-btn" title="Add Layer">
+                        <i class="fa-solid fa-plus"></i>
+                    </button>
+                    <button class="panel-btn" title="Add Group">
+                        <i class="fa-solid fa-folder-plus"></i>
+                    </button>
+                    <button class="panel-btn" title="Add Mask">
+                        <i class="fa-solid fa-mask"></i>
+                    </button>
+                    <button class="panel-btn danger" title="Delete Layer">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div class="panel-body">
+                <div class="layer-controls">
+                    <select class="layer-blend">
+                        <option selected>Normal</option>
+                        <option>Multiply</option>
+                        <option>Screen</option>
+                        <option>Overlay</option>
+                        <option>Soft Light</option>
+                        <option>Hard Light</option>
+                        <option>Color Dodge</option>
+                        <option>Color Burn</option>
+                        <option>Darken</option>
+                        <option>Lighten</option>
+                        <option>Difference</option>
+                        <option>Hue</option>
+                        <option>Saturation</option>
+                        <option>Color</option>
+                        <option>Luminosity</option>
+                    </select>
+                    <input type="range" class="layer-opacity-slider" min="0" max="100" value="100">
+                    <span class="layer-opacity-value">100%</span>
+                </div>
+
+                <div class="layer-list">
+                    <div class="layer active">
+                        <button class="layer-vis">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                        <div class="layer-thumb"></div>
+                        <span class="layer-name">Layer 3</span>
+                        <button class="layer-lock"><i class="fa-solid fa-lock-open"></i></button><button class="layer-props" title="Properties"><i class="fa-solid fa-sliders"></i></button>
+                    </div>
+
+                    <div class="layer-group">
+                        <div class="layer-group-header">
+                            <button class="layer-group-collapse">
+                                <i class="fa-solid fa-chevron-down"></i>
+                            </button>
+                            <button class="layer-vis">
+                                <i class="fa-solid fa-eye"></i>
+                            </button>
+                            <i class="fa-solid fa-folder layer-group-icon"></i>
+                            <span class="layer-name">Effects</span>
+                            <button class="layer-lock"><i class="fa-solid fa-lock-open"></i></button><button class="layer-props" title="Properties"><i class="fa-solid fa-sliders"></i></button>
+                        </div>
+                        <div class="layer-group-children">
+                            <div class="layer">
+                                <button class="layer-vis">
+                                    <i class="fa-solid fa-eye"></i>
+                                </button>
+                                <div class="layer-thumb"></div>
+                                <span class="layer-name">Glow</span>
+                                <button class="layer-lock"><i class="fa-solid fa-lock-open"></i></button><button class="layer-props" title="Properties"><i class="fa-solid fa-sliders"></i></button>
+                            </div>
+                            <div class="layer">
+                                <button class="layer-vis">
+                                    <i class="fa-solid fa-eye"></i>
+                                </button>
+                                <div class="layer-thumb"></div>
+                                <span class="layer-name">Shadow</span>
+                                <button class="layer-lock"><i class="fa-solid fa-lock-open"></i></button><button class="layer-props" title="Properties"><i class="fa-solid fa-sliders"></i></button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="layer">
+                        <button class="layer-vis">
+                            <i class="fa-solid fa-eye"></i>
+                        </button>
+                        <div class="layer-thumbs">
+                            <div class="layer-thumb"></div>
+                            <div class="layer-thumb mask" title="Mask"></div>
+                        </div>
+                        <span class="layer-name">Layer 2</span>
+                        <button class="layer-lock"><i class="fa-solid fa-lock-open"></i></button><button class="layer-props" title="Properties"><i class="fa-solid fa-sliders"></i></button>
+                    </div>
+
+                    <div class="layer">
+                        <button class="layer-vis off">
+                            <i class="fa-solid fa-eye-slash"></i>
+                        </button>
+                        <div class="layer-thumb"></div>
+                        <span class="layer-name">Background</span>
+                        <button class="layer-lock locked"><i class="fa-solid fa-lock"></i></button><button class="layer-props" title="Properties"><i class="fa-solid fa-sliders"></i></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Theme toggle (for demo purposes) -->
+<button class="theme-toggle" onclick="document.body.classList.toggle('light'); document.body.classList.toggle('dark');">
+    <i class="fa-solid fa-circle-half-stroke"></i>
+</button>
+
+<script>
+    // Tool selection
+    document.querySelectorAll('.tool:not(.swap)').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.tool').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        });
+    });
+
+    // Layer selection
+    document.querySelectorAll('.layer').forEach(layer => {
+        layer.addEventListener('click', () => {
+            document.querySelectorAll('.layer').forEach(l => l.classList.remove('active'));
+            layer.classList.add('active');
+        });
+    });
+
+    // Vertical scrub controls
+    document.querySelectorAll('.scrub').forEach(el => {
+        const min = +el.dataset.min;
+        const max = +el.dataset.max;
+        const speed = +(el.dataset.speed || 1);
+        const unit = el.dataset.unit || '';
+        let value = +el.dataset.value;
+        let startY = 0;
+        let startVal = 0;
+        const display = el.querySelector('.scrub-value');
+
+        function fmt(v) {
+            return unit === 'px' ? Math.round(v) + ' px' : Math.round(v) + '%';
+        }
+
+        el.addEventListener('pointerdown', e => {
+            e.preventDefault();
+            startY = e.clientX;
+            startVal = value;
+            el.setPointerCapture(e.pointerId);
+            el.classList.add('dragging');
+        });
+
+        el.addEventListener('pointermove', e => {
+            if (!el.hasPointerCapture(e.pointerId)) return;
+            const dx = e.clientX - startY;
+            value = Math.round(Math.min(max, Math.max(min, startVal + dx * speed)));
+            display.textContent = fmt(value);
+            el.dataset.value = value;
+        });
+
+        el.addEventListener('pointerup', e => {
+            el.releasePointerCapture(e.pointerId);
+            el.classList.remove('dragging');
+        });
+    });
+
+    // Panel expand/collapse toggle
+    document.querySelectorAll('.panel-title').forEach(title => {
+        title.addEventListener('click', () => {
+            const panel = title.closest('.panel');
+            panel.classList.toggle('expanded');
+            panel.classList.toggle('collapsed');
+        });
+    });
+
+    // Bottom bar toggle
+    document.querySelector('.bottom-bar-toggle').addEventListener('click', () => {
+        const bar = document.querySelector('.bottom-bar');
+        bar.classList.toggle('expanded');
+        if (bar.classList.contains('expanded')) {
+            requestAnimationFrame(() => setTimeout(drawNodeCurves, 220));
+        }
+    });
+
+    // Node curves
+    const connections = [
+        { from: 'tex-out',   to: 'mix-a',  color: '#5b7ff5' },
+        { from: 'color-out', to: 'mix-b',  color: '#e05555' },
+        { from: 'mix-out',   to: 'out-in', color: '#e0a030' },
+    ];
+
+    function drawNodeCurves() {
+        const svg = document.querySelector('.node-curves');
+        const editor = document.querySelector('.node-editor');
+        if (!svg || !editor) return;
+        const rect = editor.getBoundingClientRect();
+        svg.innerHTML = '';
+        for (const c of connections) {
+            const fromEl = document.querySelector(`[data-port="${c.from}"]`);
+            const toEl   = document.querySelector(`[data-port="${c.to}"]`);
+            if (!fromEl || !toEl) continue;
+            const fr = fromEl.getBoundingClientRect();
+            const tr = toEl.getBoundingClientRect();
+            const x1 = fr.left + fr.width / 2 - rect.left;
+            const y1 = fr.top  + fr.height / 2 - rect.top;
+            const x2 = tr.left + tr.width / 2 - rect.left;
+            const y2 = tr.top  + tr.height / 2 - rect.top;
+            const dx = Math.abs(x2 - x1) * 0.5;
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', `M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`);
+            path.setAttribute('fill', 'none');
+            path.setAttribute('stroke', c.color);
+            path.setAttribute('stroke-width', '2');
+            path.setAttribute('stroke-opacity', '0.7');
+            svg.appendChild(path);
+        }
+    }
+
+    window.addEventListener('resize', () => {
+        if (document.querySelector('.bottom-bar.expanded')) drawNodeCurves();
+    });
+
+    // Sidebar resize
+    (() => {
+        const handle = document.querySelector('.sidebar-resize');
+        const sidebar = document.querySelector('.sidebar');
+        let startX, startW;
+
+        handle.addEventListener('pointerdown', e => {
+            e.preventDefault();
+            startX = e.clientX;
+            startW = sidebar.offsetWidth;
+            handle.setPointerCapture(e.pointerId);
+            handle.classList.add('dragging');
+        });
+
+        handle.addEventListener('pointermove', e => {
+            if (!handle.hasPointerCapture(e.pointerId)) return;
+            const dx = startX - e.clientX;
+            sidebar.style.width = Math.max(180, Math.min(500, startW + dx)) + 'px';
+        });
+
+        handle.addEventListener('pointerup', e => {
+            handle.releasePointerCapture(e.pointerId);
+            handle.classList.remove('dragging');
+        });
+    })();
+
+    // Layer opacity slider (top controls)
+    (() => {
+        const slider = document.querySelector('.layer-opacity-slider');
+        const display = document.querySelector('.layer-opacity-value');
+        if (slider && display) {
+            slider.addEventListener('input', () => {
+                display.textContent = slider.value + '%';
+            });
+        }
+    })();
+
+    // Layer properties (inline expand)
+    (() => {
+        const propsHTML = `
+            <div class="layer-detail">
+                <div class="prop-row">
+                    <span class="prop-label">Fill</span>
+                    <input type="range" class="prop-slider" min="0" max="100" value="100">
+                    <span class="prop-value">100%</span>
+                </div>
+                <div class="prop-row">
+                    <span class="prop-label">Alpha Lock</span>
+                    <button class="prop-toggle"><i class="fa-solid fa-toggle-off"></i></button>
+                </div>
+                <div class="prop-row">
+                    <span class="prop-label">Clip Below</span>
+                    <button class="prop-toggle"><i class="fa-solid fa-toggle-off"></i></button>
+                </div>
+                <div class="prop-row">
+                    <span class="prop-label">Inherit Alpha</span>
+                    <button class="prop-toggle"><i class="fa-solid fa-toggle-off"></i></button>
+                </div>
+            </div>`;
+
+        function wireDetail(detail) {
+            detail.querySelectorAll('.prop-toggle').forEach(btn => {
+                btn.addEventListener('click', e => {
+                    e.stopPropagation();
+                    btn.classList.toggle('on');
+                    const icon = btn.querySelector('i');
+                    icon.classList.toggle('fa-toggle-off');
+                    icon.classList.toggle('fa-toggle-on');
+                });
+            });
+            detail.querySelectorAll('.prop-slider').forEach(slider => {
+                const display = slider.nextElementSibling;
+                slider.addEventListener('input', () => {
+                    display.textContent = slider.value + '%';
+                });
+            });
+        }
+
+        document.querySelectorAll('.layer-props').forEach(btn => {
+            btn.addEventListener('click', e => {
+                e.stopPropagation();
+                const item = btn.closest('.layer, .layer-group-header');
+                const next = item.nextElementSibling;
+
+                if (next && next.classList.contains('layer-detail')) {
+                    next.remove();
+                    return;
+                }
+
+                item.insertAdjacentHTML('afterend', propsHTML);
+                wireDetail(item.nextElementSibling);
+            });
+        });
+    })();
+
+    // Group collapse toggle
+    document.querySelectorAll('.layer-group-collapse').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            btn.closest('.layer-group').classList.toggle('collapsed');
+        });
+    });
+
+    // Lock toggle
+    document.querySelectorAll('.layer-lock').forEach(btn => {
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            btn.classList.toggle('locked');
+            const icon = btn.querySelector('i');
+            icon.classList.toggle('fa-lock-open');
+            icon.classList.toggle('fa-lock');
+        });
+    });
+
+    // Node editor fullscreen toggle
+    (() => {
+        const btn = document.querySelector('.node-editor-fullscreen');
+        const bar = document.querySelector('.bottom-bar');
+        const icon = btn.querySelector('i');
+
+        btn.addEventListener('click', () => {
+            bar.classList.toggle('fullscreen');
+            icon.classList.toggle('fa-expand');
+            icon.classList.toggle('fa-compress');
+            btn.title = bar.classList.contains('fullscreen') ? 'Exit fullscreen' : 'Fullscreen';
+            requestAnimationFrame(() => drawNodeCurves());
+        });
+
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape' && bar.classList.contains('fullscreen')) {
+                bar.classList.remove('fullscreen');
+                icon.classList.replace('fa-compress', 'fa-expand');
+                btn.title = 'Fullscreen';
+                requestAnimationFrame(() => drawNodeCurves());
+            }
+        });
+    })();
+
+    // Visibility toggle
+    document.querySelectorAll('.layer-vis').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            btn.classList.toggle('off');
+            const icon = btn.querySelector('i');
+            icon.classList.toggle('fa-eye');
+            icon.classList.toggle('fa-eye-slash');
+        });
+    });
+</script>
+
+</body>
+</html>

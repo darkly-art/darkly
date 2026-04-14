@@ -3,7 +3,7 @@ import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
-import { MIN_SIZE, MAX_SIZE, SIZE_STEP } from '../tools/brush.svelte';
+import { brushGraph } from '../state/brush_graph.svelte';
 
 export function registerActions() {
     // -- Binding sites --
@@ -109,6 +109,23 @@ export function registerActions() {
             if (!app.handle) return;
             readImageFromClipboard().then(clip => {
                 if (!clip || !app.handle) return;
+
+                // If brush builder is open with a selected Image node,
+                // paste into that node instead of the main canvas.
+                if (brushGraph.isOpen && brushGraph.selectedNode != null) {
+                    const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];
+                    if (node?.type_id === 'image') {
+                        brushGraph.uploadImageToNode(
+                            brushGraph.selectedNode,
+                            `image_${brushGraph.selectedNode}`,
+                            clip.rgba,
+                            clip.width,
+                            clip.height,
+                        );
+                        return;
+                    }
+                }
+
                 const docW = config.get('canvas.width') as number;
                 const docH = config.get('canvas.height') as number;
                 const ox = Math.round((docW - clip.width) / 2);
@@ -134,7 +151,7 @@ export function registerActions() {
             if (ok) {
                 const prevTool = toolRegistry.get(app.activeToolId);
                 app.activeToolId = 'transform';
-                const ctx = { handle: app.handle, screenToCanvas: (_x: number, _y: number) => ({ x: 0, y: 0 }) };
+                const ctx = { handle: app.handle, canvasEl: document.createElement('canvas'), screenToCanvas: (_x: number, _y: number) => ({ x: 0, y: 0 }) };
                 prevTool?.onDeactivate?.(ctx);
                 toolRegistry.get('transform')?.onActivate?.(ctx);
                 app.requestFrame();
@@ -174,40 +191,6 @@ export function registerActions() {
             handler: () => { app.activeToolId = tool.id; },
         });
     }
-
-    // -- Brush controls --
-    actions.register({
-        id: 'brushSizeUp',
-        displayName: 'Increase Brush Size',
-        category: 'brush',
-        handler: () => {
-            app.brushSize = Math.min(app.brushSize + SIZE_STEP, MAX_SIZE);
-        },
-    });
-    actions.register({
-        id: 'brushSizeDown',
-        displayName: 'Decrease Brush Size',
-        category: 'brush',
-        handler: () => {
-            app.brushSize = Math.max(app.brushSize - SIZE_STEP, MIN_SIZE);
-        },
-    });
-    actions.register({
-        id: 'opacityUp',
-        displayName: 'Increase Opacity',
-        category: 'brush',
-        handler: () => {
-            app.brushOpacity = Math.min(1.0, app.brushOpacity + 0.1);
-        },
-    });
-    actions.register({
-        id: 'opacityDown',
-        displayName: 'Decrease Opacity',
-        category: 'brush',
-        handler: () => {
-            app.brushOpacity = Math.max(0.0, app.brushOpacity - 0.1);
-        },
-    });
 
     // -- Layers --
     actions.register({

@@ -1,16 +1,19 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
 import type { Component } from 'svelte';
-import type { ToolOverlayData } from '../canvas/overlay';
 
 export interface ToolContext {
     handle: DarklyHandle;
+    canvasEl: HTMLCanvasElement;
     screenToCanvas: (screenX: number, screenY: number) => { x: number; y: number };
 }
 
 export interface Tool {
     readonly id: string;
     readonly name: string;
-    readonly icon: string;
+    /** Font Awesome icon class (e.g. 'fa-solid fa-paintbrush'). */
+    readonly faIcon: string;
+    /** Tool group for toolbar visual separation (e.g. 'paint', 'select'). */
+    readonly group: string;
 
     /** Key name in HotkeyMap that activates this tool (e.g. 'brushTool').
      *  Used by hotkey registration to wire up tool switching automatically. */
@@ -28,9 +31,10 @@ export interface Tool {
     /** Handle a key event. Return true if the tool consumed it. */
     onKeyDown?(e: KeyboardEvent): boolean;
 
-    /** Return overlay shapes to render on top of the canvas.
-     *  Called reactively — return null to hide the overlay. */
-    getOverlay?(): ToolOverlayData | null;
+    /** Called once per frame after render, for async state synchronization.
+     *  Tools that initiate async GPU operations (readbacks, etc.) use this
+     *  to detect when results arrive. */
+    onFrame?(): void;
 
     /** Called by the system to dismiss the tool's overlay (e.g. on any
      *  unhandled key press). Tools that show overlays should clear their

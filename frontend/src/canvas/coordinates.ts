@@ -44,7 +44,15 @@ export function canvasToScreen(
 
 /**
  * Convert screen CSS coordinates (clientX/clientY) to canvas coordinates.
- * Wraps the WASM screen_to_canvas with CSS→buffer conversion.
+ *
+ * Pure-JS inverse of the forward transform above — avoids calling into WASM,
+ * which would alias the RefCell borrow if a pointer event fires while
+ * render() holds &mut self (WebGPU can synchronously pump the event queue).
+ *
+ * Inverse transform (from view.rs ViewTransform::from_pan_zoom_rotate):
+ *   1. CSS → buffer pixels (* DPR, - element offset)
+ *   2. Apply inverse view matrix: M^-1 * [buf_x, buf_y]
+ *      where M^-1 = [cos/z, sin/z; -sin/z, cos/z] with translation
  */
 export function screenToCanvas(
     clientX: number, clientY: number,
@@ -54,6 +62,30 @@ export function screenToCanvas(
     const rect = canvasEl.getBoundingClientRect();
     const buf_x = (clientX - rect.left) * dpr;
     const buf_y = (clientY - rect.top) * dpr;
-    const result = app.handle!.screen_to_canvas(buf_x, buf_y);
-    return { x: result[0], y: result[1] };
+
+    const cos_r = Math.cos(app.rotation);
+    const sin_r = Math.sin(app.rotation);
+    const inv_zoom = 1.0 / app.zoom;
+
+    const canvas_w = config.get('canvas.width') as number;
+    const canvas_h = config.get('canvas.height') as number;
+    const cx = canvas_w / 2;
+    const cy = canvas_h / 2;
+
+    // Screen center + pan in buffer pixels (matches Rust's sx, sy)
+    const sx = canvasEl.width / 2 + app.panX * dpr;
+    const sy = canvasEl.height / 2 + app.panY * dpr;
+
+    // Inverse matrix coefficients (same as view.rs)
+    const m00 = cos_r * inv_zoom;
+    const m01 = sin_r * inv_zoom;
+    const m10 = -sin_r * inv_zoom;
+    const m11 = cos_r * inv_zoom;
+    const tx = cx - m00 * sx - m10 * sy;
+    const ty = cy - m01 * sx - m11 * sy;
+
+    return {
+        x: m00 * buf_x + m10 * buf_y + tx,
+        y: m01 * buf_x + m11 * buf_y + ty,
+    };
 }

@@ -10,3 +10,5 @@ pub mod tool;
 pub mod tools;
 pub mod undo;
 pub mod gpu;
+pub mod nodegraph;
+pub mod brush;

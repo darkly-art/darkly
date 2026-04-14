@@ -1,10 +1,11 @@
 // Transform-commit: sample a source texture through an inverse affine matrix
-// and output directly to a layer/mask texture. Used by commit_floating() to
-// write transformed pixels without CPU rasterization.
+// and composite onto a layer/mask texture with shader-side Porter-Duff.
 //
-// Unlike the preview shader (transform.wgsl) which reads a background
-// accumulator and manually composites, this shader outputs straight-alpha
-// pixels and lets the hardware blend state handle compositing.
+// The destination is copied to a temp texture before this pass runs. The shader
+// reads both the transformed source and the dest copy, computes correct
+// straight-alpha source-over, and outputs with REPLACE blend. This avoids the
+// premultiplied-stored-as-straight bug that hardware alpha blending causes on
+// straight-alpha layer textures (see compositing lessons learned #4).
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -38,6 +39,9 @@ struct Uniforms {
 }
 @group(0) @binding(2) var<uniform> u: Uniforms;
 
+// Destination copy (straight alpha) — for shader-side Porter-Duff.
+@group(1) @binding(0) var t_dest: texture_2d<f32>;
+
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // Convert UV to canvas pixel position
     let canvas_pos = in.uv * u.canvas_size;
@@ -57,27 +61,28 @@ struct Uniforms {
         discard;
     }
 
-    // Source texture is stored premultiplied so hardware bilinear
-    // interpolation doesn't produce dark halos at content edges.
+    // Source texture is premultiplied for correct bilinear interpolation.
     let fg_pm = textureSampleLevel(t_source, t_sampler, src_uv, 0.0);
-    let a = fg_pm.a * u.opacity;
+    let fg_a = fg_pm.a * u.opacity;
+    let fg_pre = fg_pm.rgb * u.opacity;
 
-    if (a <= 0.0) {
+    if (fg_a <= 0.0) {
         discard;
     }
 
-    // Un-premultiply to get straight-alpha RGB
-    let rgb = fg_pm.rgb / fg_pm.a;
+    // Read destination (straight alpha — the layer's existing pixels).
+    let bg = textureLoad(t_dest, vec2i(in.position.xy), 0);
+
+    // Porter-Duff source-over (premultiplied fg, straight bg → straight output).
+    let blended = source_over(fg_pre, fg_a, bg);
 
     if (u.is_mask > 0.5) {
         // Mask mode: convert RGB to luminance, output as single-channel value.
-        // For R8 targets, only the R channel is written. The alpha channel
-        // controls source-over blend strength.
-        let lum = dot(rgb, vec3f(0.2126, 0.7152, 0.0722));
-        return vec4f(lum, lum, lum, a);
+        // For R8 targets, only the R channel is written.
+        let lum = dot(blended.rgb, vec3f(0.2126, 0.7152, 0.0722));
+        return vec4f(lum, lum, lum, blended.a);
     } else {
         // RGBA mode: output straight-alpha color.
-        // Hardware blend state does source-over compositing.
-        return vec4f(rgb, a);
+        return blended;
     }
 }

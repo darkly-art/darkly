@@ -5,13 +5,13 @@
  * interactive handles for move, scale, and rotate. Enter commits the
  * transform; Escape cancels.
  *
- * Uses the SVG ToolOverlay system for handle rendering. Affine matrix
- * computation happens in JS using the same [a, b, tx, c, d, ty] format
- * as the Rust gpu/transform.rs module.
+ * Handles are rendered via the GPU overlay system (not SVG) for smooth
+ * drag performance. Hit-testing for cursor feedback and drag initiation
+ * is pure JS math (distance checks against known handle positions).
  */
 import type { Tool, ToolContext } from './registry';
-import type { ToolOverlayData, OverlayHandle, OverlayLine } from '../canvas/overlay';
 import { app } from '../state/app.svelte';
+import { OverlayBuilder } from '../canvas/gpu_overlay';
 
 // ---------------------------------------------------------------------------
 // Affine2D helpers (mirrors Rust gpu/transform.rs)
@@ -150,10 +150,13 @@ let drag = $state<{
     startAngle: number;
 } | null>(null);
 
+/** Canvas element reference for coordinate conversions. */
+let canvasEl: HTMLCanvasElement | null = null;
+
 const ROTATION_ARM_LENGTH = 30; // screen pixels
 
 /** Read floating content info from Rust and populate JS state.
- *  Called ONLY from event handlers (not from getOverlay). */
+ *  Called ONLY from event handlers (not from overlay push). */
 function syncFromRust(): boolean {
     if (!app.handle) return false;
     const raw = app.handle.floating_info();
@@ -172,6 +175,8 @@ function syncFromRust(): boolean {
 function clearState() {
     active = false;
     drag = null;
+    app.handle?.clear_overlay();
+    app.toolCursor = null;
 }
 
 function pushMatrix() {
@@ -230,8 +235,6 @@ function updateDrag(canvasX: number, canvasY: number, shiftKey: boolean) {
             ),
         );
     } else {
-        // Compute scale in source-local space so it follows the object's
-        // edges regardless of rotation, then apply in local space.
         const dragLocal = handleLocal(handle, srcW, srcH);
         const mouseOffset: [number, number] = [canvasX - origin[0], canvasY - origin[1]];
 
@@ -256,7 +259,6 @@ function updateDrag(canvasX: number, canvasY: number, shiftKey: boolean) {
             sy = uniform * Math.sign(sy || 1);
         }
 
-        // Apply scale in local space around the local anchor point
         matrix = affineMultiply(
             initialMatrix,
             affineMultiply(
@@ -277,22 +279,37 @@ function endDrag() {
 }
 
 // ---------------------------------------------------------------------------
-// Overlay generation (pure — only reads $state, no side effects)
+// GPU overlay (built via OverlayBuilder, rendered by GPU, hit-tested by JS)
 // ---------------------------------------------------------------------------
 
-function buildOverlay(): ToolOverlayData | null {
-    if (!active) return null;
+/** Last-built overlay — kept for hit-testing between frames. */
+let overlay: OverlayBuilder | null = null;
 
+function mid(a: [number, number], b: [number, number]): [number, number] {
+    return [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+}
+
+function buildOverlay(): OverlayBuilder | null {
+    if (!active || !app.handle || !canvasEl) {
+        app.handle?.clear_overlay();
+        return null;
+    }
+
+    const o = new OverlayBuilder(canvasEl);
+
+    // Corner positions in canvas space
     const tl = toCanvas(0, 0);
     const tr = toCanvas(srcW, 0);
     const br = toCanvas(srcW, srcH);
     const bl = toCanvas(0, srcH);
 
-    const tm: [number, number] = [(tl[0] + tr[0]) / 2, (tl[1] + tr[1]) / 2];
-    const rm: [number, number] = [(tr[0] + br[0]) / 2, (tr[1] + br[1]) / 2];
-    const bm: [number, number] = [(br[0] + bl[0]) / 2, (br[1] + bl[1]) / 2];
-    const lm: [number, number] = [(bl[0] + tl[0]) / 2, (bl[1] + tl[1]) / 2];
+    // Edge midpoints
+    const tm = mid(tl, tr);
+    const rm = mid(tr, br);
+    const bm = mid(br, bl);
+    const lm = mid(bl, tl);
 
+    // Rotation handle position (perpendicular to top edge, in canvas space)
     const edgeX = tr[0] - tl[0];
     const edgeY = tr[1] - tl[1];
     const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY);
@@ -301,43 +318,30 @@ function buildOverlay(): ToolOverlayData | null {
     const armCanvas = ROTATION_ARM_LENGTH / (app.zoom || 1);
     const rotPos: [number, number] = [tm[0] + perpX * armCanvas, tm[1] + perpY * armCanvas];
 
-    const lines: OverlayLine[] = [
-        { x1: tl[0], y1: tl[1], x2: tr[0], y2: tr[1], stroke: '#4af', dashArray: '6 4' },
-        { x1: tr[0], y1: tr[1], x2: br[0], y2: br[1], stroke: '#4af', dashArray: '6 4' },
-        { x1: br[0], y1: br[1], x2: bl[0], y2: bl[1], stroke: '#4af', dashArray: '6 4' },
-        { x1: bl[0], y1: bl[1], x2: tl[0], y2: tl[1], stroke: '#4af', dashArray: '6 4' },
-        { x1: tm[0], y1: tm[1], x2: rotPos[0], y2: rotPos[1], stroke: '#4af', dashArray: '4 3' },
-    ];
+    // Bounding box + rotation arm
+    o.line(tl, tr, { color: '#4af', dash: 6 });
+    o.line(tr, br, { color: '#4af', dash: 6 });
+    o.line(br, bl, { color: '#4af', dash: 6 });
+    o.line(bl, tl, { color: '#4af', dash: 6 });
+    o.line(tm, rotPos, { color: '#4af', dash: 4 });
 
-    const makeHandle = (id: string, pos: [number, number], handle: Handle, radius = 5): OverlayHandle => ({
-        id,
-        x: pos[0],
-        y: pos[1],
-        radius,
-        cursor: cursorForHandle(handle),
-        fill: '#fff',
-        stroke: '#4af',
-        onDrag(cx, cy) { beginDragIfNeeded(handle, cx, cy); updateDrag(cx, cy, false); },
-        onDragEnd() { endDrag(); },
-    });
+    // Corner handles
+    o.handle(tl, { id: Handle.TopLeft,     cursor: 'nwse-resize' });
+    o.handle(tr, { id: Handle.TopRight,    cursor: 'nesw-resize' });
+    o.handle(br, { id: Handle.BottomRight, cursor: 'nwse-resize' });
+    o.handle(bl, { id: Handle.BottomLeft,  cursor: 'nesw-resize' });
 
-    const handles: OverlayHandle[] = [
-        makeHandle('tl', tl, Handle.TopLeft, 5),
-        makeHandle('tr', tr, Handle.TopRight, 5),
-        makeHandle('br', br, Handle.BottomRight, 5),
-        makeHandle('bl', bl, Handle.BottomLeft, 5),
-        makeHandle('tm', tm, Handle.Top, 4),
-        makeHandle('rm', rm, Handle.Right, 4),
-        makeHandle('bm', bm, Handle.Bottom, 4),
-        makeHandle('lm', lm, Handle.Left, 4),
-        { ...makeHandle('rot', rotPos, Handle.Rotate, 5), fill: '#4af', stroke: '#fff' },
-    ];
+    // Edge handles
+    o.handle(tm, { id: Handle.Top,    cursor: 'ns-resize', radius: 4 });
+    o.handle(rm, { id: Handle.Right,  cursor: 'ew-resize', radius: 4 });
+    o.handle(bm, { id: Handle.Bottom, cursor: 'ns-resize', radius: 4 });
+    o.handle(lm, { id: Handle.Left,   cursor: 'ew-resize', radius: 4 });
 
-    return { lines, handles };
-}
+    // Rotation handle (colors swapped)
+    o.handle(rotPos, { id: Handle.Rotate, cursor: 'grab', fill: '#4af', stroke: '#fff' });
 
-function beginDragIfNeeded(handle: Handle, cx: number, cy: number) {
-    if (!drag) beginDrag(handle, cx, cy);
+    o.push(app.handle);
+    return o;
 }
 
 // ---------------------------------------------------------------------------
@@ -347,10 +351,12 @@ function beginDragIfNeeded(handle: Handle, cx: number, cy: number) {
 export const transformTool: Tool = {
     id: 'transform',
     name: 'Transform',
-    icon: 'T',
+    faIcon: 'fa-solid fa-up-down-left-right',
+    group: 'transform',
     hotkeyAction: 'transformTool',
 
     onActivate(ctx) {
+        canvasEl = ctx.canvasEl;
         if (!app.activeLayerId || !ctx.handle) return;
         if (!ctx.handle.has_floating()) {
             ctx.handle.begin_transform(app.activeLayerId);
@@ -367,7 +373,7 @@ export const transformTool: Tool = {
         clearState();
     },
 
-    onPointerDown(_ctx, _e, cx, cy) {
+    onPointerDown(ctx, _e, cx, cy) {
         if (!active) {
             if (app.handle && app.activeLayerId != null) {
                 if (!app.handle.has_floating()) {
@@ -377,12 +383,16 @@ export const transformTool: Tool = {
             }
             if (!active) return;
         }
-        beginDrag(Handle.Body, cx, cy);
+        const hit = overlay?.hitTest(cx, cy);
+        beginDrag(hit?.id ?? Handle.Body, cx, cy);
     },
 
     onPointerMove(_ctx, e, cx, cy) {
         if (drag) {
             updateDrag(cx, cy, e.shiftKey);
+        } else if (active) {
+            const hit = overlay?.hitTest(cx, cy);
+            app.toolCursor = hit?.cursor ?? 'move';
         }
     },
 
@@ -406,8 +416,15 @@ export const transformTool: Tool = {
         return false;
     },
 
-    getOverlay(): ToolOverlayData | null {
-        return buildOverlay();
+    onFrame() {
+        // Sync when floating content arrives from an async GPU readback
+        // (begin_transform without selection computes content bounds async).
+        if (!active && app.handle?.has_floating()) {
+            syncFromRust();
+        }
+        if (active) {
+            overlay = buildOverlay();
+        }
     },
 
     dismissOverlay() {

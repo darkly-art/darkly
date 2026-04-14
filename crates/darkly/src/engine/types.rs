@@ -50,6 +50,10 @@ pub struct ParamInfo {
     pub default: ParamValue,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<ParamValue>,
+    /// Enum: `["Label1", "Label2", ...]`.
+    /// Icon: `[["fa-class", "Label"], ...]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<serde_json::Value>,
 }
 
 impl ParamInfo {
@@ -60,18 +64,56 @@ impl ParamInfo {
                 min: Some(*min as f64), max: Some(*max as f64),
                 default: ParamValue::Float(*default),
                 value: value.cloned(),
+                options: None,
             },
             ParamDef::Int { name, min, max, default } => ParamInfo {
                 kind: "int", name,
                 min: Some(*min as f64), max: Some(*max as f64),
                 default: ParamValue::Int(*default),
                 value: value.cloned(),
+                options: None,
             },
             ParamDef::Bool { name, default } => ParamInfo {
                 kind: "bool", name,
                 min: None, max: None,
                 default: ParamValue::Bool(*default),
                 value: value.cloned(),
+                options: None,
+            },
+            ParamDef::String { name, default } => ParamInfo {
+                kind: "string", name,
+                min: None, max: None,
+                default: ParamValue::String(default.to_string()),
+                value: value.cloned(),
+                options: None,
+            },
+            ParamDef::Curve { name, default } => ParamInfo {
+                kind: "curve", name,
+                min: None, max: None,
+                default: ParamValue::Curve(default.to_vec()),
+                value: value.cloned(),
+                options: None,
+            },
+            ParamDef::Enum { name, options, default } => ParamInfo {
+                kind: "enum", name,
+                min: None, max: None,
+                default: ParamValue::Int(*default),
+                value: value.cloned(),
+                options: Some(serde_json::json!(options)),
+            },
+            ParamDef::FloatInput { name, min, max, default } => ParamInfo {
+                kind: "floatInput", name,
+                min: Some(*min as f64), max: Some(*max as f64),
+                default: ParamValue::Float(*default),
+                value: value.cloned(),
+                options: None,
+            },
+            ParamDef::Icon { name, options, default } => ParamInfo {
+                kind: "icon", name,
+                min: None, max: None,
+                default: ParamValue::String(default.to_string()),
+                value: value.cloned(),
+                options: Some(serde_json::json!(options)),
             },
         }
     }
@@ -80,13 +122,22 @@ impl ParamInfo {
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum StrokeOp {
-    PaintCircle { x: f32, y: f32, radius: f32, r: u8, g: u8, b: u8, a: u8 },
-    EraseCircle { x: f32, y: f32, radius: f32 },
     FloodFill { x: f32, y: f32, r: u8, g: u8, b: u8, a: u8, tolerance: u8 },
     LinearGradient {
         x0: f32, y0: f32, x1: f32, y1: f32,
         r0: u8, g0: u8, b0: u8, a0: u8,
         r1: u8, g1: u8, b1: u8, a1: u8,
+    },
+    /// Node-graph brush stroke event with full tablet data.
+    BrushStroke {
+        x: f32, y: f32,
+        pressure: f32,
+        x_tilt: f32, y_tilt: f32,
+        rotation: f32,
+        tangential_pressure: f32,
+        time_ms: f64,
+        /// Foreground color as linear RGBA floats (0-1).
+        cr: f32, cg: f32, cb: f32, ca: f32,
     },
 }
 

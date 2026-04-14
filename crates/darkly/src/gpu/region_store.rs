@@ -277,6 +277,17 @@ impl RegionStore {
         self.scratch_height = height;
     }
 
+    /// Create a texture view for the scratch texture of the given format.
+    /// Used by `DiffRectPass` to compare pre-stroke state against current canvas.
+    pub fn scratch_view(&self, format: wgpu::TextureFormat) -> wgpu::TextureView {
+        self.scratch_for(format).create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    /// Canvas dimensions of the scratch textures.
+    pub fn scratch_dimensions(&self) -> (u32, u32) {
+        (self.scratch_width, self.scratch_height)
+    }
+
     // --- Internal ---
 
     fn scratch_for(&self, format: wgpu::TextureFormat) -> &wgpu::Texture {
@@ -300,7 +311,7 @@ impl RegionStore {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
     }

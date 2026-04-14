@@ -1,13 +1,48 @@
 //! Stroke lifecycle, flood fill, erase helpers, and paint infrastructure.
 
-use super::{DarklyEngine, GpuStrokeState, ReadbackContext};
+use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use super::types::StrokeOp;
+use crate::brush::checkpoint_ring::CheckpointRing;
+use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::paint_info::PaintInformation;
+use crate::brush::spacing::SpacingConfig;
+use crate::brush::stroke_buffer::StrokeBuffer;
+use crate::brush::stroke_engine::StrokeEngine;
 use crate::gpu::flood_fill;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
+    /// Flush any pending diff-based undo commit. Called before overwriting the
+    /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait)
+    /// — if the diff hasn't completed yet, falls back to a full-canvas rect.
+    fn flush_pending_undo_commit(&mut self) {
+        if !self.diff_rect.is_pending() {
+            return;
+        }
+        let Some(commit) = self.pending_undo_commit.take() else { return };
+
+        // Try to collect the result without blocking.
+        let _ = self.gpu.device.poll(wgpu::PollType::Poll);
+        let rect = match self.diff_rect.poll(&self.gpu.device) {
+            Some(Some(rect)) => rect,
+            Some(None) => return, // Textures identical — no commit needed.
+            None => {
+                // Diff not ready — fall back to full canvas.
+                let (w, h) = self.region_store.scratch_dimensions();
+                [0, 0, w, h]
+            }
+        };
+
+        self.gpu.encode("brush-stroke-end-flush", |encoder| {
+            let entry = self.region_store.commit_region(
+                encoder, commit.layer_id, commit.format, rect,
+            );
+            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        });
+    }
+
     // --- Painting ---
 
     pub fn fill_gradient(&mut self, layer_id: u64) {
@@ -72,8 +107,9 @@ impl DarklyEngine {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
 
-        // Lazy init: save the region on first stroke_to.
-        if self.gpu_stroke.is_none() {
+        // Lazy init: save the canvas to scratch for undo on first stroke_to.
+        if !self.scratch_saved {
+            self.flush_pending_undo_commit();
             let (texture, format) = if mask_editing {
                 match self.compositor.mask_texture(layer_id) {
                     Some(t) => (&t.texture, wgpu::TextureFormat::R8Unorm),
@@ -86,16 +122,13 @@ impl DarklyEngine {
                 }
             };
 
-            // Save the entire canvas to scratch for undo.
             self.gpu.encode("stroke-begin", |encoder| {
                 self.region_store.save_region(encoder, texture, format, [0, 0, canvas_w, canvas_h]);
             });
 
-            self.gpu_stroke = Some(GpuStrokeState::new(format));
+            self.scratch_saved = true;
         }
 
-        // Helper closure to create a paint target from compositor textures.
-        // Defined as a macro to avoid holding borrows across match arms.
         macro_rules! paint_target {
             () => {
                 if mask_editing {
@@ -109,30 +142,6 @@ impl DarklyEngine {
         }
 
         match op {
-            StrokeOp::PaintCircle { x, y, radius, r, g, b, a } => {
-                let target = match paint_target!() { Some(t) => t, None => return };
-                self.gpu.encode("stroke-to", |encoder| {
-                    target.composite_circle(
-                        encoder, &self.paint_pipelines, &self.gpu.queue,
-                        x, y, radius, [r, g, b, a], 1.0,
-                    );
-                });
-                if let Some(gs) = &mut self.gpu_stroke {
-                    gs.expand(x, y, radius, canvas_w, canvas_h);
-                }
-            }
-            StrokeOp::EraseCircle { x, y, radius } => {
-                let target = match paint_target!() { Some(t) => t, None => return };
-                self.gpu.encode("stroke-to", |encoder| {
-                    target.erase_circle(
-                        encoder, &self.paint_pipelines, &self.gpu.queue,
-                        x, y, radius,
-                    );
-                });
-                if let Some(gs) = &mut self.gpu_stroke {
-                    gs.expand(x, y, radius, canvas_w, canvas_h);
-                }
-            }
             StrokeOp::LinearGradient { x0, y0, x1, y1, r0, g0, b0, a0, r1, g1, b1, a1 } => {
                 let target = match paint_target!() { Some(t) => t, None => return };
                 self.gpu.encode("stroke-gradient", |encoder| {
@@ -141,20 +150,279 @@ impl DarklyEngine {
                         x0, y0, x1, y1, [r0, g0, b0, a0], [r1, g1, b1, a1], None,
                     );
                 });
-                // Gradient covers the full canvas.
-                if let Some(gs) = &mut self.gpu_stroke {
-                    gs.stroke_rect = Some([0, 0, canvas_w, canvas_h]);
-                }
             }
             StrokeOp::FloodFill { x, y, r, g, b, a, tolerance } => {
-                // Flood fill needs mutable self access, so the target is obtained inside.
                 self.gpu_flood_fill(layer_id, mask_editing,
                     x as i32, y as i32, [r, g, b, a], tolerance,
                     canvas_w, canvas_h);
             }
+            StrokeOp::BrushStroke { x, y, pressure, x_tilt, y_tilt, rotation, tangential_pressure, time_ms, cr, cg, cb, ca } => {
+                self.brush_stroke_to(
+                    layer_id, mask_editing,
+                    x, y, pressure, x_tilt, y_tilt, rotation, tangential_pressure, time_ms,
+                    [cr, cg, cb, ca],
+                    canvas_w, canvas_h,
+                );
+            }
         }
 
         self.compositor.mark_dirty();
+    }
+
+    /// Handle a BrushStroke event through the node-graph brush engine.
+    ///
+    /// Lazy-inits a `StrokeEngine` + `StrokeBuffer` on the first event.
+    /// Each event feeds through the stabilizer, which may trigger rewind
+    /// and re-rendering of the stroke from scratch.
+    fn brush_stroke_to(
+        &mut self,
+        layer_id: u64,
+        mask_editing: bool,
+        x: f32, y: f32,
+        pressure: f32,
+        x_tilt: f32, y_tilt: f32,
+        rotation: f32,
+        tangential_pressure: f32,
+        time_ms: f64,
+        color: [f32; 4],
+        canvas_w: u32, canvas_h: u32,
+    ) {
+        // Lazy-init: compile the active brush graph + create stroke buffer.
+        if self.brush_stroke_engine.is_none() {
+            let runner = match crate::brush::compile_graph(&self.active_brush_graph) {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("brush graph compilation failed: {e:?}");
+                    return;
+                }
+            };
+
+            // Create the stabilizer from the active config.
+            let stabilizer = self.stabilizer_registry.create_from_config(
+                &self.active_stabilizer_config,
+            );
+
+            self.brush_stroke_engine = Some(StrokeEngine::new(
+                runner, color, SpacingConfig::default(), stabilizer,
+            ));
+
+            // Create the stroke buffer and save the pre-stroke snapshot.
+            let layer_tex = if mask_editing {
+                self.compositor.mask_texture(layer_id)
+            } else {
+                self.compositor.layer_texture(layer_id)
+            };
+            if let Some(layer_tex) = layer_tex {
+                let stroke_buffer = StrokeBuffer::new(
+                    &self.gpu.device,
+                    canvas_w,
+                    canvas_h,
+                    self.dab_pool.bind_group_layout(),
+                    self.brush_pipelines.canvas_copy_bind_group_layout(),
+                );
+                self.gpu.encode("stroke-buffer-init", |encoder| {
+                    stroke_buffer.save_pre_stroke(encoder, &layer_tex.texture);
+                    stroke_buffer.clear(encoder);
+                });
+                self.stroke_buffer = Some(stroke_buffer);
+            }
+        }
+
+        // Build PaintInformation from the raw tablet data.
+        let info = PaintInformation {
+            pos: [x, y],
+            pressure,
+            x_tilt,
+            y_tilt,
+            rotation,
+            tangential_pressure,
+            time: (time_ms / 1000.0) as f32,
+            ..Default::default()
+        };
+
+        // Get the canvas texture and view.
+        let layer_tex = if mask_editing {
+            match self.compositor.mask_texture(layer_id) {
+                Some(t) => t,
+                None => return,
+            }
+        } else {
+            match self.compositor.layer_texture(layer_id) {
+                Some(t) => t,
+                None => return,
+            }
+        };
+        let layer_view = layer_tex.view.clone();
+
+        // Take the stroke engine and buffer out to avoid borrow conflicts.
+        let mut engine = self.brush_stroke_engine.take().unwrap();
+        let stroke_buffer = self.stroke_buffer.take();
+
+        let sel_bg = if self.gpu_selection.active {
+            self.gpu_selection.brush_bind_group()
+        } else {
+            &self.brush_pipelines.default_selection_bind_group
+        };
+
+        if let Some(ref stroke_buffer) = stroke_buffer {
+            // Stabilized path: dabs render to stroke buffer, then composite onto layer.
+            let result = engine.stabilize(info);
+            let max_div = engine.max_divergence_window();
+            let tip_vi = engine.stabilizer_len().saturating_sub(1);
+
+            // Helper macro: create a BrushGpuContext for rendering a segment.
+            macro_rules! make_gpu_ctx {
+                ($label:expr) => {
+                    BrushGpuContext {
+                        encoder: self.gpu.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor { label: Some($label) },
+                        ),
+                        device: &self.gpu.device,
+                        queue: &self.gpu.queue,
+                        dab_pool: &mut self.dab_pool,
+                        pipelines: &self.brush_pipelines,
+                        canvas_view: stroke_buffer.stroke_view(),
+                        canvas_texture: stroke_buffer.stroke_texture(),
+                        canvas_width: canvas_w,
+                        canvas_height: canvas_h,
+                        selection_bind_group: sel_bg,
+                        resource_handles: &self.resource_handles,
+                        blend_mode: self.brush_blend_mode,
+                    }
+                };
+            }
+
+            if let Some(div_idx) = result.divergence_index {
+                // Divergence — try checkpoint-based partial re-render.
+                let restore = self.gpu.encode_ret("stroke-checkpoint-restore", |encoder| {
+                    self.checkpoint_ring.restore_before(
+                        encoder,
+                        stroke_buffer.stroke_texture(),
+                        stroke_buffer.stroke_view(),
+                        div_idx,
+                    )
+                });
+
+                let start_vi = if let Some(cp) = restore {
+                    // Restored from checkpoint — truncate and resume.
+                    engine.save_points.truncate(cp.save_point_index + 1);
+                    engine.restore_render_state(&cp.render_state);
+                    self.checkpoint_ring.invalidate_from(cp.vector_index + 1);
+                    cp.vector_index + 1
+                } else {
+                    // No checkpoint before divergence — full re-render.
+                    self.gpu.encode("stroke-rewind", |encoder| {
+                        stroke_buffer.clear(encoder);
+                    });
+                    engine.reset_render_state();
+                    self.checkpoint_ring.clear();
+                    0
+                };
+
+                // Render in segments with checkpoints at boundaries.
+                let boundaries = CheckpointRing::compute_segment_boundaries(
+                    start_vi, tip_vi, max_div,
+                );
+
+                let mut seg_start = start_vi;
+                for &boundary in &boundaries {
+                    if boundary <= seg_start || boundary > tip_vi { continue; }
+
+                    // Render segment.
+                    let mut gpu_ctx = make_gpu_ctx!("brush-rerender-seg");
+                    engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, boundary);
+                    drop(gpu_ctx);
+
+                    // Save checkpoint at this boundary.
+                    if let Some(bbox) = engine.save_points.full_bbox() {
+                        let sp_idx = engine.save_points.len().saturating_sub(1);
+                        let render_state = engine.capture_render_state();
+                        self.gpu.encode("checkpoint-save", |encoder| {
+                            self.checkpoint_ring.save(
+                                &self.gpu.device, encoder,
+                                stroke_buffer.stroke_texture(),
+                                sp_idx, boundary, bbox, render_state,
+                            );
+                        });
+                    }
+
+                    seg_start = boundary + 1;
+                }
+
+                // Render any remaining dabs past the last boundary.
+                if seg_start <= tip_vi {
+                    let mut gpu_ctx = make_gpu_ctx!("brush-rerender-tail");
+                    engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, tip_vi);
+                }
+            } else {
+                // No divergence — render tail only.
+                let mut gpu_ctx = make_gpu_ctx!("brush-dab");
+                engine.render_from_stabilized_tail(&mut gpu_ctx);
+
+                // Periodically save a checkpoint to keep the ring fresh.
+                let spacing = CheckpointRing::spacing(max_div);
+                let should_save = match self.checkpoint_ring.newest_vector_index() {
+                    Some(newest_vi) => tip_vi.saturating_sub(newest_vi) >= spacing,
+                    None => true,
+                };
+                if should_save && !engine.save_points.is_empty() {
+                    if let Some(bbox) = engine.save_points.full_bbox() {
+                        let sp_idx = engine.save_points.len() - 1;
+                        let render_state = engine.capture_render_state();
+                        self.gpu.encode("checkpoint-save", |encoder| {
+                            self.checkpoint_ring.save(
+                                &self.gpu.device, encoder,
+                                stroke_buffer.stroke_texture(),
+                                sp_idx, tip_vi, bbox, render_state,
+                            );
+                        });
+                    }
+                }
+            }
+
+            // Composite stroke buffer onto the layer.
+            self.gpu.encode("stroke-composite", |encoder| {
+                stroke_buffer.composite_onto_layer(
+                    encoder,
+                    &self.brush_pipelines,
+                    &self.gpu.queue,
+                    &layer_view,
+                    sel_bg,
+                );
+            });
+        } else {
+            // Fallback: no stroke buffer — render directly to layer (shouldn't happen).
+            let layer_tex = if mask_editing {
+                self.compositor.mask_texture(layer_id)
+            } else {
+                self.compositor.layer_texture(layer_id)
+            };
+            if let Some(layer_tex) = layer_tex {
+                let canvas_view = layer_tex.view.clone();
+                let canvas_texture = &layer_tex.texture;
+                let mut gpu_ctx = BrushGpuContext {
+                    encoder: self.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
+                    ),
+                    device: &self.gpu.device,
+                    queue: &self.gpu.queue,
+                    dab_pool: &mut self.dab_pool,
+                    pipelines: &self.brush_pipelines,
+                    canvas_view: &canvas_view,
+                    canvas_texture,
+                    canvas_width: canvas_w,
+                    canvas_height: canvas_h,
+                    selection_bind_group: sel_bg,
+                    resource_handles: &self.resource_handles,
+                    blend_mode: self.brush_blend_mode,
+                };
+                engine.move_to(info, &mut gpu_ctx);
+            }
+        }
+
+        // Put the engine and buffer back.
+        self.brush_stroke_engine = Some(engine);
+        self.stroke_buffer = stroke_buffer;
     }
 
     /// Start async GPU flood fill: readback layer texture, then complete on a
@@ -207,10 +475,22 @@ impl DarklyEngine {
             flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
         };
 
-        // 2. Upload fill mask and stamp onto target.
+        // 2. Combine fill mask with active selection (if any), then upload.
+        let effective_mask = if self.gpu_selection.active {
+            if let Some(sel) = &self.gpu_selection.cpu_cache {
+                fill_mask.iter().zip(sel.iter())
+                    .map(|(&f, &s)| ((f as u16 * s as u16) / 255) as u8)
+                    .collect()
+            } else {
+                fill_mask
+            }
+        } else {
+            fill_mask
+        };
+
         let mask_bind_group = self.paint_pipelines.upload_r8_bind_group(
             &self.gpu.device, &self.gpu.queue, canvas_w, canvas_h,
-            &fill_mask, "flood-fill-mask",
+            &effective_mask, "flood-fill-mask",
         );
 
         let (target, _) = match self.get_paint_target(layer_id, mask_editing) {
@@ -225,16 +505,20 @@ impl DarklyEngine {
             );
         });
 
-        // 4. Commit undo — the stroke lifecycle was deferred for async fill.
-        if let Some(gs) = self.gpu_stroke.take() {
-            let rect = [0u32, 0, canvas_w, canvas_h];
-            self.gpu.encode("flood-fill-undo", |encoder| {
-                let entry = self.region_store.commit_region(
-                    encoder, layer_id, gs.format, rect,
-                );
-                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
-            });
-        }
+        // 4. Commit undo — use full canvas rect (flood fill can change any pixel).
+        let format = if mask_editing {
+            wgpu::TextureFormat::R8Unorm
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+        let rect = [0u32, 0, canvas_w, canvas_h];
+        self.gpu.encode("flood-fill-undo", |encoder| {
+            let entry = self.region_store.commit_region(
+                encoder, layer_id, format, rect,
+            );
+            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+        });
+        self.scratch_saved = false;
 
         self.compositor.mark_dirty();
     }
@@ -248,18 +532,38 @@ impl DarklyEngine {
                 return;
             }
 
-            if let Some(gs) = self.gpu_stroke.take() {
-                // GPU path: commit the changed region to the undo buffer.
-                if let Some(rect) = gs.stroke_rect {
-                    self.gpu.encode("stroke-end", |encoder| {
-                        let entry = self.region_store.commit_region(
-                            encoder, layer_id, gs.format, rect,
-                        );
-                        self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            // Finalize brush stroke engine and destroy stroke buffer + checkpoints.
+            if let Some(engine) = self.brush_stroke_engine.take() {
+                let _record = engine.end();
+            }
+            self.stroke_buffer = None;
+            self.checkpoint_ring.clear();
+
+            // Dispatch GPU diff to find the exact changed region for undo.
+            if self.scratch_saved && self.pending_undo_commit.is_none() {
+                let format = if self.editing_mask_layer == Some(layer_id) {
+                    wgpu::TextureFormat::R8Unorm
+                } else {
+                    wgpu::TextureFormat::Rgba8Unorm
+                };
+                let current_view = if self.editing_mask_layer == Some(layer_id) {
+                    self.compositor.mask_texture(layer_id).map(|t| &t.view)
+                } else {
+                    self.compositor.layer_texture(layer_id).map(|t| &t.view)
+                };
+                if let Some(current_view) = current_view {
+                    let scratch_view = self.region_store.scratch_view(format);
+                    let (w, h) = self.region_store.scratch_dimensions();
+                    self.diff_rect.request(
+                        &self.gpu.device, &self.gpu.queue,
+                        &scratch_view, current_view, w, h,
+                    );
+                    self.pending_undo_commit = Some(PendingUndoCommit {
+                        layer_id, format,
                     });
                 }
-                // else: no paint was applied (empty stroke), nothing to undo.
             }
+            self.scratch_saved = false;
             self.doc.set_mask_editing(None);
         }
     }
@@ -268,6 +572,10 @@ impl DarklyEngine {
 
     /// Clear layer pixels within the current selection via GPU erase pass.
     pub(crate) fn gpu_clear_selection(&mut self, layer_id: u64) {
+        if !self.gpu_selection.active {
+            return;
+        }
+
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         let mask_editing = self.editing_mask_layer == Some(layer_id);
@@ -277,22 +585,17 @@ impl DarklyEngine {
             None => return,
         };
 
-        // Upload selection mask as R8 GPU texture.
-        let sel_bind_group = match self.upload_selection_mask(canvas_w, canvas_h) {
-            Some(bg) => bg,
-            None => return,
-        };
-
         // Save region for undo.
         self.gpu.encode("clear-sel-save", |encoder| {
             self.region_store.save_region(encoder, target.texture, format, [0, 0, canvas_w, canvas_h]);
         });
 
-        // Erase within selection.
+        // Erase within selection using the cached GPU selection bind group.
         let (target, _) = self.get_paint_target(layer_id, mask_editing).unwrap();
+        let sel_bg = self.gpu_selection.paint_bind_group();
         self.gpu.encode("clear-sel-erase", |encoder| {
             target.erase_with_selection(
-                encoder, &self.paint_pipelines, &self.gpu.queue, &sel_bind_group,
+                encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg,
             );
         });
 
@@ -354,29 +657,37 @@ impl DarklyEngine {
         }
     }
 
-    /// Upload a cropped region of the selection mask as an R8 GPU texture.
-    pub(crate) fn upload_cropped_selection_mask(
+    /// Upload a cropped region of the GPU selection as an R8 texture bind group.
+    /// Reads from the CPU cache (populated by async readback or eagerly on upload).
+    pub(crate) fn upload_cropped_selection_r8(
         &self,
         origin: (i32, i32),
         width: u32,
         height: u32,
     ) -> Option<wgpu::BindGroup> {
-        let selection = self.doc.selection.as_ref()?;
-        let pixels = selection.rasterize_r8(origin, width, height, 0);
+        if !self.gpu_selection.active {
+            return None;
+        }
+
+        let full = self.gpu_selection.cpu_cache.as_ref()?;
+        let (ox, oy) = origin;
+        let cw = self.gpu_selection.width;
+        let ch = self.gpu_selection.height;
+
+        let mut pixels = vec![0u8; (width * height) as usize];
+        for py in 0..height {
+            for px in 0..width {
+                let sx = ox + px as i32;
+                let sy = oy + py as i32;
+                if sx >= 0 && sy >= 0 && (sx as u32) < cw && (sy as u32) < ch {
+                    pixels[(py * width + px) as usize] = full[(sy as u32 * cw + sx as u32) as usize];
+                }
+            }
+        }
+
         Some(self.paint_pipelines.upload_r8_bind_group(
             &self.gpu.device, &self.gpu.queue, width, height,
             &pixels, "selection-cropped",
-        ))
-    }
-
-    /// Upload the document's selection mask (AlphaMask) as an R8 GPU texture,
-    /// returning a bind group suitable for the paint pipeline's selection slot.
-    pub(crate) fn upload_selection_mask(&self, canvas_w: u32, canvas_h: u32) -> Option<wgpu::BindGroup> {
-        let selection = self.doc.selection.as_ref()?;
-        let pixels = selection.rasterize_r8((0, 0), canvas_w, canvas_h, 0);
-        Some(self.paint_pipelines.upload_r8_bind_group(
-            &self.gpu.device, &self.gpu.queue, canvas_w, canvas_h,
-            &pixels, "selection-upload",
         ))
     }
 }

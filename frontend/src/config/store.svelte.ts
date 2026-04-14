@@ -158,3 +158,20 @@ class ConfigStore {
 }
 
 export const config = new ConfigStore();
+
+/**
+ * Format a tinykeys-style binding (e.g. "Shift+KeyR", "$mod+KeyA") into a
+ * human-readable shortcut string (e.g. "Shift+R", "Ctrl+A" / "Cmd+A").
+ */
+export function formatHotkey(binding: string | undefined): string | undefined {
+    if (!binding) return undefined;
+    const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
+    return binding.split('+').map(part => {
+        if (part === '$mod') return isMac ? '\u2318' : 'Ctrl';
+        if (part === 'Shift') return isMac ? '\u21E7' : 'Shift';
+        if (part === 'Alt') return isMac ? '\u2325' : 'Alt';
+        if (part.startsWith('Key')) return part.slice(3);
+        if (part === 'Delete') return 'Del';
+        return part;
+    }).join('+');
+}

@@ -137,15 +137,16 @@ impl<'a> GpuPaintTarget<'a> {
         self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(selection_bind_group));
     }
 
-    /// Multiply the target's pixel values by a mask texture.
+    /// Multiply ALL channels of the target by a mask texture.
     ///
-    /// `dst.rgba *= mask_sample` (premultiplied-safe: scales all channels equally).
-    /// Used by apply_mask_destructive (mask × layer alpha) and selection masking
-    /// of transform sources (zero out unselected pixels).
+    /// `dst.rgba *= mask_sample` — produces premultiplied output. Use this when
+    /// the result will be sampled with bilinear filtering (e.g. transform sources),
+    /// where premultiplied data is required for correct interpolation at alpha
+    /// edges (see compositing-lessons-learned.md §2).
     ///
-    /// The mask texture must be the same dimensions as the target (or use a
-    /// 1:1 UV mapping). The caller is responsible for cropping/uploading a
-    /// correctly-sized mask.
+    /// **Do not use for straight-alpha destinations** (layer textures, clipboard
+    /// staging). Use `multiply_alpha_by_mask` instead — it preserves RGB and only
+    /// scales the alpha channel, which is correct for straight-alpha storage.
     pub fn multiply_by_mask(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -158,6 +159,92 @@ impl<'a> GpuPaintTarget<'a> {
         // Full-target rect, color = black with full alpha.
         // The shader outputs (0, 0, 0, mask_sample) and the blend state
         // computes dst * SrcAlpha = dst * mask_sample.
+        let uniforms = PaintUniforms {
+            origin: [0.0, 0.0],
+            size: [self.width as f32, self.height as f32],
+            canvas_size: [self.width as f32, self.height as f32],
+            center: [0.0, 0.0],
+            radius: 0.0,
+            softness: 0.0,
+            _pad: [0.0; 2],
+            color: [0.0, 0.0, 0.0, 1.0],
+        };
+
+        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
+    }
+
+    /// Multiply ALL channels of the target by `(1 - mask)`.
+    ///
+    /// `dst.rgba *= (1 - mask_sample)` — produces premultiplied output.
+    /// Same caveat as `multiply_by_mask`: do not use for straight-alpha
+    /// destinations. Use `multiply_alpha_by_inverse_mask` instead.
+    pub fn multiply_by_inverse_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        mask_bind_group: &wgpu::BindGroup,
+    ) {
+        let pipeline = pipelines.inverse_mask_multiply_pipeline(self.format);
+
+        let uniforms = PaintUniforms {
+            origin: [0.0, 0.0],
+            size: [self.width as f32, self.height as f32],
+            canvas_size: [self.width as f32, self.height as f32],
+            center: [0.0, 0.0],
+            radius: 0.0,
+            softness: 0.0,
+            _pad: [0.0; 2],
+            color: [0.0, 0.0, 0.0, 1.0],
+        };
+
+        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
+    }
+
+    /// Multiply only the ALPHA channel of the target by a mask texture.
+    ///
+    /// `dst.a *= mask_sample`, `dst.rgb` unchanged. Correct for straight-alpha
+    /// destinations (layer textures, clipboard staging) where the color channels
+    /// represent the actual color independent of opacity. See
+    /// compositing-lessons-learned.md §1: in straight alpha, coverage scaling
+    /// only affects the alpha channel.
+    pub fn multiply_alpha_by_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        mask_bind_group: &wgpu::BindGroup,
+    ) {
+        let pipeline = pipelines.alpha_mask_multiply_pipeline(self.format);
+
+        let uniforms = PaintUniforms {
+            origin: [0.0, 0.0],
+            size: [self.width as f32, self.height as f32],
+            canvas_size: [self.width as f32, self.height as f32],
+            center: [0.0, 0.0],
+            radius: 0.0,
+            softness: 0.0,
+            _pad: [0.0; 2],
+            color: [0.0, 0.0, 0.0, 1.0],
+        };
+
+        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
+    }
+
+    /// Multiply only the ALPHA channel of the target by `(1 - mask)`.
+    ///
+    /// `dst.a *= (1 - mask_sample)`, `dst.rgb` unchanged. Straight-alpha
+    /// complement of `multiply_alpha_by_mask`. Used by cut-erase to reduce
+    /// opacity at selected pixels without darkening the color.
+    pub fn multiply_alpha_by_inverse_mask(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &PaintPipelines,
+        queue: &wgpu::Queue,
+        mask_bind_group: &wgpu::BindGroup,
+    ) {
+        let pipeline = pipelines.alpha_inverse_mask_multiply_pipeline(self.format);
+
         let uniforms = PaintUniforms {
             origin: [0.0, 0.0],
             size: [self.width as f32, self.height as f32],
@@ -370,6 +457,10 @@ pub struct PaintPipelines {
     gradient_r8: wgpu::RenderPipeline,
     mask_multiply_rgba: wgpu::RenderPipeline,
     mask_multiply_r8: wgpu::RenderPipeline,
+    inverse_mask_multiply_rgba: wgpu::RenderPipeline,
+    inverse_mask_multiply_r8: wgpu::RenderPipeline,
+    alpha_mask_multiply_rgba: wgpu::RenderPipeline,
+    alpha_inverse_mask_multiply_rgba: wgpu::RenderPipeline,
 
     pub(crate) uniform_buf: wgpu::Buffer,
     pub(crate) uniform_bind_group: wgpu::BindGroup,
@@ -624,6 +715,52 @@ impl PaintPipelines {
             },
         };
 
+        // Inverse mask multiply: dst *= (1 - mask_sample). Same shader as
+        // mask_multiply but with OneMinusSrcAlpha blend factor.
+        // Used by transform source masking (premultiplied output for interpolation).
+        let blend_inverse_mask_multiply = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+
+        // Alpha-only mask multiply: dst.a *= mask_sample, dst.rgb unchanged.
+        // Correct for straight-alpha destinations where RGB represents the actual
+        // color independent of opacity. Color uses dst_factor=One to preserve RGB.
+        let blend_alpha_mask_multiply = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::SrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+
+        // Alpha-only inverse mask multiply: dst.a *= (1 - mask_sample), dst.rgb unchanged.
+        let blend_alpha_inverse_mask_multiply = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::One,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::Zero,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+
         PaintPipelines {
             composite_rgba: make_pipeline("paint-composite-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_composite),
             composite_r8: make_pipeline("paint-composite-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_composite),
@@ -635,6 +772,10 @@ impl PaintPipelines {
             gradient_r8: make_pipeline("gradient-r8", &gradient_layout, &gradient_shader, wgpu::TextureFormat::R8Unorm, blend_gradient),
             mask_multiply_rgba: make_pipeline("mask-multiply-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_mask_multiply),
             mask_multiply_r8: make_pipeline("mask-multiply-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_mask_multiply),
+            inverse_mask_multiply_rgba: make_pipeline("inv-mask-mul-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_inverse_mask_multiply),
+            inverse_mask_multiply_r8: make_pipeline("inv-mask-mul-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_inverse_mask_multiply),
+            alpha_mask_multiply_rgba: make_pipeline("alpha-mask-mul-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_alpha_mask_multiply),
+            alpha_inverse_mask_multiply_rgba: make_pipeline("alpha-inv-mask-mul-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_alpha_inverse_mask_multiply),
             uniform_buf,
             uniform_bind_group,
             gradient_uniform_buf,
@@ -748,6 +889,28 @@ impl PaintPipelines {
         match format {
             wgpu::TextureFormat::R8Unorm => &self.mask_multiply_r8,
             _ => &self.mask_multiply_rgba,
+        }
+    }
+
+    fn inverse_mask_multiply_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        match format {
+            wgpu::TextureFormat::R8Unorm => &self.inverse_mask_multiply_r8,
+            _ => &self.inverse_mask_multiply_rgba,
+        }
+    }
+
+    fn alpha_mask_multiply_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        match format {
+            // R8 has only one channel — alpha-only and all-channel are equivalent.
+            wgpu::TextureFormat::R8Unorm => &self.mask_multiply_r8,
+            _ => &self.alpha_mask_multiply_rgba,
+        }
+    }
+
+    fn alpha_inverse_mask_multiply_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        match format {
+            wgpu::TextureFormat::R8Unorm => &self.inverse_mask_multiply_r8,
+            _ => &self.alpha_inverse_mask_multiply_rgba,
         }
     }
 }
