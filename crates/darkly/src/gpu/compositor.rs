@@ -227,14 +227,9 @@ impl Compositor {
         height: u32,
         is_software: bool,
     ) -> Self {
-        use crate::tile::TILE_SIZE;
-
-        // Pad accumulator dimensions to tile boundaries so they match layer
-        // textures exactly. The composite shader samples both with the same
-        // UVs, so any size mismatch causes painting offset / wrapping.
-        let ts = TILE_SIZE as u32;
-        let padded_w = ((width + ts - 1) / ts) * ts;
-        let padded_h = ((height + ts - 1) / ts) * ts;
+        // Accumulator dimensions match layer textures exactly (no tile padding).
+        let padded_w = width;
+        let padded_h = height;
 
         let accum_format = wgpu::TextureFormat::Rgba8Unorm;
 

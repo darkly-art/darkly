@@ -101,6 +101,16 @@ impl GpuContext {
         self.queue.submit([encoder.finish()]);
     }
 
+    /// Like `encode`, but returns a value from the closure.
+    pub fn encode_ret<T>(&self, label: &str, f: impl FnOnce(&mut wgpu::CommandEncoder) -> T) -> T {
+        let mut encoder = self.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some(label) },
+        );
+        let result = f(&mut encoder);
+        self.queue.submit([encoder.finish()]);
+        result
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width > 0 && height > 0 {
             if let (Some(surface), Some(config)) = (&self.surface, &mut self.surface_config) {

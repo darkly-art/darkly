@@ -104,11 +104,15 @@
     }
 
     function onPointerDown(e: PointerEvent) {
+        // Prevent browser from synthesising fling/scroll gestures from pen
+        // input — touch-action:none only covers touch, not pen (Chromium bug).
+        e.preventDefault();
+
         // Touch: always capture and track for gesture detection
         if (e.pointerType === 'touch') {
             canvas.setPointerCapture(e.pointerId);
             if (nav.onTouchPointerDown(e)) {
-                // Two-finger gesture started — end any in-progress tool stroke
+                // Touch consumed by navigation — end any in-progress tool stroke
                 const ctx = getToolContext();
                 if (ctx) {
                     const tool = toolRegistry.get(app.activeToolId);
@@ -132,6 +136,8 @@
     }
 
     function onPointerMove(e: PointerEvent) {
+        e.preventDefault();
+
         // Touch gesture: update position and apply gesture transform
         if (e.pointerType === 'touch') {
             nav.onTouchPointerMove(e, canvas);
@@ -152,6 +158,8 @@
     }
 
     function onPointerUp(e: PointerEvent) {
+        e.preventDefault();
+
         // Touch: clean up gesture state; skip tool dispatch if gesture occurred
         if (e.pointerType === 'touch') {
             const wasGesture = nav.isTouchGesture;
@@ -172,6 +180,8 @@
     }
 
     function onPointerCancel(e: PointerEvent) {
+        e.preventDefault();
+
         // Pen/touch can fire pointercancel instead of pointerup (pen lifted
         // out of range, system gesture, browser intervention).  Clean up
         // the same state that onPointerUp would.
@@ -202,7 +212,7 @@
     }
 
     // Call onDeactivate/onActivate when the active tool changes.
-    let prevToolId = app.activeToolId;
+    let prevToolId = '';
     $effect(() => {
         const id = app.activeToolId;
         if (id !== prevToolId) {
@@ -210,9 +220,9 @@
             if (ctx) {
                 toolRegistry.get(prevToolId)?.onDeactivate?.(ctx);
                 toolRegistry.get(id)?.onActivate?.(ctx);
+                app.toolCursor = null;
+                prevToolId = id;
             }
-            app.toolCursor = null;
-            prevToolId = id;
         }
     });
 

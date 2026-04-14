@@ -463,8 +463,8 @@ fn clear_selection_contents() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
 
-    // Paint at center — default brush at pressure=1.0 is 256px diameter,
-    // which covers the entire 128x128 canvas.
+    // Paint at center — default brush (scale=0.1, size=0.5) at pressure=1.0
+    // produces ~26px diameter dab, centered at (64,64).
     engine.begin_stroke(layer_id);
     engine.stroke_to(StrokeOp::BrushStroke {
         x: 64.0, y: 64.0, pressure: 1.0,
@@ -475,13 +475,13 @@ fn clear_selection_contents() {
     engine.end_stroke();
     engine.render(0.0); // flush pending diff undo
 
-    // Select left half and delete.
+    // Select left half and delete.  The dab straddles the boundary at x=64.
     engine.select_rect(0.0, 0.0, 64.0, h as f32, SelectionMode::Replace, false, 0.0);
     engine.clear_selection_contents(layer_id);
 
     let pixels = engine.test_readback_layer(layer_id);
-    assert_eq!(alpha_at(&pixels, w, 16, 64), 0, "left (cleared) should be transparent");
-    assert!(alpha_at(&pixels, w, 96, 64) > 0, "right (kept) should still have paint");
+    assert_eq!(alpha_at(&pixels, w, 56, 64), 0, "left (cleared) should be transparent");
+    assert!(alpha_at(&pixels, w, 72, 64) > 0, "right (kept) should still have paint");
 }
 
 // ============================================================================

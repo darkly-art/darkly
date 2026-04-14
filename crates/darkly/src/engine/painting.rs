@@ -2,9 +2,11 @@
 
 use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use super::types::StrokeOp;
+use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::paint_info::PaintInformation;
 use crate::brush::spacing::SpacingConfig;
+use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::gpu::flood_fill;
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -169,9 +171,9 @@ impl DarklyEngine {
 
     /// Handle a BrushStroke event through the node-graph brush engine.
     ///
-    /// Lazy-inits a `StrokeEngine` with the default brush graph on the first
-    /// event.  Each event feeds through the stroke engine which smooths,
-    /// interpolates, and places dabs via the compiled brush graph.
+    /// Lazy-inits a `StrokeEngine` + `StrokeBuffer` on the first event.
+    /// Each event feeds through the stabilizer, which may trigger rewind
+    /// and re-rendering of the stroke from scratch.
     fn brush_stroke_to(
         &mut self,
         layer_id: u64,
@@ -185,7 +187,7 @@ impl DarklyEngine {
         color: [f32; 4],
         canvas_w: u32, canvas_h: u32,
     ) {
-        // Lazy-init: compile the active brush graph on first BrushStroke event.
+        // Lazy-init: compile the active brush graph + create stroke buffer.
         if self.brush_stroke_engine.is_none() {
             let runner = match crate::brush::compile_graph(&self.active_brush_graph) {
                 Ok(r) => r,
@@ -194,9 +196,36 @@ impl DarklyEngine {
                     return;
                 }
             };
+
+            // Create the stabilizer from the active config.
+            let stabilizer = self.stabilizer_registry.create_from_config(
+                &self.active_stabilizer_config,
+            );
+
             self.brush_stroke_engine = Some(StrokeEngine::new(
-                runner, color, SpacingConfig::default(), 0.3,
+                runner, color, SpacingConfig::default(), stabilizer,
             ));
+
+            // Create the stroke buffer and save the pre-stroke snapshot.
+            let layer_tex = if mask_editing {
+                self.compositor.mask_texture(layer_id)
+            } else {
+                self.compositor.layer_texture(layer_id)
+            };
+            if let Some(layer_tex) = layer_tex {
+                let stroke_buffer = StrokeBuffer::new(
+                    &self.gpu.device,
+                    canvas_w,
+                    canvas_h,
+                    self.dab_pool.bind_group_layout(),
+                    self.brush_pipelines.canvas_copy_bind_group_layout(),
+                );
+                self.gpu.encode("stroke-buffer-init", |encoder| {
+                    stroke_buffer.save_pre_stroke(encoder, &layer_tex.texture);
+                    stroke_buffer.clear(encoder);
+                });
+                self.stroke_buffer = Some(stroke_buffer);
+            }
         }
 
         // Build PaintInformation from the raw tablet data.
@@ -211,7 +240,7 @@ impl DarklyEngine {
             ..Default::default()
         };
 
-        // Get the canvas texture and view for compositing.
+        // Get the canvas texture and view.
         let layer_tex = if mask_editing {
             match self.compositor.mask_texture(layer_id) {
                 Some(t) => t,
@@ -223,40 +252,177 @@ impl DarklyEngine {
                 None => return,
             }
         };
-        let canvas_view = layer_tex.view.clone();
-        let canvas_texture = &layer_tex.texture;
+        let layer_view = layer_tex.view.clone();
 
-        // Take the stroke engine out to avoid borrow conflicts.
+        // Take the stroke engine and buffer out to avoid borrow conflicts.
         let mut engine = self.brush_stroke_engine.take().unwrap();
+        let stroke_buffer = self.stroke_buffer.take();
 
         let sel_bg = if self.gpu_selection.active {
             self.gpu_selection.brush_bind_group()
         } else {
             &self.brush_pipelines.default_selection_bind_group
         };
-        {
-            let mut gpu_ctx = BrushGpuContext {
-                encoder: self.gpu.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
-                ),
-                device: &self.gpu.device,
-                queue: &self.gpu.queue,
-                dab_pool: &mut self.dab_pool,
-                pipelines: &self.brush_pipelines,
-                canvas_view: &canvas_view,
-                canvas_texture,
-                canvas_width: canvas_w,
-                canvas_height: canvas_h,
-                selection_bind_group: sel_bg,
-                resource_handles: &self.resource_handles,
-                blend_mode: self.brush_blend_mode,
-            };
 
-            engine.move_to(info, &mut gpu_ctx);
+        if let Some(ref stroke_buffer) = stroke_buffer {
+            // Stabilized path: dabs render to stroke buffer, then composite onto layer.
+            let result = engine.stabilize(info);
+            let max_div = engine.max_divergence_window();
+            let tip_vi = engine.stabilizer_len().saturating_sub(1);
+
+            // Helper macro: create a BrushGpuContext for rendering a segment.
+            macro_rules! make_gpu_ctx {
+                ($label:expr) => {
+                    BrushGpuContext {
+                        encoder: self.gpu.device.create_command_encoder(
+                            &wgpu::CommandEncoderDescriptor { label: Some($label) },
+                        ),
+                        device: &self.gpu.device,
+                        queue: &self.gpu.queue,
+                        dab_pool: &mut self.dab_pool,
+                        pipelines: &self.brush_pipelines,
+                        canvas_view: stroke_buffer.stroke_view(),
+                        canvas_texture: stroke_buffer.stroke_texture(),
+                        canvas_width: canvas_w,
+                        canvas_height: canvas_h,
+                        selection_bind_group: sel_bg,
+                        resource_handles: &self.resource_handles,
+                        blend_mode: self.brush_blend_mode,
+                    }
+                };
+            }
+
+            if let Some(div_idx) = result.divergence_index {
+                // Divergence — try checkpoint-based partial re-render.
+                let restore = self.gpu.encode_ret("stroke-checkpoint-restore", |encoder| {
+                    self.checkpoint_ring.restore_before(
+                        encoder,
+                        stroke_buffer.stroke_texture(),
+                        stroke_buffer.stroke_view(),
+                        div_idx,
+                    )
+                });
+
+                let start_vi = if let Some(cp) = restore {
+                    // Restored from checkpoint — truncate and resume.
+                    engine.save_points.truncate(cp.save_point_index + 1);
+                    engine.restore_render_state(&cp.render_state);
+                    self.checkpoint_ring.invalidate_from(cp.vector_index + 1);
+                    cp.vector_index + 1
+                } else {
+                    // No checkpoint before divergence — full re-render.
+                    self.gpu.encode("stroke-rewind", |encoder| {
+                        stroke_buffer.clear(encoder);
+                    });
+                    engine.reset_render_state();
+                    self.checkpoint_ring.clear();
+                    0
+                };
+
+                // Render in segments with checkpoints at boundaries.
+                let boundaries = CheckpointRing::compute_segment_boundaries(
+                    start_vi, tip_vi, max_div,
+                );
+
+                let mut seg_start = start_vi;
+                for &boundary in &boundaries {
+                    if boundary <= seg_start || boundary > tip_vi { continue; }
+
+                    // Render segment.
+                    let mut gpu_ctx = make_gpu_ctx!("brush-rerender-seg");
+                    engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, boundary);
+                    drop(gpu_ctx);
+
+                    // Save checkpoint at this boundary.
+                    if let Some(bbox) = engine.save_points.full_bbox() {
+                        let sp_idx = engine.save_points.len().saturating_sub(1);
+                        let render_state = engine.capture_render_state();
+                        self.gpu.encode("checkpoint-save", |encoder| {
+                            self.checkpoint_ring.save(
+                                &self.gpu.device, encoder,
+                                stroke_buffer.stroke_texture(),
+                                sp_idx, boundary, bbox, render_state,
+                            );
+                        });
+                    }
+
+                    seg_start = boundary + 1;
+                }
+
+                // Render any remaining dabs past the last boundary.
+                if seg_start <= tip_vi {
+                    let mut gpu_ctx = make_gpu_ctx!("brush-rerender-tail");
+                    engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, tip_vi);
+                }
+            } else {
+                // No divergence — render tail only.
+                let mut gpu_ctx = make_gpu_ctx!("brush-dab");
+                engine.render_from_stabilized_tail(&mut gpu_ctx);
+
+                // Periodically save a checkpoint to keep the ring fresh.
+                let spacing = CheckpointRing::spacing(max_div);
+                let should_save = match self.checkpoint_ring.newest_vector_index() {
+                    Some(newest_vi) => tip_vi.saturating_sub(newest_vi) >= spacing,
+                    None => true,
+                };
+                if should_save && !engine.save_points.is_empty() {
+                    if let Some(bbox) = engine.save_points.full_bbox() {
+                        let sp_idx = engine.save_points.len() - 1;
+                        let render_state = engine.capture_render_state();
+                        self.gpu.encode("checkpoint-save", |encoder| {
+                            self.checkpoint_ring.save(
+                                &self.gpu.device, encoder,
+                                stroke_buffer.stroke_texture(),
+                                sp_idx, tip_vi, bbox, render_state,
+                            );
+                        });
+                    }
+                }
+            }
+
+            // Composite stroke buffer onto the layer.
+            self.gpu.encode("stroke-composite", |encoder| {
+                stroke_buffer.composite_onto_layer(
+                    encoder,
+                    &self.brush_pipelines,
+                    &self.gpu.queue,
+                    &layer_view,
+                    sel_bg,
+                );
+            });
+        } else {
+            // Fallback: no stroke buffer — render directly to layer (shouldn't happen).
+            let layer_tex = if mask_editing {
+                self.compositor.mask_texture(layer_id)
+            } else {
+                self.compositor.layer_texture(layer_id)
+            };
+            if let Some(layer_tex) = layer_tex {
+                let canvas_view = layer_tex.view.clone();
+                let canvas_texture = &layer_tex.texture;
+                let mut gpu_ctx = BrushGpuContext {
+                    encoder: self.gpu.device.create_command_encoder(
+                        &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
+                    ),
+                    device: &self.gpu.device,
+                    queue: &self.gpu.queue,
+                    dab_pool: &mut self.dab_pool,
+                    pipelines: &self.brush_pipelines,
+                    canvas_view: &canvas_view,
+                    canvas_texture,
+                    canvas_width: canvas_w,
+                    canvas_height: canvas_h,
+                    selection_bind_group: sel_bg,
+                    resource_handles: &self.resource_handles,
+                    blend_mode: self.brush_blend_mode,
+                };
+                engine.move_to(info, &mut gpu_ctx);
+            }
         }
 
-        // Put the engine back.
+        // Put the engine and buffer back.
         self.brush_stroke_engine = Some(engine);
+        self.stroke_buffer = stroke_buffer;
     }
 
     /// Start async GPU flood fill: readback layer texture, then complete on a
@@ -366,10 +532,12 @@ impl DarklyEngine {
                 return;
             }
 
-            // Finalize brush stroke engine if active.
+            // Finalize brush stroke engine and destroy stroke buffer + checkpoints.
             if let Some(engine) = self.brush_stroke_engine.take() {
                 let _record = engine.end();
             }
+            self.stroke_buffer = None;
+            self.checkpoint_ring.clear();
 
             // Dispatch GPU diff to find the exact changed region for undo.
             if self.scratch_saved && self.pending_undo_commit.is_none() {

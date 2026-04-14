@@ -1,7 +1,7 @@
 //! Brush preset management methods on DarklyEngine.
 
 use super::DarklyEngine;
-use crate::brush::preset::{BrushPreset, PresetBundle, ResourceKind};
+use crate::brush::preset::{BrushPreset, PresetBundle};
 use crate::brush::preset_library::PresetInfo;
 
 impl DarklyEngine {
@@ -28,6 +28,9 @@ impl DarklyEngine {
         let json = serde_json::to_string(&bundle.preset.graph)
             .map_err(|e| format!("failed to serialize graph: {e}"))?;
         self.set_brush_graph(&json)?;
+
+        // Update stabilizer configuration from the preset.
+        self.active_stabilizer_config = bundle.preset.stabilizer.clone();
 
         Ok(self.active_brush_graph.needs_layout())
     }
@@ -57,14 +60,13 @@ impl DarklyEngine {
     ///
     /// Populates `self.resource_handles` so Image nodes can resolve their
     /// `resource_name` param to a `TextureHandle` at evaluation time.
+    /// Handles both `BrushTip` and `Pattern` resource kinds — both are
+    /// uploaded as static textures and accessed identically by node evaluators.
     fn upload_preset_resources(&mut self, bundle: &PresetBundle) {
         self.dab_pool.clear_static();
         self.resource_handles.clear();
 
         for meta in &bundle.preset.resources {
-            if meta.kind != ResourceKind::BrushTip {
-                continue;
-            }
             let Some(data) = bundle.resource(meta.name.as_str()) else {
                 log::warn!("preset resource '{}' not found in bundle", meta.name);
                 continue;
@@ -84,7 +86,7 @@ impl DarklyEngine {
                     self.resource_handles.insert(meta.name.clone(), handle);
                 }
                 Err(e) => {
-                    log::warn!("failed to decode brush tip '{}': {e}", meta.name);
+                    log::warn!("failed to decode resource '{}': {e}", meta.name);
                 }
             }
         }

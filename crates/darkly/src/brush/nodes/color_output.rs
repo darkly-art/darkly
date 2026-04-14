@@ -157,7 +157,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             uv_min: [uv_min_x, uv_min_y],
             uv_max: [uv_max_x, uv_max_y],
             blend_mode,
-            _pad: 0,
+            fg_premultiplied: 1, // dab from stamp shader is premultiplied
         };
         gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
 

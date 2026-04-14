@@ -376,28 +376,119 @@ A `user_input` node is a source node (like `constant`) that the brush creator pl
 
 ---
 
-## Phase 10 — Smoothing + Stabilizer
+## Phase 10 — Stroke Stabilizer
 
-**Goal:** Stroke smoothing algorithms for clean lines. Not required for Krita import compatibility, but dramatically improves stroke quality. Moved before KPP import because the taffy feel is a core differentiator and shouldn't wait behind import plumbing.
+**Goal:** Retroactive stroke reshaping — the defining feature. When drawing, the stroke is always at the cursor (zero lag), but the stroke behind the pen continuously reshapes itself as new input arrives. Changing direction pulls and bends the already-drawn curve. It should feel like piping frosting onto a cake or pulling taffy — the stroke has physical body and weight, it stretches and flows, but it's always anchored to where the pen is right now. Procreate is the only app that has achieved this feel; they are closed source. This is a hard research problem that requires designing our own system from first principles.
+
+### What this is NOT
+
+These are common misunderstandings that must be avoided:
+
+- **NOT pulled string / Lazy Nezumi.** In those systems, the cursor moves ahead and the stroke trails behind, catching up over time. There is a visible gap between pen and mark. That is the opposite of what we want.
+- **NOT forward-only smoothing.** Exponential moving average, Gaussian filtering, or any algorithm that only affects future points and leaves the past frozen is insufficient. The past must move.
+- **NOT a delay/lag system.** The stroke is never behind the cursor. The pen tip IS the stroke tip, always, every frame.
+- **NOT a post-processing step.** The reshaping happens live during the stroke, not after pen-up. The user sees the curve behind them shift as they draw.
+
+### What this IS
+
+When you draw and change direction, the stroke you already drew — the pixels on screen behind your pen — visibly moves to accommodate the new direction. The curve reshapes retroactively. If you draw right then turn sharply down, the corner doesn't stay sharp — the stroke behind the corner bends and flows into the new direction. The already-rendered pixels shift. You are not just adding to the stroke, you are sculpting it as you go.
+
+The pen is always at the tip of the stroke (zero lag). The smoothing manifests as the past reshaping to meet the present, not the present lagging behind to stay smooth.
+
+### Architecture
+
+Three layers, each ignorant of the others' internals:
+
+**Layer 1 — Stabilizer** (owns the curve)
+
+Receives raw input points. Produces a stabilized vector (the smooth curve). On each new input point, the stabilizer re-runs on the full input history and produces an updated vector. It then diffs the updated vector against the previous frame's vector to find the **divergence point** — the earliest position on the curve where the new vector differs from the old one.
+
+The stabilizer is NOT optional. All strokes flow through it, always. The user controls the algorithm and its strength (including zero, which passes through raw input unchanged), but the mechanism — vector production, diffing, divergence detection — is always active. This is because the entire rendering pipeline depends on it: the stroke buffer, the save points, the partial re-render. These aren't features of the stabilizer, they're features of how strokes are rendered, and the stabilizer is the entry point.
+
+The specific smoothing algorithm is TBD pending research. Do not assume a particular approach.
+
+**Layer 2 — Dab save-point system** (owns restore/rewind)
+
+The stroke renders into a **stroke buffer** — a texture separate from the canvas that holds only the in-progress stroke. The canvas the user sees is: pre-stroke snapshot composited with the stroke buffer.
+
+Each dab rendered into the stroke buffer is associated with a position on the stabilized vector. After each dab is composited into the stroke buffer, the system diffs the stroke buffer against the **pre-stroke canvas snapshot** (which already exists today for undo). This diff produces a bounding box representing the cumulative change from the start of the stroke through this dab. That bounding box (and the pixel data within it from the pre-stroke snapshot) is stored as the **save point** for this dab.
+
+To understand save points: dab #10's save point is NOT "what dab #10 changed." It is the bounding box of everything dabs #1 through #10 changed, diffed against the pre-stroke snapshot. This means any save point, paired with the pre-stroke snapshot, can fully restore the stroke buffer to its state at that dab. You don't walk save points in reverse — you jump directly to the one you need.
+
+**Rewind operation:** The stabilizer reports "divergence at vector position mapped to dab #44." The save-point system takes dab #44's save point, copies the pre-stroke snapshot pixels into that bounding box region of the stroke buffer. The stroke buffer now looks exactly as it did after dab #44 was rendered. This is a single GPU copy operation — not a replay.
+
+**Layer 3 — Brush engine** (owns rendering)
+
+Receives a canvas (the stroke buffer, already restored to the correct state), a vector (the tail from the divergence point to the tip), and a brush. Renders dabs. It does not know that the canvas was rewound, that the vector is a partial tail, or that stabilization exists. It just paints, same as it does today.
+
+### Per-frame flow during a stroke
+
+```
+1. New pen input event arrives (position, pressure, tilt, etc.)
+
+2. Stabilizer:
+   a. Append raw input to history
+   b. Re-run stabilization on full history → new stabilized vector
+   c. Diff new vector against previous frame's vector
+   d. Find divergence point → maps to a dab index
+
+3. Save-point system:
+   a. Look up save point for the dab at the divergence point
+   b. Copy pre-stroke snapshot pixels into the stroke buffer
+      within that save point's bounding box
+   c. Stroke buffer is now restored to post-divergence-dab state
+
+4. Brush engine:
+   a. Render dabs from divergence point to tip into stroke buffer
+   b. Each new dab gets a save point (diff stroke buffer vs pre-stroke snapshot)
+
+5. Compositor:
+   a. Composite stroke buffer onto pre-stroke snapshot → display
+```
+
+### Performance characteristics
+
+**Smooth continuous motion (the common case):** The stabilizer's new vector matches the previous vector everywhere except the tip. Divergence is at the last dab. No rewind needed — just render one new dab and create its save point. Cost: identical to the current (non-stabilized) pipeline.
+
+**Direction change:** The tail of the vector reshapes. Divergence is further back — say 10-20 dabs. Rewind is one GPU copy (the save point). Then 10-20 dabs re-rendered. This is exactly when the visual change is most significant, so the extra work produces visible results.
+
+**Worst case (very long stroke with global reshaping):** Divergence is near the start. Rewind + re-render most of the stroke. This should be rare with a well-designed stabilizer (influence should be local, not global). If it happens frequently, the stabilizer algorithm needs adjustment — the rendering system can handle it, but it signals the algorithm is doing too much retroactive work.
+
+### Critical implementation detail
+
+The dab-to-vector-position mapping is **load-bearing**. Each dab must know which position on the stabilized vector it corresponds to, so that when the stabilizer says "divergence at vector position X," the save-point system can look up "that's dab #N" and restore to it. If this mapping is wrong — if dabs and vector positions are out of sync — the rewind point is wrong and the stroke will have visual artifacts at the splice between restored and re-rendered regions.
+
+This mapping must survive re-stabilization: when the vector reshapes, the dabs that were placed along the OLD vector need to be associated with the corresponding positions on the NEW vector. The stabilizer's diff must account for this — it's not just "which positions changed" but "which old dabs correspond to which new positions."
+
+### Research
+
+- Investigate candidate algorithms from first principles: spline re-fitting (cubic, Catmull-Rom, B-spline), relaxation/optimization on control points, physical simulation with retroactive propagation
+- Read prior art in curve fitting and online spline approximation literature
+- Prototype candidates and evaluate by feel
 
 ### Create
 
-- `crates/darkly/src/brush/smoothing.rs` — `SmoothingMode` enum:
-  - `WeightedAverage { factor }` — exponential moving average on position (current basic impl)
-  - `PulledString { distance }` — cursor must travel `distance` pixels before the brush follows; produces very smooth curves
-  - `SpringDynamics { mass, drag }` — physical spring simulation; the Procreate taffy feel
-- Retroactive smoothing via `StrokeRecord::replay()` — change smoothing mid-stroke and watch it update
+- `crates/darkly/src/brush/stabilizer.rs` — the stabilizer algorithm. Takes raw input points, produces a smooth curve that reshapes retroactively as new points arrive. Always in the pipeline (not optional). The specific algorithm is TBD pending research.
+- Stroke buffer texture — separate from the canvas, holds only the in-progress stroke. Composited onto the pre-stroke snapshot for display each frame.
+- Dab save-point storage — per-dab bounding box diffed against the pre-stroke snapshot, keyed to vector position. Uses the existing diff infrastructure (`DiffRectPass`).
 
 ### Modify
 
-- `crates/darkly/src/brush/stroke_engine.rs` — plug in smoothing modes, replace current hardcoded weighted average
+- `crates/darkly/src/brush/stroke_engine.rs` — all strokes flow through the stabilizer. The brush engine receives a canvas and a vector and renders dabs, unaware of rewind.
+- `crates/darkly/src/brush/nodes/color_output.rs` — during a stroke, composites dabs into the stroke buffer instead of directly onto the canvas.
+- Compositing pipeline — per-frame composite of stroke buffer onto pre-stroke snapshot for display.
 
 ### Verify
 
-- Each mode produces visibly different stroke character
-- Pulled string: sharp corners become smooth curves
-- Spring dynamics: overshoots and settles like physical brush
-- Retroactive: change smoothing params → stroke re-renders with new smoothing
+- Zero perceptible lag — stroke is always at the cursor, every frame, no exceptions
+- Drawing a sharp corner → the stroke behind the corner visibly reshapes into a smooth curve as you continue moving
+- Drawing a straight line then curving → the transition region of the already-drawn stroke bends to meet the new direction
+- The feel is physical — like frosting, like taffy. The stroke has weight and body
+- Smooth continuous motion renders only one dab per input event (verify via dab count instrumentation)
+- Sharp direction change re-renders a tail of dabs (verify the rewind point is correct — no artifacts at the splice between restored and re-rendered regions)
+- Save-point restore produces pixel-identical results to full stroke re-render from scratch
+- Performance: partial re-render keeps up with input event rate during normal painting
+- Stabilizer at strength zero: stroke is identical to raw input (pass-through, but the full pipeline still runs)
 
 ---
 
@@ -501,9 +592,9 @@ Phase 7 (preset format + round-trip)         ✓ complete
     ↓
 Phase 8 (stamp tips + user-exposed properties) ✓ complete
     ↓
-Phase 9 (texture overlay)                    ← CURRENT
+Phase 9 (texture overlay)                    ✓ complete
     ↓
-Phase 10 (smoothing + stabilizer)            ← stroke quality / taffy feel
+Phase 10 (smoothing + stabilizer)            ← CURRENT
     ↓
 Phase 11 (KPP import)                        ← "download and paint" milestone
     ↓

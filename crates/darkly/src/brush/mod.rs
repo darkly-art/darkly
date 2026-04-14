@@ -1,9 +1,10 @@
 //! Node-graph composable brush engine.
 //!
-//! Phase 8: Stamp tips + user-exposed properties.
+//! Phase 9: Texture overlay.
 
 pub mod builtin_presets;
 pub mod brush_tip;
+pub mod checkpoint_ring;
 pub mod curve_math;
 pub mod dab_pool;
 pub mod eval;
@@ -14,7 +15,11 @@ pub mod paint_info;
 pub mod pipelines;
 pub mod preset;
 pub mod preset_library;
+pub mod save_points;
 pub mod spacing;
+pub mod stabilizer;
+pub mod stabilizers;
+pub mod stroke_buffer;
 pub mod stroke_engine;
 pub mod wire;
 
@@ -100,6 +105,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
     map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
+    map.insert("texture_overlay".into(), Box::new(nodes::texture_overlay::TextureOverlayEvaluator));
     map
 }
 

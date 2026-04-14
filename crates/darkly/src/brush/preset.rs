@@ -9,6 +9,7 @@ use std::io::{Cursor, Read, Write};
 
 use serde::{Deserialize, Serialize};
 
+use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::nodegraph::Graph;
 
@@ -32,6 +33,9 @@ pub struct BrushPreset {
     #[serde(default)]
     pub tags: Vec<String>,
     pub graph: Graph<BrushWireType>,
+    /// Stabilizer configuration.  Default = no stabilization (pass-through).
+    #[serde(default)]
+    pub stabilizer: StabilizerConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<PresetResourceMeta>,
 }
@@ -78,6 +82,7 @@ impl BrushPreset {
             description: String::new(),
             tags: Vec::new(),
             graph,
+            stabilizer: StabilizerConfig::default(),
             resources: Vec::new(),
         }
     }

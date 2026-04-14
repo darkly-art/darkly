@@ -39,7 +39,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_icon("fa-solid fa-circle")
                 .with_description("Base brush size"),
             PortDef::input("scale", BrushWireType::Scalar)
-                .with_range(0.0, 4.0, 1.0)
+                .with_range(0.0, 4.0, 0.1)
                 .with_label("Scale")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-up-right-and-down-left-from-center")

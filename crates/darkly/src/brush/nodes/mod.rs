@@ -18,6 +18,7 @@ pub mod random;
 pub mod remap;
 pub mod split_vec2;
 pub mod stamp;
+pub mod texture_overlay;
 pub mod user_input;
 
 use crate::brush::BrushNodeRegistration;
@@ -40,6 +41,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         remap::register(),
         split_vec2::register(),
         stamp::register(),
+        texture_overlay::register(),
         user_input::register(),
     ]
 }
