@@ -205,7 +205,7 @@
         justify-content: center;
         gap: 4px;
         padding: 4px 8px;
-        background: var(--bg-raised);
+        background: var(--bg);
         flex-shrink: 0;
     }
 

@@ -70,7 +70,7 @@
         align-items: center;
         gap: 6px;
         padding: 4px 8px;
-        background: var(--bg-raised);
+        background: var(--bg);
         border-bottom: 1px solid var(--bg-hover);
         min-height: 28px;
     }

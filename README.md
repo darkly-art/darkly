@@ -27,6 +27,8 @@ crates/darkly/          Platform-agnostic core (wgpu, pure Rust)
   src/gpu/              Compositor, filters, veils, shaders
 frontend/wasm/          WASM bridge (wasm-bindgen) → browser
 frontend/src/           Svelte UI
+shared/styles/          @darkly/styles — tokens + themes shared by UI and website
+website/                Astro + Starlight site (splash, docs, /demo/)
 ```
 
 ## Getting started
@@ -38,13 +40,14 @@ frontend/src/           Svelte UI
 - [Node.js](https://nodejs.org/) >= 18
 
 ```sh
+# Install all workspace dependencies (frontend + website + shared styles)
+npm install
+
 # Build the WASM package
 wasm-pack build frontend/wasm --target web
 
-# Install frontend dependencies and start the dev server
-cd frontend
-npm install
-npm run dev
+# Start the frontend dev server
+npm --prefix frontend run dev
 ```
 
 Open the URL printed by vite (typically `https://localhost:5173`). Requires a browser with WebGPU support (Chrome 113+, Edge 113+, Firefox Nightly with flag).
@@ -56,6 +59,32 @@ chromium --enable-features=Vulkan --enable-unsafe-webgpu
 ```
 
 You can verify the active backend at `chrome://gpu` — look for "Vulkan" under Graphics Feature Status. On macOS and Windows this is generally not needed (Metal and D3D12 are used by default).
+
+## Website & docs
+
+The `website/` workspace contains the splash page and markdown docs (Astro + Starlight). It shares design tokens with the frontend via the `@darkly/styles` workspace package, so one edit in `shared/styles/` propagates to both surfaces.
+
+```sh
+# Dev server with hot reload (http://localhost:4321)
+npm --prefix website run dev
+
+# Production build — also builds the frontend and mounts it at /demo/
+npm --prefix website run build
+
+# Preview the built site locally
+npm --prefix website run preview
+
+# Site-only build (skip the frontend WASM rebuild)
+npm --prefix website run build:site-only
+```
+
+Routes:
+
+- `/` — splash page (`website/src/pages/index.astro`)
+- `/guides/*` — docs (`website/src/content/docs/guides/`)
+- `/demo/` — the live WebGPU app, populated by `npm run build`
+
+Adding a doc page: drop a `.md` file under `website/src/content/docs/guides/` — it's auto-picked up by the sidebar.
 
 ## Adding filters and veils
 

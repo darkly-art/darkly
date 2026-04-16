@@ -34,7 +34,9 @@ State belongs to the thing it describes — not to a parent that manages it on i
 
 ## Prior Art Principle
 
-Before deciding on an approach, research how established editors handle it. Krita and GIMP are checked out under the project root (`krita/`, `gimp/`), along with other references (MyPaint, libmypaint, Aseprite, etc.). Read the actual source — never rely on web searches, docs, or LLM training data for architectural claims. If a reference repo isn't checked out, clone it. Never claim "Krita does X" without pointing to a specific file and function.
+Before deciding on an approach, research how established editors handle it. Krita and GIMP are checked out under the project root (`krita/`, `gimp/`), along with other references (MyPaint, libmypaint, Aseprite, etc.). Read the actual source — never rely on web searches, docs, blog posts, or LLM training data for architectural claims. If a reference repo isn't checked out, clone it. Never claim "Krita does X" without pointing to a specific file and function.
+
+This applies to any open source project, not just the editors listed above. Web descriptions are unreliable and often marketing-flavored; the source is ground truth. When delegating research to a subagent, instruct it to clone and cite specific files and line numbers — reject any claim not backed by source.
 
 Our implementation will differ in specifics (GPU pipelines, tile formats, Rust idioms), but core algorithms and architectural decisions should be informed by prior art, not invented from scratch.
 
