@@ -68,6 +68,7 @@ export type ExposedValue =
     // Future: | { kind: 'bool'; value: boolean }
     ;
 
+
 export interface ExposedPortInfo {
     nodeId: number;
     portName: string;
@@ -131,6 +132,7 @@ class BrushGraphState {
 
     /** Ports exposed in the brush properties panel. */
     exposedPorts = $state<ExposedPortInfo[]>([]);
+
 
     // --- WASM command helpers ---
 

@@ -190,7 +190,7 @@ impl BrushNodeEvaluator for StampEvaluator {
             application: application_int,
             ratio,
         };
-        gpu.pipelines.write_stamp_uniforms(gpu.queue, &uniforms);
+        let offset = gpu.pipelines.write_stamp_uniforms(gpu.queue, &uniforms);
 
         // Render stamp to dab texture (non-square viewport).
         {
@@ -210,7 +210,7 @@ impl BrushNodeEvaluator for StampEvaluator {
 
             pass.set_viewport(0.0, 0.0, dab_w as f32, dab_h as f32, 0.0, 1.0);
             pass.set_pipeline(gpu.pipelines.stamp_pipeline());
-            pass.set_bind_group(0, &gpu.pipelines.stamp_uniform_bind_group, &[]);
+            pass.set_bind_group(0, &gpu.pipelines.stamp_uniform_bind_group, &[offset]);
             pass.set_bind_group(1, tip_bind_group, &[]);
             pass.draw(0..3, 0..1);
         }

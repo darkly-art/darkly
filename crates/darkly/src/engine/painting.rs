@@ -14,10 +14,26 @@ use crate::gpu::readback;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
+    /// Read the stabilize strength from the pen_input node's "stabilize" port
+    /// default in the active brush graph.  Returns 0.0 if not found.
+    fn pen_input_stabilize_strength(&self) -> f32 {
+        use crate::nodegraph::PortDir;
+        for node in self.active_brush_graph.nodes.values() {
+            if node.type_id == "pen_input" {
+                for port in &node.ports {
+                    if port.name == "stabilize" && port.dir == PortDir::Input {
+                        return port.default;
+                    }
+                }
+            }
+        }
+        0.0
+    }
+
     /// Flush any pending diff-based undo commit. Called before overwriting the
     /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait)
     /// — if the diff hasn't completed yet, falls back to a full-canvas rect.
-    fn flush_pending_undo_commit(&mut self) {
+    pub(crate) fn flush_pending_undo_commit(&mut self) {
         if !self.diff_rect.is_pending() {
             return;
         }
@@ -197,10 +213,17 @@ impl DarklyEngine {
                 }
             };
 
-            // Create the stabilizer from the active config.
-            let stabilizer = self.stabilizer_registry.create_from_config(
-                &self.active_stabilizer_config,
-            );
+            // Derive stabilizer from the pen_input node's "stabilize" port.
+            let strength = self.pen_input_stabilize_strength();
+            let stabilizer_config = if strength > 0.0 {
+                crate::brush::stabilizer::StabilizerConfig {
+                    algorithm: "laplacian".into(),
+                    params: vec![crate::gpu::params::ParamValue::Float(strength)],
+                }
+            } else {
+                crate::brush::stabilizer::StabilizerConfig::default()
+            };
+            let stabilizer = self.stabilizer_registry.create_from_config(&stabilizer_config);
 
             self.brush_stroke_engine = Some(StrokeEngine::new(
                 runner, color, SpacingConfig::default(), stabilizer,
@@ -266,6 +289,7 @@ impl DarklyEngine {
 
         if let Some(ref stroke_buffer) = stroke_buffer {
             // Stabilized path: dabs render to stroke buffer, then composite onto layer.
+            self.brush_pipelines.reset_uniform_rings();
             let result = engine.stabilize(info);
             let max_div = engine.max_divergence_window();
             let tip_vi = engine.stabilizer_len().saturating_sub(1);
@@ -287,7 +311,10 @@ impl DarklyEngine {
                         canvas_height: canvas_h,
                         selection_bind_group: sel_bg,
                         resource_handles: &self.resource_handles,
-                        blend_mode: self.brush_blend_mode,
+                        // Per-dab compositing always uses source-over into the
+                        // stroke buffer.  For erase, the blend mode is applied
+                        // in the stroke→layer composite pass instead.
+                        blend_mode: 0,
                     }
                 };
             }
@@ -307,7 +334,11 @@ impl DarklyEngine {
                     // Restored from checkpoint — truncate and resume.
                     engine.save_points.truncate(cp.save_point_index + 1);
                     engine.restore_render_state(&cp.render_state);
-                    self.checkpoint_ring.invalidate_from(cp.vector_index + 1);
+                    // Only invalidate from the divergence point onward —
+                    // checkpoints between the restore point and div_idx
+                    // are still valid (the stroke buffer content there
+                    // didn't change, only positions >= div_idx diverged).
+                    self.checkpoint_ring.invalidate_from(div_idx);
                     cp.vector_index + 1
                 } else {
                     // No checkpoint before divergence — full re-render.
@@ -318,7 +349,6 @@ impl DarklyEngine {
                     self.checkpoint_ring.clear();
                     0
                 };
-
                 // Render in segments with checkpoints at boundaries.
                 let boundaries = CheckpointRing::compute_segment_boundaries(
                     start_vi, tip_vi, max_div,
@@ -331,7 +361,7 @@ impl DarklyEngine {
                     // Render segment.
                     let mut gpu_ctx = make_gpu_ctx!("brush-rerender-seg");
                     engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, boundary);
-                    drop(gpu_ctx);
+                    gpu_ctx.submit_final();
 
                     // Save checkpoint at this boundary.
                     if let Some(bbox) = engine.save_points.full_bbox() {
@@ -353,11 +383,13 @@ impl DarklyEngine {
                 if seg_start <= tip_vi {
                     let mut gpu_ctx = make_gpu_ctx!("brush-rerender-tail");
                     engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, tip_vi);
+                    gpu_ctx.submit_final();
                 }
             } else {
                 // No divergence — render tail only.
                 let mut gpu_ctx = make_gpu_ctx!("brush-dab");
                 engine.render_from_stabilized_tail(&mut gpu_ctx);
+                gpu_ctx.submit_final();
 
                 // Periodically save a checkpoint to keep the ring fresh.
                 let spacing = CheckpointRing::spacing(max_div);
@@ -388,6 +420,7 @@ impl DarklyEngine {
                     &self.gpu.queue,
                     &layer_view,
                     sel_bg,
+                    self.brush_blend_mode,
                 );
             });
         } else {
@@ -416,7 +449,9 @@ impl DarklyEngine {
                     resource_handles: &self.resource_handles,
                     blend_mode: self.brush_blend_mode,
                 };
+                self.brush_pipelines.reset_uniform_rings();
                 engine.move_to(info, &mut gpu_ctx);
+                gpu_ctx.submit_final();
             }
         }
 

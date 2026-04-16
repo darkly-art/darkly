@@ -14,6 +14,9 @@
 //! Separate from `PaintPipelines` — different concerns (dab generation +
 //! dab compositing vs. SDF circle painting + gradient fill).
 
+use std::cell::Cell;
+use std::num::NonZeroU64;
+
 
 /// Uniform data for the circle mask generation shader.
 #[repr(C)]
@@ -67,6 +70,68 @@ pub struct CompositeUniforms {
     pub fg_premultiplied: u32, // 1 = dab input is premultiplied, 0 = straight alpha
 }
 
+/// Ring buffer for dynamic uniform offsets.
+///
+/// Instead of a single uniform buffer that must be submitted between dabs,
+/// each dab writes to a unique offset.  All render passes can go into one
+/// command encoder and be submitted once.
+///
+/// Uses `Cell` for `next_index` so `write()` can take `&self` — the ring is
+/// never shared across threads.
+const UNIFORM_RING_CAPACITY: u32 = 256;
+
+pub struct DynamicUniformRing {
+    buffer: wgpu::Buffer,
+    aligned_stride: u64,
+    capacity: u32,
+    next_index: Cell<u32>,
+}
+
+impl DynamicUniformRing {
+    fn new(device: &wgpu::Device, label: &str, uniform_size: u64, min_alignment: u32) -> Self {
+        let aligned_stride = align_up(uniform_size, min_alignment as u64);
+        let capacity = UNIFORM_RING_CAPACITY;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: aligned_stride * capacity as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self { buffer, aligned_stride, capacity, next_index: Cell::new(0) }
+    }
+
+    /// Write uniform data to the next slot.  Returns the byte offset for
+    /// `set_bind_group`'s dynamic offset array.
+    pub fn write(&self, queue: &wgpu::Queue, data: &[u8]) -> u32 {
+        let idx = self.next_index.get();
+        debug_assert!(idx < self.capacity, "DynamicUniformRing overflow");
+        let offset = idx as u64 * self.aligned_stride;
+        queue.write_buffer(&self.buffer, offset, data);
+        self.next_index.set(idx + 1);
+        offset as u32
+    }
+
+    /// Reset to slot 0 for the next frame.
+    pub fn reset(&self) {
+        self.next_index.set(0);
+    }
+
+    fn nearly_full(&self) -> bool {
+        // Leave headroom for a few more writes after the check (one dab
+        // can use up to 3 ring slots across different pipelines).
+        self.next_index.get() >= self.capacity - 4
+    }
+
+    /// Binding size for the bind group entry (one slot, not the whole buffer).
+    fn binding_size(&self) -> NonZeroU64 {
+        NonZeroU64::new(self.aligned_stride).unwrap()
+    }
+}
+
+fn align_up(value: u64, alignment: u64) -> u64 {
+    (value + alignment - 1) & !(alignment - 1)
+}
+
 /// Pre-built render pipelines for the brush system.
 pub struct BrushPipelines {
     circle_pipeline: wgpu::RenderPipeline,
@@ -74,16 +139,16 @@ pub struct BrushPipelines {
     tex_overlay_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
 
-    circle_uniform_buf: wgpu::Buffer,
+    circle_uniform_ring: DynamicUniformRing,
     pub(crate) circle_uniform_bind_group: wgpu::BindGroup,
 
-    stamp_uniform_buf: wgpu::Buffer,
+    stamp_uniform_ring: DynamicUniformRing,
     pub(crate) stamp_uniform_bind_group: wgpu::BindGroup,
 
-    tex_overlay_uniform_buf: wgpu::Buffer,
+    tex_overlay_uniform_ring: DynamicUniformRing,
     pub(crate) tex_overlay_uniform_bind_group: wgpu::BindGroup,
 
-    composite_uniform_buf: wgpu::Buffer,
+    composite_uniform_ring: DynamicUniformRing,
     pub(crate) composite_uniform_bind_group: wgpu::BindGroup,
 
     /// 1x1 white selection texture — bound when no selection is active.
@@ -147,6 +212,8 @@ impl BrushPipelines {
         });
 
         // --- Bind group layouts ---
+        let min_align = device.limits().min_uniform_buffer_offset_alignment;
+
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("brush-uniform-bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -154,7 +221,7 @@ impl BrushPipelines {
                 visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: None,
                 },
                 count: None,
@@ -236,68 +303,72 @@ impl BrushPipelines {
             immediate_size: 0,
         });
 
-        // --- Uniform buffers ---
-        let circle_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("brush-circle-uniforms"),
-            size: std::mem::size_of::<CircleUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
+        // --- Dynamic uniform rings ---
+        let circle_uniform_ring = DynamicUniformRing::new(
+            device, "brush-circle-uniforms",
+            std::mem::size_of::<CircleUniforms>() as u64, min_align,
+        );
         let circle_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-circle-uniform-bg"),
             layout: &uniform_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: circle_uniform_buf.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &circle_uniform_ring.buffer,
+                    offset: 0,
+                    size: Some(circle_uniform_ring.binding_size()),
+                }),
             }],
         });
 
-        let stamp_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("brush-stamp-uniforms"),
-            size: std::mem::size_of::<StampUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
+        let stamp_uniform_ring = DynamicUniformRing::new(
+            device, "brush-stamp-uniforms",
+            std::mem::size_of::<StampUniforms>() as u64, min_align,
+        );
         let stamp_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-stamp-uniform-bg"),
             layout: &uniform_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: stamp_uniform_buf.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &stamp_uniform_ring.buffer,
+                    offset: 0,
+                    size: Some(stamp_uniform_ring.binding_size()),
+                }),
             }],
         });
 
-        let tex_overlay_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("brush-tex-overlay-uniforms"),
-            size: std::mem::size_of::<TexOverlayUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
+        let tex_overlay_uniform_ring = DynamicUniformRing::new(
+            device, "brush-tex-overlay-uniforms",
+            std::mem::size_of::<TexOverlayUniforms>() as u64, min_align,
+        );
         let tex_overlay_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-tex-overlay-uniform-bg"),
             layout: &uniform_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: tex_overlay_uniform_buf.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &tex_overlay_uniform_ring.buffer,
+                    offset: 0,
+                    size: Some(tex_overlay_uniform_ring.binding_size()),
+                }),
             }],
         });
 
-        let composite_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("brush-composite-uniforms"),
-            size: std::mem::size_of::<CompositeUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
+        let composite_uniform_ring = DynamicUniformRing::new(
+            device, "brush-composite-uniforms",
+            std::mem::size_of::<CompositeUniforms>() as u64, min_align,
+        );
         let composite_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-composite-uniform-bg"),
             layout: &uniform_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: composite_uniform_buf.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &composite_uniform_ring.buffer,
+                    offset: 0,
+                    size: Some(composite_uniform_ring.binding_size()),
+                }),
             }],
         });
 
@@ -516,13 +587,13 @@ impl BrushPipelines {
             stamp_pipeline,
             tex_overlay_pipeline,
             composite_pipeline,
-            circle_uniform_buf,
+            circle_uniform_ring,
             circle_uniform_bind_group,
-            stamp_uniform_buf,
+            stamp_uniform_ring,
             stamp_uniform_bind_group,
-            tex_overlay_uniform_buf,
+            tex_overlay_uniform_ring,
             tex_overlay_uniform_bind_group,
-            composite_uniform_buf,
+            composite_uniform_ring,
             composite_uniform_bind_group,
             default_selection_bind_group,
             selection_bgl,
@@ -561,23 +632,44 @@ impl BrushPipelines {
         &self.canvas_copy_bgl
     }
 
-    /// Write circle mask uniforms to the GPU buffer.
-    pub fn write_circle_uniforms(&self, queue: &wgpu::Queue, uniforms: &CircleUniforms) {
-        queue.write_buffer(&self.circle_uniform_buf, 0, bytemuck::bytes_of(uniforms));
+    /// Write circle mask uniforms to the next ring slot.
+    /// Returns the dynamic byte offset for `set_bind_group`.
+    pub fn write_circle_uniforms(&self, queue: &wgpu::Queue, uniforms: &CircleUniforms) -> u32 {
+        self.circle_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
     }
 
-    /// Write stamp dab uniforms to the GPU buffer.
-    pub fn write_stamp_uniforms(&self, queue: &wgpu::Queue, uniforms: &StampUniforms) {
-        queue.write_buffer(&self.stamp_uniform_buf, 0, bytemuck::bytes_of(uniforms));
+    /// Write stamp dab uniforms to the next ring slot.
+    /// Returns the dynamic byte offset for `set_bind_group`.
+    pub fn write_stamp_uniforms(&self, queue: &wgpu::Queue, uniforms: &StampUniforms) -> u32 {
+        self.stamp_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
     }
 
-    /// Write texture overlay uniforms to the GPU buffer.
-    pub fn write_tex_overlay_uniforms(&self, queue: &wgpu::Queue, uniforms: &TexOverlayUniforms) {
-        queue.write_buffer(&self.tex_overlay_uniform_buf, 0, bytemuck::bytes_of(uniforms));
+    /// Write texture overlay uniforms to the next ring slot.
+    /// Returns the dynamic byte offset for `set_bind_group`.
+    pub fn write_tex_overlay_uniforms(&self, queue: &wgpu::Queue, uniforms: &TexOverlayUniforms) -> u32 {
+        self.tex_overlay_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
     }
 
-    /// Write composite uniforms to the GPU buffer.
-    pub fn write_composite_uniforms(&self, queue: &wgpu::Queue, uniforms: &CompositeUniforms) {
-        queue.write_buffer(&self.composite_uniform_buf, 0, bytemuck::bytes_of(uniforms));
+    /// Write composite uniforms to the next ring slot.
+    /// Returns the dynamic byte offset for `set_bind_group`.
+    pub fn write_composite_uniforms(&self, queue: &wgpu::Queue, uniforms: &CompositeUniforms) -> u32 {
+        self.composite_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
+    }
+
+    /// True if any ring is close to capacity.  The caller should flush
+    /// the current encoder, reset rings, and create a fresh encoder.
+    pub fn rings_nearly_full(&self) -> bool {
+        self.circle_uniform_ring.nearly_full()
+            || self.stamp_uniform_ring.nearly_full()
+            || self.tex_overlay_uniform_ring.nearly_full()
+            || self.composite_uniform_ring.nearly_full()
+    }
+
+    /// Reset all uniform rings for a new frame.
+    pub fn reset_uniform_rings(&self) {
+        self.circle_uniform_ring.reset();
+        self.stamp_uniform_ring.reset();
+        self.tex_overlay_uniform_ring.reset();
+        self.composite_uniform_ring.reset();
     }
 }

@@ -86,12 +86,25 @@ impl CheckpointSlot {
 }
 
 /// Ring buffer of checkpoint textures for O(divergence_window / N) re-render.
+///
+/// Three invariants keep the ring healthy (see stabilization.md for details):
+///
+/// 1. **Slot selection favors the tip**: overwrite the lowest vector_index
+///    (furthest from tip, least useful).  Not FIFO, not "even spread."
+///
+/// 2. **Invalidation is scoped to divergence**: `invalidate_from(div_idx)`,
+///    NOT `invalidate_from(restore_point + 1)`.  Checkpoints between the
+///    restore point and the divergence index are still valid.
+///
+/// 3. **The restore point advances**: preserved intermediate checkpoints
+///    let the next frame restore from a closer point, converging to
+///    O(window/8) within a few frames of any disruption.
+///
+/// Violating any invariant degrades re-render cost from O(window/8) to
+/// O(total_stroke) over time.  See stabilization.md § "Checkpoint Ring
+/// Invariants" for the full failure modes.
 pub struct CheckpointRing {
     slots: Vec<CheckpointSlot>,
-    /// Write cursor — next slot to overwrite.
-    head: usize,
-    /// Number of valid slots currently in the ring.
-    count: usize,
 }
 
 impl CheckpointRing {
@@ -100,24 +113,31 @@ impl CheckpointRing {
         for _ in 0..RING_CAPACITY {
             slots.push(CheckpointSlot::empty());
         }
-        Self { slots, head: 0, count: 0 }
-    }
-
-    /// Number of valid checkpoints in the ring.
-    pub fn len(&self) -> usize {
-        self.count
+        Self { slots }
     }
 
     /// The vector_index of the newest valid checkpoint, if any.
     pub fn newest_vector_index(&self) -> Option<usize> {
-        if self.count == 0 { return None; }
-        // The newest is the slot just before head (wrapping).
-        let idx = (self.head + RING_CAPACITY - 1) % RING_CAPACITY;
-        if self.slots[idx].valid {
-            Some(self.slots[idx].vector_index)
-        } else {
-            None
+        self.slots.iter()
+            .filter(|s| s.valid)
+            .map(|s| s.vector_index)
+            .max()
+    }
+
+    /// Choose which slot to overwrite for a new checkpoint.
+    ///
+    /// Priority: (1) an invalid slot, (2) the valid slot with the lowest
+    /// vector_index — the one furthest from the tip.  Divergence only
+    /// reaches max_divergence_window behind the tip, so the oldest
+    /// checkpoint is the least useful and should be recycled first.
+    fn pick_slot(&self) -> usize {
+        if let Some(i) = self.slots.iter().position(|s| !s.valid) {
+            return i;
         }
+        self.slots.iter().enumerate()
+            .min_by_key(|(_, s)| s.vector_index)
+            .map(|(i, _)| i)
+            .unwrap_or(0)
     }
 
     /// Save a checkpoint: copy the bbox region from the stroke texture
@@ -141,7 +161,8 @@ impl CheckpointRing {
         if w == 0 || h == 0 { return; }
         let bbox = [x, y, w, h];
 
-        let slot = &mut self.slots[self.head];
+        let slot_idx = self.pick_slot();
+        let slot = &mut self.slots[slot_idx];
         slot.ensure_texture(device, w, h);
         slot.bbox = bbox;
         slot.save_point_index = save_point_index;
@@ -165,12 +186,6 @@ impl CheckpointRing {
             },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
         );
-
-        // Advance head.
-        self.head = (self.head + 1) % RING_CAPACITY;
-        if self.count < RING_CAPACITY {
-            self.count += 1;
-        }
     }
 
     /// Find the best checkpoint strictly before `div_vector_index`.
@@ -259,7 +274,6 @@ impl CheckpointRing {
         for slot in &mut self.slots {
             if slot.valid && slot.vector_index >= vector_index {
                 slot.valid = false;
-                self.count = self.count.saturating_sub(1);
             }
         }
     }
@@ -269,8 +283,6 @@ impl CheckpointRing {
         for slot in &mut self.slots {
             slot.valid = false;
         }
-        self.head = 0;
-        self.count = 0;
     }
 
     /// Compute the ideal checkpoint spacing for the given divergence window.

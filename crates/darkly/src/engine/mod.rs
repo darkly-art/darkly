@@ -19,7 +19,7 @@ use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
 use crate::brush::pipelines::BrushPipelines;
 use crate::brush::preset_library::PresetLibrary;
-use crate::brush::stabilizer::{StabilizerConfig, StabilizerRegistry};
+use crate::brush::stabilizer::StabilizerRegistry;
 use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::brush::wire::BrushWireType;
@@ -166,7 +166,6 @@ pub struct DarklyEngine {
 
     // --- Stabilizer ---
     pub(crate) stabilizer_registry: StabilizerRegistry,
-    pub(crate) active_stabilizer_config: StabilizerConfig,
 
     /// Composite blend mode for the current stroke: 0 = paint, 1 = erase.
     pub(crate) brush_blend_mode: u32,
@@ -247,7 +246,6 @@ impl DarklyEngine {
             stroke_buffer: None,
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),
-            active_stabilizer_config: StabilizerConfig::default(),
             brush_blend_mode: 0,
             diff_rect,
             pending_undo_commit: None,

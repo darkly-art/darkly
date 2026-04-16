@@ -7,7 +7,7 @@
 use crate::brush::wire::BrushWireType;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::wire::ScalarValue;
-use crate::nodegraph::{NodeRegistration, PortDef};
+use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 
@@ -45,6 +45,14 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Dab index within the current stroke (0, 1, 2, ...)"),
             PortDef::output("fade", BrushWireType::Scalar)
                 .with_description("Stroke fade-out (0 at start, 1 at stroke end)"),
+            // Stabilization strength — input port read at stroke start,
+            // not per-dab.  Exposed via the eye toggle like any other port.
+            PortDef::input("stabilize", BrushWireType::Scalar)
+                .with_range(0.0, 1.0, 0.0)
+                .with_unit(UnitType::Percent)
+                .with_icon("fa-solid fa-wave-square")
+                .with_label("Stabilize")
+                .with_description("Stroke stabilization strength (0 = off, 100% = maximum smoothing)"),
         ],
         params: &[],
         is_gpu: false,

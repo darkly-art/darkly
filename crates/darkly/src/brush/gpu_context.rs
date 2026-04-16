@@ -11,11 +11,11 @@ use super::wire::TextureHandle;
 
 /// Everything a GPU brush node needs to record render passes.
 ///
-/// Created once per `move_to()` by the painting layer and passed to
-/// the stroke engine.  Each dab records its render passes into the
-/// encoder, then calls `submit_and_reset()` to flush — this ensures
-/// `queue.write_buffer` uniform data is consumed before the next dab
-/// overwrites it.
+/// Created once per rendering batch (per-segment in divergence, per-frame
+/// in the no-divergence tail) and passed to the stroke engine.  Each dab
+/// records its render passes into the encoder.  Dynamic uniform buffer
+/// offsets allow all dabs to share one encoder without per-dab submission.
+/// Call `submit_final()` when the batch is complete.
 pub struct BrushGpuContext<'a> {
     pub encoder: wgpu::CommandEncoder,
     pub device: &'a wgpu::Device,
@@ -38,17 +38,29 @@ pub struct BrushGpuContext<'a> {
 }
 
 impl<'a> BrushGpuContext<'a> {
-    /// Submit the current encoder and create a fresh one.
+    /// Submit the batched encoder and consume the context.
     ///
-    /// Must be called after each dab so that `queue.write_buffer` uniform
-    /// writes are consumed before the next dab overwrites them.
-    pub fn submit_and_reset(&mut self) {
-        let finished = std::mem::replace(
-            &mut self.encoder,
-            self.device.create_command_encoder(
-                &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
-            ),
-        );
-        self.queue.submit([finished.finish()]);
+    /// All dab render passes in this batch are submitted in a single
+    /// `queue.submit()` call — no per-dab submission needed thanks to
+    /// dynamic uniform buffer offsets.
+    pub fn submit_final(self) {
+        self.queue.submit([self.encoder.finish()]);
+    }
+
+    /// If any uniform ring is nearly full, submit the current encoder,
+    /// reset all rings, and create a fresh encoder.  Called between dabs
+    /// to prevent ring overflow — adds at most 1 extra submit per ~250
+    /// dabs, which is negligible compared to the old per-dab submit.
+    pub fn flush_if_needed(&mut self) {
+        if self.pipelines.rings_nearly_full() {
+            let finished = std::mem::replace(
+                &mut self.encoder,
+                self.device.create_command_encoder(
+                    &wgpu::CommandEncoderDescriptor { label: Some("brush-ring-flush") },
+                ),
+            );
+            self.queue.submit([finished.finish()]);
+            self.pipelines.reset_uniform_rings();
+        }
     }
 }
