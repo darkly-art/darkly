@@ -56,6 +56,10 @@
     let panStartX = 0, panStartY = 0, panOriginX = 0, panOriginY = 0;
     let interactionActive = false;
 
+    // --- Cursor glow for dot matrix ---
+    let mouseX = $state(0);
+    let mouseY = $state(0);
+
     function capturePointer(e: PointerEvent) {
         containerEl.setPointerCapture(e.pointerId);
         if (!interactionActive) {
@@ -187,6 +191,11 @@
     }
 
     function onPointerMove(e: PointerEvent) {
+        // Update cursor glow position (relative to container)
+        const r = containerEl.getBoundingClientRect();
+        mouseX = e.clientX - r.left;
+        mouseY = e.clientY - r.top;
+
         if (isPanning) {
             panX = panOriginX + (e.clientX - panStartX);
             panY = panOriginY + (e.clientY - panStartY);
@@ -273,7 +282,7 @@
 <div
     class="graph-container"
     bind:this={containerEl}
-    style="background-position: {panX}px {panY}px; background-size: {20 * zoom}px {20 * zoom}px;"
+    style="background-position: {panX}px {panY}px; background-size: {20 * zoom}px {20 * zoom}px; --mouse-x: {mouseX}px; --mouse-y: {mouseY}px;"
     onwheel={onWheel}
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
@@ -304,6 +313,17 @@
         background-image: radial-gradient(circle, color-mix(in srgb, var(--text) 40%, transparent) 1px, transparent 1px);
         background-size: 20px 20px;
         cursor: default;
+    }
+    .graph-container::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(circle, var(--accent) 2.5px, transparent 2.5px);
+        background-size: inherit;
+        background-position: inherit;
+        pointer-events: none;
+        mask-image: radial-gradient(circle 150px at var(--mouse-x) var(--mouse-y), black 0%, transparent 100%);
+        -webkit-mask-image: radial-gradient(circle 150px at var(--mouse-x) var(--mouse-y), black 0%, transparent 100%);
     }
     .node-layer {
         position: absolute;
