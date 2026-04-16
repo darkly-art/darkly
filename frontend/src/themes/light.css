@@ -1,4 +1,5 @@
-.light {
+.light,
+[data-theme='light'] {
     --bg:          #ffffff;
     --bg-raised:   #f0f0f0;
     --bg-hover:    #e8e8e8;

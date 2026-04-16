@@ -86,7 +86,7 @@
 <style>
     .toolbar {
         width: 44px;
-        background: var(--bg-raised);
+        background: var(--bg);
         display: flex;
         flex-direction: column;
         align-items: center;

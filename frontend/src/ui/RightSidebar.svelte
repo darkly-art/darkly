@@ -45,7 +45,7 @@
         width: 280px;
         min-width: 180px;
         max-width: 500px;
-        background: var(--bg-raised);
+        background: var(--bg);
         display: flex;
         flex-direction: column;
         flex-shrink: 0;

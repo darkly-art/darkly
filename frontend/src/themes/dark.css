@@ -1,8 +1,9 @@
-.dark {
+.dark,
+[data-theme='dark'] {
     --bg:          #000000;
-    --bg-raised:   #000000;
-    --bg-hover:    #111111;
-    --bg-active:   #1a1a1a;
+    --bg-raised:   #111111;
+    --bg-hover:    #1a1a1a;
+    --bg-active:   #242424;
     --text:        #cccccc;
     --text-muted:  #666666;
     --text-dim:    #444444;
