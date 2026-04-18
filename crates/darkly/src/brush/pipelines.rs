@@ -57,44 +57,6 @@ pub struct TexOverlayUniforms {
     pub _pad: [f32; 3],
 }
 
-/// Uniform data for the smudge bucket update shader.
-///
-/// Drives a 1×1 render pass that blends the previous bucket color with the
-/// canvas sample under the dab center.  The resulting bucket is then read
-/// by `smudge_stamp` to color the dab (MyPaint-style wet paint model).
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct SmudgeBucketUniforms {
-    /// UV into `canvas_copy_texture` at the dab center (0..1 in texture space).
-    pub sample_uv: [f32; 2],
-    /// Mix factor for the bucket update: `new_bucket = lerp(old, sampled, 1 - smudge_length)`.
-    /// 1.0 = bucket is sticky (never resample); 0.0 = always snap to canvas.
-    pub smudge_length: f32,
-    /// 1 = this is the first dab of the stroke; shader seeds from sampled_canvas
-    /// instead of mixing with old bucket contents (which are undefined).
-    pub is_first_dab: u32,
-}
-
-/// Uniform data for the smudge dab render shader.
-///
-/// Near-clone of `StampUniforms` with an added `smudge` factor that mixes
-/// the brush color with the pre-updated smudge bucket per-texel.
-/// `smudge = 0` matches `stamp` exactly.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct SmudgeStampUniforms {
-    pub dab_width: f32,
-    pub dab_height: f32,
-    pub opacity: f32,
-    pub rotation: f32,
-    pub color: [f32; 4],     // brush color (straight alpha)
-    pub mirror_x: f32,
-    pub mirror_y: f32,
-    pub ratio: f32,
-    /// 0 = pure brush color; 1 = pure bucket (canvas smear).
-    pub smudge: f32,
-}
-
 /// Uniform data for the dab compositing shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -176,8 +138,6 @@ pub struct BrushPipelines {
     stamp_pipeline: wgpu::RenderPipeline,
     tex_overlay_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
-    smudge_bucket_pipeline: wgpu::RenderPipeline,
-    smudge_stamp_pipeline: wgpu::RenderPipeline,
 
     circle_uniform_ring: DynamicUniformRing,
     pub(crate) circle_uniform_bind_group: wgpu::BindGroup,
@@ -191,12 +151,6 @@ pub struct BrushPipelines {
     composite_uniform_ring: DynamicUniformRing,
     pub(crate) composite_uniform_bind_group: wgpu::BindGroup,
 
-    smudge_bucket_uniform_ring: DynamicUniformRing,
-    pub(crate) smudge_bucket_uniform_bind_group: wgpu::BindGroup,
-
-    smudge_stamp_uniform_ring: DynamicUniformRing,
-    pub(crate) smudge_stamp_uniform_bind_group: wgpu::BindGroup,
-
     /// 1x1 white selection texture — bound when no selection is active.
     pub(crate) default_selection_bind_group: wgpu::BindGroup,
     pub(crate) selection_bgl: wgpu::BindGroupLayout,
@@ -209,18 +163,6 @@ pub struct BrushPipelines {
     _canvas_copy_view: wgpu::TextureView,
     pub(crate) canvas_copy_bind_group: wgpu::BindGroup,
     canvas_copy_bgl: wgpu::BindGroupLayout,
-
-    /// Ping-pong smudge bucket textures — 1×1 RGBA16F holding the accumulated
-    /// "wet paint" color for watercolor/smudge brushes.  StrokeEngine tracks
-    /// which is "current" and swaps each dab.  `smudge_bucket` reads the old
-    /// side and writes the new side; `smudge_stamp` reads the new side when
-    /// coloring the dab.
-    _smudge_bucket_texture_a: wgpu::Texture,
-    _smudge_bucket_texture_b: wgpu::Texture,
-    smudge_bucket_view_a: wgpu::TextureView,
-    smudge_bucket_view_b: wgpu::TextureView,
-    pub(crate) smudge_bucket_read_bg_a: wgpu::BindGroup,
-    pub(crate) smudge_bucket_read_bg_b: wgpu::BindGroup,
 }
 
 impl BrushPipelines {
@@ -266,20 +208,6 @@ impl BrushPipelines {
                     include_str!("../../../../shaders/source_over.wgsl"), "\n",
                     include_str!("../../../../shaders/brush/composite.wgsl"),
                 ).into(),
-            ),
-        });
-
-        let smudge_bucket_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("brush-smudge-bucket"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/brush/smudge_bucket.wgsl").into(),
-            ),
-        });
-
-        let smudge_stamp_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("brush-smudge-stamp"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/brush/smudge_stamp.wgsl").into(),
             ),
         });
 
@@ -375,24 +303,6 @@ impl BrushPipelines {
             immediate_size: 0,
         });
 
-        // Smudge bucket: group(0) = uniforms, group(1) = old bucket (1x1 sampled),
-        //                group(2) = canvas copy.  Writes the new bucket.
-        // The bucket read BGL matches canvas_copy_bgl (texture + sampler) so the
-        // 1×1 input bind groups can be built against one layout.
-        let smudge_bucket_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("brush-smudge-bucket-layout"),
-            bind_group_layouts: &[&uniform_bgl, &canvas_copy_bgl, &canvas_copy_bgl],
-            immediate_size: 0,
-        });
-
-        // Smudge stamp: group(0) = uniforms, group(1) = brush tip texture,
-        //               group(2) = smudge bucket (1×1 color).
-        let smudge_stamp_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("brush-smudge-stamp-layout"),
-            bind_group_layouts: &[&uniform_bgl, dab_bgl, &canvas_copy_bgl],
-            immediate_size: 0,
-        });
-
         // --- Dynamic uniform rings ---
         let circle_uniform_ring = DynamicUniformRing::new(
             device, "brush-circle-uniforms",
@@ -458,40 +368,6 @@ impl BrushPipelines {
                     buffer: &composite_uniform_ring.buffer,
                     offset: 0,
                     size: Some(composite_uniform_ring.binding_size()),
-                }),
-            }],
-        });
-
-        let smudge_bucket_uniform_ring = DynamicUniformRing::new(
-            device, "brush-smudge-bucket-uniforms",
-            std::mem::size_of::<SmudgeBucketUniforms>() as u64, min_align,
-        );
-        let smudge_bucket_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("brush-smudge-bucket-uniform-bg"),
-            layout: &uniform_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &smudge_bucket_uniform_ring.buffer,
-                    offset: 0,
-                    size: Some(smudge_bucket_uniform_ring.binding_size()),
-                }),
-            }],
-        });
-
-        let smudge_stamp_uniform_ring = DynamicUniformRing::new(
-            device, "brush-smudge-stamp-uniforms",
-            std::mem::size_of::<SmudgeStampUniforms>() as u64, min_align,
-        );
-        let smudge_stamp_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("brush-smudge-stamp-uniform-bg"),
-            layout: &uniform_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &smudge_stamp_uniform_ring.buffer,
-                    offset: 0,
-                    size: Some(smudge_stamp_uniform_ring.binding_size()),
                 }),
             }],
         });
@@ -582,52 +458,6 @@ impl BrushPipelines {
                 },
             ],
         });
-
-        // --- Smudge bucket textures (1×1, ping-pong) ---
-        // RGBA16F to avoid precision loss across repeated bucket updates
-        // (MyPaint's exponential decay blends dozens of dabs' worth of color;
-        // 8-bit would quantize visibly over long strokes).
-        let mk_bucket = |label: &'static str| device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let smudge_bucket_texture_a = mk_bucket("brush-smudge-bucket-a");
-        let smudge_bucket_texture_b = mk_bucket("brush-smudge-bucket-b");
-        let smudge_bucket_view_a = smudge_bucket_texture_a
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let smudge_bucket_view_b = smudge_bucket_texture_b
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let smudge_bucket_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("brush-smudge-bucket-sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
-        let mk_bucket_read_bg = |view: &wgpu::TextureView, label: &'static str| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &canvas_copy_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&smudge_bucket_sampler),
-                    },
-                ],
-            })
-        };
-        let smudge_bucket_read_bg_a = mk_bucket_read_bg(&smudge_bucket_view_a, "brush-smudge-bucket-read-a");
-        let smudge_bucket_read_bg_b = mk_bucket_read_bg(&smudge_bucket_view_b, "brush-smudge-bucket-read-b");
 
         // --- Pipelines ---
 
@@ -752,73 +582,11 @@ impl BrushPipelines {
             cache: None,
         });
 
-        // Smudge bucket: REPLACE blend, Rgba16Float target for bucket precision.
-        let smudge_bucket_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("brush-smudge-bucket"),
-            layout: Some(&smudge_bucket_layout),
-            vertex: wgpu::VertexState {
-                module: &smudge_bucket_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &smudge_bucket_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // Smudge stamp: REPLACE blend on dab texture (same convention as stamp).
-        let smudge_stamp_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("brush-smudge-stamp"),
-            layout: Some(&smudge_stamp_layout),
-            vertex: wgpu::VertexState {
-                module: &smudge_stamp_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &smudge_stamp_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
         Self {
             circle_pipeline,
             stamp_pipeline,
             tex_overlay_pipeline,
             composite_pipeline,
-            smudge_bucket_pipeline,
-            smudge_stamp_pipeline,
             circle_uniform_ring,
             circle_uniform_bind_group,
             stamp_uniform_ring,
@@ -827,22 +595,12 @@ impl BrushPipelines {
             tex_overlay_uniform_bind_group,
             composite_uniform_ring,
             composite_uniform_bind_group,
-            smudge_bucket_uniform_ring,
-            smudge_bucket_uniform_bind_group,
-            smudge_stamp_uniform_ring,
-            smudge_stamp_uniform_bind_group,
             default_selection_bind_group,
             selection_bgl,
             canvas_copy_texture,
             _canvas_copy_view: canvas_copy_view,
             canvas_copy_bind_group,
             canvas_copy_bgl,
-            _smudge_bucket_texture_a: smudge_bucket_texture_a,
-            _smudge_bucket_texture_b: smudge_bucket_texture_b,
-            smudge_bucket_view_a,
-            smudge_bucket_view_b,
-            smudge_bucket_read_bg_a,
-            smudge_bucket_read_bg_b,
         }
     }
 
@@ -860,26 +618,6 @@ impl BrushPipelines {
 
     pub fn composite_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.composite_pipeline
-    }
-
-    pub fn smudge_bucket_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.smudge_bucket_pipeline
-    }
-
-    pub fn smudge_stamp_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.smudge_stamp_pipeline
-    }
-
-    /// Render-target view for the smudge bucket at index 0 (A) or 1 (B).
-    /// StrokeEngine's `SmudgeState` tracks which is current; the bucket-update
-    /// pass writes to the non-current view, then `SmudgeState` flips.
-    pub fn smudge_bucket_view(&self, index: u32) -> &wgpu::TextureView {
-        if index & 1 == 0 { &self.smudge_bucket_view_a } else { &self.smudge_bucket_view_b }
-    }
-
-    /// Bind group for sampling the smudge bucket at index 0 (A) or 1 (B).
-    pub fn smudge_bucket_read_bg(&self, index: u32) -> &wgpu::BindGroup {
-        if index & 1 == 0 { &self.smudge_bucket_read_bg_a } else { &self.smudge_bucket_read_bg_b }
     }
 
     pub fn selection_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
@@ -918,16 +656,6 @@ impl BrushPipelines {
         self.composite_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
     }
 
-    /// Write smudge bucket uniforms to the next ring slot.
-    pub fn write_smudge_bucket_uniforms(&self, queue: &wgpu::Queue, uniforms: &SmudgeBucketUniforms) -> u32 {
-        self.smudge_bucket_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
-    }
-
-    /// Write smudge stamp uniforms to the next ring slot.
-    pub fn write_smudge_stamp_uniforms(&self, queue: &wgpu::Queue, uniforms: &SmudgeStampUniforms) -> u32 {
-        self.smudge_stamp_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
-    }
-
     /// True if any ring is close to capacity.  The caller should flush
     /// the current encoder, reset rings, and create a fresh encoder.
     pub fn rings_nearly_full(&self) -> bool {
@@ -935,8 +663,6 @@ impl BrushPipelines {
             || self.stamp_uniform_ring.nearly_full()
             || self.tex_overlay_uniform_ring.nearly_full()
             || self.composite_uniform_ring.nearly_full()
-            || self.smudge_bucket_uniform_ring.nearly_full()
-            || self.smudge_stamp_uniform_ring.nearly_full()
     }
 
     /// Reset all uniform rings for a new frame.
@@ -945,7 +671,5 @@ impl BrushPipelines {
         self.stamp_uniform_ring.reset();
         self.tex_overlay_uniform_ring.reset();
         self.composite_uniform_ring.reset();
-        self.smudge_bucket_uniform_ring.reset();
-        self.smudge_stamp_uniform_ring.reset();
     }
 }

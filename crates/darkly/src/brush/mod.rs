@@ -103,7 +103,6 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
     map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
-    map.insert("smudge_stamp".into(), Box::new(nodes::smudge_stamp::SmudgeStampEvaluator));
     map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
     map.insert("texture_overlay".into(), Box::new(nodes::texture_overlay::TextureOverlayEvaluator));
     map

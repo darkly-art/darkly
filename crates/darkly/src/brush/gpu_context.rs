@@ -9,32 +9,6 @@ use super::dab_pool::DabTexturePool;
 use super::pipelines::BrushPipelines;
 use super::wire::TextureHandle;
 
-/// Per-stroke state for smudge/watercolor brushes.
-///
-/// The two 1×1 smudge bucket textures in `BrushPipelines` are used ping-pong:
-/// each dab reads from `current_bucket` and writes to `current_bucket ^ 1`,
-/// then flips.  `is_first_dab` gates the bucket-update shader's seeding branch
-/// (on the first dab, the old bucket's contents are undefined, so the shader
-/// seeds straight from the sampled canvas color).
-///
-/// StrokeEngine owns the master copy; it's snapshotted into BrushGpuContext
-/// before `execute_gpu` and copied back after so the smudge_stamp node can
-/// read and advance it.
-#[derive(Copy, Clone, Default, Debug)]
-pub struct SmudgeState {
-    /// Which bucket (0 = A, 1 = B) holds the latest valid color.
-    pub current_bucket: u32,
-    /// True until the first dab of the stroke has been rendered.
-    pub is_first_dab: bool,
-}
-
-impl SmudgeState {
-    /// Fresh state for the start of a stroke.
-    pub fn new() -> Self {
-        Self { current_bucket: 0, is_first_dab: true }
-    }
-}
-
 /// Everything a GPU brush node needs to record render passes.
 ///
 /// Created once per rendering batch (per-segment in divergence, per-frame
@@ -65,16 +39,12 @@ pub struct BrushGpuContext<'a> {
     /// for the current dab, if the copy has already been issued.  `None` means
     /// no copy has been made yet for this dab.
     ///
-    /// Multiple GPU nodes per dab may need canvas_copy (e.g. smudge_stamp reads
-    /// it to sample, color_output reads it for Porter-Duff).  Tracking origin
-    /// lets the second caller reuse the first's copy when regions match.  Reset
-    /// by `StrokeEngine::place_dab` before each dab.
+    /// Multiple GPU nodes per dab may need canvas_copy (e.g. a displacement
+    /// node reads it to sample source pixels, color_output reads it for
+    /// Porter-Duff).  Tracking origin lets the second caller reuse the
+    /// first's copy when regions match.  Reset by `StrokeEngine::place_dab`
+    /// before each dab.
     pub canvas_copy_origin: Option<[u32; 2]>,
-    /// Snapshot of StrokeEngine's per-stroke smudge state.  StrokeEngine copies
-    /// its master value in before `execute_gpu` and copies the advanced value
-    /// back after, so the smudge_stamp node can read + advance it cleanly.
-    /// Untouched by non-smudge brushes.
-    pub smudge_state: SmudgeState,
 }
 
 impl<'a> BrushGpuContext<'a> {

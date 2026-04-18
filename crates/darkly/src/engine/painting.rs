@@ -3,7 +3,7 @@
 use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use super::types::StrokeOp;
 use crate::brush::checkpoint_ring::CheckpointRing;
-use crate::brush::gpu_context::{BrushGpuContext, SmudgeState};
+use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::paint_info::PaintInformation;
 use crate::brush::spacing::SpacingConfig;
 use crate::brush::stroke_buffer::StrokeBuffer;
@@ -329,7 +329,6 @@ impl DarklyEngine {
                         // in the stroke→layer composite pass instead.
                         blend_mode: 0,
                         canvas_copy_origin: None,
-                        smudge_state: SmudgeState::default(),
                     }
                 };
             }
@@ -464,7 +463,6 @@ impl DarklyEngine {
                     resource_handles: &self.resource_handles,
                     blend_mode: self.brush_blend_mode,
                     canvas_copy_origin: None,
-                    smudge_state: SmudgeState::default(),
                 };
                 self.brush_pipelines.reset_uniform_rings();
                 engine.move_to(info, &mut gpu_ctx);

@@ -10,7 +10,7 @@
 
 use super::dab_pool::MAX_DAB_SIZE;
 use super::eval::BrushGraphRunner;
-use super::gpu_context::{BrushGpuContext, SmudgeState};
+use super::gpu_context::BrushGpuContext;
 use super::interpolation::{lerp_paint_info, CatmullRomSegment};
 use super::paint_info::{PaintInformation, StrokeRecord};
 use super::save_points::SavePointStore;
@@ -67,11 +67,6 @@ pub struct StrokeEngine {
     /// Stroke seed for deterministic per-dab randomness.  Passed to
     /// the runner so random nodes can generate independent sequences.
     stroke_seed: u32,
-
-    /// Per-stroke smudge/watercolor state.  Snapshotted into `BrushGpuContext`
-    /// before each `execute_gpu` and copied back after — watched by smudge-
-    /// aware brushes, ignored by everything else.
-    smudge_state: SmudgeState,
 }
 
 impl StrokeEngine {
@@ -104,7 +99,6 @@ impl StrokeEngine {
             last_dab_size: [d, d],
             dab_count: 0,
             stroke_seed,
-            smudge_state: SmudgeState::new(),
         }
     }
 
@@ -169,7 +163,6 @@ impl StrokeEngine {
         self.last_dab_size = [d, d];
         self.dab_count = 0;
         self.save_points.clear();
-        self.smudge_state = SmudgeState::new();
     }
 
     /// Render dabs along the stabilized polyline starting from `start_vector_index`.
@@ -320,18 +313,16 @@ impl StrokeEngine {
         );
         self.runner.execute_cpu();
 
-        // Per-dab context state: reset canvas_copy cache, hand off current
-        // smudge-bucket state to the nodes, and pick it up again after.
+        // Per-dab context state: reset the canvas_copy cache so the first
+        // node that needs a canvas region this dab actually issues the copy.
         gpu.canvas_copy_origin = None;
-        gpu.smudge_state = self.smudge_state;
         self.runner.execute_gpu(gpu);
-        self.smudge_state = gpu.smudge_state;
 
         gpu.dab_pool.release_all();
         gpu.flush_if_needed();
 
-        // Update dab size from dab source node output (procedural, stamp, or smudge_stamp).
-        for node_type in &["procedural", "stamp", "smudge_stamp"] {
+        // Update dab size from dab source node output (procedural or stamp).
+        for node_type in &["procedural", "stamp"] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
                 if let Some(val) = self.runner.read_slot(slot) {
                     let size = val.as_vec2();

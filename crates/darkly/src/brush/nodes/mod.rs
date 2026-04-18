@@ -15,7 +15,6 @@ pub mod paint_color;
 pub mod pen_input;
 pub mod random;
 pub mod remap;
-pub mod smudge_stamp;
 pub mod split_vec2;
 pub mod stamp;
 pub mod texture_overlay;
@@ -38,7 +37,6 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         pen_input::register(),
         random::register(),
         remap::register(),
-        smudge_stamp::register(),
         split_vec2::register(),
         stamp::register(),
         texture_overlay::register(),

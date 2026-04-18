@@ -25,7 +25,6 @@ pub fn all() -> Vec<PresetBundle> {
         pencil(),
         charcoal(),
         canvas_brush(),
-        watercolor(),
     ]
 }
 
@@ -44,26 +43,12 @@ struct PresetBuilder {
 }
 
 impl PresetBuilder {
-    /// Create a new builder with the standard dab source `stamp` and
-    /// output wiring.  See [`PresetBuilder::new_with_dab_source`] to
-    /// substitute a different dab source (e.g. `smudge_stamp` for
-    /// watercolor).
+    /// Create a new builder with the standard nodes and output wiring.
+    ///
+    /// Pre-wires: stamp.dab → color_output.dab, stamp.dab_size →
+    /// color_output.dab_size, stamp.scatter_offset → color_output.scatter_offset,
+    /// pen_input.position → color_output.position.
     fn new() -> Self {
-        Self::new_with_dab_source("stamp")
-    }
-
-    /// Create a new builder whose dab source is the given node type.
-    ///
-    /// The dab source must expose the same output contract as `stamp`
-    /// (`dab`, `dab_size`, `scatter_offset` ports), because those are
-    /// auto-wired to `color_output`.  `self.stamp` points at the dab
-    /// source — every preset helper that reads/writes `self.stamp`
-    /// works unchanged with the substitute.
-    ///
-    /// Also wires `pen_input.position` into the dab source's `position`
-    /// input when the source declares one, so nodes like `smudge_stamp`
-    /// can sample the canvas at the dab location.
-    fn new_with_dab_source(dab_source_type: &str) -> Self {
         let registry = BrushNodeRegistry::new();
         let mut graph = Graph::new();
 
@@ -77,15 +62,9 @@ impl PresetBuilder {
             registry.get("paint_color").unwrap().ports.clone(),
             vec![],
         );
-        let dab_source_reg = registry.get(dab_source_type)
-            .unwrap_or_else(|| panic!("unknown dab source: {}", dab_source_type));
-        let dab_source_has_position = dab_source_reg
-            .ports
-            .iter()
-            .any(|p| p.name == "position" && p.dir == crate::nodegraph::PortDir::Input);
         let stamp = graph.add_node(
-            dab_source_type,
-            dab_source_reg.ports.clone(),
+            "stamp",
+            registry.get("stamp").unwrap().ports.clone(),
             vec![],
         );
         let color_output = graph.add_node(
@@ -95,15 +74,12 @@ impl PresetBuilder {
         );
 
         // Standard output wiring (every preset needs this).
-        let mut wires: Vec<(NodeId, &str, NodeId, &str)> = vec![
+        let wires = [
             (stamp, "dab", color_output, "dab"),
             (stamp, "dab_size", color_output, "dab_size"),
             (stamp, "scatter_offset", color_output, "scatter_offset"),
             (pen, "position", color_output, "position"),
         ];
-        if dab_source_has_position {
-            wires.push((pen, "position", stamp, "position"));
-        }
         for (from_node, from_port, to_node, to_port) in wires {
             graph.connect(
                 PortRef { node: from_node, port: from_port.into() },
@@ -196,21 +172,6 @@ impl PresetBuilder {
                 ParamValue::String(description.to_string()),
             ],
         )
-    }
-
-    /// Wire pen_input.pressure → stamp.size.
-    fn wire_pressure_to_size(&mut self) {
-        self.wire(self.pen, "pressure", self.stamp, "size");
-    }
-
-    /// Wire pen_input.pressure → stamp.opacity.
-    fn wire_pressure_to_opacity(&mut self) {
-        self.wire(self.pen, "pressure", self.stamp, "opacity");
-    }
-
-    /// Wire paint_color.color → stamp.color.
-    fn wire_color(&mut self) {
-        self.wire(self.paint_color, "color", self.stamp, "color");
     }
 
     /// Add a random node. `mode`: 0 = per-dab, 1 = per-stroke.
@@ -313,16 +274,16 @@ impl PresetBuilder {
 fn soft_round() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.7);
-    b.wire_pressure_to_size();
-    b.wire_color();
+    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Soft Round", "basic")
 }
 
 fn hard_round() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.05);
-    b.wire_pressure_to_size();
-    b.wire_color();
+    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Hard Round", "basic")
 }
 
@@ -335,8 +296,8 @@ fn ink_pen() -> PresetBundle {
     ]);
     b.wire(b.pen, "pressure", curve, "input");
     b.wire(curve, "output", b.stamp, "size");
-    b.wire_pressure_to_opacity();
-    b.wire_color();
+    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.paint_color, "color", b.stamp, "color");
     b.set_stabilize(0.6);
     b.build("Ink Pen", "inking")
 }
@@ -345,29 +306,29 @@ fn airbrush() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(1.0);
     b.set_port(b.stamp, "size", 0.15);
-    b.wire_pressure_to_opacity();
-    b.wire_color();
+    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Airbrush", "basic")
 }
 
 fn scatter_brush() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.3);
-    b.wire_pressure_to_size();
+    b.wire(b.pen, "pressure", b.stamp, "size");
     let rand_x = b.add_random(0);
     let rand_y = b.add_random(0);
     b.wire(rand_x, "value", b.stamp, "scatter_x");
     b.wire(rand_y, "value", b.stamp, "scatter_y");
-    b.wire_color();
+    b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Scatter Brush", "effects")
 }
 
 fn calligraphy() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_image("calligraphy.png");
-    b.wire_pressure_to_size();
+    b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.pen, "tilt_direction", b.stamp, "rotation");
-    b.wire_color();
+    b.wire(b.paint_color, "color", b.stamp, "color");
     b.set_stabilize(0.6);
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/calligraphy.png");
@@ -379,11 +340,11 @@ fn calligraphy() -> PresetBundle {
 fn textured_ink() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_image("ink_dry.png");
-    b.wire_pressure_to_size();
-    b.wire_pressure_to_opacity();
+    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.pen, "pressure", b.stamp, "opacity");
     let rand_rot = b.add_random(0);
     b.wire(rand_rot, "value", b.stamp, "rotation");
-    b.wire_color();
+    b.wire(b.paint_color, "color", b.stamp, "color");
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");
     b.build_with_resources("Textured Ink", "effects", vec![
@@ -398,16 +359,16 @@ fn size_slider() -> PresetBundle {
         "Size", 128.0, 1.0, 500.0, 1, "fa-solid fa-circle", "Brush diameter in pixels",
     );
     b.wire(slider, "value", b.stamp, "size");
-    b.wire_color();
+    b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Size Slider", "basic")
 }
 
 fn pencil() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.15);
-    b.wire_pressure_to_size();
-    b.wire_pressure_to_opacity();
-    b.wire_color();
+    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.paint_color, "color", b.stamp, "color");
 
     // Insert texture overlay with Multiply blend (pencil grain).
     let tex = b.add_texture_overlay(0); // 0 = Multiply
@@ -426,9 +387,9 @@ fn pencil() -> PresetBundle {
 fn charcoal() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.6);
-    b.wire_pressure_to_size();
-    b.wire_pressure_to_opacity();
-    b.wire_color();
+    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.paint_color, "color", b.stamp, "color");
 
     // Texture overlay with Subtract blend (charcoal grain — cuts into dab).
     let tex = b.add_texture_overlay(1); // 1 = Subtract
@@ -443,29 +404,11 @@ fn charcoal() -> PresetBundle {
     ])
 }
 
-fn watercolor() -> PresetBundle {
-    // Soft-edged wet paint: pen pressure drives size, color pulls in the
-    // canvas-under-dab via the smudge bucket.  Smudge amount and length
-    // are exposed as toolbar sliders — the whole point of this brush is
-    // that the user can dial in pigment vs. canvas pickup.
-    let mut b = PresetBuilder::new_with_dab_source("smudge_stamp");
-    b.add_circle(0.85);
-    b.wire_pressure_to_size();
-    b.wire_pressure_to_opacity();
-    b.wire_color();
-
-    b.expose_port(b.stamp, "smudge", 0.6);
-    b.expose_port(b.stamp, "smudge_length", 0.5);
-
-    b.set_stabilize(0.4);
-    b.build("Watercolor", "painting")
-}
-
 fn canvas_brush() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.4);
-    b.wire_pressure_to_size();
-    b.wire_color();
+    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.paint_color, "color", b.stamp, "color");
 
     // Texture overlay with Multiply blend and user-adjustable strength.
     let tex = b.add_texture_overlay(0); // 0 = Multiply
@@ -546,41 +489,4 @@ mod tests {
         assert_eq!(names.len(), presets.len(), "duplicate preset names");
     }
 
-    #[test]
-    fn watercolor_uses_smudge_stamp_and_wires_position() {
-        // The whole point of the watercolor preset is to drive a smudge_stamp
-        // dab source with pen position wired in so the shader can sample the
-        // canvas under each dab.  Regression-guard both in one shot: if either
-        // the dab source or the position wire is lost, smudge silently breaks.
-        let bundle = watercolor();
-        let smudge_stamp_id = bundle
-            .preset
-            .graph
-            .nodes
-            .iter()
-            .find(|(_, node)| node.type_id == "smudge_stamp")
-            .map(|(id, _)| *id)
-            .expect("watercolor preset must contain a smudge_stamp node");
-
-        let pen_id = bundle
-            .preset
-            .graph
-            .nodes
-            .iter()
-            .find(|(_, node)| node.type_id == "pen_input")
-            .map(|(id, _)| *id)
-            .expect("watercolor preset must contain a pen_input node");
-
-        let has_position_wire = bundle
-            .preset
-            .graph
-            .connections
-            .iter()
-            .any(|c|
-                c.from.node == pen_id && c.from.port == "position"
-                    && c.to.node == smudge_stamp_id && c.to.port == "position"
-            );
-        assert!(has_position_wire,
-            "pen_input.position must be wired into smudge_stamp.position");
-    }
 }
