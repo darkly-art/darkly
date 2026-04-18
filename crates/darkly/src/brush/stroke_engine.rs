@@ -11,7 +11,7 @@
 use super::dab_pool::MAX_DAB_SIZE;
 use super::eval::BrushGraphRunner;
 use super::gpu_context::BrushGpuContext;
-use super::interpolation::lerp_paint_info;
+use super::interpolation::{lerp_paint_info, CatmullRomSegment};
 use super::paint_info::{PaintInformation, StrokeRecord};
 use super::save_points::SavePointStore;
 use super::spacing::SpacingConfig;
@@ -219,25 +219,7 @@ impl StrokeEngine {
             info.tilt_magnitude = (info.x_tilt * info.x_tilt + info.y_tilt * info.y_tilt).sqrt().min(1.0);
             info.tilt_direction = info.y_tilt.atan2(info.x_tilt);
 
-            if let Some(ref prev) = self.last_point {
-                let dx = info.pos[0] - prev.pos[0];
-                let dy = info.pos[1] - prev.pos[1];
-                let dist = (dx * dx + dy * dy).sqrt();
-
-                self.accumulated_distance += dist;
-                info.distance = self.accumulated_distance;
-                info.drawing_angle = dy.atan2(dx);
-
-                let dt = info.time - prev.time;
-                if dt > 0.0 {
-                    let speed_px_per_sec = dist / dt;
-                    info.speed = (speed_px_per_sec / MAX_SPEED_PX_PER_SEC).min(1.0);
-                } else {
-                    info.speed = prev.speed;
-                }
-            }
-
-            // Place dabs along the segment from last_point to info.
+            // First point of the stroke: no segment to place dabs along.
             if self.last_point.is_none() {
                 self.place_dab(&info, gpu, i);
                 self.last_point = Some(info);
@@ -246,24 +228,55 @@ impl StrokeEngine {
             }
 
             let prev = self.last_point.unwrap();
+
+            // Build Catmull-Rom segment between prev (p1) and info (p2).
+            // Outer control points use stabilized neighbours when available;
+            // degenerate fallback duplicates the endpoint at stroke edges.
+            let p0_pt = if i >= 2 { stabilized[i - 2] } else { prev };
+            let p1_pt = prev;
+            let p2_pt = info;
+            let p3_pt = if i + 1 < stabilized.len() { stabilized[i + 1] } else { info };
+
+            let seg = CatmullRomSegment::new(&p0_pt, &p1_pt, &p2_pt, &p3_pt);
+            let arc_len = seg.arc_length();
+
+            // Derived sensor values at the stabilized endpoint use the
+            // segment's arc length (chord distance would under-count on
+            // curved strokes).
+            self.accumulated_distance += arc_len;
+            info.distance = self.accumulated_distance;
             let dx = info.pos[0] - prev.pos[0];
             let dy = info.pos[1] - prev.pos[1];
-            let segment_dist = (dx * dx + dy * dy).sqrt();
+            info.drawing_angle = dy.atan2(dx);
 
-            if segment_dist < 0.001 {
+            let dt = info.time - prev.time;
+            if dt > 0.0 {
+                let speed_px_per_sec = arc_len / dt;
+                info.speed = (speed_px_per_sec / MAX_SPEED_PX_PER_SEC).min(1.0);
+            } else {
+                info.speed = prev.speed;
+            }
+
+            if arc_len < 0.001 {
                 self.last_point = Some(info);
+                self.save_points.finalize_render_state(i, self.capture_render_state());
                 continue;
             }
 
             let mut traveled = self.leftover_distance;
-            while traveled < segment_dist {
-                let t = traveled / segment_dist;
-                let dab_info = lerp_paint_info(&prev, &info, t);
+            while traveled < arc_len {
+                // Position comes from the curve; sensors lerp between
+                // endpoints so they can't overshoot (pressure stays in-range,
+                // time stays monotonic, etc.).
+                let cr_dab = seg.eval_at_distance(traveled);
+                let t_lerp = traveled / arc_len;
+                let mut dab_info = lerp_paint_info(&prev, &info, t_lerp);
+                dab_info.pos = cr_dab.pos;
                 self.place_dab(&dab_info, gpu, i);
                 traveled += self.spacing.distance(self.effective_diameter());
             }
 
-            self.leftover_distance = traveled - segment_dist;
+            self.leftover_distance = traveled - arc_len;
             self.last_point = Some(info);
 
             // Capture end-of-segment state on ALL save points for this vector
@@ -357,24 +370,6 @@ impl StrokeEngine {
         info.tilt_magnitude = (info.x_tilt * info.x_tilt + info.y_tilt * info.y_tilt).sqrt().min(1.0);
         info.tilt_direction = info.y_tilt.atan2(info.x_tilt);
 
-        if let Some(ref prev) = self.last_point {
-            let dx = info.pos[0] - prev.pos[0];
-            let dy = info.pos[1] - prev.pos[1];
-            let dist = (dx * dx + dy * dy).sqrt();
-
-            self.accumulated_distance += dist;
-            info.distance = self.accumulated_distance;
-            info.drawing_angle = dy.atan2(dx);
-
-            let dt = info.time - prev.time;
-            if dt > 0.0 {
-                let speed_px_per_sec = dist / dt;
-                info.speed = (speed_px_per_sec / MAX_SPEED_PX_PER_SEC).min(1.0);
-            } else {
-                info.speed = prev.speed;
-            }
-        }
-
         if self.last_point.is_none() {
             self.place_dab(&info, gpu, len - 1);
             self.last_point = Some(info);
@@ -383,24 +378,48 @@ impl StrokeEngine {
         }
 
         let prev = self.last_point.unwrap();
+
+        // Tip segment: no future sample yet, so p3 = p2 (degenerate).
+        // The next input event re-renders this segment with proper
+        // lookahead via the synthesized tip-correction divergence.
+        let p0_pt = if len >= 3 { stabilized[len - 3] } else { prev };
+        let p1_pt = prev;
+        let p2_pt = info;
+        let p3_pt = info;
+
+        let seg = CatmullRomSegment::new(&p0_pt, &p1_pt, &p2_pt, &p3_pt);
+        let arc_len = seg.arc_length();
+
+        self.accumulated_distance += arc_len;
+        info.distance = self.accumulated_distance;
         let dx = info.pos[0] - prev.pos[0];
         let dy = info.pos[1] - prev.pos[1];
-        let segment_dist = (dx * dx + dy * dy).sqrt();
+        info.drawing_angle = dy.atan2(dx);
 
-        if segment_dist < 0.001 {
+        let dt = info.time - prev.time;
+        if dt > 0.0 {
+            let speed_px_per_sec = arc_len / dt;
+            info.speed = (speed_px_per_sec / MAX_SPEED_PX_PER_SEC).min(1.0);
+        } else {
+            info.speed = prev.speed;
+        }
+
+        if arc_len < 0.001 {
             self.last_point = Some(info);
             return;
         }
 
         let mut traveled = self.leftover_distance;
-        while traveled < segment_dist {
-            let t = traveled / segment_dist;
-            let dab_info = lerp_paint_info(&prev, &info, t);
+        while traveled < arc_len {
+            let cr_dab = seg.eval_at_distance(traveled);
+            let t_lerp = traveled / arc_len;
+            let mut dab_info = lerp_paint_info(&prev, &info, t_lerp);
+            dab_info.pos = cr_dab.pos;
             self.place_dab(&dab_info, gpu, len - 1);
             traveled += self.spacing.distance(self.effective_diameter());
         }
 
-        self.leftover_distance = traveled - segment_dist;
+        self.leftover_distance = traveled - arc_len;
         self.last_point = Some(info);
         self.save_points.finalize_render_state(len - 1, self.capture_render_state());
     }

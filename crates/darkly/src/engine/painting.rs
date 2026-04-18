@@ -294,6 +294,19 @@ impl DarklyEngine {
             let max_div = engine.max_divergence_window();
             let tip_vi = engine.stabilizer_len().saturating_sub(1);
 
+            // Synthesize divergence on the previously-rendered tip segment.
+            // It was drawn with a degenerate `p3 = p2` because the next
+            // sample hadn't arrived yet; now it has, so re-render that
+            // segment with proper Catmull-Rom lookahead.  `tip_div` is
+            // the deeper of the two when the stabilizer also reports
+            // divergence (take the earliest vi that needs rebuild).
+            let tip_div = tip_vi.saturating_sub(1);
+            let div_idx = match result.divergence_index {
+                Some(k) => Some(k.min(tip_div)),
+                None if tip_vi >= 1 => Some(tip_div),
+                None => None,
+            };
+
             // Helper macro: create a BrushGpuContext for rendering a segment.
             macro_rules! make_gpu_ctx {
                 ($label:expr) => {
@@ -319,7 +332,7 @@ impl DarklyEngine {
                 };
             }
 
-            if let Some(div_idx) = result.divergence_index {
+            if let Some(div_idx) = div_idx {
                 // Divergence — try checkpoint-based partial re-render.
                 let restore = self.gpu.encode_ret("stroke-checkpoint-restore", |encoder| {
                     self.checkpoint_ring.restore_before(
