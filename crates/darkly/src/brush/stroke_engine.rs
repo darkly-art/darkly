@@ -11,7 +11,7 @@
 use super::dab_pool::MAX_DAB_SIZE;
 use super::eval::BrushGraphRunner;
 use super::gpu_context::BrushGpuContext;
-use super::interpolation::CatmullRomSegment;
+use super::interpolation::lerp_paint_info;
 use super::paint_info::{PaintInformation, StrokeRecord};
 use super::save_points::SavePointStore;
 use super::spacing::SpacingConfig;
@@ -27,7 +27,6 @@ const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
 #[derive(Clone)]
 pub struct RenderCheckpoint {
     pub last_point: Option<PaintInformation>,
-    pub prev_prev_point: Option<PaintInformation>,
     pub accumulated_distance: f32,
     pub leftover_distance: f32,
     pub last_dab_size: [f32; 2],
@@ -55,9 +54,6 @@ pub struct StrokeEngine {
 
     /// Last processed point for interpolation (post-derived-values).
     last_point: Option<PaintInformation>,
-    /// The point before `last_point`, used as the p0 control point for
-    /// Catmull-Rom spline interpolation in the tail render path.
-    prev_prev_point: Option<PaintInformation>,
     /// Cumulative distance along the stroke path (in pixels).
     accumulated_distance: f32,
     /// Distance remaining from the last segment that didn't reach the next
@@ -98,7 +94,6 @@ impl StrokeEngine {
             stabilizer,
             save_points: SavePointStore::new(),
             last_point: None,
-            prev_prev_point: None,
             accumulated_distance: 0.0,
             leftover_distance: 0.0,
             last_dab_size: [d, d],
@@ -140,7 +135,6 @@ impl StrokeEngine {
     pub fn capture_render_state(&self) -> RenderCheckpoint {
         RenderCheckpoint {
             last_point: self.last_point,
-            prev_prev_point: self.prev_prev_point,
             accumulated_distance: self.accumulated_distance,
             leftover_distance: self.leftover_distance,
             last_dab_size: self.last_dab_size,
@@ -151,7 +145,6 @@ impl StrokeEngine {
     /// Restore render state from a checkpoint.
     pub fn restore_render_state(&mut self, checkpoint: &RenderCheckpoint) {
         self.last_point = checkpoint.last_point;
-        self.prev_prev_point = checkpoint.prev_prev_point;
         self.accumulated_distance = checkpoint.accumulated_distance;
         self.leftover_distance = checkpoint.leftover_distance;
         self.last_dab_size = checkpoint.last_dab_size;
@@ -164,7 +157,6 @@ impl StrokeEngine {
     /// reports divergence and the stroke buffer has been rewound.
     pub fn reset_render_state(&mut self) {
         self.last_point = None;
-        self.prev_prev_point = None;
         self.accumulated_distance = 0.0;
         self.leftover_distance = 0.0;
         let d = Self::default_diameter();
@@ -216,32 +208,18 @@ impl StrokeEngine {
                     lp.pos = current.pos;
                 }
             }
-            if start > 1 {
-                if let Some(ref mut pp) = self.prev_prev_point {
-                    if let Some(current) = stabilized.get(start - 2) {
-                        pp.pos = current.pos;
-                    }
-                }
-            }
         }
 
-        // Precompute derived values (speed, distance, angle, tilt) for each
-        // point in the range so the Catmull-Rom segment can interpolate them.
-        let mut enriched: Vec<PaintInformation> = Vec::with_capacity(end - start + 1);
+        // Walk the polyline, computing derived values and placing dabs.
         for i in start..=end {
-            let mut info = stabilized[i];
+            let raw = stabilized[i];
+            let mut info = raw;
 
+            // Compute derived values from the stabilized positions.
             info.tilt_magnitude = (info.x_tilt * info.x_tilt + info.y_tilt * info.y_tilt).sqrt().min(1.0);
             info.tilt_direction = info.y_tilt.atan2(info.x_tilt);
 
-            // Use previous enriched point, or last_point from prior render.
-            let prev_ref = if let Some(last) = enriched.last() {
-                Some(last)
-            } else {
-                self.last_point.as_ref()
-            };
-
-            if let Some(prev) = prev_ref {
+            if let Some(ref prev) = self.last_point {
                 let dx = info.pos[0] - prev.pos[0];
                 let dy = info.pos[1] - prev.pos[1];
                 let dist = (dx * dx + dy * dy).sqrt();
@@ -252,22 +230,17 @@ impl StrokeEngine {
 
                 let dt = info.time - prev.time;
                 if dt > 0.0 {
-                    info.speed = (dist / dt / MAX_SPEED_PX_PER_SEC).min(1.0);
+                    let speed_px_per_sec = dist / dt;
+                    info.speed = (speed_px_per_sec / MAX_SPEED_PX_PER_SEC).min(1.0);
                 } else {
                     info.speed = prev.speed;
                 }
             }
 
-            enriched.push(info);
-        }
-
-        // Walk the enriched polyline, placing dabs along Catmull-Rom curves.
-        for (local_i, info) in enriched.iter().enumerate() {
-            let i = start + local_i; // original stabilized index
-
+            // Place dabs along the segment from last_point to info.
             if self.last_point.is_none() {
-                self.place_dab(info, gpu, i);
-                self.last_point = Some(*info);
+                self.place_dab(&info, gpu, i);
+                self.last_point = Some(info);
                 self.save_points.finalize_render_state(i, self.capture_render_state());
                 continue;
             }
@@ -278,42 +251,20 @@ impl StrokeEngine {
             let segment_dist = (dx * dx + dy * dy).sqrt();
 
             if segment_dist < 0.001 {
-                self.prev_prev_point = Some(prev);
-                self.last_point = Some(*info);
+                self.last_point = Some(info);
                 continue;
             }
 
-            // Resolve the 4 Catmull-Rom control points: p0, p1(=prev), p2(=info), p3.
-            // Copy into locals to avoid borrowing self across place_dab.
-            let p0 = if local_i >= 2 {
-                enriched[local_i - 2]
-            } else if local_i == 1 {
-                self.prev_prev_point.unwrap_or(prev)
-            } else {
-                self.prev_prev_point.unwrap_or(prev)
-            };
-
-            let p3 = if local_i + 1 < enriched.len() {
-                enriched[local_i + 1]
-            } else if i + 1 < stabilized.len() {
-                stabilized[i + 1]
-            } else {
-                *info
-            };
-
-            let segment = CatmullRomSegment::new(&p0, &prev, info, &p3);
-            let arc_len = segment.arc_length();
-
             let mut traveled = self.leftover_distance;
-            while traveled < arc_len {
-                let dab_info = segment.eval_at_distance(traveled);
+            while traveled < segment_dist {
+                let t = traveled / segment_dist;
+                let dab_info = lerp_paint_info(&prev, &info, t);
                 self.place_dab(&dab_info, gpu, i);
                 traveled += self.spacing.distance(self.effective_diameter());
             }
 
-            self.leftover_distance = traveled - arc_len;
-            self.prev_prev_point = Some(prev);
-            self.last_point = Some(*info);
+            self.leftover_distance = traveled - segment_dist;
+            self.last_point = Some(info);
 
             // Capture end-of-segment state on ALL save points for this vector
             // index.  This represents "everything through vector index i is
@@ -379,7 +330,6 @@ impl StrokeEngine {
         // overwrites the last save point's render_state after each segment.
         self.save_points.push([x, y, w, h], vector_index, RenderCheckpoint {
             last_point: None,
-            prev_prev_point: None,
             accumulated_distance: 0.0,
             leftover_distance: 0.0,
             last_dab_size: [0.0, 0.0],
@@ -438,26 +388,19 @@ impl StrokeEngine {
         let segment_dist = (dx * dx + dy * dy).sqrt();
 
         if segment_dist < 0.001 {
-            self.prev_prev_point = Some(prev);
             self.last_point = Some(info);
             return;
         }
 
-        // Catmull-Rom: p0 = prev_prev (or prev if unavailable),
-        // p1 = prev, p2 = info, p3 = info (no lookahead at the tail).
-        let p0 = self.prev_prev_point.unwrap_or(prev);
-        let segment = CatmullRomSegment::new(&p0, &prev, &info, &info);
-        let arc_len = segment.arc_length();
-
         let mut traveled = self.leftover_distance;
-        while traveled < arc_len {
-            let dab_info = segment.eval_at_distance(traveled);
+        while traveled < segment_dist {
+            let t = traveled / segment_dist;
+            let dab_info = lerp_paint_info(&prev, &info, t);
             self.place_dab(&dab_info, gpu, len - 1);
             traveled += self.spacing.distance(self.effective_diameter());
         }
 
-        self.leftover_distance = traveled - arc_len;
-        self.prev_prev_point = Some(prev);
+        self.leftover_distance = traveled - segment_dist;
         self.last_point = Some(info);
         self.save_points.finalize_render_state(len - 1, self.capture_render_state());
     }

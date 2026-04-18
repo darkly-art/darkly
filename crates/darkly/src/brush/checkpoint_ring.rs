@@ -52,7 +52,6 @@ impl CheckpointSlot {
             vector_index: 0,
             render_state: RenderCheckpoint {
                 last_point: None,
-                prev_prev_point: None,
                 accumulated_distance: 0.0,
                 leftover_distance: 0.0,
                 last_dab_size: [0.0, 0.0],

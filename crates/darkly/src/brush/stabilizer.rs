@@ -63,26 +63,11 @@ impl PassThrough {
 impl StabilizerAlgorithm for PassThrough {
     fn push(&mut self, point: PaintInformation) -> StabilizeResult {
         self.points.push(point);
-        // Report divergence at the previous point so the batch re-render
-        // path fires.  This gives Catmull-Rom proper p3 lookahead without
-        // any actual point smoothing — the points are unchanged, but the
-        // curve between the last two points is re-rendered with the new
-        // point as a neighbor.
-        let divergence_index = if self.points.len() >= 3 {
-            Some(self.points.len() - 2)
-        } else {
-            None
-        };
-        StabilizeResult { divergence_index }
+        StabilizeResult { divergence_index: None }
     }
 
     fn stabilized(&self) -> &[PaintInformation] {
         &self.points
-    }
-
-    fn max_divergence_window(&self) -> usize {
-        // Divergence reaches back 1 point (for Catmull-Rom p3 lookahead).
-        1
     }
 
     fn clear(&mut self) {
@@ -184,13 +169,7 @@ mod tests {
                 ..Default::default()
             };
             let result = stab.push(pt);
-            // First two points: no divergence (not enough neighbors).
-            // From the third point on: divergence at len-2 for CR lookahead.
-            if i < 2 {
-                assert!(result.divergence_index.is_none());
-            } else {
-                assert_eq!(result.divergence_index, Some(stab.len() - 2));
-            }
+            assert!(result.divergence_index.is_none());
         }
         assert_eq!(stab.len(), 5);
         // Points are unchanged (no smoothing).
