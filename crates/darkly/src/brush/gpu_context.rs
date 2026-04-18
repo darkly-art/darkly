@@ -9,6 +9,32 @@ use super::dab_pool::DabTexturePool;
 use super::pipelines::BrushPipelines;
 use super::wire::TextureHandle;
 
+/// Per-stroke state for smudge/watercolor brushes.
+///
+/// The two 1×1 smudge bucket textures in `BrushPipelines` are used ping-pong:
+/// each dab reads from `current_bucket` and writes to `current_bucket ^ 1`,
+/// then flips.  `is_first_dab` gates the bucket-update shader's seeding branch
+/// (on the first dab, the old bucket's contents are undefined, so the shader
+/// seeds straight from the sampled canvas color).
+///
+/// StrokeEngine owns the master copy; it's snapshotted into BrushGpuContext
+/// before `execute_gpu` and copied back after so the smudge_stamp node can
+/// read and advance it.
+#[derive(Copy, Clone, Default, Debug)]
+pub struct SmudgeState {
+    /// Which bucket (0 = A, 1 = B) holds the latest valid color.
+    pub current_bucket: u32,
+    /// True until the first dab of the stroke has been rendered.
+    pub is_first_dab: bool,
+}
+
+impl SmudgeState {
+    /// Fresh state for the start of a stroke.
+    pub fn new() -> Self {
+        Self { current_bucket: 0, is_first_dab: true }
+    }
+}
+
 /// Everything a GPU brush node needs to record render passes.
 ///
 /// Created once per rendering batch (per-segment in divergence, per-frame
@@ -35,6 +61,20 @@ pub struct BrushGpuContext<'a> {
     /// Composite blend mode override: 0 = source-over (paint), 1 = destination-out (erase).
     /// Set per-stroke by the engine based on the active tool.
     pub blend_mode: u32,
+    /// Origin (in canvas pixels) of the valid region in `canvas_copy_texture`
+    /// for the current dab, if the copy has already been issued.  `None` means
+    /// no copy has been made yet for this dab.
+    ///
+    /// Multiple GPU nodes per dab may need canvas_copy (e.g. smudge_stamp reads
+    /// it to sample, color_output reads it for Porter-Duff).  Tracking origin
+    /// lets the second caller reuse the first's copy when regions match.  Reset
+    /// by `StrokeEngine::place_dab` before each dab.
+    pub canvas_copy_origin: Option<[u32; 2]>,
+    /// Snapshot of StrokeEngine's per-stroke smudge state.  StrokeEngine copies
+    /// its master value in before `execute_gpu` and copies the advanced value
+    /// back after, so the smudge_stamp node can read + advance it cleanly.
+    /// Untouched by non-smudge brushes.
+    pub smudge_state: SmudgeState,
 }
 
 impl<'a> BrushGpuContext<'a> {
@@ -62,5 +102,39 @@ impl<'a> BrushGpuContext<'a> {
             self.queue.submit([finished.finish()]);
             self.pipelines.reset_uniform_rings();
         }
+    }
+
+    /// Ensure `canvas_copy_texture` holds the canvas region starting at the
+    /// given pixel origin, sized to cover `(width, height)`.  Idempotent per
+    /// dab: the first caller issues `copy_texture_to_texture`; subsequent
+    /// callers with matching origin are no-ops.  Mismatched origins force a
+    /// fresh copy.
+    ///
+    /// Both `smudge_stamp` (canvas sampling) and `color_output` (Porter-Duff
+    /// bg) need this, and both compute the same footprint from the same
+    /// position — the cache prevents a redundant copy per dab.
+    pub fn ensure_canvas_copy(&mut self, origin_x: u32, origin_y: u32, width: u32, height: u32) {
+        if self.canvas_copy_origin == Some([origin_x, origin_y]) {
+            return;
+        }
+        if width == 0 || height == 0 {
+            return;
+        }
+        self.encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: self.canvas_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: origin_x, y: origin_y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: self.pipelines.canvas_copy_texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        self.canvas_copy_origin = Some([origin_x, origin_y]);
     }
 }

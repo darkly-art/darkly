@@ -6,7 +6,6 @@ pub mod add;
 pub mod circle;
 pub mod clamp;
 pub mod color_output;
-pub mod constant;
 pub mod curve;
 pub mod image;
 pub mod make_color;
@@ -16,6 +15,7 @@ pub mod paint_color;
 pub mod pen_input;
 pub mod random;
 pub mod remap;
+pub mod smudge_stamp;
 pub mod split_vec2;
 pub mod stamp;
 pub mod texture_overlay;
@@ -29,7 +29,6 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         circle::register(),
         clamp::register(),
         color_output::register(),
-        constant::register(),
         curve::register(),
         image::register(),
         make_color::register(),
@@ -39,6 +38,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         pen_input::register(),
         random::register(),
         remap::register(),
+        smudge_stamp::register(),
         split_vec2::register(),
         stamp::register(),
         texture_overlay::register(),

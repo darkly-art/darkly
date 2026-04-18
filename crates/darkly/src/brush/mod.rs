@@ -88,7 +88,6 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     let mut map: HashMap<String, Box<dyn eval::BrushNodeEvaluator>> = HashMap::new();
     // CPU nodes.
     map.insert("pen_input".into(), Box::new(nodes::pen_input::PenInputEvaluator));
-    map.insert("constant".into(), Box::new(nodes::constant::ConstantEvaluator));
     map.insert("multiply".into(), Box::new(nodes::multiply::MultiplyEvaluator));
     map.insert("curve".into(), Box::new(nodes::curve::CurveEvaluator));
     map.insert("paint_color".into(), Box::new(nodes::paint_color::PaintColorEvaluator));
@@ -104,6 +103,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
     map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
+    map.insert("smudge_stamp".into(), Box::new(nodes::smudge_stamp::SmudgeStampEvaluator));
     map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
     map.insert("texture_overlay".into(), Box::new(nodes::texture_overlay::TextureOverlayEvaluator));
     map
@@ -236,45 +236,33 @@ mod tests {
     use super::paint_info::{PaintInformation, StrokeRecord};
     use super::wire::{BrushWireType, ScalarValue};
 
-    /// Helper: build a graph with pen_input → multiply(constant 0.5) on pressure.
-    fn pressure_times_half_graph() -> (Graph<BrushWireType>, NodeId, NodeId, NodeId) {
+    /// Helper: build a graph with pen_input.pressure → multiply.a,
+    /// and multiply.b pinned to 0.5 via a port default (no extra node).
+    fn pressure_times_half_graph() -> (Graph<BrushWireType>, NodeId, NodeId) {
         let registry = BrushNodeRegistry::new();
         let mut graph = Graph::new();
 
-        // Add pen_input node.
         let pen_reg = registry.get("pen_input").unwrap();
         let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
 
-        // Add constant(0.5) node.
-        let const_reg = registry.get("constant").unwrap();
-        let constant = graph.add_node(
-            "constant",
-            const_reg.ports.clone(),
-            vec![ParamValue::Float(0.5)],
-        );
-
-        // Add multiply node.
         let mul_reg = registry.get("multiply").unwrap();
         let multiply = graph.add_node("multiply", mul_reg.ports.clone(), vec![]);
 
-        // Wire: pen_input.pressure → multiply.a
+        // pen.pressure → multiply.a
         graph.connect(
             PortRef { node: pen, port: "pressure".into() },
             PortRef { node: multiply, port: "a".into() },
         ).unwrap();
 
-        // Wire: constant.value → multiply.b
-        graph.connect(
-            PortRef { node: constant, port: "value".into() },
-            PortRef { node: multiply, port: "b".into() },
-        ).unwrap();
+        // multiply.b defaults to 0.5 — no wire, just a port default.
+        graph.set_port_default(multiply, "b", 0.5).unwrap();
 
-        (graph, pen, constant, multiply)
+        (graph, pen, multiply)
     }
 
     #[test]
-    fn pressure_times_constant() {
-        let (graph, _pen, _constant, multiply) = pressure_times_half_graph();
+    fn pressure_times_port_default() {
+        let (graph, _pen, multiply) = pressure_times_half_graph();
         let registry = BrushNodeRegistry::new();
         let evaluators = default_evaluators();
 

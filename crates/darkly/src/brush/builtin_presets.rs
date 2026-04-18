@@ -25,6 +25,7 @@ pub fn all() -> Vec<PresetBundle> {
         pencil(),
         charcoal(),
         canvas_brush(),
+        watercolor(),
     ]
 }
 
@@ -43,12 +44,26 @@ struct PresetBuilder {
 }
 
 impl PresetBuilder {
-    /// Create a new builder with the standard nodes and output wiring.
-    ///
-    /// Pre-wires: stamp.dab → color_output.dab, stamp.dab_size →
-    /// color_output.dab_size, stamp.scatter_offset → color_output.scatter_offset,
-    /// pen_input.position → color_output.position.
+    /// Create a new builder with the standard dab source `stamp` and
+    /// output wiring.  See [`PresetBuilder::new_with_dab_source`] to
+    /// substitute a different dab source (e.g. `smudge_stamp` for
+    /// watercolor).
     fn new() -> Self {
+        Self::new_with_dab_source("stamp")
+    }
+
+    /// Create a new builder whose dab source is the given node type.
+    ///
+    /// The dab source must expose the same output contract as `stamp`
+    /// (`dab`, `dab_size`, `scatter_offset` ports), because those are
+    /// auto-wired to `color_output`.  `self.stamp` points at the dab
+    /// source — every preset helper that reads/writes `self.stamp`
+    /// works unchanged with the substitute.
+    ///
+    /// Also wires `pen_input.position` into the dab source's `position`
+    /// input when the source declares one, so nodes like `smudge_stamp`
+    /// can sample the canvas at the dab location.
+    fn new_with_dab_source(dab_source_type: &str) -> Self {
         let registry = BrushNodeRegistry::new();
         let mut graph = Graph::new();
 
@@ -62,9 +77,15 @@ impl PresetBuilder {
             registry.get("paint_color").unwrap().ports.clone(),
             vec![],
         );
+        let dab_source_reg = registry.get(dab_source_type)
+            .unwrap_or_else(|| panic!("unknown dab source: {}", dab_source_type));
+        let dab_source_has_position = dab_source_reg
+            .ports
+            .iter()
+            .any(|p| p.name == "position" && p.dir == crate::nodegraph::PortDir::Input);
         let stamp = graph.add_node(
-            "stamp",
-            registry.get("stamp").unwrap().ports.clone(),
+            dab_source_type,
+            dab_source_reg.ports.clone(),
             vec![],
         );
         let color_output = graph.add_node(
@@ -74,12 +95,15 @@ impl PresetBuilder {
         );
 
         // Standard output wiring (every preset needs this).
-        let wires = [
+        let mut wires: Vec<(NodeId, &str, NodeId, &str)> = vec![
             (stamp, "dab", color_output, "dab"),
             (stamp, "dab_size", color_output, "dab_size"),
             (stamp, "scatter_offset", color_output, "scatter_offset"),
             (pen, "position", color_output, "position"),
         ];
+        if dab_source_has_position {
+            wires.push((pen, "position", stamp, "position"));
+        }
         for (from_node, from_port, to_node, to_port) in wires {
             graph.connect(
                 PortRef { node: from_node, port: from_port.into() },
@@ -92,8 +116,7 @@ impl PresetBuilder {
 
     /// Set the stabilization strength and expose it in the toolbar.
     fn set_stabilize(&mut self, strength: f32) {
-        self.graph.set_port_default(self.pen, "stabilize", strength).unwrap();
-        self.graph.set_port_exposed(self.pen, "stabilize", true).unwrap();
+        self.expose_port(self.pen, "stabilize", strength);
     }
 
     /// Add a circle node with the given softness, wired to stamp.tip.
@@ -103,8 +126,7 @@ impl PresetBuilder {
             self.registry.get("circle").unwrap().ports.clone(),
             vec![],
         );
-        let softness_const = self.add_constant(softness);
-        self.wire(softness_const, "value", circle, "softness");
+        self.graph.set_port_default(circle, "softness", softness).unwrap();
         self.wire(circle, "texture", self.stamp, "tip");
     }
 
@@ -118,13 +140,25 @@ impl PresetBuilder {
         self.wire(image, "texture", self.stamp, "tip");
     }
 
-    /// Add a constant node with the given value.
-    fn add_constant(&mut self, value: f32) -> NodeId {
-        self.graph.add_node(
-            "constant",
-            self.registry.get("constant").unwrap().ports.clone(),
-            vec![ParamValue::Float(value)],
-        )
+    /// Set a port's instance-level default value.
+    ///
+    /// Replaces the old `add_constant` + `wire` pattern for feeding a fixed
+    /// number into a port: the port simply carries the value, no extra node
+    /// or wire needed.  The port's node-def metadata (label, unit, icon,
+    /// range) is reused; only the default changes.
+    fn set_port(&mut self, node: NodeId, port: &str, value: f32) {
+        self.graph.set_port_default(node, port, value).unwrap();
+    }
+
+    /// Set a port's default value and expose it as a user-adjustable control.
+    ///
+    /// The port's existing metadata (label, unit, icon, range) drives the UI.
+    /// Use this for preset-specific knobs that reuse a port's built-in label.
+    /// If you need a custom label for a specific preset, fall back to
+    /// `add_user_input` + `wire`.
+    fn expose_port(&mut self, node: NodeId, port: &str, value: f32) {
+        self.graph.set_port_default(node, port, value).unwrap();
+        self.graph.set_port_exposed(node, port, true).unwrap();
     }
 
     /// Add a curve node with control points defining the transfer function.
@@ -310,8 +344,7 @@ fn ink_pen() -> PresetBundle {
 fn airbrush() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(1.0);
-    let size = b.add_constant(0.15);
-    b.wire(size, "value", b.stamp, "size");
+    b.set_port(b.stamp, "size", 0.15);
     b.wire_pressure_to_opacity();
     b.wire_color();
     b.build("Airbrush", "basic")
@@ -380,11 +413,9 @@ fn pencil() -> PresetBundle {
     let tex = b.add_texture_overlay(0); // 0 = Multiply
     b.add_pattern("paper_grain.png", tex);
 
-    // Scale + strength wired to constants for a subtle pencil feel.
-    let scale = b.add_constant(0.5);
-    let strength = b.add_constant(0.8);
-    b.wire(scale, "value", tex, "scale");
-    b.wire(strength, "value", tex, "strength");
+    // Subtle pencil feel.
+    b.set_port(tex, "scale", 0.5);
+    b.set_port(tex, "strength", 0.8);
 
     let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/paper_grain.png");
     b.build_with_resources("Pencil", "sketching", vec![
@@ -403,15 +434,31 @@ fn charcoal() -> PresetBundle {
     let tex = b.add_texture_overlay(1); // 1 = Subtract
     b.add_pattern("canvas_grain.png", tex);
 
-    let scale = b.add_constant(0.7);
-    let strength = b.add_constant(0.9);
-    b.wire(scale, "value", tex, "scale");
-    b.wire(strength, "value", tex, "strength");
+    b.set_port(tex, "scale", 0.7);
+    b.set_port(tex, "strength", 0.9);
 
     let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/canvas_grain.png");
     b.build_with_resources("Charcoal", "sketching", vec![
         ("canvas_grain.png", ResourceKind::Pattern, pattern_bytes),
     ])
+}
+
+fn watercolor() -> PresetBundle {
+    // Soft-edged wet paint: pen pressure drives size, color pulls in the
+    // canvas-under-dab via the smudge bucket.  Smudge amount and length
+    // are exposed as toolbar sliders — the whole point of this brush is
+    // that the user can dial in pigment vs. canvas pickup.
+    let mut b = PresetBuilder::new_with_dab_source("smudge_stamp");
+    b.add_circle(0.85);
+    b.wire_pressure_to_size();
+    b.wire_pressure_to_opacity();
+    b.wire_color();
+
+    b.expose_port(b.stamp, "smudge", 0.6);
+    b.expose_port(b.stamp, "smudge_length", 0.5);
+
+    b.set_stabilize(0.4);
+    b.build("Watercolor", "painting")
 }
 
 fn canvas_brush() -> PresetBundle {
@@ -424,15 +471,8 @@ fn canvas_brush() -> PresetBundle {
     let tex = b.add_texture_overlay(0); // 0 = Multiply
     b.add_pattern("canvas_grain.png", tex);
 
-    let scale = b.add_constant(1.0);
-    b.wire(scale, "value", tex, "scale");
-
-    // User-exposed strength slider.
-    let strength_slider = b.add_user_input(
-        "Grain", 0.6, 0.0, 1.0, 0,
-        "fa-solid fa-mountain", "Canvas grain strength",
-    );
-    b.wire(strength_slider, "value", tex, "strength");
+    b.set_port(tex, "scale", 1.0);
+    b.expose_port(tex, "strength", 0.6);
 
     let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/canvas_grain.png");
     b.build_with_resources("Canvas Brush", "painting", vec![
@@ -504,5 +544,43 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), presets.len(), "duplicate preset names");
+    }
+
+    #[test]
+    fn watercolor_uses_smudge_stamp_and_wires_position() {
+        // The whole point of the watercolor preset is to drive a smudge_stamp
+        // dab source with pen position wired in so the shader can sample the
+        // canvas under each dab.  Regression-guard both in one shot: if either
+        // the dab source or the position wire is lost, smudge silently breaks.
+        let bundle = watercolor();
+        let smudge_stamp_id = bundle
+            .preset
+            .graph
+            .nodes
+            .iter()
+            .find(|(_, node)| node.type_id == "smudge_stamp")
+            .map(|(id, _)| *id)
+            .expect("watercolor preset must contain a smudge_stamp node");
+
+        let pen_id = bundle
+            .preset
+            .graph
+            .nodes
+            .iter()
+            .find(|(_, node)| node.type_id == "pen_input")
+            .map(|(id, _)| *id)
+            .expect("watercolor preset must contain a pen_input node");
+
+        let has_position_wire = bundle
+            .preset
+            .graph
+            .connections
+            .iter()
+            .any(|c|
+                c.from.node == pen_id && c.from.port == "position"
+                    && c.to.node == smudge_stamp_id && c.to.port == "position"
+            );
+        assert!(has_position_wire,
+            "pen_input.position must be wired into smudge_stamp.position");
     }
 }

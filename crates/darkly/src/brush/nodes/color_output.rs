@@ -113,27 +113,11 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             return vec![];
         }
 
-        // Copy the canvas region under the dab to the canvas-copy texture.
-        // The shader reads this to do correct straight-alpha Porter-Duff.
-        gpu.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: gpu.canvas_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: copy_x, y: copy_y, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: gpu.pipelines.canvas_copy_texture(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: copy_w,
-                height: copy_h,
-                depth_or_array_layers: 1,
-            },
-        );
+        // Ensure the canvas region under the dab is in canvas_copy for
+        // the shader's straight-alpha Porter-Duff read.  Idempotent per dab
+        // — if an upstream node (e.g. smudge_stamp) already issued the copy
+        // with the same origin, this is a no-op.
+        gpu.ensure_canvas_copy(copy_x, copy_y, copy_w, copy_h);
 
         // UV mapping: the dab content occupies [0..dab_w] x [0..dab_h] in the
         // MAX_DAB_SIZE pool texture.  The composite quad maps to the scaled
