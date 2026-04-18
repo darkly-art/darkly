@@ -128,6 +128,8 @@ enum Command {
     // Overlay
     SetOverlay(Vec<OverlayPrimitive>),
     ClearOverlay,
+    SetOverlayMask(u32, u32, Vec<u8>),
+    ClearOverlayMask,
 
     // Brush config
     SetBrushBlendMode(u32),
@@ -200,6 +202,8 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
 
             Command::SetOverlay(prims) => engine.set_overlay_primitives(prims),
             Command::ClearOverlay => engine.clear_overlay(),
+            Command::SetOverlayMask(w, h, data) => engine.set_overlay_mask(w, h, &data),
+            Command::ClearOverlayMask => engine.clear_overlay_mask(),
 
             Command::SetBrushBlendMode(m) => engine.set_brush_blend_mode(m),
             Command::ResetBrushGraph => engine.reset_brush_graph(),
@@ -479,6 +483,14 @@ impl DarklyHandle {
     }
 
     pub fn clear_overlay(&self) { self.push(Command::ClearOverlay); }
+
+    /// Upload an RGBA8 mask texture sampled by KIND_MASKED_STAMP overlay
+    /// primitives. The red channel is used as grayscale coverage.
+    pub fn set_overlay_mask(&self, width: u32, height: u32, data: &[u8]) {
+        self.push(Command::SetOverlayMask(width, height, data.to_vec()));
+    }
+
+    pub fn clear_overlay_mask(&self) { self.push(Command::ClearOverlayMask); }
 
     // --- Brush config ---
 
@@ -926,6 +938,8 @@ fn js_to_overlay_primitive(obj: &JsValue) -> Option<OverlayPrimitive> {
     let dash_len = js_f32(obj, "dashLen").unwrap_or(0.0);
     let dash_offset = js_f32(obj, "dashOffset").unwrap_or(0.0);
     let corner_radius = js_f32(obj, "cornerRadius").unwrap_or(0.0);
+    let mode_param = js_f32(obj, "modeParam").unwrap_or(0.0);
+    let rotation = js_f32(obj, "rotation").unwrap_or(0.0);
 
     Some(OverlayPrimitive {
         color,
@@ -937,6 +951,7 @@ fn js_to_overlay_primitive(obj: &JsValue) -> Option<OverlayPrimitive> {
         corner_radius,
         kind,
         flags,
-        _pad: [0; 2],
+        mode_param,
+        rotation,
     })
 }

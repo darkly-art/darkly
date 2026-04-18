@@ -418,4 +418,15 @@ impl DarklyEngine {
     pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> Option<usize> {
         self.compositor.overlay_hit_test(screen_x, screen_y)
     }
+
+    /// Upload the mask texture sampled by KIND_MASKED_STAMP overlay primitives.
+    pub fn set_overlay_mask(&mut self, width: u32, height: u32, rgba: &[u8]) {
+        self.compositor.set_overlay_mask(
+            &self.gpu.device, &self.gpu.queue, width, height, rgba,
+        );
+    }
+
+    pub fn clear_overlay_mask(&mut self) {
+        self.compositor.clear_overlay_mask();
+    }
 }

@@ -477,7 +477,7 @@ impl Compositor {
             is_software,
         );
 
-        let tool_overlay = ToolOverlay::new(device, surface_format);
+        let tool_overlay = ToolOverlay::new(device, queue, surface_format);
 
         let transform_pass = crate::gpu::transform::TransformPass::new(device, accum_format);
         let content_bounds = ContentBoundsPass::new(device);
@@ -874,6 +874,25 @@ impl Compositor {
     /// Advance overlay animation time.
     pub fn update_overlay_time(&mut self, dt: f32) {
         self.tool_overlay.advance_time(dt);
+    }
+
+    /// Upload a mask texture for KIND_MASKED_STAMP overlay primitives.
+    pub fn set_overlay_mask(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) {
+        self.tool_overlay.set_mask_texture(device, queue, width, height, rgba);
+        self.needs_present = true;
+    }
+
+    /// Drop the uploaded mask (fall back to 1×1 white).
+    pub fn clear_overlay_mask(&mut self) {
+        self.tool_overlay.clear_mask_texture();
+        self.needs_present = true;
     }
 
     /// CPU-side hit test on overlay primitives.
@@ -1583,12 +1602,13 @@ impl Compositor {
         // of the final pass (no separate LoadOp::Load pass needed).
         self.present_and_veils(&mut encoder, &surface_view);
 
-        // Invert overlay primitives (if any) need a separate pass with
-        // snapshot copy. This path is only hit by rect_select.
-        if self.tool_overlay.has_invert() {
+        // Snapshot-sampling overlay primitives (invert + soft-contrast) need a
+        // separate pass with a surface→snapshot copy. Hit by rect-select and
+        // the brush-stamp preview.
+        if self.tool_overlay.has_snapshot() {
             let vw = self.veil_chain.viewport_size().0;
             let vh = self.veil_chain.viewport_size().1;
-            self.tool_overlay.encode_invert(
+            self.tool_overlay.encode_snapshot(
                 &mut encoder, &output.texture, &surface_view, vw, vh,
             );
         }

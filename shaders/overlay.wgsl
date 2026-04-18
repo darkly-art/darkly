@@ -6,12 +6,15 @@
 //
 // Two pipelines share this shader, both using standard alpha blending:
 //   - Solid pipeline (fs_solid): outputs premultiplied color directly.
-//   - Invert pipeline (fs_invert): samples a snapshot of the surface, computes
-//     greyscale luminance, thresholds at 0.5 → white on dark, black on light.
+//   - Snapshot pipeline (fs_snapshot): samples a snapshot of the surface.
+//     Branches on flags: FLAG_INVERT_COLOR thresholds luminance at 0.5
+//     (white on dark, black on light); FLAG_SOFT_CONTRAST produces a
+//     subtle tint toward the opposite luminance end, strength controlled
+//     by mode_param.
 //
 // Pipeline position: drawn on top of the final surface (after present+veils)
 // using LoadOp::Load. The snapshot is a GPU-to-GPU copy taken just before the
-// overlay pass, only when inverted primitives are present.
+// overlay pass, only when any snapshot-sampling primitive is present.
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -39,29 +42,34 @@ struct OverlayPrimitive {
     dash_offset: f32,     // 40: animated offset for marching
     corner_radius: f32,   // 44: rounded rect radius
     kind: u32,            // 48: primitive type
-    flags: u32,           // 52: bit0=canvas_space
-    _pad0: u32,           // 56
-    _pad1: u32,           // 60
+    flags: u32,           // 52: bit0=canvas_space, bit1=invert, bit2=soft_contrast
+    mode_param: f32,      // 56: mode-dependent scalar (e.g. soft-contrast strength)
+    rotation: f32,        // 60: rotation in radians (KIND_MASKED_STAMP)
 }
 
 @group(0) @binding(0) var<uniform> u: OverlayUniforms;
 @group(0) @binding(1) var<storage, read> prims: array<OverlayPrimitive>;
 @group(0) @binding(2) var t_snapshot: texture_2d<f32>;
 @group(0) @binding(3) var t_sampler: sampler;
+@group(0) @binding(4) var t_mask: texture_2d<f32>;
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const KIND_LINE: u32          = 0u;
-const KIND_CIRCLE: u32        = 1u;
-const KIND_RECT: u32          = 2u;
-const KIND_DASHED_LINE: u32   = 3u;
-const KIND_FILLED_RECT: u32   = 4u;
-const KIND_FILLED_CIRCLE: u32 = 5u;
-const KIND_ELLIPSE: u32       = 6u;
+const KIND_LINE: u32           = 0u;
+const KIND_CIRCLE: u32         = 1u;
+const KIND_RECT: u32           = 2u;
+const KIND_DASHED_LINE: u32    = 3u;
+const KIND_FILLED_RECT: u32    = 4u;
+const KIND_FILLED_CIRCLE: u32  = 5u;
+const KIND_ELLIPSE: u32        = 6u;
+const KIND_FILLED_ELLIPSE: u32 = 7u;
+const KIND_MASKED_STAMP: u32   = 8u;
 
-const FLAG_CANVAS_SPACE: u32  = 1u;
+const FLAG_CANVAS_SPACE: u32   = 1u;
+const FLAG_INVERT_COLOR: u32   = 2u;
+const FLAG_SOFT_CONTRAST: u32  = 4u;
 
 // ---------------------------------------------------------------------------
 // Coordinate transforms
@@ -134,7 +142,7 @@ struct VertexOutput {
             lo = p0 - vec2f(r);
             hi = p0 + vec2f(r);
         }
-        case KIND_ELLIPSE: {
+        case KIND_ELLIPSE, KIND_FILLED_ELLIPSE: {
             // p0 = center, p1 = [rx, ry]
             if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
                 let center = prim.p0;
@@ -148,6 +156,30 @@ struct VertexOutput {
             } else {
                 lo = p0 - p1 - vec2f(margin);
                 hi = p0 + p1 + vec2f(margin);
+            }
+        }
+        case KIND_MASKED_STAMP: {
+            // p0 = center, p1 = half-extent; rotation in radians.
+            let c = cos(prim.rotation);
+            let s = sin(prim.rotation);
+            let ex = vec2f( c,  s) * prim.p1.x;
+            let ey = vec2f(-s,  c) * prim.p1.y;
+            if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
+                let corners = array<vec2f, 4>(
+                    canvas_to_screen(prim.p0 - ex - ey),
+                    canvas_to_screen(prim.p0 + ex - ey),
+                    canvas_to_screen(prim.p0 - ex + ey),
+                    canvas_to_screen(prim.p0 + ex + ey),
+                );
+                lo = min(min(corners[0], corners[1]), min(corners[2], corners[3])) - vec2f(margin);
+                hi = max(max(corners[0], corners[1]), max(corners[2], corners[3])) + vec2f(margin);
+            } else {
+                let c0 = prim.p0 - ex - ey;
+                let c1 = prim.p0 + ex - ey;
+                let c2 = prim.p0 - ex + ey;
+                let c3 = prim.p0 + ex + ey;
+                lo = min(min(c0, c1), min(c2, c3)) - vec2f(margin);
+                hi = max(max(c0, c1), max(c2, c3)) + vec2f(margin);
             }
         }
         case KIND_RECT, KIND_FILLED_RECT: {
@@ -302,6 +334,39 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
                 dist = abs(sdf_ellipse(screen_pos, p0, p1)) - half_t;
             }
         }
+        case KIND_FILLED_ELLIPSE: {
+            // p0 = center, p1 = [rx, ry] — filled ellipse (signed interior)
+            if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
+                let cp = screen_to_canvas(screen_pos);
+                let canvas_d = sdf_ellipse(cp, prim.p0, prim.p1);
+                let zoom = length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
+                dist = canvas_d * zoom;
+            } else {
+                dist = sdf_ellipse(screen_pos, p0, p1);
+            }
+        }
+        case KIND_MASKED_STAMP: {
+            // Coverage comes directly from the mask texture. Bypass the SDF
+            // smoothstep by returning the sampled value — the mask's own
+            // falloff (soft brush, hard round, textured tip) is the shape.
+            var local: vec2f;
+            if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
+                local = screen_to_canvas(screen_pos) - prim.p0;
+            } else {
+                local = screen_pos - prim.p0;
+            }
+            // Inverse rotation into stamp-local space.
+            let cr = cos(-prim.rotation);
+            let sr = sin(-prim.rotation);
+            local = vec2f(local.x * cr - local.y * sr, local.x * sr + local.y * cr);
+            // UV in [0, 1]. p1 is half-extent, so divide by full extent.
+            let uv = local / (prim.p1 * 2.0) + 0.5;
+            if uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 {
+                return 0.0;
+            }
+            // Red channel = grayscale coverage. Matches brush AlphaMask convention.
+            return textureSampleLevel(t_mask, t_sampler, uv, 0.0).r;
+        }
         default: {
             dist = 1e6;
         }
@@ -325,22 +390,36 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
-// Fragment — invert pipeline (snapshot-based luminance threshold)
+// Fragment — snapshot pipeline (samples surface snapshot)
 //
-// Samples the surface snapshot, computes greyscale luminance, thresholds
-// at 0.5: dark background → white overlay, light background → black overlay.
+// Two modes, branched on flags:
+//   FLAG_INVERT_COLOR — luminance threshold at 0.5: dark bg → white, light
+//     bg → black. Used by rect-select marching ants.
+//   FLAG_SOFT_CONTRAST — subtle tint toward the opposite luminance end.
+//     Strength comes from prim.mode_param (typical 0.15). Used for the
+//     brush stamp preview.
 // ---------------------------------------------------------------------------
 
-@fragment fn fs_invert(in: VertexOutput) -> @location(0) vec4f {
+@fragment fn fs_snapshot(in: VertexOutput) -> @location(0) vec4f {
     let prim = prims[in.prim_idx];
-    let alpha = eval_prim(prim, in.screen_pos);
-    if alpha < 0.001 { discard; }
+    let coverage = eval_prim(prim, in.screen_pos);
+    if coverage < 0.001 { discard; }
 
     let uv = in.screen_pos / u.screen_size;
     let bg = textureSampleLevel(t_snapshot, t_sampler, uv, 0.0).rgb;
     let lum = dot(bg, vec3f(0.2126, 0.7152, 0.0722));
-    let rgb = select(vec3f(0.0), vec3f(1.0), lum < 0.5);
 
-    let a = prim.color.a * alpha;
-    return vec4f(rgb * a, a);
+    if (prim.flags & FLAG_SOFT_CONTRAST) != 0u {
+        // Soft tint: push bg toward opposite luminance end by (strength * coverage).
+        // Emit alpha = coverage so the tinted interior fully replaces the
+        // surface (the mix itself encodes the subtle amount).
+        let tint_target = vec3f(select(0.0, 1.0, lum < 0.5));
+        let rgb = mix(bg, tint_target, prim.mode_param * coverage);
+        return vec4f(rgb * coverage, coverage);
+    } else {
+        // Invert mode: hard black/white threshold with standard alpha.
+        let rgb = select(vec3f(0.0), vec3f(1.0), lum < 0.5);
+        let a = prim.color.a * coverage;
+        return vec4f(rgb * a, a);
+    }
 }

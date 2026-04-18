@@ -4,16 +4,19 @@
  */
 
 // GPU overlay constants (must match Rust/WGSL)
-export const KIND_LINE          = 0;
-export const KIND_CIRCLE        = 1;
-export const KIND_RECT          = 2;
-export const KIND_DASHED_LINE   = 3;
-export const KIND_FILLED_RECT   = 4;
-export const KIND_FILLED_CIRCLE = 5;
-export const KIND_ELLIPSE       = 6;
+export const KIND_LINE           = 0;
+export const KIND_CIRCLE         = 1;
+export const KIND_RECT           = 2;
+export const KIND_DASHED_LINE    = 3;
+export const KIND_FILLED_RECT    = 4;
+export const KIND_FILLED_CIRCLE  = 5;
+export const KIND_ELLIPSE        = 6;
+export const KIND_FILLED_ELLIPSE = 7;
+export const KIND_MASKED_STAMP   = 8;
 
-export const FLAG_CANVAS_SPACE  = 1;
-export const FLAG_INVERT_COLOR  = 2;
+export const FLAG_CANVAS_SPACE   = 1;
+export const FLAG_INVERT_COLOR   = 2;
+export const FLAG_SOFT_CONTRAST  = 4;
 
 export interface GpuPrim {
     kind: number;
@@ -25,6 +28,8 @@ export interface GpuPrim {
     dashLen: number;
     dashOffset: number;
     cornerRadius: number;
+    modeParam: number;
+    rotation: number;
 }
 
 export function prim(
@@ -41,6 +46,8 @@ export function prim(
         dashLen: opts?.dashLen ?? 0,
         dashOffset: opts?.dashOffset ?? 0,
         cornerRadius: opts?.cornerRadius ?? 0,
+        modeParam: opts?.modeParam ?? 0,
+        rotation: opts?.rotation ?? 0,
     };
 }
 

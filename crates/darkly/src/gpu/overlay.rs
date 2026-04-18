@@ -11,9 +11,18 @@ pub const KIND_DASHED_LINE: u32 = 3;
 pub const KIND_FILLED_RECT: u32 = 4;
 pub const KIND_FILLED_CIRCLE: u32 = 5;
 pub const KIND_ELLIPSE: u32 = 6;
+pub const KIND_FILLED_ELLIPSE: u32 = 7;
+/// Rotated rect sampled from the bound mask texture. Coverage comes from the
+/// mask's red channel — greyscale softness, speckles, textured tips all work
+/// by construction. p0 = center, p1 = half-extent, rotation in radians.
+pub const KIND_MASKED_STAMP: u32 = 8;
 
 pub const FLAG_CANVAS_SPACE: u32 = 1;
 pub const FLAG_INVERT_COLOR: u32 = 2;
+pub const FLAG_SOFT_CONTRAST: u32 = 4;
+
+/// Mask of flags that require snapshot-texture sampling (shared pipeline).
+const FLAG_SNAPSHOT_MASK: u32 = FLAG_INVERT_COLOR | FLAG_SOFT_CONTRAST;
 
 // ---------------------------------------------------------------------------
 // GPU structs (must match shaders/overlay.wgsl layout exactly)
@@ -32,7 +41,11 @@ pub struct OverlayPrimitive {
     pub corner_radius: f32,
     pub kind: u32,
     pub flags: u32,
-    pub _pad: [u32; 2],
+    /// Mode-dependent scalar parameter. For FLAG_SOFT_CONTRAST: tint strength
+    /// in [0, 1] (typical 0.15); ignored otherwise.
+    pub mode_param: f32,
+    /// Rotation in radians. Used by KIND_MASKED_STAMP to orient the mask UVs.
+    pub rotation: f32,
 }
 
 impl OverlayPrimitive {
@@ -47,7 +60,8 @@ impl OverlayPrimitive {
             corner_radius: 0.0,
             kind,
             flags,
-            _pad: [0; 2],
+            mode_param: 0.0,
+            rotation: 0.0,
         }
     }
 }
@@ -73,19 +87,27 @@ struct OverlayUniforms {
 
 pub struct ToolOverlay {
     solid_pipeline: wgpu::RenderPipeline,
-    invert_pipeline: wgpu::RenderPipeline,
+    /// Snapshot-sampling pipeline: handles invert + soft-contrast primitives.
+    snapshot_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     uniform_buf: wgpu::Buffer,
     prim_buf: wgpu::Buffer,
     prim_capacity: usize,
     sampler: wgpu::Sampler,
-    /// 1×1 dummy texture — bound when no invert primitives are present,
-    /// avoiding allocation of a viewport-sized snapshot texture.
+    /// 1×1 dummy texture — bound when no snapshot-sampling primitives are
+    /// present, avoiding allocation of a viewport-sized snapshot texture.
     dummy_view: wgpu::TextureView,
-    /// Viewport-sized snapshot for invert primitives (allocated on demand).
+    /// Viewport-sized snapshot for snapshot-sampling primitives (allocated on demand).
     snapshot: Option<wgpu::Texture>,
     snapshot_view: Option<wgpu::TextureView>,
     snapshot_size: (u32, u32),
+    /// 1×1 white fallback mask — bound when the user hasn't uploaded one.
+    /// With it, KIND_MASKED_STAMP degrades to a solid rectangle.
+    dummy_white_mask_view: wgpu::TextureView,
+    /// User-uploaded mask texture (set via set_mask_texture). Sampled by
+    /// KIND_MASKED_STAMP primitives to get the stamp shape + softness.
+    mask: Option<wgpu::Texture>,
+    mask_view: Option<wgpu::TextureView>,
     surface_format: wgpu::TextureFormat,
     primitives: Vec<OverlayPrimitive>,
     time: f32,
@@ -93,12 +115,13 @@ pub struct ToolOverlay {
     bind_group: Option<wgpu::BindGroup>,
     /// Partition counts set by prepare().
     solid_count: u32,
-    invert_count: u32,
+    snapshot_count: u32,
 }
 
 impl ToolOverlay {
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
     ) -> Self {
         let bind_group_layout =
@@ -138,11 +161,22 @@ impl ToolOverlay {
                         },
                         count: None,
                     },
-                    // 3: sampler
+                    // 3: sampler (shared by snapshot + mask)
                     wgpu::BindGroupLayoutEntry {
                         binding: 3,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // 4: mask texture (stamp shape + softness)
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
                         count: None,
                     },
                 ],
@@ -208,14 +242,14 @@ impl ToolOverlay {
                 cache: None,
             });
 
-        let invert_pipeline =
+        let snapshot_pipeline =
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("overlay-invert"),
+                label: Some("overlay-snapshot"),
                 layout: Some(&pipeline_layout),
                 vertex: vertex_state,
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_invert"),
+                    entry_point: Some("fs_snapshot"),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: surface_format,
                         blend: Some(alpha_blend),
@@ -270,9 +304,29 @@ impl ToolOverlay {
         });
         let dummy_view = dummy_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // 1×1 white fallback mask — used when no user mask is set. The red
+        // channel samples as 1.0 so KIND_MASKED_STAMP becomes a solid rect.
+        use wgpu::util::DeviceExt;
+        let dummy_mask = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("overlay-dummy-mask"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &[255u8, 255, 255, 255],
+        );
+        let dummy_white_mask_view = dummy_mask.create_view(&wgpu::TextureViewDescriptor::default());
+
         ToolOverlay {
             solid_pipeline,
-            invert_pipeline,
+            snapshot_pipeline,
             bind_group_layout,
             uniform_buf,
             prim_buf,
@@ -282,12 +336,15 @@ impl ToolOverlay {
             snapshot: None,
             snapshot_view: None,
             snapshot_size: (0, 0),
+            dummy_white_mask_view,
+            mask: None,
+            mask_view: None,
             surface_format,
             primitives: Vec::new(),
             time: 0.0,
             bind_group: None,
             solid_count: 0,
-            invert_count: 0,
+            snapshot_count: 0,
         }
     }
 
@@ -300,7 +357,52 @@ impl ToolOverlay {
     pub fn clear_primitives(&mut self) {
         self.primitives.clear();
         self.solid_count = 0;
-        self.invert_count = 0;
+        self.snapshot_count = 0;
+    }
+
+    /// Upload the stamp mask sampled by KIND_MASKED_STAMP primitives.
+    /// Expects RGBA8 pixel data in row-major order (width*height*4 bytes). The
+    /// red channel is used as grayscale coverage; other channels are ignored.
+    /// Replaces any previously uploaded mask.
+    pub fn set_mask_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) {
+        assert_eq!(
+            rgba.len(),
+            (width * height * 4) as usize,
+            "overlay mask: expected {} bytes for {width}x{height} RGBA8, got {}",
+            width * height * 4,
+            rgba.len(),
+        );
+        use wgpu::util::DeviceExt;
+        let tex = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("overlay-mask"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.mask_view = Some(tex.create_view(&wgpu::TextureViewDescriptor::default()));
+        self.mask = Some(tex);
+    }
+
+    /// Clear the user-uploaded mask, falling back to the 1×1 white default.
+    pub fn clear_mask_texture(&mut self) {
+        self.mask = None;
+        self.mask_view = None;
     }
 
     /// Returns true if the overlay has content to render.
@@ -308,9 +410,10 @@ impl ToolOverlay {
         !self.primitives.is_empty()
     }
 
-    /// Returns true if any primitive uses the invert pipeline.
-    pub fn has_invert(&self) -> bool {
-        self.invert_count > 0
+    /// Returns true if any primitive uses the snapshot-sampling pipeline
+    /// (invert or soft-contrast modes).
+    pub fn has_snapshot(&self) -> bool {
+        self.snapshot_count > 0
     }
 
     /// Returns true if any primitive is animating (dashed lines).
@@ -351,15 +454,15 @@ impl ToolOverlay {
     }
 
     // -----------------------------------------------------------------------
-    // Split rendering: prepare() → draw_solid() / encode_invert()
+    // Split rendering: prepare() → draw_solid() / encode_snapshot()
     //
     // Solid primitives are drawn inside the caller's render pass (no extra
-    // LoadOp::Load). Invert primitives (if any) get their own pass with a
-    // snapshot copy, same as before.
+    // LoadOp::Load). Snapshot-sampling primitives (invert + soft-contrast)
+    // get their own pass with a surface→snapshot copy.
     // -----------------------------------------------------------------------
 
     /// CPU-side work: partition, upload buffers, build bind group.
-    /// Must be called once per frame before draw_solid() or encode_invert().
+    /// Must be called once per frame before draw_solid() or encode_snapshot().
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -370,17 +473,17 @@ impl ToolOverlay {
     ) {
         if self.primitives.is_empty() {
             self.solid_count = 0;
-            self.invert_count = 0;
+            self.snapshot_count = 0;
             self.bind_group = None;
             return;
         }
 
-        // Partition: solid first, inverted second.
-        self.primitives.sort_by_key(|p| p.flags & FLAG_INVERT_COLOR);
+        // Partition: solid first, snapshot-sampling (invert + soft) second.
+        self.primitives.sort_by_key(|p| (p.flags & FLAG_SNAPSHOT_MASK) != 0);
         self.solid_count = self.primitives.iter()
-            .filter(|p| p.flags & FLAG_INVERT_COLOR == 0)
+            .filter(|p| p.flags & FLAG_SNAPSHOT_MASK == 0)
             .count() as u32;
-        self.invert_count = self.primitives.len() as u32 - self.solid_count;
+        self.snapshot_count = self.primitives.len() as u32 - self.solid_count;
 
         // Grow primitive buffer if needed.
         let count = self.primitives.len();
@@ -414,13 +517,17 @@ impl ToolOverlay {
         };
         queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
-        // Choose texture view: dummy for solid-only, real snapshot for invert.
-        let tex_view = if self.invert_count > 0 {
+        // Choose texture view: dummy for solid-only, real snapshot when any
+        // snapshot-sampling primitive (invert or soft-contrast) is present.
+        let tex_view = if self.snapshot_count > 0 {
             self.ensure_snapshot(device, viewport_w, viewport_h);
             self.snapshot_view.as_ref().unwrap()
         } else {
             &self.dummy_view
         };
+
+        // Pick mask view: user-uploaded if present, else 1×1 white fallback.
+        let mask_view = self.mask_view.as_ref().unwrap_or(&self.dummy_white_mask_view);
 
         // Build bind group.
         self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -451,6 +558,10 @@ impl ToolOverlay {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(mask_view),
+                },
             ],
         }));
     }
@@ -468,10 +579,10 @@ impl ToolOverlay {
         rpass.draw(0..6, 0..self.solid_count);
     }
 
-    /// Encode a separate render pass for invert primitives.
-    /// Copies the current surface to the snapshot texture and draws invert
-    /// primitives on top. Only call when has_invert() is true.
-    pub fn encode_invert(
+    /// Encode a separate render pass for snapshot-sampling primitives
+    /// (invert + soft-contrast). Copies the current surface to the snapshot
+    /// texture and draws them on top. Only call when has_snapshot() is true.
+    pub fn encode_snapshot(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         surface_texture: &wgpu::Texture,
@@ -479,13 +590,13 @@ impl ToolOverlay {
         viewport_w: u32,
         viewport_h: u32,
     ) {
-        if self.invert_count == 0 {
+        if self.snapshot_count == 0 {
             return;
         }
 
-        let bg = self.bind_group.as_ref().expect("prepare() must be called before encode_invert()");
+        let bg = self.bind_group.as_ref().expect("prepare() must be called before encode_snapshot()");
 
-        // Copy surface → snapshot so fs_invert can sample the background.
+        // Copy surface → snapshot so fs_snapshot can sample the background.
         encoder.copy_texture_to_texture(
             surface_texture.as_image_copy(),
             self.snapshot.as_ref().unwrap().as_image_copy(),
@@ -496,9 +607,9 @@ impl ToolOverlay {
             },
         );
 
-        // Separate render pass for invert primitives.
+        // Separate render pass for snapshot-sampling primitives.
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("tool-overlay-invert"),
+            label: Some("tool-overlay-snapshot"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: surface_view,
                 resolve_target: None,
@@ -511,9 +622,9 @@ impl ToolOverlay {
             ..Default::default()
         });
 
-        rpass.set_pipeline(&self.invert_pipeline);
+        rpass.set_pipeline(&self.snapshot_pipeline);
         rpass.set_bind_group(0, bg, &[]);
-        rpass.draw(0..6, self.solid_count..(self.solid_count + self.invert_count));
+        rpass.draw(0..6, self.solid_count..(self.solid_count + self.snapshot_count));
     }
 
     /// CPU-side hit test: returns the index of the first primitive hit at the
@@ -600,6 +711,264 @@ fn cpu_sdf(prim: &OverlayPrimitive, p: [f32; 2]) -> f32 {
             // p0 = center, p1 = [rx, ry]
             sdf::sdf_ellipse(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0], prim.p1[1]).abs()
         }
+        KIND_FILLED_ELLIPSE => {
+            // p0 = center, p1 = [rx, ry] — interior is signed-negative
+            sdf::sdf_ellipse(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0], prim.p1[1])
+        }
         _ => f32::MAX,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gpu::test_utils::test_device;
+
+    fn make_overlay() -> ToolOverlay {
+        let (device, queue) = test_device();
+        ToolOverlay::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm)
+    }
+
+    #[test]
+    fn partition_groups_solid_and_snapshot() {
+        let (device, queue) = test_device();
+        let mut overlay = ToolOverlay::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+
+        // Mix: one solid line, one invert rect, one soft-contrast filled ellipse.
+        // Deliberately interleave so the sort has work to do.
+        let solid = OverlayPrimitive::new(KIND_LINE, 0, [0.0, 0.0], [100.0, 0.0]);
+        let invert = OverlayPrimitive::new(KIND_RECT, FLAG_INVERT_COLOR, [10.0, 10.0], [50.0, 50.0]);
+        let soft = {
+            let mut p = OverlayPrimitive::new(
+                KIND_FILLED_ELLIPSE,
+                FLAG_SOFT_CONTRAST,
+                [200.0, 200.0], [40.0, 30.0],
+            );
+            p.mode_param = 0.15;
+            p
+        };
+        overlay.set_primitives(vec![soft, solid, invert]);
+
+        let vt = ViewTransform::identity();
+        overlay.prepare(&device, &queue, &vt, 512, 512);
+
+        assert_eq!(overlay.solid_count, 1, "one solid primitive");
+        assert_eq!(overlay.snapshot_count, 2, "invert + soft share the snapshot batch");
+        assert!(overlay.has_snapshot(), "snapshot pass required");
+        assert!(overlay.has_content());
+
+        // Partition ordering: solid first, snapshot-sampling second.
+        assert_eq!(overlay.primitives[0].flags & FLAG_SNAPSHOT_MASK, 0);
+        assert_ne!(overlay.primitives[1].flags & FLAG_SNAPSHOT_MASK, 0);
+        assert_ne!(overlay.primitives[2].flags & FLAG_SNAPSHOT_MASK, 0);
+    }
+
+    #[test]
+    fn partition_solid_only_skips_snapshot() {
+        let (device, queue) = test_device();
+        let mut overlay = ToolOverlay::new(&device, &queue, wgpu::TextureFormat::Rgba8Unorm);
+
+        overlay.set_primitives(vec![
+            OverlayPrimitive::new(KIND_LINE, 0, [0.0, 0.0], [1.0, 1.0]),
+            OverlayPrimitive::new(KIND_FILLED_RECT, 0, [0.0, 0.0], [10.0, 10.0]),
+        ]);
+
+        let vt = ViewTransform::identity();
+        overlay.prepare(&device, &queue, &vt, 256, 256);
+
+        assert_eq!(overlay.solid_count, 2);
+        assert_eq!(overlay.snapshot_count, 0);
+        assert!(!overlay.has_snapshot());
+        assert!(overlay.snapshot.is_none(), "no snapshot texture allocated when unused");
+    }
+
+    #[test]
+    fn filled_ellipse_cpu_sdf_interior_vs_exterior() {
+        // Purely a CPU-side hit-test sanity check for the new kind.
+        let mut prim = OverlayPrimitive::new(
+            KIND_FILLED_ELLIPSE,
+            0,
+            [100.0, 100.0], [30.0, 20.0],
+        );
+        prim.thickness = 0.0;
+
+        let center = cpu_sdf(&prim, [100.0, 100.0]);
+        let edge_x = cpu_sdf(&prim, [130.0, 100.0]);
+        let outside = cpu_sdf(&prim, [200.0, 100.0]);
+
+        assert!(center < 0.0, "center is interior: {center}");
+        assert!(edge_x.abs() < 1.0, "edge is near zero: {edge_x}");
+        assert!(outside > 0.0, "outside is positive: {outside}");
+    }
+
+    #[test]
+    fn clear_primitives_resets_counts() {
+        let mut overlay = make_overlay();
+        overlay.set_primitives(vec![
+            OverlayPrimitive::new(KIND_LINE, 0, [0.0, 0.0], [10.0, 10.0]),
+        ]);
+        overlay.solid_count = 1; // simulate post-prepare state
+        overlay.snapshot_count = 0;
+
+        overlay.clear_primitives();
+        assert_eq!(overlay.solid_count, 0);
+        assert_eq!(overlay.snapshot_count, 0);
+        assert!(!overlay.has_content());
+    }
+
+    #[test]
+    fn overlay_primitive_is_64_bytes() {
+        // The WGSL struct is declared 64 bytes, std430-aligned. Any deviation
+        // will cause a shader-side aliasing bug.
+        assert_eq!(std::mem::size_of::<OverlayPrimitive>(), 64);
+    }
+
+    /// GPU integration: render a soft-contrast filled ellipse over a
+    /// half-black / half-white surface and verify the tint direction
+    /// (bg darker → interior lighter; bg lighter → interior darker).
+    #[test]
+    fn soft_contrast_tints_bg_toward_opposite_luminance() {
+        use crate::gpu::test_utils::{create_test_texture_with_format, readback_texture};
+
+        let (device, queue) = test_device();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut overlay = ToolOverlay::new(&device, &queue, format);
+
+        // Build a 64×16 surface: left half pure black, right half pure white.
+        const W: u32 = 64;
+        const H: u32 = 16;
+        let mut pixels = vec![0u8; (W * H * 4) as usize];
+        for y in 0..H {
+            for x in 0..W {
+                let i = ((y * W + x) * 4) as usize;
+                let v = if x < W / 2 { 0 } else { 255 };
+                pixels[i] = v;     pixels[i+1] = v;
+                pixels[i+2] = v;   pixels[i+3] = 255;
+            }
+        }
+        let (surface_tex, surface_view) =
+            create_test_texture_with_format(&device, &queue, W, H, &pixels, format);
+
+        // Soft ellipse spanning both halves, screen-space, strength 0.25.
+        let mut prim = OverlayPrimitive::new(
+            KIND_FILLED_ELLIPSE,
+            FLAG_SOFT_CONTRAST,
+            [(W as f32) * 0.5, (H as f32) * 0.5],
+            [12.0, 6.0],
+        );
+        prim.mode_param = 0.25;
+        overlay.set_primitives(vec![prim]);
+
+        let vt = ViewTransform::identity();
+        overlay.prepare(&device, &queue, &vt, W, H);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("soft-contrast-test"),
+        });
+        overlay.encode_snapshot(&mut encoder, &surface_tex, &surface_view, W, H);
+        queue.submit([encoder.finish()]);
+
+        let out = readback_texture(&device, &queue, &surface_tex, format, W, H);
+        let px = |x: u32, y: u32| -> [u8; 4] {
+            let i = ((y * W + x) * 4) as usize;
+            [out[i], out[i+1], out[i+2], out[i+3]]
+        };
+
+        // Inside ellipse on the black side (x = 26, y = 8 — 6px left of seam).
+        let dark_inside = px(26, 8);
+        // Inside ellipse on the white side (x = 38, y = 8 — 6px right of seam).
+        let light_inside = px(38, 8);
+        // Outside the ellipse on both sides.
+        let dark_outside = px(2, 8);
+        let light_outside = px(62, 8);
+
+        // Untinted bg must be preserved exactly outside the ellipse.
+        assert_eq!(dark_outside, [0, 0, 0, 255], "dark bg unchanged outside ellipse");
+        assert_eq!(light_outside, [255, 255, 255, 255], "light bg unchanged outside ellipse");
+
+        // Tint direction: dark bg lightens, light bg darkens.
+        assert!(dark_inside[0] > 0, "dark interior should lighten: got {dark_inside:?}");
+        assert!(light_inside[0] < 255, "light interior should darken: got {light_inside:?}");
+
+        // Magnitude check: at strength 0.25 with full coverage the shift is
+        // ~64/255. Accept a generous band to cover AA sampling jitter.
+        assert!(dark_inside[0] >= 40 && dark_inside[0] <= 90,
+            "dark interior tint magnitude: got {dark_inside:?}");
+        assert!(light_inside[0] >= 165 && light_inside[0] <= 215,
+            "light interior tint magnitude: got {light_inside:?}");
+    }
+
+    /// GPU integration: KIND_MASKED_STAMP — coverage comes from the uploaded
+    /// mask texture. Upload a mask with two clearly-separated regions (mostly
+    /// black left, mostly white right) and verify over a black surface that
+    /// the white-mask region gets tinted (toward white, since bg is dark) while
+    /// the black-mask region leaves the surface unchanged.
+    #[test]
+    fn masked_stamp_uses_mask_red_as_coverage() {
+        use crate::gpu::test_utils::{create_test_texture_with_format, readback_texture};
+
+        let (device, queue) = test_device();
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut overlay = ToolOverlay::new(&device, &queue, format);
+
+        // Black surface → luminance 0 → soft-contrast target is white (1.0).
+        const W: u32 = 64;
+        const H: u32 = 16;
+        let mut bg = vec![0u8; (W * H * 4) as usize];
+        for i in (3..bg.len()).step_by(4) { bg[i] = 255; }
+        let (surface_tex, surface_view) =
+            create_test_texture_with_format(&device, &queue, W, H, &bg, format);
+
+        // 16×1 mask: left half black (coverage 0), right half white (coverage 1).
+        // A wide mask avoids linear-filter bleed near the sample points.
+        let mut mask = vec![0u8; 16 * 1 * 4];
+        for x in 8..16 {
+            let i = x * 4;
+            mask[i] = 255; mask[i+1] = 255; mask[i+2] = 255; mask[i+3] = 255;
+        }
+        overlay.set_mask_texture(&device, &queue, 16, 1, &mask);
+
+        // Stamp in screen space; half-extent 20 × 6 → UV.x in [0, 1] across
+        // screen_x in [12, 52]. Sample at x=16 (far left, mask=0) and x=48
+        // (far right, mask=1).
+        let mut prim = OverlayPrimitive::new(
+            KIND_MASKED_STAMP,
+            FLAG_SOFT_CONTRAST,
+            [(W as f32) * 0.5, (H as f32) * 0.5],
+            [20.0, 6.0],
+        );
+        prim.mode_param = 0.6;
+        overlay.set_primitives(vec![prim]);
+
+        let vt = ViewTransform::identity();
+        overlay.prepare(&device, &queue, &vt, W, H);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("masked-stamp-test"),
+        });
+        overlay.encode_snapshot(&mut encoder, &surface_tex, &surface_view, W, H);
+        queue.submit([encoder.finish()]);
+
+        let out = readback_texture(&device, &queue, &surface_tex, format, W, H);
+        let r_at = |x: u32, y: u32| -> u8 { out[((y * W + x) * 4) as usize] };
+
+        let left_r = r_at(16, 8);     // inside stamp, mask ≈ 0
+        let right_r = r_at(48, 8);    // inside stamp, mask ≈ 1
+        let outside_r = r_at(2, 8);   // outside stamp bounds
+
+        assert_eq!(outside_r, 0, "surface outside the stamp must be unchanged");
+        assert!(
+            left_r <= 5,
+            "left half (mask=0) should stay near black 0: got {left_r}",
+        );
+        // mix(0, 255, 0.6 * 1.0) ≈ 153. Generous band for any AA/filter jitter.
+        assert!(
+            right_r >= 130 && right_r <= 170,
+            "right half (mask=1, strength=0.6) should tint toward white: got {right_r}",
+        );
     }
 }
