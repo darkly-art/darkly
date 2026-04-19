@@ -35,9 +35,19 @@ function previewStrength(halfExtent: [number, number]): number {
 
 /** Push the masked-stamp overlay primitive at the cursor, if a preview is
  *  available. Also toggles the native cursor: hidden when the ghost stamp
- *  is driving, visible as a fallback when the graph has no preview sink. */
-function pushHoverOverlay(handle: any, cx: number, cy: number) {
-    const info = handle.get_brush_preview_info() as BrushPreviewInfo | null;
+ *  is driving, visible as a fallback when the graph has no preview sink.
+ *
+ *  Re-renders the preview mask with live pen data (tilt / rotation /
+ *  pressure) so the ghost reflects the pen's current pose rather than a
+ *  neutral default. Most tablets keep reporting tilt during hover. */
+function pushHoverOverlay(handle: any, e: PointerEvent, cx: number, cy: number) {
+    const info = handle.refresh_brush_preview(
+        e.pressure,
+        (e.tiltX ?? 0) / 90,
+        (e.tiltY ?? 0) / 90,
+        (e.twist ?? 0) / 360,
+        (e as any).tangentialPressure ?? 0,
+    ) as BrushPreviewInfo | null;
     if (!info) {
         handle.clear_overlay();
         app.toolCursor = null;
@@ -127,8 +137,8 @@ export const brushTool: Tool = {
             ctx.handle.stroke_to('brush_stroke', brushStrokeParams(e, cx, cy));
             return;
         }
-        // Hover: draw a soft masked-stamp preview at the cursor.
-        pushHoverOverlay(ctx.handle, cx, cy);
+        // Hover: re-render the preview with live pen data + draw it.
+        pushHoverOverlay(ctx.handle, e, cx, cy);
     },
 
     onPointerUp(ctx) {

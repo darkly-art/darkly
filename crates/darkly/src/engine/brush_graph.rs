@@ -59,18 +59,34 @@ impl DarklyEngine {
 
     // --- Fine-grained graph commands ---
 
-    /// Re-render the brush preview into the overlay's preview mask.
+    /// Re-render the brush preview into the overlay's preview mask using
+    /// fully-synthetic pen inputs. Fired on graph/param changes where no
+    /// real pen data is available.
+    pub fn regenerate_brush_preview(&mut self) {
+        let dummy = crate::brush::paint_info::PaintInformation::preview_dummy();
+        self.regenerate_brush_preview_with_pen(&dummy);
+    }
+
+    /// Re-render the brush preview using the supplied pen data.
+    ///
+    /// Called by the brush tool on hover so the preview reflects live tilt
+    /// / rotation / pressure. `pen` carries whatever the PointerEvent
+    /// reported; fields the hardware doesn't populate should be zeroed
+    /// (tablet quirk: most pens report tilt even while hovering above the
+    /// canvas, so we plumb them through).
     ///
     /// Runs the active brush graph normally — CPU eval, GPU eval — but
-    /// with `render_mode: Preview` and a synthetic pen input. `color_output`
-    /// bails in that mode; `preview_output` (if the graph has one) blits
-    /// its upstream dab into the overlay's preview mask. Positioning info
-    /// is read from `preview_output`'s resolved input slots after eval.
+    /// with `render_mode: Preview`. `color_output` bails in that mode;
+    /// `preview_output` (if the graph has one) blits its upstream dab
+    /// into the overlay's preview mask. Positioning info is read from
+    /// `preview_output`'s resolved input slots after eval.
     ///
     /// No-op with cleared state when the graph has no `preview_output`.
-    pub fn regenerate_brush_preview(&mut self) {
+    pub fn regenerate_brush_preview_with_pen(
+        &mut self,
+        pen: &crate::brush::paint_info::PaintInformation,
+    ) {
         use crate::brush::gpu_context::{BrushGpuContext, RenderMode};
-        use crate::brush::paint_info::PaintInformation;
 
         let mut runner = match crate::brush::compile_graph(&self.active_brush_graph) {
             Ok(r) => r,
@@ -131,7 +147,7 @@ impl DarklyEngine {
 
         self.brush_pipelines.reset_uniform_rings();
         runner.clear_slots();
-        runner.seed_sensors(&PaintInformation::preview_dummy(), [1.0, 1.0, 1.0, 1.0], 0, 0);
+        runner.seed_sensors(pen, [1.0, 1.0, 1.0, 1.0], 0, 0);
         runner.execute_cpu();
         runner.execute_gpu(&mut gpu_ctx);
         let info = runner.read_preview_info().unwrap_or_default();

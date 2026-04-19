@@ -55,6 +55,7 @@
 
 use std::cell::RefCell;
 
+use darkly::brush::paint_info::PaintInformation;
 use darkly::document::{MoveTarget, SelectionMode};
 use darkly::engine::{DarklyEngine, StrokeOp};
 use darkly::gpu::context::GpuContext;
@@ -502,23 +503,48 @@ impl DarklyHandle {
         // a preview regen before we read the cache. Otherwise the tool can
         // read a stale size the first hover after a slider drag.
         self.flush_if_needed();
+        brush_preview_info_as_js(&self.engine.borrow())
+    }
 
-        match self.engine.borrow().brush_preview_info() {
-            Some(info) => {
-                #[derive(serde::Serialize)]
-                struct Info {
-                    #[serde(rename = "halfExtent")]
-                    half_extent: [f32; 2],
-                    rotation: f32,
-                }
-                let payload = Info {
-                    half_extent: info.half_extent_canvas_px,
-                    rotation: info.rotation_rad,
-                };
-                serde_wasm_bindgen::to_value(&payload).unwrap_or(JsValue::NULL)
-            }
-            None => JsValue::NULL,
+    /// Re-render the brush preview with live pen data, then return the
+    /// updated positioning info. Called from the brush tool's hover path
+    /// so the preview reflects the pen's current tilt / rotation /
+    /// pressure — matches what the stamp will actually look like if the
+    /// pen presses at this pose.
+    ///
+    /// Values come straight from the PointerEvent; hardware that doesn't
+    /// report a sensor passes 0 (which is also the neutral state, so no
+    /// conditional-default logic is needed). Pressure = 0 is remapped to
+    /// 0.5 inside the engine because the hover event reports 0 pressure
+    /// (no contact) but the preview should reflect what happens "if the
+    /// pen presses now."
+    pub fn refresh_brush_preview(
+        &self,
+        pressure: f32,
+        tilt_x: f32,
+        tilt_y: f32,
+        rotation: f32,
+        tangential_pressure: f32,
+    ) -> JsValue {
+        self.flush_if_needed();
+
+        let mut pen = PaintInformation::preview_dummy();
+        // Hover reports pressure=0 (no contact) — keep the dummy's 0.5 as
+        // a "what-if-pressed-now" fallback. If the pen is actively pressed
+        // during hover (some hardware does this near the surface), use it.
+        if pressure > 0.0 {
+            pen.pressure = pressure;
         }
+        pen.x_tilt = tilt_x;
+        pen.y_tilt = tilt_y;
+        pen.rotation = rotation;
+        pen.tangential_pressure = tangential_pressure;
+        // Derived — stroke_engine computes these the same way.
+        pen.tilt_magnitude = (tilt_x * tilt_x + tilt_y * tilt_y).sqrt().min(1.0);
+        pen.tilt_direction = tilt_y.atan2(tilt_x);
+
+        self.engine.borrow_mut().regenerate_brush_preview_with_pen(&pen);
+        brush_preview_info_as_js(&self.engine.borrow())
     }
 
     // --- Brush config ---
@@ -955,6 +981,27 @@ fn js_f32_quad(obj: &JsValue, key: &str) -> Option<[f32; 4]> {
         arr.get(2).as_f64()? as f32,
         arr.get(3).as_f64()? as f32,
     ])
+}
+
+/// Serialize `engine.brush_preview_info()` as a JS `{ halfExtent, rotation }`
+/// POJO, or `null` when the active graph has no preview source.
+fn brush_preview_info_as_js(engine: &DarklyEngine) -> JsValue {
+    #[derive(serde::Serialize)]
+    struct Info {
+        #[serde(rename = "halfExtent")]
+        half_extent: [f32; 2],
+        rotation: f32,
+    }
+    match engine.brush_preview_info() {
+        Some(info) => {
+            let payload = Info {
+                half_extent: info.half_extent_canvas_px,
+                rotation: info.rotation_rad,
+            };
+            serde_wasm_bindgen::to_value(&payload).unwrap_or(JsValue::NULL)
+        }
+        None => JsValue::NULL,
+    }
 }
 
 fn js_to_overlay_primitive(obj: &JsValue) -> Option<OverlayPrimitive> {
