@@ -492,6 +492,35 @@ impl DarklyHandle {
 
     pub fn clear_overlay_mask(&self) { self.push(Command::ClearOverlayMask); }
 
+    /// Canvas-space positioning for the active brush's hover preview, or
+    /// null when the current graph has no preview wire. Returned as
+    /// `{ halfExtent: [f32, f32], rotation: f32 }`. The overlay mask itself
+    /// is already bound internally — the tool only needs this to place the
+    /// primitive.
+    pub fn get_brush_preview_info(&self) -> JsValue {
+        // Drain any pending commands so param changes have already triggered
+        // a preview regen before we read the cache. Otherwise the tool can
+        // read a stale size the first hover after a slider drag.
+        self.flush_if_needed();
+
+        match self.engine.borrow().brush_preview_info() {
+            Some(info) => {
+                #[derive(serde::Serialize)]
+                struct Info {
+                    #[serde(rename = "halfExtent")]
+                    half_extent: [f32; 2],
+                    rotation: f32,
+                }
+                let payload = Info {
+                    half_extent: info.half_extent_canvas_px,
+                    rotation: info.rotation_rad,
+                };
+                serde_wasm_bindgen::to_value(&payload).unwrap_or(JsValue::NULL)
+            }
+            None => JsValue::NULL,
+        }
+    }
+
     // --- Brush config ---
 
     pub fn set_brush_blend_mode(&self, mode: u32) { self.push(Command::SetBrushBlendMode(mode)); }

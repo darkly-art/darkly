@@ -27,6 +27,8 @@ export interface Tool {
     onPointerDown(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
     onPointerMove(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
     onPointerUp(ctx: ToolContext, e: PointerEvent): void;
+    /** Pointer left the canvas. Tools with hover overlays should clear them here. */
+    onPointerLeave?(ctx: ToolContext): void;
 
     /** Handle a key event. Return true if the tool consumed it. */
     onKeyDown?(e: KeyboardEvent): boolean;

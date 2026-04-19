@@ -104,6 +104,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
     map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
+    map.insert("preview_output".into(), Box::new(nodes::preview_output::PreviewOutputEvaluator));
     map.insert("texture_overlay".into(), Box::new(nodes::texture_overlay::TextureOverlayEvaluator));
     map
 }
@@ -146,6 +147,10 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     let color_output = graph.add_node("color_output", out_reg.ports.clone(), vec![]);
     graph.nodes.get_mut(&color_output).unwrap().position = [520.0, 40.0];
 
+    let preview_reg = registry.get("preview_output").unwrap();
+    let preview_output = graph.add_node("preview_output", preview_reg.ports.clone(), vec![]);
+    graph.nodes.get_mut(&preview_output).unwrap().position = [520.0, 240.0];
+
     // circle.texture → stamp.tip
     graph.connect(
         PortRef { node: circle, port: "texture".into() },
@@ -186,6 +191,20 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     graph.connect(
         PortRef { node: stamp, port: "scatter_offset".into() },
         PortRef { node: color_output, port: "scatter_offset".into() },
+    ).unwrap();
+
+    // stamp.dab → preview_output.dab
+    // Second sink alongside color_output. Runs only in preview mode; blits
+    // the same dab subtree into the overlay's preview mask.
+    graph.connect(
+        PortRef { node: stamp, port: "dab".into() },
+        PortRef { node: preview_output, port: "dab".into() },
+    ).unwrap();
+
+    // stamp.dab_size → preview_output.dab_size
+    graph.connect(
+        PortRef { node: stamp, port: "dab_size".into() },
+        PortRef { node: preview_output, port: "dab_size".into() },
     ).unwrap();
 
     graph

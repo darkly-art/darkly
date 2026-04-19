@@ -98,6 +98,18 @@ impl EvalContext<'_> {
     }
 }
 
+/// Canvas-space positioning info read from the graph's preview terminal
+/// after a preview-mode evaluation. Consumed by the overlay to place the
+/// `KIND_MASKED_STAMP` primitive — the mask texture itself is bound to
+/// the overlay separately.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BrushPreviewInfo {
+    /// Half-extent in canvas pixels — the overlay primitive's `p1`.
+    pub half_extent_canvas_px: [f32; 2],
+    /// Rotation in radians — the overlay primitive's `rotation`.
+    pub rotation_rad: f32,
+}
+
 /// Trait implemented by each node to produce output values.
 pub trait BrushNodeEvaluator: Send + Sync {
     /// Evaluate the node on the CPU and return named output values.
@@ -429,5 +441,35 @@ impl BrushGraphRunner {
         for slot in self.slots.iter_mut() {
             *slot = None;
         }
+    }
+
+    /// True if the graph has a `preview_output` terminal node.
+    /// `regenerate_brush_preview` uses this to short-circuit when the
+    /// active graph doesn't declare a preview.
+    pub fn has_preview_terminal(&self) -> bool {
+        self.plan.steps.iter().any(|s| s.type_id == "preview_output")
+    }
+
+    /// After a preview-mode `execute_gpu`, reads the `preview_output`
+    /// terminal's resolved inputs and builds positioning info for the
+    /// overlay primitive. Returns None if the graph has no preview
+    /// terminal or the required inputs are unresolved.
+    pub fn read_preview_info(&self) -> Option<BrushPreviewInfo> {
+        let step = self.plan.steps.iter().find(|s| s.type_id == "preview_output")?;
+        let mut dab_size: Option<[f32; 2]> = None;
+        let mut rotation = 0.0_f32;
+        for (port_name, slot_idx) in &step.input_slots {
+            let Some(val) = self.slots[*slot_idx] else { continue };
+            match port_name.as_str() {
+                "dab_size" => dab_size = Some(val.as_vec2()),
+                "rotation" => rotation = val.as_f32() * std::f32::consts::TAU,
+                _ => {}
+            }
+        }
+        let size = dab_size?;
+        Some(BrushPreviewInfo {
+            half_extent_canvas_px: [size[0] * 0.5, size[1] * 0.5],
+            rotation_rad: rotation,
+        })
     }
 }

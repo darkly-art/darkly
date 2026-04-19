@@ -895,6 +895,39 @@ impl Compositor {
         self.needs_present = true;
     }
 
+    /// Ensure the overlay's preview-mask texture exists at the given size;
+    /// returns a view for a brush node to render into.
+    pub fn ensure_overlay_preview_mask(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> &wgpu::TextureView {
+        self.tool_overlay.ensure_preview_mask(device, width, height)
+    }
+
+    /// Route the preview-mask texture as the active overlay mask binding.
+    pub fn use_overlay_preview_mask(&mut self) {
+        self.tool_overlay.use_preview_mask_as_mask();
+        self.needs_present = true;
+    }
+
+    /// Unbind the preview mask (falls back to 1×1 white default).
+    pub fn clear_overlay_preview_mask(&mut self) {
+        self.tool_overlay.clear_preview_mask();
+        self.needs_present = true;
+    }
+
+    /// Borrow the overlay's preview-mask Texture (None if never allocated).
+    pub fn overlay_preview_mask_texture(&self) -> Option<&wgpu::Texture> {
+        self.tool_overlay.preview_mask_texture()
+    }
+
+    /// Immutable access to the tool overlay for test assertions.
+    pub fn tool_overlay_ref(&self) -> &ToolOverlay {
+        &self.tool_overlay
+    }
+
     /// CPU-side hit test on overlay primitives.
     pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> Option<usize> {
         self.tool_overlay.hit_test(screen_x, screen_y)

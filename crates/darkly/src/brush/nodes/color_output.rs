@@ -18,7 +18,7 @@
 
 use crate::brush::dab_pool::MAX_DAB_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
-use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::gpu_context::{BrushGpuContext, RenderMode};
 use crate::brush::pipelines::CompositeUniforms;
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef};
@@ -61,6 +61,12 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
+        // Stroke-only terminal. Preview passes run the same graph but
+        // route output into `preview_output` instead.
+        if gpu.render_mode != RenderMode::Stroke {
+            return vec![];
+        }
+
         let dab_handle = match ctx.input("dab") {
             ScalarValue::Texture(h) => h,
             _ => return vec![],

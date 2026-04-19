@@ -57,6 +57,16 @@ pub struct TexOverlayUniforms {
     pub _pad: [f32; 3],
 }
 
+/// Uniform data for the blit shader (preview mask blit).
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct BlitUniforms {
+    /// UV corner (0..1) inside the source texture where sampling starts.
+    pub uv_min: [f32; 2],
+    /// UV corner (0..1) inside the source texture where sampling ends.
+    pub uv_max: [f32; 2],
+}
+
 /// Uniform data for the dab compositing shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -151,6 +161,10 @@ pub struct BrushPipelines {
     composite_uniform_ring: DynamicUniformRing,
     pub(crate) composite_uniform_bind_group: wgpu::BindGroup,
 
+    blit_pipeline: wgpu::RenderPipeline,
+    blit_uniform_ring: DynamicUniformRing,
+    pub(crate) blit_uniform_bind_group: wgpu::BindGroup,
+
     /// 1x1 white selection texture — bound when no selection is active.
     pub(crate) default_selection_bind_group: wgpu::BindGroup,
     pub(crate) selection_bgl: wgpu::BindGroupLayout,
@@ -208,6 +222,13 @@ impl BrushPipelines {
                     include_str!("../../../../shaders/source_over.wgsl"), "\n",
                     include_str!("../../../../shaders/brush/composite.wgsl"),
                 ).into(),
+            ),
+        });
+
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("brush-blit"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/brush/blit.wgsl").into(),
             ),
         });
 
@@ -303,6 +324,13 @@ impl BrushPipelines {
             immediate_size: 0,
         });
 
+        // Blit: group(0) = uniforms, group(1) = source texture+sampler.
+        let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("brush-blit-layout"),
+            bind_group_layouts: &[&uniform_bgl, dab_bgl],
+            immediate_size: 0,
+        });
+
         // --- Dynamic uniform rings ---
         let circle_uniform_ring = DynamicUniformRing::new(
             device, "brush-circle-uniforms",
@@ -368,6 +396,23 @@ impl BrushPipelines {
                     buffer: &composite_uniform_ring.buffer,
                     offset: 0,
                     size: Some(composite_uniform_ring.binding_size()),
+                }),
+            }],
+        });
+
+        let blit_uniform_ring = DynamicUniformRing::new(
+            device, "brush-blit-uniforms",
+            std::mem::size_of::<BlitUniforms>() as u64, min_align,
+        );
+        let blit_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("brush-blit-uniform-bg"),
+            layout: &uniform_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &blit_uniform_ring.buffer,
+                    offset: 0,
+                    size: Some(blit_uniform_ring.binding_size()),
                 }),
             }],
         });
@@ -582,6 +627,36 @@ impl BrushPipelines {
             cache: None,
         });
 
+        // Blit: stretch a UV sub-rect of the source across the target viewport.
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("brush-blit"),
+            layout: Some(&blit_layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         Self {
             circle_pipeline,
             stamp_pipeline,
@@ -595,6 +670,9 @@ impl BrushPipelines {
             tex_overlay_uniform_bind_group,
             composite_uniform_ring,
             composite_uniform_bind_group,
+            blit_pipeline,
+            blit_uniform_ring,
+            blit_uniform_bind_group,
             default_selection_bind_group,
             selection_bgl,
             canvas_copy_texture,
@@ -618,6 +696,10 @@ impl BrushPipelines {
 
     pub fn composite_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.composite_pipeline
+    }
+
+    pub fn blit_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.blit_pipeline
     }
 
     pub fn selection_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
@@ -656,6 +738,12 @@ impl BrushPipelines {
         self.composite_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
     }
 
+    /// Write blit uniforms to the next ring slot.
+    /// Returns the dynamic byte offset for `set_bind_group`.
+    pub fn write_blit_uniforms(&self, queue: &wgpu::Queue, uniforms: &BlitUniforms) -> u32 {
+        self.blit_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
+    }
+
     /// True if any ring is close to capacity.  The caller should flush
     /// the current encoder, reset rings, and create a fresh encoder.
     pub fn rings_nearly_full(&self) -> bool {
@@ -663,6 +751,7 @@ impl BrushPipelines {
             || self.stamp_uniform_ring.nearly_full()
             || self.tex_overlay_uniform_ring.nearly_full()
             || self.composite_uniform_ring.nearly_full()
+            || self.blit_uniform_ring.nearly_full()
     }
 
     /// Reset all uniform rings for a new frame.
@@ -671,5 +760,6 @@ impl BrushPipelines {
         self.stamp_uniform_ring.reset();
         self.tex_overlay_uniform_ring.reset();
         self.composite_uniform_ring.reset();
+        self.blit_uniform_ring.reset();
     }
 }

@@ -52,6 +52,18 @@ pub struct PaintInformation {
     pub fade: f32,
 }
 
+impl PaintInformation {
+    /// Synthetic pen input for dry-run previews.
+    /// Neutral tablet state with mid-pressure so pressure-driven sensors
+    /// show the brush at a typical firm stroke.
+    pub fn preview_dummy() -> Self {
+        Self {
+            pressure: 0.5,
+            ..Default::default()
+        }
+    }
+}
+
 /// A complete vector record of a stroke, retained for re-rendering.
 ///
 /// Stores raw pre-smoothing events so the stroke can be replayed with

@@ -199,6 +199,14 @@
         app.requestFrame();
     }
 
+    function onPointerLeave() {
+        const ctx = getToolContext();
+        if (!ctx) return;
+        const tool = toolRegistry.get(app.activeToolId);
+        tool?.onPointerLeave?.(ctx);
+        app.requestFrame();
+    }
+
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
 
     function onKeyDown(e: KeyboardEvent) {
@@ -218,9 +226,11 @@
         if (id !== prevToolId) {
             const ctx = getToolContext();
             if (ctx) {
+                // Reset before deactivate so a tool's onDeactivate can still
+                // override; whatever the new tool's onActivate sets wins.
+                app.toolCursor = null;
                 toolRegistry.get(prevToolId)?.onDeactivate?.(ctx);
                 toolRegistry.get(id)?.onActivate?.(ctx);
-                app.toolCursor = null;
                 prevToolId = id;
             }
         }
@@ -266,6 +276,7 @@
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}
         onpointercancel={onPointerCancel}
+        onpointerleave={onPointerLeave}
         onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); app.requestFrame(); }}
     ></canvas>
 </div>

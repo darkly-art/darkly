@@ -18,7 +18,7 @@ use crate::brush::dab_pool::MAX_DAB_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::pipelines::StampUniforms;
-use crate::brush::wire::{BrushWireType, ScalarValue};
+use crate::brush::wire::{BrushWireType, ScalarValue, TextureHandle};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
@@ -96,6 +96,134 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
+/// Fully-resolved stamp inputs, computed once and reused by both the live
+/// evaluation path and the preview path. Everything here is pure CPU data.
+struct StampInputs {
+    tip_handle: TextureHandle,
+    effective_size: f32,      // size * scale, clamped to [0, 1]
+    ratio: f32,
+    opacity: f32,
+    color: [f32; 4],
+    rotation_rad: f32,
+    mirror_x: f32,
+    mirror_y: f32,
+    application_int: u32,
+    scatter_x: f32,
+    scatter_y: f32,
+}
+
+fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
+    let tip_handle = match ctx.input("tip") {
+        ScalarValue::Texture(h) => h,
+        _ => return None,
+    };
+
+    let size = ctx.input_f32("size");
+    let scale = ctx.input_f32("scale");
+    let rotation_input = ctx.input_f32("rotation");
+    let mirror_x_input = ctx.input_f32("mirror_x");
+    let mirror_y_input = ctx.input_f32("mirror_y");
+    let ratio = ctx.input_f32("ratio").max(0.01);
+    let opacity = ctx.input_f32("opacity");
+    let color = ctx.input("color").as_color();
+    let scatter_x = ctx.input_f32("scatter_x");
+    let scatter_y = ctx.input_f32("scatter_y");
+
+    let application_int = match ctx.params.get(0) {
+        Some(crate::gpu::params::ParamValue::Int(v)) => *v as u32,
+        _ => 0,
+    };
+    let _application = match application_int {
+        1 => BrushTipApplication::ImageStamp,
+        2 => BrushTipApplication::LightnessMap,
+        3 => BrushTipApplication::GradientMap,
+        _ => BrushTipApplication::AlphaMask,
+    };
+
+    Some(StampInputs {
+        tip_handle,
+        effective_size: (size * scale).clamp(0.0, 1.0),
+        ratio,
+        opacity,
+        color,
+        rotation_rad: rotation_input * std::f32::consts::TAU,
+        mirror_x: if mirror_x_input > 0.5 { 1.0 } else { 0.0 },
+        mirror_y: if mirror_y_input > 0.5 { 1.0 } else { 0.0 },
+        application_int,
+        scatter_x,
+        scatter_y,
+    })
+}
+
+/// Compute the dab's pixel dimensions given the effective size and the tip's
+/// aspect ratio. The longer axis scales up to `max_dim`, the shorter axis
+/// follows from the tip's aspect. Both are clamped into [1, max_dim].
+fn compute_dab_dims(effective_size: f32, tip_w: u32, tip_h: u32, max_dim: u32) -> (u32, u32) {
+    let max = max_dim as f32;
+    let tip_aspect = tip_w as f32 / tip_h as f32;
+    if tip_aspect >= 1.0 {
+        let w = (effective_size * max).max(1.0);
+        let h = (w / tip_aspect).max(1.0);
+        (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
+    } else {
+        let h = (effective_size * max).max(1.0);
+        let w = (h * tip_aspect).max(1.0);
+        (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
+    }
+}
+
+/// Record a single stamp render pass into `target_view` at the given pixel
+/// viewport size. Shared by live stroke evaluation (target = pool dab) and
+/// preview (target = overlay's preview mask).
+///
+/// Split-borrow friendly: takes the pieces it needs rather than `&mut gpu`,
+/// so the caller can hold a `gpu.dab_pool.view(target_handle)` borrow
+/// concurrently without a conflict.
+fn encode_stamp_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    queue: &wgpu::Queue,
+    pipelines: &crate::brush::pipelines::BrushPipelines,
+    tip_bind_group: &wgpu::BindGroup,
+    inputs: &StampInputs,
+    target_view: &wgpu::TextureView,
+    viewport: (u32, u32),
+    label: &'static str,
+) {
+    let (view_w, view_h) = viewport;
+
+    let uniforms = StampUniforms {
+        dab_width: view_w as f32,
+        dab_height: view_h as f32,
+        opacity: inputs.opacity,
+        rotation: inputs.rotation_rad,
+        color: inputs.color,
+        mirror_x: inputs.mirror_x,
+        mirror_y: inputs.mirror_y,
+        application: inputs.application_int,
+        ratio: inputs.ratio,
+    };
+    let offset = pipelines.write_stamp_uniforms(queue, &uniforms);
+
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target_view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        ..Default::default()
+    });
+    pass.set_viewport(0.0, 0.0, view_w as f32, view_h as f32, 0.0, 1.0);
+    pass.set_pipeline(pipelines.stamp_pipeline());
+    pass.set_bind_group(0, &pipelines.stamp_uniform_bind_group, &[offset]);
+    pass.set_bind_group(1, tip_bind_group, &[]);
+    pass.draw(0..3, 0..1);
+}
+
 pub struct StampEvaluator;
 
 impl BrushNodeEvaluator for StampEvaluator {
@@ -109,111 +237,22 @@ impl BrushNodeEvaluator for StampEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        // Tip texture must be connected — no tip means no dab.
-        let tip_handle = match ctx.input("tip") {
-            ScalarValue::Texture(h) => h,
-            _ => return vec![],
-        };
+        let Some(inputs) = resolve_inputs(ctx) else { return vec![]; };
 
-        let size = ctx.input_f32("size");
-        let scale = ctx.input_f32("scale");
-        let rotation_input = ctx.input_f32("rotation");
-        let mirror_x_input = ctx.input_f32("mirror_x");
-        let mirror_y_input = ctx.input_f32("mirror_y");
-        let ratio = ctx.input_f32("ratio").max(0.01);
-        let opacity = ctx.input_f32("opacity");
-        let color = ctx.input("color").as_color();
-        let scatter_x = ctx.input_f32("scatter_x");
-        let scatter_y = ctx.input_f32("scatter_y");
+        let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
+        let (dab_w, dab_h) = compute_dab_dims(inputs.effective_size, tip_w, tip_h, MAX_DAB_SIZE);
 
-        // Read application mode param.
-        let application_int = match ctx.params.get(0) {
-            Some(crate::gpu::params::ParamValue::Int(v)) => *v as u32,
-            _ => 0,
-        };
-        let _application = match application_int {
-            1 => BrushTipApplication::ImageStamp,
-            2 => BrushTipApplication::LightnessMap,
-            3 => BrushTipApplication::GradientMap,
-            _ => BrushTipApplication::AlphaMask,
-        };
-
-        // Compute dab dimensions preserving tip aspect ratio.
-        // The `size` input (0-1) scales the longer axis up to MAX_DAB_SIZE;
-        // `scale` multiplies the result, letting a User Input node control
-        // the overall brush size.  The product is clamped to MAX_DAB_SIZE.
-        let effective_size = (size * scale).clamp(0.0, 1.0);
-        let max = MAX_DAB_SIZE as f32;
-        let (tip_w, tip_h) = gpu.dab_pool.texture_size(tip_handle);
-        let tip_aspect = tip_w as f32 / tip_h as f32;
-
-        let (dab_w, dab_h) = if tip_aspect >= 1.0 {
-            // Wide tip: width is the long axis.
-            let w = (effective_size * max).max(1.0);
-            let h = (w / tip_aspect).max(1.0);
-            (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
-        } else {
-            // Tall tip: height is the long axis.
-            let h = (effective_size * max).max(1.0);
-            let w = (h * tip_aspect).max(1.0);
-            (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
-        };
-
-        // Scatter: offset in pixels proportional to the larger dab dimension.
         let dab_major = dab_w.max(dab_h) as f32;
-        let scatter_px_x = scatter_x * dab_major;
-        let scatter_px_y = scatter_y * dab_major;
+        let scatter_px_x = inputs.scatter_x * dab_major;
+        let scatter_px_y = inputs.scatter_y * dab_major;
 
-        // Rotation: 0-1 maps to 0-2pi radians.
-        let rotation_rad = rotation_input * std::f32::consts::TAU;
-
-        // Mirror: threshold at 0.5.
-        let mirror_x = if mirror_x_input > 0.5 { 1.0 } else { 0.0 };
-        let mirror_y = if mirror_y_input > 0.5 { 1.0 } else { 0.0 };
-
-        // Acquire a dab texture from the pool (mutable borrow ends here).
         let handle = gpu.dab_pool.acquire(gpu.device);
-        let dab_view = gpu.dab_pool.view(handle);
-
-        // Get the tip's bind group for sampling.
-        let tip_bind_group = gpu.dab_pool.bind_group(tip_handle);
-
-        // Write uniforms.
-        let uniforms = StampUniforms {
-            dab_width: dab_w as f32,
-            dab_height: dab_h as f32,
-            opacity,
-            rotation: rotation_rad,
-            color,
-            mirror_x,
-            mirror_y,
-            application: application_int,
-            ratio,
-        };
-        let offset = gpu.pipelines.write_stamp_uniforms(gpu.queue, &uniforms);
-
-        // Render stamp to dab texture (non-square viewport).
-        {
-            let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("brush-stamp"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: dab_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-
-            pass.set_viewport(0.0, 0.0, dab_w as f32, dab_h as f32, 0.0, 1.0);
-            pass.set_pipeline(gpu.pipelines.stamp_pipeline());
-            pass.set_bind_group(0, &gpu.pipelines.stamp_uniform_bind_group, &[offset]);
-            pass.set_bind_group(1, tip_bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
+        let dab_view = gpu.dab_pool.view(handle).clone();
+        let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
+        encode_stamp_pass(
+            &mut gpu.encoder, gpu.queue, gpu.pipelines,
+            &tip_bind_group, &inputs, &dab_view, (dab_w, dab_h), "brush-stamp",
+        );
 
         vec![
             ("dab".into(), ScalarValue::Texture(handle)),

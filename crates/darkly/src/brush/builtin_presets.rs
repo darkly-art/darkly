@@ -72,6 +72,11 @@ impl PresetBuilder {
             registry.get("color_output").unwrap().ports.clone(),
             vec![],
         );
+        let preview_output = graph.add_node(
+            "preview_output",
+            registry.get("preview_output").unwrap().ports.clone(),
+            vec![],
+        );
 
         // Standard output wiring (every preset needs this).
         let wires = [
@@ -79,6 +84,9 @@ impl PresetBuilder {
             (stamp, "dab_size", color_output, "dab_size"),
             (stamp, "scatter_offset", color_output, "scatter_offset"),
             (pen, "position", color_output, "position"),
+            // Preview sink: same dab subtree feeds the overlay preview mask.
+            (stamp, "dab", preview_output, "dab"),
+            (stamp, "dab_size", preview_output, "dab_size"),
         ];
         for (from_node, from_port, to_node, to_port) in wires {
             graph.connect(

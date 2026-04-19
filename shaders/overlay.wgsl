@@ -395,9 +395,10 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
 // Two modes, branched on flags:
 //   FLAG_INVERT_COLOR — luminance threshold at 0.5: dark bg → white, light
 //     bg → black. Used by rect-select marching ants.
-//   FLAG_SOFT_CONTRAST — subtle tint toward the opposite luminance end.
-//     Strength comes from prim.mode_param (typical 0.15). Used for the
-//     brush stamp preview.
+//   FLAG_SOFT_CONTRAST — desaturate bg toward its grayscale equivalent.
+//     Strength comes from prim.mode_param: 1.0 = fully grey, 0.5 = half
+//     desaturated. Saturated colors (red, blue, etc.) shift chromatically
+//     rather than in luminance, which reads strongly regardless of hue.
 // ---------------------------------------------------------------------------
 
 @fragment fn fs_snapshot(in: VertexOutput) -> @location(0) vec4f {
@@ -410,11 +411,22 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
     let lum = dot(bg, vec3f(0.2126, 0.7152, 0.0722));
 
     if (prim.flags & FLAG_SOFT_CONTRAST) != 0u {
-        // Soft tint: push bg toward opposite luminance end by (strength * coverage).
-        // Emit alpha = coverage so the tinted interior fully replaces the
-        // surface (the mix itself encodes the subtle amount).
-        let tint_target = vec3f(select(0.0, 1.0, lum < 0.5));
-        let rgb = mix(bg, tint_target, prim.mode_param * coverage);
+        // Two-part overlay applied as chained mixes:
+        //   1. Luminance shift: mix bg toward opposite extreme (black or
+        //      white based on bg luminance), strength = mode_param.
+        //      Handles achromatic bgs — shifts grays up/down in brightness.
+        //      A smoothstep [0.4, 0.6] softens the seam that a hard
+        //      threshold produces on gradients crossing lum = 0.5.
+        //      Mid-gray (lum ≈ 0.5) gets minimal lum shift as a tradeoff,
+        //      but desat handles anything with chroma.
+        //   2. Desaturation: pull the result toward bg's own gray, strength
+        //      = mode_param * 0.5. Handles saturated bgs (red, blue, etc.)
+        //      by lowering the dominant channel, which pure luminance shift
+        //      can't do when that channel is already at the extreme.
+        let opposite_extreme = vec3f(1.0 - smoothstep(0.4, 0.6, lum));
+        let bg_gray = vec3f(lum);
+        let shifted = mix(bg, opposite_extreme, prim.mode_param * coverage);
+        let rgb = mix(shifted, bg_gray, prim.mode_param * 0.5 * coverage);
         return vec4f(rgb * coverage, coverage);
     } else {
         // Invert mode: hard black/white threshold with standard alpha.

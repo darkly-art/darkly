@@ -9,6 +9,22 @@ use super::dab_pool::DabTexturePool;
 use super::pipelines::BrushPipelines;
 use super::wire::TextureHandle;
 
+/// Which terminal node should actually do GPU work during this pass.
+///
+/// Brush graphs have two terminals — `color_output` writes to the canvas,
+/// `preview_output` writes to the overlay preview mask. Only one runs per
+/// pass; the other's `evaluate_gpu` is a no-op when the mode doesn't match.
+/// All non-terminal nodes (stamp, circle, etc.) are mode-agnostic and run
+/// identically either way.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderMode {
+    /// Normal stroke path. `color_output` composites; `preview_output` skips.
+    Stroke,
+    /// Preview regen. `preview_output` blits into the preview mask;
+    /// `color_output` skips.
+    Preview,
+}
+
 /// Everything a GPU brush node needs to record render passes.
 ///
 /// Created once per rendering batch (per-segment in divergence, per-frame
@@ -45,6 +61,14 @@ pub struct BrushGpuContext<'a> {
     /// first's copy when regions match.  Reset by `StrokeEngine::place_dab`
     /// before each dab.
     pub canvas_copy_origin: Option<[u32; 2]>,
+    /// Which terminal should run in this pass. Only inspected by terminal
+    /// nodes (`color_output`, `preview_output`). Non-terminals ignore.
+    pub render_mode: RenderMode,
+    /// Preview mask target. Populated by the engine when `render_mode ==
+    /// Preview`; the `preview_output` node renders into it. `None` in stroke
+    /// mode.
+    pub preview_target_view: Option<&'a wgpu::TextureView>,
+    pub preview_target_size: (u32, u32),
 }
 
 impl<'a> BrushGpuContext<'a> {

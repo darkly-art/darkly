@@ -108,6 +108,13 @@ pub struct ToolOverlay {
     /// KIND_MASKED_STAMP primitives to get the stamp shape + softness.
     mask: Option<wgpu::Texture>,
     mask_view: Option<wgpu::TextureView>,
+    /// Preview mask texture owned by the overlay and used as a render
+    /// target by brush nodes' `render_preview`. Separate from `mask` so
+    /// CPU uploads and GPU renders don't stomp each other. Allocated on
+    /// demand via `ensure_preview_mask`.
+    preview_mask: Option<wgpu::Texture>,
+    preview_mask_view: Option<wgpu::TextureView>,
+    preview_mask_size: (u32, u32),
     surface_format: wgpu::TextureFormat,
     primitives: Vec<OverlayPrimitive>,
     time: f32,
@@ -339,6 +346,9 @@ impl ToolOverlay {
             dummy_white_mask_view,
             mask: None,
             mask_view: None,
+            preview_mask: None,
+            preview_mask_view: None,
+            preview_mask_size: (0, 0),
             surface_format,
             primitives: Vec::new(),
             time: 0.0,
@@ -403,6 +413,67 @@ impl ToolOverlay {
     pub fn clear_mask_texture(&mut self) {
         self.mask = None;
         self.mask_view = None;
+    }
+
+    /// Ensure the preview-mask texture exists at the given dimensions, then
+    /// return a view a brush node can render into. Reallocates only when
+    /// size changes; otherwise returns the existing view.
+    ///
+    /// Allocated with RENDER_ATTACHMENT + TEXTURE_BINDING usage (RGBA8Unorm)
+    /// so nodes can render into it and the overlay can sample it as a mask.
+    pub fn ensure_preview_mask(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> &wgpu::TextureView {
+        if self.preview_mask_size != (width, height) || self.preview_mask.is_none() {
+            let tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("overlay-preview-mask"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            self.preview_mask = Some(tex);
+            self.preview_mask_view = Some(view);
+            self.preview_mask_size = (width, height);
+        }
+        self.preview_mask_view.as_ref().unwrap()
+    }
+
+    /// Point the overlay's mask binding at the preview-mask texture so
+    /// subsequent `prepare()` calls bind it as the KIND_MASKED_STAMP source.
+    pub fn use_preview_mask_as_mask(&mut self) {
+        if let Some(view) = &self.preview_mask_view {
+            self.mask_view = Some(view.clone());
+            // Drop any CPU-uploaded texture — preview-mask is now authoritative.
+            self.mask = None;
+        }
+    }
+
+    /// Stop using the preview mask as the overlay mask source (falls back
+    /// to the 1×1 white default). Does not free the preview texture.
+    pub fn clear_preview_mask(&mut self) {
+        self.mask = None;
+        self.mask_view = None;
+    }
+
+    /// Current preview mask dimensions (0,0 if never allocated).
+    pub fn preview_mask_size(&self) -> (u32, u32) {
+        self.preview_mask_size
+    }
+
+    /// Access the preview-mask texture (for engines that need the Texture,
+    /// not just the view, e.g. for a BrushGpuContext's canvas_texture slot).
+    pub fn preview_mask_texture(&self) -> Option<&wgpu::Texture> {
+        self.preview_mask.as_ref()
     }
 
     /// Returns true if the overlay has content to render.
@@ -827,47 +898,45 @@ mod tests {
         assert_eq!(std::mem::size_of::<OverlayPrimitive>(), 64);
     }
 
-    /// GPU integration: render a soft-contrast filled ellipse over a
-    /// half-black / half-white surface and verify the tint direction
-    /// (bg darker → interior lighter; bg lighter → interior darker).
+    /// GPU integration: render a soft-contrast filled ellipse over a pure
+    /// red surface and verify desaturation — the interior should shift
+    /// toward grey (R drops significantly, G and B rise from 0).
     #[test]
-    fn soft_contrast_tints_bg_toward_opposite_luminance() {
+    fn soft_contrast_desaturates_bg() {
         use crate::gpu::test_utils::{create_test_texture_with_format, readback_texture};
 
         let (device, queue) = test_device();
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let mut overlay = ToolOverlay::new(&device, &queue, format);
 
-        // Build a 64×16 surface: left half pure black, right half pure white.
+        // Saturated red surface: only desaturation has anything to shift.
         const W: u32 = 64;
         const H: u32 = 16;
         let mut pixels = vec![0u8; (W * H * 4) as usize];
-        for y in 0..H {
-            for x in 0..W {
-                let i = ((y * W + x) * 4) as usize;
-                let v = if x < W / 2 { 0 } else { 255 };
-                pixels[i] = v;     pixels[i+1] = v;
-                pixels[i+2] = v;   pixels[i+3] = 255;
-            }
+        for i in (0..pixels.len()).step_by(4) {
+            pixels[i] = 255;     // R = 1
+            pixels[i+1] = 0;
+            pixels[i+2] = 0;
+            pixels[i+3] = 255;
         }
         let (surface_tex, surface_view) =
             create_test_texture_with_format(&device, &queue, W, H, &pixels, format);
 
-        // Soft ellipse spanning both halves, screen-space, strength 0.25.
+        // Full-strength desat over the center.
         let mut prim = OverlayPrimitive::new(
             KIND_FILLED_ELLIPSE,
             FLAG_SOFT_CONTRAST,
             [(W as f32) * 0.5, (H as f32) * 0.5],
             [12.0, 6.0],
         );
-        prim.mode_param = 0.25;
+        prim.mode_param = 1.0;  // fully grey
         overlay.set_primitives(vec![prim]);
 
         let vt = ViewTransform::identity();
         overlay.prepare(&device, &queue, &vt, W, H);
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("soft-contrast-test"),
+            label: Some("soft-contrast-desat-test"),
         });
         overlay.encode_snapshot(&mut encoder, &surface_tex, &surface_view, W, H);
         queue.submit([encoder.finish()]);
@@ -878,34 +947,27 @@ mod tests {
             [out[i], out[i+1], out[i+2], out[i+3]]
         };
 
-        // Inside ellipse on the black side (x = 26, y = 8 — 6px left of seam).
-        let dark_inside = px(26, 8);
-        // Inside ellipse on the white side (x = 38, y = 8 — 6px right of seam).
-        let light_inside = px(38, 8);
-        // Outside the ellipse on both sides.
-        let dark_outside = px(2, 8);
-        let light_outside = px(62, 8);
+        let inside = px(32, 8);   // center of the ellipse
+        let outside = px(2, 8);   // well outside
 
-        // Untinted bg must be preserved exactly outside the ellipse.
-        assert_eq!(dark_outside, [0, 0, 0, 255], "dark bg unchanged outside ellipse");
-        assert_eq!(light_outside, [255, 255, 255, 255], "light bg unchanged outside ellipse");
+        assert_eq!(outside, [255, 0, 0, 255], "red bg unchanged outside ellipse");
 
-        // Tint direction: dark bg lightens, light bg darkens.
-        assert!(dark_inside[0] > 0, "dark interior should lighten: got {dark_inside:?}");
-        assert!(light_inside[0] < 255, "light interior should darken: got {light_inside:?}");
-
-        // Magnitude check: at strength 0.25 with full coverage the shift is
-        // ~64/255. Accept a generous band to cover AA sampling jitter.
-        assert!(dark_inside[0] >= 40 && dark_inside[0] <= 90,
-            "dark interior tint magnitude: got {dark_inside:?}");
-        assert!(light_inside[0] >= 165 && light_inside[0] <= 215,
-            "light interior tint magnitude: got {light_inside:?}");
+        // Combined shift at mode_param=1:
+        //   lum_shift toward white (red has lum=0.21 < 0.5): mix(red, white, 1) = white
+        //   desat toward bg_gray=(0.21..): mix(white, 0.21, 0.5) ≈ 0.605 = (154, 154, 154).
+        // Key property: R drops hard (dominant-channel desat) AND G/B rise.
+        assert!(inside[0] < 200, "R should drop substantially: got {inside:?}");
+        assert!(inside[1] > 100, "G should rise well off 0: got {inside:?}");
+        assert!(inside[2] > 100, "B should rise well off 0: got {inside:?}");
+        // All channels should land close (approximately grey).
+        let spread = (inside[0] as i32 - inside[1] as i32).abs();
+        assert!(spread < 15, "result should be near-grey: {inside:?}");
     }
 
     /// GPU integration: KIND_MASKED_STAMP — coverage comes from the uploaded
     /// mask texture. Upload a mask with two clearly-separated regions (mostly
-    /// black left, mostly white right) and verify over a black surface that
-    /// the white-mask region gets tinted (toward white, since bg is dark) while
+    /// black left, mostly white right) and verify over a red surface that
+    /// the white-mask region gets desaturated (R drops, G/B rise) while
     /// the black-mask region leaves the surface unchanged.
     #[test]
     fn masked_stamp_uses_mask_red_as_coverage() {
@@ -915,11 +977,14 @@ mod tests {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let mut overlay = ToolOverlay::new(&device, &queue, format);
 
-        // Black surface → luminance 0 → soft-contrast target is white (1.0).
+        // Red surface: desaturation shifts R→0.21 gray, G/B rise from 0.
         const W: u32 = 64;
         const H: u32 = 16;
         let mut bg = vec![0u8; (W * H * 4) as usize];
-        for i in (3..bg.len()).step_by(4) { bg[i] = 255; }
+        for i in (0..bg.len()).step_by(4) {
+            bg[i] = 255;      // R
+            bg[i+3] = 255;    // A
+        }
         let (surface_tex, surface_view) =
             create_test_texture_with_format(&device, &queue, W, H, &bg, format);
 
@@ -954,21 +1019,26 @@ mod tests {
         queue.submit([encoder.finish()]);
 
         let out = readback_texture(&device, &queue, &surface_tex, format, W, H);
-        let r_at = |x: u32, y: u32| -> u8 { out[((y * W + x) * 4) as usize] };
+        let px = |x: u32, y: u32| -> [u8; 4] {
+            let i = ((y * W + x) * 4) as usize;
+            [out[i], out[i+1], out[i+2], out[i+3]]
+        };
 
-        let left_r = r_at(16, 8);     // inside stamp, mask ≈ 0
-        let right_r = r_at(48, 8);    // inside stamp, mask ≈ 1
-        let outside_r = r_at(2, 8);   // outside stamp bounds
+        let left = px(16, 8);     // inside stamp, mask ≈ 0 → coverage ≈ 0
+        let right = px(48, 8);    // inside stamp, mask ≈ 1 → coverage ≈ 1
+        let outside = px(2, 8);   // outside stamp bounds
 
-        assert_eq!(outside_r, 0, "surface outside the stamp must be unchanged");
-        assert!(
-            left_r <= 5,
-            "left half (mask=0) should stay near black 0: got {left_r}",
-        );
-        // mix(0, 255, 0.6 * 1.0) ≈ 153. Generous band for any AA/filter jitter.
-        assert!(
-            right_r >= 130 && right_r <= 170,
-            "right half (mask=1, strength=0.6) should tint toward white: got {right_r}",
-        );
+        assert_eq!(outside, [255, 0, 0, 255], "red bg unchanged outside stamp");
+
+        // Left half: mask=0 → no desaturation → still pure red.
+        assert!(left[0] >= 250 && left[1] <= 5 && left[2] <= 5,
+            "left half (mask=0) should stay pure red: got {left:?}");
+
+        // Right half: mask=1 with strength=0.6 → 60% desat.
+        // R goes from 255 toward ~54 (red's gray point): 255*0.4 + 54*0.6 ≈ 134.
+        // G/B go from 0 toward ~54: 0*0.4 + 54*0.6 ≈ 32.
+        assert!(right[0] < 200, "R should fall: got {right:?}");
+        assert!(right[1] > 15, "G should rise from 0: got {right:?}");
+        assert!(right[2] > 15, "B should rise from 0: got {right:?}");
     }
 }

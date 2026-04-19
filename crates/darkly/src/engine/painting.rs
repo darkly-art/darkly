@@ -329,6 +329,9 @@ impl DarklyEngine {
                         // in the stroke→layer composite pass instead.
                         blend_mode: 0,
                         canvas_copy_origin: None,
+                        render_mode: crate::brush::gpu_context::RenderMode::Stroke,
+                        preview_target_view: None,
+                        preview_target_size: (0, 0),
                     }
                 };
             }
@@ -463,6 +466,9 @@ impl DarklyEngine {
                     resource_handles: &self.resource_handles,
                     blend_mode: self.brush_blend_mode,
                     canvas_copy_origin: None,
+                    render_mode: crate::brush::gpu_context::RenderMode::Stroke,
+                    preview_target_view: None,
+                    preview_target_size: (0, 0),
                 };
                 self.brush_pipelines.reset_uniform_rings();
                 engine.move_to(info, &mut gpu_ctx);

@@ -152,6 +152,12 @@ pub struct DarklyEngine {
     /// Defaults to `brush::default_graph()`.  Updated via `set_brush_graph()`.
     pub(crate) active_brush_graph: crate::nodegraph::Graph<BrushWireType>,
 
+    /// Canvas-space positioning info for the brush preview overlay, cached
+    /// after each `regenerate_brush_preview()` call. Consumed by the brush
+    /// tool to size/rotate the hover overlay primitive. `None` when the
+    /// graph has no `color_output.preview` wire.
+    pub(crate) brush_preview_info: Option<crate::brush::eval::BrushPreviewInfo>,
+
     // --- Preset Library (Phase 7) ---
     pub(crate) preset_library: PresetLibrary,
     /// Resource name → TextureHandle for images uploaded by the current preset.
@@ -216,7 +222,7 @@ impl DarklyEngine {
             &paint_pipelines.selection_bind_group_layout,
         );
 
-        DarklyEngine {
+        let mut engine = DarklyEngine {
             doc,
             compositor,
             gpu,
@@ -235,6 +241,7 @@ impl DarklyEngine {
             brush_pipelines,
             brush_stroke_engine: None,
             active_brush_graph: crate::brush::default_graph(),
+            brush_preview_info: None,
             preset_library: {
                 let mut lib = PresetLibrary::new();
                 for bundle in crate::brush::builtin_presets::all() {
@@ -257,7 +264,13 @@ impl DarklyEngine {
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],
             thumbnail_cache: ThumbnailCache::new(),
-        }
+        };
+
+        // Populate the brush preview mask + cached info from the default
+        // graph so the hover overlay is live immediately, without needing
+        // the user to trigger a `compile_active` via a param change.
+        engine.regenerate_brush_preview();
+        engine
     }
 }
 
@@ -266,6 +279,24 @@ impl DarklyEngine {
 // ---------------------------------------------------------------------------
 
 impl DarklyEngine {
+    /// Current overlay preview mask dimensions. Test-only accessor.
+    pub fn compositor_preview_mask_size(&self) -> (u32, u32) {
+        self.compositor.tool_overlay_ref().preview_mask_size()
+    }
+
+    /// Blocking readback of the overlay's preview mask texture. Test-only.
+    pub fn test_readback_overlay_preview_mask(&self) -> Vec<u8> {
+        let tex = self
+            .compositor
+            .overlay_preview_mask_texture()
+            .expect("preview mask not allocated");
+        let (w, h) = self.compositor_preview_mask_size();
+        crate::gpu::test_utils::readback_texture(
+            &self.gpu.device, &self.gpu.queue,
+            tex, wgpu::TextureFormat::Rgba8Unorm, w, h,
+        )
+    }
+
     /// Blocking readback of a layer's RGBA texture. For test assertions only.
     pub fn test_readback_layer(&self, layer_id: u64) -> Vec<u8> {
         let layer_tex = self.compositor.layer_texture(layer_id)

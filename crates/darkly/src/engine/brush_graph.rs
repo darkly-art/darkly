@@ -55,6 +55,97 @@ impl DarklyEngine {
 
     // --- Fine-grained graph commands ---
 
+    /// Re-render the brush preview into the overlay's preview mask.
+    ///
+    /// Runs the active brush graph normally — CPU eval, GPU eval — but
+    /// with `render_mode: Preview` and a synthetic pen input. `color_output`
+    /// bails in that mode; `preview_output` (if the graph has one) blits
+    /// its upstream dab into the overlay's preview mask. Positioning info
+    /// is read from `preview_output`'s resolved input slots after eval.
+    ///
+    /// No-op with cleared state when the graph has no `preview_output`.
+    pub fn regenerate_brush_preview(&mut self) {
+        use crate::brush::gpu_context::{BrushGpuContext, RenderMode};
+        use crate::brush::paint_info::PaintInformation;
+
+        let mut runner = match crate::brush::compile_graph(&self.active_brush_graph) {
+            Ok(r) => r,
+            Err(_) => {
+                self.compositor.clear_overlay_preview_mask();
+                self.brush_preview_info = None;
+                return;
+            }
+        };
+
+        if !runner.has_preview_terminal() {
+            self.compositor.clear_overlay_preview_mask();
+            self.brush_preview_info = None;
+            return;
+        }
+
+        // Fixed-size preview mask; overlay's linear sampler handles display
+        // scaling via the primitive's canvas-space half-extent.
+        let target_size = (128_u32, 128_u32);
+        let target_view = self
+            .compositor
+            .ensure_overlay_preview_mask(&self.gpu.device, target_size.0, target_size.1)
+            .clone();
+        let preview_tex = self
+            .compositor
+            .overlay_preview_mask_texture()
+            .expect("ensure_overlay_preview_mask just allocated it");
+
+        let sel_bg = if self.gpu_selection.active {
+            self.gpu_selection.brush_bind_group()
+        } else {
+            &self.brush_pipelines.default_selection_bind_group
+        };
+        let encoder = self.gpu.device.create_command_encoder(
+            &wgpu::CommandEncoderDescriptor { label: Some("brush-preview-regen") },
+        );
+
+        let mut gpu_ctx = BrushGpuContext {
+            encoder,
+            device: &self.gpu.device,
+            queue: &self.gpu.queue,
+            dab_pool: &mut self.dab_pool,
+            pipelines: &self.brush_pipelines,
+            // color_output bails in Preview mode — canvas_view is unused but
+            // the struct requires it. Reuse the preview view as a placeholder.
+            canvas_view: &target_view,
+            canvas_texture: preview_tex,
+            canvas_width: target_size.0,
+            canvas_height: target_size.1,
+            selection_bind_group: sel_bg,
+            resource_handles: &self.resource_handles,
+            blend_mode: 0,
+            canvas_copy_origin: None,
+            render_mode: RenderMode::Preview,
+            preview_target_view: Some(&target_view),
+            preview_target_size: target_size,
+        };
+
+        self.brush_pipelines.reset_uniform_rings();
+        runner.clear_slots();
+        runner.seed_sensors(&PaintInformation::preview_dummy(), [1.0, 1.0, 1.0, 1.0], 0, 0);
+        runner.execute_cpu();
+        runner.execute_gpu(&mut gpu_ctx);
+        let info = runner.read_preview_info().unwrap_or_default();
+
+        gpu_ctx.dab_pool.release_all();
+        let command_buf = gpu_ctx.encoder.finish();
+        self.gpu.queue.submit([command_buf]);
+
+        self.compositor.use_overlay_preview_mask();
+        self.brush_preview_info = Some(info);
+    }
+
+    /// Read-only snapshot of the current brush preview info, for the
+    /// frontend to place the hover overlay primitive.
+    pub fn brush_preview_info(&self) -> Option<crate::brush::eval::BrushPreviewInfo> {
+        self.brush_preview_info
+    }
+
     /// Compile the active graph in-place, then release any static GPU
     /// textures that are no longer referenced by an Image node.
     ///
@@ -87,6 +178,10 @@ impl DarklyEngine {
                 self.dab_pool.release_static(handle);
             }
         }
+
+        // Refresh the brush preview overlay now that the graph is compiled —
+        // size, rotation, and tip changes all land here.
+        self.regenerate_brush_preview();
 
         Ok(())
     }
