@@ -304,7 +304,7 @@ fn ink_pen() -> PresetBundle {
     ]);
     b.wire(b.pen, "pressure", curve, "input");
     b.wire(curve, "output", b.stamp, "size");
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.set_stabilize(0.6);
     b.build("Ink Pen", "inking")
@@ -314,7 +314,7 @@ fn airbrush() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(1.0);
     b.set_port(b.stamp, "size", 0.15);
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Airbrush", "basic")
 }
@@ -349,7 +349,7 @@ fn textured_ink() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_image("ink_dry.png");
     b.wire(b.pen, "pressure", b.stamp, "size");
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     let rand_rot = b.add_random(0);
     b.wire(rand_rot, "value", b.stamp, "rotation");
     b.wire(b.paint_color, "color", b.stamp, "color");
@@ -375,7 +375,7 @@ fn pencil() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.15);
     b.wire(b.pen, "pressure", b.stamp, "size");
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
     // Insert texture overlay with Multiply blend (pencil grain).
@@ -396,7 +396,7 @@ fn charcoal() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.6);
     b.wire(b.pen, "pressure", b.stamp, "size");
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
     // Texture overlay with Subtract blend (charcoal grain — cuts into dab).

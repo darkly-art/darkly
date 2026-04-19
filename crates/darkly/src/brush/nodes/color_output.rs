@@ -1,27 +1,32 @@
-//! Color output GPU terminal node.
+//! Color output GPU terminal node — paint semantics.
 //!
-//! Reads a dab texture and position, then composites the dab onto the
-//! canvas layer via shader-side Porter-Duff source-over blending.
-//! This is the final node in a brush graph — it produces visible output.
+//! `color_output` is the paint terminal of a brush graph. It owns three
+//! lifecycle hooks that together define how a paint stroke maps to layer
+//! state:
 //!
-//! The dab texture contains the brush content rendered at internal resolution
-//! (up to `MAX_DAB_SIZE`).  The `dab_size` input determines the final canvas
-//! footprint — the composite quad is sized to `dab_size`, and the GPU bilinear
-//! samples the dab texture into the quad.
+//! 1. `begin_stroke` — clears the stroke scratch to transparent. Called at
+//!    stroke start and on every rewind boundary.
+//! 2. `evaluate_gpu` (per dab) — composites the dab into the scratch with
+//!    straight-alpha Porter-Duff source-over, modulated by the selection
+//!    mask. Dabs accumulate, selection masks once. The scratch holds the
+//!    stroke's contribution-so-far, selection-already-applied.
+//! 3. `commit` (per pen event) — composites the scratch onto the pre-stroke
+//!    layer snapshot and writes the result back to the layer. Applies the
+//!    stroke-level `opacity` input port as a cap and honours the engine's
+//!    paint-vs-erase `blend_mode`. Selection is NOT re-applied (already
+//!    baked into the scratch, applying twice would yield `sel²`).
 //!
-//! Before the composite render pass, the canvas region under the dab is
-//! copied to a temporary texture.  The shader reads both the dab and the
-//! canvas copy, computes correct straight-alpha compositing, and writes
-//! the result with REPLACE blend — avoiding the premultiplied-stored-as-
-//! straight bug that hardware alpha blending causes on straight-alpha
-//! layer textures (see compositing-lessons-learned.md #2).
+//! The per-dab composite always writes REPLACE with source-over into the
+//! scratch — per-dab blend_mode selection doesn't exist, and wouldn't make
+//! physical sense (erasing a dab against an empty scratch is a no-op).
+//! Engine-level paint-vs-erase is a *stroke* decision, applied at commit.
 
 use crate::brush::dab_pool::MAX_DAB_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::{BrushGpuContext, RenderMode};
 use crate::brush::pipelines::CompositeUniforms;
 use crate::brush::wire::{BrushWireType, ScalarValue};
-use crate::nodegraph::{NodeRegistration, PortDef};
+use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 
@@ -42,6 +47,13 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("blend_mode", BrushWireType::Int)
                 .with_range(0.0, 1.0, 0.0)
                 .with_description("Compositing blend mode (0 = source over, 1 = erase)"),
+            PortDef::input("opacity", BrushWireType::Scalar)
+                .with_range(0.0, 1.0, 1.0)
+                .with_label("Opacity")
+                .with_unit(UnitType::Percent)
+                .with_icon("fa-solid fa-fill-drip")
+                .exposed()
+                .with_description("Stroke-level opacity cap (max coverage regardless of overlap)"),
         ],
         params: &[],
         is_gpu: true,
@@ -75,9 +87,6 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         let base_position = ctx.input("position").as_vec2();
         let scatter = ctx.input("scatter_offset").as_vec2();
         let position = [base_position[0] + scatter[0], base_position[1] + scatter[1]];
-        // Port value if explicitly wired, otherwise use engine-level override.
-        let port_blend = ctx.input("blend_mode").as_f32() as u32;
-        let blend_mode = port_blend.max(gpu.blend_mode);
 
         let dab_w = dab_size[0];
         let dab_h = dab_size[1];
@@ -119,10 +128,10 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             return vec![];
         }
 
-        // Ensure the canvas region under the dab is in canvas_copy for
-        // the shader's straight-alpha Porter-Duff read.  Idempotent per dab
-        // — if an upstream node (e.g. smudge_stamp) already issued the copy
-        // with the same origin, this is a no-op.
+        // Ensure the scratch region under the dab is in canvas_copy for the
+        // shader's straight-alpha Porter-Duff read. The bg here is the
+        // scratch (not the layer) — source-over against the running stroke
+        // accumulation.
         gpu.ensure_canvas_copy(copy_x, copy_y, copy_w, copy_h);
 
         // UV mapping: the dab content occupies [0..dab_w] x [0..dab_h] in the
@@ -146,19 +155,25 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             canvas_size: [gpu.canvas_width as f32, gpu.canvas_height as f32],
             uv_min: [uv_min_x, uv_min_y],
             uv_max: [uv_max_x, uv_max_y],
-            blend_mode,
+            // Per-dab: always source-over. Paint-vs-erase is a stroke-level
+            // decision, applied in commit.
+            blend_mode: 0,
             fg_premultiplied: 1, // dab from stamp shader is premultiplied
+            stroke_opacity: 1.0, // per-dab composites aren't opacity-capped
+            apply_selection: 1,  // selection masks every dab as it lands
         };
         let offset = gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
 
         let dab_bind_group = gpu.dab_pool.bind_group(dab_handle);
 
-        // Composite dab onto canvas (REPLACE blend — shader does Porter-Duff).
+        // Composite dab onto the stroke scratch (REPLACE blend — shader does
+        // Porter-Duff). The "bg" bind group is canvas_copy, which was just
+        // filled with the scratch's current contents above.
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("brush-composite"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: gpu.canvas_view,
+                    view: gpu.stroke_scratch_view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -184,5 +199,86 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
 
         // Terminal node — no outputs.
         vec![]
+    }
+
+    /// Clear the stroke scratch to transparent. Paint starts from an empty
+    /// accumulator — per-dab composites pile up from nothing.
+    fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
+        if gpu.render_mode != RenderMode::Stroke {
+            return;
+        }
+        let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("color_output-begin_stroke"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: gpu.stroke_scratch_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.0, g: 0.0, b: 0.0, a: 0.0,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+
+    /// Composite the scratch (= this stroke's accumulated contribution,
+    /// already selection-masked) onto the pre-stroke layer snapshot, and
+    /// write the result to the layer. Applies the stroke-level `opacity`
+    /// port and honours the engine's `blend_mode` (paint vs erase).
+    fn commit(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {
+        if gpu.render_mode != RenderMode::Stroke {
+            return;
+        }
+        // Everything we need must be present; if any piece is missing we're
+        // in a pre-refactor fallback path that composites directly to the
+        // layer — nothing for commit to do.
+        let (Some(layer_view), Some(scratch_bg), Some(pre_stroke_bg)) = (
+            gpu.layer_view,
+            gpu.scratch_bind_group,
+            gpu.pre_stroke_bind_group,
+        ) else { return };
+
+        let opacity = ctx.input_f32("opacity").clamp(0.0, 1.0);
+        let w = gpu.canvas_width as f32;
+        let h = gpu.canvas_height as f32;
+
+        let uniforms = CompositeUniforms {
+            origin: [0.0, 0.0],
+            size: [w, h],
+            canvas_size: [w, h],
+            uv_min: [0.0, 0.0],
+            uv_max: [1.0, 1.0],
+            blend_mode: gpu.blend_mode, // paint = 0, erase = 1
+            fg_premultiplied: 0,        // scratch is straight alpha
+            stroke_opacity: opacity,
+            // Selection is already baked into the scratch via per-dab
+            // composites — applying again would give sel².
+            apply_selection: 0,
+        };
+        let offset = gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
+
+        let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("color_output-commit"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: layer_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_viewport(0.0, 0.0, w, h, 0.0, 1.0);
+        pass.set_pipeline(gpu.pipelines.composite_pipeline());
+        pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[offset]);
+        pass.set_bind_group(1, scratch_bg, &[]);
+        pass.set_bind_group(2, gpu.selection_bind_group, &[]);
+        pass.set_bind_group(3, pre_stroke_bg, &[]);
+        pass.draw(0..6, 0..1);
     }
 }

@@ -38,9 +38,13 @@ pub struct BrushGpuContext<'a> {
     pub queue: &'a wgpu::Queue,
     pub dab_pool: &'a mut DabTexturePool,
     pub pipelines: &'a BrushPipelines,
-    pub canvas_view: &'a wgpu::TextureView,
-    /// The canvas layer texture (needed for copy_texture_to_texture).
-    pub canvas_texture: &'a wgpu::Texture,
+    /// The stroke scratch texture view — dabs composite into this during
+    /// a stroke, and the terminal node commits it onto the layer on every
+    /// pen event. Reused as a placeholder in preview mode (nothing writes to it).
+    pub stroke_scratch_view: &'a wgpu::TextureView,
+    /// The stroke scratch texture (needed for copy_texture_to_texture by
+    /// `ensure_canvas_copy`).
+    pub stroke_scratch_texture: &'a wgpu::Texture,
     pub canvas_width: u32,
     pub canvas_height: u32,
     /// Selection mask bind group (or default 1x1 white when no selection).
@@ -67,8 +71,24 @@ pub struct BrushGpuContext<'a> {
     /// Preview mask target. Populated by the engine when `render_mode ==
     /// Preview`; the `preview_output` node renders into it. `None` in stroke
     /// mode.
-    pub preview_target_view: Option<&'a wgpu::TextureView>,
-    pub preview_target_size: (u32, u32),
+    pub preview_mask_view: Option<&'a wgpu::TextureView>,
+    pub preview_mask_size: (u32, u32),
+    /// The actual layer texture view — write target for the terminal's
+    /// `commit` hook. `None` in preview mode (no layer to commit to).
+    pub layer_view: Option<&'a wgpu::TextureView>,
+    /// The actual layer texture (for copy_texture_to_texture at commit).
+    pub layer_texture: Option<&'a wgpu::Texture>,
+    /// Pre-stroke layer snapshot. Supplied by `StrokeBuffer::save_pre_stroke`
+    /// at the start of a stroke. `Some` during a stroke, `None` in preview.
+    pub pre_stroke_texture: Option<&'a wgpu::Texture>,
+    /// Bind group (canvas-copy BGL) over `pre_stroke_texture`, pre-built
+    /// by `StrokeBuffer` so `color_output::commit` can bind it as the
+    /// composite background without recreating bind groups every event.
+    pub pre_stroke_bind_group: Option<&'a wgpu::BindGroup>,
+    /// Bind group (dab BGL) over the stroke scratch, pre-built by
+    /// `StrokeBuffer` so `color_output::commit` can bind it as the
+    /// composite foreground (the per-dab accumulation).
+    pub scratch_bind_group: Option<&'a wgpu::BindGroup>,
 }
 
 impl<'a> BrushGpuContext<'a> {
@@ -116,7 +136,7 @@ impl<'a> BrushGpuContext<'a> {
         }
         self.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: self.canvas_texture,
+                texture: self.stroke_scratch_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x: origin_x, y: origin_y, z: 0 },
                 aspect: wgpu::TextureAspect::All,

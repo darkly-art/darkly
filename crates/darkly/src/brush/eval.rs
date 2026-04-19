@@ -134,6 +134,26 @@ pub trait BrushNodeEvaluator: Send + Sync {
     ) -> Vec<(String, ScalarValue)> {
         vec![]
     }
+
+    /// Stroke-scoped setup. Called at stroke start and on every rewind
+    /// boundary (full or partial) — whenever the scratch must be reset
+    /// to this terminal's starting state. Non-terminal nodes default to
+    /// no-op.
+    ///
+    /// The `EvalContext`'s slot-driven inputs are *not* seeded for this
+    /// hook — it runs before any dab, so `ctx.input` will only return
+    /// port defaults. That's deliberate: the hook's job is lifecycle,
+    /// not per-dab sampling.
+    fn begin_stroke(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
+
+    /// Per-pen-event commit. Called after every event's dabs have rendered
+    /// into the scratch. The terminal pushes the scratch onto the layer
+    /// however its semantics require. Non-terminal nodes default to no-op.
+    ///
+    /// Like `begin_stroke`, inputs here are port defaults only — the
+    /// committed state is a function of the scratch, which already
+    /// reflects all per-dab CPU input resolution.
+    fn commit(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
 }
 
 // ── Graph runner ────────────────────────────────────────────────────
@@ -391,6 +411,51 @@ impl BrushGraphRunner {
                     }
                 }
             }
+        }
+    }
+
+    /// Dispatch `begin_stroke` to every GPU node's evaluator in topological
+    /// order. Only terminal nodes override — everything else no-ops. Runs
+    /// once per stroke-start and once per rewind boundary, before any dab.
+    pub fn begin_stroke(&mut self, gpu: &mut BrushGpuContext) {
+        self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.begin_stroke(ctx, gpu));
+    }
+
+    /// Dispatch `commit` to every GPU node's evaluator in topological
+    /// order. Runs once per pen event after that event's dabs have
+    /// finished compositing into the scratch.
+    pub fn commit(&mut self, gpu: &mut BrushGpuContext) {
+        self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.commit(ctx, gpu));
+    }
+
+    /// Shared walker for lifecycle hooks. Mirrors `execute_gpu` minus the
+    /// per-dab slot/input plumbing, because lifecycle hooks run *outside*
+    /// any specific dab — they work from port defaults and GPU resources.
+    fn dispatch_lifecycle<F>(&mut self, gpu: &mut BrushGpuContext, mut f: F)
+    where
+        F: FnMut(&dyn BrushNodeEvaluator, &EvalContext, &mut BrushGpuContext),
+    {
+        let empty_inputs = HashMap::new();
+        let empty_params = Vec::new();
+        let empty_ports = Vec::new();
+        for step in &self.plan.steps {
+            if !step.is_gpu {
+                continue;
+            }
+            let Some(evaluator) = self.evaluators.get(&step.type_id) else {
+                continue;
+            };
+            let node = self.node_data.get(&step.node_id);
+            let ctx = EvalContext {
+                inputs: &empty_inputs,
+                params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
+                port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
+                lut: node.and_then(|n| n.lut.as_ref()),
+                stroke_seed: self.stroke_seed,
+                dab_index: self.dab_index,
+                node_id: step.node_id,
+            };
+            f(evaluator.as_ref(), &ctx, gpu);
         }
     }
 

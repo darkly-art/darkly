@@ -142,7 +142,7 @@ impl PresetBundle {
             zip::ZipArchive::new(cursor).map_err(|e| format!("invalid ZIP archive: {e}"))?;
 
         // Read preset.json
-        let preset: BrushPreset = {
+        let mut preset: BrushPreset = {
             let mut file = archive
                 .by_name("preset.json")
                 .map_err(|e| format!("missing preset.json: {e}"))?;
@@ -152,6 +152,13 @@ impl PresetBundle {
             serde_json::from_str(&json)
                 .map_err(|e| format!("invalid preset.json: {e}"))?
         };
+
+        // Migrate: the stamp node's per-dab alpha port was renamed from
+        // "opacity" to "flow" during the paint refactor. Any preset saved
+        // before that carries the old name; rewrite in place so compilation
+        // finds the right port. Silent one-way upgrade — old presets keep
+        // working without a format bump.
+        migrate_stamp_opacity_to_flow(&mut preset.graph);
 
         if preset.format_version > FORMAT_VERSION {
             return Err(format!(
@@ -206,6 +213,49 @@ impl PresetBundle {
         let bytes =
             std::fs::read(path).map_err(|e| format!("failed to read preset file: {e}"))?;
         Self::from_bytes(&bytes)
+    }
+}
+
+/// Rewrite every reference to a `stamp` node's "opacity" port so that it
+/// uses the new "flow" name. Applies to:
+/// - the node's own `ports` vector (so `set_port_default` finds it),
+/// - any `Connection` that routes to/from the old name.
+///
+/// Pre-refactor presets stored the per-dab alpha port as "opacity". The
+/// refactor separated that from stroke-level opacity by renaming to "flow";
+/// this migration keeps legacy presets loading silently.
+fn migrate_stamp_opacity_to_flow(graph: &mut Graph<BrushWireType>) {
+    use crate::nodegraph::NodeId;
+
+    // Collect stamp node ids up-front — we mutate both `nodes` and
+    // `connections`, and don't want to hold a borrow across that.
+    let stamp_ids: Vec<NodeId> = graph
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.type_id == "stamp")
+        .map(|(id, _)| *id)
+        .collect();
+    if stamp_ids.is_empty() {
+        return;
+    }
+
+    for id in &stamp_ids {
+        if let Some(node) = graph.nodes.get_mut(id) {
+            for port in node.ports.iter_mut() {
+                if port.name == "opacity" {
+                    port.name = "flow".into();
+                }
+            }
+        }
+    }
+
+    for conn in graph.connections.iter_mut() {
+        if stamp_ids.contains(&conn.to.node) && conn.to.port == "opacity" {
+            conn.to.port = "flow".into();
+        }
+        if stamp_ids.contains(&conn.from.node) && conn.from.port == "opacity" {
+            conn.from.port = "flow".into();
+        }
     }
 }
 
@@ -289,6 +339,69 @@ mod tests {
 
         let err = PresetBundle::from_bytes(&bytes).unwrap_err();
         assert!(err.contains("missing preset.json"), "got: {err}");
+    }
+
+    #[test]
+    fn legacy_stamp_opacity_migrates_to_flow() {
+        use crate::brush::BrushNodeRegistry;
+        use crate::nodegraph::{Graph, PortRef};
+
+        // Build a graph the old way: stamp has an "opacity" port (not "flow")
+        // and a wire from pen_input.pressure → stamp.opacity. Simulates a
+        // preset saved before the Flow/Opacity rename.
+        let registry = BrushNodeRegistry::new();
+        let mut graph: Graph<BrushWireType> = Graph::new();
+
+        let pen = graph.add_node("pen_input",
+            registry.get("pen_input").unwrap().ports.clone(), vec![]);
+
+        // Clone the stamp port defs and rename "flow" back to "opacity" to
+        // mimic the pre-refactor layout.
+        let mut stamp_ports = registry.get("stamp").unwrap().ports.clone();
+        for p in stamp_ports.iter_mut() {
+            if p.name == "flow" {
+                p.name = "opacity".into();
+                p.label = "Opacity".into();
+            }
+        }
+        let stamp = graph.add_node("stamp", stamp_ports, vec![
+            crate::gpu::params::ParamValue::Int(0),
+        ]);
+
+        graph.connect(
+            PortRef { node: pen, port: "pressure".into() },
+            PortRef { node: stamp, port: "opacity".into() },
+        ).expect("legacy wire should connect");
+
+        // Round-trip through the preset ZIP so the migration runs on load.
+        let preset = BrushPreset::from_graph("Legacy", graph);
+        let bundle = PresetBundle::without_resources(preset);
+        let bytes = bundle.to_bytes().unwrap();
+        let loaded = PresetBundle::from_bytes(&bytes).unwrap();
+
+        // The stamp's port should now be called "flow".
+        let stamp_node = loaded.preset.graph.nodes.get(&stamp)
+            .expect("stamp survived round-trip");
+        let has_flow = stamp_node.ports.iter().any(|p| p.name == "flow");
+        let has_opacity = stamp_node.ports.iter().any(|p| p.name == "opacity");
+        assert!(has_flow, "migrated stamp has a flow port");
+        assert!(!has_opacity, "migrated stamp has no opacity port");
+
+        // Wires should be rewritten too — pressure → stamp.flow.
+        let rewritten = loaded.preset.graph.connections.iter().any(|c| {
+            c.to.node == stamp && c.to.port == "flow"
+        });
+        assert!(rewritten,
+            "legacy wire pen→stamp.opacity should rewrite to pen→stamp.flow");
+        let stale = loaded.preset.graph.connections.iter().any(|c| {
+            c.to.node == stamp && c.to.port == "opacity"
+        });
+        assert!(!stale, "no wire should still reference the old opacity port");
+
+        // Compiles cleanly with the new port name.
+        let compile = crate::brush::compile_graph(&loaded.preset.graph);
+        assert!(compile.is_ok(),
+            "migrated graph should compile: {:?}", compile.err());
     }
 
     #[test]

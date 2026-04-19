@@ -58,8 +58,8 @@ impl BrushNodeEvaluator for PreviewOutputEvaluator {
         if gpu.render_mode != RenderMode::Preview {
             return vec![];
         }
-        let Some(target_view) = gpu.preview_target_view else { return vec![]; };
-        let (target_w, target_h) = gpu.preview_target_size;
+        let Some(target_view) = gpu.preview_mask_view else { return vec![]; };
+        let (target_w, target_h) = gpu.preview_mask_size;
 
         let dab_handle = match ctx.input("dab") {
             ScalarValue::Texture(h) => h,

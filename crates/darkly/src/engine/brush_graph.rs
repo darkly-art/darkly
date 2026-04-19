@@ -130,10 +130,11 @@ impl DarklyEngine {
             queue: &self.gpu.queue,
             dab_pool: &mut self.dab_pool,
             pipelines: &self.brush_pipelines,
-            // color_output bails in Preview mode — canvas_view is unused but
-            // the struct requires it. Reuse the preview view as a placeholder.
-            canvas_view: &target_view,
-            canvas_texture: preview_tex,
+            // `color_output` bails in Preview mode, so the stroke_scratch_*
+            // fields are never written to — alias them to the preview target
+            // as a placeholder.
+            stroke_scratch_view: &target_view,
+            stroke_scratch_texture: preview_tex,
             canvas_width: target_size.0,
             canvas_height: target_size.1,
             selection_bind_group: sel_bg,
@@ -141,8 +142,14 @@ impl DarklyEngine {
             blend_mode: 0,
             canvas_copy_origin: None,
             render_mode: RenderMode::Preview,
-            preview_target_view: Some(&target_view),
-            preview_target_size: target_size,
+            preview_mask_view: Some(&target_view),
+            preview_mask_size: target_size,
+            // No layer / pre-stroke state in preview — commit isn't called.
+            layer_view: None,
+            layer_texture: None,
+            pre_stroke_texture: None,
+            pre_stroke_bind_group: None,
+            scratch_bind_group: None,
         };
 
         self.brush_pipelines.reset_uniform_rings();

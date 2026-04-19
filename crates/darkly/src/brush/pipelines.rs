@@ -78,6 +78,8 @@ pub struct CompositeUniforms {
     pub uv_max: [f32; 2],     // max UV in dab texture
     pub blend_mode: u32,       // 0 = source-over, 1 = erase (destination-out)
     pub fg_premultiplied: u32, // 1 = dab input is premultiplied, 0 = straight alpha
+    pub stroke_opacity: f32,   // stroke-level opacity cap (1.0 = no cap)
+    pub apply_selection: u32,  // 1 = modulate by selection, 0 = ignore (commit pass)
 }
 
 /// Ring buffer for dynamic uniform offsets.

@@ -203,8 +203,13 @@ impl DarklyEngine {
         color: [f32; 4],
         canvas_w: u32, canvas_h: u32,
     ) {
+        // True on the lazy-init path below — the terminal's `begin_stroke`
+        // hook must run once before the first dab to initialise the scratch.
+        let mut need_begin_stroke = false;
+
         // Lazy-init: compile the active brush graph + create stroke buffer.
         if self.brush_stroke_engine.is_none() {
+            need_begin_stroke = true;
             let runner = match crate::brush::compile_graph(&self.active_brush_graph) {
                 Ok(r) => r,
                 Err(e) => {
@@ -245,8 +250,11 @@ impl DarklyEngine {
                 );
                 self.gpu.encode("stroke-buffer-init", |encoder| {
                     stroke_buffer.save_pre_stroke(encoder, &layer_tex.texture);
-                    stroke_buffer.clear(encoder);
                 });
+                // Scratch initialisation is now the terminal's responsibility
+                // (via `runner.begin_stroke`). Deferred until we have the
+                // engine + buffer in hand a few lines below — see the
+                // `begin_stroke` call guarded by `first_event`.
                 self.stroke_buffer = Some(stroke_buffer);
             }
         }
@@ -288,7 +296,8 @@ impl DarklyEngine {
         };
 
         if let Some(ref stroke_buffer) = stroke_buffer {
-            // Stabilized path: dabs render to stroke buffer, then composite onto layer.
+            // Stabilized path: dabs render into the scratch, then the
+            // terminal's `commit` hook lands them on the layer.
             self.brush_pipelines.reset_uniform_rings();
             let result = engine.stabilize(info);
             let max_div = engine.max_divergence_window();
@@ -307,7 +316,11 @@ impl DarklyEngine {
                 None => None,
             };
 
-            // Helper macro: create a BrushGpuContext for rendering a segment.
+            // Helper macro: create a BrushGpuContext wired with the stroke
+            // scratch, layer, and pre-stroke snapshot. The macro always
+            // includes the commit-side references (layer_view, bind groups,
+            // pre_stroke_texture) — `color_output::commit` asks for them,
+            // and lifecycle hooks fan out from the same context.
             macro_rules! make_gpu_ctx {
                 ($label:expr) => {
                     BrushGpuContext {
@@ -318,31 +331,51 @@ impl DarklyEngine {
                         queue: &self.gpu.queue,
                         dab_pool: &mut self.dab_pool,
                         pipelines: &self.brush_pipelines,
-                        canvas_view: stroke_buffer.stroke_view(),
-                        canvas_texture: stroke_buffer.stroke_texture(),
+                        stroke_scratch_view: stroke_buffer.stroke_view(),
+                        stroke_scratch_texture: stroke_buffer.stroke_texture(),
                         canvas_width: canvas_w,
                         canvas_height: canvas_h,
                         selection_bind_group: sel_bg,
                         resource_handles: &self.resource_handles,
-                        // Per-dab compositing always uses source-over into the
-                        // stroke buffer.  For erase, the blend mode is applied
-                        // in the stroke→layer composite pass instead.
-                        blend_mode: 0,
+                        // blend_mode applies at commit (paint vs. erase). The
+                        // per-dab composite inside `color_output::evaluate_gpu`
+                        // hard-codes source-over regardless of this value.
+                        blend_mode: self.brush_blend_mode,
                         canvas_copy_origin: None,
                         render_mode: crate::brush::gpu_context::RenderMode::Stroke,
-                        preview_target_view: None,
-                        preview_target_size: (0, 0),
+                        preview_mask_view: None,
+                        preview_mask_size: (0, 0),
+                        layer_view: Some(&layer_view),
+                        layer_texture: Some(&layer_tex.texture),
+                        pre_stroke_texture: Some(stroke_buffer.pre_stroke_texture()),
+                        pre_stroke_bind_group: Some(stroke_buffer.pre_stroke_bind_group()),
+                        scratch_bind_group: Some(stroke_buffer.stroke_bind_group()),
                     }
                 };
             }
 
+            // First event of the stroke — let the terminal set up its scratch.
+            if need_begin_stroke {
+                let mut gpu_ctx = make_gpu_ctx!("brush-begin-stroke");
+                engine.begin_stroke(&mut gpu_ctx);
+                gpu_ctx.submit_final();
+            }
+
             if let Some(div_idx) = div_idx {
                 // Divergence — try checkpoint-based partial re-render.
+                // The terminal's `begin_stroke` establishes outside-bbox
+                // state for whichever path we take below; the checkpoint
+                // ring no longer clears on its own.
+                {
+                    let mut gpu_ctx = make_gpu_ctx!("brush-begin-stroke-rewind");
+                    engine.begin_stroke(&mut gpu_ctx);
+                    gpu_ctx.submit_final();
+                }
+
                 let restore = self.gpu.encode_ret("stroke-checkpoint-restore", |encoder| {
                     self.checkpoint_ring.restore_before(
                         encoder,
                         stroke_buffer.stroke_texture(),
-                        stroke_buffer.stroke_view(),
                         div_idx,
                     )
                 });
@@ -358,10 +391,8 @@ impl DarklyEngine {
                     self.checkpoint_ring.invalidate_from(div_idx);
                     cp.vector_index + 1
                 } else {
-                    // No checkpoint before divergence — full re-render.
-                    self.gpu.encode("stroke-rewind", |encoder| {
-                        stroke_buffer.clear(encoder);
-                    });
+                    // No checkpoint before divergence — full re-render. The
+                    // `begin_stroke` above already reset the scratch.
                     engine.reset_render_state();
                     self.checkpoint_ring.clear();
                     0
@@ -429,19 +460,18 @@ impl DarklyEngine {
                 }
             }
 
-            // Composite stroke buffer onto the layer.
-            self.gpu.encode("stroke-composite", |encoder| {
-                stroke_buffer.composite_onto_layer(
-                    encoder,
-                    &self.brush_pipelines,
-                    &self.gpu.queue,
-                    &layer_view,
-                    sel_bg,
-                    self.brush_blend_mode,
-                );
-            });
+            // Ask the terminal to commit the stroke state onto the layer.
+            // For paint this is `source_over(scratch × opacity, pre_stroke)`;
+            // other terminals (warp, smudge, …) will do their own thing.
+            {
+                let mut gpu_ctx = make_gpu_ctx!("brush-commit");
+                engine.commit(&mut gpu_ctx);
+                gpu_ctx.submit_final();
+            }
         } else {
-            // Fallback: no stroke buffer — render directly to layer (shouldn't happen).
+            // Fallback: no stroke buffer — render directly to layer (shouldn't
+            // happen in practice). Skips the lifecycle hooks since there's no
+            // scratch to clear or commit.
             let layer_tex = if mask_editing {
                 self.compositor.mask_texture(layer_id)
             } else {
@@ -458,8 +488,8 @@ impl DarklyEngine {
                     queue: &self.gpu.queue,
                     dab_pool: &mut self.dab_pool,
                     pipelines: &self.brush_pipelines,
-                    canvas_view: &canvas_view,
-                    canvas_texture,
+                    stroke_scratch_view: &canvas_view,
+                    stroke_scratch_texture: canvas_texture,
                     canvas_width: canvas_w,
                     canvas_height: canvas_h,
                     selection_bind_group: sel_bg,
@@ -467,8 +497,13 @@ impl DarklyEngine {
                     blend_mode: self.brush_blend_mode,
                     canvas_copy_origin: None,
                     render_mode: crate::brush::gpu_context::RenderMode::Stroke,
-                    preview_target_view: None,
-                    preview_target_size: (0, 0),
+                    preview_mask_view: None,
+                    preview_mask_size: (0, 0),
+                    layer_view: None,
+                    layer_texture: None,
+                    pre_stroke_texture: None,
+                    pre_stroke_bind_group: None,
+                    scratch_bind_group: None,
                 };
                 self.brush_pipelines.reset_uniform_rings();
                 engine.move_to(info, &mut gpu_ctx);
