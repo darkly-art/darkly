@@ -26,6 +26,7 @@ import {
     type GpuPrim,
 } from '../tools/selection_helpers';
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
+import { app } from '../state/app.svelte';
 
 // ---------------------------------------------------------------------------
 // Color conversion
@@ -169,11 +170,17 @@ export class OverlayBuilder {
         }
 
         wasmHandle.set_overlay(prims);
+        // Overlay updates may originate outside a pointer event (e.g. async
+        // GPU readback completion in a tool's onFrame hook). The frame loop
+        // has already decided whether to continue based on render()'s return
+        // value, so nothing would otherwise present these new primitives.
+        app.requestFrame();
     }
 
     /** Clear the GPU overlay. */
     clear(wasmHandle: DarklyHandle): void {
         wasmHandle.clear_overlay();
+        app.requestFrame();
     }
 
     /**

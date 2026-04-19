@@ -87,7 +87,7 @@ function handleLocal(h: Handle, w: number, ht: number): [number, number] {
         case Handle.Bottom:      return [w / 2, ht];
         case Handle.BottomLeft:  return [0, ht];
         case Handle.Left:        return [0, ht / 2];
-        case Handle.Rotate:      return [w / 2, 0];
+        case Handle.Rotate:      return [w / 2, ht / 2];
         case Handle.Body:        return [w / 2, ht / 2];
     }
 }
@@ -117,10 +117,18 @@ function cursorForHandle(h: Handle): string {
         case Handle.Bottom:      return 'ns-resize';
         case Handle.Left:
         case Handle.Right:       return 'ew-resize';
-        case Handle.Rotate:      return 'grab';
+        case Handle.Rotate:      return ROTATE_CURSOR;
         case Handle.Body:        return 'move';
     }
 }
+
+/**
+ * Rotation cursor used when hovering outside the transform bounding box
+ * (matches Krita's free-transform behavior). Browsers have no standard
+ * rotation cursor, so we use an inline SVG.
+ */
+const ROTATE_CURSOR =
+    "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='M21 12a9 9 0 1 1-3.5-7.1'/><polyline points='21 3 21 9 15 9'/></svg>\") 12 12, grab";
 
 // ---------------------------------------------------------------------------
 // Reactive tool state
@@ -153,7 +161,47 @@ let drag = $state<{
 /** Canvas element reference for coordinate conversions. */
 let canvasEl: HTMLCanvasElement | null = null;
 
-const ROTATION_ARM_LENGTH = 30; // screen pixels
+/**
+ * Current transformed bounding box in canvas space (tl, tr, br, bl).
+ * Updated each frame by buildOverlay(); used by pointer handlers to
+ * decide whether a point is inside (→ move) or outside (→ rotate).
+ */
+let bboxPolygon: [
+    [number, number], [number, number], [number, number], [number, number],
+] | null = null;
+
+/** Ray-casting point-in-polygon test. */
+function pointInPolygon(
+    px: number, py: number,
+    poly: readonly [number, number][],
+): boolean {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i];
+        const [xj, yj] = poly[j];
+        if (((yi > py) !== (yj > py)) &&
+            (px < ((xj - xi) * (py - yi)) / (yj - yi) + xi)) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+/**
+ * Resolve which Handle a canvas-space point corresponds to, using Krita-style
+ * priority: a handle within its hit radius wins; otherwise the bounding-box
+ * polygon partitions into Body (inside) vs Rotate (outside).
+ */
+function resolveHandle(canvasX: number, canvasY: number): {
+    id: Handle; cursor: string;
+} {
+    const hit = overlay?.hitTest(canvasX, canvasY);
+    if (hit) return { id: hit.id as Handle, cursor: hit.cursor };
+    if (bboxPolygon && pointInPolygon(canvasX, canvasY, bboxPolygon)) {
+        return { id: Handle.Body, cursor: cursorForHandle(Handle.Body) };
+    }
+    return { id: Handle.Rotate, cursor: cursorForHandle(Handle.Rotate) };
+}
 
 /** Read floating content info from Rust and populate JS state.
  *  Called ONLY from event handlers (not from overlay push). */
@@ -175,6 +223,7 @@ function syncFromRust(): boolean {
 function clearState() {
     active = false;
     drag = null;
+    bboxPolygon = null;
     app.handle?.clear_overlay();
     app.toolCursor = null;
 }
@@ -292,6 +341,7 @@ function mid(a: [number, number], b: [number, number]): [number, number] {
 function buildOverlay(): OverlayBuilder | null {
     if (!active || !app.handle || !canvasEl) {
         app.handle?.clear_overlay();
+        bboxPolygon = null;
         return null;
     }
 
@@ -302,6 +352,7 @@ function buildOverlay(): OverlayBuilder | null {
     const tr = toCanvas(srcW, 0);
     const br = toCanvas(srcW, srcH);
     const bl = toCanvas(0, srcH);
+    bboxPolygon = [tl, tr, br, bl];
 
     // Edge midpoints
     const tm = mid(tl, tr);
@@ -309,21 +360,11 @@ function buildOverlay(): OverlayBuilder | null {
     const bm = mid(br, bl);
     const lm = mid(bl, tl);
 
-    // Rotation handle position (perpendicular to top edge, in canvas space)
-    const edgeX = tr[0] - tl[0];
-    const edgeY = tr[1] - tl[1];
-    const edgeLen = Math.sqrt(edgeX * edgeX + edgeY * edgeY);
-    const perpX = edgeLen > 0.01 ? edgeY / edgeLen : 0;
-    const perpY = edgeLen > 0.01 ? -edgeX / edgeLen : -1;
-    const armCanvas = ROTATION_ARM_LENGTH / (app.zoom || 1);
-    const rotPos: [number, number] = [tm[0] + perpX * armCanvas, tm[1] + perpY * armCanvas];
-
-    // Bounding box + rotation arm
+    // Bounding box
     o.line(tl, tr, { color: '#4af', dash: 6 });
     o.line(tr, br, { color: '#4af', dash: 6 });
     o.line(br, bl, { color: '#4af', dash: 6 });
     o.line(bl, tl, { color: '#4af', dash: 6 });
-    o.line(tm, rotPos, { color: '#4af', dash: 4 });
 
     // Corner handles
     o.handle(tl, { id: Handle.TopLeft,     cursor: 'nwse-resize' });
@@ -336,9 +377,6 @@ function buildOverlay(): OverlayBuilder | null {
     o.handle(rm, { id: Handle.Right,  cursor: 'ew-resize', radius: 4 });
     o.handle(bm, { id: Handle.Bottom, cursor: 'ns-resize', radius: 4 });
     o.handle(lm, { id: Handle.Left,   cursor: 'ew-resize', radius: 4 });
-
-    // Rotation handle (colors swapped)
-    o.handle(rotPos, { id: Handle.Rotate, cursor: 'grab', fill: '#4af', stroke: '#fff' });
 
     o.push(app.handle);
     return o;
@@ -383,16 +421,14 @@ export const transformTool: Tool = {
             }
             if (!active) return;
         }
-        const hit = overlay?.hitTest(cx, cy);
-        beginDrag(hit?.id ?? Handle.Body, cx, cy);
+        beginDrag(resolveHandle(cx, cy).id, cx, cy);
     },
 
     onPointerMove(_ctx, e, cx, cy) {
         if (drag) {
             updateDrag(cx, cy, e.shiftKey);
         } else if (active) {
-            const hit = overlay?.hitTest(cx, cy);
-            app.toolCursor = hit?.cursor ?? 'move';
+            app.toolCursor = resolveHandle(cx, cy).cursor;
         }
     },
 
