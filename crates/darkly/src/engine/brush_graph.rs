@@ -45,12 +45,16 @@ impl DarklyEngine {
         let graph: Graph<BrushWireType> =
             serde_json::from_str(json).map_err(|e| format!("JSON parse error: {e}"))?;
         self.active_brush_graph = graph;
+        // Run the post-mutation pipeline so the brush preview mask (and any
+        // other graph-dependent state) refreshes from the new graph.
+        self.compile_active()?;
         Ok(())
     }
 
     /// Reset the active brush graph to the built-in default.
     pub fn reset_brush_graph(&mut self) {
         self.active_brush_graph = crate::brush::default_graph();
+        let _ = self.compile_active();
     }
 
     // --- Fine-grained graph commands ---
