@@ -98,11 +98,12 @@ impl DarklyEngine {
             }
         };
 
-        if !runner.graph_has_preview_wire() {
-            self.compositor.clear_overlay_preview_mask();
-            self.brush_preview_info = None;
-            return;
-        }
+        // Always dispatch `render_preview` — individual terminals decide
+        // whether they produce output this frame. A paint graph with no
+        // `brush_preview` wire has color_output's hook return early and
+        // `brush_preview_info` stays None; a self-previewing terminal
+        // (liquify etc.) fires its hook and publishes placement info. The
+        // post-run `info.is_some()` check below routes both outcomes.
 
         // Fixed-size preview mask; overlay's linear sampler handles display
         // scaling via the primitive's canvas-space half-extent.
