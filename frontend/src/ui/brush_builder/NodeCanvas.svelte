@@ -153,7 +153,7 @@
         e.preventDefault();
         wheelBegin();
         if (e.ctrlKey || e.metaKey) {
-            const factor = e.deltaY > 0 ? 0.9 : 1.1;
+            const factor = Math.exp(-e.deltaY * 0.002);
             const newZoom = Math.max(0.2, Math.min(3, zoom * factor));
             const rect = containerEl.getBoundingClientRect();
             const mx = e.clientX - rect.left;
@@ -162,8 +162,8 @@
             panY = my - (my - panY) * (newZoom / zoom);
             zoom = newZoom;
         } else {
-            panX -= e.deltaX;
-            panY -= e.deltaY;
+            panX -= e.deltaX * 0.4;
+            panY -= e.deltaY * 0.4;
         }
     }
 
