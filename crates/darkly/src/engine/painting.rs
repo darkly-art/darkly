@@ -350,6 +350,7 @@ impl DarklyEngine {
                         pre_stroke_texture: Some(stroke_buffer.pre_stroke_texture()),
                         pre_stroke_bind_group: Some(stroke_buffer.pre_stroke_bind_group()),
                         scratch_bind_group: Some(stroke_buffer.stroke_bind_group()),
+                        dab_write_bbox: None,
                     }
                 };
             }
@@ -504,6 +505,7 @@ impl DarklyEngine {
                     pre_stroke_texture: None,
                     pre_stroke_bind_group: None,
                     scratch_bind_group: None,
+                    dab_write_bbox: None,
                 };
                 self.brush_pipelines.reset_uniform_rings();
                 engine.move_to(info, &mut gpu_ctx);

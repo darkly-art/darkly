@@ -81,6 +81,15 @@ pub struct BrushGpuContext<'a> {
     /// `StrokeBuffer` so `color_output::commit` can bind it as the
     /// composite foreground (the per-dab accumulation).
     pub scratch_bind_group: Option<&'a wgpu::BindGroup>,
+    /// Union of canvas-pixel rects the current dab's passes write to, in
+    /// `[x, y, w, h]`. The node that issues the write is the only thing
+    /// that knows the real footprint — stroke_engine can't derive it from
+    /// `info.pos` because the graph may offset the dab (scatter, wobble,
+    /// future position-modulating nodes). Each pass unions its rect into
+    /// this via `push_dab_write_bbox`, stroke_engine reads it after
+    /// `execute_gpu` for the save-point bbox and resets it before the
+    /// next dab. `None` outside stroke evaluation.
+    pub dab_write_bbox: Option<[u32; 4]>,
 }
 
 impl<'a> BrushGpuContext<'a> {
@@ -108,6 +117,19 @@ impl<'a> BrushGpuContext<'a> {
             self.queue.submit([finished.finish()]);
             self.pipelines.reset_uniform_rings();
         }
+    }
+
+    /// Union a write-pass footprint into `dab_write_bbox`. Called by any
+    /// GPU node whose pass writes to the stroke scratch, so stroke_engine
+    /// can record a save-point bbox that matches what was actually drawn.
+    pub fn push_dab_write_bbox(&mut self, bbox: [u32; 4]) {
+        if bbox[2] == 0 || bbox[3] == 0 {
+            return;
+        }
+        self.dab_write_bbox = Some(match self.dab_write_bbox {
+            Some(prev) => crate::brush::save_points::union_bbox(prev, bbox),
+            None => bbox,
+        });
     }
 
     /// Ensure `canvas_copy_texture` holds the canvas region starting at the

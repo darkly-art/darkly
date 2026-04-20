@@ -132,6 +132,12 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             return vec![];
         }
 
+        // Publish the dab's canvas footprint so the stroke engine can
+        // record a save-point bbox that matches what was actually drawn.
+        // This is authoritative — `info.pos ± dab_radius` isn't, because
+        // the graph may offset position (scatter etc.).
+        gpu.push_dab_write_bbox([copy_x, copy_y, copy_w, copy_h]);
+
         // Ensure the scratch region under the dab is in canvas_copy for the
         // shader's straight-alpha Porter-Duff read. The bg here is the
         // scratch (not the layer) — source-over against the running stroke

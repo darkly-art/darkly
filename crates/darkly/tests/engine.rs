@@ -5,11 +5,13 @@
 //! exercise the same code paths that users hit.
 //! Run with: `cargo test -p darkly --test engine`
 
+use darkly::brush::wire::BrushWireType;
 use darkly::document::SelectionMode;
 use darkly::engine::DarklyEngine;
 use darkly::engine::types::StrokeOp;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
+use darkly::nodegraph::NodeInstance;
 
 /// Paint a solid-color brush stroke at a given position (test helper replacing legacy PaintCircle).
 fn paint_at(engine: &mut DarklyEngine, layer_id: u64, x: f32, y: f32, r: f32, g: f32, b: f32) {
@@ -174,4 +176,93 @@ fn lasso_selection_performance_and_correctness() {
     // Well outside polygon (50, 500) — 450px left of center, outside r=200.
     assert_eq!(alpha_at(&pixels, w, 50, cy as u32), 0,
         "outside lasso should be transparent");
+}
+
+// ============================================================================
+// Scatter brush dabs must survive stabilizer-driven checkpoint restore
+// ============================================================================
+
+fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
+    engine
+        .active_brush_graph_ref()
+        .nodes
+        .values()
+        .find(|n: &&NodeInstance<BrushWireType>| n.type_id == type_id)
+        .unwrap_or_else(|| panic!("no '{type_id}' node in default graph"))
+        .id
+        .0
+}
+
+/// Regression: `stroke_engine::place_dab` used to derive the save-point
+/// bbox from `info.pos ± dab_radius` — the unscattered polyline point, not
+/// where the dab actually landed. Every graph that offsets the dab (scatter
+/// being the obvious one) dropped paint outside the recorded bbox on
+/// checkpoint restore. With the stabilizer enabled, checkpoints save every
+/// `spacing` dabs and the synthetic tip divergence fires on every pen
+/// event, so the drop happens continuously during live drawing.
+///
+/// Setup: constant downward scatter (`scatter_y = 0.9`) on the default
+/// graph so the dab landing site is deterministic — every dab center sits
+/// at `y + 0.9 * dab_major`, well outside the unscattered bbox around the
+/// stroke centerline. With the bug, pixels outside that bbox are wiped on
+/// the next checkpoint restore; with the fix, they survive.
+#[test]
+fn scatter_brush_survives_checkpoint_restore() {
+    let (w, h) = (256, 256);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+
+    // Configure the default graph to exercise scatter deterministically.
+    let pen_id = find_node_id(&engine, "pen_input");
+    let stamp_id = find_node_id(&engine, "stamp");
+    // Enable laplacian stabilizer — gives spacing > 1 so restores actually
+    // find a prior checkpoint (with spacing=1, restore_before's strict `<`
+    // test never matches and the bug is hidden behind a full re-render).
+    engine.brush_graph_set_port_default(pen_id, "stabilize", 0.5).unwrap();
+    // Pin dab size: pressure(=1) → stamp.size, scale=0.1 → ~51px dab at
+    // MAX_DAB_SIZE=512. scatter_y=0.9 offsets ~46px down per dab.
+    engine.brush_graph_set_port_default(stamp_id, "scale", 0.1).unwrap();
+    engine.brush_graph_set_port_default(stamp_id, "scatter_y", 0.9).unwrap();
+
+    // Horizontal stroke at y=128. With scatter, every dab lands centered
+    // near y=174 (=128 + 0.9 * 51), footprint y ≈ [148, 200].
+    let stroke_y = (h / 2) as f32;
+    engine.begin_stroke(layer_id);
+    let samples = 40;
+    for i in 0..samples {
+        let t = i as f32 / (samples - 1) as f32;
+        let x = 32.0 + t * (w as f32 - 64.0);
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x, y: stroke_y,
+            pressure: 1.0,
+            x_tilt: 0.0, y_tilt: 0.0,
+            rotation: 0.0, tangential_pressure: 0.0,
+            time_ms: i as f64 * 16.0,
+            cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_layer(layer_id);
+
+    // Paint is expected across the stroke's x range at y=190 — well
+    // inside the scattered dab footprint (y ≈ [148, 200]), well outside
+    // the unscattered bbox (y ≈ [102, 154]) that the buggy code records.
+    // Sample the middle of the stroke where the corresponding dabs are
+    // far enough from the tip that they sit behind the most recent
+    // checkpoint and their scatter goes through the restore path.
+    let probe_y: u32 = 190;
+    let mut painted_xs = 0u32;
+    for px in 64..(w - 64) {
+        if alpha_at(&pixels, w, px, probe_y) > 0 {
+            painted_xs += 1;
+        }
+    }
+    assert!(
+        painted_xs > 64,
+        "scattered paint at y={probe_y} covers only {painted_xs} x-pixels; \
+         most of the stroke's scatter at that y has been wiped by \
+         checkpoint restore (save-point bbox doesn't cover dab footprint)"
+    );
 }

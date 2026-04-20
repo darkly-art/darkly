@@ -91,7 +91,7 @@ impl SavePointStore {
 }
 
 /// Compute the union of two `[x, y, w, h]` bounding boxes.
-fn union_bbox(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
+pub fn union_bbox(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
     let ax2 = a[0] + a[2];
     let ay2 = a[1] + a[3];
     let bx2 = b[0] + b[2];
