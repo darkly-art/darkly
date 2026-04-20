@@ -322,7 +322,7 @@
         /* filled by inline style */
     }
     .port-dot:hover {
-        transform: scale(1.3);
+        transform: translateY(-50%) scale(1.3);
     }
     .port-label {
         font-size: 9px;
