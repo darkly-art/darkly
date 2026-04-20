@@ -47,8 +47,6 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Width and height of the dab in pixels"),
             PortDef::input("position", BrushWireType::Vec2)
                 .with_description("Canvas position where the dab center is placed"),
-            PortDef::input("scatter_offset", BrushWireType::Vec2)
-                .with_description("Random offset added to the position for scatter effects"),
             PortDef::input("blend_mode", BrushWireType::Int)
                 .with_range(0.0, 1.0, 0.0)
                 .with_description("Compositing blend mode (0 = source over, 1 = erase)"),
@@ -88,9 +86,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             _ => return vec![],
         };
         let dab_size = ctx.input("dab_size").as_vec2();
-        let base_position = ctx.input("position").as_vec2();
-        let scatter = ctx.input("scatter_offset").as_vec2();
-        let position = [base_position[0] + scatter[0], base_position[1] + scatter[1]];
+        let position = ctx.input("position").as_vec2();
 
         let dab_w = dab_size[0];
         let dab_h = dab_size[1];

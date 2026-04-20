@@ -46,10 +46,11 @@ impl PresetBuilder {
     /// Create a new builder with the standard nodes and output wiring.
     ///
     /// Pre-wires: stamp.dab → color_output.dab, stamp.dab_size →
-    /// color_output.dab_size, stamp.scatter_offset → color_output.scatter_offset,
-    /// pen_input.position → color_output.position, and stamp.preview →
-    /// color_output.brush_preview (the hover preview path — terminal's
-    /// `render_preview` hook blits this into the overlay).
+    /// color_output.dab_size, pen_input.position → color_output.position,
+    /// and stamp.preview → color_output.brush_preview (the hover preview
+    /// path — terminal's `render_preview` hook blits this into the
+    /// overlay). Presets that want jitter call `wire_scatter` to splice
+    /// a `scatter` node onto the position wire.
     fn new() -> Self {
         let registry = BrushNodeRegistry::new();
         let mut graph = Graph::new();
@@ -79,7 +80,6 @@ impl PresetBuilder {
         let wires = [
             (stamp, "dab", color_output, "dab"),
             (stamp, "dab_size", color_output, "dab_size"),
-            (stamp, "scatter_offset", color_output, "scatter_offset"),
             (pen, "position", color_output, "position"),
             // Hover preview: the terminal's `render_preview` hook blits the
             // stamp's transform-baked, deposition-stripped preview texture.
@@ -186,6 +186,29 @@ impl PresetBuilder {
             self.registry.get("random").unwrap().ports.clone(),
             vec![ParamValue::Int(mode)],
         )
+    }
+
+    /// Splice a `scatter` node onto the position wire feeding
+    /// `color_output.position`, with size-proportional displacement
+    /// (`stamp.dab_major` → `scatter.dab_size`) and the given amounts
+    /// exposed as toolbar knobs. Returns the scatter node id for any
+    /// further wiring the preset wants to do.
+    fn wire_scatter(&mut self, amount_x: f32, amount_y: f32) -> NodeId {
+        let scatter = self.graph.add_node(
+            "scatter",
+            self.registry.get("scatter").unwrap().ports.clone(),
+            vec![],
+        );
+        self.graph.disconnect(
+            &PortRef { node: self.pen, port: "position".into() },
+            &PortRef { node: self.color_output, port: "position".into() },
+        );
+        self.wire(self.pen, "position", scatter, "position");
+        self.wire(scatter, "position", self.color_output, "position");
+        self.wire(self.stamp, "dab_major", scatter, "dab_size");
+        self.expose_port(scatter, "amount_x", amount_x);
+        self.expose_port(scatter, "amount_y", amount_y);
+        scatter
     }
 
     /// Generic wire helper.
@@ -320,11 +343,8 @@ fn scatter_brush() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.3);
     b.wire(b.pen, "pressure", b.stamp, "size");
-    let rand_x = b.add_random(0);
-    let rand_y = b.add_random(0);
-    b.wire(rand_x, "value", b.stamp, "scatter_x");
-    b.wire(rand_y, "value", b.stamp, "scatter_y");
     b.wire(b.paint_color, "color", b.stamp, "color");
+    b.wire_scatter(1.0, 1.0);
     b.build("Scatter Brush", "effects")
 }
 

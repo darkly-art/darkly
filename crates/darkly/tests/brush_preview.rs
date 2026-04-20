@@ -339,7 +339,6 @@ fn legacy_preview_output_migrates_on_load() {
         (paint_color, "color", stamp, "color"),
         (stamp, "dab", color_output, "dab"),
         (stamp, "dab_size", color_output, "dab_size"),
-        (stamp, "scatter_offset", color_output, "scatter_offset"),
         (pen, "position", color_output, "position"),
         // Legacy preview wires that the migration should drop.
         (stamp, "dab", preview_output_id, "dab"),

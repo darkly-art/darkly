@@ -99,6 +99,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("make_color".into(), Box::new(nodes::make_color::MakeColorEvaluator));
     map.insert("user_input".into(), Box::new(nodes::user_input::UserInputEvaluator));
     map.insert("random".into(), Box::new(nodes::random::RandomEvaluator));
+    map.insert("scatter".into(), Box::new(nodes::scatter::ScatterEvaluator));
     // GPU nodes.
     map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
     map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
@@ -116,11 +117,12 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
 ///   paint_color ──color──→  stamp.color
 ///   stamp ──dab──→          color_output.dab
 ///   stamp ──dab_size──→     color_output.dab_size
-///   stamp ──scatter_offset──→ color_output.scatter_offset
 ///   pen_input ──position──→ color_output.position
 ///   stamp ──preview──→      color_output.brush_preview
 ///
-/// Produces a basic round brush with pressure → size dynamics.
+/// Produces a basic round brush with pressure → size dynamics. Brushes
+/// that want jitter put a `scatter` node between `pen_input.position`
+/// and `color_output.position`.
 pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     use crate::nodegraph::{Graph, PortRef};
 
@@ -181,12 +183,6 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     graph.connect(
         PortRef { node: pen, port: "position".into() },
         PortRef { node: color_output, port: "position".into() },
-    ).unwrap();
-
-    // stamp.scatter_offset → color_output.scatter_offset
-    graph.connect(
-        PortRef { node: stamp, port: "scatter_offset".into() },
-        PortRef { node: color_output, port: "scatter_offset".into() },
     ).unwrap();
 
     // stamp.preview → color_output.brush_preview

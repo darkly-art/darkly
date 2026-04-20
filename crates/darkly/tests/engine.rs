@@ -201,28 +201,33 @@ fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
 /// `spacing` dabs and the synthetic tip divergence fires on every pen
 /// event, so the drop happens continuously during live drawing.
 ///
-/// Setup: constant downward scatter (`scatter_y = 0.9`) on the default
-/// graph so the dab landing site is deterministic — every dab center sits
-/// at `y + 0.9 * dab_major`, well outside the unscattered bbox around the
-/// stroke centerline. With the bug, pixels outside that bbox are wiped on
-/// the next checkpoint restore; with the fix, they survive.
+/// Setup: loads the "Scatter Brush" preset (scatter node on the position
+/// wire, size-proportional via `stamp.dab_size`). Amount_y is forced
+/// high and the scatter node's own random is deterministic (hash of
+/// `stroke_seed + node_id + dab_index`), so replays reproduce the same
+/// pattern. With the bug, pixels outside the unscattered bbox are wiped
+/// on each checkpoint restore; with the fix, they survive.
 #[test]
 fn scatter_brush_survives_checkpoint_restore() {
     let (w, h) = (256, 256);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
 
-    // Configure the default graph to exercise scatter deterministically.
+    engine.brush_preset_load("Scatter Brush").expect("preset load");
+
+    // Configure the scatter brush graph to exercise the checkpoint path.
     let pen_id = find_node_id(&engine, "pen_input");
     let stamp_id = find_node_id(&engine, "stamp");
+    let scatter_id = find_node_id(&engine, "scatter");
     // Enable laplacian stabilizer — gives spacing > 1 so restores actually
     // find a prior checkpoint (with spacing=1, restore_before's strict `<`
     // test never matches and the bug is hidden behind a full re-render).
     engine.brush_graph_set_port_default(pen_id, "stabilize", 0.5).unwrap();
     // Pin dab size: pressure(=1) → stamp.size, scale=0.1 → ~51px dab at
-    // MAX_DAB_SIZE=512. scatter_y=0.9 offsets ~46px down per dab.
+    // MAX_DAB_SIZE=512. amount_y=1.0 offsets up to ±51px per dab.
     engine.brush_graph_set_port_default(stamp_id, "scale", 0.1).unwrap();
-    engine.brush_graph_set_port_default(stamp_id, "scatter_y", 0.9).unwrap();
+    engine.brush_graph_set_port_default(scatter_id, "amount_x", 0.0).unwrap();
+    engine.brush_graph_set_port_default(scatter_id, "amount_y", 1.0).unwrap();
 
     // Horizontal stroke at y=128. With scatter, every dab lands centered
     // near y=174 (=128 + 0.9 * 51), footprint y ≈ [148, 200].
@@ -246,23 +251,27 @@ fn scatter_brush_survives_checkpoint_restore() {
 
     let pixels = engine.test_readback_layer(layer_id);
 
-    // Paint is expected across the stroke's x range at y=190 — well
-    // inside the scattered dab footprint (y ≈ [148, 200]), well outside
-    // the unscattered bbox (y ≈ [102, 154]) that the buggy code records.
-    // Sample the middle of the stroke where the corresponding dabs are
-    // far enough from the tip that they sit behind the most recent
-    // checkpoint and their scatter goes through the restore path.
-    let probe_y: u32 = 190;
-    let mut painted_xs = 0u32;
-    for px in 64..(w - 64) {
-        if alpha_at(&pixels, w, px, probe_y) > 0 {
-            painted_xs += 1;
+    // Measure the vertical spread of painted pixels. With scatter on Y,
+    // paint should spread well past the unscattered bbox around y=128
+    // (which would be ~y ∈ [102, 154], total ~52px tall for this dab
+    // size). The bug clamps the spread to that bbox; the fix preserves
+    // the full scattered footprint ~y ∈ [51, 205], total ~150px tall.
+    let mut min_y = u32::MAX;
+    let mut max_y = 0u32;
+    for py in 0..h {
+        for px in 0..w {
+            if alpha_at(&pixels, w, px, py) > 0 {
+                min_y = min_y.min(py);
+                max_y = max_y.max(py);
+            }
         }
     }
+    assert!(min_y != u32::MAX, "stroke painted nothing");
+    let spread = max_y - min_y + 1;
     assert!(
-        painted_xs > 64,
-        "scattered paint at y={probe_y} covers only {painted_xs} x-pixels; \
-         most of the stroke's scatter at that y has been wiped by \
-         checkpoint restore (save-point bbox doesn't cover dab footprint)"
+        spread > 90,
+        "scatter vertical spread is only {spread}px (y ∈ [{min_y}, {max_y}]); \
+         dab footprint should stretch ~150px across y but is clamped to the \
+         unscattered bbox because checkpoint restore wipes outside-bbox pixels"
     );
 }
