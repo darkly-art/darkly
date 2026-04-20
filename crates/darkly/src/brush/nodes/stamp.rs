@@ -76,10 +76,6 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("The stamped dab texture ready for compositing"),
             PortDef::output("dab_size", BrushWireType::Vec2)
                 .with_description("Actual pixel dimensions of the generated dab"),
-            PortDef::output("dab_major", BrushWireType::Scalar)
-                .with_description("Longer axis of the generated dab, in canvas pixels — \
-                    a scalar scaffold for things like scatter that want one \
-                    multiplier rather than a Vec2"),
             PortDef::output("preview", BrushWireType::Texture)
                 .with_description("Hover-preview texture: brush tip with rotation/ratio/mirror baked in, deposition (flow/color) neutralised. Texture dimensions encode the brush's canvas-pixel extent."),
         ],
@@ -242,11 +238,9 @@ impl BrushNodeEvaluator for StampEvaluator {
             &tip_bind_group, &inputs, &dab_view, (dab_w, dab_h), "brush-stamp",
         );
 
-        let dab_major = dab_w.max(dab_h) as f32;
         vec![
             ("dab".into(), ScalarValue::Texture(handle)),
             ("dab_size".into(), ScalarValue::Vec2([dab_w as f32, dab_h as f32])),
-            ("dab_major".into(), ScalarValue::Scalar(dab_major)),
         ]
     }
 

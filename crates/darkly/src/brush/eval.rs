@@ -441,7 +441,14 @@ impl BrushGraphRunner {
                 node_id: step.node_id,
             };
 
-            let outputs = f(evaluator.as_ref(), &ctx, gpu);
+            // Pure-math nodes promoted to the GPU phase (because an input
+            // depends on a GPU output) only implement `evaluate_cpu`. Run
+            // it here so the slot table fills in topological order; the
+            // `evaluate_gpu` closure runs too and no-ops (empty default).
+            // Declared-GPU nodes take the opposite path: `evaluate_cpu`
+            // returns empty, `evaluate_gpu` does the work.
+            let mut outputs = evaluator.evaluate_cpu(&ctx);
+            outputs.extend(f(evaluator.as_ref(), &ctx, gpu));
 
             // Write outputs to their assigned slots.
             for (port_name, value) in outputs {

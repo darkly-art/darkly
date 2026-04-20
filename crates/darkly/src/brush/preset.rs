@@ -430,8 +430,10 @@ fn migrate_stamp_scatter_to_node(graph: &mut Graph<BrushWireType>) {
 
     let registry = crate::brush::BrushNodeRegistry::new();
     let Some(scatter_reg) = registry.get("scatter") else { return };
+    let Some(split_reg) = registry.get("split_vec2") else { return };
 
     let scatter_id = graph.add_node("scatter", scatter_reg.ports.clone(), vec![]);
+    let split_id = graph.add_node("split_vec2", split_reg.ports.clone(), vec![]);
     let _ = graph.set_port_default(scatter_id, "amount_x", 1.0);
     let _ = graph.set_port_default(scatter_id, "amount_y", 1.0);
     let _ = graph.set_port_exposed(scatter_id, "amount_x", true);
@@ -459,8 +461,13 @@ fn migrate_stamp_scatter_to_node(graph: &mut Graph<BrushWireType>) {
         PortRef { node: scatter_id, port: "position".into() },
         PortRef { node: color_id, port: "position".into() },
     );
+    // stamp.dab_size (Vec2) → split_vec2 → scatter.dab_size (Scalar)
     let _ = graph.connect(
-        PortRef { node: stamp_id, port: "dab_major".into() },
+        PortRef { node: stamp_id, port: "dab_size".into() },
+        PortRef { node: split_id, port: "vec".into() },
+    );
+    let _ = graph.connect(
+        PortRef { node: split_id, port: "x".into() },
         PortRef { node: scatter_id, port: "dab_size".into() },
     );
 }
@@ -746,11 +753,22 @@ mod tests {
                 && c.to.node == color_output && c.to.port == "position"),
             "scatter.position → color_output.position wire missing"
         );
+        // stamp.dab_size (Vec2) → split_vec2 → scatter.dab_size (Scalar).
+        let split_id = g.nodes.iter()
+            .find(|(_, n)| n.type_id == "split_vec2")
+            .map(|(id, _)| *id)
+            .expect("migration should add a split_vec2 node");
         assert!(
             g.connections.iter().any(|c|
-                c.from.node == stamp && c.from.port == "dab_major"
+                c.from.node == stamp && c.from.port == "dab_size"
+                && c.to.node == split_id && c.to.port == "vec"),
+            "stamp.dab_size → split_vec2.vec wire missing"
+        );
+        assert!(
+            g.connections.iter().any(|c|
+                c.from.node == split_id && c.from.port == "x"
                 && c.to.node == scatter_id && c.to.port == "dab_size"),
-            "stamp.dab_major → scatter.dab_size wire missing"
+            "split_vec2.x → scatter.dab_size wire missing"
         );
 
         // Migrated graph compiles.

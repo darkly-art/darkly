@@ -189,14 +189,18 @@ impl PresetBuilder {
     }
 
     /// Splice a `scatter` node onto the position wire feeding
-    /// `color_output.position`, with size-proportional displacement
-    /// (`stamp.dab_major` → `scatter.dab_size`) and the given amounts
-    /// exposed as toolbar knobs. Returns the scatter node id for any
-    /// further wiring the preset wants to do.
+    /// `color_output.position`, with size-proportional displacement —
+    /// `stamp.dab_size` → `split_vec2.x` → `scatter.dab_size`. The
+    /// amounts are exposed as toolbar knobs. Returns the scatter node id.
     fn wire_scatter(&mut self, amount_x: f32, amount_y: f32) -> NodeId {
         let scatter = self.graph.add_node(
             "scatter",
             self.registry.get("scatter").unwrap().ports.clone(),
+            vec![],
+        );
+        let split = self.graph.add_node(
+            "split_vec2",
+            self.registry.get("split_vec2").unwrap().ports.clone(),
             vec![],
         );
         self.graph.disconnect(
@@ -205,7 +209,8 @@ impl PresetBuilder {
         );
         self.wire(self.pen, "position", scatter, "position");
         self.wire(scatter, "position", self.color_output, "position");
-        self.wire(self.stamp, "dab_major", scatter, "dab_size");
+        self.wire(self.stamp, "dab_size", split, "vec");
+        self.wire(split, "x", scatter, "dab_size");
         self.expose_port(scatter, "amount_x", amount_x);
         self.expose_port(scatter, "amount_y", amount_y);
         scatter

@@ -2,21 +2,18 @@
 //!
 //! Takes a `position` wire and emits a displaced position. The offset is
 //! drawn from an internal per-axis PRNG in (-1, 1), scaled by the user-
-//! controllable `amount_x` / `amount_y`, and optionally scaled again by
-//! an axis-wise `dab_size` multiplier (when wired). Positioned in the
+//! controllable `amount_x` / `amount_y`, and then by `dab_size` (the
+//! pixel reference the amounts are fractions of). Positioned in the
 //! graph wherever jitter is wanted: before `color_output.position` for
 //! deposition scatter, before a smudge sample point for texture-direction
 //! noise, etc. Two independent scatter nodes in the same graph salt their
 //! seeds with their own `node_id`, so they produce uncorrelated streams.
 //!
-//! Tagged `is_gpu: true` to sit in the GPU evaluation phase even though
-//! it touches no GPU resources: the `dab_size` input is commonly wired
-//! from a dab-producing node (e.g. `stamp`) whose dab_size isn't known
-//! until after `execute_cpu`. Running scatter in the GPU phase lets
-//! topo-order deliver that value.
+//! The node is pure math — the compiler auto-promotes it to the GPU
+//! phase when `dab_size` is wired from a GPU-produced output (e.g. via
+//! `split_vec2` on `stamp.dab_size`).
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
-use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
@@ -56,7 +53,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Input position + random offset"),
         ],
         params: &[],
-        is_gpu: true,
+        is_gpu: false,
     }
 }
 
@@ -76,17 +73,7 @@ fn prng_f32(seed: u32, index: u32) -> f32 {
 pub struct ScatterEvaluator;
 
 impl BrushNodeEvaluator for ScatterEvaluator {
-    fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        // Pure math, but scheduled in the GPU phase so topo-order can
-        // deliver `dab_size` from a GPU node. See module doc.
-        vec![]
-    }
-
-    fn evaluate_gpu(
-        &self,
-        ctx: &EvalContext,
-        _gpu: &mut BrushGpuContext,
-    ) -> Vec<(String, ScalarValue)> {
+    fn evaluate_cpu(&self, ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         let position = ctx.input("position").as_vec2();
         let amount_x = ctx.input_f32("amount_x");
         let amount_y = ctx.input_f32("amount_y");
