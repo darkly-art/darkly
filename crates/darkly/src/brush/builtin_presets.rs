@@ -25,6 +25,7 @@ pub fn all() -> Vec<PresetBundle> {
         pencil(),
         charcoal(),
         canvas_brush(),
+        liquify_push(),
     ]
 }
 
@@ -451,6 +452,44 @@ fn canvas_brush() -> PresetBundle {
     b.build_with_resources("Canvas Brush", "painting", vec![
         ("canvas_grain.png", ResourceKind::Pattern, pattern_bytes),
     ])
+}
+
+/// Liquify warp brush. Pushes pixels along pen motion with a radial
+/// falloff. Unlike paint presets, the graph has no stamp / paint_color /
+/// color_output — the liquify node is itself the terminal, with its own
+/// `begin_stroke` / `commit` / `render_preview` lifecycle.
+fn liquify_push() -> PresetBundle {
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let liquify = graph.add_node(
+        "liquify",
+        registry.get("liquify").unwrap().ports.clone(),
+        vec![],
+    );
+
+    // pen_input.position → liquify.position
+    graph.connect(
+        PortRef { node: pen, port: "position".into() },
+        PortRef { node: liquify, port: "position".into() },
+    ).unwrap();
+    // pen_input.motion → liquify.motion
+    graph.connect(
+        PortRef { node: pen, port: "motion".into() },
+        PortRef { node: liquify, port: "motion".into() },
+    ).unwrap();
+
+    // size / strength / softness are already `.exposed()` on the liquify
+    // node-def, so the toolbar picks them up without extra preset work.
+
+    let mut preset = BrushPreset::from_graph("Liquify", graph);
+    preset.category = "effects".to_string();
+    PresetBundle::without_resources(preset)
 }
 
 // ---------------------------------------------------------------------------

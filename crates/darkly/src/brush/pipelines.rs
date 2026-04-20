@@ -67,6 +67,40 @@ pub struct BlitUniforms {
     pub uv_max: [f32; 2],
 }
 
+/// Uniform data for the liquify warp shader.
+///
+/// The shader samples `canvas_copy` (a copy of the stroke scratch) at a
+/// displaced UV inside a circular brush disc and writes the warped sample
+/// back to the scratch. Everything is canvas-space; the shader converts to
+/// UVs via `canvas_size` and `copy_origin`.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LiquifyUniforms {
+    /// Top-left of the render-pass quad in canvas pixels (clamped to canvas
+    /// bounds). The quad covers the brush disc plus displacement padding.
+    pub rect_origin: [f32; 2],
+    /// Width and height of the render-pass quad in canvas pixels.
+    pub rect_size: [f32; 2],
+    /// Full canvas dimensions (for NDC conversion + selection UV).
+    pub canvas_size: [f32; 2],
+    /// Float copy origin matching the `canvas_copy` `copy_texture_to_texture`
+    /// call. The shader floors this before dividing to recover the texel
+    /// coordinate — same pattern as `composite.wgsl`.
+    pub copy_origin: [f32; 2],
+    /// Brush centre in canvas pixels.
+    pub center: [f32; 2],
+    /// Motion vector (canvas pixels). Pixels sampled from `canvas_pos −
+    /// motion × falloff × strength`.
+    pub motion: [f32; 2],
+    /// Brush radius in canvas pixels.
+    pub radius: f32,
+    /// Displacement magnitude multiplier (0–1). Zero = no effect.
+    pub strength: f32,
+    /// Waveshape knob (0–1). 0 = saw, 0.5 = sine, 1 = square.
+    pub softness: f32,
+    pub _pad: f32,
+}
+
 /// Uniform data for the dab compositing shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -167,6 +201,10 @@ pub struct BrushPipelines {
     blit_uniform_ring: DynamicUniformRing,
     pub(crate) blit_uniform_bind_group: wgpu::BindGroup,
 
+    liquify_pipeline: wgpu::RenderPipeline,
+    liquify_uniform_ring: DynamicUniformRing,
+    pub(crate) liquify_uniform_bind_group: wgpu::BindGroup,
+
     /// 1x1 white selection texture — bound when no selection is active.
     pub(crate) default_selection_bind_group: wgpu::BindGroup,
     pub(crate) selection_bgl: wgpu::BindGroupLayout,
@@ -231,6 +269,13 @@ impl BrushPipelines {
             label: Some("brush-blit"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../../../shaders/brush/blit.wgsl").into(),
+            ),
+        });
+
+        let liquify_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("brush-liquify"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/brush/liquify.wgsl").into(),
             ),
         });
 
@@ -333,6 +378,16 @@ impl BrushPipelines {
             immediate_size: 0,
         });
 
+        // Liquify: group(0) = uniforms, group(1) = selection mask,
+        //          group(2) = canvas copy (sampled at displaced UV — linear).
+        // No dab texture — the warp reads from canvas_copy and writes to the
+        // scratch render target, producing the new canvas state directly.
+        let liquify_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("brush-liquify-layout"),
+            bind_group_layouts: &[&uniform_bgl, &selection_bgl, &canvas_copy_bgl],
+            immediate_size: 0,
+        });
+
         // --- Dynamic uniform rings ---
         let circle_uniform_ring = DynamicUniformRing::new(
             device, "brush-circle-uniforms",
@@ -419,6 +474,23 @@ impl BrushPipelines {
             }],
         });
 
+        let liquify_uniform_ring = DynamicUniformRing::new(
+            device, "brush-liquify-uniforms",
+            std::mem::size_of::<LiquifyUniforms>() as u64, min_align,
+        );
+        let liquify_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("brush-liquify-uniform-bg"),
+            layout: &uniform_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &liquify_uniform_ring.buffer,
+                    offset: 0,
+                    size: Some(liquify_uniform_ring.binding_size()),
+                }),
+            }],
+        });
+
         // --- Default selection (1x1 white = fully selected) ---
         let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-default-selection"),
@@ -485,10 +557,14 @@ impl BrushPipelines {
             view_formats: &[],
         });
         let canvas_copy_view = canvas_copy_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // Linear sampler — `composite.wgsl` reads at integer pixel origins
+        // (produces the same value as Nearest at pixel centres), while
+        // `liquify.wgsl` reads at displaced sub-pixel UVs and needs bilinear
+        // interpolation to avoid blocky warp output.
         let canvas_copy_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("brush-canvas-copy-sampler"),
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         let canvas_copy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -659,6 +735,40 @@ impl BrushPipelines {
             cache: None,
         });
 
+        // Liquify: REPLACE blend — the shader reads canvas_copy at a displaced
+        // UV and writes the result straight into the scratch render target.
+        // No alpha blending needed; each fragment either outputs a warped
+        // sample or (outside the disc) discards, leaving the scratch's prior
+        // content (which LoadOp::Load preserved).
+        let liquify_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("brush-liquify"),
+            layout: Some(&liquify_layout),
+            vertex: wgpu::VertexState {
+                module: &liquify_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &liquify_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         Self {
             circle_pipeline,
             stamp_pipeline,
@@ -675,6 +785,9 @@ impl BrushPipelines {
             blit_pipeline,
             blit_uniform_ring,
             blit_uniform_bind_group,
+            liquify_pipeline,
+            liquify_uniform_ring,
+            liquify_uniform_bind_group,
             default_selection_bind_group,
             selection_bgl,
             canvas_copy_texture,
@@ -704,8 +817,19 @@ impl BrushPipelines {
         &self.blit_pipeline
     }
 
+    pub fn liquify_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.liquify_pipeline
+    }
+
     pub fn selection_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.selection_bgl
+    }
+
+    /// The 1×1 white selection bind group — bound when no selection is active.
+    /// Exposed for out-of-crate tests that construct a `BrushGpuContext`
+    /// manually and need a default selection mask.
+    pub fn default_selection_bind_group(&self) -> &wgpu::BindGroup {
+        &self.default_selection_bind_group
     }
 
     pub fn canvas_copy_texture(&self) -> &wgpu::Texture {
@@ -746,6 +870,12 @@ impl BrushPipelines {
         self.blit_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
     }
 
+    /// Write liquify uniforms to the next ring slot.
+    /// Returns the dynamic byte offset for `set_bind_group`.
+    pub fn write_liquify_uniforms(&self, queue: &wgpu::Queue, uniforms: &LiquifyUniforms) -> u32 {
+        self.liquify_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
+    }
+
     /// True if any ring is close to capacity.  The caller should flush
     /// the current encoder, reset rings, and create a fresh encoder.
     pub fn rings_nearly_full(&self) -> bool {
@@ -754,6 +884,7 @@ impl BrushPipelines {
             || self.tex_overlay_uniform_ring.nearly_full()
             || self.composite_uniform_ring.nearly_full()
             || self.blit_uniform_ring.nearly_full()
+            || self.liquify_uniform_ring.nearly_full()
     }
 
     /// Reset all uniform rings for a new frame.
@@ -763,5 +894,6 @@ impl BrushPipelines {
         self.tex_overlay_uniform_ring.reset();
         self.composite_uniform_ring.reset();
         self.blit_uniform_ring.reset();
+        self.liquify_uniform_ring.reset();
     }
 }

@@ -40,6 +40,11 @@ pub struct PaintInformation {
     pub distance: f32,
     /// Drawing angle in radians (direction of pen travel, 0 = right).
     pub drawing_angle: f32,
+    /// Per-dab motion vector in canvas pixels — the position delta from the
+    /// previous stabilized sample into this one. All dabs in a segment carry
+    /// the segment's motion, not a per-dab tangent. Warp brushes (liquify,
+    /// smudge) read this to push pixels along the pen's direction of travel.
+    pub motion: [f32; 2],
     /// Combined tilt magnitude (0-1), derived from x_tilt and y_tilt.
     pub tilt_magnitude: f32,
     /// Tilt direction in radians.

@@ -316,6 +316,7 @@ impl BrushGraphRunner {
                 "drawing_angle" => ScalarValue::Scalar(info.drawing_angle),
                 "time" => ScalarValue::Scalar(info.time),
                 "position" => ScalarValue::Vec2(info.pos),
+                "motion" => ScalarValue::Vec2(info.motion),
                 "index" => ScalarValue::Int(info.index as i32),
                 "fade" => ScalarValue::Scalar(info.fade),
                 _ => continue,

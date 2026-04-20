@@ -41,6 +41,8 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Elapsed time since the stroke began (seconds)"),
             PortDef::output("position", BrushWireType::Vec2)
                 .with_description("Current cursor position in canvas coordinates (x, y)"),
+            PortDef::output("motion", BrushWireType::Vec2)
+                .with_description("Per-dab motion vector in canvas pixels (delta from previous sample)"),
             PortDef::output("index", BrushWireType::Int)
                 .with_description("Dab index within the current stroke (0, 1, 2, ...)"),
             PortDef::output("fade", BrushWireType::Scalar)

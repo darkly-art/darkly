@@ -248,6 +248,7 @@ impl StrokeEngine {
             let dx = info.pos[0] - prev.pos[0];
             let dy = info.pos[1] - prev.pos[1];
             info.drawing_angle = dy.atan2(dx);
+            info.motion = [dx, dy];
 
             let dt = info.time - prev.time;
             if dt > 0.0 {
@@ -324,8 +325,9 @@ impl StrokeEngine {
         gpu.dab_pool.release_all();
         gpu.flush_if_needed();
 
-        // Update dab size from dab source node output (procedural or stamp).
-        for node_type in &["procedural", "stamp"] {
+        // Update dab size from dab source node output (procedural, stamp,
+        // or warp terminals like liquify that report an effective radius).
+        for node_type in &["procedural", "stamp", "liquify"] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
                 if let Some(val) = self.runner.read_slot(slot) {
                     let size = val.as_vec2();
@@ -408,6 +410,7 @@ impl StrokeEngine {
         let dx = info.pos[0] - prev.pos[0];
         let dy = info.pos[1] - prev.pos[1];
         info.drawing_angle = dy.atan2(dx);
+        info.motion = [dx, dy];
 
         let dt = info.time - prev.time;
         if dt > 0.0 {
