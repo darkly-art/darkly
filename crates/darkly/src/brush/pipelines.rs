@@ -73,6 +73,11 @@ pub struct BlitUniforms {
 /// displaced UV inside a circular brush disc and writes the warped sample
 /// back to the scratch. Everything is canvas-space; the shader converts to
 /// UVs via `canvas_size` and `copy_origin`.
+///
+/// Per-dab displacement magnitude is decided on the CPU (strength × radius)
+/// and passed as `displacement`; the shader just multiplies by a unit
+/// direction vector and the radial falloff. Pen speed never enters the
+/// equation — a slow drag produces the same per-dab warp as a fast flick.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LiquifyUniforms {
@@ -89,13 +94,14 @@ pub struct LiquifyUniforms {
     pub copy_origin: [f32; 2],
     /// Brush centre in canvas pixels.
     pub center: [f32; 2],
-    /// Motion vector (canvas pixels). Pixels sampled from `canvas_pos −
-    /// motion × falloff × strength`.
-    pub motion: [f32; 2],
+    /// Unit direction vector (cos θ, sin θ). Pixels sampled from
+    /// `canvas_pos − direction × displacement × falloff`.
+    pub direction: [f32; 2],
+    /// Displacement magnitude in canvas pixels at the brush centre
+    /// (where falloff = 1). Computed as `radius × K × strength`.
+    pub displacement: f32,
     /// Brush radius in canvas pixels.
     pub radius: f32,
-    /// Displacement magnitude multiplier (0–1). Zero = no effect.
-    pub strength: f32,
     /// Waveshape knob (0–1). 0 = saw, 0.5 = sine, 1 = square.
     pub softness: f32,
     pub _pad: f32,

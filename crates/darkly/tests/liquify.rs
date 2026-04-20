@@ -12,6 +12,7 @@
 //! Run with `cargo test -p darkly --test liquify`.
 
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock};
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
@@ -27,11 +28,26 @@ use darkly::nodegraph::{Graph, PortRef};
 
 const CANVAS: u32 = 128;
 
+/// Share a single `(Device, Queue)` across every test in this binary.
+///
+/// Tests run concurrently by default. Creating a fresh wgpu device per
+/// test races through instance/adapter enumeration on some Vulkan drivers
+/// and SIGSEGVs. Sharing the handles (which wgpu documents as Send + Sync)
+/// sidesteps the race cleanly — each test still builds its own pipelines,
+/// textures, etc., so there's no cross-test state leakage.
+fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
+    static HANDLES: OnceLock<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> = OnceLock::new();
+    HANDLES.get_or_init(|| {
+        let (d, q) = test_device();
+        (Arc::new(d), Arc::new(q))
+    }).clone()
+}
+
 // ── Test harness ────────────────────────────────────────────────────────────
 
 struct Harness {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
     layer_texture: wgpu::Texture,
     layer_view: wgpu::TextureView,
     pipelines: BrushPipelines,
@@ -70,15 +86,19 @@ fn liquify_graph(
         PortRef { node: liquify, port: "position".into() },
     ).unwrap();
     graph.connect(
-        PortRef { node: pen, port: "motion".into() },
-        PortRef { node: liquify, port: "motion".into() },
+        PortRef { node: pen, port: "drawing_angle".into() },
+        PortRef { node: liquify, port: "direction".into() },
+    ).unwrap();
+    graph.connect(
+        PortRef { node: pen, port: "distance".into() },
+        PortRef { node: liquify, port: "distance".into() },
     ).unwrap();
 
     graph
 }
 
 fn harness(initial: &[u8], size: f32, strength: f32, softness: f32) -> Harness {
-    let (device, queue) = test_device();
+    let (device, queue) = shared_device();
 
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, initial);
 
@@ -201,36 +221,46 @@ fn canvas_with_bar() -> Vec<u8> {
     pixels
 }
 
-fn pen(pos: [f32; 2], motion: [f32; 2]) -> PaintInformation {
-    PaintInformation { pos, motion, ..Default::default() }
+/// Build a `PaintInformation` with a given position and drawing direction.
+/// `direction` is in radians (0 = east, matching `pen_input.drawing_angle`).
+///
+/// Sets `distance` to a non-zero value (the stroke engine would do this for
+/// any dab after the first). Tests that want to exercise the "stationary
+/// click → no-op" gate construct PaintInformation manually with distance=0.
+fn pen(pos: [f32; 2], direction: f32) -> PaintInformation {
+    PaintInformation {
+        pos,
+        drawing_angle: direction,
+        distance: 10.0,
+        ..Default::default()
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
-/// Rightward motion should push the bar's red pixels to the right.
+/// An eastward dab should push the bar's red pixels to the right.
 ///
-/// With `motion = (20, 0)` and `strength = 1` and `softness = 1` (square,
-/// flat inside the disc), the shader samples from `canvas_pos - (20, 0)`.
-/// The original bar at x=63..=64 therefore shows up at x=83..=84 inside the
-/// disc; the original location shows the background (pre-stroke empty).
+/// With `direction = 0` (east), `strength = 1`, `softness = 1` (square,
+/// flat inside the disc) and `size = 0.5` → radius = 128 px:
+///   displacement = radius × 0.25 × strength = 32 px
+/// The shader samples at `canvas_pos − (32, 0)`, so the original bar at
+/// x=63 appears at x=95 after the dab. At x=63, the sample source is
+/// x=31 which is background.
 #[test]
-fn rightward_motion_pushes_pixels_right() {
+fn rightward_direction_pushes_pixels_right() {
     let mut h = harness(&canvas_with_bar(), 0.5, 1.0, 1.0);
     h.begin_stroke();
-    h.dab(&pen([64.0, 64.0], [20.0, 0.0]));
+    h.dab(&pen([64.0, 64.0], 0.0));
     h.commit();
 
     let after = h.readback();
 
-    // Disc of radius 128 (size=0.5 → 0.5 * 512 * 0.5 = 128 px) covers the
-    // whole 128×128 canvas; square falloff gives full strength everywhere.
-    let shifted = pixel(&after, 83, 64);
+    let shifted = pixel(&after, 95, 64);
     assert!(
         shifted[0] > 200 && shifted[3] > 200,
-        "expected red at shifted position (83,64), got {:?}", shifted,
+        "expected red at shifted position (95,64), got {:?}", shifted,
     );
-    // The original bar location now samples from (43,64) which was
-    // background — expect transparent or empty.
+    // Original bar location now samples from (31,64) which was background.
     let orig = pixel(&after, 63, 64);
     assert!(
         orig[0] < 20,
@@ -238,21 +268,49 @@ fn rightward_motion_pushes_pixels_right() {
     );
 }
 
-/// A dab with zero motion does nothing — the liquify evaluator early-outs
-/// before touching the scratch, and commit copies an unmodified scratch-
-/// equals-pre_stroke over the layer (identity).
+/// The first dab of a stroke — before the pen has moved — has
+/// `distance = 0`. Liquify must gate on that and produce no warp, because
+/// the drawing_angle at that moment is uninitialized (defaults to 0 →
+/// east), and applying a warp in the default direction on a stationary
+/// click would visibly smear the canvas rightward the instant the user
+/// clicks down.
 #[test]
-fn zero_motion_is_noop() {
+fn stationary_click_is_noop() {
     let initial = canvas_with_bar();
     let mut h = harness(&initial, 0.5, 1.0, 1.0);
     h.begin_stroke();
-    h.dab(&pen([64.0, 64.0], [0.0, 0.0]));
+    let first_dab = PaintInformation {
+        pos: [64.0, 64.0],
+        drawing_angle: 0.0,
+        distance: 0.0,  // stroke engine's initial value — no travel yet
+        ..Default::default()
+    };
+    h.dab(&first_dab);
     h.commit();
 
     let after = h.readback();
     assert_eq!(
         after, initial,
-        "zero-motion dab should leave the canvas byte-identical",
+        "stationary click (distance=0) must not apply any warp — the stroke \
+         has no established direction yet",
+    );
+}
+
+/// A dab with zero strength does nothing — the liquify evaluator early-outs
+/// before touching the scratch, and commit copies an unmodified
+/// scratch-equals-pre_stroke over the layer (identity).
+#[test]
+fn zero_strength_is_noop() {
+    let initial = canvas_with_bar();
+    let mut h = harness(&initial, 0.5, 0.0, 1.0);
+    h.begin_stroke();
+    h.dab(&pen([64.0, 64.0], 0.0));
+    h.commit();
+
+    let after = h.readback();
+    assert_eq!(
+        after, initial,
+        "zero-strength dab should leave the canvas byte-identical",
     );
 }
 
@@ -265,7 +323,7 @@ fn outside_radius_is_untouched() {
     let initial = canvas_with_bar();
     let mut h = harness(&initial, 0.05, 1.0, 1.0);
     h.begin_stroke();
-    h.dab(&pen([32.0, 32.0], [5.0, 0.0]));
+    h.dab(&pen([32.0, 32.0], 0.0));
     h.commit();
 
     let after = h.readback();
@@ -288,13 +346,13 @@ fn waveshape_differs_saw_vs_square() {
 
     let mut saw = harness(&initial, 0.25, 1.0, 0.0);  // softness=0 → saw
     saw.begin_stroke();
-    saw.dab(&pen([64.0, 64.0], [15.0, 0.0]));
+    saw.dab(&pen([64.0, 64.0], 0.0));
     saw.commit();
     let saw_out = saw.readback();
 
     let mut square = harness(&initial, 0.25, 1.0, 1.0);  // softness=1 → square
     square.begin_stroke();
-    square.dab(&pen([64.0, 64.0], [15.0, 0.0]));
+    square.dab(&pen([64.0, 64.0], 0.0));
     square.commit();
     let square_out = square.readback();
 
@@ -324,9 +382,9 @@ fn rewind_equivalence() {
     // Run A: three dabs, one pass.
     let mut a = harness(&initial, 0.5, 0.5, 0.5);
     a.begin_stroke();
-    a.dab(&pen([40.0, 64.0], [8.0, 0.0]));
-    a.dab(&pen([64.0, 64.0], [8.0, 0.0]));
-    a.dab(&pen([88.0, 64.0], [8.0, 0.0]));
+    a.dab(&pen([40.0, 64.0], 0.0));
+    a.dab(&pen([64.0, 64.0], 0.0));
+    a.dab(&pen([88.0, 64.0], 0.0));
     a.commit();
     let a_out = a.readback();
 
@@ -335,14 +393,14 @@ fn rewind_equivalence() {
     // stabilizer can't find a checkpoint before a divergence.
     let mut b = harness(&initial, 0.5, 0.5, 0.5);
     b.begin_stroke();
-    b.dab(&pen([40.0, 64.0], [8.0, 0.0]));
-    b.dab(&pen([64.0, 64.0], [8.0, 0.0]));
+    b.dab(&pen([40.0, 64.0], 0.0));
+    b.dab(&pen([64.0, 64.0], 0.0));
     // Rewind: begin_stroke again (reseed scratch from pre_stroke), then
     // replay ALL dabs from vi=0. The commit uses the final scratch state.
     b.begin_stroke();
-    b.dab(&pen([40.0, 64.0], [8.0, 0.0]));
-    b.dab(&pen([64.0, 64.0], [8.0, 0.0]));
-    b.dab(&pen([88.0, 64.0], [8.0, 0.0]));
+    b.dab(&pen([40.0, 64.0], 0.0));
+    b.dab(&pen([64.0, 64.0], 0.0));
+    b.dab(&pen([88.0, 64.0], 0.0));
     b.commit();
     let b_out = b.readback();
 
@@ -351,5 +409,46 @@ fn rewind_equivalence() {
         "rewind+replay must produce identical pixels to a single pass — \
          if this fails, begin_stroke isn't reseeding from pre_stroke \
          (warps are compounding across rewinds)",
+    );
+}
+
+/// Displacement magnitude is a function of `strength` and `radius` alone —
+/// identical regardless of any speed/motion signal. Two dabs with the same
+/// `position`, `direction` and `strength` but different `speed` fields on
+/// the PaintInformation should produce byte-identical output.
+#[test]
+fn speed_does_not_affect_displacement() {
+    let initial = canvas_with_bar();
+
+    let mut slow = harness(&initial, 0.25, 0.7, 0.5);
+    slow.begin_stroke();
+    let slow_info = PaintInformation {
+        pos: [64.0, 64.0],
+        drawing_angle: 0.0,
+        speed: 0.05,  // barely moving
+        distance: 5.0,  // non-zero, past the first-dab gate
+        ..Default::default()
+    };
+    slow.dab(&slow_info);
+    slow.commit();
+    let slow_out = slow.readback();
+
+    let mut fast = harness(&initial, 0.25, 0.7, 0.5);
+    fast.begin_stroke();
+    let fast_info = PaintInformation {
+        pos: [64.0, 64.0],
+        drawing_angle: 0.0,
+        speed: 0.95,  // near max
+        distance: 500.0,
+        ..Default::default()
+    };
+    fast.dab(&fast_info);
+    fast.commit();
+    let fast_out = fast.readback();
+
+    assert_eq!(
+        slow_out, fast_out,
+        "pen speed must not affect per-dab displacement — slow drag and fast flick \
+         with identical direction/strength/position should produce identical output",
     );
 }

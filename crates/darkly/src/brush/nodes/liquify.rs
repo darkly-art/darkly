@@ -1,9 +1,15 @@
 //! Liquify warp GPU terminal node.
 //!
-//! A warp brush that pushes pixels along the pen's motion vector with a
+//! A warp brush that pushes pixels along the pen's drawing direction with a
 //! radial falloff around the brush center. Unlike paint terminals it does
 //! not deposit pigment — every pixel inside the brush disc is replaced with
-//! a sample from elsewhere in the scratch, displaced opposite the motion.
+//! a sample from elsewhere in the scratch, displaced opposite the direction
+//! of travel.
+//!
+//! Displacement *magnitude* is a function of `strength` and `radius` only —
+//! pen speed is intentionally ignored. A slow deliberate drag produces the
+//! same per-dab displacement as a fast flick. Speed still governs stroke
+//! length (dabs fire as the pen moves), but not per-dab warp intensity.
 //!
 //! ## Stroke lifecycle
 //!
@@ -14,9 +20,9 @@
 //!   checkpoint system then overlays the bbox snapshot for partial rewinds.
 //! - `evaluate_gpu` (per dab) — `ensure_canvas_copy` captures the scratch's
 //!   current warp state into `canvas_copy`, then the liquify shader reads
-//!   the copy at a displaced UV and writes the warped sample back into the
-//!   scratch. Successive dabs read each other's output, so the warp
-//!   compounds along the stroke.
+//!   the copy at a displaced UV (`canvas_pos − direction × magnitude × falloff`)
+//!   and writes the warped sample back into the scratch. Successive dabs
+//!   read each other's output, so the warp compounds along the stroke.
 //! - `commit` — `copy_texture_to_texture(scratch → layer)`, full canvas.
 //!   The scratch already holds the finished warped canvas; no source-over.
 //!   `gpu.blend_mode` is ignored — warping isn't paint.
@@ -50,12 +56,12 @@ pub fn register() -> BrushNodeRegistration {
         display_name: "Liquify",
         ports: vec![
             PortDef::input("size", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.3)
+                .with_range(0.0, 4.0, 0.3)
                 .with_label("Size")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-up-right-and-down-left-from-center")
                 .exposed()
-                .with_description("Brush radius as a fraction of the maximum"),
+                .with_description("Brush radius as a multiple of the base size (1.0 = 100% = half MAX_DAB_SIZE). Uncapped above 100% for large-area warps."),
             PortDef::input("strength", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_label("Strength")
@@ -72,8 +78,11 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Falloff waveshape: 0 = saw, 0.5 = sine, 1 = square"),
             PortDef::input("position", BrushWireType::Vec2)
                 .with_description("Brush center in canvas pixels"),
-            PortDef::input("motion", BrushWireType::Vec2)
-                .with_description("Per-dab motion vector in canvas pixels"),
+            PortDef::input("direction", BrushWireType::Scalar)
+                .with_range(-6.2832, 6.2832, 0.0)
+                .with_description("Warp direction in radians (typically wired from pen_input.drawing_angle). 0 = east."),
+            PortDef::input("distance", BrushWireType::Scalar)
+                .with_description("Cumulative pen travel in pixels (typically wired from pen_input.distance). Used as a 'has the pen moved yet' gate — the first dab of a stationary click has distance=0 and is skipped so liquify doesn't warp in a default direction before the stroke actually has one."),
             PortDef::output("dab_size", BrushWireType::Vec2)
                 .with_description("Affected diameter in canvas pixels (used by stroke engine for dab spacing)"),
         ],
@@ -86,9 +95,10 @@ pub struct LiquifyEvaluator;
 
 impl BrushNodeEvaluator for LiquifyEvaluator {
     /// Publish `dab_size` so the stroke engine can space dabs along the
-    /// path. Computed from the `size` port (normalised 0–1 → canvas pixels).
+    /// path. `size = 1.0` maps to diameter `MAX_DAB_SIZE`; larger values
+    /// allow brushes wider than that for full-canvas warp effects.
     fn evaluate_cpu(&self, ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        let size = ctx.input_f32("size").clamp(0.0, 1.0);
+        let size = ctx.input_f32("size").max(0.0);
         let diameter = (size * MAX_DAB_SIZE as f32).max(1.0);
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
@@ -102,28 +112,43 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let size = ctx.input_f32("size").clamp(0.0, 1.0);
+        let size = ctx.input_f32("size").max(0.0);
         let strength = ctx.input_f32("strength").clamp(0.0, 1.0);
         let softness = ctx.input_f32("softness").clamp(0.0, 1.0);
         let position = ctx.input("position").as_vec2();
-        let motion = ctx.input("motion").as_vec2();
+        let direction = ctx.input_f32("direction");
+        let distance = ctx.input_f32("distance");
 
         let radius = size * (MAX_DAB_SIZE as f32) * 0.5;
         if radius < 1.0 {
             return vec![];
         }
 
-        // No-op early-out when the dab wouldn't displace anything. Saves an
-        // encoder pass per stationary dab.
-        let motion_len = (motion[0] * motion[0] + motion[1] * motion[1]).sqrt();
-        if motion_len < 0.01 || strength < 1e-4 {
+        if strength < 1e-4 {
             return vec![];
         }
 
+        // Gate: skip dabs that have no direction of travel yet. The stroke
+        // engine's first dab fires before any motion is recorded (pen-down
+        // moment) — drawing_angle defaults to 0 (east), so without this gate
+        // a stationary click would immediately warp rightward. `distance`
+        // stays at zero until the pen actually moves, so it's the cleanest
+        // "stroke has a direction" signal.
+        if distance < 0.5 {
+            return vec![];
+        }
+
+        // Per-dab displacement magnitude is a fixed fraction of the brush
+        // radius — pen speed doesn't enter the equation. `DRAG_FACTOR` is
+        // tuned so that strength=1 pushes pixels approximately one dab
+        // spacing (~25% of radius) per dab, giving a 1:1 "drag" feel along
+        // the stroke path. Tune empirically as users give feedback.
+        const DRAG_FACTOR: f32 = 0.25;
+        let displacement = radius * DRAG_FACTOR * strength;
+
         // Bounding box: disc + displacement padding so the bilinear-sampled
         // canvas_copy footprint is always inside the copied region.
-        let pad = strength * motion_len;
-        let half = radius + pad;
+        let half = radius + displacement;
         let unclipped_x0 = position[0] - half;
         let unclipped_y0 = position[1] - half;
         let x0 = unclipped_x0.max(0.0);
@@ -157,15 +182,20 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         // dabs in the same place see the prior dab's warp.
         gpu.ensure_canvas_copy(copy_x, copy_y, copy_w, copy_h);
 
+        // Direction → unit vector. First dab of a stroke has no prior
+        // position and arrives here with `direction = 0` (east). Acceptable
+        // at stroke onset; subsequent dabs use the actual direction.
+        let dir_vec = [direction.cos(), direction.sin()];
+
         let uniforms = LiquifyUniforms {
             rect_origin: [x0, y0],
             rect_size: [rect_w, rect_h],
             canvas_size: [gpu.canvas_width as f32, gpu.canvas_height as f32],
             copy_origin: [copy_x as f32, copy_y as f32],
             center: position,
-            motion,
+            direction: dir_vec,
+            displacement,
             radius,
-            strength,
             softness,
             _pad: 0.0,
         };
@@ -266,7 +296,7 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             return vec![];
         }
 
-        let size = ctx.input_f32("size").clamp(0.0, 1.0);
+        let size = ctx.input_f32("size").max(0.0);
         // Soft edge for the preview ring — independent of the `softness`
         // waveshape knob (which controls warp falloff, not visual hardness).
         let preview_softness = 0.3_f32;

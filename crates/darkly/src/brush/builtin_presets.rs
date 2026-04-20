@@ -478,10 +478,17 @@ fn liquify_push() -> PresetBundle {
         PortRef { node: pen, port: "position".into() },
         PortRef { node: liquify, port: "position".into() },
     ).unwrap();
-    // pen_input.motion → liquify.motion
+    // pen_input.drawing_angle → liquify.direction (radians; shader turns
+    // it into a unit direction vector). Magnitude comes from strength.
     graph.connect(
-        PortRef { node: pen, port: "motion".into() },
-        PortRef { node: liquify, port: "motion".into() },
+        PortRef { node: pen, port: "drawing_angle".into() },
+        PortRef { node: liquify, port: "direction".into() },
+    ).unwrap();
+    // pen_input.distance → liquify.distance (gates the first dab so a
+    // stationary click doesn't smear in the default direction).
+    graph.connect(
+        PortRef { node: pen, port: "distance".into() },
+        PortRef { node: liquify, port: "distance".into() },
     ).unwrap();
 
     // size / strength / softness are already `.exposed()` on the liquify

@@ -1,8 +1,12 @@
 // Liquify warp: sample the stroke scratch (via canvas_copy) at a displaced
 // UV inside a circular brush disc and write the result back to the scratch.
-// Each dab pushes pixels by -motion * falloff * strength; repeated dabs
-// along a stroke compound because the shader reads the cumulatively-warped
-// scratch, not the pre-stroke layer.
+// Each dab pushes pixels by `-direction × displacement × falloff`. Pen
+// speed is deliberately absent — `displacement` is CPU-computed from
+// `radius × K × strength` alone, so slow and fast drags feel the same per
+// dab. Speed only shows up indirectly via how many dabs fire per unit time.
+//
+// Repeated dabs along a stroke compound because the shader reads the
+// cumulatively-warped scratch, not the pre-stroke layer.
 //
 // Discard outside the radius so existing scratch content is preserved
 // (LoadOp::Load on the render pass). REPLACE blend — fragment output is the
@@ -15,16 +19,16 @@
 // Interpolated linearly between these three shapes.
 
 struct LiquifyUniforms {
-    rect_origin: vec2f,  // quad top-left in canvas pixels
-    rect_size:   vec2f,  // quad w,h in canvas pixels
-    canvas_size: vec2f,  // full canvas
-    copy_origin: vec2f,  // float form of the integer copy origin
-    center:      vec2f,  // brush centre in canvas pixels
-    motion:      vec2f,  // per-dab motion (canvas pixels)
-    radius:      f32,
-    strength:    f32,
-    softness:    f32,
-    _pad:        f32,
+    rect_origin:  vec2f,  // quad top-left in canvas pixels
+    rect_size:    vec2f,  // quad w,h in canvas pixels
+    canvas_size:  vec2f,  // full canvas
+    copy_origin:  vec2f,  // float form of the integer copy origin
+    center:       vec2f,  // brush centre in canvas pixels
+    direction:    vec2f,  // unit vector of pen travel
+    displacement: f32,    // canvas-pixel shift at falloff = 1
+    radius:       f32,
+    softness:     f32,
+    _pad:         f32,
 }
 
 @group(0) @binding(0) var<uniform> u: LiquifyUniforms;
@@ -87,9 +91,11 @@ fn falloff(d: f32, softness: f32) -> f32 {
     // Waveshape falloff.
     let f = falloff(d, clamp(u.softness, 0.0, 1.0));
 
-    // Displace sampling position opposite the motion — pushing pixels along
-    // motion means reading from "behind" where the motion came from.
-    let source_pos = canvas_pos - u.motion * f * u.strength;
+    // Displace sampling position opposite the drawing direction — pushing
+    // pixels along the direction means reading from "behind" where the pen
+    // came from. Magnitude is CPU-computed from strength × radius; speed-
+    // independent.
+    let source_pos = canvas_pos - u.direction * u.displacement * f;
 
     // UV into canvas_copy using the same floor(origin) convention as
     // composite.wgsl (gpu-lessons-learned.md §7).
