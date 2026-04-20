@@ -3,6 +3,7 @@
 // that exports `pub fn register() -> crate::gpu::veil::VeilRegistration`.
 
 pub mod bokeh;
+pub mod frozen;
 pub mod kuwahara;
 pub mod monochrome;
 pub mod noise;
@@ -15,6 +16,7 @@ use crate::gpu::veil::VeilRegistration;
 pub fn registrations() -> Vec<VeilRegistration> {
     vec![
         bokeh::register(),
+        frozen::register(),
         kuwahara::register(),
         monochrome::register(),
         noise::register(),
