@@ -1,29 +1,18 @@
-//! GPU context bundle passed to brush node evaluators during `execute_gpu`.
+//! GPU context bundle passed to brush node evaluators during `execute_gpu`
+//! and `render_preview_pipeline`.
 //!
 //! Provides everything a GPU node needs: command encoder, device, queue,
 //! dab texture pool, pipelines, canvas target, and selection bind group.
+//! Stroke and preview modes are differentiated by *which* method the runner
+//! invokes (`evaluate_gpu` vs `render_preview`), not by a flag on this
+//! struct — terminals stop branching on a mode enum.
 
 use std::collections::HashMap;
 
 use super::dab_pool::DabTexturePool;
+use super::eval::BrushPreviewInfo;
 use super::pipelines::BrushPipelines;
 use super::wire::TextureHandle;
-
-/// Which terminal node should actually do GPU work during this pass.
-///
-/// Brush graphs have two terminals — `color_output` writes to the canvas,
-/// `preview_output` writes to the overlay preview mask. Only one runs per
-/// pass; the other's `evaluate_gpu` is a no-op when the mode doesn't match.
-/// All non-terminal nodes (stamp, circle, etc.) are mode-agnostic and run
-/// identically either way.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RenderMode {
-    /// Normal stroke path. `color_output` composites; `preview_output` skips.
-    Stroke,
-    /// Preview regen. `preview_output` blits into the preview mask;
-    /// `color_output` skips.
-    Preview,
-}
 
 /// Everything a GPU brush node needs to record render passes.
 ///
@@ -65,14 +54,17 @@ pub struct BrushGpuContext<'a> {
     /// first's copy when regions match.  Reset by `StrokeEngine::place_dab`
     /// before each dab.
     pub canvas_copy_origin: Option<[u32; 2]>,
-    /// Which terminal should run in this pass. Only inspected by terminal
-    /// nodes (`color_output`, `preview_output`). Non-terminals ignore.
-    pub render_mode: RenderMode,
-    /// Preview mask target. Populated by the engine when `render_mode ==
-    /// Preview`; the `preview_output` node renders into it. `None` in stroke
-    /// mode.
+    /// Preview mask target. Populated by the engine during preview regen;
+    /// terminal `render_preview` hooks blit their preview texture into it.
+    /// `None` during stroke evaluation (the preview path isn't running).
     pub preview_mask_view: Option<&'a wgpu::TextureView>,
     pub preview_mask_size: (u32, u32),
+    /// Set by a terminal's `render_preview` hook to publish overlay
+    /// placement info (extent + rotation) to the engine. The engine reads
+    /// this after `render_preview_pipeline` returns. `None` outside the
+    /// preview path; first-write-wins if multiple terminals try to publish
+    /// (unusual — typically one terminal owns the preview).
+    pub brush_preview_info: Option<BrushPreviewInfo>,
     /// The actual layer texture view — write target for the terminal's
     /// `commit` hook. `None` in preview mode (no layer to commit to).
     pub layer_view: Option<&'a wgpu::TextureView>,

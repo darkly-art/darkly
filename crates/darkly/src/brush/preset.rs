@@ -160,6 +160,13 @@ impl PresetBundle {
         // working without a format bump.
         migrate_stamp_opacity_to_flow(&mut preset.graph);
 
+        // Migrate: the `preview_output` node was removed when terminals
+        // gained a `render_preview` lifecycle hook. Drop any legacy
+        // `preview_output` nodes and install the new
+        // `stamp.preview → color_output.brush_preview` wire so loaded
+        // presets continue to show a hover preview.
+        migrate_drop_preview_output(&mut preset.graph);
+
         if preset.format_version > FORMAT_VERSION {
             return Err(format!(
                 "preset format version {} is newer than supported version {FORMAT_VERSION}",
@@ -257,6 +264,88 @@ fn migrate_stamp_opacity_to_flow(graph: &mut Graph<BrushWireType>) {
             conn.from.port = "flow".into();
         }
     }
+}
+
+/// Drop legacy `preview_output` nodes and install the new
+/// `stamp.preview → color_output.brush_preview` wire so loaded presets
+/// keep showing a hover preview after the preview-system redesign.
+///
+/// Strategy:
+/// 1. Find every `preview_output` node, remove their incoming wires, and
+///    delete the nodes themselves.
+/// 2. If the graph has exactly one `color_output` and one `stamp`, and
+///    `color_output.brush_preview` is unconnected, add the wire.
+///
+/// We don't try to be clever about graphs with multiple stamps or
+/// terminals — those are unusual; the loaded preset will simply have no
+/// preview wired (the engine short-circuits and shows the system cursor).
+fn migrate_drop_preview_output(graph: &mut Graph<BrushWireType>) {
+    use crate::nodegraph::{NodeId, PortRef};
+
+    // 1. Drop all `preview_output` nodes + their wires.
+    let preview_output_ids: Vec<NodeId> = graph
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.type_id == "preview_output")
+        .map(|(id, _)| *id)
+        .collect();
+    if !preview_output_ids.is_empty() {
+        graph
+            .connections
+            .retain(|c| !preview_output_ids.contains(&c.to.node)
+                     && !preview_output_ids.contains(&c.from.node));
+        for id in &preview_output_ids {
+            graph.nodes.remove(id);
+        }
+    }
+
+    // 2. Install the default preview wire if the typical shape applies.
+    let stamps: Vec<NodeId> = graph
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.type_id == "stamp")
+        .map(|(id, _)| *id)
+        .collect();
+    let color_outputs: Vec<NodeId> = graph
+        .nodes
+        .iter()
+        .filter(|(_, n)| n.type_id == "color_output")
+        .map(|(id, _)| *id)
+        .collect();
+    if stamps.len() != 1 || color_outputs.len() != 1 {
+        return;
+    }
+    let stamp_id = stamps[0];
+    let color_id = color_outputs[0];
+
+    let already_wired = graph.connections.iter().any(|c| {
+        c.to.node == color_id && c.to.port == "brush_preview"
+    });
+    if already_wired {
+        return;
+    }
+
+    // Make sure the new ports exist on the loaded node instances —
+    // pre-refactor presets snapshot their port lists, so the in-memory
+    // `color_output.ports` doesn't include `brush_preview` and
+    // `stamp.ports` doesn't include `preview`. Patch them in from the
+    // current registration so `connect` accepts the wire.
+    let registry = crate::brush::BrushNodeRegistry::new();
+    for (id, type_id) in [(stamp_id, "stamp"), (color_id, "color_output")] {
+        let Some(reg) = registry.get(type_id) else { continue };
+        let Some(node) = graph.nodes.get_mut(&id) else { continue };
+        for reg_port in &reg.ports {
+            let exists = node.ports.iter().any(|p| p.name == reg_port.name);
+            if !exists {
+                node.ports.push(reg_port.clone());
+            }
+        }
+    }
+
+    let _ = graph.connect(
+        PortRef { node: stamp_id, port: "preview".into() },
+        PortRef { node: color_id, port: "brush_preview".into() },
+    );
 }
 
 #[cfg(test)]

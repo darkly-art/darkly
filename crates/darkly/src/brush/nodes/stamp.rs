@@ -88,6 +88,8 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Actual pixel dimensions of the generated dab"),
             PortDef::output("scatter_offset", BrushWireType::Vec2)
                 .with_description("Computed scatter offset in canvas pixels"),
+            PortDef::output("preview", BrushWireType::Texture)
+                .with_description("Hover-preview texture: brush tip with rotation/ratio/mirror baked in, deposition (flow/color/scatter) neutralised. Texture dimensions encode the brush's canvas-pixel extent."),
         ],
         params: &[
             ParamDef::Int { name: "application", min: 0, max: 3, default: 0 },
@@ -262,6 +264,55 @@ impl BrushNodeEvaluator for StampEvaluator {
             ("dab".into(), ScalarValue::Texture(handle)),
             ("dab_size".into(), ScalarValue::Vec2([dab_w as f32, dab_h as f32])),
             ("scatter_offset".into(), ScalarValue::Vec2([scatter_px_x, scatter_px_y])),
+        ]
+    }
+
+    /// Preview-mode render: produce a brush-tip texture with rotation,
+    /// ratio, and mirror baked in — but *without* per-dab deposition
+    /// modulation (flow=1, color=white, scatter=0). The texture is sized
+    /// to the brush's canvas-pixel footprint, so downstream consumers
+    /// (typically `color_output`) can read its dimensions directly without
+    /// a separate size wire.
+    ///
+    /// The same `encode_stamp_pass` shader as the stroke path is used —
+    /// single source of truth for tip rasterisation. The only difference
+    /// is the input values fed in.
+    fn render_preview(
+        &self,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
+    ) -> Vec<(String, ScalarValue)> {
+        let Some(mut inputs) = resolve_inputs(ctx) else { return vec![]; };
+
+        // Strip deposition modulation. The preview shows the brush, not
+        // how much paint a single dab would deposit.
+        inputs.flow = 1.0;
+        inputs.color = [1.0, 1.0, 1.0, 1.0];
+        // Scatter is a *position* dynamic — irrelevant for a stationary
+        // hover preview centred on the cursor.
+        inputs.scatter_x = 0.0;
+        inputs.scatter_y = 0.0;
+
+        let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
+        let (dab_w, dab_h) = compute_dab_dims(inputs.effective_size, tip_w, tip_h, MAX_DAB_SIZE);
+        if dab_w == 0 || dab_h == 0 {
+            return vec![];
+        }
+
+        // Right-sized texture: dimensions == brush canvas-pixel extent.
+        // `color_output::render_preview` queries `texture_size(handle)` to
+        // recover this without a parallel size wire.
+        let handle = gpu.dab_pool.acquire_sized(gpu.device, dab_w, dab_h);
+        let view = gpu.dab_pool.view(handle).clone();
+        let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
+        encode_stamp_pass(
+            &mut gpu.encoder, gpu.queue, gpu.pipelines,
+            &tip_bind_group, &inputs, &view, (dab_w, dab_h), "brush-stamp-preview",
+        );
+
+        vec![
+            ("preview".into(), ScalarValue::Texture(handle)),
+            ("dab_size".into(), ScalarValue::Vec2([dab_w as f32, dab_h as f32])),
         ]
     }
 }

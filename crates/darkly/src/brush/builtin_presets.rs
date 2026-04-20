@@ -47,7 +47,9 @@ impl PresetBuilder {
     ///
     /// Pre-wires: stamp.dab → color_output.dab, stamp.dab_size →
     /// color_output.dab_size, stamp.scatter_offset → color_output.scatter_offset,
-    /// pen_input.position → color_output.position.
+    /// pen_input.position → color_output.position, and stamp.preview →
+    /// color_output.brush_preview (the hover preview path — terminal's
+    /// `render_preview` hook blits this into the overlay).
     fn new() -> Self {
         let registry = BrushNodeRegistry::new();
         let mut graph = Graph::new();
@@ -72,11 +74,6 @@ impl PresetBuilder {
             registry.get("color_output").unwrap().ports.clone(),
             vec![],
         );
-        let preview_output = graph.add_node(
-            "preview_output",
-            registry.get("preview_output").unwrap().ports.clone(),
-            vec![],
-        );
 
         // Standard output wiring (every preset needs this).
         let wires = [
@@ -84,9 +81,9 @@ impl PresetBuilder {
             (stamp, "dab_size", color_output, "dab_size"),
             (stamp, "scatter_offset", color_output, "scatter_offset"),
             (pen, "position", color_output, "position"),
-            // Preview sink: same dab subtree feeds the overlay preview mask.
-            (stamp, "dab", preview_output, "dab"),
-            (stamp, "dab_size", preview_output, "dab_size"),
+            // Hover preview: the terminal's `render_preview` hook blits the
+            // stamp's transform-baked, deposition-stripped preview texture.
+            (stamp, "preview", color_output, "brush_preview"),
         ];
         for (from_node, from_port, to_node, to_port) in wires {
             graph.connect(

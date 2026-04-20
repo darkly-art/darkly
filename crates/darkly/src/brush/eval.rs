@@ -135,6 +135,25 @@ pub trait BrushNodeEvaluator: Send + Sync {
         vec![]
     }
 
+    /// Preview-mode GPU evaluation. Called by the engine during hover
+    /// preview regen, in place of `evaluate_gpu`. Default delegates so
+    /// most nodes don't differentiate; nodes that bake per-dab deposition
+    /// (stamp's flow, color, scatter) override this to produce a
+    /// preview-appropriate output (typically a clean rotated/aspect-baked
+    /// shape texture sized to the brush's canvas-pixel extent).
+    ///
+    /// Terminal nodes that own preview rendering (e.g. `color_output`)
+    /// also override this — they read a `brush_preview` input texture and
+    /// blit it into `gpu.preview_mask_view`, then publish placement info
+    /// via `gpu.brush_preview_info`.
+    fn render_preview(
+        &self,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
+    ) -> Vec<(String, ScalarValue)> {
+        self.evaluate_gpu(ctx, gpu)
+    }
+
     /// Stroke-scoped setup. Called at stroke start and on every rewind
     /// boundary (full or partial) — whenever the scratch must be reset
     /// to this terminal's starting state. Non-terminal nodes default to
@@ -370,6 +389,28 @@ impl BrushGraphRunner {
     /// After this returns, call `gpu.dab_pool.release_all()` to return
     /// acquired dab textures to the pool.
     pub fn execute_gpu(&mut self, gpu: &mut BrushGpuContext) {
+        self.dispatch_gpu(gpu, |ev, ctx, gpu| ev.evaluate_gpu(ctx, gpu));
+    }
+
+    /// Walk GPU steps invoking each evaluator's `render_preview` hook
+    /// instead of `evaluate_gpu`. Same slot-table plumbing — non-terminals
+    /// produce shape-appropriate outputs (e.g. stamp emits a B&W tip
+    /// texture sized to the brush's canvas-pixel extent), terminals
+    /// consume them and render into the overlay's preview mask, publishing
+    /// placement info via `gpu.brush_preview_info`.
+    pub fn render_preview_pipeline(&mut self, gpu: &mut BrushGpuContext) {
+        self.dispatch_gpu(gpu, |ev, ctx, gpu| ev.render_preview(ctx, gpu));
+    }
+
+    /// Shared walker for the per-dab GPU pipeline. Wires inputs from the
+    /// slot table, runs the evaluator-supplied closure (`evaluate_gpu` for
+    /// stroke/dab evaluation, `render_preview` for preview regen), and
+    /// writes the resulting outputs back to their slots.
+    fn dispatch_gpu<F>(&mut self, gpu: &mut BrushGpuContext, mut f: F)
+    where
+        F: FnMut(&dyn BrushNodeEvaluator, &EvalContext, &mut BrushGpuContext)
+            -> Vec<(String, ScalarValue)>,
+    {
         for step in &self.plan.steps {
             if !step.is_gpu {
                 continue;
@@ -400,7 +441,7 @@ impl BrushGraphRunner {
                 node_id: step.node_id,
             };
 
-            let outputs = evaluator.evaluate_gpu(&ctx, gpu);
+            let outputs = f(evaluator.as_ref(), &ctx, gpu);
 
             // Write outputs to their assigned slots.
             for (port_name, value) in outputs {
@@ -508,33 +549,16 @@ impl BrushGraphRunner {
         }
     }
 
-    /// True if the graph has a `preview_output` terminal node.
-    /// `regenerate_brush_preview` uses this to short-circuit when the
-    /// active graph doesn't declare a preview.
-    pub fn has_preview_terminal(&self) -> bool {
-        self.plan.steps.iter().any(|s| s.type_id == "preview_output")
-    }
-
-    /// After a preview-mode `execute_gpu`, reads the `preview_output`
-    /// terminal's resolved inputs and builds positioning info for the
-    /// overlay primitive. Returns None if the graph has no preview
-    /// terminal or the required inputs are unresolved.
-    pub fn read_preview_info(&self) -> Option<BrushPreviewInfo> {
-        let step = self.plan.steps.iter().find(|s| s.type_id == "preview_output")?;
-        let mut dab_size: Option<[f32; 2]> = None;
-        let mut rotation = 0.0_f32;
-        for (port_name, slot_idx) in &step.input_slots {
-            let Some(val) = self.slots[*slot_idx] else { continue };
-            match port_name.as_str() {
-                "dab_size" => dab_size = Some(val.as_vec2()),
-                "rotation" => rotation = val.as_f32() * std::f32::consts::TAU,
-                _ => {}
-            }
-        }
-        let size = dab_size?;
-        Some(BrushPreviewInfo {
-            half_extent_canvas_px: [size[0] * 0.5, size[1] * 0.5],
-            rotation_rad: rotation,
+    /// True if any node in the graph has a `brush_preview` input that's
+    /// connected (i.e. a wire targets some node's `brush_preview` port).
+    /// `regenerate_brush_preview` uses this to short-circuit when no
+    /// terminal asked to render a preview.
+    pub fn graph_has_preview_wire(&self) -> bool {
+        // Plan steps include input_slots for connected ports only
+        // (disconnected ports fall back to defaults and never appear here),
+        // so a `brush_preview` input slot is proof of a wire.
+        self.plan.steps.iter().any(|s| {
+            s.input_slots.iter().any(|(name, _)| name == "brush_preview")
         })
     }
 }

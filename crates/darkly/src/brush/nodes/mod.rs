@@ -13,7 +13,6 @@ pub mod mix;
 pub mod multiply;
 pub mod paint_color;
 pub mod pen_input;
-pub mod preview_output;
 pub mod random;
 pub mod remap;
 pub mod split_vec2;
@@ -36,7 +35,6 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         multiply::register(),
         paint_color::register(),
         pen_input::register(),
-        preview_output::register(),
         random::register(),
         remap::register(),
         split_vec2::register(),

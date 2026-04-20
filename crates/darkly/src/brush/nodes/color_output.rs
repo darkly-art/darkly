@@ -1,8 +1,8 @@
 //! Color output GPU terminal node — paint semantics.
 //!
-//! `color_output` is the paint terminal of a brush graph. It owns three
+//! `color_output` is the paint terminal of a brush graph. It owns four
 //! lifecycle hooks that together define how a paint stroke maps to layer
-//! state:
+//! state and how the brush appears under the hover cursor:
 //!
 //! 1. `begin_stroke` — clears the stroke scratch to transparent. Called at
 //!    stroke start and on every rewind boundary.
@@ -15,6 +15,11 @@
 //!    stroke-level `opacity` input port as a cap and honours the engine's
 //!    paint-vs-erase `blend_mode`. Selection is NOT re-applied (already
 //!    baked into the scratch, applying twice would yield `sel²`).
+//! 4. `render_preview` — reads the `brush_preview` input texture (typically
+//!    the brush tip's preview output, but accepts any texture), blits it
+//!    into the overlay's preview mask, and publishes placement info.
+//!    Deposition settings (flow, opacity, blend mode) are intentionally
+//!    *not* consulted — preview shows the brush, not the paint deposit.
 //!
 //! The per-dab composite always writes REPLACE with source-over into the
 //! scratch — per-dab blend_mode selection doesn't exist, and wouldn't make
@@ -22,9 +27,9 @@
 //! Engine-level paint-vs-erase is a *stroke* decision, applied at commit.
 
 use crate::brush::dab_pool::MAX_DAB_SIZE;
-use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
-use crate::brush::gpu_context::{BrushGpuContext, RenderMode};
-use crate::brush::pipelines::CompositeUniforms;
+use crate::brush::eval::{BrushNodeEvaluator, BrushPreviewInfo, EvalContext};
+use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::pipelines::{BlitUniforms, CompositeUniforms};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
@@ -54,6 +59,8 @@ pub fn register() -> BrushNodeRegistration {
                 .with_icon("fa-solid fa-fill-drip")
                 .exposed()
                 .with_description("Stroke-level opacity cap (max coverage regardless of overlap)"),
+            PortDef::input("brush_preview", BrushWireType::Texture)
+                .with_description("Hover-preview texture. Its dimensions are the brush's canvas-pixel extent (rotation, ratio, mirror baked in). Typically wired from a brush tip's preview output, but accepts any texture."),
         ],
         params: &[],
         is_gpu: true,
@@ -73,11 +80,8 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        // Stroke-only terminal. Preview passes run the same graph but
-        // route output into `preview_output` instead.
-        if gpu.render_mode != RenderMode::Stroke {
-            return vec![];
-        }
+        // Preview path is dispatched via `render_preview`; this method is
+        // only invoked during stroke evaluation, no mode check needed.
 
         let dab_handle = match ctx.input("dab") {
             ScalarValue::Texture(h) => h,
@@ -204,9 +208,6 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
     /// Clear the stroke scratch to transparent. Paint starts from an empty
     /// accumulator — per-dab composites pile up from nothing.
     fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        if gpu.render_mode != RenderMode::Stroke {
-            return;
-        }
         let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("color_output-begin_stroke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -229,9 +230,6 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
     /// write the result to the layer. Applies the stroke-level `opacity`
     /// port and honours the engine's `blend_mode` (paint vs erase).
     fn commit(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        if gpu.render_mode != RenderMode::Stroke {
-            return;
-        }
         // Everything we need must be present; if any piece is missing we're
         // in a pre-refactor fallback path that composites directly to the
         // layer — nothing for commit to do.
@@ -280,5 +278,84 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         pass.set_bind_group(2, gpu.selection_bind_group, &[]);
         pass.set_bind_group(3, pre_stroke_bg, &[]);
         pass.draw(0..6, 0..1);
+    }
+
+    /// Render the hover preview into the overlay's preview mask.
+    ///
+    /// Reads the `brush_preview` input texture (typically wired from the
+    /// brush tip's `preview` output, but accepts any texture) and blits it
+    /// stretched into the overlay's preview mask via the blit pipeline.
+    /// The input texture's own dimensions encode the brush's canvas-pixel
+    /// extent — we publish those to the engine via `gpu.brush_preview_info`
+    /// so the overlay primitive can size itself correctly. Rotation is
+    /// considered baked into the texture (the brush terminal's job), so
+    /// `rotation_rad` here is always 0.
+    ///
+    /// Deposition settings (flow, opacity, blend mode) are intentionally
+    /// not consulted — the preview shows the brush, not the per-dab paint
+    /// deposit. This is what `evaluate_gpu`'s composite path is for.
+    fn render_preview(
+        &self,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
+    ) -> Vec<(String, ScalarValue)> {
+        let preview_handle = match ctx.input("brush_preview") {
+            ScalarValue::Texture(h) => h,
+            _ => return vec![],
+        };
+        let Some(target_view) = gpu.preview_mask_view else { return vec![] };
+        let (target_w, target_h) = gpu.preview_mask_size;
+        if target_w == 0 || target_h == 0 {
+            return vec![];
+        }
+
+        // The input texture self-describes its canvas-pixel extent.
+        let (extent_w, extent_h) = gpu.dab_pool.texture_size(preview_handle);
+        if extent_w == 0 || extent_h == 0 {
+            return vec![];
+        }
+
+        // Blit the entire input texture (UV [0,1]) stretched into the
+        // preview mask. The mask is a fixed-size canvas the overlay shader
+        // samples in normalised UV — bilinear filtering takes care of the
+        // display-time scaling driven by the primitive's halfExtent.
+        let uniforms = BlitUniforms {
+            uv_min: [0.0, 0.0],
+            uv_max: [1.0, 1.0],
+        };
+        let offset = gpu.pipelines.write_blit_uniforms(gpu.queue, &uniforms);
+        let bg = gpu.dab_pool.bind_group(preview_handle).clone();
+
+        let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("color_output-render_preview"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_viewport(0.0, 0.0, target_w as f32, target_h as f32, 0.0, 1.0);
+        pass.set_pipeline(gpu.pipelines.blit_pipeline());
+        pass.set_bind_group(0, &gpu.pipelines.blit_uniform_bind_group, &[offset]);
+        pass.set_bind_group(1, &bg, &[]);
+        pass.draw(0..3, 0..1);
+        drop(pass);
+
+        // Publish placement info: the texture's canvas-pixel extent
+        // becomes the overlay primitive's halfExtent. Rotation is baked
+        // into the texture, so we report 0 here.
+        if gpu.brush_preview_info.is_none() {
+            gpu.brush_preview_info = Some(BrushPreviewInfo {
+                half_extent_canvas_px: [extent_w as f32 * 0.5, extent_h as f32 * 0.5],
+                rotation_rad: 0.0,
+            });
+        }
+
+        vec![]
     }
 }

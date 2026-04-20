@@ -75,18 +75,19 @@ impl DarklyEngine {
     /// (tablet quirk: most pens report tilt even while hovering above the
     /// canvas, so we plumb them through).
     ///
-    /// Runs the active brush graph normally — CPU eval, GPU eval — but
-    /// with `render_mode: Preview`. `color_output` bails in that mode;
-    /// `preview_output` (if the graph has one) blits its upstream dab
-    /// into the overlay's preview mask. Positioning info is read from
-    /// `preview_output`'s resolved input slots after eval.
+    /// Dispatches the graph through `render_preview_pipeline` — each GPU
+    /// node's `render_preview` hook runs (defaults to `evaluate_gpu`,
+    /// terminals override). The terminal that owns the preview reads the
+    /// `brush_preview` input texture, blits it into the overlay's preview
+    /// mask, and publishes placement info via `gpu.brush_preview_info`.
     ///
-    /// No-op with cleared state when the graph has no `preview_output`.
+    /// No-op with cleared state when the graph has no `brush_preview`
+    /// wire connected.
     pub fn regenerate_brush_preview_with_pen(
         &mut self,
         pen: &crate::brush::paint_info::PaintInformation,
     ) {
-        use crate::brush::gpu_context::{BrushGpuContext, RenderMode};
+        use crate::brush::gpu_context::BrushGpuContext;
 
         let mut runner = match crate::brush::compile_graph(&self.active_brush_graph) {
             Ok(r) => r,
@@ -97,7 +98,7 @@ impl DarklyEngine {
             }
         };
 
-        if !runner.has_preview_terminal() {
+        if !runner.graph_has_preview_wire() {
             self.compositor.clear_overlay_preview_mask();
             self.brush_preview_info = None;
             return;
@@ -130,9 +131,10 @@ impl DarklyEngine {
             queue: &self.gpu.queue,
             dab_pool: &mut self.dab_pool,
             pipelines: &self.brush_pipelines,
-            // `color_output` bails in Preview mode, so the stroke_scratch_*
-            // fields are never written to — alias them to the preview target
-            // as a placeholder.
+            // The preview pipeline doesn't touch the stroke scratch — the
+            // terminal's `render_preview` writes to `preview_mask_view`
+            // instead. Alias the scratch fields to the preview target so
+            // the struct is well-formed (no Option needed).
             stroke_scratch_view: &target_view,
             stroke_scratch_texture: preview_tex,
             canvas_width: target_size.0,
@@ -141,9 +143,9 @@ impl DarklyEngine {
             resource_handles: &self.resource_handles,
             blend_mode: 0,
             canvas_copy_origin: None,
-            render_mode: RenderMode::Preview,
             preview_mask_view: Some(&target_view),
             preview_mask_size: target_size,
+            brush_preview_info: None,
             // No layer / pre-stroke state in preview — commit isn't called.
             layer_view: None,
             layer_texture: None,
@@ -156,15 +158,19 @@ impl DarklyEngine {
         runner.clear_slots();
         runner.seed_sensors(pen, [1.0, 1.0, 1.0, 1.0], 0, 0);
         runner.execute_cpu();
-        runner.execute_gpu(&mut gpu_ctx);
-        let info = runner.read_preview_info().unwrap_or_default();
+        runner.render_preview_pipeline(&mut gpu_ctx);
 
+        let info = gpu_ctx.brush_preview_info;
         gpu_ctx.dab_pool.release_all();
         let command_buf = gpu_ctx.encoder.finish();
         self.gpu.queue.submit([command_buf]);
 
-        self.compositor.use_overlay_preview_mask();
-        self.brush_preview_info = Some(info);
+        if info.is_some() {
+            self.compositor.use_overlay_preview_mask();
+        } else {
+            self.compositor.clear_overlay_preview_mask();
+        }
+        self.brush_preview_info = info;
     }
 
     /// Read-only snapshot of the current brush preview info, for the
