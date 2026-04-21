@@ -7,14 +7,27 @@ use crate::gpu::params::{ParamDef, ParamValue};
 pub enum LayerInfo {
     #[serde(rename_all = "camelCase")]
     Raster {
-        id: f64, name: String, visible: bool, opacity: f32, blend_mode: u32,
-        has_mask: bool, mask_enabled: bool, show_mask: bool,
+        id: f64,
+        name: String,
+        visible: bool,
+        opacity: f32,
+        blend_mode: u32,
+        has_mask: bool,
+        mask_enabled: bool,
+        show_mask: bool,
     },
     #[serde(rename_all = "camelCase")]
     Group {
-        id: f64, name: String, visible: bool, collapsed: bool, passthrough: bool,
-        opacity: f32, blend_mode: u32,
-        has_mask: bool, mask_enabled: bool, show_mask: bool,
+        id: f64,
+        name: String,
+        visible: bool,
+        collapsed: bool,
+        passthrough: bool,
+        opacity: f32,
+        blend_mode: u32,
+        has_mask: bool,
+        mask_enabled: bool,
+        show_mask: bool,
         children: Vec<LayerInfo>,
     },
 }
@@ -59,58 +72,97 @@ pub struct ParamInfo {
 impl ParamInfo {
     pub fn from_def(def: &ParamDef, value: Option<&ParamValue>) -> Self {
         match def {
-            ParamDef::Float { name, min, max, default } => ParamInfo {
-                kind: "float", name,
-                min: Some(*min as f64), max: Some(*max as f64),
+            ParamDef::Float {
+                name,
+                min,
+                max,
+                default,
+            } => ParamInfo {
+                kind: "float",
+                name,
+                min: Some(*min as f64),
+                max: Some(*max as f64),
                 default: ParamValue::Float(*default),
                 value: value.cloned(),
                 options: None,
             },
-            ParamDef::Int { name, min, max, default } => ParamInfo {
-                kind: "int", name,
-                min: Some(*min as f64), max: Some(*max as f64),
+            ParamDef::Int {
+                name,
+                min,
+                max,
+                default,
+            } => ParamInfo {
+                kind: "int",
+                name,
+                min: Some(*min as f64),
+                max: Some(*max as f64),
                 default: ParamValue::Int(*default),
                 value: value.cloned(),
                 options: None,
             },
             ParamDef::Bool { name, default } => ParamInfo {
-                kind: "bool", name,
-                min: None, max: None,
+                kind: "bool",
+                name,
+                min: None,
+                max: None,
                 default: ParamValue::Bool(*default),
                 value: value.cloned(),
                 options: None,
             },
             ParamDef::String { name, default } => ParamInfo {
-                kind: "string", name,
-                min: None, max: None,
+                kind: "string",
+                name,
+                min: None,
+                max: None,
                 default: ParamValue::String(default.to_string()),
                 value: value.cloned(),
                 options: None,
             },
             ParamDef::Curve { name, default } => ParamInfo {
-                kind: "curve", name,
-                min: None, max: None,
+                kind: "curve",
+                name,
+                min: None,
+                max: None,
                 default: ParamValue::Curve(default.to_vec()),
                 value: value.cloned(),
                 options: None,
             },
-            ParamDef::Enum { name, options, default } => ParamInfo {
-                kind: "enum", name,
-                min: None, max: None,
+            ParamDef::Enum {
+                name,
+                options,
+                default,
+            } => ParamInfo {
+                kind: "enum",
+                name,
+                min: None,
+                max: None,
                 default: ParamValue::Int(*default),
                 value: value.cloned(),
                 options: Some(serde_json::json!(options)),
             },
-            ParamDef::FloatInput { name, min, max, default } => ParamInfo {
-                kind: "floatInput", name,
-                min: Some(*min as f64), max: Some(*max as f64),
+            ParamDef::FloatInput {
+                name,
+                min,
+                max,
+                default,
+            } => ParamInfo {
+                kind: "floatInput",
+                name,
+                min: Some(*min as f64),
+                max: Some(*max as f64),
                 default: ParamValue::Float(*default),
                 value: value.cloned(),
                 options: None,
             },
-            ParamDef::Icon { name, options, default } => ParamInfo {
-                kind: "icon", name,
-                min: None, max: None,
+            ParamDef::Icon {
+                name,
+                options,
+                default,
+            } => ParamInfo {
+                kind: "icon",
+                name,
+                min: None,
+                max: None,
                 default: ParamValue::String(default.to_string()),
                 value: value.cloned(),
                 options: Some(serde_json::json!(options)),
@@ -122,22 +174,44 @@ impl ParamInfo {
 #[derive(serde::Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum StrokeOp {
-    FloodFill { x: f32, y: f32, r: u8, g: u8, b: u8, a: u8, tolerance: u8 },
+    FloodFill {
+        x: f32,
+        y: f32,
+        r: u8,
+        g: u8,
+        b: u8,
+        a: u8,
+        tolerance: u8,
+    },
     LinearGradient {
-        x0: f32, y0: f32, x1: f32, y1: f32,
-        r0: u8, g0: u8, b0: u8, a0: u8,
-        r1: u8, g1: u8, b1: u8, a1: u8,
+        x0: f32,
+        y0: f32,
+        x1: f32,
+        y1: f32,
+        r0: u8,
+        g0: u8,
+        b0: u8,
+        a0: u8,
+        r1: u8,
+        g1: u8,
+        b1: u8,
+        a1: u8,
     },
     /// Node-graph brush stroke event with full tablet data.
     BrushStroke {
-        x: f32, y: f32,
+        x: f32,
+        y: f32,
         pressure: f32,
-        x_tilt: f32, y_tilt: f32,
+        x_tilt: f32,
+        y_tilt: f32,
         rotation: f32,
         tangential_pressure: f32,
         time_ms: f64,
         /// Foreground color as linear RGBA floats (0-1).
-        cr: f32, cg: f32, cb: f32, ca: f32,
+        cr: f32,
+        cg: f32,
+        cb: f32,
+        ca: f32,
     },
 }
 

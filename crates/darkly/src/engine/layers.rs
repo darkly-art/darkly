@@ -3,32 +3,36 @@
 use super::DarklyEngine;
 use crate::document::MoveTarget;
 use crate::layer::{BlendMode, Layer, LayerNode};
-use crate::undo::{LayerAddAction, LayerRemoveAction, LayerMoveAction, PropertyAction};
 use crate::undo::property::Property;
+use crate::undo::{LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAction};
 
 impl DarklyEngine {
     // --- Layer CRUD ---
 
     pub fn add_raster_layer(&mut self) -> u64 {
         let id = self.doc.add_raster_layer();
-        self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
+        self.compositor
+            .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
         self.compositor.mark_dirty();
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.undo_stack
+            .push(Box::new(LayerAddAction::new(id, parent, pos)));
 
         id
     }
 
     pub fn add_raster_layer_in(&mut self, group_id: u64) -> u64 {
         let id = self.doc.add_raster_layer_in(Some(group_id));
-        self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
+        self.compositor
+            .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
         self.compositor.mark_dirty();
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.undo_stack
+            .push(Box::new(LayerAddAction::new(id, parent, pos)));
 
         id
     }
@@ -38,7 +42,8 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.undo_stack
+            .push(Box::new(LayerAddAction::new(id, parent, pos)));
 
         id
     }
@@ -52,7 +57,8 @@ impl DarklyEngine {
         let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
 
         if let Some(node) = self.doc.detach_for_undo(layer_id) {
-            self.undo_stack.push(Box::new(LayerRemoveAction::new(node, parent, pos)));
+            self.undo_stack
+                .push(Box::new(LayerRemoveAction::new(node, parent, pos)));
         }
 
         self.compositor.mark_dirty();
@@ -95,11 +101,18 @@ impl DarklyEngine {
 
         if let Some(Layer::Raster(r)) = self.doc.layer(layer_id) {
             self.compositor.update_raster_uniforms(
-                &self.gpu.queue, layer_id, r.opacity, r.blend_mode,
+                &self.gpu.queue,
+                layer_id,
+                r.opacity,
+                r.blend_mode,
             );
         } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
             self.compositor.update_group_uniforms(
-                &self.gpu.queue, layer_id, g.opacity, g.blend_mode, g.show_mask,
+                &self.gpu.queue,
+                layer_id,
+                g.opacity,
+                g.blend_mode,
+                g.show_mask,
             );
         }
         self.compositor.mark_dirty();
@@ -128,11 +141,18 @@ impl DarklyEngine {
 
         if let Some(Layer::Raster(r)) = self.doc.layer(layer_id) {
             self.compositor.update_raster_uniforms(
-                &self.gpu.queue, layer_id, r.opacity, r.blend_mode,
+                &self.gpu.queue,
+                layer_id,
+                r.opacity,
+                r.blend_mode,
             );
         } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
             self.compositor.update_group_uniforms(
-                &self.gpu.queue, layer_id, g.opacity, g.blend_mode, g.show_mask,
+                &self.gpu.queue,
+                layer_id,
+                g.opacity,
+                g.blend_mode,
+                g.show_mask,
             );
         }
         self.compositor.mark_dirty();
@@ -199,10 +219,15 @@ impl DarklyEngine {
             g.passthrough = passthrough;
         }
         if !passthrough {
-            self.compositor.ensure_group_state(&self.gpu.device, &self.gpu.queue, group_id);
+            self.compositor
+                .ensure_group_state(&self.gpu.device, &self.gpu.queue, group_id);
             if let Some(LayerNode::Group(g)) = self.doc.find_node(group_id) {
                 self.compositor.update_group_uniforms(
-                    &self.gpu.queue, group_id, g.opacity, g.blend_mode, g.show_mask,
+                    &self.gpu.queue,
+                    group_id,
+                    g.opacity,
+                    g.blend_mode,
+                    g.show_mask,
                 );
             }
         }

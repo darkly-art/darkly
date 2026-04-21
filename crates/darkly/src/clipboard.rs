@@ -44,13 +44,7 @@ pub struct ImageClip {
 
 impl ImageClip {
     /// Create an `ImageClip` from raw RGBA bytes (e.g. from GPU readback or external paste).
-    pub fn from_rgba(
-        width: u32,
-        height: u32,
-        rgba: Vec<u8>,
-        offset_x: i32,
-        offset_y: i32,
-    ) -> Self {
+    pub fn from_rgba(width: u32, height: u32, rgba: Vec<u8>, offset_x: i32, offset_y: i32) -> Self {
         debug_assert_eq!(rgba.len(), (width * height * 4) as usize);
         ImageClip {
             data: rgba,
@@ -65,7 +59,13 @@ impl ImageClip {
     ///
     /// Returns `(bytes, width, height, offset_x, offset_y)`.
     pub fn to_rgba(&self) -> (&[u8], u32, u32, i32, i32) {
-        (&self.data, self.width, self.height, self.offset_x, self.offset_y)
+        (
+            &self.data,
+            self.width,
+            self.height,
+            self.offset_x,
+            self.offset_y,
+        )
     }
 
     /// Returns true if this clip has no pixel data.
@@ -88,7 +88,7 @@ mod tests {
         let h = 4u32;
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         for i in 0..16 {
-            rgba[i * 4] = 255;     // R
+            rgba[i * 4] = 255; // R
             rgba[i * 4 + 3] = 255; // A
         }
 
@@ -102,8 +102,8 @@ mod tests {
         assert_eq!((ow, oh), (4, 4));
         assert_eq!((ox, oy), (10, 20));
         assert_eq!(out[0], 255); // R
-        assert_eq!(out[1], 0);   // G
-        assert_eq!(out[2], 0);   // B
+        assert_eq!(out[1], 0); // G
+        assert_eq!(out[2], 0); // B
         assert_eq!(out[3], 255); // A
     }
 

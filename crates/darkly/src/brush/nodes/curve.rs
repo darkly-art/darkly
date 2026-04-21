@@ -8,8 +8,8 @@
 //! Prior art: Krita's `KisCubicCurve` and GIMP's `GimpCurve` both use
 //! precomputed LUTs for brush dynamics curves.
 
-use crate::brush::wire::BrushWireType;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
@@ -29,9 +29,10 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::output("output", BrushWireType::Scalar)
                 .with_description("Remapped output from the spline transfer function"),
         ],
-        params: &[
-            ParamDef::Curve { name: "curve", default: DEFAULT_CURVE },
-        ],
+        params: &[ParamDef::Curve {
+            name: "curve",
+            default: DEFAULT_CURVE,
+        }],
         is_gpu: false,
     }
 }

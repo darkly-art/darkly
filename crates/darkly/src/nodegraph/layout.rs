@@ -221,8 +221,16 @@ impl<W: WireKind> Graph<W> {
                 widths.insert(id, w);
                 heights.insert(id, h);
             } else {
-                let n_in = node.ports.iter().filter(|p| p.dir == PortDir::Input).count();
-                let n_out = node.ports.iter().filter(|p| p.dir == PortDir::Output).count();
+                let n_in = node
+                    .ports
+                    .iter()
+                    .filter(|p| p.dir == PortDir::Input)
+                    .count();
+                let n_out = node
+                    .ports
+                    .iter()
+                    .filter(|p| p.dir == PortDir::Output)
+                    .count();
                 let max_ports = n_in.max(n_out);
                 let h = NODE_HEADER_H + BODY_PAD * 2.0 + max_ports as f32 * PORT_ROW_H;
                 heights.insert(id, h.max(MIN_NODE_H));
@@ -242,7 +250,11 @@ impl<W: WireKind> Graph<W> {
                     .filter_map(|id| widths.get(id))
                     .copied()
                     .fold(0.0f32, f32::max);
-                x += if prev_max_w > 0.0 { prev_max_w + GAP_Y * 2.0 } else { SPACING_X };
+                x += if prev_max_w > 0.0 {
+                    prev_max_w + GAP_Y * 2.0
+                } else {
+                    SPACING_X
+                };
             }
             assign_column(&mut self.nodes, layer_nodes, x, &heights);
         }
@@ -283,8 +295,14 @@ mod tests {
     }
     fn wire(g: &mut Graph<TestWireKind>, from: NodeId, from_port: &str, to: NodeId, to_port: &str) {
         g.connect(
-            PortRef { node: from, port: from_port.into() },
-            PortRef { node: to, port: to_port.into() },
+            PortRef {
+                node: from,
+                port: from_port.into(),
+            },
+            PortRef {
+                node: to,
+                port: to_port.into(),
+            },
         )
         .unwrap();
     }
@@ -413,11 +431,7 @@ mod tests {
         let a2 = g.add_node("a2", vec![scalar_out("out")], vec![]);
         let b1 = g.add_node("b1", vec![scalar_in("in"), scalar_out("out")], vec![]);
         let b2 = g.add_node("b2", vec![scalar_in("in"), scalar_out("out")], vec![]);
-        let sink = g.add_node(
-            "sink",
-            vec![scalar_in("in_a"), scalar_in("in_b")],
-            vec![],
-        );
+        let sink = g.add_node("sink", vec![scalar_in("in_a"), scalar_in("in_b")], vec![]);
         wire(&mut g, a1, "out", b1, "in");
         wire(&mut g, a2, "out", b2, "in");
         wire(&mut g, b1, "out", sink, "in_a");
@@ -442,11 +456,7 @@ mod tests {
             vec![],
         );
         let small = g.add_node("small", vec![scalar_out("out")], vec![]);
-        let sink = g.add_node(
-            "sink",
-            vec![scalar_in("in1"), scalar_in("in2")],
-            vec![],
-        );
+        let sink = g.add_node("sink", vec![scalar_in("in1"), scalar_in("in2")], vec![]);
         wire(&mut g, tall, "out0", sink, "in1");
         wire(&mut g, small, "out", sink, "in2");
 
@@ -477,11 +487,7 @@ mod tests {
         // This must not break the topo sort (in-degree must be counted
         // at the node level, not the connection level).
         let mut g = Graph::<TestWireKind>::new();
-        let src = g.add_node(
-            "src",
-            vec![scalar_out("out1"), scalar_out("out2")],
-            vec![],
-        );
+        let src = g.add_node("src", vec![scalar_out("out1"), scalar_out("out2")], vec![]);
         let mid = g.add_node(
             "mid",
             vec![scalar_in("in1"), scalar_in("in2"), scalar_out("out")],

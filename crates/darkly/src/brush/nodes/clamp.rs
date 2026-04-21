@@ -1,7 +1,7 @@
 //! Clamp node — clamp(Scalar, min, max) → Scalar.
 
-use crate::brush::wire::BrushWireType;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
@@ -14,14 +14,23 @@ pub fn register() -> BrushNodeRegistration {
         category: "math",
         display_name: "Clamp",
         ports: vec![
-            PortDef::input("value", BrushWireType::Scalar)
-                .with_description("Input value to clamp"),
+            PortDef::input("value", BrushWireType::Scalar).with_description("Input value to clamp"),
             PortDef::output("result", BrushWireType::Scalar)
                 .with_description("Clamped output value"),
         ],
         params: &[
-            ParamDef::Float { name: "min", min: 0.0, max: 1.0, default: 0.0 },
-            ParamDef::Float { name: "max", min: 0.0, max: 1.0, default: 1.0 },
+            ParamDef::Float {
+                name: "min",
+                min: 0.0,
+                max: 1.0,
+                default: 0.0,
+            },
+            ParamDef::Float {
+                name: "max",
+                min: 0.0,
+                max: 1.0,
+                default: 1.0,
+            },
         ],
         is_gpu: false,
     }

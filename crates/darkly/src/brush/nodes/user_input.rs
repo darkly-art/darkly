@@ -58,15 +58,31 @@ pub fn register() -> BrushNodeRegistration {
         type_id: "user_input",
         category: "input",
         display_name: "User Input",
-        ports: vec![
-            PortDef::output("value", BrushWireType::Scalar)
-                .with_description("The user-controlled value, normalized to 0\u{2013}1"),
-        ],
+        ports: vec![PortDef::output("value", BrushWireType::Scalar)
+            .with_description("The user-controlled value, normalized to 0\u{2013}1")],
         params: &[
-            ParamDef::String { name: "label", default: "" },
-            ParamDef::Float { name: "value", min: 0.0, max: 1.0, default: 0.5 },
-            ParamDef::FloatInput { name: "min", min: 0.0, max: 100000.0, default: 0.0 },
-            ParamDef::FloatInput { name: "max", min: 0.0, max: 100000.0, default: 1.0 },
+            ParamDef::String {
+                name: "label",
+                default: "",
+            },
+            ParamDef::Float {
+                name: "value",
+                min: 0.0,
+                max: 1.0,
+                default: 0.5,
+            },
+            ParamDef::FloatInput {
+                name: "min",
+                min: 0.0,
+                max: 100000.0,
+                default: 0.0,
+            },
+            ParamDef::FloatInput {
+                name: "max",
+                min: 0.0,
+                max: 100000.0,
+                default: 1.0,
+            },
             ParamDef::Enum {
                 name: "units",
                 options: &["Percent", "Pixels", "Degrees", "Raw"],
@@ -77,7 +93,10 @@ pub fn register() -> BrushNodeRegistration {
                 options: ICON_OPTIONS,
                 default: "",
             },
-            ParamDef::String { name: "description", default: "" },
+            ParamDef::String {
+                name: "description",
+                default: "",
+            },
         ],
         is_gpu: false,
     }

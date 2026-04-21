@@ -5,10 +5,7 @@ use std::path::{Path, PathBuf};
 fn main() {
     let src = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("src");
 
-    generate_registry(
-        &src.join("gpu/veils"),
-        "crate::gpu::veil::VeilRegistration",
-    );
+    generate_registry(&src.join("gpu/veils"), "crate::gpu::veil::VeilRegistration");
 
     generate_registry(&src.join("tools"), "crate::tool::ToolRegistration");
 
@@ -65,9 +62,11 @@ fn generate_registry(dir: &Path, registration_type: &str) {
     }
 
     code.push_str(&format!("\nuse {registration_type};\n\n"));
-    code.push_str(&format!(
-        "pub fn registrations() -> Vec<{type_name}> {{\n"
-    ));
+    // Skip rustfmt on the generated body — layout varies across rustfmt
+    // versions (single-element `vec![]` collapses on newer versions),
+    // which would otherwise make CI's fmt check depend on the toolchain.
+    code.push_str("#[rustfmt::skip]\n");
+    code.push_str(&format!("pub fn registrations() -> Vec<{type_name}> {{\n"));
     code.push_str("    vec![\n");
     for m in &modules {
         code.push_str(&format!("        {m}::register(),\n"));

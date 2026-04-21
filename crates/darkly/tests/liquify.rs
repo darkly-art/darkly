@@ -15,11 +15,11 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use darkly::brush::compile_graph;
+use darkly::brush::dab_pool::DabTexturePool;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::BrushGpuContext;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipelines::BrushPipelines;
-use darkly::brush::dab_pool::DabTexturePool;
 use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::brush::wire::BrushWireType;
 use darkly::brush::BrushNodeRegistry;
@@ -37,10 +37,12 @@ const CANVAS: u32 = 128;
 /// textures, etc., so there's no cross-test state leakage.
 fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     static HANDLES: OnceLock<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> = OnceLock::new();
-    HANDLES.get_or_init(|| {
-        let (d, q) = test_device();
-        (Arc::new(d), Arc::new(q))
-    }).clone()
+    HANDLES
+        .get_or_init(|| {
+            let (d, q) = test_device();
+            (Arc::new(d), Arc::new(q))
+        })
+        .clone()
 }
 
 // ── Test harness ────────────────────────────────────────────────────────────
@@ -58,11 +60,7 @@ struct Harness {
 
 /// Build a minimal liquify graph: pen_input.position/motion → liquify.*,
 /// with size/strength/softness overridden to the test's requested values.
-fn liquify_graph(
-    size: f32,
-    strength: f32,
-    softness: f32,
-) -> Graph<BrushWireType> {
+fn liquify_graph(size: f32, strength: f32, softness: f32) -> Graph<BrushWireType> {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::new();
 
@@ -78,21 +76,49 @@ fn liquify_graph(
     );
 
     graph.set_port_default(liquify, "size", size).unwrap();
-    graph.set_port_default(liquify, "strength", strength).unwrap();
-    graph.set_port_default(liquify, "softness", softness).unwrap();
+    graph
+        .set_port_default(liquify, "strength", strength)
+        .unwrap();
+    graph
+        .set_port_default(liquify, "softness", softness)
+        .unwrap();
 
-    graph.connect(
-        PortRef { node: pen, port: "position".into() },
-        PortRef { node: liquify, port: "position".into() },
-    ).unwrap();
-    graph.connect(
-        PortRef { node: pen, port: "drawing_angle".into() },
-        PortRef { node: liquify, port: "direction".into() },
-    ).unwrap();
-    graph.connect(
-        PortRef { node: pen, port: "distance".into() },
-        PortRef { node: liquify, port: "distance".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "position".into(),
+            },
+            PortRef {
+                node: liquify,
+                port: "position".into(),
+            },
+        )
+        .unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "drawing_angle".into(),
+            },
+            PortRef {
+                node: liquify,
+                port: "direction".into(),
+            },
+        )
+        .unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "distance".into(),
+            },
+            PortRef {
+                node: liquify,
+                port: "distance".into(),
+            },
+        )
+        .unwrap();
 
     graph
 }
@@ -103,10 +129,18 @@ fn harness(initial: &[u8], size: f32, strength: f32, softness: f32) -> Harness {
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, initial);
 
     let dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout(), CANVAS, CANVAS);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        dab_pool.bind_group_layout(),
+        CANVAS,
+        CANVAS,
+    );
 
     let stroke_buffer = StrokeBuffer::new(
-        &device, CANVAS, CANVAS,
+        &device,
+        CANVAS,
+        CANVAS,
         dab_pool.bind_group_layout(),
         pipelines.canvas_copy_bind_group_layout(),
     );
@@ -124,8 +158,14 @@ fn harness(initial: &[u8], size: f32, strength: f32, softness: f32) -> Harness {
     let runner = compile_graph(&graph).expect("graph compiles");
 
     Harness {
-        device, queue, layer_texture, layer_view, pipelines, dab_pool,
-        stroke_buffer, runner,
+        device,
+        queue,
+        layer_texture,
+        layer_view,
+        pipelines,
+        dab_pool,
+        stroke_buffer,
+        runner,
     }
 }
 
@@ -136,9 +176,11 @@ fn harness(initial: &[u8], size: f32, strength: f32, softness: f32) -> Harness {
 macro_rules! make_ctx {
     ($h:ident, $label:expr, $resources:expr) => {
         BrushGpuContext {
-            encoder: $h.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some($label),
-            }),
+            encoder: $h
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some($label),
+                }),
             device: &$h.device,
             queue: &$h.queue,
             dab_pool: &mut $h.dab_pool,
@@ -179,7 +221,8 @@ impl Harness {
         // Slot updates borrow the runner mutably but don't need the ctx, so
         // split them out first.
         self.runner.clear_slots();
-        self.runner.seed_sensors(info, [1.0, 1.0, 1.0, 1.0], 0, info.index);
+        self.runner
+            .seed_sensors(info, [1.0, 1.0, 1.0, 1.0], 0, info.index);
         self.runner.execute_cpu();
 
         let mut ctx = make_ctx!(self, "liquify-test-dab", &resources);
@@ -197,8 +240,12 @@ impl Harness {
 
     fn readback(&self) -> Vec<u8> {
         readback_texture(
-            &self.device, &self.queue, &self.layer_texture,
-            wgpu::TextureFormat::Rgba8Unorm, CANVAS, CANVAS,
+            &self.device,
+            &self.queue,
+            &self.layer_texture,
+            wgpu::TextureFormat::Rgba8Unorm,
+            CANVAS,
+            CANVAS,
         )
     }
 }
@@ -258,13 +305,15 @@ fn rightward_direction_pushes_pixels_right() {
     let shifted = pixel(&after, 95, 64);
     assert!(
         shifted[0] > 200 && shifted[3] > 200,
-        "expected red at shifted position (95,64), got {:?}", shifted,
+        "expected red at shifted position (95,64), got {:?}",
+        shifted,
     );
     // Original bar location now samples from (31,64) which was background.
     let orig = pixel(&after, 63, 64);
     assert!(
         orig[0] < 20,
-        "expected background at original bar (63,64), got {:?}", orig,
+        "expected background at original bar (63,64), got {:?}",
+        orig,
     );
 }
 
@@ -282,7 +331,7 @@ fn stationary_click_is_noop() {
     let first_dab = PaintInformation {
         pos: [64.0, 64.0],
         drawing_angle: 0.0,
-        distance: 0.0,  // stroke engine's initial value — no travel yet
+        distance: 0.0, // stroke engine's initial value — no travel yet
         ..Default::default()
     };
     h.dab(&first_dab);
@@ -344,13 +393,13 @@ fn outside_radius_is_untouched() {
 fn waveshape_differs_saw_vs_square() {
     let initial = canvas_with_bar();
 
-    let mut saw = harness(&initial, 0.25, 1.0, 0.0);  // softness=0 → saw
+    let mut saw = harness(&initial, 0.25, 1.0, 0.0); // softness=0 → saw
     saw.begin_stroke();
     saw.dab(&pen([64.0, 64.0], 0.0));
     saw.commit();
     let saw_out = saw.readback();
 
-    let mut square = harness(&initial, 0.25, 1.0, 1.0);  // softness=1 → square
+    let mut square = harness(&initial, 0.25, 1.0, 1.0); // softness=1 → square
     square.begin_stroke();
     square.dab(&pen([64.0, 64.0], 0.0));
     square.commit();
@@ -362,7 +411,9 @@ fn waveshape_differs_saw_vs_square() {
         .chunks_exact(4)
         .zip(square_out.chunks_exact(4))
         .filter(|(a, b)| {
-            a.iter().zip(b.iter()).any(|(x, y)| (*x as i32 - *y as i32).abs() > 4)
+            a.iter()
+                .zip(b.iter())
+                .any(|(x, y)| (*x as i32 - *y as i32).abs() > 4)
         })
         .count();
     assert!(
@@ -425,8 +476,8 @@ fn speed_does_not_affect_displacement() {
     let slow_info = PaintInformation {
         pos: [64.0, 64.0],
         drawing_angle: 0.0,
-        speed: 0.05,  // barely moving
-        distance: 5.0,  // non-zero, past the first-dab gate
+        speed: 0.05,   // barely moving
+        distance: 5.0, // non-zero, past the first-dab gate
         ..Default::default()
     };
     slow.dab(&slow_info);
@@ -438,7 +489,7 @@ fn speed_does_not_affect_displacement() {
     let fast_info = PaintInformation {
         pos: [64.0, 64.0],
         drawing_angle: 0.0,
-        speed: 0.95,  // near max
+        speed: 0.95, // near max
         distance: 500.0,
         ..Default::default()
     };

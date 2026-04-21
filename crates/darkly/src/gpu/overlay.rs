@@ -131,70 +131,68 @@ impl ToolOverlay {
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
     ) -> Self {
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("overlay-bgl"),
-                entries: &[
-                    // 0: uniforms
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("overlay-bgl"),
+            entries: &[
+                // 0: uniforms
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // 1: primitives storage buffer
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // 1: primitives storage buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // 2: snapshot texture (surface copy for background readback)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // 2: snapshot texture (surface copy for background readback)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // 3: sampler (shared by snapshot + mask)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
+                    count: None,
+                },
+                // 3: sampler (shared by snapshot + mask)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // 4: mask texture (stamp shape + softness)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // 4: mask texture (stamp shape + softness)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
-        let pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("overlay-layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                immediate_size: 0,
-            });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("overlay-layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            immediate_size: 0,
+        });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("overlay-shader"),
@@ -224,55 +222,53 @@ impl ToolOverlay {
             },
         };
 
-        let solid_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("overlay-solid"),
-                layout: Some(&pipeline_layout),
-                vertex: vertex_state.clone(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_solid"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(alpha_blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
+        let solid_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("overlay-solid"),
+            layout: Some(&pipeline_layout),
+            vertex: vertex_state.clone(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_solid"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(alpha_blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
-        let snapshot_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("overlay-snapshot"),
-                layout: Some(&pipeline_layout),
-                vertex: vertex_state,
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_snapshot"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: surface_format,
-                        blend: Some(alpha_blend),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
+        let snapshot_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("overlay-snapshot"),
+            layout: Some(&pipeline_layout),
+            vertex: vertex_state,
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_snapshot"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(alpha_blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("overlay-uniforms"),
@@ -301,7 +297,11 @@ impl ToolOverlay {
         // 1×1 dummy texture — always available for solid-only bind groups.
         let dummy_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("overlay-dummy"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -318,7 +318,11 @@ impl ToolOverlay {
             queue,
             &wgpu::TextureDescriptor {
                 label: Some("overlay-dummy-mask"),
-                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -394,7 +398,11 @@ impl ToolOverlay {
             queue,
             &wgpu::TextureDescriptor {
                 label: Some("overlay-mask"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -430,7 +438,11 @@ impl ToolOverlay {
         if self.preview_mask_size != (width, height) || self.preview_mask.is_none() {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("overlay-preview-mask"),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -489,7 +501,9 @@ impl ToolOverlay {
 
     /// Returns true if any primitive is animating (dashed lines).
     pub fn needs_animation(&self) -> bool {
-        self.primitives.iter().any(|p| p.kind == KIND_DASHED_LINE && p.dash_len > 0.0)
+        self.primitives
+            .iter()
+            .any(|p| p.kind == KIND_DASHED_LINE && p.dash_len > 0.0)
     }
 
     /// Advance overlay animation time by the given delta.
@@ -550,8 +564,11 @@ impl ToolOverlay {
         }
 
         // Partition: solid first, snapshot-sampling (invert + soft) second.
-        self.primitives.sort_by_key(|p| (p.flags & FLAG_SNAPSHOT_MASK) != 0);
-        self.solid_count = self.primitives.iter()
+        self.primitives
+            .sort_by_key(|p| (p.flags & FLAG_SNAPSHOT_MASK) != 0);
+        self.solid_count = self
+            .primitives
+            .iter()
             .filter(|p| p.flags & FLAG_SNAPSHOT_MASK == 0)
             .count() as u32;
         self.snapshot_count = self.primitives.len() as u32 - self.solid_count;
@@ -598,7 +615,10 @@ impl ToolOverlay {
         };
 
         // Pick mask view: user-uploaded if present, else 1×1 white fallback.
-        let mask_view = self.mask_view.as_ref().unwrap_or(&self.dummy_white_mask_view);
+        let mask_view = self
+            .mask_view
+            .as_ref()
+            .unwrap_or(&self.dummy_white_mask_view);
 
         // Build bind group.
         self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -644,7 +664,10 @@ impl ToolOverlay {
         if self.solid_count == 0 {
             return;
         }
-        let bg = self.bind_group.as_ref().expect("prepare() must be called before draw_solid()");
+        let bg = self
+            .bind_group
+            .as_ref()
+            .expect("prepare() must be called before draw_solid()");
         rpass.set_pipeline(&self.solid_pipeline);
         rpass.set_bind_group(0, bg, &[]);
         rpass.draw(0..6, 0..self.solid_count);
@@ -665,7 +688,10 @@ impl ToolOverlay {
             return;
         }
 
-        let bg = self.bind_group.as_ref().expect("prepare() must be called before encode_snapshot()");
+        let bg = self
+            .bind_group
+            .as_ref()
+            .expect("prepare() must be called before encode_snapshot()");
 
         // Copy surface → snapshot so fs_snapshot can sample the background.
         encoder.copy_texture_to_texture(
@@ -695,7 +721,10 @@ impl ToolOverlay {
 
         rpass.set_pipeline(&self.snapshot_pipeline);
         rpass.set_bind_group(0, bg, &[]);
-        rpass.draw(0..6, self.solid_count..(self.solid_count + self.snapshot_count));
+        rpass.draw(
+            0..6,
+            self.solid_count..(self.solid_count + self.snapshot_count),
+        );
     }
 
     /// CPU-side hit test: returns the index of the first primitive hit at the
@@ -764,19 +793,19 @@ fn cpu_sdf(prim: &OverlayPrimitive, p: [f32; 2]) -> f32 {
         KIND_LINE | KIND_DASHED_LINE => {
             sdf::sdf_segment(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0], prim.p1[1])
         }
-        KIND_CIRCLE => {
-            sdf::sdf_circle(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0]).abs()
-        }
-        KIND_FILLED_CIRCLE => {
-            sdf::sdf_circle(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0])
-        }
+        KIND_CIRCLE => sdf::sdf_circle(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0]).abs(),
+        KIND_FILLED_CIRCLE => sdf::sdf_circle(p[0], p[1], prim.p0[0], prim.p0[1], prim.p1[0]),
         KIND_RECT | KIND_FILLED_RECT => {
             let cx = (prim.p0[0] + prim.p1[0]) * 0.5;
             let cy = (prim.p0[1] + prim.p1[1]) * 0.5;
             let hw = (prim.p1[0] - prim.p0[0]) * 0.5;
             let hh = (prim.p1[1] - prim.p0[1]) * 0.5;
             let d = sdf::sdf_rounded_rect(p[0], p[1], cx, cy, hw, hh, prim.corner_radius);
-            if prim.kind == KIND_RECT { d.abs() } else { d }
+            if prim.kind == KIND_RECT {
+                d.abs()
+            } else {
+                d
+            }
         }
         KIND_ELLIPSE => {
             // p0 = center, p1 = [rx, ry]
@@ -812,12 +841,14 @@ mod tests {
         // Mix: one solid line, one invert rect, one soft-contrast filled ellipse.
         // Deliberately interleave so the sort has work to do.
         let solid = OverlayPrimitive::new(KIND_LINE, 0, [0.0, 0.0], [100.0, 0.0]);
-        let invert = OverlayPrimitive::new(KIND_RECT, FLAG_INVERT_COLOR, [10.0, 10.0], [50.0, 50.0]);
+        let invert =
+            OverlayPrimitive::new(KIND_RECT, FLAG_INVERT_COLOR, [10.0, 10.0], [50.0, 50.0]);
         let soft = {
             let mut p = OverlayPrimitive::new(
                 KIND_FILLED_ELLIPSE,
                 FLAG_SOFT_CONTRAST,
-                [200.0, 200.0], [40.0, 30.0],
+                [200.0, 200.0],
+                [40.0, 30.0],
             );
             p.mode_param = 0.15;
             p
@@ -828,7 +859,10 @@ mod tests {
         overlay.prepare(&device, &queue, &vt, 512, 512);
 
         assert_eq!(overlay.solid_count, 1, "one solid primitive");
-        assert_eq!(overlay.snapshot_count, 2, "invert + soft share the snapshot batch");
+        assert_eq!(
+            overlay.snapshot_count, 2,
+            "invert + soft share the snapshot batch"
+        );
         assert!(overlay.has_snapshot(), "snapshot pass required");
         assert!(overlay.has_content());
 
@@ -854,17 +888,16 @@ mod tests {
         assert_eq!(overlay.solid_count, 2);
         assert_eq!(overlay.snapshot_count, 0);
         assert!(!overlay.has_snapshot());
-        assert!(overlay.snapshot.is_none(), "no snapshot texture allocated when unused");
+        assert!(
+            overlay.snapshot.is_none(),
+            "no snapshot texture allocated when unused"
+        );
     }
 
     #[test]
     fn filled_ellipse_cpu_sdf_interior_vs_exterior() {
         // Purely a CPU-side hit-test sanity check for the new kind.
-        let mut prim = OverlayPrimitive::new(
-            KIND_FILLED_ELLIPSE,
-            0,
-            [100.0, 100.0], [30.0, 20.0],
-        );
+        let mut prim = OverlayPrimitive::new(KIND_FILLED_ELLIPSE, 0, [100.0, 100.0], [30.0, 20.0]);
         prim.thickness = 0.0;
 
         let center = cpu_sdf(&prim, [100.0, 100.0]);
@@ -879,9 +912,12 @@ mod tests {
     #[test]
     fn clear_primitives_resets_counts() {
         let mut overlay = make_overlay();
-        overlay.set_primitives(vec![
-            OverlayPrimitive::new(KIND_LINE, 0, [0.0, 0.0], [10.0, 10.0]),
-        ]);
+        overlay.set_primitives(vec![OverlayPrimitive::new(
+            KIND_LINE,
+            0,
+            [0.0, 0.0],
+            [10.0, 10.0],
+        )]);
         overlay.solid_count = 1; // simulate post-prepare state
         overlay.snapshot_count = 0;
 
@@ -914,10 +950,10 @@ mod tests {
         const H: u32 = 16;
         let mut pixels = vec![0u8; (W * H * 4) as usize];
         for i in (0..pixels.len()).step_by(4) {
-            pixels[i] = 255;     // R = 1
-            pixels[i+1] = 0;
-            pixels[i+2] = 0;
-            pixels[i+3] = 255;
+            pixels[i] = 255; // R = 1
+            pixels[i + 1] = 0;
+            pixels[i + 2] = 0;
+            pixels[i + 3] = 255;
         }
         let (surface_tex, surface_view) =
             create_test_texture_with_format(&device, &queue, W, H, &pixels, format);
@@ -929,7 +965,7 @@ mod tests {
             [(W as f32) * 0.5, (H as f32) * 0.5],
             [12.0, 6.0],
         );
-        prim.mode_param = 1.0;  // fully grey
+        prim.mode_param = 1.0; // fully grey
         overlay.set_primitives(vec![prim]);
 
         let vt = ViewTransform::identity();
@@ -944,19 +980,26 @@ mod tests {
         let out = readback_texture(&device, &queue, &surface_tex, format, W, H);
         let px = |x: u32, y: u32| -> [u8; 4] {
             let i = ((y * W + x) * 4) as usize;
-            [out[i], out[i+1], out[i+2], out[i+3]]
+            [out[i], out[i + 1], out[i + 2], out[i + 3]]
         };
 
-        let inside = px(32, 8);   // center of the ellipse
-        let outside = px(2, 8);   // well outside
+        let inside = px(32, 8); // center of the ellipse
+        let outside = px(2, 8); // well outside
 
-        assert_eq!(outside, [255, 0, 0, 255], "red bg unchanged outside ellipse");
+        assert_eq!(
+            outside,
+            [255, 0, 0, 255],
+            "red bg unchanged outside ellipse"
+        );
 
         // Combined shift at mode_param=1:
         //   lum_shift toward white (red has lum=0.21 < 0.5): mix(red, white, 1) = white
         //   desat toward bg_gray=(0.21..): mix(white, 0.21, 0.5) ≈ 0.605 = (154, 154, 154).
         // Key property: R drops hard (dominant-channel desat) AND G/B rise.
-        assert!(inside[0] < 200, "R should drop substantially: got {inside:?}");
+        assert!(
+            inside[0] < 200,
+            "R should drop substantially: got {inside:?}"
+        );
         assert!(inside[1] > 100, "G should rise well off 0: got {inside:?}");
         assert!(inside[2] > 100, "B should rise well off 0: got {inside:?}");
         // All channels should land close (approximately grey).
@@ -982,18 +1025,21 @@ mod tests {
         const H: u32 = 16;
         let mut bg = vec![0u8; (W * H * 4) as usize];
         for i in (0..bg.len()).step_by(4) {
-            bg[i] = 255;      // R
-            bg[i+3] = 255;    // A
+            bg[i] = 255; // R
+            bg[i + 3] = 255; // A
         }
         let (surface_tex, surface_view) =
             create_test_texture_with_format(&device, &queue, W, H, &bg, format);
 
         // 16×1 mask: left half black (coverage 0), right half white (coverage 1).
         // A wide mask avoids linear-filter bleed near the sample points.
-        let mut mask = vec![0u8; 16 * 1 * 4];
+        let mut mask = vec![0u8; 16 * 4];
         for x in 8..16 {
             let i = x * 4;
-            mask[i] = 255; mask[i+1] = 255; mask[i+2] = 255; mask[i+3] = 255;
+            mask[i] = 255;
+            mask[i + 1] = 255;
+            mask[i + 2] = 255;
+            mask[i + 3] = 255;
         }
         overlay.set_mask_texture(&device, &queue, 16, 1, &mask);
 
@@ -1021,18 +1067,20 @@ mod tests {
         let out = readback_texture(&device, &queue, &surface_tex, format, W, H);
         let px = |x: u32, y: u32| -> [u8; 4] {
             let i = ((y * W + x) * 4) as usize;
-            [out[i], out[i+1], out[i+2], out[i+3]]
+            [out[i], out[i + 1], out[i + 2], out[i + 3]]
         };
 
-        let left = px(16, 8);     // inside stamp, mask ≈ 0 → coverage ≈ 0
-        let right = px(48, 8);    // inside stamp, mask ≈ 1 → coverage ≈ 1
-        let outside = px(2, 8);   // outside stamp bounds
+        let left = px(16, 8); // inside stamp, mask ≈ 0 → coverage ≈ 0
+        let right = px(48, 8); // inside stamp, mask ≈ 1 → coverage ≈ 1
+        let outside = px(2, 8); // outside stamp bounds
 
         assert_eq!(outside, [255, 0, 0, 255], "red bg unchanged outside stamp");
 
         // Left half: mask=0 → no desaturation → still pure red.
-        assert!(left[0] >= 250 && left[1] <= 5 && left[2] <= 5,
-            "left half (mask=0) should stay pure red: got {left:?}");
+        assert!(
+            left[0] >= 250 && left[1] <= 5 && left[2] <= 5,
+            "left half (mask=0) should stay pure red: got {left:?}"
+        );
 
         // Right half: mask=1 with strength=0.6 → 60% desat.
         // R goes from 255 toward ~54 (red's gray point): 255*0.4 + 54*0.6 ≈ 134.

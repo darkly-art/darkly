@@ -3,8 +3,8 @@
 //! Lerps between two values based on a factor.  Works for both Scalar
 //! and Color inputs (Color inputs lerp component-wise).
 
-use crate::brush::wire::BrushWireType;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 

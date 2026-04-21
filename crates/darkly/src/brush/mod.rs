@@ -2,8 +2,8 @@
 //!
 //! Phase 9: Texture overlay.
 
-pub mod builtin_presets;
 pub mod brush_tip;
+pub mod builtin_presets;
 pub mod checkpoint_ring;
 pub mod curve_math;
 pub mod dab_pool;
@@ -87,25 +87,49 @@ impl Default for BrushNodeRegistry {
 pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>> {
     let mut map: HashMap<String, Box<dyn eval::BrushNodeEvaluator>> = HashMap::new();
     // CPU nodes.
-    map.insert("pen_input".into(), Box::new(nodes::pen_input::PenInputEvaluator));
-    map.insert("multiply".into(), Box::new(nodes::multiply::MultiplyEvaluator));
+    map.insert(
+        "pen_input".into(),
+        Box::new(nodes::pen_input::PenInputEvaluator),
+    );
+    map.insert(
+        "multiply".into(),
+        Box::new(nodes::multiply::MultiplyEvaluator),
+    );
     map.insert("curve".into(), Box::new(nodes::curve::CurveEvaluator));
-    map.insert("paint_color".into(), Box::new(nodes::paint_color::PaintColorEvaluator));
+    map.insert(
+        "paint_color".into(),
+        Box::new(nodes::paint_color::PaintColorEvaluator),
+    );
     map.insert("add".into(), Box::new(nodes::add::AddEvaluator));
     map.insert("clamp".into(), Box::new(nodes::clamp::ClampEvaluator));
     map.insert("remap".into(), Box::new(nodes::remap::RemapEvaluator));
     map.insert("mix".into(), Box::new(nodes::mix::MixEvaluator));
-    map.insert("split_vec2".into(), Box::new(nodes::split_vec2::SplitVec2Evaluator));
-    map.insert("make_color".into(), Box::new(nodes::make_color::MakeColorEvaluator));
-    map.insert("user_input".into(), Box::new(nodes::user_input::UserInputEvaluator));
+    map.insert(
+        "split_vec2".into(),
+        Box::new(nodes::split_vec2::SplitVec2Evaluator),
+    );
+    map.insert(
+        "make_color".into(),
+        Box::new(nodes::make_color::MakeColorEvaluator),
+    );
+    map.insert(
+        "user_input".into(),
+        Box::new(nodes::user_input::UserInputEvaluator),
+    );
     map.insert("random".into(), Box::new(nodes::random::RandomEvaluator));
     map.insert("scatter".into(), Box::new(nodes::scatter::ScatterEvaluator));
     // GPU nodes.
     map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
     map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
-    map.insert("color_output".into(), Box::new(nodes::color_output::ColorOutputEvaluator));
-    map.insert("texture_overlay".into(), Box::new(nodes::texture_overlay::TextureOverlayEvaluator));
+    map.insert(
+        "color_output".into(),
+        Box::new(nodes::color_output::ColorOutputEvaluator),
+    );
+    map.insert(
+        "texture_overlay".into(),
+        Box::new(nodes::texture_overlay::TextureOverlayEvaluator),
+    );
     map.insert("liquify".into(), Box::new(nodes::liquify::LiquifyEvaluator));
     map
 }
@@ -151,50 +175,106 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     graph.nodes.get_mut(&color_output).unwrap().position = [520.0, 40.0];
 
     // circle.texture → stamp.tip
-    graph.connect(
-        PortRef { node: circle, port: "texture".into() },
-        PortRef { node: stamp, port: "tip".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: circle,
+                port: "texture".into(),
+            },
+            PortRef {
+                node: stamp,
+                port: "tip".into(),
+            },
+        )
+        .unwrap();
 
     // pressure → stamp.size
-    graph.connect(
-        PortRef { node: pen, port: "pressure".into() },
-        PortRef { node: stamp, port: "size".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "pressure".into(),
+            },
+            PortRef {
+                node: stamp,
+                port: "size".into(),
+            },
+        )
+        .unwrap();
 
     // paint_color → stamp.color
-    graph.connect(
-        PortRef { node: paint_color, port: "color".into() },
-        PortRef { node: stamp, port: "color".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: paint_color,
+                port: "color".into(),
+            },
+            PortRef {
+                node: stamp,
+                port: "color".into(),
+            },
+        )
+        .unwrap();
 
     // stamp.dab → color_output.dab
-    graph.connect(
-        PortRef { node: stamp, port: "dab".into() },
-        PortRef { node: color_output, port: "dab".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: stamp,
+                port: "dab".into(),
+            },
+            PortRef {
+                node: color_output,
+                port: "dab".into(),
+            },
+        )
+        .unwrap();
 
     // stamp.dab_size → color_output.dab_size
-    graph.connect(
-        PortRef { node: stamp, port: "dab_size".into() },
-        PortRef { node: color_output, port: "dab_size".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: stamp,
+                port: "dab_size".into(),
+            },
+            PortRef {
+                node: color_output,
+                port: "dab_size".into(),
+            },
+        )
+        .unwrap();
 
     // pen_input.position → color_output.position
-    graph.connect(
-        PortRef { node: pen, port: "position".into() },
-        PortRef { node: color_output, port: "position".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "position".into(),
+            },
+            PortRef {
+                node: color_output,
+                port: "position".into(),
+            },
+        )
+        .unwrap();
 
     // stamp.preview → color_output.brush_preview
     // The stamp emits a deposition-stripped, transform-baked tip texture
     // whose dimensions encode the brush's canvas-pixel extent. The
     // terminal's `render_preview` hook blits it into the overlay's hover
     // preview mask.
-    graph.connect(
-        PortRef { node: stamp, port: "preview".into() },
-        PortRef { node: color_output, port: "brush_preview".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: stamp,
+                port: "preview".into(),
+            },
+            PortRef {
+                node: color_output,
+                port: "brush_preview".into(),
+            },
+        )
+        .unwrap();
 
     graph
 }
@@ -236,12 +316,12 @@ pub fn validate_graph_json(json: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::gpu::params::ParamValue;
-    use crate::nodegraph::{Graph, NodeId, PortRef};
     use super::eval::BrushGraphRunner;
     use super::paint_info::{PaintInformation, StrokeRecord};
     use super::wire::{BrushWireType, ScalarValue};
+    use super::*;
+    use crate::gpu::params::ParamValue;
+    use crate::nodegraph::{Graph, NodeId, PortRef};
 
     /// Helper: build a graph with pen_input.pressure → multiply.a,
     /// and multiply.b pinned to 0.5 via a port default (no extra node).
@@ -256,10 +336,18 @@ mod tests {
         let multiply = graph.add_node("multiply", mul_reg.ports.clone(), vec![]);
 
         // pen.pressure → multiply.a
-        graph.connect(
-            PortRef { node: pen, port: "pressure".into() },
-            PortRef { node: multiply, port: "a".into() },
-        ).unwrap();
+        graph
+            .connect(
+                PortRef {
+                    node: pen,
+                    port: "pressure".into(),
+                },
+                PortRef {
+                    node: multiply,
+                    port: "a".into(),
+                },
+            )
+            .unwrap();
 
         // multiply.b defaults to 0.5 — no wire, just a port default.
         graph.set_port_default(multiply, "b", 0.5).unwrap();
@@ -308,10 +396,18 @@ mod tests {
             vec![ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])],
         );
 
-        graph.connect(
-            PortRef { node: pen, port: "pressure".into() },
-            PortRef { node: curve, port: "input".into() },
-        ).unwrap();
+        graph
+            .connect(
+                PortRef {
+                    node: pen,
+                    port: "pressure".into(),
+                },
+                PortRef {
+                    node: curve,
+                    port: "input".into(),
+                },
+            )
+            .unwrap();
 
         let evaluators = default_evaluators();
         let mut runner = BrushGraphRunner::new(&graph, registry.as_map(), evaluators).unwrap();
@@ -349,10 +445,18 @@ mod tests {
             vec![ParamValue::Curve(vec![[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]])],
         );
 
-        graph.connect(
-            PortRef { node: pen, port: "pressure".into() },
-            PortRef { node: curve, port: "input".into() },
-        ).unwrap();
+        graph
+            .connect(
+                PortRef {
+                    node: pen,
+                    port: "pressure".into(),
+                },
+                PortRef {
+                    node: curve,
+                    port: "input".into(),
+                },
+            )
+            .unwrap();
 
         let evaluators = default_evaluators();
         let mut runner = BrushGraphRunner::new(&graph, registry.as_map(), evaluators).unwrap();
@@ -368,7 +472,10 @@ mod tests {
         let result = runner.read_slot(slot).unwrap();
         match result {
             ScalarValue::Scalar(v) => {
-                assert!((v - 0.2).abs() < 0.05, "s-curve at 0.5: expected ~0.2, got {v}");
+                assert!(
+                    (v - 0.2).abs() < 0.05,
+                    "s-curve at 0.5: expected ~0.2, got {v}"
+                );
             }
             other => panic!("expected Scalar, got {:?}", other),
         }
@@ -412,7 +519,10 @@ mod tests {
         let result = runner.read_slot(slot).unwrap();
         match result {
             ScalarValue::Scalar(v) => {
-                assert!((v - 1.0).abs() < 1e-6, "expected 1.0 (default * default), got {v}");
+                assert!(
+                    (v - 1.0).abs() < 1e-6,
+                    "expected 1.0 (default * default), got {v}"
+                );
             }
             other => panic!("expected Scalar, got {:?}", other),
         }
@@ -445,6 +555,10 @@ mod tests {
     #[test]
     fn default_runner_compiles() {
         let runner = super::default_runner();
-        assert!(runner.is_ok(), "default_runner() failed: {:?}", runner.err());
+        assert!(
+            runner.is_ok(),
+            "default_runner() failed: {:?}",
+            runner.err()
+        );
     }
 }

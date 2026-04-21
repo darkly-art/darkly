@@ -44,7 +44,9 @@ pub fn flood_fill_rgba(
             if ny < 0 || ny >= h {
                 continue;
             }
-            scan_row_rgba(pixels, width, w, &seed, tol, &mut mask, &mut queue, ny, start, end);
+            scan_row_rgba(
+                pixels, width, w, &seed, tol, &mut mask, &mut queue, ny, start, end,
+            );
         }
     }
 
@@ -85,7 +87,9 @@ pub fn flood_fill_r8(
             if ny < 0 || ny >= h {
                 continue;
             }
-            scan_row_r8(pixels, width, w, seed, tol, &mut mask, &mut queue, ny, start, end);
+            scan_row_r8(
+                pixels, width, w, seed, tol, &mut mask, &mut queue, ny, start, end,
+            );
         }
     }
 
@@ -98,7 +102,12 @@ pub fn flood_fill_r8(
 
 fn read_rgba(pixels: &[u8], width: u32, x: i32, y: i32) -> [u8; 4] {
     let offset = ((y as u32 * width + x as u32) * 4) as usize;
-    [pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]]
+    [
+        pixels[offset],
+        pixels[offset + 1],
+        pixels[offset + 2],
+        pixels[offset + 3],
+    ]
 }
 
 fn matches_rgba(pixels: &[u8], width: u32, x: i32, y: i32, seed: &[u8; 4], tol: i16) -> bool {
@@ -110,8 +119,13 @@ fn matches_rgba(pixels: &[u8], width: u32, x: i32, y: i32, seed: &[u8; 4], tol: 
 }
 
 fn find_segment_rgba(
-    pixels: &[u8], width: u32, canvas_w: i32,
-    seed: &[u8; 4], tol: i16, x: i32, y: i32,
+    pixels: &[u8],
+    width: u32,
+    canvas_w: i32,
+    seed: &[u8; 4],
+    tol: i16,
+    x: i32,
+    y: i32,
 ) -> (i32, i32) {
     let mut end = x;
     while end < canvas_w && matches_rgba(pixels, width, end, y, seed, tol) {
@@ -125,11 +139,16 @@ fn find_segment_rgba(
 }
 
 fn scan_row_rgba(
-    pixels: &[u8], width: u32, canvas_w: i32,
-    seed: &[u8; 4], tol: i16,
+    pixels: &[u8],
+    width: u32,
+    canvas_w: i32,
+    seed: &[u8; 4],
+    tol: i16,
     mask: &mut [u8],
     queue: &mut VecDeque<(i32, i32, i32)>,
-    y: i32, start: i32, end: i32,
+    y: i32,
+    start: i32,
+    end: i32,
 ) {
     let mut x = start;
     while x < end {
@@ -155,8 +174,13 @@ fn matches_r8(pixels: &[u8], width: u32, x: i32, y: i32, seed: u8, tol: i16) -> 
 }
 
 fn find_segment_r8(
-    pixels: &[u8], width: u32, canvas_w: i32,
-    seed: u8, tol: i16, x: i32, y: i32,
+    pixels: &[u8],
+    width: u32,
+    canvas_w: i32,
+    seed: u8,
+    tol: i16,
+    x: i32,
+    y: i32,
 ) -> (i32, i32) {
     let mut end = x;
     while end < canvas_w && matches_r8(pixels, width, end, y, seed, tol) {
@@ -170,11 +194,16 @@ fn find_segment_r8(
 }
 
 fn scan_row_r8(
-    pixels: &[u8], width: u32, canvas_w: i32,
-    seed: u8, tol: i16,
+    pixels: &[u8],
+    width: u32,
+    canvas_w: i32,
+    seed: u8,
+    tol: i16,
     mask: &mut [u8],
     queue: &mut VecDeque<(i32, i32, i32)>,
-    y: i32, start: i32, end: i32,
+    y: i32,
+    start: i32,
+    end: i32,
 ) {
     let mut x = start;
     while x < end {
@@ -212,7 +241,7 @@ mod tests {
         for y in 0..2 {
             for x in 0..2 {
                 let offset = (y * 4 + x) * 4;
-                pixels[offset] = 255;     // R
+                pixels[offset] = 255; // R
                 pixels[offset + 3] = 255; // A
             }
         }
@@ -223,12 +252,12 @@ mod tests {
         assert_eq!(mask[1], 255); // (1,0)
         assert_eq!(mask[4], 255); // (0,1)
         assert_eq!(mask[5], 255); // (1,1)
-        assert_eq!(mask[2], 0);   // (2,0) — transparent, not matching
-        assert_eq!(mask[8], 0);   // (0,2) — transparent
+        assert_eq!(mask[2], 0); // (2,0) — transparent, not matching
+        assert_eq!(mask[8], 0); // (0,2) — transparent
 
         // Fill from (3,3) — should fill all transparent pixels.
         let mask = flood_fill_rgba(&pixels, 4, 4, 3, 3, 0);
-        assert_eq!(mask[0], 0);   // (0,0) — red, not matching
+        assert_eq!(mask[0], 0); // (0,0) — red, not matching
         assert_eq!(mask[2], 255); // (2,0) — transparent
         assert_eq!(mask[15], 255); // (3,3) — transparent
     }
@@ -237,8 +266,10 @@ mod tests {
     fn flood_fill_r8_basic() {
         // 4×4 R8 image: top-left 2×2 is 255, rest is 0.
         let mut pixels = vec![0u8; 4 * 4];
-        pixels[0] = 255; pixels[1] = 255;
-        pixels[4] = 255; pixels[5] = 255;
+        pixels[0] = 255;
+        pixels[1] = 255;
+        pixels[4] = 255;
+        pixels[5] = 255;
 
         let mask = flood_fill_r8(&pixels, 4, 4, 0, 0, 0);
         assert_eq!(mask[0], 255);

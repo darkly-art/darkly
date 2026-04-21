@@ -94,18 +94,18 @@ impl GpuContext {
     /// Eliminates the 4-line boilerplate pattern that appears ~30 times in the
     /// engine: create encoder → do work → queue.submit.
     pub fn encode(&self, label: &str, f: impl FnOnce(&mut wgpu::CommandEncoder)) {
-        let mut encoder = self.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor { label: Some(label) },
-        );
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
         f(&mut encoder);
         self.queue.submit([encoder.finish()]);
     }
 
     /// Like `encode`, but returns a value from the closure.
     pub fn encode_ret<T>(&self, label: &str, f: impl FnOnce(&mut wgpu::CommandEncoder) -> T) -> T {
-        let mut encoder = self.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor { label: Some(label) },
-        );
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
         let result = f(&mut encoder);
         self.queue.submit([encoder.finish()]);
         result

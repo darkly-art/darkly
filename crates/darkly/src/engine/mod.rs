@@ -11,9 +11,7 @@ mod selection;
 pub mod types;
 mod veils;
 
-pub use types::{
-    ClipboardExport, LayerInfo, ParamInfo, StrokeOp, VeilInfo, VeilTypeInfo,
-};
+pub use types::{ClipboardExport, LayerInfo, ParamInfo, StrokeOp, VeilInfo, VeilTypeInfo};
 
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
@@ -27,10 +25,10 @@ use crate::clipboard::Clipboard;
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
+use crate::gpu::diff_rect::DiffRectPass;
 use crate::gpu::overlay::OverlayPrimitive;
 use crate::gpu::paint_target::PaintPipelines;
 use crate::gpu::readback::ReadbackScheduler;
-use crate::gpu::diff_rect::DiffRectPass;
 use crate::gpu::region_store::RegionStore;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::view::ViewTransform;
@@ -110,7 +108,10 @@ pub(crate) struct ThumbnailCache {
 
 impl ThumbnailCache {
     fn new() -> Self {
-        ThumbnailCache { layer: HashMap::new(), mask: HashMap::new() }
+        ThumbnailCache {
+            layer: HashMap::new(),
+            mask: HashMap::new(),
+        }
     }
 }
 
@@ -162,7 +163,8 @@ pub struct DarklyEngine {
     pub(crate) preset_library: PresetLibrary,
     /// Resource name → TextureHandle for images uploaded by the current preset.
     /// Built by `upload_preset_resources()`, read by Image nodes via BrushGpuContext.
-    pub(crate) resource_handles: std::collections::HashMap<String, crate::brush::wire::TextureHandle>,
+    pub(crate) resource_handles:
+        std::collections::HashMap<String, crate::brush::wire::TextureHandle>,
 
     /// Stroke buffer for stabilizer-driven rewind + re-render.
     pub(crate) stroke_buffer: Option<StrokeBuffer>,
@@ -205,19 +207,31 @@ pub struct DarklyEngine {
 impl DarklyEngine {
     pub fn new(gpu: GpuContext, doc_width: u32, doc_height: u32) -> Self {
         let compositor = Compositor::new(
-            &gpu.device, &gpu.queue, gpu.surface_format(),
-            doc_width, doc_height, gpu.is_software,
+            &gpu.device,
+            &gpu.queue,
+            gpu.surface_format(),
+            doc_width,
+            doc_height,
+            gpu.is_software,
         );
         let doc = Document::new(doc_width, doc_height);
         let undo_stack = UndoStack::new(50);
         let region_store = RegionStore::new(&gpu.device, doc_width, doc_height);
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
         let dab_pool = DabTexturePool::new(&gpu.device);
-        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout(), doc_width, doc_height);
+        let brush_pipelines = BrushPipelines::new(
+            &gpu.device,
+            &gpu.queue,
+            dab_pool.bind_group_layout(),
+            doc_width,
+            doc_height,
+        );
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
         let diff_rect = DiffRectPass::new(&gpu.device);
         let gpu_selection = GpuSelection::new(
-            &gpu.device, doc_width, doc_height,
+            &gpu.device,
+            doc_width,
+            doc_height,
             brush_pipelines.selection_bind_group_layout(),
             &paint_pipelines.selection_bind_group_layout,
         );
@@ -292,8 +306,12 @@ impl DarklyEngine {
             .expect("preview mask not allocated");
         let (w, h) = self.compositor_preview_mask_size();
         crate::gpu::test_utils::readback_texture(
-            &self.gpu.device, &self.gpu.queue,
-            tex, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &self.gpu.device,
+            &self.gpu.queue,
+            tex,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
         )
     }
 
@@ -305,13 +323,19 @@ impl DarklyEngine {
 
     /// Blocking readback of a layer's RGBA texture. For test assertions only.
     pub fn test_readback_layer(&self, layer_id: u64) -> Vec<u8> {
-        let layer_tex = self.compositor.layer_texture(layer_id)
+        let layer_tex = self
+            .compositor
+            .layer_texture(layer_id)
             .expect("layer texture not found");
         let w = self.doc.width;
         let h = self.doc.height;
         crate::gpu::test_utils::readback_texture(
-            &self.gpu.device, &self.gpu.queue,
-            &layer_tex.texture, wgpu::TextureFormat::Rgba8Unorm, w, h,
+            &self.gpu.device,
+            &self.gpu.queue,
+            &layer_tex.texture,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
         )
     }
 
@@ -327,7 +351,12 @@ impl DarklyEngine {
         let completed = self.readbacks.poll(&self.gpu.device);
         for (ctx, pixels) in completed {
             match ctx {
-                ReadbackContext::Copy { is_mask, region, is_cut, layer_id } => {
+                ReadbackContext::Copy {
+                    is_mask,
+                    region,
+                    is_cut,
+                    layer_id,
+                } => {
                     self.complete_copy(is_mask, region, is_cut, layer_id, pixels);
                 }
                 ReadbackContext::SelectionReadback => {
@@ -350,7 +379,12 @@ mod tests {
 
     #[test]
     fn param_info_serializes_flat() {
-        let def = ParamDef::Float { name: "speed", min: 0.0, max: 10.0, default: 1.0 };
+        let def = ParamDef::Float {
+            name: "speed",
+            min: 0.0,
+            max: 10.0,
+            default: 1.0,
+        };
         let info = ParamInfo::from_def(&def, Some(&ParamValue::Float(2.5)));
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["kind"], "float");
@@ -363,7 +397,10 @@ mod tests {
 
     #[test]
     fn param_info_bool_omits_min_max() {
-        let def = ParamDef::Bool { name: "soft", default: true };
+        let def = ParamDef::Bool {
+            name: "soft",
+            default: true,
+        };
         let info = ParamInfo::from_def(&def, None);
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["kind"], "bool");
@@ -382,11 +419,19 @@ mod tests {
             index: 0,
             params: vec![
                 ParamInfo::from_def(
-                    &ParamDef::Int { name: "scale", min: 1, max: 32, default: 2 },
+                    &ParamDef::Int {
+                        name: "scale",
+                        min: 1,
+                        max: 32,
+                        default: 2,
+                    },
                     Some(&ParamValue::Int(4)),
                 ),
                 ParamInfo::from_def(
-                    &ParamDef::Bool { name: "soft", default: true },
+                    &ParamDef::Bool {
+                        name: "soft",
+                        default: true,
+                    },
                     Some(&ParamValue::Bool(false)),
                 ),
             ],

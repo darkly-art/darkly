@@ -57,62 +57,59 @@ impl ContentBoundsPass {
             ),
         });
 
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("content-bounds-bgl"),
-                entries: &[
-                    // binding 0: source texture
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("content-bounds-bgl"),
+            entries: &[
+                // binding 0: source texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // binding 1: atomic bounds storage buffer
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // binding 1: atomic bounds storage buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // binding 2: params uniform
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // binding 2: params uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
-        let pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("content-bounds-pipeline-layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                immediate_size: 0,
-            });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("content-bounds-pipeline-layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            immediate_size: 0,
+        });
 
-        let pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("content-bounds-pipeline"),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("content-bounds-pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         ContentBoundsPass {
             pipeline,
@@ -132,7 +129,9 @@ impl ContentBoundsPass {
     /// True if a bounds computation is in flight for this layer.
     pub fn is_pending(&self, layer_id: LayerId) -> bool {
         let gen = self.generation.get(&layer_id).copied().unwrap_or(0);
-        self.pending.iter().any(|p| p.layer_id == layer_id && p.gen == gen)
+        self.pending
+            .iter()
+            .any(|p| p.layer_id == layer_id && p.gen == gen)
     }
 
     /// Invalidate cached bounds for a specific layer.
@@ -179,7 +178,11 @@ impl ContentBoundsPass {
         let gen = self.generation.get(&layer_id).copied().unwrap_or(0);
 
         // Don't queue duplicate requests for the same generation.
-        if self.pending.iter().any(|p| p.layer_id == layer_id && p.gen == gen) {
+        if self
+            .pending
+            .iter()
+            .any(|p| p.layer_id == layer_id && p.gen == gen)
+        {
             return;
         }
 
@@ -254,8 +257,8 @@ impl ContentBoundsPass {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, Some(&bind_group), &[]);
-            let wg_x = (width + 15) / 16;
-            let wg_y = (height + 15) / 16;
+            let wg_x = width.div_ceil(16);
+            let wg_y = height.div_ceil(16);
             pass.dispatch_workgroups(wg_x, wg_y, 1);
         }
 

@@ -290,7 +290,6 @@ impl AlphaMask {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Flat-buffer SDF rasterization (no tile indirection)
 // ---------------------------------------------------------------------------
@@ -356,7 +355,13 @@ pub fn rasterize_sdf_r8(
         }
     }
 
-    RasterizedMask { data: pixels, x: x0, y: y0, width: rw, height: rh }
+    RasterizedMask {
+        data: pixels,
+        x: x0,
+        y: y0,
+        width: rw,
+        height: rh,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -374,7 +379,13 @@ pub fn rasterize_polygon_r8(
     antialias: bool,
 ) -> RasterizedMask {
     if vertices.len() < 3 {
-        return RasterizedMask { data: Vec::new(), x: 0, y: 0, width: 0, height: 0 };
+        return RasterizedMask {
+            data: Vec::new(),
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+        };
     }
 
     // Bounding box.
@@ -398,12 +409,26 @@ pub fn rasterize_polygon_r8(
     let rh = y1 - y0;
 
     if rw == 0 || rh == 0 {
-        return RasterizedMask { data: Vec::new(), x: x0, y: y0, width: 0, height: 0 };
+        return RasterizedMask {
+            data: Vec::new(),
+            x: x0,
+            y: y0,
+            width: 0,
+            height: 0,
+        };
     }
 
     let n = vertices.len();
-    let sub_samples: &[f32] = if antialias { &[0.125, 0.375, 0.625, 0.875] } else { &[0.5] };
-    let scale = if antialias { 255.0 / sub_samples.len() as f32 } else { 255.0 };
+    let sub_samples: &[f32] = if antialias {
+        &[0.125, 0.375, 0.625, 0.875]
+    } else {
+        &[0.5]
+    };
+    let scale = if antialias {
+        255.0 / sub_samples.len() as f32
+    } else {
+        255.0
+    };
 
     // Accumulator: one u8 per pixel for non-AA, one u16 per pixel for AA.
     let mut accum = vec![0u16; (rw * rh) as usize];
@@ -469,11 +494,18 @@ pub fn rasterize_polygon_r8(
     }
 
     // Convert accumulator to R8.
-    let data: Vec<u8> = accum.iter().map(|&v| {
-        (v as f32 * scale).round().min(255.0) as u8
-    }).collect();
+    let data: Vec<u8> = accum
+        .iter()
+        .map(|&v| (v as f32 * scale).round().min(255.0) as u8)
+        .collect();
 
-    RasterizedMask { data, x: x0, y: y0, width: rw, height: rh }
+    RasterizedMask {
+        data,
+        x: x0,
+        y: y0,
+        width: rw,
+        height: rh,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -537,21 +569,27 @@ pub fn contour_segments_r8(
             let r = [x + 1.0, y + right];
 
             match index {
-                1  => segments.push((l, t)),
-                2  => segments.push((t, r)),
-                3  => segments.push((l, r)),
-                4  => segments.push((b, l)),
-                5  => segments.push((b, t)),
-                6  => { segments.push((t, r)); segments.push((b, l)); }
-                7  => segments.push((b, r)),
-                8  => segments.push((r, b)),
-                9  => { segments.push((l, t)); segments.push((r, b)); }
+                1 => segments.push((l, t)),
+                2 => segments.push((t, r)),
+                3 => segments.push((l, r)),
+                4 => segments.push((b, l)),
+                5 => segments.push((b, t)),
+                6 => {
+                    segments.push((t, r));
+                    segments.push((b, l));
+                }
+                7 => segments.push((b, r)),
+                8 => segments.push((r, b)),
+                9 => {
+                    segments.push((l, t));
+                    segments.push((r, b));
+                }
                 10 => segments.push((t, b)),
                 11 => segments.push((l, b)),
                 12 => segments.push((r, l)),
                 13 => segments.push((r, t)),
                 14 => segments.push((t, l)),
-                _  => unreachable!(),
+                _ => unreachable!(),
             }
         }
     }
@@ -631,7 +669,7 @@ impl AlphaMask {
         };
 
         let ts = TILE_SIZE as i32;
-        let tile_expand = ((half as usize) + TILE_SIZE - 1) / TILE_SIZE;
+        let tile_expand = (half as usize).div_ceil(TILE_SIZE);
         let te = tile_expand as i32;
 
         // Horizontal blur: self → intermediate
@@ -754,32 +792,46 @@ impl AlphaMask {
 
                 // Interpolation along edges for smoother contours
                 let top = lerp_edge(self.sample(px, py), self.sample(px + 1, py), threshold);
-                let bottom = lerp_edge(self.sample(px, py + 1), self.sample(px + 1, py + 1), threshold);
+                let bottom = lerp_edge(
+                    self.sample(px, py + 1),
+                    self.sample(px + 1, py + 1),
+                    threshold,
+                );
                 let left = lerp_edge(self.sample(px, py), self.sample(px, py + 1), threshold);
-                let right = lerp_edge(self.sample(px + 1, py), self.sample(px + 1, py + 1), threshold);
+                let right = lerp_edge(
+                    self.sample(px + 1, py),
+                    self.sample(px + 1, py + 1),
+                    threshold,
+                );
 
-                let t = [x + top, y];       // top edge
+                let t = [x + top, y]; // top edge
                 let b = [x + bottom, y + 1.0]; // bottom edge
-                let l = [x, y + left];      // left edge
+                let l = [x, y + left]; // left edge
                 let r = [x + 1.0, y + right]; // right edge
 
                 // Marching squares lookup — emit 1 or 2 segments per cell.
                 match index {
-                    1  => segments.push((l, t)),       // TL inside
-                    2  => segments.push((t, r)),       // TR inside
-                    3  => segments.push((l, r)),       // TL+TR inside
-                    4  => segments.push((b, l)),       // BL inside
-                    5  => segments.push((b, t)),       // TL+BL inside
-                    6  => { segments.push((t, r)); segments.push((b, l)); } // TR+BL (saddle)
-                    7  => segments.push((b, r)),       // TL+TR+BL inside
-                    8  => segments.push((r, b)),       // BR inside
-                    9  => { segments.push((l, t)); segments.push((r, b)); } // TL+BR (saddle)
-                    10 => segments.push((t, b)),       // TR+BR inside
-                    11 => segments.push((l, b)),       // TL+TR+BR inside
-                    12 => segments.push((r, l)),       // BL+BR inside
-                    13 => segments.push((r, t)),       // TL+BL+BR inside
-                    14 => segments.push((t, l)),       // TR+BL+BR inside
-                    _  => unreachable!(),
+                    1 => segments.push((l, t)), // TL inside
+                    2 => segments.push((t, r)), // TR inside
+                    3 => segments.push((l, r)), // TL+TR inside
+                    4 => segments.push((b, l)), // BL inside
+                    5 => segments.push((b, t)), // TL+BL inside
+                    6 => {
+                        segments.push((t, r));
+                        segments.push((b, l));
+                    } // TR+BL (saddle)
+                    7 => segments.push((b, r)), // TL+TR+BL inside
+                    8 => segments.push((r, b)), // BR inside
+                    9 => {
+                        segments.push((l, t));
+                        segments.push((r, b));
+                    } // TL+BR (saddle)
+                    10 => segments.push((t, b)), // TR+BR inside
+                    11 => segments.push((l, b)), // TL+TR+BR inside
+                    12 => segments.push((r, l)), // BL+BR inside
+                    13 => segments.push((r, t)), // TL+BL+BR inside
+                    14 => segments.push((t, l)), // TR+BL+BR inside
+                    _ => unreachable!(),
                 }
             }
         }
@@ -797,7 +849,9 @@ fn merge_collinear(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32; 
     use std::collections::BTreeMap;
 
     // Quantize coordinate to integer key for grouping (f32 bits as i32).
-    fn key(v: f32) -> i32 { v.to_bits() as i32 }
+    fn key(v: f32) -> i32 {
+        v.to_bits() as i32
+    }
 
     // Group by (coordinate, reversed) to preserve winding direction from
     // marching squares. This ensures the dash animation marches consistently
@@ -812,11 +866,16 @@ fn merge_collinear(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32; 
         if a[1] == b[1] {
             let reversed = a[0] > b[0];
             let (lo, hi) = if reversed { (b[0], a[0]) } else { (a[0], b[0]) };
-            horiz.entry((key(a[1]), reversed)).or_default().push((lo, hi));
+            horiz
+                .entry((key(a[1]), reversed))
+                .or_default()
+                .push((lo, hi));
         } else if a[0] == b[0] {
             let reversed = a[1] > b[1];
             let (lo, hi) = if reversed { (b[1], a[1]) } else { (a[1], b[1]) };
-            vert.entry((key(a[0]), reversed)).or_default().push((lo, hi));
+            vert.entry((key(a[0]), reversed))
+                .or_default()
+                .push((lo, hi));
         } else {
             other.push((a, b));
         }
@@ -897,7 +956,7 @@ fn simplify_segments(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32
     let mut adj: HashMap<(i64, i64), Vec<(usize, bool)>> = HashMap::new();
     for (i, (a, b)) in segments.iter().enumerate() {
         adj.entry(qkey(*a)).or_default().push((i, false)); // false = start
-        adj.entry(qkey(*b)).or_default().push((i, true));  // true = end
+        adj.entry(qkey(*b)).or_default().push((i, true)); // true = end
     }
 
     // Chain segments into polylines via greedy traversal.
@@ -916,9 +975,9 @@ fn simplify_segments(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32
         loop {
             let tail = *chain.last().unwrap();
             let key = qkey(tail);
-            let next = adj.get(&key).and_then(|neighbors| {
-                neighbors.iter().find(|&&(idx, _)| !used[idx])
-            });
+            let next = adj
+                .get(&key)
+                .and_then(|neighbors| neighbors.iter().find(|&&(idx, _)| !used[idx]));
             match next {
                 Some(&(idx, is_end)) => {
                     used[idx] = true;
@@ -939,9 +998,9 @@ fn simplify_segments(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32
         loop {
             let head = chain[0];
             let key = qkey(head);
-            let next = adj.get(&key).and_then(|neighbors| {
-                neighbors.iter().find(|&&(idx, _)| !used[idx])
-            });
+            let next = adj
+                .get(&key)
+                .and_then(|neighbors| neighbors.iter().find(|&&(idx, _)| !used[idx]));
             match next {
                 Some(&(idx, is_end)) => {
                     used[idx] = true;
@@ -1086,7 +1145,9 @@ impl AlphaMask {
                     let ty = (py / ts as u32) as i32;
                     let lx = (px % ts as u32) as usize;
                     let ly = (py % ts as u32) as usize;
-                    mask.get_or_create(tx, ty).write().set(lx, ly, v as f32 / 255.0);
+                    mask.get_or_create(tx, ty)
+                        .write()
+                        .set(lx, ly, v as f32 / 255.0);
                 }
             }
         }
@@ -1309,7 +1370,10 @@ mod tests {
         );
         // Well outside: pixel at x=52 (center 52.5), sdf=2.5 → coverage ≈ 0
         let far_outside = mask.sample(52, 20);
-        assert!(far_outside < 0.05, "far outside should be ~0, got {far_outside}");
+        assert!(
+            far_outside < 0.05,
+            "far outside should be ~0, got {far_outside}"
+        );
     }
 
     #[test]
@@ -1365,7 +1429,10 @@ mod tests {
 
         // Center should still be close to 1.0 (may be slightly less due to normalization)
         let center = mask.sample(30, 30);
-        assert!(center > 0.9, "center should remain near 1.0 after feather, got {center}");
+        assert!(
+            center > 0.9,
+            "center should remain near 1.0 after feather, got {center}"
+        );
     }
 
     #[test]
@@ -1400,14 +1467,21 @@ mod tests {
         mask.fill_rect_test(10, 10, 20, 20, 1.0);
         let segs = mask.contour_segments(0.5);
         // A 20×20 rectangle should produce boundary segments
-        assert!(!segs.is_empty(), "contour should produce segments for a filled rect");
+        assert!(
+            !segs.is_empty(),
+            "contour should produce segments for a filled rect"
+        );
         // Segments should be near the boundary (x=10, x=30, y=10, y=30)
         for (a, b) in &segs {
-            let near_boundary =
-                (a[0] >= 9.0 && a[0] <= 31.0) && (a[1] >= 9.0 && a[1] <= 31.0)
-                && (b[0] >= 9.0 && b[0] <= 31.0) && (b[1] >= 9.0 && b[1] <= 31.0);
-            assert!(near_boundary, "segment [{},{}]-[{},{}] should be near boundary",
-                a[0], a[1], b[0], b[1]);
+            let near_boundary = (a[0] >= 9.0 && a[0] <= 31.0)
+                && (a[1] >= 9.0 && a[1] <= 31.0)
+                && (b[0] >= 9.0 && b[0] <= 31.0)
+                && (b[1] >= 9.0 && b[1] <= 31.0);
+            assert!(
+                near_boundary,
+                "segment [{},{}]-[{},{}] should be near boundary",
+                a[0], a[1], b[0], b[1]
+            );
         }
     }
 }

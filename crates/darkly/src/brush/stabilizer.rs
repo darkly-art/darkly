@@ -39,10 +39,17 @@ pub trait StabilizerAlgorithm: Send {
         self.stabilized().len()
     }
 
+    /// Whether the stabilized polyline is empty.
+    fn is_empty(&self) -> bool {
+        self.stabilized().is_empty()
+    }
+
     /// Conservative upper bound on how far back from the tip divergence
     /// can reach (in vector indices). Used to space checkpoints so the
     /// oldest one is past the divergence boundary.
-    fn max_divergence_window(&self) -> usize { 0 }
+    fn max_divergence_window(&self) -> usize {
+        0
+    }
 
     /// Reset for a new stroke.
     fn clear(&mut self);
@@ -54,16 +61,26 @@ pub struct PassThrough {
     points: Vec<PaintInformation>,
 }
 
+impl Default for PassThrough {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PassThrough {
     pub fn new() -> Self {
-        Self { points: Vec::with_capacity(256) }
+        Self {
+            points: Vec::with_capacity(256),
+        }
     }
 }
 
 impl StabilizerAlgorithm for PassThrough {
     fn push(&mut self, point: PaintInformation) -> StabilizeResult {
         self.points.push(point);
-        StabilizeResult { divergence_index: None }
+        StabilizeResult {
+            divergence_index: None,
+        }
     }
 
     fn stabilized(&self) -> &[PaintInformation] {
@@ -88,6 +105,12 @@ pub struct StabilizerRegistry {
     entries: HashMap<&'static str, StabilizerRegistration>,
 }
 
+impl Default for StabilizerRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StabilizerRegistry {
     pub fn new() -> Self {
         let mut entries = HashMap::new();
@@ -99,7 +122,8 @@ impl StabilizerRegistry {
 
     /// Return all registered stabilizer type IDs with their parameter definitions.
     pub fn types(&self) -> Vec<(&'static str, &'static str, &'static [ParamDef])> {
-        let mut types: Vec<_> = self.entries
+        let mut types: Vec<_> = self
+            .entries
             .iter()
             .map(|(&id, reg)| (id, reg.display_name, reg.params))
             .collect();
@@ -109,16 +133,19 @@ impl StabilizerRegistry {
 
     /// Get the static parameter definitions for a stabilizer type.
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.entries
-            .get(type_id)
-            .map(|e| e.params)
-            .unwrap_or(&[])
+        self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
     }
 
     /// Create a stabilizer algorithm instance from a type string and parameters.
     /// Returns `None` if the type_id is not found.
-    pub fn create(&self, type_id: &str, params: &[ParamValue]) -> Option<Box<dyn StabilizerAlgorithm>> {
-        self.entries.get(type_id).map(|reg| (reg.from_params)(params))
+    pub fn create(
+        &self,
+        type_id: &str,
+        params: &[ParamValue],
+    ) -> Option<Box<dyn StabilizerAlgorithm>> {
+        self.entries
+            .get(type_id)
+            .map(|reg| (reg.from_params)(params))
     }
 
     /// Create a stabilizer from a `StabilizerConfig`.
@@ -129,14 +156,17 @@ impl StabilizerRegistry {
         }
         self.create(&config.algorithm, &config.params)
             .unwrap_or_else(|| {
-                log::warn!("unknown stabilizer algorithm '{}', using pass-through", config.algorithm);
+                log::warn!(
+                    "unknown stabilizer algorithm '{}', using pass-through",
+                    config.algorithm
+                );
                 Box::new(PassThrough::new())
             })
     }
 }
 
 /// Per-preset stabilizer configuration — stored in `BrushPreset`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct StabilizerConfig {
     /// Algorithm type_id.  Empty string or "none" = pass-through.
     #[serde(default)]
@@ -144,15 +174,6 @@ pub struct StabilizerConfig {
     /// Algorithm-specific parameter values.
     #[serde(default)]
     pub params: Vec<ParamValue>,
-}
-
-impl Default for StabilizerConfig {
-    fn default() -> Self {
-        Self {
-            algorithm: String::new(),
-            params: Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -222,7 +243,10 @@ mod tests {
         assert_eq!(stab.len(), 0);
 
         // "none" → pass-through.
-        let config = StabilizerConfig { algorithm: "none".into(), params: vec![] };
+        let config = StabilizerConfig {
+            algorithm: "none".into(),
+            params: vec![],
+        };
         let stab = registry.create_from_config(&config);
         assert_eq!(stab.len(), 0);
 
@@ -240,7 +264,10 @@ mod tests {
     fn registry_discovers_algorithms() {
         let registry = StabilizerRegistry::new();
         let types = registry.types();
-        assert!(!types.is_empty(), "registry should discover at least one algorithm");
+        assert!(
+            !types.is_empty(),
+            "registry should discover at least one algorithm"
+        );
         assert!(types.iter().any(|(id, _, _)| *id == "laplacian"));
     }
 }

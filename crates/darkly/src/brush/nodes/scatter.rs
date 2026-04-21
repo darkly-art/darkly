@@ -46,9 +46,11 @@ pub fn register() -> BrushNodeRegistration {
                 .with_label("Dab Size")
                 .with_unit(UnitType::Raw)
                 .with_icon("fa-solid fa-ruler")
-                .with_description("Pixel reference the amounts are fractions of. \
+                .with_description(
+                    "Pixel reference the amounts are fractions of. \
                     Wire `stamp.dab_major` for size-proportional scatter, or leave \
-                    unwired and dial it directly for smudge/liquify brushes."),
+                    unwired and dial it directly for smudge/liquify brushes.",
+                ),
             PortDef::output("position", BrushWireType::Vec2)
                 .with_description("Input position + random offset"),
         ],
@@ -89,11 +91,9 @@ impl BrushNodeEvaluator for ScatterEvaluator {
         let offset_x = (raw_x * 2.0 - 1.0) * amount_x * dab_size;
         let offset_y = (raw_y * 2.0 - 1.0) * amount_y * dab_size;
 
-        vec![
-            ("position".into(), ScalarValue::Vec2([
-                position[0] + offset_x,
-                position[1] + offset_y,
-            ])),
-        ]
+        vec![(
+            "position".into(),
+            ScalarValue::Vec2([position[0] + offset_x, position[1] + offset_y]),
+        )]
     }
 }

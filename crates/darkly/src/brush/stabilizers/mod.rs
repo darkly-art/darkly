@@ -6,6 +6,7 @@ pub mod laplacian;
 
 use crate::brush::stabilizer::StabilizerRegistration;
 
+#[rustfmt::skip]
 pub fn registrations() -> Vec<StabilizerRegistration> {
     vec![
         laplacian::register(),

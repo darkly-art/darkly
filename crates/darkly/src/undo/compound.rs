@@ -40,6 +40,8 @@ impl UndoAction for CompoundAction {
     }
 
     fn gpu_region_entry_mut(&mut self) -> Option<&mut UndoRegionEntry> {
-        self.actions.iter_mut().find_map(|a| a.gpu_region_entry_mut())
+        self.actions
+            .iter_mut()
+            .find_map(|a| a.gpu_region_entry_mut())
     }
 }

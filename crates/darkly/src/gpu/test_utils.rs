@@ -41,12 +41,8 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
 
 fn noop_waker() -> std::task::Waker {
     use std::task::{RawWaker, RawWakerVTable, Waker};
-    const VTABLE: RawWakerVTable = RawWakerVTable::new(
-        |p| RawWaker::new(p, &VTABLE),
-        |_| {},
-        |_| {},
-        |_| {},
-    );
+    const VTABLE: RawWakerVTable =
+        RawWakerVTable::new(|p| RawWaker::new(p, &VTABLE), |_| {}, |_| {}, |_| {});
     unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }
 
@@ -58,7 +54,14 @@ pub fn create_test_texture(
     height: u32,
     data: &[u8],
 ) -> (wgpu::Texture, wgpu::TextureView) {
-    create_test_texture_with_format(device, queue, width, height, data, wgpu::TextureFormat::Rgba8Unorm)
+    create_test_texture_with_format(
+        device,
+        queue,
+        width,
+        height,
+        data,
+        wgpu::TextureFormat::Rgba8Unorm,
+    )
 }
 
 /// Create a texture with known pixel data and a specific format.
@@ -70,10 +73,14 @@ pub fn create_test_texture_with_format(
     data: &[u8],
     format: wgpu::TextureFormat,
 ) -> (wgpu::Texture, wgpu::TextureView) {
-    let bpp = format.block_copy_size(None).unwrap_or(1) as u32;
+    let bpp = format.block_copy_size(None).unwrap_or(1);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("test-texture"),
-        size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -99,7 +106,11 @@ pub fn create_test_texture_with_format(
                 bytes_per_row: Some(width * bpp),
                 rows_per_image: Some(height),
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -119,7 +130,13 @@ pub fn readback_texture(
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("test-readback"),
     });
-    let request = super::readback::request_readback(device, &mut encoder, texture, format, [0, 0, width, height]);
+    let request = super::readback::request_readback(
+        device,
+        &mut encoder,
+        texture,
+        format,
+        [0, 0, width, height],
+    );
     queue.submit([encoder.finish()]);
     request.blocking_read(device)
 }

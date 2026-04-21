@@ -5,11 +5,11 @@
 //! Run with: `cargo test -p darkly --test selection`
 
 use darkly::document::SelectionMode;
-use darkly::engine::DarklyEngine;
 use darkly::engine::types::StrokeOp;
+use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
-use darkly::gpu::test_utils::*;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use darkly::gpu::test_utils::*;
 use darkly::mask;
 
 /// Create a headless DarklyEngine with the given canvas dimensions.
@@ -28,10 +28,15 @@ fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: u64, w: u32, h: u32) {
             x,
             y: (h / 2) as f32,
             pressure: 1.0,
-            x_tilt: 0.0, y_tilt: 0.0,
-            rotation: 0.0, tangential_pressure: 0.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -43,7 +48,9 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
 }
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
-    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test") })
+    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("test"),
+    })
 }
 
 fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) {
@@ -77,7 +84,12 @@ fn gpu_gradient_with_selection() {
         }
     }
     let (sel_tex, _) = create_test_texture_with_format(
-        &device, &queue, w, h, &sel_data, wgpu::TextureFormat::R8Unorm,
+        &device,
+        &queue,
+        w,
+        h,
+        &sel_data,
+        wgpu::TextureFormat::R8Unorm,
     );
     let sel_view = sel_tex.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -87,12 +99,24 @@ fn gpu_gradient_with_selection() {
     });
     let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
     target.linear_gradient(
-        &mut enc, &pipelines, &queue,
-        0.0, 0.0, 64.0, 0.0,
-        [255, 0, 0, 255], [0, 0, 255, 255],
+        &mut enc,
+        &pipelines,
+        &queue,
+        0.0,
+        0.0,
+        64.0,
+        0.0,
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
         Some(&sel_bg),
     );
     submit(&queue, enc);
@@ -105,7 +129,11 @@ fn gpu_gradient_with_selection() {
 
     // Right half should still be transparent (outside selection).
     let right = pixel_at(&pixels, w, 48, 32, 4);
-    assert_eq!(right[3], 0, "right half should be transparent, A={}", right[3]);
+    assert_eq!(
+        right[3], 0,
+        "right half should be transparent, A={}",
+        right[3]
+    );
 }
 
 /// Fill layer with red, create selection (left half), clear selection → left half transparent.
@@ -128,7 +156,12 @@ fn gpu_clear_selection_contents() {
         }
     }
     let (sel_tex, _) = create_test_texture_with_format(
-        &device, &queue, w, h, &sel_data, wgpu::TextureFormat::R8Unorm,
+        &device,
+        &queue,
+        w,
+        h,
+        &sel_data,
+        wgpu::TextureFormat::R8Unorm,
     );
     let sel_view = sel_tex.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -138,7 +171,13 @@ fn gpu_clear_selection_contents() {
     });
     let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
 
     // Erase within selection.
     let mut enc = encoder(&device);
@@ -153,7 +192,12 @@ fn gpu_clear_selection_contents() {
 
     // Right half should still be red.
     let right = pixel_at(&pixels, w, 50, 32, 4);
-    assert_eq!(right, &[255, 0, 0, 255], "right half should be red, got {:?}", right);
+    assert_eq!(
+        right,
+        &[255, 0, 0, 255],
+        "right half should be red, got {:?}",
+        right
+    );
 }
 
 /// Clear selection with undo.
@@ -166,12 +210,18 @@ fn gpu_clear_selection_undo() {
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = darkly::gpu::region_store::RegionStore::with_capacity(&device, w, h, 2 * 1024 * 1024);
+    let mut store =
+        darkly::gpu::region_store::RegionStore::with_capacity(&device, w, h, 2 * 1024 * 1024);
 
     // Selection: full canvas.
     let sel_data = vec![255u8; (w * h) as usize];
     let (sel_tex, _) = create_test_texture_with_format(
-        &device, &queue, w, h, &sel_data, wgpu::TextureFormat::R8Unorm,
+        &device,
+        &queue,
+        w,
+        h,
+        &sel_data,
+        wgpu::TextureFormat::R8Unorm,
     );
     let sel_view = sel_tex.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -187,7 +237,13 @@ fn gpu_clear_selection_undo() {
     submit(&queue, enc);
 
     // Erase within selection.
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
     target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
     submit(&queue, enc);
@@ -206,7 +262,11 @@ fn gpu_clear_selection_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 32, 32, 4), &[255, 0, 0, 255], "should be red after undo");
+    assert_eq!(
+        pixel_at(&pixels, w, 32, 32, 4),
+        &[255, 0, 0, 255],
+        "should be red after undo"
+    );
 }
 
 /// Regression: flood fill must respect the active selection.
@@ -223,7 +283,11 @@ fn gpu_flood_fill_respects_selection() {
     // CPU flood fill from (16, 32) on the transparent canvas — should fill everything.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     let fill_mask = darkly::gpu::flood_fill::flood_fill_rgba(&pixels, w, h, 16, 32, 0);
-    assert_eq!(fill_mask[(32 * w + 48) as usize], 255, "fill mask should cover entire canvas");
+    assert_eq!(
+        fill_mask[(32 * w + 48) as usize],
+        255,
+        "fill mask should cover entire canvas"
+    );
 
     // Selection: left half only (x < 32).
     let mut sel_data = vec![0u8; (w * h) as usize];
@@ -234,19 +298,30 @@ fn gpu_flood_fill_respects_selection() {
     }
 
     // Combine fill mask with selection (the fix being tested).
-    let combined: Vec<u8> = fill_mask.iter().zip(sel_data.iter())
+    let combined: Vec<u8> = fill_mask
+        .iter()
+        .zip(sel_data.iter())
         .map(|(&f, &s)| ((f as u16 * s as u16) / 255) as u8)
         .collect();
 
-    let mask_bg = pipelines.upload_r8_bind_group(
-        &device, &queue, w, h, &combined, "test-fill-sel-mask",
-    );
+    let mask_bg =
+        pipelines.upload_r8_bind_group(&device, &queue, w, h, &combined, "test-fill-sel-mask");
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
-        &mut enc, &pipelines, &queue,
-        [0, 0, w, h], [0, 0, 255, 255], &mask_bg,
+        &mut enc,
+        &pipelines,
+        &queue,
+        [0, 0, w, h],
+        [0, 0, 255, 255],
+        &mask_bg,
     );
     submit(&queue, enc);
 
@@ -254,12 +329,24 @@ fn gpu_flood_fill_respects_selection() {
 
     // Inside selection (left half) — should be blue.
     let inside = pixel_at(&result, w, 16, 32, 4);
-    assert!(inside[2] > 200, "inside selection should be blue, B={}", inside[2]);
-    assert!(inside[3] > 200, "inside selection alpha should be opaque, A={}", inside[3]);
+    assert!(
+        inside[2] > 200,
+        "inside selection should be blue, B={}",
+        inside[2]
+    );
+    assert!(
+        inside[3] > 200,
+        "inside selection alpha should be opaque, A={}",
+        inside[3]
+    );
 
     // Outside selection (right half) — should still be transparent.
     let outside = pixel_at(&result, w, 48, 32, 4);
-    assert_eq!(outside[3], 0, "outside selection should be transparent, A={}", outside[3]);
+    assert_eq!(
+        outside[3], 0,
+        "outside selection should be transparent, A={}",
+        outside[3]
+    );
 }
 
 // ============================================================================
@@ -279,9 +366,19 @@ fn selection_add_mode() {
     paint_full_stroke(&mut engine, layer_id, w, h);
     let pixels = engine.test_readback_layer(layer_id);
 
-    assert!(alpha_at(&pixels, w, 16, h / 2) > 0, "left quarter (Replace) should have paint");
-    assert_eq!(alpha_at(&pixels, w, 64, h / 2), 0, "middle (not selected) should be transparent");
-    assert!(alpha_at(&pixels, w, 112, h / 2) > 0, "right quarter (Add) should have paint");
+    assert!(
+        alpha_at(&pixels, w, 16, h / 2) > 0,
+        "left quarter (Replace) should have paint"
+    );
+    assert_eq!(
+        alpha_at(&pixels, w, 64, h / 2),
+        0,
+        "middle (not selected) should be transparent"
+    );
+    assert!(
+        alpha_at(&pixels, w, 112, h / 2) > 0,
+        "right quarter (Add) should have paint"
+    );
 }
 
 /// Subtract mode: select all, subtract center band.
@@ -292,14 +389,32 @@ fn selection_subtract_mode() {
     let layer_id = engine.add_raster_layer();
 
     engine.select_all();
-    engine.select_rect(48.0, 0.0, 32.0, h as f32, SelectionMode::Subtract, false, 0.0);
+    engine.select_rect(
+        48.0,
+        0.0,
+        32.0,
+        h as f32,
+        SelectionMode::Subtract,
+        false,
+        0.0,
+    );
 
     paint_full_stroke(&mut engine, layer_id, w, h);
     let pixels = engine.test_readback_layer(layer_id);
 
-    assert!(alpha_at(&pixels, w, 16, h / 2) > 0, "left (selected) should have paint");
-    assert_eq!(alpha_at(&pixels, w, 64, h / 2), 0, "center (subtracted) should be transparent");
-    assert!(alpha_at(&pixels, w, 112, h / 2) > 0, "right (selected) should have paint");
+    assert!(
+        alpha_at(&pixels, w, 16, h / 2) > 0,
+        "left (selected) should have paint"
+    );
+    assert_eq!(
+        alpha_at(&pixels, w, 64, h / 2),
+        0,
+        "center (subtracted) should be transparent"
+    );
+    assert!(
+        alpha_at(&pixels, w, 112, h / 2) > 0,
+        "right (selected) should have paint"
+    );
 }
 
 /// Intersect mode: left half ∩ top half = top-left quadrant only.
@@ -310,17 +425,33 @@ fn selection_intersect_mode() {
     let layer_id = engine.add_raster_layer();
 
     engine.select_rect(0.0, 0.0, 64.0, h as f32, SelectionMode::Replace, false, 0.0);
-    engine.select_rect(0.0, 0.0, w as f32, 64.0, SelectionMode::Intersect, false, 0.0);
+    engine.select_rect(
+        0.0,
+        0.0,
+        w as f32,
+        64.0,
+        SelectionMode::Intersect,
+        false,
+        0.0,
+    );
 
     // Paint horizontal strokes at two heights: y=32 (top) and y=96 (bottom).
     engine.begin_stroke(layer_id);
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
         engine.stroke_to(StrokeOp::BrushStroke {
-            x, y: 32.0, pressure: 1.0,
-            x_tilt: 0.0, y_tilt: 0.0, rotation: 0.0, tangential_pressure: 0.0,
+            x,
+            y: 32.0,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -329,10 +460,18 @@ fn selection_intersect_mode() {
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
         engine.stroke_to(StrokeOp::BrushStroke {
-            x, y: 96.0, pressure: 1.0,
-            x_tilt: 0.0, y_tilt: 0.0, rotation: 0.0, tangential_pressure: 0.0,
+            x,
+            y: 96.0,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 0.0, cg: 1.0, cb: 0.0, ca: 1.0,
+            cr: 0.0,
+            cg: 1.0,
+            cb: 0.0,
+            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -340,11 +479,22 @@ fn selection_intersect_mode() {
     let pixels = engine.test_readback_layer(layer_id);
 
     // Top-left (16, 32) — in intersection.
-    assert!(alpha_at(&pixels, w, 16, 32) > 0, "top-left (intersection) should have paint");
+    assert!(
+        alpha_at(&pixels, w, 16, 32) > 0,
+        "top-left (intersection) should have paint"
+    );
     // Top-right (112, 32) — right half, outside intersection.
-    assert_eq!(alpha_at(&pixels, w, 112, 32), 0, "top-right should be transparent");
+    assert_eq!(
+        alpha_at(&pixels, w, 112, 32),
+        0,
+        "top-right should be transparent"
+    );
     // Bottom-left (16, 96) — bottom half, outside intersection.
-    assert_eq!(alpha_at(&pixels, w, 16, 96), 0, "bottom-left should be transparent");
+    assert_eq!(
+        alpha_at(&pixels, w, 16, 96),
+        0,
+        "bottom-left should be transparent"
+    );
 }
 
 // ============================================================================
@@ -363,8 +513,15 @@ fn selection_invert() {
     paint_full_stroke(&mut engine, layer_id, w, h);
     let pixels = engine.test_readback_layer(layer_id);
 
-    assert_eq!(alpha_at(&pixels, w, 16, h / 2), 0, "left (inverted out) should be transparent");
-    assert!(alpha_at(&pixels, w, 112, h / 2) > 0, "right (inverted in) should have paint");
+    assert_eq!(
+        alpha_at(&pixels, w, 16, h / 2),
+        0,
+        "left (inverted out) should be transparent"
+    );
+    assert!(
+        alpha_at(&pixels, w, 112, h / 2) > 0,
+        "right (inverted in) should have paint"
+    );
 }
 
 // ============================================================================
@@ -383,7 +540,10 @@ fn selection_select_all() {
     paint_full_stroke(&mut engine, layer_id, w, h);
     let pixels = engine.test_readback_layer(layer_id);
 
-    assert!(alpha_at(&pixels, w, w / 2, h / 2) > 0, "center should have paint with select_all");
+    assert!(
+        alpha_at(&pixels, w, w / 2, h / 2) > 0,
+        "center should have paint with select_all"
+    );
 }
 
 #[test]
@@ -401,16 +561,27 @@ fn selection_clear() {
     engine.begin_stroke(layer_id);
     for step in 0..5 {
         engine.stroke_to(StrokeOp::BrushStroke {
-            x: 48.0, y: 16.0 + step as f32 * 8.0, pressure: 1.0,
-            x_tilt: 0.0, y_tilt: 0.0, rotation: 0.0, tangential_pressure: 0.0,
+            x: 48.0,
+            y: 16.0 + step as f32 * 8.0,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
             time_ms: step as f64 * 16.0,
-            cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
         });
     }
     engine.end_stroke();
 
     let pixels = engine.test_readback_layer(layer_id);
-    assert!(alpha_at(&pixels, w, 48, 32) > 0, "right side should have paint after clear_selection");
+    assert!(
+        alpha_at(&pixels, w, 48, 32) > 0,
+        "right side should have paint after clear_selection"
+    );
 }
 
 // ============================================================================
@@ -431,17 +602,27 @@ fn selection_undo_redo() {
 
     // Undo the selection — should go back to no selection.
     engine.undo();
-    assert!(!engine.has_selection(), "selection should be gone after undo");
+    assert!(
+        !engine.has_selection(),
+        "selection should be gone after undo"
+    );
 
     // Redo — selection returns.
     engine.redo();
-    assert!(engine.has_selection(), "selection should be back after redo");
+    assert!(
+        engine.has_selection(),
+        "selection should be back after redo"
+    );
 
     // Paint with the selection active — only left half gets paint.
     paint_full_stroke(&mut engine, layer_id, w, h);
     let px = engine.test_readback_layer(layer_id);
     assert!(alpha_at(&px, w, 16, h / 2) > 0, "left should have paint");
-    assert_eq!(alpha_at(&px, w, 112, h / 2), 0, "right should be empty with selection");
+    assert_eq!(
+        alpha_at(&px, w, 112, h / 2),
+        0,
+        "right should be empty with selection"
+    );
 
     // Undo the stroke, undo the selection, verify right side can be painted.
     engine.undo(); // undo stroke
@@ -450,7 +631,10 @@ fn selection_undo_redo() {
 
     paint_full_stroke(&mut engine, layer_id, w, h);
     let px = engine.test_readback_layer(layer_id);
-    assert!(alpha_at(&px, w, 112, h / 2) > 0, "right should have paint after undo (no masking)");
+    assert!(
+        alpha_at(&px, w, 112, h / 2) > 0,
+        "right should have paint after undo (no masking)"
+    );
 }
 
 // ============================================================================
@@ -467,10 +651,18 @@ fn clear_selection_contents() {
     // produces ~26px diameter dab, centered at (64,64).
     engine.begin_stroke(layer_id);
     engine.stroke_to(StrokeOp::BrushStroke {
-        x: 64.0, y: 64.0, pressure: 1.0,
-        x_tilt: 0.0, y_tilt: 0.0, rotation: 0.0, tangential_pressure: 0.0,
+        x: 64.0,
+        y: 64.0,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+        cr: 1.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
     });
     engine.end_stroke();
     engine.render(0.0); // flush pending diff undo
@@ -480,8 +672,15 @@ fn clear_selection_contents() {
     engine.clear_selection_contents(layer_id);
 
     let pixels = engine.test_readback_layer(layer_id);
-    assert_eq!(alpha_at(&pixels, w, 56, 64), 0, "left (cleared) should be transparent");
-    assert!(alpha_at(&pixels, w, 72, 64) > 0, "right (kept) should still have paint");
+    assert_eq!(
+        alpha_at(&pixels, w, 56, 64),
+        0,
+        "left (cleared) should be transparent"
+    );
+    assert!(
+        alpha_at(&pixels, w, 72, 64) > 0,
+        "right (kept) should still have paint"
+    );
 }
 
 // ============================================================================
@@ -498,15 +697,26 @@ fn no_selection_paints_normally() {
 
     engine.begin_stroke(layer_id);
     engine.stroke_to(StrokeOp::BrushStroke {
-        x: 32.0, y: 32.0, pressure: 1.0,
-        x_tilt: 0.0, y_tilt: 0.0, rotation: 0.0, tangential_pressure: 0.0,
+        x: 32.0,
+        y: 32.0,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+        cr: 1.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
     });
     engine.end_stroke();
 
     let pixels = engine.test_readback_layer(layer_id);
-    assert!(alpha_at(&pixels, w, 32, 32) > 0, "center should have paint with no selection");
+    assert!(
+        alpha_at(&pixels, w, 32, 32) > 0,
+        "center should have paint with no selection"
+    );
 }
 
 // ============================================================================
@@ -517,19 +727,28 @@ fn no_selection_paints_normally() {
 fn rasterize_sdf_r8_rect() {
     let (w, h) = (64u32, 64u32);
     let result = mask::rasterize_sdf_r8(
-        w, h,
+        w,
+        h,
         (10, 10, 20, 20),
         |px, py| darkly::sdf::sdf_rect(px, py, 20.0, 20.0, 10.0, 10.0),
-        false, 0.0,
+        false,
+        0.0,
     );
 
     // The result is a tight-bounds buffer. Check a pixel inside the rect
     // relative to the region origin.
-    assert!(result.width == 20 && result.height == 20, "region should be 20x20");
+    assert!(
+        result.width == 20 && result.height == 20,
+        "region should be 20x20"
+    );
     assert_eq!(result.x, 10);
     assert_eq!(result.y, 10);
     // Center of the shape = (20, 20) in canvas space = (10, 10) in region space.
-    assert_eq!(result.data[(10 * result.width + 10) as usize], 255, "inside rect should be 255");
+    assert_eq!(
+        result.data[(10 * result.width + 10) as usize],
+        255,
+        "inside rect should be 255"
+    );
     // (0, 0) in region space = (10, 10) in canvas space = corner of shape, should be inside.
     assert_eq!(result.data[0], 255, "corner should be inside");
 }
@@ -576,17 +795,23 @@ fn contour_segments_r8_rectangle_geometry() {
     }
 
     let segments = mask::contour_segments_r8(&data, w, h, 127);
-    assert!(!segments.is_empty(), "rectangle should produce contour segments");
+    assert!(
+        !segments.is_empty(),
+        "rectangle should produce contour segments"
+    );
 
     let (left, right) = (rx as f32, (rx + rw) as f32);
     let (top, bottom) = (ry as f32, (ry + rh) as f32);
     let margin = 1.0;
 
     let on_boundary = |p: [f32; 2]| -> bool {
-        let on_left   = (p[0] - left).abs()   < margin && p[1] >= top  - margin && p[1] <= bottom + margin;
-        let on_right  = (p[0] - right).abs()  < margin && p[1] >= top  - margin && p[1] <= bottom + margin;
-        let on_top    = (p[1] - top).abs()     < margin && p[0] >= left - margin && p[0] <= right  + margin;
-        let on_bottom = (p[1] - bottom).abs()  < margin && p[0] >= left - margin && p[0] <= right  + margin;
+        let on_left =
+            (p[0] - left).abs() < margin && p[1] >= top - margin && p[1] <= bottom + margin;
+        let on_right =
+            (p[0] - right).abs() < margin && p[1] >= top - margin && p[1] <= bottom + margin;
+        let on_top = (p[1] - top).abs() < margin && p[0] >= left - margin && p[0] <= right + margin;
+        let on_bottom =
+            (p[1] - bottom).abs() < margin && p[0] >= left - margin && p[0] <= right + margin;
         on_left || on_right || on_top || on_bottom
     };
 
@@ -594,13 +819,17 @@ fn contour_segments_r8_rectangle_geometry() {
         assert!(on_boundary(*a),
             "segment {i} start ({:.1}, {:.1}) not on rect boundary [{left},{top}]-[{right},{bottom}]",
             a[0], a[1]);
-        assert!(on_boundary(*b),
+        assert!(
+            on_boundary(*b),
             "segment {i} end ({:.1}, {:.1}) not on rect boundary [{left},{top}]-[{right},{bottom}]",
-            b[0], b[1]);
+            b[0],
+            b[1]
+        );
     }
 
     // The total length of all segments should equal the rectangle perimeter.
-    let total_len: f32 = segments.iter()
+    let total_len: f32 = segments
+        .iter()
         .map(|(a, b)| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt())
         .sum();
     let expected_perimeter = 2.0 * (rw as f32 + rh as f32);
@@ -611,17 +840,18 @@ fn contour_segments_r8_rectangle_geometry() {
 
     // Segments should form a closed loop: for every endpoint, there must
     // be another segment with a matching endpoint (within tolerance).
-    let close = |a: [f32; 2], b: [f32; 2]| {
-        (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01
-    };
+    let close = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < 0.01 && (a[1] - b[1]).abs() < 0.01;
     for (i, (a, b)) in segments.iter().enumerate() {
         for pt in [a, b] {
-            let connects = segments.iter().enumerate().any(|(j, (c, d))| {
-                j != i && (close(*pt, *c) || close(*pt, *d))
-            });
-            assert!(connects,
+            let connects = segments
+                .iter()
+                .enumerate()
+                .any(|(j, (c, d))| j != i && (close(*pt, *c) || close(*pt, *d)));
+            assert!(
+                connects,
                 "segment {i} endpoint ({:.1}, {:.1}) is dangling (not connected)",
-                pt[0], pt[1]);
+                pt[0], pt[1]
+            );
         }
     }
 }
@@ -634,10 +864,17 @@ fn contour_segments_r8_circle_geometry() {
     let (cx, cy, r) = (64.0_f32, 64.0_f32, 20.0_f32);
 
     let result = mask::rasterize_sdf_r8(
-        w, h,
-        ((cx - r) as i32, (cy - r) as i32, (2.0 * r) as i32, (2.0 * r) as i32),
+        w,
+        h,
+        (
+            (cx - r) as i32,
+            (cy - r) as i32,
+            (2.0 * r) as i32,
+            (2.0 * r) as i32,
+        ),
         |px, py| darkly::sdf::sdf_circle(px, py, cx, cy, r),
-        true, 0.0,
+        true,
+        0.0,
     );
     // Expand to full canvas for contour extraction.
     let mut pixels = vec![0u8; (w * h) as usize];
@@ -649,20 +886,27 @@ fn contour_segments_r8_circle_geometry() {
     }
 
     let segments = mask::contour_segments_r8(&pixels, w, h, 127);
-    assert!(!segments.is_empty(), "circle should produce contour segments");
+    assert!(
+        !segments.is_empty(),
+        "circle should produce contour segments"
+    );
 
     // Every endpoint should be roughly at distance r from the center.
     for (i, (a, b)) in segments.iter().enumerate() {
         for pt in [a, b] {
             let dist = ((pt[0] - cx).powi(2) + (pt[1] - cy).powi(2)).sqrt();
-            assert!((dist - r).abs() < 2.0,
+            assert!(
+                (dist - r).abs() < 2.0,
                 "segment {i} endpoint ({:.1}, {:.1}) is {dist:.1} from center, expected ~{r:.0}",
-                pt[0], pt[1]);
+                pt[0],
+                pt[1]
+            );
         }
     }
 
     // Total length should approximate circumference = 2πr.
-    let total_len: f32 = segments.iter()
+    let total_len: f32 = segments
+        .iter()
         .map(|(a, b)| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt())
         .sum();
     let expected = 2.0 * std::f32::consts::PI * r;
@@ -689,19 +933,24 @@ fn contour_segments_r8_matches_tile_version() {
     let tile_mask = darkly::tile::AlphaMask::from_r8(&flat, w, h);
     let tile_segs = tile_mask.contour_segments(0.5);
 
-    assert_eq!(r8_segs.len(), tile_segs.len(),
+    assert_eq!(
+        r8_segs.len(),
+        tile_segs.len(),
         "r8 ({}) and tile ({}) segment counts should match",
-        r8_segs.len(), tile_segs.len());
+        r8_segs.len(),
+        tile_segs.len()
+    );
 
     let eps = 0.01;
-    let close = |a: [f32; 2], b: [f32; 2]| {
-        (a[0] - b[0]).abs() < eps && (a[1] - b[1]).abs() < eps
-    };
+    let close = |a: [f32; 2], b: [f32; 2]| (a[0] - b[0]).abs() < eps && (a[1] - b[1]).abs() < eps;
     for (i, r8) in r8_segs.iter().enumerate() {
         let found = tile_segs.iter().any(|t| {
-            (close(r8.0, t.0) && close(r8.1, t.1))
-            || (close(r8.0, t.1) && close(r8.1, t.0))
+            (close(r8.0, t.0) && close(r8.1, t.1)) || (close(r8.0, t.1) && close(r8.1, t.0))
         });
-        assert!(found, "r8 segment {i} ({:?} -> {:?}) not in tile output", r8.0, r8.1);
+        assert!(
+            found,
+            "r8 segment {i} ({:?} -> {:?}) not in tile output",
+            r8.0, r8.1
+        );
     }
 }

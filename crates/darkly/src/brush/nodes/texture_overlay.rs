@@ -49,14 +49,18 @@ pub fn register() -> BrushNodeRegistration {
                 .with_icon("fa-solid fa-mountain")
                 .exposed()
                 .with_description("Texture blend strength (0% = none, 100% = full)"),
-            PortDef::output("dab", BrushWireType::Texture)
-                .with_description("The textured dab"),
+            PortDef::output("dab", BrushWireType::Texture).with_description("The textured dab"),
             PortDef::output("dab_size", BrushWireType::Vec2)
                 .with_description("Pass-through dab dimensions"),
         ],
         params: &[
             // 0 = Multiply, 1 = Subtract, 2 = Overlay
-            ParamDef::Int { name: "blend_mode", min: 0, max: 2, default: 0 },
+            ParamDef::Int {
+                name: "blend_mode",
+                min: 0,
+                max: 2,
+                default: 0,
+            },
         ],
         is_gpu: true,
     }
@@ -96,7 +100,7 @@ impl BrushNodeEvaluator for TextureOverlayEvaluator {
         let scale = ctx.input_f32("scale").max(0.01);
         let strength = ctx.input_f32("strength");
 
-        let blend_mode = match ctx.params.get(0) {
+        let blend_mode = match ctx.params.first() {
             Some(crate::gpu::params::ParamValue::Int(v)) => *v as u32,
             _ => 0,
         };
@@ -127,7 +131,9 @@ impl BrushNodeEvaluator for TextureOverlayEvaluator {
             blend_mode,
             _pad: [0.0; 3],
         };
-        let offset = gpu.pipelines.write_tex_overlay_uniforms(gpu.queue, &uniforms);
+        let offset = gpu
+            .pipelines
+            .write_tex_overlay_uniforms(gpu.queue, &uniforms);
 
         // Get bind groups for sampling the dab and pattern textures.
         let dab_bind_group = gpu.dab_pool.bind_group(dab_handle);

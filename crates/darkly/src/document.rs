@@ -37,7 +37,7 @@ pub struct Document {
 
 // --- Tree traversal helpers (free functions for borrow-splitting) ---
 
-fn find_layer_in<'a>(nodes: &'a [LayerNode], id: LayerId) -> Option<&'a Layer> {
+fn find_layer_in(nodes: &[LayerNode], id: LayerId) -> Option<&Layer> {
     for node in nodes {
         match node {
             LayerNode::Layer(l) if l.id() == id => return Some(l),
@@ -52,7 +52,7 @@ fn find_layer_in<'a>(nodes: &'a [LayerNode], id: LayerId) -> Option<&'a Layer> {
     None
 }
 
-fn find_layer_in_mut<'a>(nodes: &'a mut [LayerNode], id: LayerId) -> Option<&'a mut Layer> {
+fn find_layer_in_mut(nodes: &mut [LayerNode], id: LayerId) -> Option<&mut Layer> {
     for node in nodes {
         match node {
             LayerNode::Layer(l) if l.id() == id => return Some(l),
@@ -67,7 +67,7 @@ fn find_layer_in_mut<'a>(nodes: &'a mut [LayerNode], id: LayerId) -> Option<&'a 
     None
 }
 
-fn find_node_in<'a>(nodes: &'a [LayerNode], id: LayerId) -> Option<&'a LayerNode> {
+fn find_node_in(nodes: &[LayerNode], id: LayerId) -> Option<&LayerNode> {
     for node in nodes {
         if node.id() == id {
             return Some(node);
@@ -81,7 +81,7 @@ fn find_node_in<'a>(nodes: &'a [LayerNode], id: LayerId) -> Option<&'a LayerNode
     None
 }
 
-fn find_node_in_mut<'a>(nodes: &'a mut [LayerNode], id: LayerId) -> Option<&'a mut LayerNode> {
+fn find_node_in_mut(nodes: &mut [LayerNode], id: LayerId) -> Option<&mut LayerNode> {
     for node in nodes {
         if node.id() == id {
             return Some(node);
@@ -233,7 +233,9 @@ impl Document {
     pub fn add_raster_layer(&mut self) -> LayerId {
         let id = self.alloc_id();
         let layer = RasterLayer::new(id);
-        self.root.children.push(LayerNode::Layer(Layer::Raster(layer)));
+        self.root
+            .children
+            .push(LayerNode::Layer(Layer::Raster(layer)));
         id
     }
 
@@ -245,7 +247,9 @@ impl Document {
 
         match parent {
             Some(group_id) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, group_id) {
+                if let Some(LayerNode::Group(g)) =
+                    find_node_in_mut(&mut self.root.children, group_id)
+                {
                     g.children.push(node);
                 } else {
                     self.root.children.push(node);
@@ -386,14 +390,18 @@ impl Document {
                 }
             }
             MoveTarget::IntoGroupTop(group_id) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, group_id) {
+                if let Some(LayerNode::Group(g)) =
+                    find_node_in_mut(&mut self.root.children, group_id)
+                {
                     g.children.push(node);
                 } else {
                     self.root.children.push(node);
                 }
             }
             MoveTarget::IntoGroupBottom(group_id) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children, group_id) {
+                if let Some(LayerNode::Group(g)) =
+                    find_node_in_mut(&mut self.root.children, group_id)
+                {
                     g.children.insert(0, node);
                 } else {
                     self.root.children.push(node);
@@ -413,21 +421,19 @@ impl Document {
             SelectionMode::Replace => {
                 self.selection = Some(shape_mask);
             }
-            SelectionMode::Add => {
-                match &mut self.selection {
-                    Some(sel) => sel.boolean_add(&shape_mask),
-                    None => self.selection = Some(shape_mask),
-                }
-            }
+            SelectionMode::Add => match &mut self.selection {
+                Some(sel) => sel.boolean_add(&shape_mask),
+                None => self.selection = Some(shape_mask),
+            },
             SelectionMode::Subtract => {
                 if let Some(sel) = &mut self.selection {
                     sel.boolean_subtract(&shape_mask);
                 }
             }
             SelectionMode::Intersect => {
-                match &mut self.selection {
-                    Some(sel) => sel.boolean_intersect(&shape_mask),
-                    None => {} // intersect with nothing = nothing
+                // intersect with nothing = nothing
+                if let Some(sel) = &mut self.selection {
+                    sel.boolean_intersect(&shape_mask);
                 }
             }
         }
@@ -562,7 +568,7 @@ mod tests {
     fn nested_groups_flatten_correctly() {
         let mut doc = Document::new(256, 256);
         let l1 = doc.add_raster_layer(); // root
-        let g1 = doc.add_group();        // root group
+        let g1 = doc.add_group(); // root group
         let l2 = doc.add_raster_layer_in(Some(g1)); // inside g1
 
         let flat = doc.flat_layers();

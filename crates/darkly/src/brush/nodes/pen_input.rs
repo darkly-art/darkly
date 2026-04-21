@@ -4,8 +4,8 @@
 //! `seed_sensors()` writes directly to its output slots (no virtual
 //! dispatch).  The evaluator is a no-op.
 
-use crate::brush::wire::BrushWireType;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
@@ -23,8 +23,9 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Horizontal tilt of the pen barrel (-1 = left, 1 = right)"),
             PortDef::output("y_tilt", BrushWireType::Scalar)
                 .with_description("Vertical tilt of the pen barrel (-1 = toward user, 1 = away)"),
-            PortDef::output("tilt_magnitude", BrushWireType::Scalar)
-                .with_description("How far the pen is tilted from vertical (0 = upright, 1 = flat)"),
+            PortDef::output("tilt_magnitude", BrushWireType::Scalar).with_description(
+                "How far the pen is tilted from vertical (0 = upright, 1 = flat)",
+            ),
             PortDef::output("tilt_direction", BrushWireType::Scalar)
                 .with_description("Compass direction of pen tilt (0\u{2013}1 wrapping, 0 = right)"),
             PortDef::output("rotation", BrushWireType::Scalar)
@@ -41,8 +42,9 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Elapsed time since the stroke began (seconds)"),
             PortDef::output("position", BrushWireType::Vec2)
                 .with_description("Current cursor position in canvas coordinates (x, y)"),
-            PortDef::output("motion", BrushWireType::Vec2)
-                .with_description("Per-dab motion vector in canvas pixels (delta from previous sample)"),
+            PortDef::output("motion", BrushWireType::Vec2).with_description(
+                "Per-dab motion vector in canvas pixels (delta from previous sample)",
+            ),
             PortDef::output("index", BrushWireType::Int)
                 .with_description("Dab index within the current stroke (0, 1, 2, ...)"),
             PortDef::output("fade", BrushWireType::Scalar)
@@ -54,7 +56,9 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-wave-square")
                 .with_label("Stabilize")
-                .with_description("Stroke stabilization strength (0 = off, 100% = maximum smoothing)"),
+                .with_description(
+                    "Stroke stabilization strength (0 = off, 100% = maximum smoothing)",
+                ),
         ],
         params: &[],
         is_gpu: false,

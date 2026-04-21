@@ -266,9 +266,7 @@ pub fn get_bool(key: &str) -> bool {
 /// Set a user override for a config key.
 pub fn set(key: &str, value: ConfigValue) {
     CONFIG.with(|c| {
-        c.borrow_mut()
-            .user_overrides
-            .insert(key.to_string(), value);
+        c.borrow_mut().user_overrides.insert(key.to_string(), value);
     });
 }
 
@@ -308,9 +306,7 @@ pub fn preset_names() -> &'static [&'static str] {
 /// Check whether the default type for a key is `Int` (used by the WASM bridge
 /// to disambiguate JS numbers).
 pub fn default_is_int(key: &str) -> bool {
-    CONFIG.with(|c| {
-        matches!(c.borrow().default_for(key), Some(ConfigValue::Int(_)))
-    })
+    CONFIG.with(|c| matches!(c.borrow().default_for(key), Some(ConfigValue::Int(_))))
 }
 
 /// Iterate over all default key/value pairs.
@@ -334,7 +330,7 @@ mod tests {
         assert_eq!(get_i64("animation.overlay_divisor"), 4);
         assert_eq!(get_str("hotkeys.nav.trigger"), "Space");
         assert_eq!(get_i64("canvas.width"), 1920);
-        assert_eq!(get_bool("input.fingerPainting"), false);
+        assert!(!get_bool("input.fingerPainting"));
     }
 
     #[test]

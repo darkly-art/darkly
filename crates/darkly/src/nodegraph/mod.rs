@@ -11,14 +11,18 @@ mod layout;
 mod registration;
 
 pub use compiler::{ExecStep, ExecutionPlan};
-pub use graph::{Connection, Graph, GraphError, NodeId, NodeInstance, PortDef, PortDir, PortRef, UnitType};
+pub use graph::{
+    Connection, Graph, GraphError, NodeId, NodeInstance, PortDef, PortDir, PortRef, UnitType,
+};
 pub use registration::NodeRegistration;
 
 /// Trait implemented by the wire-type enum of each domain (e.g. `BrushWireType`).
 ///
 /// `WireKind` defines what data types can flow along wires and how
 /// type-compatibility is checked at connect time.
-pub trait WireKind: Copy + Eq + std::hash::Hash + std::fmt::Debug + serde::Serialize + for<'de> serde::Deserialize<'de> {
+pub trait WireKind:
+    Copy + Eq + std::hash::Hash + std::fmt::Debug + serde::Serialize + for<'de> serde::Deserialize<'de>
+{
     /// Returns `true` if a wire of type `from` can connect to a port
     /// expecting type `to`.  This allows implicit coercions (e.g.
     /// Int → Float) without requiring explicit conversion nodes.

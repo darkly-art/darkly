@@ -7,8 +7,8 @@
 
 use darkly::brush::wire::BrushWireType;
 use darkly::document::SelectionMode;
-use darkly::engine::DarklyEngine;
 use darkly::engine::types::StrokeOp;
+use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
 use darkly::nodegraph::NodeInstance;
@@ -17,10 +17,18 @@ use darkly::nodegraph::NodeInstance;
 fn paint_at(engine: &mut DarklyEngine, layer_id: u64, x: f32, y: f32, r: f32, g: f32, b: f32) {
     engine.begin_stroke(layer_id);
     engine.stroke_to(StrokeOp::BrushStroke {
-        x, y, pressure: 1.0,
-        x_tilt: 0.0, y_tilt: 0.0, rotation: 0.0, tangential_pressure: 0.0,
+        x,
+        y,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
         time_ms: 0.0,
-        cr: r, cg: g, cb: b, ca: 1.0,
+        cr: r,
+        cg: g,
+        cb: b,
+        ca: 1.0,
     });
     engine.end_stroke();
     // Flush the pending diff-based undo commit.
@@ -43,10 +51,15 @@ fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: u64, w: u32, h: u32) {
             x,
             y: (h / 2) as f32,
             pressure: 1.0,
-            x_tilt: 0.0, y_tilt: 0.0,
-            rotation: 0.0, tangential_pressure: 0.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -67,12 +80,27 @@ fn engine_brush_stroke_respects_selection() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
 
-    engine.select_rect(0.0, 0.0, (w / 2) as f32, h as f32, SelectionMode::Replace, false, 0.0);
+    engine.select_rect(
+        0.0,
+        0.0,
+        (w / 2) as f32,
+        h as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
     paint_full_stroke(&mut engine, layer_id, w, h);
 
     let pixels = engine.test_readback_layer(layer_id);
-    assert!(alpha_at(&pixels, w, w / 4, h / 2) > 0, "left (selected) should have paint");
-    assert_eq!(alpha_at(&pixels, w, 3 * w / 4, h / 2), 0, "right (unselected) should be transparent");
+    assert!(
+        alpha_at(&pixels, w, w / 4, h / 2) > 0,
+        "left (selected) should have paint"
+    );
+    assert_eq!(
+        alpha_at(&pixels, w, 3 * w / 4, h / 2),
+        0,
+        "right (unselected) should be transparent"
+    );
 }
 
 // ============================================================================
@@ -90,23 +118,49 @@ fn engine_transform_bounds_are_tight() {
     let sel_w = 30.0_f32;
     let sel_h = 45.0_f32;
 
-    engine.select_rect(sel_x, sel_y, sel_w, sel_h, SelectionMode::Replace, false, 0.0);
+    engine.select_rect(
+        sel_x,
+        sel_y,
+        sel_w,
+        sel_h,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
 
-    paint_at(&mut engine, layer_id, sel_x + sel_w / 2.0, sel_y + sel_h / 2.0, 1.0, 0.0, 0.0);
+    paint_at(
+        &mut engine,
+        layer_id,
+        sel_x + sel_w / 2.0,
+        sel_y + sel_h / 2.0,
+        1.0,
+        0.0,
+        0.0,
+    );
 
     let started = engine.begin_transform(layer_id);
     assert!(started, "begin_transform should succeed with a selection");
 
     let (origin_x, origin_y, float_w, float_h, _) = engine.floating_info().unwrap();
 
-    assert!((float_w as i32 - sel_w as i32).unsigned_abs() <= 1,
-        "width should be ~{}, got {float_w}", sel_w as u32);
-    assert!((float_h as i32 - sel_h as i32).unsigned_abs() <= 1,
-        "height should be ~{}, got {float_h}", sel_h as u32);
-    assert!((origin_x as i32 - sel_x as i32).abs() <= 1,
-        "origin X should be ~{sel_x}, got {origin_x}");
-    assert!((origin_y as i32 - sel_y as i32).abs() <= 1,
-        "origin Y should be ~{sel_y}, got {origin_y}");
+    assert!(
+        (float_w as i32 - sel_w as i32).unsigned_abs() <= 1,
+        "width should be ~{}, got {float_w}",
+        sel_w as u32
+    );
+    assert!(
+        (float_h as i32 - sel_h as i32).unsigned_abs() <= 1,
+        "height should be ~{}, got {float_h}",
+        sel_h as u32
+    );
+    assert!(
+        (origin_x as i32 - sel_x as i32).abs() <= 1,
+        "origin X should be ~{sel_x}, got {origin_x}"
+    );
+    assert!(
+        (origin_y as i32 - sel_y as i32).abs() <= 1,
+        "origin Y should be ~{sel_y}, got {origin_y}"
+    );
 }
 
 // ============================================================================
@@ -146,8 +200,10 @@ fn lasso_selection_performance_and_correctness() {
     eprintln!("select_lasso({n_verts} verts, {w}x{h}): {ms:.1}ms");
 
     // Must complete in <50ms on native. The old SDF path took ~200ms+ here.
-    assert!(ms < 50.0,
-        "select_lasso with {n_verts} verts took {ms:.1}ms, expected <50ms");
+    assert!(
+        ms < 50.0,
+        "select_lasso with {n_verts} verts took {ms:.1}ms, expected <50ms"
+    );
 
     assert!(engine.has_selection());
 
@@ -159,10 +215,15 @@ fn lasso_selection_performance_and_correctness() {
             x,
             y: cy,
             pressure: 1.0,
-            x_tilt: 0.0, y_tilt: 0.0,
-            rotation: 0.0, tangential_pressure: 0.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
             time_ms: x_step as f64 * 16.0,
-            cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
         });
     }
     engine.end_stroke();
@@ -170,12 +231,17 @@ fn lasso_selection_performance_and_correctness() {
     let pixels = engine.test_readback_layer(layer_id);
 
     // Center of polygon (500, 500) — should have paint.
-    assert!(alpha_at(&pixels, w, cx as u32, cy as u32) > 0,
-        "center of lasso should have paint");
+    assert!(
+        alpha_at(&pixels, w, cx as u32, cy as u32) > 0,
+        "center of lasso should have paint"
+    );
 
     // Well outside polygon (50, 500) — 450px left of center, outside r=200.
-    assert_eq!(alpha_at(&pixels, w, 50, cy as u32), 0,
-        "outside lasso should be transparent");
+    assert_eq!(
+        alpha_at(&pixels, w, 50, cy as u32),
+        0,
+        "outside lasso should be transparent"
+    );
 }
 
 // ============================================================================
@@ -213,7 +279,9 @@ fn scatter_brush_survives_checkpoint_restore() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
 
-    engine.brush_preset_load("Scatter Brush").expect("preset load");
+    engine
+        .brush_preset_load("Scatter Brush")
+        .expect("preset load");
 
     // Configure the scatter brush graph to exercise the checkpoint path.
     let pen_id = find_node_id(&engine, "pen_input");
@@ -222,12 +290,20 @@ fn scatter_brush_survives_checkpoint_restore() {
     // Enable laplacian stabilizer — gives spacing > 1 so restores actually
     // find a prior checkpoint (with spacing=1, restore_before's strict `<`
     // test never matches and the bug is hidden behind a full re-render).
-    engine.brush_graph_set_port_default(pen_id, "stabilize", 0.5).unwrap();
+    engine
+        .brush_graph_set_port_default(pen_id, "stabilize", 0.5)
+        .unwrap();
     // Pin dab size: pressure(=1) → stamp.size, scale=0.1 → ~51px dab at
     // MAX_DAB_SIZE=512. amount_y=1.0 offsets up to ±51px per dab.
-    engine.brush_graph_set_port_default(stamp_id, "scale", 0.1).unwrap();
-    engine.brush_graph_set_port_default(scatter_id, "amount_x", 0.0).unwrap();
-    engine.brush_graph_set_port_default(scatter_id, "amount_y", 1.0).unwrap();
+    engine
+        .brush_graph_set_port_default(stamp_id, "scale", 0.1)
+        .unwrap();
+    engine
+        .brush_graph_set_port_default(scatter_id, "amount_x", 0.0)
+        .unwrap();
+    engine
+        .brush_graph_set_port_default(scatter_id, "amount_y", 1.0)
+        .unwrap();
 
     // Horizontal stroke at y=128. With scatter, every dab lands centered
     // near y=174 (=128 + 0.9 * 51), footprint y ≈ [148, 200].
@@ -238,12 +314,18 @@ fn scatter_brush_survives_checkpoint_restore() {
         let t = i as f32 / (samples - 1) as f32;
         let x = 32.0 + t * (w as f32 - 64.0);
         engine.stroke_to(StrokeOp::BrushStroke {
-            x, y: stroke_y,
+            x,
+            y: stroke_y,
             pressure: 1.0,
-            x_tilt: 0.0, y_tilt: 0.0,
-            rotation: 0.0, tangential_pressure: 0.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
             time_ms: i as f64 * 16.0,
-            cr: 1.0, cg: 0.0, cb: 0.0, ca: 1.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
         });
     }
     engine.end_stroke();

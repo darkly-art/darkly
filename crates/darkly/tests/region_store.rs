@@ -2,11 +2,13 @@
 //!
 //! Run with: `cargo test -p darkly --test region_store`
 
-use darkly::gpu::test_utils::*;
 use darkly::gpu::region_store::RegionStore;
+use darkly::gpu::test_utils::*;
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
-    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test") })
+    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("test"),
+    })
 }
 
 fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) {
@@ -27,7 +29,11 @@ fn write_texture(queue: &wgpu::Queue, tex: &wgpu::Texture, w: u32, h: u32, bpp: 
             bytes_per_row: Some(w * bpp),
             rows_per_image: Some(h),
         },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
 }
 
@@ -54,7 +60,11 @@ fn region_store_save_restore_round_trip() {
     write_texture(&queue, &tex, w, h, 4, &blue);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(&pixels[0..4], &[0, 0, 255, 255], "should be blue before restore");
+    assert_eq!(
+        &pixels[0..4],
+        &[0, 0, 255, 255],
+        "should be blue before restore"
+    );
 
     // Restore.
     let mut enc = encoder(&device);
@@ -62,7 +72,11 @@ fn region_store_save_restore_round_trip() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(&pixels[0..4], &[255, 0, 0, 255], "should be red after restore");
+    assert_eq!(
+        &pixels[0..4],
+        &[255, 0, 0, 255],
+        "should be red after restore"
+    );
 }
 
 /// Partial rect: save inner 64×64, overwrite full texture, restore only inner rect.
@@ -96,12 +110,24 @@ fn region_store_partial_rect() {
 
     // Inner rect should be red.
     let inner_offset = ((32 * w + 32) * 4) as usize;
-    assert_eq!(&pixels[inner_offset..inner_offset + 4], &[255, 0, 0, 255], "inner should be red");
+    assert_eq!(
+        &pixels[inner_offset..inner_offset + 4],
+        &[255, 0, 0, 255],
+        "inner should be red"
+    );
 
     // Outer border should still be blue.
-    assert_eq!(&pixels[0..4], &[0, 0, 255, 255], "outer (0,0) should be blue");
+    assert_eq!(
+        &pixels[0..4],
+        &[0, 0, 255, 255],
+        "outer (0,0) should be blue"
+    );
     let bottom_right = (((h - 1) * w + (w - 1)) * 4) as usize;
-    assert_eq!(&pixels[bottom_right..bottom_right + 4], &[0, 0, 255, 255], "outer bottom-right should be blue");
+    assert_eq!(
+        &pixels[bottom_right..bottom_right + 4],
+        &[0, 0, 255, 255],
+        "outer bottom-right should be blue"
+    );
 }
 
 /// Redo round-trip: save red → overwrite blue → commit → undo → redo.
@@ -181,7 +207,11 @@ fn region_store_ring_buffer_eviction() {
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     // Entry 3 saved color [180, 0, 0, 255].
-    assert_eq!(pixels[0], 180, "newest entry should be restorable: expected 180, got {}", pixels[0]);
+    assert_eq!(
+        pixels[0], 180,
+        "newest entry should be restorable: expected 180, got {}",
+        pixels[0]
+    );
 }
 
 /// R8 format: save/restore round-trip on R8Unorm texture.

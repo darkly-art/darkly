@@ -3,8 +3,18 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int   { name: "iterations", min: 1,   max: 50,  default: 5 },
-    ParamDef::Float { name: "wetness",    min: 0.0, max: 2.0, default: 0.5 },
+    ParamDef::Int {
+        name: "iterations",
+        min: 1,
+        max: 50,
+        default: 5,
+    },
+    ParamDef::Float {
+        name: "wetness",
+        min: 0.0,
+        max: 2.0,
+        default: 0.5,
+    },
 ];
 
 /// Size of the generated RGBA noise texture used as a flow map.
@@ -16,8 +26,14 @@ pub fn register() -> VeilRegistration {
         params: PARAMS,
         create_pipeline: create_watercolor_pipeline,
         from_params: |params, shared| {
-            let iterations = match params.get(0) { Some(ParamValue::Int(v)) => *v, _ => 20 };
-            let wetness = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 1.0 };
+            let iterations = match params.first() {
+                Some(ParamValue::Int(v)) => *v,
+                _ => 20,
+            };
+            let wetness = match params.get(1) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 1.0,
+            };
             Box::new(Watercolor::new(iterations, wetness, shared))
         },
     }
@@ -166,9 +182,30 @@ impl Veil for Watercolor {
         let layout = &self.shared.bind_group_layout;
 
         // --- Uniform buffers for each pass type ---
-        let init_ub = self.make_uniform_buf(device, queue, 0, render_width, render_height, "watercolor-ub-init");
-        let blur_ub = self.make_uniform_buf(device, queue, 1, render_width, render_height, "watercolor-ub-blur");
-        let final_ub = self.make_uniform_buf(device, queue, 2, render_width, render_height, "watercolor-ub-final");
+        let init_ub = self.make_uniform_buf(
+            device,
+            queue,
+            0,
+            render_width,
+            render_height,
+            "watercolor-ub-init",
+        );
+        let blur_ub = self.make_uniform_buf(
+            device,
+            queue,
+            1,
+            render_width,
+            render_height,
+            "watercolor-ub-blur",
+        );
+        let final_ub = self.make_uniform_buf(
+            device,
+            queue,
+            2,
+            render_width,
+            render_height,
+            "watercolor-ub-final",
+        );
 
         // --- Noise texture + repeat sampler for flow-map bias ---
         let (noise_tex, noise_view) = create_noise_texture(device, queue);
@@ -182,8 +219,8 @@ impl Veil for Watercolor {
         });
 
         // --- Two aux textures for iterative ping-pong blur ---
-        let tex_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING;
+        let tex_usage =
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
         let mut aux_textures = vec![noise_tex];
         let mut aux_views = Vec::with_capacity(3);
         // aux_views[0..2] = ping-pong blur targets, aux_views[2] = noise
@@ -241,7 +278,11 @@ impl Veil for Watercolor {
 
         // [0] = init: reads ping_pong[i] → writes aux_views[0]
         let init_bgs: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
-            make_bg(&format!("watercolor-init-{i}"), &ping_pong_views[i], &init_ub)
+            make_bg(
+                &format!("watercolor-init-{i}"),
+                &ping_pong_views[i],
+                &init_ub,
+            )
         });
 
         // [1] = blur: [j] reads aux_views[j] (writes to aux_views[1-j])
@@ -343,54 +384,53 @@ fn create_watercolor_pipeline(
     device: &wgpu::Device,
     _format: wgpu::TextureFormat,
 ) -> EffectPipeline {
-    let bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("watercolor-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("watercolor-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("watercolor-pipeline-layout"),

@@ -255,9 +255,11 @@ impl TransformPass {
             label: Some("transform-shader"),
             source: wgpu::ShaderSource::Wgsl(
                 concat!(
-                    include_str!("../../../../shaders/source_over.wgsl"), "\n",
+                    include_str!("../../../../shaders/source_over.wgsl"),
+                    "\n",
                     include_str!("../../../../shaders/transform.wgsl"),
-                ).into(),
+                )
+                .into(),
             ),
         });
 
@@ -291,41 +293,43 @@ impl TransformPass {
         });
 
         // --- Commit pipelines (render directly to layer/mask texture) ---
-        let commit_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("transform-commit-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
+        let commit_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("transform-commit-bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
                     },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
                     },
-                    count: None,
-                },
-            ],
-        });
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ],
+            });
 
         // Single-texture BGL shared by dest copy (commit) and premultiply passes.
         let single_tex_bgl = super::straight_composite::single_texture_bind_group_layout(
-            device, "transform-single-tex-bgl",
+            device,
+            "transform-single-tex-bgl",
         );
 
         let commit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -338,9 +342,11 @@ impl TransformPass {
             label: Some("transform-commit-shader"),
             source: wgpu::ShaderSource::Wgsl(
                 concat!(
-                    include_str!("../../../../shaders/source_over.wgsl"), "\n",
+                    include_str!("../../../../shaders/source_over.wgsl"),
+                    "\n",
                     include_str!("../../../../shaders/transform_commit.wgsl"),
-                ).into(),
+                )
+                .into(),
             ),
         });
 
@@ -377,12 +383,10 @@ impl TransformPass {
             })
         };
 
-        let commit_rgba_pipeline = make_commit_pipeline(
-            "transform-commit-rgba", wgpu::TextureFormat::Rgba8Unorm,
-        );
-        let commit_r8_pipeline = make_commit_pipeline(
-            "transform-commit-r8", wgpu::TextureFormat::R8Unorm,
-        );
+        let commit_rgba_pipeline =
+            make_commit_pipeline("transform-commit-rgba", wgpu::TextureFormat::Rgba8Unorm);
+        let commit_r8_pipeline =
+            make_commit_pipeline("transform-commit-r8", wgpu::TextureFormat::R8Unorm);
 
         // --- Premultiply pipeline (straight→premultiplied alpha conversion) ---
         let premultiply_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -482,7 +486,7 @@ impl TransformPass {
         for i in 0..pixel_count {
             let off = i * 4;
             let a = rgba_data[off + 3] as f32 / 255.0;
-            premul[off]     = (rgba_data[off]     as f32 * a).round() as u8;
+            premul[off] = (rgba_data[off] as f32 * a).round() as u8;
             premul[off + 1] = (rgba_data[off + 1] as f32 * a).round() as u8;
             premul[off + 2] = (rgba_data[off + 2] as f32 * a).round() as u8;
             premul[off + 3] = rgba_data[off + 3];
@@ -649,7 +653,11 @@ impl TransformPass {
         let copy_src = wgpu::TexelCopyTextureInfo {
             texture: layer_texture,
             mip_level: 0,
-            origin: wgpu::Origin3d { x: src_x, y: src_y, z: 0 },
+            origin: wgpu::Origin3d {
+                x: src_x,
+                y: src_y,
+                z: 0,
+            },
             aspect: wgpu::TextureAspect::All,
         };
         let copy_size = wgpu::Extent3d {
@@ -682,7 +690,11 @@ impl TransformPass {
                 wgpu::TexelCopyTextureInfo {
                     texture: &temp_texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: dst_x, y: dst_y, z: 0 },
+                    origin: wgpu::Origin3d {
+                        x: dst_x,
+                        y: dst_y,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 copy_size,
@@ -699,7 +711,8 @@ impl TransformPass {
                 }],
             });
 
-            let premul_target_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let premul_target_view =
+                source_texture.create_view(&wgpu::TextureViewDescriptor::default());
             {
                 let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("premultiply"),
@@ -725,7 +738,11 @@ impl TransformPass {
                 wgpu::TexelCopyTextureInfo {
                     texture: &source_texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: dst_x, y: dst_y, z: 0 },
+                    origin: wgpu::Origin3d {
+                        x: dst_x,
+                        y: dst_y,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 copy_size,
@@ -872,7 +889,11 @@ impl TransformPass {
         };
 
         let inv = affine_inverse(matrix).unwrap_or(IDENTITY);
-        let is_mask = if target_format == wgpu::TextureFormat::R8Unorm { 1.0 } else { 0.0 };
+        let is_mask = if target_format == wgpu::TextureFormat::R8Unorm {
+            1.0
+        } else {
+            0.0
+        };
 
         // Reuse the preview uniform struct — _pad becomes is_mask for commit.
         let uniforms = TransformBlendUniforms {
@@ -889,7 +910,11 @@ impl TransformPass {
 
         // Copy destination for shader-side Porter-Duff (see straight_composite module).
         let dest_bg = super::straight_composite::copy_for_compositing(
-            device, encoder, &self.single_tex_bgl, target_texture, target_format,
+            device,
+            encoder,
+            &self.single_tex_bgl,
+            target_texture,
+            target_format,
         );
 
         let pipeline = match target_format {
@@ -924,7 +949,8 @@ impl TransformPass {
 
     /// Check if floating content is active and targets the given layer.
     pub fn targets_layer(&self, layer_id: LayerId) -> bool {
-        self.active.as_ref().map_or(false, |s| s.target_layer == layer_id)
+        self.active
+            .as_ref()
+            .is_some_and(|s| s.target_layer == layer_id)
     }
 }
-

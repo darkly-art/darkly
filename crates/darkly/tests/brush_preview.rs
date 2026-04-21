@@ -41,7 +41,8 @@ fn default_graph_regenerates_brush_preview_into_overlay_mask() {
     engine.regenerate_brush_preview();
 
     // Engine caches the canvas-space info for the brush tool.
-    let info = engine.brush_preview_info()
+    let info = engine
+        .brush_preview_info()
         .expect("default graph has a preview producer");
     assert!(info.half_extent_canvas_px[0] > 0.0);
     assert!(info.half_extent_canvas_px[1] > 0.0);
@@ -58,16 +59,20 @@ fn default_graph_regenerates_brush_preview_into_overlay_mask() {
     let cy = mask_h / 2;
     let center_idx = ((cy * mask_w + cx) * 4) as usize;
     let center_r = pixels[center_idx];
-    assert!(center_r > 0,
+    assert!(
+        center_r > 0,
         "preview mask center should be non-zero (got {}): default round \
-         stamp must write its alpha into the mask target", center_r);
+         stamp must write its alpha into the mask target",
+        center_r
+    );
 
     // A pixel near the very edge of the target should be transparent,
     // confirming the stamp renders as a bounded disc, not a filled rect.
-    let edge_idx = (0 * 4) as usize;
-    let edge_a = pixels[edge_idx + 3];
-    assert!(edge_a <= 16,
-        "preview mask corner should be near-zero alpha, got {edge_a}");
+    let edge_a = pixels[3];
+    assert!(
+        edge_a <= 16,
+        "preview mask corner should be near-zero alpha, got {edge_a}"
+    );
 }
 
 /// Crank `stamp.flow` to almost zero and verify the preview is unchanged.
@@ -82,7 +87,9 @@ fn preview_ignores_stamp_flow() {
     let baseline_size = engine.compositor_preview_mask_size();
 
     let stamp = find_node_id(&engine, "stamp");
-    engine.brush_graph_set_port_default(stamp.0, "flow", 0.05).unwrap();
+    engine
+        .brush_graph_set_port_default(stamp.0, "flow", 0.05)
+        .unwrap();
     engine.regenerate_brush_preview();
 
     let dimmed = engine.test_readback_overlay_preview_mask();
@@ -120,7 +127,9 @@ fn preview_ignores_color_output_opacity() {
     assert!(baseline_r > 200, "baseline preview centre should be solid");
 
     let color_out = find_node_id(&engine, "color_output");
-    engine.brush_graph_set_port_default(color_out.0, "opacity", 0.05).unwrap();
+    engine
+        .brush_graph_set_port_default(color_out.0, "opacity", 0.05)
+        .unwrap();
     engine.regenerate_brush_preview();
 
     let dimmed = engine.test_readback_overlay_preview_mask();
@@ -147,7 +156,9 @@ fn preview_extent_matches_texture_dimensions() {
     // would dominate; setting the default has no effect when wired. So
     // instead verify the relationship: half_extent_x * 2 = an integer
     // pixel count consistent with the brush.)
-    engine.brush_graph_set_port_default(stamp.0, "scale", 1.0).unwrap();
+    engine
+        .brush_graph_set_port_default(stamp.0, "scale", 1.0)
+        .unwrap();
     engine.regenerate_brush_preview();
 
     let info = engine
@@ -182,8 +193,7 @@ fn preview_uses_arbitrary_brush_preview_texture() {
     // Replace the `stamp.preview → color_output.brush_preview` wire with
     // one from an `image` node. We upload a 32×32 solid-red texture and
     // wire it in.
-    let red_pixels: Vec<u8> = std::iter::repeat([255u8, 0, 0, 255])
-        .take(32 * 32)
+    let red_pixels: Vec<u8> = std::iter::repeat_n([255u8, 0, 0, 255], 32 * 32)
         .flatten()
         .collect();
     engine
@@ -202,9 +212,7 @@ fn preview_uses_arbitrary_brush_preview_texture() {
     let json_before: serde_json::Value =
         serde_json::from_str(&serde_json::to_string(engine.active_brush_graph_ref()).unwrap())
             .unwrap();
-    let _ = engine
-        .brush_graph_add_node("image", 100.0, 600.0)
-        .unwrap();
+    let _ = engine.brush_graph_add_node("image", 100.0, 600.0).unwrap();
     let json_after: serde_json::Value =
         serde_json::from_str(&serde_json::to_string(engine.active_brush_graph_ref()).unwrap())
             .unwrap();
@@ -288,17 +296,31 @@ fn legacy_preview_output_migrates_on_load() {
     // a `preview_output` node wired from stamp.
     let registry = BrushNodeRegistry::new();
     let mut graph: Graph<BrushWireType> = Graph::new();
-    let pen = graph.add_node("pen_input",
-        registry.get("pen_input").unwrap().ports.clone(), vec![]);
-    let paint_color = graph.add_node("paint_color",
-        registry.get("paint_color").unwrap().ports.clone(), vec![]);
-    let circle = graph.add_node("circle",
-        registry.get("circle").unwrap().ports.clone(), vec![]);
-    let stamp = graph.add_node("stamp",
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let circle = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![],
+    );
+    let stamp = graph.add_node(
+        "stamp",
         registry.get("stamp").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)]);
-    let color_output = graph.add_node("color_output",
-        registry.get("color_output").unwrap().ports.clone(), vec![]);
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let color_output = graph.add_node(
+        "color_output",
+        registry.get("color_output").unwrap().ports.clone(),
+        vec![],
+    );
 
     // Synthesise the legacy `preview_output` node — it no longer has a
     // registration in the runtime, so we hand-craft an instance with the
@@ -311,7 +333,9 @@ fn legacy_preview_output_migrates_on_load() {
                 name: "dab".into(),
                 dir: PortDir::Input,
                 wire_type: BrushWireType::Texture,
-                min: 0.0, max: 0.0, default: 0.0,
+                min: 0.0,
+                max: 0.0,
+                default: 0.0,
                 description: String::new(),
                 unit_type: Default::default(),
                 icon: String::new(),
@@ -322,7 +346,9 @@ fn legacy_preview_output_migrates_on_load() {
                 name: "dab_size".into(),
                 dir: PortDir::Input,
                 wire_type: BrushWireType::Vec2,
-                min: 0.0, max: 0.0, default: 0.0,
+                min: 0.0,
+                max: 0.0,
+                default: 0.0,
                 description: String::new(),
                 unit_type: Default::default(),
                 icon: String::new(),
@@ -345,10 +371,18 @@ fn legacy_preview_output_migrates_on_load() {
         (stamp, "dab_size", preview_output_id, "dab_size"),
     ];
     for (fn_, fp, tn, tp) in wires {
-        graph.connect(
-            PortRef { node: fn_, port: fp.into() },
-            PortRef { node: tn, port: tp.into() },
-        ).unwrap();
+        graph
+            .connect(
+                PortRef {
+                    node: fn_,
+                    port: fp.into(),
+                },
+                PortRef {
+                    node: tn,
+                    port: tp.into(),
+                },
+            )
+            .unwrap();
     }
 
     let preset = BrushPreset::from_graph("Legacy", graph);
@@ -363,17 +397,28 @@ fn legacy_preview_output_migrates_on_load() {
         .nodes
         .values()
         .any(|n| n.type_id == "preview_output");
-    assert!(!has_preview_output, "preview_output should be gone after migration");
+    assert!(
+        !has_preview_output,
+        "preview_output should be gone after migration"
+    );
 
     // Migration installed the new wire.
-    let has_new_wire = loaded.preset.graph.connections.iter().any(|c| {
-        c.to.port == "brush_preview" && c.from.port == "preview"
-    });
-    assert!(has_new_wire,
-        "migration should install stamp.preview → color_output.brush_preview");
+    let has_new_wire = loaded
+        .preset
+        .graph
+        .connections
+        .iter()
+        .any(|c| c.to.port == "brush_preview" && c.from.port == "preview");
+    assert!(
+        has_new_wire,
+        "migration should install stamp.preview → color_output.brush_preview"
+    );
 
     // The migrated graph must compile.
     let runner = darkly::brush::compile_graph(&loaded.preset.graph);
-    assert!(runner.is_ok(),
-        "migrated graph should compile: {:?}", runner.err());
+    assert!(
+        runner.is_ok(),
+        "migrated graph should compile: {:?}",
+        runner.err()
+    );
 }

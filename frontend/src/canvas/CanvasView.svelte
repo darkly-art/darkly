@@ -54,9 +54,9 @@
             handle.resize(canvas.width, canvas.height);
             app.handle = handle;
 
-            // Demo setup: gradient background + paint layer in a group
+            // Demo setup: background image + paint layer in a group
             const bg = handle.add_raster_layer();
-            handle.fill_gradient(bg);
+            handle.fill_background(bg);
 
             const groupId = handle.add_group();
             const paintLayerId = handle.add_raster_layer_in(groupId);

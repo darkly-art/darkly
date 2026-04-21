@@ -336,7 +336,9 @@ impl<W: WireKind> Graph<W> {
 
     /// All connections whose destination is a port on `node_id`.
     pub fn inputs_for(&self, node_id: NodeId) -> impl Iterator<Item = &Connection> {
-        self.connections.iter().filter(move |c| c.to.node == node_id)
+        self.connections
+            .iter()
+            .filter(move |c| c.to.node == node_id)
     }
 
     /// All connections whose source is a port on `node_id`.
@@ -354,7 +356,10 @@ impl<W: WireKind> Graph<W> {
 
     /// Update a node's UI position.
     pub fn set_node_position(&mut self, id: NodeId, pos: [f32; 2]) -> Result<(), GraphError> {
-        let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;
+        let node = self
+            .nodes
+            .get_mut(&id)
+            .ok_or(GraphError::NodeNotFound(id))?;
         node.position = pos;
         Ok(())
     }
@@ -368,7 +373,10 @@ impl<W: WireKind> Graph<W> {
         port_name: &str,
         value: f32,
     ) -> Result<(), GraphError> {
-        let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;
+        let node = self
+            .nodes
+            .get_mut(&id)
+            .ok_or(GraphError::NodeNotFound(id))?;
         let port = node
             .ports
             .iter_mut()
@@ -388,7 +396,10 @@ impl<W: WireKind> Graph<W> {
         port_name: &str,
         exposed: bool,
     ) -> Result<(), GraphError> {
-        let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;
+        let node = self
+            .nodes
+            .get_mut(&id)
+            .ok_or(GraphError::NodeNotFound(id))?;
         let port = node
             .ports
             .iter_mut()
@@ -408,7 +419,10 @@ impl<W: WireKind> Graph<W> {
         index: usize,
         value: ParamValue,
     ) -> Result<(), GraphError> {
-        let node = self.nodes.get_mut(&id).ok_or(GraphError::NodeNotFound(id))?;
+        let node = self
+            .nodes
+            .get_mut(&id)
+            .ok_or(GraphError::NodeNotFound(id))?;
         if index >= node.params.len() {
             return Err(GraphError::PortNotFound {
                 node: id,
@@ -504,27 +518,31 @@ mod tests {
     #[test]
     fn cycle_detection() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node(
-            "a",
-            vec![scalar_in("in"), scalar_out("out")],
-            vec![],
-        );
-        let b = g.add_node(
-            "b",
-            vec![scalar_in("in"), scalar_out("out")],
-            vec![],
-        );
+        let a = g.add_node("a", vec![scalar_in("in"), scalar_out("out")], vec![]);
+        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")], vec![]);
 
         g.connect(
-            PortRef { node: a, port: "out".into() },
-            PortRef { node: b, port: "in".into() },
+            PortRef {
+                node: a,
+                port: "out".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in".into(),
+            },
         )
         .unwrap();
 
         let err = g
             .connect(
-                PortRef { node: b, port: "out".into() },
-                PortRef { node: a, port: "in".into() },
+                PortRef {
+                    node: b,
+                    port: "out".into(),
+                },
+                PortRef {
+                    node: a,
+                    port: "in".into(),
+                },
             )
             .unwrap_err();
 
@@ -539,8 +557,14 @@ mod tests {
 
         let err = g
             .connect(
-                PortRef { node: a, port: "out".into() },
-                PortRef { node: b, port: "in".into() },
+                PortRef {
+                    node: a,
+                    port: "out".into(),
+                },
+                PortRef {
+                    node: b,
+                    port: "in".into(),
+                },
             )
             .unwrap_err();
 
@@ -555,15 +579,27 @@ mod tests {
         let c = g.add_node("c", vec![scalar_in("in")], vec![]);
 
         g.connect(
-            PortRef { node: a, port: "out".into() },
-            PortRef { node: c, port: "in".into() },
+            PortRef {
+                node: a,
+                port: "out".into(),
+            },
+            PortRef {
+                node: c,
+                port: "in".into(),
+            },
         )
         .unwrap();
 
         let err = g
             .connect(
-                PortRef { node: b, port: "out".into() },
-                PortRef { node: c, port: "in".into() },
+                PortRef {
+                    node: b,
+                    port: "out".into(),
+                },
+                PortRef {
+                    node: c,
+                    port: "in".into(),
+                },
             )
             .unwrap_err();
 
@@ -574,21 +610,29 @@ mod tests {
     fn remove_node_cleans_connections() {
         let mut g = Graph::<TestWireKind>::new();
         let a = g.add_node("a", vec![scalar_out("out")], vec![]);
-        let b = g.add_node(
-            "b",
-            vec![scalar_in("in"), scalar_out("out")],
-            vec![],
-        );
+        let b = g.add_node("b", vec![scalar_in("in"), scalar_out("out")], vec![]);
         let c = g.add_node("c", vec![scalar_in("in")], vec![]);
 
         g.connect(
-            PortRef { node: a, port: "out".into() },
-            PortRef { node: b, port: "in".into() },
+            PortRef {
+                node: a,
+                port: "out".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in".into(),
+            },
         )
         .unwrap();
         g.connect(
-            PortRef { node: b, port: "out".into() },
-            PortRef { node: c, port: "in".into() },
+            PortRef {
+                node: b,
+                port: "out".into(),
+            },
+            PortRef {
+                node: c,
+                port: "in".into(),
+            },
         )
         .unwrap();
 
@@ -602,8 +646,14 @@ mod tests {
         let a = g.add_node("source", vec![scalar_out("out")], vec![]);
         let b = g.add_node("sink", vec![scalar_in("in")], vec![]);
         g.connect(
-            PortRef { node: a, port: "out".into() },
-            PortRef { node: b, port: "in".into() },
+            PortRef {
+                node: a,
+                port: "out".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in".into(),
+            },
         )
         .unwrap();
 
@@ -617,14 +667,24 @@ mod tests {
 
     #[test]
     fn unit_type_conversion_round_trip() {
-        for unit in [UnitType::Normalized, UnitType::Percent, UnitType::Degrees, UnitType::Raw] {
+        for unit in [
+            UnitType::Normalized,
+            UnitType::Percent,
+            UnitType::Degrees,
+            UnitType::Raw,
+        ] {
             for &val in &[0.0, 0.25, 0.5, 0.75, 1.0] {
                 let display = unit.to_display(val);
                 let back = unit.from_display(display);
                 assert!(
                     (back - val).abs() < 1e-6,
                     "{:?}: to_display({}) = {}, from_display({}) = {} (expected {})",
-                    unit, val, display, display, back, val,
+                    unit,
+                    val,
+                    display,
+                    display,
+                    back,
+                    val,
                 );
             }
         }
@@ -648,7 +708,12 @@ mod tests {
 
     #[test]
     fn unit_type_serde_round_trip() {
-        for unit in [UnitType::Normalized, UnitType::Percent, UnitType::Degrees, UnitType::Raw] {
+        for unit in [
+            UnitType::Normalized,
+            UnitType::Percent,
+            UnitType::Degrees,
+            UnitType::Raw,
+        ] {
             let json = serde_json::to_string(&unit).unwrap();
             let back: UnitType = serde_json::from_str(&json).unwrap();
             assert_eq!(unit, back);

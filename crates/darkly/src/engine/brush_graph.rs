@@ -7,8 +7,8 @@ use super::DarklyEngine;
 use crate::brush::wire::BrushWireType;
 use crate::brush::{BrushNodeRegistration, BrushNodeRegistry};
 use crate::gpu::params::ParamValue;
-use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
 use crate::nodegraph::Graph;
+use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
 
 impl DarklyEngine {
     /// Return metadata for all registered brush node types.
@@ -122,9 +122,12 @@ impl DarklyEngine {
         } else {
             &self.brush_pipelines.default_selection_bind_group
         };
-        let encoder = self.gpu.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor { label: Some("brush-preview-regen") },
-        );
+        let encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("brush-preview-regen"),
+            });
 
         let mut gpu_ctx = BrushGpuContext {
             encoder,
@@ -186,8 +189,7 @@ impl DarklyEngine {
     ///
     /// Returns Ok on success or an error string.
     fn compile_active(&mut self) -> Result<(), String> {
-        crate::brush::compile_graph(&self.active_brush_graph)
-            .map_err(|e| format!("{e}"))?;
+        crate::brush::compile_graph(&self.active_brush_graph).map_err(|e| format!("{e}"))?;
 
         // Collect resource names still referenced by Image nodes.
         let live: std::collections::HashSet<String> = self
@@ -223,8 +225,7 @@ impl DarklyEngine {
 
     /// Serialize the active graph as JSON.
     fn active_graph_json(&self) -> String {
-        serde_json::to_string(&self.active_brush_graph)
-            .unwrap_or_else(|_| "null".into())
+        serde_json::to_string(&self.active_brush_graph).unwrap_or_else(|_| "null".into())
     }
 
     /// Add a node to the active graph and compile.
@@ -347,7 +348,9 @@ impl DarklyEngine {
 
     /// Update a node's position (UI-only, no compile).
     pub fn brush_graph_move_node(&mut self, node_id: u64, x: f32, y: f32) {
-        let _ = self.active_brush_graph.set_node_position(NodeId(node_id), [x, y]);
+        let _ = self
+            .active_brush_graph
+            .set_node_position(NodeId(node_id), [x, y]);
     }
 
     /// Run auto-layout on the active brush graph and return updated JSON.
@@ -384,7 +387,8 @@ impl DarklyEngine {
             height,
             rgba,
         );
-        self.resource_handles.insert(resource_name.to_string(), handle);
+        self.resource_handles
+            .insert(resource_name.to_string(), handle);
         Ok(())
     }
 
@@ -427,9 +431,11 @@ impl DarklyEngine {
                 }
 
                 // A connected input is driven by its wire, not the user.
-                let connected = self.active_brush_graph.connections.iter().any(|c| {
-                    c.to.node == node.id && c.to.port == port.name
-                });
+                let connected = self
+                    .active_brush_graph
+                    .connections
+                    .iter()
+                    .any(|c| c.to.node == node.id && c.to.port == port.name);
                 if connected {
                     continue;
                 }
@@ -437,7 +443,9 @@ impl DarklyEngine {
                 // Display metadata comes from the registration (canonical),
                 // per-instance state (default, exposed) from the instance.
                 let reg_port = reg.and_then(|r| {
-                    r.ports.iter().find(|rp| rp.name == port.name && rp.dir == port.dir)
+                    r.ports
+                        .iter()
+                        .find(|rp| rp.name == port.name && rp.dir == port.dir)
                 });
                 let unit_type = reg_port.map_or(port.unit_type, |rp| rp.unit_type);
                 let label = reg_port
@@ -445,14 +453,9 @@ impl DarklyEngine {
                     .filter(|l| !l.is_empty())
                     .cloned()
                     .unwrap_or_else(|| port.name.clone());
-                let icon = reg_port.map_or_else(
-                    || port.icon.clone(),
-                    |rp| rp.icon.clone(),
-                );
-                let description = reg_port.map_or_else(
-                    || port.description.clone(),
-                    |rp| rp.description.clone(),
-                );
+                let icon = reg_port.map_or_else(|| port.icon.clone(), |rp| rp.icon.clone());
+                let description =
+                    reg_port.map_or_else(|| port.description.clone(), |rp| rp.description.clone());
 
                 result.push(ExposedPortInfo {
                     node_id: node.id.0,
@@ -524,7 +527,7 @@ impl DarklyEngine {
 
         // Map legacy units enum to UnitType.
         let unit_type = match units {
-            1 => UnitType::Raw,     // pixels (display as-is)
+            1 => UnitType::Raw, // pixels (display as-is)
             2 => UnitType::Degrees,
             3 => UnitType::Raw,
             _ => UnitType::Percent, // 0 = percent
@@ -577,7 +580,11 @@ impl DarklyEngine {
         let registry = BrushNodeRegistry::new();
         let unit_type = registry
             .get(&node.type_id)
-            .and_then(|r| r.ports.iter().find(|rp| rp.name == port_name && rp.dir == PortDir::Input))
+            .and_then(|r| {
+                r.ports
+                    .iter()
+                    .find(|rp| rp.name == port_name && rp.dir == PortDir::Input)
+            })
             .map_or(UnitType::default(), |rp| rp.unit_type);
 
         let port_value = unit_type.from_display(display_value);

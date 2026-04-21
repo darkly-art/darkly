@@ -90,7 +90,7 @@ pub fn register() -> BrushNodeRegistration {
 /// evaluation path and the preview path. Everything here is pure CPU data.
 struct StampInputs {
     tip_handle: TextureHandle,
-    effective_size: f32,      // size * scale, clamped to [0, 1]
+    effective_size: f32, // size * scale, clamped to [0, 1]
     ratio: f32,
     /// Per-dab paint deposition (industry "flow"). Feeds the stamp shader's
     /// `opacity` uniform — the stamp pipeline still calls its uniform
@@ -119,7 +119,7 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
     let flow = ctx.input_f32("flow");
     let color = ctx.input("color").as_color();
 
-    let application_int = match ctx.params.get(0) {
+    let application_int = match ctx.params.first() {
         Some(crate::gpu::params::ParamValue::Int(v)) => *v as u32,
         _ => 0,
     };
@@ -225,7 +225,9 @@ impl BrushNodeEvaluator for StampEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let Some(inputs) = resolve_inputs(ctx) else { return vec![]; };
+        let Some(inputs) = resolve_inputs(ctx) else {
+            return vec![];
+        };
 
         let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
         let (dab_w, dab_h) = compute_dab_dims(inputs.effective_size, tip_w, tip_h, MAX_DAB_SIZE);
@@ -234,13 +236,22 @@ impl BrushNodeEvaluator for StampEvaluator {
         let dab_view = gpu.dab_pool.view(handle).clone();
         let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
         encode_stamp_pass(
-            &mut gpu.encoder, gpu.queue, gpu.pipelines,
-            &tip_bind_group, &inputs, &dab_view, (dab_w, dab_h), "brush-stamp",
+            &mut gpu.encoder,
+            gpu.queue,
+            gpu.pipelines,
+            &tip_bind_group,
+            &inputs,
+            &dab_view,
+            (dab_w, dab_h),
+            "brush-stamp",
         );
 
         vec![
             ("dab".into(), ScalarValue::Texture(handle)),
-            ("dab_size".into(), ScalarValue::Vec2([dab_w as f32, dab_h as f32])),
+            (
+                "dab_size".into(),
+                ScalarValue::Vec2([dab_w as f32, dab_h as f32]),
+            ),
         ]
     }
 
@@ -259,7 +270,9 @@ impl BrushNodeEvaluator for StampEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let Some(mut inputs) = resolve_inputs(ctx) else { return vec![]; };
+        let Some(mut inputs) = resolve_inputs(ctx) else {
+            return vec![];
+        };
 
         // Strip deposition modulation. The preview shows the brush, not
         // how much paint a single dab would deposit.
@@ -279,13 +292,22 @@ impl BrushNodeEvaluator for StampEvaluator {
         let view = gpu.dab_pool.view(handle).clone();
         let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
         encode_stamp_pass(
-            &mut gpu.encoder, gpu.queue, gpu.pipelines,
-            &tip_bind_group, &inputs, &view, (dab_w, dab_h), "brush-stamp-preview",
+            &mut gpu.encoder,
+            gpu.queue,
+            gpu.pipelines,
+            &tip_bind_group,
+            &inputs,
+            &view,
+            (dab_w, dab_h),
+            "brush-stamp-preview",
         );
 
         vec![
             ("preview".into(), ScalarValue::Texture(handle)),
-            ("dab_size".into(), ScalarValue::Vec2([dab_w as f32, dab_h as f32])),
+            (
+                "dab_size".into(),
+                ScalarValue::Vec2([dab_w as f32, dab_h as f32]),
+            ),
         ]
     }
 }

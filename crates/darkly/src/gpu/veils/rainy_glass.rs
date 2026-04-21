@@ -3,11 +3,36 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float { name: "speed",       min: 0.0, max: 3.0, default: 1.0 },
-    ParamDef::Float { name: "rain_amount", min: 0.0, max: 1.0, default: 0.7 },
-    ParamDef::Float { name: "direction",   min: 0.0, max: 360.0, default: 0.0 },
-    ParamDef::Float { name: "fog_amount",  min: 0.0, max: 1.0, default: 0.0 },
-    ParamDef::Float { name: "scale",       min: 0.1, max: 5.0, default: 0.8 },
+    ParamDef::Float {
+        name: "speed",
+        min: 0.0,
+        max: 3.0,
+        default: 1.0,
+    },
+    ParamDef::Float {
+        name: "rain_amount",
+        min: 0.0,
+        max: 1.0,
+        default: 0.7,
+    },
+    ParamDef::Float {
+        name: "direction",
+        min: 0.0,
+        max: 360.0,
+        default: 0.0,
+    },
+    ParamDef::Float {
+        name: "fog_amount",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+    },
+    ParamDef::Float {
+        name: "scale",
+        min: 0.1,
+        max: 5.0,
+        default: 0.8,
+    },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -16,12 +41,34 @@ pub fn register() -> VeilRegistration {
         params: PARAMS,
         create_pipeline: create_rainy_glass_pipeline,
         from_params: |params, shared| {
-            let speed = match params.get(0) { Some(ParamValue::Float(v)) => *v, _ => 1.0 };
-            let rain_amount = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 0.7 };
-            let direction = match params.get(2) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
-            let fog_amount = match params.get(3) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
-            let scale = match params.get(4) { Some(ParamValue::Float(v)) => *v, _ => 0.8 };
-            Box::new(RainyGlass::new(speed, rain_amount, direction, fog_amount, scale, shared))
+            let speed = match params.first() {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 1.0,
+            };
+            let rain_amount = match params.get(1) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.7,
+            };
+            let direction = match params.get(2) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.0,
+            };
+            let fog_amount = match params.get(3) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.0,
+            };
+            let scale = match params.get(4) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.8,
+            };
+            Box::new(RainyGlass::new(
+                speed,
+                rain_amount,
+                direction,
+                fog_amount,
+                scale,
+                shared,
+            ))
         },
     }
 }
@@ -61,7 +108,14 @@ pub struct RainyGlass {
 }
 
 impl RainyGlass {
-    pub fn new(speed: f32, rain_amount: f32, direction: f32, fog_amount: f32, scale: f32, shared: Arc<EffectPipeline>) -> Self {
+    pub fn new(
+        speed: f32,
+        rain_amount: f32,
+        direction: f32,
+        fog_amount: f32,
+        scale: f32,
+        shared: Arc<EffectPipeline>,
+    ) -> Self {
         RainyGlass {
             speed,
             rain_amount,
@@ -199,38 +253,37 @@ fn create_rainy_glass_pipeline(
     device: &wgpu::Device,
     _format: wgpu::TextureFormat,
 ) -> EffectPipeline {
-    let bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("rainy-glass-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("rainy-glass-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+                count: None,
+            },
+        ],
+    });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("rainy-glass-pipeline-layout"),

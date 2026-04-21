@@ -56,10 +56,10 @@ impl BlendPipelines {
         });
 
         // Group 1: mask texture (R8Unorm or fallback 1x1 white)
-        let mask_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("mask-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
+        let mask_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("mask-bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -68,9 +68,8 @@ impl BlendPipelines {
                         multisampled: false,
                     },
                     count: None,
-                },
-            ],
-        });
+                }],
+            });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("blend-pipeline-layout"),

@@ -31,10 +31,14 @@ impl ViewTransform {
     ///
     /// The present shader needs the inverse: screen -> canvas.
     pub fn from_pan_zoom_rotate(
-        pan_x: f32, pan_y: f32,
-        zoom: f32, rotation: f32,       // radians
-        screen_w: f32, screen_h: f32,
-        canvas_w: f32, canvas_h: f32,
+        pan_x: f32,
+        pan_y: f32,
+        zoom: f32,
+        rotation: f32, // radians
+        screen_w: f32,
+        screen_h: f32,
+        canvas_w: f32,
+        canvas_h: f32,
     ) -> Self {
         let cos_r = rotation.cos();
         let sin_r = rotation.sin();
@@ -57,7 +61,7 @@ impl ViewTransform {
             matrix: [
                 [m00, m01, canvas_w, 0.0],
                 [m10, m11, canvas_h, 0.0],
-                [tx,  ty,  1.0,      0.0],
+                [tx, ty, 1.0, 0.0],
             ],
         }
     }

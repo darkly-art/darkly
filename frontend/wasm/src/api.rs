@@ -95,13 +95,40 @@ enum Command {
     MaskToSelection(u64),
 
     // Painting
-    FillGradient(u64),
+    FillBackground(u64),
 
     // Selection
-    SelectRect { x: f32, y: f32, w: f32, h: f32, mode: SelectionMode, antialias: bool, feather: f32 },
-    SelectEllipse { x: f32, y: f32, w: f32, h: f32, mode: SelectionMode, antialias: bool, feather: f32 },
-    SelectLasso { verts: Vec<[f32; 2]>, mode: SelectionMode, antialias: bool, feather: f32 },
-    SelectMagicWand { layer_id: u64, seed_x: i32, seed_y: i32, tolerance: u8, mode: SelectionMode },
+    SelectRect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        mode: SelectionMode,
+        antialias: bool,
+        feather: f32,
+    },
+    SelectEllipse {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        mode: SelectionMode,
+        antialias: bool,
+        feather: f32,
+    },
+    SelectLasso {
+        verts: Vec<[f32; 2]>,
+        mode: SelectionMode,
+        antialias: bool,
+        feather: f32,
+    },
+    SelectMagicWand {
+        layer_id: u64,
+        seed_x: i32,
+        seed_y: i32,
+        tolerance: u8,
+        mode: SelectionMode,
+    },
     ClearSelection,
     ClearSelectionContents(u64),
     SelectAll,
@@ -112,7 +139,14 @@ enum Command {
     Redo,
 
     // View transform
-    SetViewTransform { pan_x: f32, pan_y: f32, zoom: f32, rotation: f32, screen_w: f32, screen_h: f32 },
+    SetViewTransform {
+        pan_x: f32,
+        pan_y: f32,
+        zoom: f32,
+        rotation: f32,
+        screen_w: f32,
+        screen_h: f32,
+    },
     Resize(u32, u32),
 
     // Floating content
@@ -165,18 +199,45 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::SelectionToMask(id) => engine.selection_to_mask(id),
             Command::MaskToSelection(id) => engine.mask_to_selection(id),
 
-            Command::FillGradient(id) => engine.fill_gradient(id),
+            Command::FillBackground(id) => engine.fill_background(id),
 
-            Command::SelectRect { x, y, w, h, mode, antialias, feather } => {
+            Command::SelectRect {
+                x,
+                y,
+                w,
+                h,
+                mode,
+                antialias,
+                feather,
+            } => {
                 engine.select_rect(x, y, w, h, mode, antialias, feather);
             }
-            Command::SelectEllipse { x, y, w, h, mode, antialias, feather } => {
+            Command::SelectEllipse {
+                x,
+                y,
+                w,
+                h,
+                mode,
+                antialias,
+                feather,
+            } => {
                 engine.select_ellipse(x, y, w, h, mode, antialias, feather);
             }
-            Command::SelectLasso { ref verts, mode, antialias, feather } => {
+            Command::SelectLasso {
+                ref verts,
+                mode,
+                antialias,
+                feather,
+            } => {
                 engine.select_lasso(verts, mode, antialias, feather);
             }
-            Command::SelectMagicWand { layer_id, seed_x, seed_y, tolerance, mode } => {
+            Command::SelectMagicWand {
+                layer_id,
+                seed_x,
+                seed_y,
+                tolerance,
+                mode,
+            } => {
                 engine.select_magic_wand(layer_id, seed_x, seed_y, tolerance, mode);
             }
             Command::ClearSelection => engine.clear_selection(),
@@ -187,7 +248,14 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::Undo => engine.undo(),
             Command::Redo => engine.redo(),
 
-            Command::SetViewTransform { pan_x, pan_y, zoom, rotation, screen_w, screen_h } => {
+            Command::SetViewTransform {
+                pan_x,
+                pan_y,
+                zoom,
+                rotation,
+                screen_w,
+                screen_h,
+            } => {
                 engine.set_view_transform(pan_x, pan_y, zoom, rotation, screen_w, screen_h);
             }
             Command::Resize(w, h) => engine.resize(w, h),
@@ -210,7 +278,9 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::ResetBrushGraph => engine.reset_brush_graph(),
             Command::BrushGraphMoveNode(id, x, y) => engine.brush_graph_move_node(id, x, y),
 
-            Command::PickColor(x, y) => { engine.pick_color(x, y); }
+            Command::PickColor(x, y) => {
+                engine.pick_color(x, y);
+            }
         }
     }
 }
@@ -254,65 +324,67 @@ fn parse_selection_mode(mode: &str) -> SelectionMode {
 
 /// Convert a JS params object to a `Vec<ParamValue>` using `ParamDef` metadata.
 fn js_to_param_values(js: &JsValue, defs: &[ParamDef]) -> Vec<ParamValue> {
-    defs.iter().map(|def| match def {
-        ParamDef::Float { name, default, .. } => {
-            let v = js_sys::Reflect::get(js, &(*name).into())
-                .ok()
-                .and_then(|v| v.as_f64())
-                .unwrap_or(*default as f64) as f32;
-            ParamValue::Float(v)
-        }
-        ParamDef::Int { name, default, .. } => {
-            let v = js_sys::Reflect::get(js, &(*name).into())
-                .ok()
-                .and_then(|v| v.as_f64())
-                .unwrap_or(*default as f64) as i32;
-            ParamValue::Int(v)
-        }
-        ParamDef::Bool { name, default } => {
-            let v = js_sys::Reflect::get(js, &(*name).into())
-                .ok()
-                .and_then(|v| v.as_bool())
-                .unwrap_or(*default);
-            ParamValue::Bool(v)
-        }
-        ParamDef::String { name, default } => {
-            let v = js_sys::Reflect::get(js, &(*name).into())
-                .ok()
-                .and_then(|v| v.as_string())
-                .unwrap_or_else(|| default.to_string());
-            ParamValue::String(v)
-        }
-        ParamDef::Curve { name, default } => {
-            let v = js_sys::Reflect::get(js, &(*name).into())
-                .ok()
-                .and_then(|v| v.as_string())
-                .and_then(|s| serde_json::from_str::<Vec<[f32; 2]>>(&s).ok())
-                .unwrap_or_else(|| default.to_vec());
-            ParamValue::Curve(v)
-        }
-        ParamDef::Enum { name, default, .. } => {
-            let v = js_sys::Reflect::get(js, &(*name).into())
-                .ok()
-                .and_then(|v| v.as_f64())
-                .unwrap_or(*default as f64) as i32;
-            ParamValue::Int(v)
-        }
-        ParamDef::Icon { name, default, .. } => {
-            let v = js_sys::Reflect::get(js, &(*name).into())
-                .ok()
-                .and_then(|v| v.as_string())
-                .unwrap_or_else(|| default.to_string());
-            ParamValue::String(v)
-        }
-        ParamDef::FloatInput { name, default, .. } => {
-            let v = js_sys::Reflect::get(js, &(*name).into())
-                .ok()
-                .and_then(|v| v.as_f64())
-                .unwrap_or(*default as f64) as f32;
-            ParamValue::Float(v)
-        }
-    }).collect()
+    defs.iter()
+        .map(|def| match def {
+            ParamDef::Float { name, default, .. } => {
+                let v = js_sys::Reflect::get(js, &(*name).into())
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(*default as f64) as f32;
+                ParamValue::Float(v)
+            }
+            ParamDef::Int { name, default, .. } => {
+                let v = js_sys::Reflect::get(js, &(*name).into())
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(*default as f64) as i32;
+                ParamValue::Int(v)
+            }
+            ParamDef::Bool { name, default } => {
+                let v = js_sys::Reflect::get(js, &(*name).into())
+                    .ok()
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(*default);
+                ParamValue::Bool(v)
+            }
+            ParamDef::String { name, default } => {
+                let v = js_sys::Reflect::get(js, &(*name).into())
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_else(|| default.to_string());
+                ParamValue::String(v)
+            }
+            ParamDef::Curve { name, default } => {
+                let v = js_sys::Reflect::get(js, &(*name).into())
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .and_then(|s| serde_json::from_str::<Vec<[f32; 2]>>(&s).ok())
+                    .unwrap_or_else(|| default.to_vec());
+                ParamValue::Curve(v)
+            }
+            ParamDef::Enum { name, default, .. } => {
+                let v = js_sys::Reflect::get(js, &(*name).into())
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(*default as f64) as i32;
+                ParamValue::Int(v)
+            }
+            ParamDef::Icon { name, default, .. } => {
+                let v = js_sys::Reflect::get(js, &(*name).into())
+                    .ok()
+                    .and_then(|v| v.as_string())
+                    .unwrap_or_else(|| default.to_string());
+                ParamValue::String(v)
+            }
+            ParamDef::FloatInput { name, default, .. } => {
+                let v = js_sys::Reflect::get(js, &(*name).into())
+                    .ok()
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(*default as f64) as f32;
+                ParamValue::Float(v)
+            }
+        })
+        .collect()
 }
 
 fn graph_result(r: Result<String, String>) -> JsValue {
@@ -337,7 +409,12 @@ fn graph_result(r: Result<String, String>) -> JsValue {
 #[wasm_bindgen]
 impl DarklyHandle {
     /// Create a new Darkly editor instance from an HTML canvas element.
-    pub async fn create(canvas: web_sys::HtmlCanvasElement, doc_width: u32, doc_height: u32, is_software: bool) -> DarklyHandle {
+    pub async fn create(
+        canvas: web_sys::HtmlCanvasElement,
+        doc_width: u32,
+        doc_height: u32,
+        is_software: bool,
+    ) -> DarklyHandle {
         let initial_width = canvas.width();
         let initial_height = canvas.height();
 
@@ -349,11 +426,14 @@ impl DarklyHandle {
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
             .expect("Failed to create surface");
         let gpu = GpuContext::new(
-            instance, surface,
+            instance,
+            surface,
             wgpu::Limits::downlevel_webgl2_defaults(),
-            initial_width, initial_height,
+            initial_width,
+            initial_height,
             is_software,
-        ).await;
+        )
+        .await;
 
         DarklyHandle {
             engine: RefCell::new(DarklyEngine::new(gpu, doc_width, doc_height)),
@@ -367,31 +447,63 @@ impl DarklyHandle {
 
     // --- Layer properties ---
 
-    pub fn set_opacity(&self, layer_id: f64, opacity: f32) { self.push(Command::SetOpacity(layer_id as u64, opacity)); }
-    pub fn set_blend_mode(&self, layer_id: f64, mode: u32) { self.push(Command::SetBlendMode(layer_id as u64, mode)); }
-    pub fn set_layer_visible(&self, layer_id: f64, visible: bool) { self.push(Command::SetLayerVisible(layer_id as u64, visible)); }
-    pub fn set_layer_name(&self, layer_id: f64, name: &str) { self.push(Command::SetLayerName(layer_id as u64, name.into())); }
-    pub fn set_group_collapsed(&self, group_id: f64, collapsed: bool) { self.push(Command::SetGroupCollapsed(group_id as u64, collapsed)); }
-    pub fn set_group_passthrough(&self, group_id: f64, passthrough: bool) { self.push(Command::SetGroupPassthrough(group_id as u64, passthrough)); }
+    pub fn set_opacity(&self, layer_id: f64, opacity: f32) {
+        self.push(Command::SetOpacity(layer_id as u64, opacity));
+    }
+    pub fn set_blend_mode(&self, layer_id: f64, mode: u32) {
+        self.push(Command::SetBlendMode(layer_id as u64, mode));
+    }
+    pub fn set_layer_visible(&self, layer_id: f64, visible: bool) {
+        self.push(Command::SetLayerVisible(layer_id as u64, visible));
+    }
+    pub fn set_layer_name(&self, layer_id: f64, name: &str) {
+        self.push(Command::SetLayerName(layer_id as u64, name.into()));
+    }
+    pub fn set_group_collapsed(&self, group_id: f64, collapsed: bool) {
+        self.push(Command::SetGroupCollapsed(group_id as u64, collapsed));
+    }
+    pub fn set_group_passthrough(&self, group_id: f64, passthrough: bool) {
+        self.push(Command::SetGroupPassthrough(group_id as u64, passthrough));
+    }
 
     // --- Layer masks ---
 
-    pub fn add_mask(&self, layer_id: f64) { self.push(Command::AddMask(layer_id as u64)); }
-    pub fn remove_mask(&self, layer_id: f64) { self.push(Command::RemoveMask(layer_id as u64)); }
-    pub fn apply_mask(&self, layer_id: f64) { self.push(Command::ApplyMask(layer_id as u64)); }
-    pub fn set_mask_enabled(&self, layer_id: f64, enabled: bool) { self.push(Command::SetMaskEnabled(layer_id as u64, enabled)); }
-    pub fn set_show_mask(&self, layer_id: f64, show: bool) { self.push(Command::SetShowMask(layer_id as u64, show)); }
-    pub fn set_editing_mask(&self, layer_id: f64, editing: bool) { self.push(Command::SetEditingMask(layer_id as u64, editing)); }
-    pub fn selection_to_mask(&self, layer_id: f64) { self.push(Command::SelectionToMask(layer_id as u64)); }
-    pub fn mask_to_selection(&self, layer_id: f64) { self.push(Command::MaskToSelection(layer_id as u64)); }
+    pub fn add_mask(&self, layer_id: f64) {
+        self.push(Command::AddMask(layer_id as u64));
+    }
+    pub fn remove_mask(&self, layer_id: f64) {
+        self.push(Command::RemoveMask(layer_id as u64));
+    }
+    pub fn apply_mask(&self, layer_id: f64) {
+        self.push(Command::ApplyMask(layer_id as u64));
+    }
+    pub fn set_mask_enabled(&self, layer_id: f64, enabled: bool) {
+        self.push(Command::SetMaskEnabled(layer_id as u64, enabled));
+    }
+    pub fn set_show_mask(&self, layer_id: f64, show: bool) {
+        self.push(Command::SetShowMask(layer_id as u64, show));
+    }
+    pub fn set_editing_mask(&self, layer_id: f64, editing: bool) {
+        self.push(Command::SetEditingMask(layer_id as u64, editing));
+    }
+    pub fn selection_to_mask(&self, layer_id: f64) {
+        self.push(Command::SelectionToMask(layer_id as u64));
+    }
+    pub fn mask_to_selection(&self, layer_id: f64) {
+        self.push(Command::MaskToSelection(layer_id as u64));
+    }
 
     // --- Painting ---
 
-    pub fn fill_gradient(&self, layer_id: f64) { self.push(Command::FillGradient(layer_id as u64)); }
+    pub fn fill_background(&self, layer_id: f64) {
+        self.push(Command::FillBackground(layer_id as u64));
+    }
 
     // --- Stroke lifecycle ---
 
-    pub fn begin_stroke(&self, layer_id: f64) { self.push(Command::BeginStroke(layer_id as u64)); }
+    pub fn begin_stroke(&self, layer_id: f64) {
+        self.push(Command::BeginStroke(layer_id as u64));
+    }
 
     pub fn stroke_to(&self, op_type: &str, params: JsValue) {
         js_sys::Reflect::set(&params, &"op".into(), &op_type.into()).ok();
@@ -401,70 +513,167 @@ impl DarklyHandle {
         }
     }
 
-    pub fn end_stroke(&self) { self.push(Command::EndStroke); }
+    pub fn end_stroke(&self) {
+        self.push(Command::EndStroke);
+    }
 
     // Legacy compat
-    pub fn snapshot(&self, layer_id: f64) { self.push(Command::BeginStroke(layer_id as u64)); }
-    pub fn commit(&self) { self.push(Command::EndStroke); }
+    pub fn snapshot(&self, layer_id: f64) {
+        self.push(Command::BeginStroke(layer_id as u64));
+    }
+    pub fn commit(&self) {
+        self.push(Command::EndStroke);
+    }
 
     // --- Selection ---
 
-    pub fn select_rect(&self, x: f32, y: f32, w: f32, h: f32, mode: &str, antialias: bool, feather: f32) {
-        self.push(Command::SelectRect { x, y, w, h, mode: parse_selection_mode(mode), antialias, feather });
+    pub fn select_rect(
+        &self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        mode: &str,
+        antialias: bool,
+        feather: f32,
+    ) {
+        self.push(Command::SelectRect {
+            x,
+            y,
+            w,
+            h,
+            mode: parse_selection_mode(mode),
+            antialias,
+            feather,
+        });
     }
 
-    pub fn select_ellipse(&self, x: f32, y: f32, w: f32, h: f32, mode: &str, antialias: bool, feather: f32) {
-        self.push(Command::SelectEllipse { x, y, w, h, mode: parse_selection_mode(mode), antialias, feather });
+    pub fn select_ellipse(
+        &self,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        mode: &str,
+        antialias: bool,
+        feather: f32,
+    ) {
+        self.push(Command::SelectEllipse {
+            x,
+            y,
+            w,
+            h,
+            mode: parse_selection_mode(mode),
+            antialias,
+            feather,
+        });
     }
 
     pub fn select_lasso(&self, vertices: JsValue, mode: &str, antialias: bool, feather: f32) {
         let verts: Vec<[f32; 2]> = serde_wasm_bindgen::from_value(vertices).unwrap_or_default();
-        self.push(Command::SelectLasso { verts, mode: parse_selection_mode(mode), antialias, feather });
-    }
-
-    pub fn select_magic_wand(&self, layer_id: u64, seed_x: i32, seed_y: i32, tolerance: u8, mode: &str) {
-        self.push(Command::SelectMagicWand {
-            layer_id, seed_x, seed_y, tolerance, mode: parse_selection_mode(mode),
+        self.push(Command::SelectLasso {
+            verts,
+            mode: parse_selection_mode(mode),
+            antialias,
+            feather,
         });
     }
 
-    pub fn clear_selection(&self) { self.push(Command::ClearSelection); }
-    pub fn clear_selection_contents(&self, layer_id: f64) { self.push(Command::ClearSelectionContents(layer_id as u64)); }
-    pub fn select_all(&self) { self.push(Command::SelectAll); }
-    pub fn invert_selection(&self) { self.push(Command::InvertSelection); }
+    pub fn select_magic_wand(
+        &self,
+        layer_id: u64,
+        seed_x: i32,
+        seed_y: i32,
+        tolerance: u8,
+        mode: &str,
+    ) {
+        self.push(Command::SelectMagicWand {
+            layer_id,
+            seed_x,
+            seed_y,
+            tolerance,
+            mode: parse_selection_mode(mode),
+        });
+    }
+
+    pub fn clear_selection(&self) {
+        self.push(Command::ClearSelection);
+    }
+    pub fn clear_selection_contents(&self, layer_id: f64) {
+        self.push(Command::ClearSelectionContents(layer_id as u64));
+    }
+    pub fn select_all(&self) {
+        self.push(Command::SelectAll);
+    }
+    pub fn invert_selection(&self) {
+        self.push(Command::InvertSelection);
+    }
 
     // --- Undo / Redo ---
 
-    pub fn undo(&self) { self.push(Command::Undo); }
-    pub fn redo(&self) { self.push(Command::Redo); }
+    pub fn undo(&self) {
+        self.push(Command::Undo);
+    }
+    pub fn redo(&self) {
+        self.push(Command::Redo);
+    }
 
     // --- View transform ---
 
-    pub fn set_view_transform(&self, pan_x: f32, pan_y: f32, zoom: f32, rotation: f32, screen_w: f32, screen_h: f32) {
-        self.push(Command::SetViewTransform { pan_x, pan_y, zoom, rotation, screen_w, screen_h });
+    pub fn set_view_transform(
+        &self,
+        pan_x: f32,
+        pan_y: f32,
+        zoom: f32,
+        rotation: f32,
+        screen_w: f32,
+        screen_h: f32,
+    ) {
+        self.push(Command::SetViewTransform {
+            pan_x,
+            pan_y,
+            zoom,
+            rotation,
+            screen_w,
+            screen_h,
+        });
     }
 
-    pub fn resize(&self, width: u32, height: u32) { self.push(Command::Resize(width, height)); }
+    pub fn resize(&self, width: u32, height: u32) {
+        self.push(Command::Resize(width, height));
+    }
 
     // --- Floating content ---
 
     pub fn update_floating_matrix(&self, matrix: &[f32]) {
         if matrix.len() >= 6 {
-            self.push(Command::UpdateFloatingMatrix(
-                [matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5]]
-            ));
+            self.push(Command::UpdateFloatingMatrix([
+                matrix[0], matrix[1], matrix[2], matrix[3], matrix[4], matrix[5],
+            ]));
         }
     }
 
-    pub fn commit_floating(&self) { self.push(Command::CommitFloating); }
-    pub fn cancel_floating(&self) { self.push(Command::CancelFloating); }
+    pub fn commit_floating(&self) {
+        self.push(Command::CommitFloating);
+    }
+    pub fn cancel_floating(&self) {
+        self.push(Command::CancelFloating);
+    }
 
     // --- Veils ---
 
-    pub fn remove_veil(&self, index: u32) { self.push(Command::RemoveVeil(index as usize)); }
-    pub fn clear_veils(&self) { self.push(Command::ClearVeils); }
-    pub fn set_veil_visible(&self, index: u32, visible: bool) { self.push(Command::SetVeilVisible(index as usize, visible)); }
-    pub fn move_veil(&self, from: u32, to: u32) { self.push(Command::MoveVeil(from as usize, to as usize)); }
+    pub fn remove_veil(&self, index: u32) {
+        self.push(Command::RemoveVeil(index as usize));
+    }
+    pub fn clear_veils(&self) {
+        self.push(Command::ClearVeils);
+    }
+    pub fn set_veil_visible(&self, index: u32, visible: bool) {
+        self.push(Command::SetVeilVisible(index as usize, visible));
+    }
+    pub fn move_veil(&self, from: u32, to: u32) {
+        self.push(Command::MoveVeil(from as usize, to as usize));
+    }
 
     // --- Overlay ---
 
@@ -483,7 +692,9 @@ impl DarklyHandle {
         self.push(Command::SetOverlay(prims));
     }
 
-    pub fn clear_overlay(&self) { self.push(Command::ClearOverlay); }
+    pub fn clear_overlay(&self) {
+        self.push(Command::ClearOverlay);
+    }
 
     /// Upload an RGBA8 mask texture sampled by KIND_MASKED_STAMP overlay
     /// primitives. The red channel is used as grayscale coverage.
@@ -491,7 +702,9 @@ impl DarklyHandle {
         self.push(Command::SetOverlayMask(width, height, data.to_vec()));
     }
 
-    pub fn clear_overlay_mask(&self) { self.push(Command::ClearOverlayMask); }
+    pub fn clear_overlay_mask(&self) {
+        self.push(Command::ClearOverlayMask);
+    }
 
     /// Canvas-space positioning for the active brush's hover preview, or
     /// null when the current graph has no preview wire. Returned as
@@ -543,15 +756,23 @@ impl DarklyHandle {
         pen.tilt_magnitude = (tilt_x * tilt_x + tilt_y * tilt_y).sqrt().min(1.0);
         pen.tilt_direction = tilt_y.atan2(tilt_x);
 
-        self.engine.borrow_mut().regenerate_brush_preview_with_pen(&pen);
+        self.engine
+            .borrow_mut()
+            .regenerate_brush_preview_with_pen(&pen);
         brush_preview_info_as_js(&self.engine.borrow())
     }
 
     // --- Brush config ---
 
-    pub fn set_brush_blend_mode(&self, mode: u32) { self.push(Command::SetBrushBlendMode(mode)); }
-    pub fn brush_graph_reset(&self) { self.push(Command::ResetBrushGraph); }
-    pub fn brush_graph_move_node(&self, node_id: u32, x: f32, y: f32) { self.push(Command::BrushGraphMoveNode(node_id as u64, x, y)); }
+    pub fn set_brush_blend_mode(&self, mode: u32) {
+        self.push(Command::SetBrushBlendMode(mode));
+    }
+    pub fn brush_graph_reset(&self) {
+        self.push(Command::ResetBrushGraph);
+    }
+    pub fn brush_graph_move_node(&self, node_id: u32, x: f32, y: f32) {
+        self.push(Command::BrushGraphMoveNode(node_id as u64, x, y));
+    }
 
     // --- Color pick ---
 
@@ -578,7 +799,9 @@ impl DarklyHandle {
 
     pub fn add_raster_layer_in(&self, group_id: f64) -> f64 {
         self.flush_if_needed();
-        self.engine.borrow_mut().add_raster_layer_in(group_id as u64) as f64
+        self.engine
+            .borrow_mut()
+            .add_raster_layer_in(group_id as u64) as f64
     }
 
     pub fn add_group(&self) -> f64 {
@@ -588,7 +811,10 @@ impl DarklyHandle {
 
     pub fn remove_layer(&self, layer_id: f64) -> Result<(), JsError> {
         self.flush_if_needed();
-        self.engine.borrow_mut().remove_layer(layer_id as u64).map_err(|e| JsError::new(&e))
+        self.engine
+            .borrow_mut()
+            .remove_layer(layer_id as u64)
+            .map_err(|e| JsError::new(&e))
     }
 
     pub fn move_layer(&self, layer_id: f64, target_type: &str, target_id: f64) {
@@ -639,13 +865,23 @@ impl DarklyHandle {
         active_layer_id: f64,
     ) -> f64 {
         self.flush_if_needed();
-        let active = if active_layer_id >= 0.0 { Some(active_layer_id as u64) } else { None };
-        self.engine.borrow_mut().paste_image(width, height, rgba, offset_x, offset_y, active) as f64
+        let active = if active_layer_id >= 0.0 {
+            Some(active_layer_id as u64)
+        } else {
+            None
+        };
+        self.engine
+            .borrow_mut()
+            .paste_image(width, height, rgba, offset_x, offset_y, active) as f64
     }
 
     pub fn paste_in_place(&self, active_layer_id: f64) -> f64 {
         self.flush_if_needed();
-        let active = if active_layer_id >= 0.0 { Some(active_layer_id as u64) } else { None };
+        let active = if active_layer_id >= 0.0 {
+            Some(active_layer_id as u64)
+        } else {
+            None
+        };
         match self.engine.borrow_mut().paste_in_place(active) {
             Some(id) => id as f64,
             None => -1.0,
@@ -656,7 +892,9 @@ impl DarklyHandle {
 
     pub fn paste_in_place_floating(&self, layer_id: f64) -> bool {
         self.flush_if_needed();
-        self.engine.borrow_mut().paste_in_place_floating(layer_id as u64)
+        self.engine
+            .borrow_mut()
+            .paste_in_place_floating(layer_id as u64)
     }
 
     pub fn begin_transform(&self, layer_id: f64) -> bool {
@@ -701,20 +939,52 @@ impl DarklyHandle {
 
     pub fn brush_graph_remove_node(&self, node_id: u32) -> JsValue {
         self.flush_if_needed();
-        graph_result(self.engine.borrow_mut().brush_graph_remove_node(node_id as u64))
+        graph_result(
+            self.engine
+                .borrow_mut()
+                .brush_graph_remove_node(node_id as u64),
+        )
     }
 
-    pub fn brush_graph_connect(&self, from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> JsValue {
+    pub fn brush_graph_connect(
+        &self,
+        from_node: u32,
+        from_port: &str,
+        to_node: u32,
+        to_port: &str,
+    ) -> JsValue {
         self.flush_if_needed();
-        graph_result(self.engine.borrow_mut().brush_graph_connect(from_node as u64, from_port, to_node as u64, to_port))
+        graph_result(self.engine.borrow_mut().brush_graph_connect(
+            from_node as u64,
+            from_port,
+            to_node as u64,
+            to_port,
+        ))
     }
 
-    pub fn brush_graph_disconnect(&self, from_node: u32, from_port: &str, to_node: u32, to_port: &str) -> JsValue {
+    pub fn brush_graph_disconnect(
+        &self,
+        from_node: u32,
+        from_port: &str,
+        to_node: u32,
+        to_port: &str,
+    ) -> JsValue {
         self.flush_if_needed();
-        graph_result(self.engine.borrow_mut().brush_graph_disconnect(from_node as u64, from_port, to_node as u64, to_port))
+        graph_result(self.engine.borrow_mut().brush_graph_disconnect(
+            from_node as u64,
+            from_port,
+            to_node as u64,
+            to_port,
+        ))
     }
 
-    pub fn brush_graph_set_param(&self, node_id: u32, param_index: u32, kind: &str, value: JsValue) -> JsValue {
+    pub fn brush_graph_set_param(
+        &self,
+        node_id: u32,
+        param_index: u32,
+        kind: &str,
+        value: JsValue,
+    ) -> JsValue {
         let pv = match kind {
             "float" => ParamValue::Float(value.as_f64().unwrap_or(0.0) as f32),
             "int" => ParamValue::Int(value.as_f64().unwrap_or(0.0) as i32),
@@ -729,12 +999,25 @@ impl DarklyHandle {
             _ => return graph_result(Err(format!("unknown param kind: {kind}"))),
         };
         self.flush_if_needed();
-        graph_result(self.engine.borrow_mut().brush_graph_set_param(node_id as u64, param_index as usize, pv))
+        graph_result(self.engine.borrow_mut().brush_graph_set_param(
+            node_id as u64,
+            param_index as usize,
+            pv,
+        ))
     }
 
-    pub fn brush_graph_set_port_default(&self, node_id: u32, port_name: &str, value: f32) -> JsValue {
+    pub fn brush_graph_set_port_default(
+        &self,
+        node_id: u32,
+        port_name: &str,
+        value: f32,
+    ) -> JsValue {
         self.flush_if_needed();
-        graph_result(self.engine.borrow_mut().brush_graph_set_port_default(node_id as u64, port_name, value))
+        graph_result(self.engine.borrow_mut().brush_graph_set_port_default(
+            node_id as u64,
+            port_name,
+            value,
+        ))
     }
 
     /// Run auto-layout.  `sizes_json` is a JSON object mapping node ID
@@ -750,9 +1033,19 @@ impl DarklyHandle {
         self.engine.borrow_mut().brush_graph_auto_layout(&sizes)
     }
 
-    pub fn brush_upload_image(&self, resource_name: &str, width: u32, height: u32, rgba: &[u8]) -> JsValue {
+    pub fn brush_upload_image(
+        &self,
+        resource_name: &str,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+    ) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow_mut().brush_upload_image(resource_name, width, height, rgba) {
+        match self
+            .engine
+            .borrow_mut()
+            .brush_upload_image(resource_name, width, height, rgba)
+        {
             Ok(()) => JsValue::NULL,
             Err(e) => JsValue::from_str(&e),
         }
@@ -797,12 +1090,16 @@ impl DarklyHandle {
 
     pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
         self.flush_if_needed();
-        self.engine.borrow_mut().layer_thumbnail(layer_id as u64, width, height)
+        self.engine
+            .borrow_mut()
+            .layer_thumbnail(layer_id as u64, width, height)
     }
 
     pub fn mask_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
         self.flush_if_needed();
-        self.engine.borrow_mut().mask_thumbnail(layer_id as u64, width, height)
+        self.engine
+            .borrow_mut()
+            .mask_thumbnail(layer_id as u64, width, height)
     }
 
     // =======================================================================
@@ -837,24 +1134,30 @@ impl DarklyHandle {
 
     pub fn floating_info(&self) -> Option<Box<[f32]>> {
         self.flush_if_needed();
-        self.engine.borrow().floating_info().map(|(ox, oy, w, h, m)| {
-            vec![ox, oy, w, h, m[0], m[1], m[2], m[3], m[4], m[5]].into_boxed_slice()
-        })
+        self.engine
+            .borrow()
+            .floating_info()
+            .map(|(ox, oy, w, h, m)| {
+                vec![ox, oy, w, h, m[0], m[1], m[2], m[3], m[4], m[5]].into_boxed_slice()
+            })
     }
 
     pub fn brush_node_types(&self) -> String {
         self.flush_if_needed();
-        serde_json::to_string(&self.engine.borrow().brush_node_types()).unwrap_or_else(|_| "[]".into())
+        serde_json::to_string(&self.engine.borrow().brush_node_types())
+            .unwrap_or_else(|_| "[]".into())
     }
 
     pub fn brush_graph_default(&self) -> String {
         self.flush_if_needed();
-        serde_json::to_string(&self.engine.borrow().default_brush_graph()).unwrap_or_else(|_| "null".into())
+        serde_json::to_string(&self.engine.borrow().default_brush_graph())
+            .unwrap_or_else(|_| "null".into())
     }
 
     pub fn brush_graph_active(&self) -> String {
         self.flush_if_needed();
-        serde_json::to_string(self.engine.borrow().active_brush_graph_ref()).unwrap_or_else(|_| "null".into())
+        serde_json::to_string(self.engine.borrow().active_brush_graph_ref())
+            .unwrap_or_else(|_| "null".into())
     }
 
     pub fn brush_graph_validate(&self, json: &str) -> JsValue {
@@ -867,25 +1170,43 @@ impl DarklyHandle {
 
     pub fn brush_exposed_ports(&self) -> String {
         self.flush_if_needed();
-        serde_json::to_string(&self.engine.borrow().brush_exposed_ports()).unwrap_or_else(|_| "[]".into())
+        serde_json::to_string(&self.engine.borrow().brush_exposed_ports())
+            .unwrap_or_else(|_| "[]".into())
     }
 
-    pub fn brush_set_exposed_port(&self, node_id: u32, port_name: &str, display_value: f32) -> JsValue {
+    pub fn brush_set_exposed_port(
+        &self,
+        node_id: u32,
+        port_name: &str,
+        display_value: f32,
+    ) -> JsValue {
         self.flush_if_needed();
-        graph_result(self.engine.borrow_mut().brush_set_exposed_port(node_id as u64, port_name, display_value))
+        graph_result(self.engine.borrow_mut().brush_set_exposed_port(
+            node_id as u64,
+            port_name,
+            display_value,
+        ))
     }
 
-    pub fn brush_graph_set_port_exposed(&self, node_id: u32, port_name: &str, exposed: bool) -> JsValue {
+    pub fn brush_graph_set_port_exposed(
+        &self,
+        node_id: u32,
+        port_name: &str,
+        exposed: bool,
+    ) -> JsValue {
         self.flush_if_needed();
-        graph_result(self.engine.borrow_mut().brush_graph_set_port_exposed(node_id as u64, port_name, exposed))
+        graph_result(self.engine.borrow_mut().brush_graph_set_port_exposed(
+            node_id as u64,
+            port_name,
+            exposed,
+        ))
     }
 
     pub fn brush_preset_list(&self) -> String {
         self.flush_if_needed();
-        serde_json::to_string(&self.engine.borrow().brush_preset_list()).unwrap_or_else(|_| "[]".into())
+        serde_json::to_string(&self.engine.borrow().brush_preset_list())
+            .unwrap_or_else(|_| "[]".into())
     }
-
-
 
     pub fn brush_preset_export(&self, name: &str) -> JsValue {
         self.flush_if_needed();
@@ -938,7 +1259,9 @@ impl DarklyHandle {
     /// schedule another rAF, which Chromium's event pump fires immediately,
     /// creating an infinite loop that freezes the UI.
     pub fn render(&self, time_secs: f32) -> bool {
-        let Ok(mut e) = self.engine.try_borrow_mut() else { return false };
+        let Ok(mut e) = self.engine.try_borrow_mut() else {
+            return false;
+        };
         drain_commands(&self.commands, &mut e);
         e.render(time_secs)
     }

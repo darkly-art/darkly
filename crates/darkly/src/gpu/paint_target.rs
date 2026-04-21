@@ -50,7 +50,9 @@ impl<'a> GpuPaintTarget<'a> {
         opacity: f32,
     ) {
         let pipeline = pipelines.composite_pipeline(self.format);
-        self.draw_circle(encoder, pipeline, pipelines, queue, cx, cy, radius, color, opacity, None);
+        self.draw_circle(
+            encoder, pipeline, pipelines, queue, cx, cy, radius, color, opacity, None,
+        );
     }
 
     /// Erase a soft circle from the target.
@@ -66,7 +68,18 @@ impl<'a> GpuPaintTarget<'a> {
         let pipeline = pipelines.erase_pipeline(self.format);
         // Erase uses white color at full alpha — the blend state does the subtracting.
         // For R8 targets, luminance(1,1,1) = 1.0 which reduces toward 0.
-        self.draw_circle(encoder, pipeline, pipelines, queue, cx, cy, radius, [255, 255, 255, 255], 1.0, None);
+        self.draw_circle(
+            encoder,
+            pipeline,
+            pipelines,
+            queue,
+            cx,
+            cy,
+            radius,
+            [255, 255, 255, 255],
+            1.0,
+            None,
+        );
     }
 
     /// Paint a soft circle with a custom selection mask bind group.
@@ -83,7 +96,18 @@ impl<'a> GpuPaintTarget<'a> {
         selection_bind_group: &wgpu::BindGroup,
     ) {
         let pipeline = pipelines.composite_pipeline(self.format);
-        self.draw_circle(encoder, pipeline, pipelines, queue, cx, cy, radius, color, opacity, Some(selection_bind_group));
+        self.draw_circle(
+            encoder,
+            pipeline,
+            pipelines,
+            queue,
+            cx,
+            cy,
+            radius,
+            color,
+            opacity,
+            Some(selection_bind_group),
+        );
     }
 
     /// Fill a rect with a solid color via alpha-over blending.
@@ -109,7 +133,14 @@ impl<'a> GpuPaintTarget<'a> {
         color: [u8; 4],
         selection_bind_group: &wgpu::BindGroup,
     ) {
-        self.fill_rect_inner(encoder, pipelines, queue, rect, color, Some(selection_bind_group));
+        self.fill_rect_inner(
+            encoder,
+            pipelines,
+            queue,
+            rect,
+            color,
+            Some(selection_bind_group),
+        );
     }
 
     /// Erase pixels within a selection mask. Full-canvas erase modulated by the
@@ -134,7 +165,14 @@ impl<'a> GpuPaintTarget<'a> {
             color: [1.0, 1.0, 1.0, 1.0], // full erase strength
         };
 
-        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(selection_bind_group));
+        self.execute_pass(
+            encoder,
+            pipeline,
+            pipelines,
+            queue,
+            &uniforms,
+            Some(selection_bind_group),
+        );
     }
 
     /// Multiply ALL channels of the target by a mask texture.
@@ -170,7 +208,14 @@ impl<'a> GpuPaintTarget<'a> {
             color: [0.0, 0.0, 0.0, 1.0],
         };
 
-        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
+        self.execute_pass(
+            encoder,
+            pipeline,
+            pipelines,
+            queue,
+            &uniforms,
+            Some(mask_bind_group),
+        );
     }
 
     /// Multiply ALL channels of the target by `(1 - mask)`.
@@ -198,7 +243,14 @@ impl<'a> GpuPaintTarget<'a> {
             color: [0.0, 0.0, 0.0, 1.0],
         };
 
-        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
+        self.execute_pass(
+            encoder,
+            pipeline,
+            pipelines,
+            queue,
+            &uniforms,
+            Some(mask_bind_group),
+        );
     }
 
     /// Multiply only the ALPHA channel of the target by a mask texture.
@@ -228,7 +280,14 @@ impl<'a> GpuPaintTarget<'a> {
             color: [0.0, 0.0, 0.0, 1.0],
         };
 
-        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
+        self.execute_pass(
+            encoder,
+            pipeline,
+            pipelines,
+            queue,
+            &uniforms,
+            Some(mask_bind_group),
+        );
     }
 
     /// Multiply only the ALPHA channel of the target by `(1 - mask)`.
@@ -256,7 +315,14 @@ impl<'a> GpuPaintTarget<'a> {
             color: [0.0, 0.0, 0.0, 1.0],
         };
 
-        self.execute_pass(encoder, pipeline, pipelines, queue, &uniforms, Some(mask_bind_group));
+        self.execute_pass(
+            encoder,
+            pipeline,
+            pipelines,
+            queue,
+            &uniforms,
+            Some(mask_bind_group),
+        );
     }
 
     /// Clear a rect to transparent (RGBA) or full reveal (R8).
@@ -316,7 +382,11 @@ impl<'a> GpuPaintTarget<'a> {
             color1: color_to_float(color1, 1.0),
         };
 
-        queue.write_buffer(&pipelines.gradient_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        queue.write_buffer(
+            &pipelines.gradient_uniform_buf,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
 
         let sel = selection.unwrap_or(&pipelines.default_selection_bind_group);
 
@@ -575,7 +645,11 @@ impl PaintPipelines {
         // --- Default selection texture (1×1 white = fully selected) ---
         let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("default-selection"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -596,7 +670,11 @@ impl PaintPipelines {
                 bytes_per_row: Some(1),
                 rows_per_image: Some(1),
             },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
         let sel_view = sel_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -623,7 +701,11 @@ impl PaintPipelines {
         });
 
         // --- Build pipeline variants ---
-        let make_pipeline = |label: &str, layout: &wgpu::PipelineLayout, shader: &wgpu::ShaderModule, format: wgpu::TextureFormat, blend: wgpu::BlendState| {
+        let make_pipeline = |label: &str,
+                             layout: &wgpu::PipelineLayout,
+                             shader: &wgpu::ShaderModule,
+                             format: wgpu::TextureFormat,
+                             blend: wgpu::BlendState| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(layout),
@@ -762,20 +844,104 @@ impl PaintPipelines {
         };
 
         PaintPipelines {
-            composite_rgba: make_pipeline("paint-composite-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_composite),
-            composite_r8: make_pipeline("paint-composite-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_composite),
-            erase_rgba: make_pipeline("paint-erase-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_erase_rgba),
-            erase_r8: make_pipeline("paint-erase-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_erase_r8),
-            clear_rgba: make_pipeline("paint-clear-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_clear),
-            clear_r8: make_pipeline("paint-clear-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_clear),
-            gradient_rgba: make_pipeline("gradient-rgba", &gradient_layout, &gradient_shader, wgpu::TextureFormat::Rgba8Unorm, blend_gradient),
-            gradient_r8: make_pipeline("gradient-r8", &gradient_layout, &gradient_shader, wgpu::TextureFormat::R8Unorm, blend_gradient),
-            mask_multiply_rgba: make_pipeline("mask-multiply-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_mask_multiply),
-            mask_multiply_r8: make_pipeline("mask-multiply-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_mask_multiply),
-            inverse_mask_multiply_rgba: make_pipeline("inv-mask-mul-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_inverse_mask_multiply),
-            inverse_mask_multiply_r8: make_pipeline("inv-mask-mul-r8", &paint_layout, &paint_shader, wgpu::TextureFormat::R8Unorm, blend_inverse_mask_multiply),
-            alpha_mask_multiply_rgba: make_pipeline("alpha-mask-mul-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_alpha_mask_multiply),
-            alpha_inverse_mask_multiply_rgba: make_pipeline("alpha-inv-mask-mul-rgba", &paint_layout, &paint_shader, wgpu::TextureFormat::Rgba8Unorm, blend_alpha_inverse_mask_multiply),
+            composite_rgba: make_pipeline(
+                "paint-composite-rgba",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::Rgba8Unorm,
+                blend_composite,
+            ),
+            composite_r8: make_pipeline(
+                "paint-composite-r8",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::R8Unorm,
+                blend_composite,
+            ),
+            erase_rgba: make_pipeline(
+                "paint-erase-rgba",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::Rgba8Unorm,
+                blend_erase_rgba,
+            ),
+            erase_r8: make_pipeline(
+                "paint-erase-r8",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::R8Unorm,
+                blend_erase_r8,
+            ),
+            clear_rgba: make_pipeline(
+                "paint-clear-rgba",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::Rgba8Unorm,
+                blend_clear,
+            ),
+            clear_r8: make_pipeline(
+                "paint-clear-r8",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::R8Unorm,
+                blend_clear,
+            ),
+            gradient_rgba: make_pipeline(
+                "gradient-rgba",
+                &gradient_layout,
+                &gradient_shader,
+                wgpu::TextureFormat::Rgba8Unorm,
+                blend_gradient,
+            ),
+            gradient_r8: make_pipeline(
+                "gradient-r8",
+                &gradient_layout,
+                &gradient_shader,
+                wgpu::TextureFormat::R8Unorm,
+                blend_gradient,
+            ),
+            mask_multiply_rgba: make_pipeline(
+                "mask-multiply-rgba",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::Rgba8Unorm,
+                blend_mask_multiply,
+            ),
+            mask_multiply_r8: make_pipeline(
+                "mask-multiply-r8",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::R8Unorm,
+                blend_mask_multiply,
+            ),
+            inverse_mask_multiply_rgba: make_pipeline(
+                "inv-mask-mul-rgba",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::Rgba8Unorm,
+                blend_inverse_mask_multiply,
+            ),
+            inverse_mask_multiply_r8: make_pipeline(
+                "inv-mask-mul-r8",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::R8Unorm,
+                blend_inverse_mask_multiply,
+            ),
+            alpha_mask_multiply_rgba: make_pipeline(
+                "alpha-mask-mul-rgba",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::Rgba8Unorm,
+                blend_alpha_mask_multiply,
+            ),
+            alpha_inverse_mask_multiply_rgba: make_pipeline(
+                "alpha-inv-mask-mul-rgba",
+                &paint_layout,
+                &paint_shader,
+                wgpu::TextureFormat::Rgba8Unorm,
+                blend_alpha_inverse_mask_multiply,
+            ),
             uniform_buf,
             uniform_bind_group,
             gradient_uniform_buf,
@@ -801,7 +967,11 @@ impl PaintPipelines {
     ) -> wgpu::BindGroup {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -822,7 +992,11 @@ impl PaintPipelines {
                 bytes_per_row: Some(width),
                 rows_per_image: Some(height),
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -907,7 +1081,10 @@ impl PaintPipelines {
         }
     }
 
-    fn alpha_inverse_mask_multiply_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+    fn alpha_inverse_mask_multiply_pipeline(
+        &self,
+        format: wgpu::TextureFormat,
+    ) -> &wgpu::RenderPipeline {
         match format {
             wgpu::TextureFormat::R8Unorm => &self.inverse_mask_multiply_r8,
             _ => &self.alpha_inverse_mask_multiply_rgba,

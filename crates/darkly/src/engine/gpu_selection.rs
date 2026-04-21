@@ -122,7 +122,12 @@ impl SelectionPipelines {
             ..Default::default()
         });
 
-        SelectionPipelines { combine_pipeline, combine_bgl, mode_buf, sampler }
+        SelectionPipelines {
+            combine_pipeline,
+            combine_bgl,
+            mode_buf,
+            sampler,
+        }
     }
 
     /// Run the combine shader: reads `selection.textures[current]` + shape → writes
@@ -144,7 +149,11 @@ impl SelectionPipelines {
         // Upload shape to a temp texture.
         let shape_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sel-shape-temp"),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -165,15 +174,23 @@ impl SelectionPipelines {
                 bytes_per_row: Some(w),
                 rows_per_image: None,
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
         let shape_view = shape_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         // Set mode uniform.
-        queue.write_buffer(&self.mode_buf, 0, bytemuck::bytes_of(&CombineParams {
-            mode: mode as u32,
-            _pad: [0; 3],
-        }));
+        queue.write_buffer(
+            &self.mode_buf,
+            0,
+            bytemuck::bytes_of(&CombineParams {
+                mode: mode as u32,
+                _pad: [0; 3],
+            }),
+        );
 
         // Create bind group: existing + shape + sampler + mode.
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -182,7 +199,9 @@ impl SelectionPipelines {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&selection.views[selection.current]),
+                    resource: wgpu::BindingResource::TextureView(
+                        &selection.views[selection.current],
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -237,10 +256,14 @@ impl SelectionPipelines {
         brush_bgl: &wgpu::BindGroupLayout,
         paint_bgl: &wgpu::BindGroupLayout,
     ) {
-        queue.write_buffer(&self.mode_buf, 0, bytemuck::bytes_of(&CombineParams {
-            mode: CombineMode::Invert as u32,
-            _pad: [0; 3],
-        }));
+        queue.write_buffer(
+            &self.mode_buf,
+            0,
+            bytemuck::bytes_of(&CombineParams {
+                mode: CombineMode::Invert as u32,
+                _pad: [0; 3],
+            }),
+        );
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sel-invert-bg"),
@@ -248,11 +271,15 @@ impl SelectionPipelines {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&selection.views[selection.current]),
+                    resource: wgpu::BindingResource::TextureView(
+                        &selection.views[selection.current],
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&selection.views[selection.current]),
+                    resource: wgpu::BindingResource::TextureView(
+                        &selection.views[selection.current],
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -360,7 +387,11 @@ impl GpuSelection {
         let textures = std::array::from_fn(|i| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(if i == 0 { "sel-tex-0" } else { "sel-tex-1" }),
-                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -386,8 +417,10 @@ impl GpuSelection {
             ..Default::default()
         });
 
-        let brush_bind_group = Self::create_brush_bind_group(device, &views[0], &sampler, brush_bgl);
-        let paint_bind_group = Self::create_paint_bind_group(device, &views[0], &sampler, paint_bgl);
+        let brush_bind_group =
+            Self::create_brush_bind_group(device, &views[0], &sampler, brush_bgl);
+        let paint_bind_group =
+            Self::create_paint_bind_group(device, &views[0], &sampler, paint_bgl);
 
         GpuSelection {
             textures,
@@ -441,7 +474,11 @@ impl GpuSelection {
                     bytes_per_row: Some(ow),
                     rows_per_image: None,
                 },
-                wgpu::Extent3d { width: ow, height: oh, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: ow,
+                    height: oh,
+                    depth_or_array_layers: 1,
+                },
             );
         }
 
@@ -451,7 +488,11 @@ impl GpuSelection {
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.textures[self.current],
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: mask.x, y: mask.y, z: 0 },
+                    origin: wgpu::Origin3d {
+                        x: mask.x,
+                        y: mask.y,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 &mask.data,
@@ -460,7 +501,11 @@ impl GpuSelection {
                     bytes_per_row: Some(mask.width),
                     rows_per_image: None,
                 },
-                wgpu::Extent3d { width: mask.width, height: mask.height, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: mask.width,
+                    height: mask.height,
+                    depth_or_array_layers: 1,
+                },
             );
         }
 
@@ -510,7 +555,11 @@ impl GpuSelection {
                 bytes_per_row: Some(self.width),
                 rows_per_image: None,
             },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
         );
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -545,24 +594,16 @@ impl GpuSelection {
                     bytes_per_row: Some(ow),
                     rows_per_image: None,
                 },
-                wgpu::Extent3d { width: ow, height: oh, depth_or_array_layers: 1 },
+                wgpu::Extent3d {
+                    width: ow,
+                    height: oh,
+                    depth_or_array_layers: 1,
+                },
             );
         }
         self.pixel_bounds = None;
         self.active = false;
         self.cpu_cache = None;
-    }
-
-    /// Blocking readback of the full selection texture.
-    ///
-    /// **Test-only** — deadlocks on WebGPU/WASM (see gpu-lessons-learned.md §5).
-    /// Production code must use `cpu_cache` instead.
-    #[cfg(test)]
-    pub fn blocking_readback(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<u8> {
-        crate::gpu::test_utils::readback_texture(
-            device, queue, self.texture(),
-            wgpu::TextureFormat::R8Unorm, self.width, self.height,
-        )
     }
 
     /// Rebuild bind groups after a ping-pong swap.
@@ -573,38 +614,52 @@ impl GpuSelection {
         paint_bgl: &wgpu::BindGroupLayout,
         sampler: &wgpu::Sampler,
     ) {
-        self.brush_bind_group = Self::create_brush_bind_group(
-            device, &self.views[self.current], sampler, brush_bgl,
-        );
-        self.paint_bind_group = Self::create_paint_bind_group(
-            device, &self.views[self.current], sampler, paint_bgl,
-        );
+        self.brush_bind_group =
+            Self::create_brush_bind_group(device, &self.views[self.current], sampler, brush_bgl);
+        self.paint_bind_group =
+            Self::create_paint_bind_group(device, &self.views[self.current], sampler, paint_bgl);
     }
 
     fn create_brush_bind_group(
-        device: &wgpu::Device, view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler, layout: &wgpu::BindGroupLayout,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+        layout: &wgpu::BindGroupLayout,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sel-brush-bg"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
         })
     }
 
     fn create_paint_bind_group(
-        device: &wgpu::Device, view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler, layout: &wgpu::BindGroupLayout,
+        device: &wgpu::Device,
+        view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+        layout: &wgpu::BindGroupLayout,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sel-paint-bg"),
             layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
             ],
         })
     }

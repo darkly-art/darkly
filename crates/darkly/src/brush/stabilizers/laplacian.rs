@@ -11,15 +11,18 @@
 //! the pen continuously reshapes as direction changes — the "taffy" feel.
 
 use crate::brush::paint_info::PaintInformation;
-use crate::brush::stabilizer::{StabilizerAlgorithm, StabilizerRegistration, StabilizeResult};
+use crate::brush::stabilizer::{StabilizeResult, StabilizerAlgorithm, StabilizerRegistration};
 use crate::gpu::params::{ParamDef, ParamValue};
 
 /// Threshold in pixels below which a point is considered unchanged.
 const DIVERGENCE_EPSILON: f32 = 0.5;
 
-const PARAMS: &[ParamDef] = &[
-    ParamDef::Float { name: "strength", min: 0.0, max: 1.0, default: 0.5 },
-];
+const PARAMS: &[ParamDef] = &[ParamDef::Float {
+    name: "strength",
+    min: 0.0,
+    max: 1.0,
+    default: 0.5,
+}];
 
 pub fn register() -> StabilizerRegistration {
     StabilizerRegistration {
@@ -69,7 +72,10 @@ impl LaplacianStabilizer {
                 // Position smoothing.
                 let prev_pos = self.stabilized[i - 1].pos;
                 let next_pos = self.stabilized[i + 1].pos;
-                let avg = [(prev_pos[0] + next_pos[0]) * 0.5, (prev_pos[1] + next_pos[1]) * 0.5];
+                let avg = [
+                    (prev_pos[0] + next_pos[0]) * 0.5,
+                    (prev_pos[1] + next_pos[1]) * 0.5,
+                ];
                 let cur = &mut self.stabilized[i];
                 cur.pos[0] += (avg[0] - cur.pos[0]) * s;
                 cur.pos[1] += (avg[1] - cur.pos[1]) * s;
@@ -137,7 +143,8 @@ impl StabilizerAlgorithm for LaplacianStabilizer {
     fn push(&mut self, point: PaintInformation) -> StabilizeResult {
         // Save previous positions for divergence detection.
         self.prev_positions.clear();
-        self.prev_positions.extend(self.stabilized.iter().map(|p| p.pos));
+        self.prev_positions
+            .extend(self.stabilized.iter().map(|p| p.pos));
 
         // Append raw point.
         self.raw_points.push(point);
@@ -164,7 +171,9 @@ impl StabilizerAlgorithm for LaplacianStabilizer {
     }
 
     fn max_divergence_window(&self) -> usize {
-        if self.strength == 0.0 { return 0; }
+        if self.strength == 0.0 {
+            return 0;
+        }
         let iterations = (self.strength * 5.0).ceil() as usize;
         iterations * 10 + 5
     }
@@ -225,13 +234,19 @@ mod tests {
         let corner = &stab.stabilized()[4];
         // It should have moved — either x decreased or y increased.
         let moved = corner.pos[0] < 40.0 - 0.1 || corner.pos[1] > 0.1;
-        assert!(moved, "corner at {:?} should be smoothed away from (40, 0)", corner.pos);
+        assert!(
+            moved,
+            "corner at {:?} should be smoothed away from (40, 0)",
+            corner.pos
+        );
     }
 
     #[test]
     fn strength_zero_is_pass_through() {
         let mut stab = LaplacianStabilizer::new(0.0);
-        let points: Vec<_> = (0..5).map(|i| make_point(i as f32 * 10.0, (i as f32).sin() * 5.0)).collect();
+        let points: Vec<_> = (0..5)
+            .map(|i| make_point(i as f32 * 10.0, (i as f32).sin() * 5.0))
+            .collect();
 
         for pt in &points {
             let result = stab.push(*pt);
@@ -257,11 +272,23 @@ mod tests {
         stab.push(make_point(40.0, 0.0));
 
         let s = stab.stabilized();
-        assert!((s[0].pos[0] - 0.0).abs() < 1e-6, "first point must be pinned");
-        assert!((s[0].pos[1] - 0.0).abs() < 1e-6, "first point must be pinned");
+        assert!(
+            (s[0].pos[0] - 0.0).abs() < 1e-6,
+            "first point must be pinned"
+        );
+        assert!(
+            (s[0].pos[1] - 0.0).abs() < 1e-6,
+            "first point must be pinned"
+        );
         let last = s.last().unwrap();
-        assert!((last.pos[0] - 40.0).abs() < 1e-6, "last point must be pinned");
-        assert!((last.pos[1] - 0.0).abs() < 1e-6, "last point must be pinned");
+        assert!(
+            (last.pos[0] - 40.0).abs() < 1e-6,
+            "last point must be pinned"
+        );
+        assert!(
+            (last.pos[1] - 0.0).abs() < 1e-6,
+            "last point must be pinned"
+        );
     }
 
     #[test]
@@ -276,7 +303,10 @@ mod tests {
         // Add a sharp turn — this should cause divergence near the end, not at the beginning.
         let result = stab.push(make_point(90.0, 30.0));
         if let Some(div) = result.divergence_index {
-            assert!(div > 2, "divergence at {div} should be near the turn, not at the start");
+            assert!(
+                div > 2,
+                "divergence at {div} should be near the turn, not at the start"
+            );
         }
     }
 
@@ -287,16 +317,28 @@ mod tests {
         // Pressure spike in the middle.
         stab.push(make_point_with_pressure(0.0, 0.0, 0.3));
         stab.push(make_point_with_pressure(10.0, 0.0, 0.3));
-        stab.push(make_point_with_pressure(20.0, 0.0, 1.0));  // spike
+        stab.push(make_point_with_pressure(20.0, 0.0, 1.0)); // spike
         stab.push(make_point_with_pressure(30.0, 0.0, 0.3));
         stab.push(make_point_with_pressure(40.0, 0.0, 0.3));
 
         let s = stab.stabilized();
         // The spike should be smoothed down.
-        assert!(s[2].pressure < 0.95, "pressure spike at {} should be smoothed", s[2].pressure);
+        assert!(
+            s[2].pressure < 0.95,
+            "pressure spike at {} should be smoothed",
+            s[2].pressure
+        );
         // Neighbors should be pulled up slightly.
-        assert!(s[1].pressure > 0.3, "pressure {} should be pulled toward spike", s[1].pressure);
-        assert!(s[3].pressure > 0.3, "pressure {} should be pulled toward spike", s[3].pressure);
+        assert!(
+            s[1].pressure > 0.3,
+            "pressure {} should be pulled toward spike",
+            s[1].pressure
+        );
+        assert!(
+            s[3].pressure > 0.3,
+            "pressure {} should be pulled toward spike",
+            s[3].pressure
+        );
     }
 
     #[test]
@@ -317,6 +359,9 @@ mod tests {
 
         let low = corner_displacement(0.2);
         let high = corner_displacement(0.8);
-        assert!(high > low, "higher strength ({high}) should displace corner more than lower ({low})");
+        assert!(
+            high > low,
+            "higher strength ({high}) should displace corner more than lower ({low})"
+        );
     }
 }

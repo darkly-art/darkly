@@ -119,10 +119,8 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         // floor(x0) to ceil(x1) to cover every texel the shader can reach.
         let copy_x = x0 as u32;
         let copy_y = y0 as u32;
-        let copy_w = ((x1.ceil() as u32).saturating_sub(copy_x))
-            .min(gpu.canvas_width - copy_x);
-        let copy_h = ((y1.ceil() as u32).saturating_sub(copy_y))
-            .min(gpu.canvas_height - copy_y);
+        let copy_w = ((x1.ceil() as u32).saturating_sub(copy_x)).min(gpu.canvas_width - copy_x);
+        let copy_h = ((y1.ceil() as u32).saturating_sub(copy_y)).min(gpu.canvas_height - copy_y);
 
         if copy_w == 0 || copy_h == 0 {
             return vec![];
@@ -191,9 +189,12 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             });
 
             pass.set_viewport(
-                0.0, 0.0,
-                gpu.canvas_width as f32, gpu.canvas_height as f32,
-                0.0, 1.0,
+                0.0,
+                0.0,
+                gpu.canvas_width as f32,
+                gpu.canvas_height as f32,
+                0.0,
+                1.0,
             );
             pass.set_pipeline(gpu.pipelines.composite_pipeline());
             pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[offset]);
@@ -218,7 +219,10 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
                 depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.0, g: 0.0, b: 0.0, a: 0.0,
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.0,
                     }),
                     store: wgpu::StoreOp::Store,
                 },
@@ -239,7 +243,9 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             gpu.layer_view,
             gpu.scratch_bind_group,
             gpu.pre_stroke_bind_group,
-        ) else { return };
+        ) else {
+            return;
+        };
 
         let opacity = ctx.input_f32("opacity").clamp(0.0, 1.0);
         let w = gpu.canvas_width as f32;
@@ -305,7 +311,9 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             ScalarValue::Texture(h) => h,
             _ => return vec![],
         };
-        let Some(target_view) = gpu.preview_mask_view else { return vec![] };
+        let Some(target_view) = gpu.preview_mask_view else {
+            return vec![];
+        };
         let (target_w, target_h) = gpu.preview_mask_size;
         if target_w == 0 || target_h == 0 {
             return vec![];

@@ -104,6 +104,12 @@ struct RegistryEntry {
     cached_pipeline: Option<Arc<EffectPipeline>>,
 }
 
+impl Default for VeilRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VeilRegistry {
     pub fn new() -> Self {
         let mut entries = HashMap::new();
@@ -123,20 +129,14 @@ impl VeilRegistry {
 
     /// Return all registered veil type IDs with their parameter definitions.
     pub fn types(&self) -> Vec<(&'static str, &'static [ParamDef])> {
-        let mut types: Vec<_> = self.entries
-            .iter()
-            .map(|(&id, e)| (id, e.params))
-            .collect();
+        let mut types: Vec<_> = self.entries.iter().map(|(&id, e)| (id, e.params)).collect();
         types.sort_by_key(|(id, _)| *id);
         types
     }
 
     /// Get the static parameter definitions for a veil type.
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
-        self.entries
-            .get(type_id)
-            .map(|e| e.params)
-            .unwrap_or(&[])
+        self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
     }
 
     /// Get or create the shared pipeline for a veil type.

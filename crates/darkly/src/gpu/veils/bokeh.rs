@@ -3,8 +3,18 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float { name: "radius",    min: 0.1, max: 1.0, default: 0.5 },
-    ParamDef::Float { name: "threshold", min: 0.01, max: 1.0, default: 0.1 },
+    ParamDef::Float {
+        name: "radius",
+        min: 0.1,
+        max: 1.0,
+        default: 0.5,
+    },
+    ParamDef::Float {
+        name: "threshold",
+        min: 0.01,
+        max: 1.0,
+        default: 0.1,
+    },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -13,8 +23,14 @@ pub fn register() -> VeilRegistration {
         params: PARAMS,
         create_pipeline: create_bokeh_pipeline,
         from_params: |params, shared| {
-            let radius = match params.get(0) { Some(ParamValue::Float(v)) => *v, _ => 0.5 };
-            let threshold = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 0.1 };
+            let radius = match params.first() {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.5,
+            };
+            let threshold = match params.get(1) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.1,
+            };
             Box::new(Bokeh::new(radius, threshold, shared))
         },
     }
@@ -146,42 +162,38 @@ impl Veil for Bokeh {
     }
 }
 
-fn create_bokeh_pipeline(
-    device: &wgpu::Device,
-    _format: wgpu::TextureFormat,
-) -> EffectPipeline {
-    let bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("bokeh-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+fn create_bokeh_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("bokeh-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+                count: None,
+            },
+        ],
+    });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("bokeh-pipeline-layout"),
