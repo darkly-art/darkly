@@ -10,6 +10,7 @@ pub mod transform;
 
 use crate::tool::ToolRegistration;
 
+#[rustfmt::skip]
 pub fn registrations() -> Vec<ToolRegistration> {
     vec![
         ellipse_select::register(),

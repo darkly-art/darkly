@@ -13,6 +13,7 @@ pub mod watercolor;
 
 use crate::gpu::veil::VeilRegistration;
 
+#[rustfmt::skip]
 pub fn registrations() -> Vec<VeilRegistration> {
     vec![
         bokeh::register(),

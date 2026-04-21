@@ -24,6 +24,7 @@ pub mod user_input;
 
 use crate::brush::BrushNodeRegistration;
 
+#[rustfmt::skip]
 pub fn registrations() -> Vec<BrushNodeRegistration> {
     vec![
         add::register(),

@@ -62,6 +62,10 @@ fn generate_registry(dir: &Path, registration_type: &str) {
     }
 
     code.push_str(&format!("\nuse {registration_type};\n\n"));
+    // Skip rustfmt on the generated body — layout varies across rustfmt
+    // versions (single-element `vec![]` collapses on newer versions),
+    // which would otherwise make CI's fmt check depend on the toolchain.
+    code.push_str("#[rustfmt::skip]\n");
     code.push_str(&format!("pub fn registrations() -> Vec<{type_name}> {{\n"));
     code.push_str("    vec![\n");
     for m in &modules {
