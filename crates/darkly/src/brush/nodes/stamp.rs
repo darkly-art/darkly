@@ -63,31 +63,21 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-arrows-left-right")
                 .with_description("Aspect ratio (100% = round)"),
-            PortDef::input("opacity", BrushWireType::Scalar)
+            PortDef::input("flow", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
-                .with_label("Opacity")
+                .with_label("Flow")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-droplet")
                 .exposed()
-                .with_description("Brush opacity"),
+                .with_description("Paint deposited per dab"),
             PortDef::input("color", BrushWireType::Color)
                 .with_description("Brush color"),
-            PortDef::input("scatter_x", BrushWireType::Scalar)
-                .with_range(-1.0, 1.0, 0.0)
-                .with_label("Scatter X")
-                .with_unit(UnitType::Percent)
-                .with_description("Horizontal scatter"),
-            PortDef::input("scatter_y", BrushWireType::Scalar)
-                .with_range(-1.0, 1.0, 0.0)
-                .with_label("Scatter Y")
-                .with_unit(UnitType::Percent)
-                .with_description("Vertical scatter"),
             PortDef::output("dab", BrushWireType::Texture)
                 .with_description("The stamped dab texture ready for compositing"),
             PortDef::output("dab_size", BrushWireType::Vec2)
                 .with_description("Actual pixel dimensions of the generated dab"),
-            PortDef::output("scatter_offset", BrushWireType::Vec2)
-                .with_description("Computed scatter offset in canvas pixels"),
+            PortDef::output("preview", BrushWireType::Texture)
+                .with_description("Hover-preview texture: brush tip with rotation/ratio/mirror baked in, deposition (flow/color) neutralised. Texture dimensions encode the brush's canvas-pixel extent."),
         ],
         params: &[
             ParamDef::Int { name: "application", min: 0, max: 3, default: 0 },
@@ -102,14 +92,16 @@ struct StampInputs {
     tip_handle: TextureHandle,
     effective_size: f32,      // size * scale, clamped to [0, 1]
     ratio: f32,
-    opacity: f32,
+    /// Per-dab paint deposition (industry "flow"). Feeds the stamp shader's
+    /// `opacity` uniform — the stamp pipeline still calls its uniform
+    /// `opacity` because it represents the per-dab alpha. Stroke-level
+    /// opacity is applied later in the commit pass.
+    flow: f32,
     color: [f32; 4],
     rotation_rad: f32,
     mirror_x: f32,
     mirror_y: f32,
     application_int: u32,
-    scatter_x: f32,
-    scatter_y: f32,
 }
 
 fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
@@ -124,10 +116,8 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
     let mirror_x_input = ctx.input_f32("mirror_x");
     let mirror_y_input = ctx.input_f32("mirror_y");
     let ratio = ctx.input_f32("ratio").max(0.01);
-    let opacity = ctx.input_f32("opacity");
+    let flow = ctx.input_f32("flow");
     let color = ctx.input("color").as_color();
-    let scatter_x = ctx.input_f32("scatter_x");
-    let scatter_y = ctx.input_f32("scatter_y");
 
     let application_int = match ctx.params.get(0) {
         Some(crate::gpu::params::ParamValue::Int(v)) => *v as u32,
@@ -144,14 +134,12 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
         tip_handle,
         effective_size: (size * scale).clamp(0.0, 1.0),
         ratio,
-        opacity,
+        flow,
         color,
         rotation_rad: rotation_input * std::f32::consts::TAU,
         mirror_x: if mirror_x_input > 0.5 { 1.0 } else { 0.0 },
         mirror_y: if mirror_y_input > 0.5 { 1.0 } else { 0.0 },
         application_int,
-        scatter_x,
-        scatter_y,
     })
 }
 
@@ -194,7 +182,7 @@ fn encode_stamp_pass(
     let uniforms = StampUniforms {
         dab_width: view_w as f32,
         dab_height: view_h as f32,
-        opacity: inputs.opacity,
+        opacity: inputs.flow,
         rotation: inputs.rotation_rad,
         color: inputs.color,
         mirror_x: inputs.mirror_x,
@@ -242,10 +230,6 @@ impl BrushNodeEvaluator for StampEvaluator {
         let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
         let (dab_w, dab_h) = compute_dab_dims(inputs.effective_size, tip_w, tip_h, MAX_DAB_SIZE);
 
-        let dab_major = dab_w.max(dab_h) as f32;
-        let scatter_px_x = inputs.scatter_x * dab_major;
-        let scatter_px_y = inputs.scatter_y * dab_major;
-
         let handle = gpu.dab_pool.acquire(gpu.device);
         let dab_view = gpu.dab_pool.view(handle).clone();
         let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
@@ -257,7 +241,51 @@ impl BrushNodeEvaluator for StampEvaluator {
         vec![
             ("dab".into(), ScalarValue::Texture(handle)),
             ("dab_size".into(), ScalarValue::Vec2([dab_w as f32, dab_h as f32])),
-            ("scatter_offset".into(), ScalarValue::Vec2([scatter_px_x, scatter_px_y])),
+        ]
+    }
+
+    /// Preview-mode render: produce a brush-tip texture with rotation,
+    /// ratio, and mirror baked in — but *without* per-dab deposition
+    /// modulation (flow=1, color=white). The texture is sized to the
+    /// brush's canvas-pixel footprint, so downstream consumers (typically
+    /// `color_output`) can read its dimensions directly without a separate
+    /// size wire.
+    ///
+    /// The same `encode_stamp_pass` shader as the stroke path is used —
+    /// single source of truth for tip rasterisation. The only difference
+    /// is the input values fed in.
+    fn render_preview(
+        &self,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
+    ) -> Vec<(String, ScalarValue)> {
+        let Some(mut inputs) = resolve_inputs(ctx) else { return vec![]; };
+
+        // Strip deposition modulation. The preview shows the brush, not
+        // how much paint a single dab would deposit.
+        inputs.flow = 1.0;
+        inputs.color = [1.0, 1.0, 1.0, 1.0];
+
+        let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
+        let (dab_w, dab_h) = compute_dab_dims(inputs.effective_size, tip_w, tip_h, MAX_DAB_SIZE);
+        if dab_w == 0 || dab_h == 0 {
+            return vec![];
+        }
+
+        // Right-sized texture: dimensions == brush canvas-pixel extent.
+        // `color_output::render_preview` queries `texture_size(handle)` to
+        // recover this without a parallel size wire.
+        let handle = gpu.dab_pool.acquire_sized(gpu.device, dab_w, dab_h);
+        let view = gpu.dab_pool.view(handle).clone();
+        let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
+        encode_stamp_pass(
+            &mut gpu.encoder, gpu.queue, gpu.pipelines,
+            &tip_bind_group, &inputs, &view, (dab_w, dab_h), "brush-stamp-preview",
+        );
+
+        vec![
+            ("preview".into(), ScalarValue::Texture(handle)),
+            ("dab_size".into(), ScalarValue::Vec2([dab_w as f32, dab_h as f32])),
         ]
     }
 }

@@ -9,9 +9,13 @@
 //! The composite step writes the final result to the layer each frame:
 //! source-over blend of the stroke buffer onto the pre-stroke snapshot.
 
-use super::pipelines::{BrushPipelines, CompositeUniforms};
-
-/// Manages the stroke-in-progress and pre-stroke textures.
+/// Manages the stroke-in-progress scratch and pre-stroke snapshot textures.
+///
+/// `StrokeBuffer` owns the raw GPU resources; the stroke *semantics* (how
+/// the scratch is initialised, how it lands on the layer) belong to the
+/// active terminal node's lifecycle hooks (`begin_stroke` / `commit`). This
+/// keeps the engine free of terminal-type branching — swapping in a warp or
+/// smudge terminal doesn't require editing this file.
 pub struct StrokeBuffer {
     /// Dabs render into this texture (instead of directly to the layer).
     stroke_texture: wgpu::Texture,
@@ -23,7 +27,7 @@ pub struct StrokeBuffer {
     pre_stroke_view: wgpu::TextureView,
 
     /// Bind group for the stroke texture, compatible with the dab texture BGL
-    /// so the existing composite pipeline can read it.
+    /// so the existing composite pipeline can read it as the foreground.
     stroke_bind_group: wgpu::BindGroup,
 
     /// Bind group for the pre-stroke texture, compatible with the canvas copy BGL
@@ -134,24 +138,21 @@ impl StrokeBuffer {
         &self.stroke_texture
     }
 
-    /// Clear the stroke buffer to transparent.
-    pub fn clear(&self, encoder: &mut wgpu::CommandEncoder) {
-        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("clear-stroke-buffer"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &self.stroke_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color {
-                        r: 0.0, g: 0.0, b: 0.0, a: 0.0,
-                    }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        // Render pass clears on begin — drop immediately.
+    /// Bind group over the stroke texture using the dab BGL — the composite
+    /// pipeline binds this as the foreground at commit time.
+    pub fn stroke_bind_group(&self) -> &wgpu::BindGroup {
+        &self.stroke_bind_group
+    }
+
+    /// The pre-stroke snapshot texture.
+    pub fn pre_stroke_texture(&self) -> &wgpu::Texture {
+        &self.pre_stroke_texture
+    }
+
+    /// Bind group over the pre-stroke snapshot using the canvas-copy BGL —
+    /// the composite pipeline binds this as the background at commit time.
+    pub fn pre_stroke_bind_group(&self) -> &wgpu::BindGroup {
+        &self.pre_stroke_bind_group
     }
 
     /// Save a snapshot of the layer texture before the stroke starts.
@@ -172,57 +173,4 @@ impl StrokeBuffer {
             wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
         );
     }
-
-    /// Composite the stroke buffer onto the layer texture.
-    ///
-    /// The composite is: source-over blend of stroke_buffer onto pre_stroke,
-    /// written to the layer texture.  Uses the existing brush composite pipeline
-    /// with the stroke buffer as the "dab" and pre_stroke as the "canvas copy".
-    pub fn composite_onto_layer(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        pipelines: &BrushPipelines,
-        queue: &wgpu::Queue,
-        layer_view: &wgpu::TextureView,
-        selection_bind_group: &wgpu::BindGroup,
-        blend_mode: u32,
-    ) {
-        let offset = pipelines.write_composite_uniforms(queue, &CompositeUniforms {
-            origin: [0.0, 0.0],
-            size: [self.width as f32, self.height as f32],
-            canvas_size: [self.width as f32, self.height as f32],
-            uv_min: [0.0, 0.0],
-            uv_max: [1.0, 1.0],
-            blend_mode,
-            fg_premultiplied: 0, // stroke buffer is straight alpha
-        });
-
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("stroke-buffer-composite"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: layer_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            pass.set_viewport(
-                0.0, 0.0,
-                self.width as f32, self.height as f32,
-                0.0, 1.0,
-            );
-            pass.set_pipeline(pipelines.composite_pipeline());
-            pass.set_bind_group(0, &pipelines.composite_uniform_bind_group, &[offset]);
-            pass.set_bind_group(1, &self.stroke_bind_group, &[]);
-            pass.set_bind_group(2, selection_bind_group, &[]);
-            pass.set_bind_group(3, &self.pre_stroke_bind_group, &[]);
-            pass.draw(0..6, 0..1);
-        }
-    }
-
 }

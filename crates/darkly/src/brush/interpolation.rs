@@ -23,6 +23,10 @@ pub fn lerp_paint_info(a: &PaintInformation, b: &PaintInformation, t: f32) -> Pa
         speed: lerp(a.speed, b.speed, t),
         distance: lerp(a.distance, b.distance, t),
         drawing_angle: lerp_angle(a.drawing_angle, b.drawing_angle, t),
+        // Motion is a per-segment quantity — all dabs in a segment push in the
+        // same direction, so we carry b's motion verbatim rather than blending
+        // with the previous segment's.
+        motion: b.motion,
         tilt_magnitude: lerp(a.tilt_magnitude, b.tilt_magnitude, t),
         tilt_direction: lerp_angle(a.tilt_direction, b.tilt_direction, t),
         // Index is not meaningful for interpolated points — use b's index.
@@ -128,6 +132,8 @@ pub fn catmull_rom_paint_info(
         drawing_angle: catmull_rom_angle(
             p0.drawing_angle, p1.drawing_angle, p2.drawing_angle, p3.drawing_angle, t,
         ),
+        // Same rationale as the lerp path: motion is per-segment, not per-dab.
+        motion: p2.motion,
         tilt_magnitude: catmull_rom(
             p0.tilt_magnitude, p1.tilt_magnitude, p2.tilt_magnitude, p3.tilt_magnitude, t,
         ).clamp(0.0, 1.0),

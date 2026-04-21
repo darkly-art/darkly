@@ -25,6 +25,7 @@ pub fn all() -> Vec<PresetBundle> {
         pencil(),
         charcoal(),
         canvas_brush(),
+        liquify_push(),
     ]
 }
 
@@ -46,8 +47,11 @@ impl PresetBuilder {
     /// Create a new builder with the standard nodes and output wiring.
     ///
     /// Pre-wires: stamp.dab → color_output.dab, stamp.dab_size →
-    /// color_output.dab_size, stamp.scatter_offset → color_output.scatter_offset,
-    /// pen_input.position → color_output.position.
+    /// color_output.dab_size, pen_input.position → color_output.position,
+    /// and stamp.preview → color_output.brush_preview (the hover preview
+    /// path — terminal's `render_preview` hook blits this into the
+    /// overlay). Presets that want jitter call `wire_scatter` to splice
+    /// a `scatter` node onto the position wire.
     fn new() -> Self {
         let registry = BrushNodeRegistry::new();
         let mut graph = Graph::new();
@@ -72,21 +76,15 @@ impl PresetBuilder {
             registry.get("color_output").unwrap().ports.clone(),
             vec![],
         );
-        let preview_output = graph.add_node(
-            "preview_output",
-            registry.get("preview_output").unwrap().ports.clone(),
-            vec![],
-        );
 
         // Standard output wiring (every preset needs this).
         let wires = [
             (stamp, "dab", color_output, "dab"),
             (stamp, "dab_size", color_output, "dab_size"),
-            (stamp, "scatter_offset", color_output, "scatter_offset"),
             (pen, "position", color_output, "position"),
-            // Preview sink: same dab subtree feeds the overlay preview mask.
-            (stamp, "dab", preview_output, "dab"),
-            (stamp, "dab_size", preview_output, "dab_size"),
+            // Hover preview: the terminal's `render_preview` hook blits the
+            // stamp's transform-baked, deposition-stripped preview texture.
+            (stamp, "preview", color_output, "brush_preview"),
         ];
         for (from_node, from_port, to_node, to_port) in wires {
             graph.connect(
@@ -189,6 +187,34 @@ impl PresetBuilder {
             self.registry.get("random").unwrap().ports.clone(),
             vec![ParamValue::Int(mode)],
         )
+    }
+
+    /// Splice a `scatter` node onto the position wire feeding
+    /// `color_output.position`, with size-proportional displacement —
+    /// `stamp.dab_size` → `split_vec2.x` → `scatter.dab_size`. The
+    /// amounts are exposed as toolbar knobs. Returns the scatter node id.
+    fn wire_scatter(&mut self, amount_x: f32, amount_y: f32) -> NodeId {
+        let scatter = self.graph.add_node(
+            "scatter",
+            self.registry.get("scatter").unwrap().ports.clone(),
+            vec![],
+        );
+        let split = self.graph.add_node(
+            "split_vec2",
+            self.registry.get("split_vec2").unwrap().ports.clone(),
+            vec![],
+        );
+        self.graph.disconnect(
+            &PortRef { node: self.pen, port: "position".into() },
+            &PortRef { node: self.color_output, port: "position".into() },
+        );
+        self.wire(self.pen, "position", scatter, "position");
+        self.wire(scatter, "position", self.color_output, "position");
+        self.wire(self.stamp, "dab_size", split, "vec");
+        self.wire(split, "x", scatter, "dab_size");
+        self.expose_port(scatter, "amount_x", amount_x);
+        self.expose_port(scatter, "amount_y", amount_y);
+        scatter
     }
 
     /// Generic wire helper.
@@ -304,7 +330,7 @@ fn ink_pen() -> PresetBundle {
     ]);
     b.wire(b.pen, "pressure", curve, "input");
     b.wire(curve, "output", b.stamp, "size");
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.set_stabilize(0.6);
     b.build("Ink Pen", "inking")
@@ -314,7 +340,7 @@ fn airbrush() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(1.0);
     b.set_port(b.stamp, "size", 0.15);
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Airbrush", "basic")
 }
@@ -323,11 +349,8 @@ fn scatter_brush() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.3);
     b.wire(b.pen, "pressure", b.stamp, "size");
-    let rand_x = b.add_random(0);
-    let rand_y = b.add_random(0);
-    b.wire(rand_x, "value", b.stamp, "scatter_x");
-    b.wire(rand_y, "value", b.stamp, "scatter_y");
     b.wire(b.paint_color, "color", b.stamp, "color");
+    b.wire_scatter(1.0, 1.0);
     b.build("Scatter Brush", "effects")
 }
 
@@ -349,7 +372,7 @@ fn textured_ink() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_image("ink_dry.png");
     b.wire(b.pen, "pressure", b.stamp, "size");
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     let rand_rot = b.add_random(0);
     b.wire(rand_rot, "value", b.stamp, "rotation");
     b.wire(b.paint_color, "color", b.stamp, "color");
@@ -375,7 +398,7 @@ fn pencil() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.15);
     b.wire(b.pen, "pressure", b.stamp, "size");
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
     // Insert texture overlay with Multiply blend (pencil grain).
@@ -396,7 +419,7 @@ fn charcoal() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.6);
     b.wire(b.pen, "pressure", b.stamp, "size");
-    b.wire(b.pen, "pressure", b.stamp, "opacity");
+    b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
     // Texture overlay with Subtract blend (charcoal grain — cuts into dab).
@@ -429,6 +452,51 @@ fn canvas_brush() -> PresetBundle {
     b.build_with_resources("Canvas Brush", "painting", vec![
         ("canvas_grain.png", ResourceKind::Pattern, pattern_bytes),
     ])
+}
+
+/// Liquify warp brush. Pushes pixels along pen motion with a radial
+/// falloff. Unlike paint presets, the graph has no stamp / paint_color /
+/// color_output — the liquify node is itself the terminal, with its own
+/// `begin_stroke` / `commit` / `render_preview` lifecycle.
+fn liquify_push() -> PresetBundle {
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let liquify = graph.add_node(
+        "liquify",
+        registry.get("liquify").unwrap().ports.clone(),
+        vec![],
+    );
+
+    // pen_input.position → liquify.position
+    graph.connect(
+        PortRef { node: pen, port: "position".into() },
+        PortRef { node: liquify, port: "position".into() },
+    ).unwrap();
+    // pen_input.drawing_angle → liquify.direction (radians; shader turns
+    // it into a unit direction vector). Magnitude comes from strength.
+    graph.connect(
+        PortRef { node: pen, port: "drawing_angle".into() },
+        PortRef { node: liquify, port: "direction".into() },
+    ).unwrap();
+    // pen_input.distance → liquify.distance (gates the first dab so a
+    // stationary click doesn't smear in the default direction).
+    graph.connect(
+        PortRef { node: pen, port: "distance".into() },
+        PortRef { node: liquify, port: "distance".into() },
+    ).unwrap();
+
+    // size / strength / softness are already `.exposed()` on the liquify
+    // node-def, so the toolbar picks them up without extra preset work.
+
+    let mut preset = BrushPreset::from_graph("Liquify", graph);
+    preset.category = "effects".to_string();
+    PresetBundle::without_resources(preset)
 }
 
 // ---------------------------------------------------------------------------

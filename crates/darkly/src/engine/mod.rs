@@ -297,6 +297,12 @@ impl DarklyEngine {
         )
     }
 
+    /// Test-only view of the selection mask's CPU cache. Returns `None`
+    /// when no selection is active or when the cache hasn't been populated.
+    pub fn test_selection_cpu_cache(&self) -> Option<&[u8]> {
+        self.gpu_selection.cpu_cache.as_deref()
+    }
+
     /// Blocking readback of a layer's RGBA texture. For test assertions only.
     pub fn test_readback_layer(&self, layer_id: u64) -> Vec<u8> {
         let layer_tex = self.compositor.layer_texture(layer_id)

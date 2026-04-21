@@ -208,14 +208,20 @@ impl CheckpointRing {
 
     /// Find and restore the best checkpoint before `div_vector_index`.
     ///
-    /// Clears the stroke buffer to transparent, then copies the checkpoint's
-    /// bbox region back onto it. Returns the checkpoint metadata for the
-    /// caller to restore engine state.
+    /// Copies the checkpoint's bbox region back onto the stroke buffer.
+    /// **Does not clear outside the bbox** — the caller must establish the
+    /// outside-bbox initial state before calling this (e.g. via
+    /// `StrokeEngine::begin_stroke`, which delegates to the active
+    /// terminal's lifecycle hook). For paint, that's a transparent clear;
+    /// for a warp/smudge terminal, it's a copy of the pre-stroke layer; the
+    /// ring doesn't care which — it only restores the mutated region.
+    ///
+    /// Returns the checkpoint metadata for the caller to restore engine
+    /// state.
     pub fn restore_before(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         stroke_texture: &wgpu::Texture,
-        stroke_view: &wgpu::TextureView,
         div_vector_index: usize,
     ) -> Option<CheckpointRestore> {
         let slot_idx = self.best_slot_before(div_vector_index)?;
@@ -227,24 +233,9 @@ impl CheckpointRing {
         h = h.min(tex_size.height.saturating_sub(y));
         if w == 0 || h == 0 { return None; }
 
-        // Clear stroke buffer to transparent.
-        {
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("checkpoint-restore-clear"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: stroke_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 0.0 }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-        }
-
-        // Copy checkpoint bbox region back to stroke buffer.
+        // Copy checkpoint bbox region back to stroke buffer. The caller
+        // has already reset outside-bbox pixels to the terminal's starting
+        // state, so only the mutated region needs restoring here.
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: slot.texture.as_ref().unwrap(),

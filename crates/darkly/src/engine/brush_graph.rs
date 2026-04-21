@@ -75,18 +75,19 @@ impl DarklyEngine {
     /// (tablet quirk: most pens report tilt even while hovering above the
     /// canvas, so we plumb them through).
     ///
-    /// Runs the active brush graph normally — CPU eval, GPU eval — but
-    /// with `render_mode: Preview`. `color_output` bails in that mode;
-    /// `preview_output` (if the graph has one) blits its upstream dab
-    /// into the overlay's preview mask. Positioning info is read from
-    /// `preview_output`'s resolved input slots after eval.
+    /// Dispatches the graph through `render_preview_pipeline` — each GPU
+    /// node's `render_preview` hook runs (defaults to `evaluate_gpu`,
+    /// terminals override). The terminal that owns the preview reads the
+    /// `brush_preview` input texture, blits it into the overlay's preview
+    /// mask, and publishes placement info via `gpu.brush_preview_info`.
     ///
-    /// No-op with cleared state when the graph has no `preview_output`.
+    /// No-op with cleared state when the graph has no `brush_preview`
+    /// wire connected.
     pub fn regenerate_brush_preview_with_pen(
         &mut self,
         pen: &crate::brush::paint_info::PaintInformation,
     ) {
-        use crate::brush::gpu_context::{BrushGpuContext, RenderMode};
+        use crate::brush::gpu_context::BrushGpuContext;
 
         let mut runner = match crate::brush::compile_graph(&self.active_brush_graph) {
             Ok(r) => r,
@@ -97,11 +98,12 @@ impl DarklyEngine {
             }
         };
 
-        if !runner.has_preview_terminal() {
-            self.compositor.clear_overlay_preview_mask();
-            self.brush_preview_info = None;
-            return;
-        }
+        // Always dispatch `render_preview` — individual terminals decide
+        // whether they produce output this frame. A paint graph with no
+        // `brush_preview` wire has color_output's hook return early and
+        // `brush_preview_info` stays None; a self-previewing terminal
+        // (liquify etc.) fires its hook and publishes placement info. The
+        // post-run `info.is_some()` check below routes both outcomes.
 
         // Fixed-size preview mask; overlay's linear sampler handles display
         // scaling via the primitive's canvas-space half-extent.
@@ -130,34 +132,47 @@ impl DarklyEngine {
             queue: &self.gpu.queue,
             dab_pool: &mut self.dab_pool,
             pipelines: &self.brush_pipelines,
-            // color_output bails in Preview mode — canvas_view is unused but
-            // the struct requires it. Reuse the preview view as a placeholder.
-            canvas_view: &target_view,
-            canvas_texture: preview_tex,
+            // The preview pipeline doesn't touch the stroke scratch — the
+            // terminal's `render_preview` writes to `preview_mask_view`
+            // instead. Alias the scratch fields to the preview target so
+            // the struct is well-formed (no Option needed).
+            stroke_scratch_view: &target_view,
+            stroke_scratch_texture: preview_tex,
             canvas_width: target_size.0,
             canvas_height: target_size.1,
             selection_bind_group: sel_bg,
             resource_handles: &self.resource_handles,
             blend_mode: 0,
             canvas_copy_origin: None,
-            render_mode: RenderMode::Preview,
-            preview_target_view: Some(&target_view),
-            preview_target_size: target_size,
+            preview_mask_view: Some(&target_view),
+            preview_mask_size: target_size,
+            brush_preview_info: None,
+            // No layer / pre-stroke state in preview — commit isn't called.
+            layer_view: None,
+            layer_texture: None,
+            pre_stroke_texture: None,
+            pre_stroke_bind_group: None,
+            scratch_bind_group: None,
+            dab_write_bbox: None,
         };
 
         self.brush_pipelines.reset_uniform_rings();
         runner.clear_slots();
         runner.seed_sensors(pen, [1.0, 1.0, 1.0, 1.0], 0, 0);
         runner.execute_cpu();
-        runner.execute_gpu(&mut gpu_ctx);
-        let info = runner.read_preview_info().unwrap_or_default();
+        runner.render_preview_pipeline(&mut gpu_ctx);
 
+        let info = gpu_ctx.brush_preview_info;
         gpu_ctx.dab_pool.release_all();
         let command_buf = gpu_ctx.encoder.finish();
         self.gpu.queue.submit([command_buf]);
 
-        self.compositor.use_overlay_preview_mask();
-        self.brush_preview_info = Some(info);
+        if info.is_some() {
+            self.compositor.use_overlay_preview_mask();
+        } else {
+            self.compositor.clear_overlay_preview_mask();
+        }
+        self.brush_preview_info = info;
     }
 
     /// Read-only snapshot of the current brush preview info, for the

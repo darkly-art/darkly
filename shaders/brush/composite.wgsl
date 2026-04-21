@@ -17,6 +17,8 @@ struct CompositeUniforms {
     uv_max: vec2f,       // max UV in dab texture
     blend_mode: u32,     // 0 = source-over, 1 = erase (destination-out)
     fg_premultiplied: u32, // 1 = dab is premultiplied, 0 = straight alpha
+    stroke_opacity: f32, // per-stroke opacity cap (1.0 = no cap). Scales fg alpha before blend.
+    apply_selection: u32, // 1 = modulate fg by selection, 0 = ignore selection
 }
 
 @group(0) @binding(0) var<uniform> u: CompositeUniforms;
@@ -62,12 +64,18 @@ struct VertexOutput {
     // Sample foreground (premultiplied or straight — see fg_premultiplied).
     let dab = textureSample(t_dab, s_dab, in.dab_uv);
 
-    // Selection masking: modulate dab by selection coverage.
+    // Selection masking: modulate dab by selection coverage. Applied per-dab
+    // only — the stroke→layer commit passes `apply_selection = 0` because
+    // selection has already been baked into the scratch by prior dabs.
     let sel_uv = in.canvas_pos / u.canvas_size;
-    let sel = textureSample(t_selection, s_selection, sel_uv).r;
-    let fg_a = dab.a * sel;
+    let sel_raw = textureSample(t_selection, s_selection, sel_uv).r;
+    let sel = select(1.0, sel_raw, u.apply_selection == 1u);
+
+    // Stroke-level opacity cap: scales the foreground alpha (and premultiplied
+    // rgb) before the Porter-Duff blend. Per-dab compositing passes 1.0.
+    let fg_a = dab.a * sel * u.stroke_opacity;
     // When fg_premultiplied == 0, the dab is straight alpha — premultiply now.
-    let fg_rgb_pre = select(dab.rgb * dab.a, dab.rgb, u.fg_premultiplied == 1u) * sel;
+    let fg_rgb_pre = select(dab.rgb * dab.a, dab.rgb, u.fg_premultiplied == 1u) * sel * u.stroke_opacity;
 
     // Background: read canvas copy (straight alpha).
     // The copy_texture_to_texture origin is floor(u.origin) — integer pixel coords.

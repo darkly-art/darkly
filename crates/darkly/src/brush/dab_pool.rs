@@ -24,6 +24,12 @@ struct DabEntry {
     view: wgpu::TextureView,
     /// Bind group for sampling this texture in the composite pass.
     bind_group: wgpu::BindGroup,
+    /// Texture dimensions. Most entries are `(max_size, max_size)` from
+    /// `acquire`; `acquire_sized` allocates entries with custom dimensions
+    /// for previews and other one-shot renders that want texture-self-
+    /// describing extents.
+    width: u32,
+    height: u32,
     in_use: bool,
 }
 
@@ -111,26 +117,41 @@ impl DabTexturePool {
 
     // --- Dab render target pool ---
 
-    /// Acquire a dab texture for rendering.  Returns a handle that indexes
-    /// into the pool.  If no free entries exist, a new texture is allocated.
+    /// Acquire a max-size (`max_size × max_size`) dab texture for rendering.
+    /// Returns a handle that indexes into the pool. If no free max-size
+    /// entry exists, a new texture is allocated.
     pub fn acquire(&mut self, device: &wgpu::Device) -> TextureHandle {
-        // Reuse a free entry if available.
+        self.acquire_sized(device, self.max_size, self.max_size)
+    }
+
+    /// Acquire a dab texture sized exactly `width × height`. Used by the
+    /// preview path so the brush terminal can publish a texture whose own
+    /// dimensions encode its canvas-pixel extent — `texture_size(handle)`
+    /// returns `(width, height)`, no separate size wire needed.
+    ///
+    /// Reuses any free entry of the requested dimensions; otherwise
+    /// allocates a fresh one. Per-hover-frame allocation amortises across
+    /// the dab pool's free-list — a stable preview size will not allocate
+    /// after the first hover frame.
+    pub fn acquire_sized(
+        &mut self,
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+    ) -> TextureHandle {
+        // Reuse a free entry of matching dimensions if available.
         for (i, entry) in self.entries.iter_mut().enumerate() {
-            if !entry.in_use {
+            if !entry.in_use && entry.width == width && entry.height == height {
                 entry.in_use = true;
                 return TextureHandle(i as u16);
             }
         }
 
-        // Allocate a new entry.
+        // Allocate a new entry sized to (width, height).
         let idx = self.entries.len();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&format!("dab-texture-{idx}")),
-            size: wgpu::Extent3d {
-                width: self.max_size,
-                height: self.max_size,
-                depth_or_array_layers: 1,
-            },
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -159,6 +180,8 @@ impl DabTexturePool {
             texture,
             view,
             bind_group,
+            width,
+            height,
             in_use: true,
         });
         TextureHandle(idx as u16)
@@ -201,15 +224,17 @@ impl DabTexturePool {
 
     /// Get the pixel dimensions of any texture by handle.
     ///
-    /// Dab render targets are always `max_size × max_size`; static
-    /// textures have their natural dimensions.
+    /// Dab render targets carry their per-allocation dimensions (set by
+    /// `acquire` or `acquire_sized`); static textures have their natural
+    /// upload dimensions.
     pub fn texture_size(&self, handle: TextureHandle) -> (u32, u32) {
         if handle.0 & STATIC_HANDLE_BIT != 0 {
             let idx = (handle.0 & !STATIC_HANDLE_BIT) as usize;
             let e = self.static_entries[idx].as_ref().expect("static texture released");
             (e.width, e.height)
         } else {
-            (self.max_size, self.max_size)
+            let e = &self.entries[handle.0 as usize];
+            (e.width, e.height)
         }
     }
 

@@ -1,29 +1,18 @@
-//! GPU context bundle passed to brush node evaluators during `execute_gpu`.
+//! GPU context bundle passed to brush node evaluators during `execute_gpu`
+//! and `render_preview_pipeline`.
 //!
 //! Provides everything a GPU node needs: command encoder, device, queue,
 //! dab texture pool, pipelines, canvas target, and selection bind group.
+//! Stroke and preview modes are differentiated by *which* method the runner
+//! invokes (`evaluate_gpu` vs `render_preview`), not by a flag on this
+//! struct — terminals stop branching on a mode enum.
 
 use std::collections::HashMap;
 
 use super::dab_pool::DabTexturePool;
+use super::eval::BrushPreviewInfo;
 use super::pipelines::BrushPipelines;
 use super::wire::TextureHandle;
-
-/// Which terminal node should actually do GPU work during this pass.
-///
-/// Brush graphs have two terminals — `color_output` writes to the canvas,
-/// `preview_output` writes to the overlay preview mask. Only one runs per
-/// pass; the other's `evaluate_gpu` is a no-op when the mode doesn't match.
-/// All non-terminal nodes (stamp, circle, etc.) are mode-agnostic and run
-/// identically either way.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RenderMode {
-    /// Normal stroke path. `color_output` composites; `preview_output` skips.
-    Stroke,
-    /// Preview regen. `preview_output` blits into the preview mask;
-    /// `color_output` skips.
-    Preview,
-}
 
 /// Everything a GPU brush node needs to record render passes.
 ///
@@ -38,9 +27,13 @@ pub struct BrushGpuContext<'a> {
     pub queue: &'a wgpu::Queue,
     pub dab_pool: &'a mut DabTexturePool,
     pub pipelines: &'a BrushPipelines,
-    pub canvas_view: &'a wgpu::TextureView,
-    /// The canvas layer texture (needed for copy_texture_to_texture).
-    pub canvas_texture: &'a wgpu::Texture,
+    /// The stroke scratch texture view — dabs composite into this during
+    /// a stroke, and the terminal node commits it onto the layer on every
+    /// pen event. Reused as a placeholder in preview mode (nothing writes to it).
+    pub stroke_scratch_view: &'a wgpu::TextureView,
+    /// The stroke scratch texture (needed for copy_texture_to_texture by
+    /// `ensure_canvas_copy`).
+    pub stroke_scratch_texture: &'a wgpu::Texture,
     pub canvas_width: u32,
     pub canvas_height: u32,
     /// Selection mask bind group (or default 1x1 white when no selection).
@@ -61,14 +54,42 @@ pub struct BrushGpuContext<'a> {
     /// first's copy when regions match.  Reset by `StrokeEngine::place_dab`
     /// before each dab.
     pub canvas_copy_origin: Option<[u32; 2]>,
-    /// Which terminal should run in this pass. Only inspected by terminal
-    /// nodes (`color_output`, `preview_output`). Non-terminals ignore.
-    pub render_mode: RenderMode,
-    /// Preview mask target. Populated by the engine when `render_mode ==
-    /// Preview`; the `preview_output` node renders into it. `None` in stroke
-    /// mode.
-    pub preview_target_view: Option<&'a wgpu::TextureView>,
-    pub preview_target_size: (u32, u32),
+    /// Preview mask target. Populated by the engine during preview regen;
+    /// terminal `render_preview` hooks blit their preview texture into it.
+    /// `None` during stroke evaluation (the preview path isn't running).
+    pub preview_mask_view: Option<&'a wgpu::TextureView>,
+    pub preview_mask_size: (u32, u32),
+    /// Set by a terminal's `render_preview` hook to publish overlay
+    /// placement info (extent + rotation) to the engine. The engine reads
+    /// this after `render_preview_pipeline` returns. `None` outside the
+    /// preview path; first-write-wins if multiple terminals try to publish
+    /// (unusual — typically one terminal owns the preview).
+    pub brush_preview_info: Option<BrushPreviewInfo>,
+    /// The actual layer texture view — write target for the terminal's
+    /// `commit` hook. `None` in preview mode (no layer to commit to).
+    pub layer_view: Option<&'a wgpu::TextureView>,
+    /// The actual layer texture (for copy_texture_to_texture at commit).
+    pub layer_texture: Option<&'a wgpu::Texture>,
+    /// Pre-stroke layer snapshot. Supplied by `StrokeBuffer::save_pre_stroke`
+    /// at the start of a stroke. `Some` during a stroke, `None` in preview.
+    pub pre_stroke_texture: Option<&'a wgpu::Texture>,
+    /// Bind group (canvas-copy BGL) over `pre_stroke_texture`, pre-built
+    /// by `StrokeBuffer` so `color_output::commit` can bind it as the
+    /// composite background without recreating bind groups every event.
+    pub pre_stroke_bind_group: Option<&'a wgpu::BindGroup>,
+    /// Bind group (dab BGL) over the stroke scratch, pre-built by
+    /// `StrokeBuffer` so `color_output::commit` can bind it as the
+    /// composite foreground (the per-dab accumulation).
+    pub scratch_bind_group: Option<&'a wgpu::BindGroup>,
+    /// Union of canvas-pixel rects the current dab's passes write to, in
+    /// `[x, y, w, h]`. The node that issues the write is the only thing
+    /// that knows the real footprint — stroke_engine can't derive it from
+    /// `info.pos` because the graph may offset the dab (scatter, wobble,
+    /// future position-modulating nodes). Each pass unions its rect into
+    /// this via `push_dab_write_bbox`, stroke_engine reads it after
+    /// `execute_gpu` for the save-point bbox and resets it before the
+    /// next dab. `None` outside stroke evaluation.
+    pub dab_write_bbox: Option<[u32; 4]>,
 }
 
 impl<'a> BrushGpuContext<'a> {
@@ -98,6 +119,19 @@ impl<'a> BrushGpuContext<'a> {
         }
     }
 
+    /// Union a write-pass footprint into `dab_write_bbox`. Called by any
+    /// GPU node whose pass writes to the stroke scratch, so stroke_engine
+    /// can record a save-point bbox that matches what was actually drawn.
+    pub fn push_dab_write_bbox(&mut self, bbox: [u32; 4]) {
+        if bbox[2] == 0 || bbox[3] == 0 {
+            return;
+        }
+        self.dab_write_bbox = Some(match self.dab_write_bbox {
+            Some(prev) => crate::brush::save_points::union_bbox(prev, bbox),
+            None => bbox,
+        });
+    }
+
     /// Ensure `canvas_copy_texture` holds the canvas region starting at the
     /// given pixel origin, sized to cover `(width, height)`.  Idempotent per
     /// dab: the first caller issues `copy_texture_to_texture`; subsequent
@@ -116,7 +150,7 @@ impl<'a> BrushGpuContext<'a> {
         }
         self.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: self.canvas_texture,
+                texture: self.stroke_scratch_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x: origin_x, y: origin_y, z: 0 },
                 aspect: wgpu::TextureAspect::All,

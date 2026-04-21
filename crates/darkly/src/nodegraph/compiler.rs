@@ -122,15 +122,40 @@ pub fn compile<W: WireKind>(
     }
 
     // ── Build steps ──────────────────────────────────────────────────
+    //
+    // `is_gpu` phases execution: GPU-phase steps run after the CPU-phase
+    // batch and have access to the GPU context. A step is in the GPU
+    // phase if *either* its registration declares `is_gpu: true` (e.g.
+    // `stamp` because it records render passes) *or* any of its inputs
+    // is produced by a GPU-phase step (so we can't evaluate until those
+    // outputs exist). The second case auto-promotes pure-math helpers
+    // like `split_vec2` whenever they sit downstream of a GPU node —
+    // the author doesn't have to know, the graph topology decides.
 
     let mut steps = Vec::with_capacity(sorted.len());
+    let mut phase: HashMap<NodeId, bool> = HashMap::new();
 
     for &node_id in &sorted {
         let node = &graph.nodes[&node_id];
-        let is_gpu = registry
+        let declared_gpu = registry
             .get(&node.type_id)
             .map(|r| r.is_gpu)
             .unwrap_or(false);
+
+        // Promote to GPU phase if any upstream producer is already GPU.
+        let inherits_gpu = node.ports.iter().any(|p| {
+            if p.dir != PortDir::Input {
+                return false;
+            }
+            let pr = PortRef { node: node_id, port: p.name.clone() };
+            input_wire
+                .get(&pr)
+                .and_then(|src| phase.get(&src.node))
+                .copied()
+                .unwrap_or(false)
+        });
+        let is_gpu = declared_gpu || inherits_gpu;
+        phase.insert(node_id, is_gpu);
 
         let mut input_slots = Vec::new();
         let mut output_slots = Vec::new();
