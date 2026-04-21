@@ -11,17 +11,26 @@ impl DarklyEngine {
 
     pub fn set_view_transform(
         &mut self,
-        pan_x: f32, pan_y: f32,
-        zoom: f32, rotation: f32,
-        screen_w: f32, screen_h: f32,
+        pan_x: f32,
+        pan_y: f32,
+        zoom: f32,
+        rotation: f32,
+        screen_w: f32,
+        screen_h: f32,
     ) {
         let transform = ViewTransform::from_pan_zoom_rotate(
-            pan_x, pan_y, zoom, rotation,
-            screen_w, screen_h,
-            self.doc.width as f32, self.doc.height as f32,
+            pan_x,
+            pan_y,
+            zoom,
+            rotation,
+            screen_w,
+            screen_h,
+            self.doc.width as f32,
+            self.doc.height as f32,
         );
         self.view_transform = transform;
-        self.compositor.update_view_transform(&self.gpu.queue, &transform);
+        self.compositor
+            .update_view_transform(&self.gpu.queue, &transform);
         self.compositor.mark_needs_present();
     }
 
@@ -43,8 +52,11 @@ impl DarklyEngine {
         let texture = self.compositor.composited_texture();
         self.gpu.encode("pick-color", |encoder| {
             let request = readback::request_readback(
-                &self.gpu.device, encoder, texture,
-                wgpu::TextureFormat::Rgba8Unorm, [px, py, 1, 1],
+                &self.gpu.device,
+                encoder,
+                texture,
+                wgpu::TextureFormat::Rgba8Unorm,
+                [px, py, 1, 1],
             );
             self.readbacks.submit(request, ReadbackContext::ColorPick);
         });
@@ -79,7 +91,11 @@ impl DarklyEngine {
 
     /// Kick off an async GPU readback for a thumbnail if one isn't already pending.
     fn request_thumbnail_readback(
-        &mut self, layer_id: u64, is_mask: bool, thumb_w: u32, thumb_h: u32,
+        &mut self,
+        layer_id: u64,
+        is_mask: bool,
+        thumb_w: u32,
+        thumb_h: u32,
     ) {
         // Don't queue duplicate requests.
         if self.readbacks.any(|c| matches!(c, ReadbackContext::Thumbnail { layer_id: lid, is_mask: im, .. } if *lid == layer_id && *im == is_mask)) {
@@ -103,14 +119,23 @@ impl DarklyEngine {
 
         self.gpu.encode("thumb-readback", |encoder| {
             let request = readback::request_readback(
-                &self.gpu.device, encoder, texture, format, [0, 0, doc_w, doc_h],
+                &self.gpu.device,
+                encoder,
+                texture,
+                format,
+                [0, 0, doc_w, doc_h],
             );
-            self.readbacks.submit(request, ReadbackContext::Thumbnail {
-                layer_id, is_mask, thumb_w, thumb_h,
-            });
+            self.readbacks.submit(
+                request,
+                ReadbackContext::Thumbnail {
+                    layer_id,
+                    is_mask,
+                    thumb_w,
+                    thumb_h,
+                },
+            );
         });
     }
-
 
     // --- Rendering ---
 
@@ -126,7 +151,10 @@ impl DarklyEngine {
                     if let Some(rect) = result {
                         self.gpu.encode("brush-stroke-end", |encoder| {
                             let entry = self.region_store.commit_region(
-                                encoder, commit.layer_id, commit.format, rect,
+                                encoder,
+                                commit.layer_id,
+                                commit.format,
+                                rect,
                             );
                             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
                         });
@@ -151,7 +179,11 @@ impl DarklyEngine {
                     if let Some(bounds) = self.compositor.content_bounds(layer_id) {
                         let [bx, by, bw, bh] = bounds;
                         self.setup_transform(
-                            layer_id, target_is_mask, (bx as i32, by as i32), bw, bh,
+                            layer_id,
+                            target_is_mask,
+                            (bx as i32, by as i32),
+                            bw,
+                            bh,
                         );
                         any_completed = true;
                     }
@@ -167,21 +199,45 @@ impl DarklyEngine {
         for (ctx, pixels) in completed {
             match ctx {
                 ReadbackContext::FloodFill {
-                    layer_id, mask_editing, seed_x, seed_y, color, tolerance,
-                    canvas_w, canvas_h,
+                    layer_id,
+                    mask_editing,
+                    seed_x,
+                    seed_y,
+                    color,
+                    tolerance,
+                    canvas_w,
+                    canvas_h,
                 } => self.complete_flood_fill(
-                    layer_id, mask_editing, seed_x, seed_y, color, tolerance,
-                    canvas_w, canvas_h, pixels,
+                    layer_id,
+                    mask_editing,
+                    seed_x,
+                    seed_y,
+                    color,
+                    tolerance,
+                    canvas_w,
+                    canvas_h,
+                    pixels,
                 ),
                 ReadbackContext::ColorPick => {
                     if pixels.len() >= 4 {
                         self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
                     }
                 }
-                ReadbackContext::Copy { is_mask, region, is_cut, layer_id } => {
+                ReadbackContext::Copy {
+                    is_mask,
+                    region,
+                    is_cut,
+                    layer_id,
+                } => {
                     self.complete_copy(is_mask, region, is_cut, layer_id, pixels);
                 }
-                ReadbackContext::MagicWand { was_active, seed_x, seed_y, tolerance, mode } => {
+                ReadbackContext::MagicWand {
+                    was_active,
+                    seed_x,
+                    seed_y,
+                    tolerance,
+                    mode,
+                } => {
                     self.complete_magic_wand(was_active, seed_x, seed_y, tolerance, mode, pixels);
                 }
                 ReadbackContext::MaskToSelection { was_active } => {
@@ -202,7 +258,12 @@ impl DarklyEngine {
                         }
                     }
                 }
-                ReadbackContext::Thumbnail { layer_id, is_mask, thumb_w, thumb_h } => {
+                ReadbackContext::Thumbnail {
+                    layer_id,
+                    is_mask,
+                    thumb_w,
+                    thumb_h,
+                } => {
                     let doc_w = self.doc.width;
                     let doc_h = self.doc.height;
                     if is_mask {
@@ -229,7 +290,8 @@ impl DarklyEngine {
 
     /// True if a color pick readback is still in flight.
     pub fn has_pending_color_pick(&self) -> bool {
-        self.readbacks.any(|c| matches!(c, ReadbackContext::ColorPick))
+        self.readbacks
+            .any(|c| matches!(c, ReadbackContext::ColorPick))
     }
 
     /// Render a frame. Returns true if animations need another frame.
@@ -253,11 +315,11 @@ impl DarklyEngine {
         // squeezed to 0 height by a UI panel).  WebGPU cannot create
         // 0-dimension textures and attempting to do so corrupts the device.
         if surface_config.width == 0 || surface_config.height == 0 {
-            return self.readbacks.has_pending()
-                || self.compositor.has_pending_content_bounds();
+            return self.readbacks.has_pending() || self.compositor.has_pending_content_bounds();
         }
 
-        self.compositor.update_animations(&self.gpu.queue, time_secs);
+        self.compositor
+            .update_animations(&self.gpu.queue, time_secs);
         self.compositor.render(
             &self.gpu.device,
             &self.gpu.queue,
@@ -278,7 +340,9 @@ impl DarklyEngine {
             return;
         }
         self.gpu.resize(width, height);
-        self.compositor.veil_chain_mut().resize(&self.gpu.device, &self.gpu.queue, width, height);
+        self.compositor
+            .veil_chain_mut()
+            .resize(&self.gpu.device, &self.gpu.queue, width, height);
         self.compositor.mark_needs_present();
     }
 
@@ -311,8 +375,12 @@ impl DarklyEngine {
         };
 
         match direction {
-            UndoDirection::Undo => { action.undo(&mut self.doc); },
-            UndoDirection::Redo => { action.redo(&mut self.doc); },
+            UndoDirection::Undo => {
+                action.undo(&mut self.doc);
+            }
+            UndoDirection::Redo => {
+                action.redo(&mut self.doc);
+            }
         }
 
         // Sync layer/mask state BEFORE restoring GPU regions, so that mask
@@ -322,18 +390,25 @@ impl DarklyEngine {
         // If this is a GPU region action, execute the texture restore.
         if let Some(entry) = action.gpu_region_entry_mut() {
             let texture = if entry.format == wgpu::TextureFormat::R8Unorm {
-                self.compositor.mask_texture(entry.layer_id).map(|t| &t.texture)
+                self.compositor
+                    .mask_texture(entry.layer_id)
+                    .map(|t| &t.texture)
             } else {
-                self.compositor.layer_texture(entry.layer_id).map(|t| &t.texture)
+                self.compositor
+                    .layer_texture(entry.layer_id)
+                    .map(|t| &t.texture)
             };
             if let Some(texture) = texture {
-                self.gpu.encode(match direction {
-                    UndoDirection::Undo => "undo-restore",
-                    UndoDirection::Redo => "redo-restore",
-                }, |encoder| {
-                    let swapped = self.region_store.restore_region(encoder, entry, texture);
-                    *entry = swapped;
-                });
+                self.gpu.encode(
+                    match direction {
+                        UndoDirection::Undo => "undo-restore",
+                        UndoDirection::Redo => "redo-restore",
+                    },
+                    |encoder| {
+                        let swapped = self.region_store.restore_region(encoder, entry, texture);
+                        *entry = swapped;
+                    },
+                );
             }
         }
 
@@ -344,13 +419,16 @@ impl DarklyEngine {
 
             if let Some(entry) = action.selection_region_entry_mut() {
                 let texture = self.gpu_selection.texture();
-                self.gpu.encode(match direction {
-                    UndoDirection::Undo => "undo-sel-restore",
-                    UndoDirection::Redo => "redo-sel-restore",
-                }, |encoder| {
-                    let swapped = self.region_store.restore_region(encoder, entry, texture);
-                    *entry = swapped;
-                });
+                self.gpu.encode(
+                    match direction {
+                        UndoDirection::Undo => "undo-sel-restore",
+                        UndoDirection::Redo => "redo-sel-restore",
+                    },
+                    |encoder| {
+                        let swapped = self.region_store.restore_region(encoder, entry, texture);
+                        *entry = swapped;
+                    },
+                );
             }
 
             self.gpu_selection.pixel_bounds = None; // will be recomputed from readback
@@ -376,39 +454,70 @@ impl DarklyEngine {
             mask_enabled: bool,
             has_mask: bool,
         }
-        let infos: Vec<RasterInfo> = self.doc.all_raster_layers().into_iter().map(|r| {
-            RasterInfo {
-                id: r.id, opacity: r.opacity, blend_mode: r.blend_mode,
-                show_mask: r.show_mask, mask_enabled: r.mask_enabled,
+        let infos: Vec<RasterInfo> = self
+            .doc
+            .all_raster_layers()
+            .into_iter()
+            .map(|r| RasterInfo {
+                id: r.id,
+                opacity: r.opacity,
+                blend_mode: r.blend_mode,
+                show_mask: r.show_mask,
+                mask_enabled: r.mask_enabled,
                 has_mask: r.has_mask,
-            }
-        }).collect();
+            })
+            .collect();
 
         for info in &infos {
-            self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, info.id);
+            self.compositor
+                .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, info.id);
             self.compositor.update_raster_uniforms_full(
-                &self.gpu.queue, info.id, info.opacity, info.blend_mode, info.show_mask,
+                &self.gpu.queue,
+                info.id,
+                info.opacity,
+                info.blend_mode,
+                info.show_mask,
             );
-            self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, info.id, info.has_mask);
+            self.compositor.set_layer_mask(
+                &self.gpu.device,
+                &self.gpu.queue,
+                info.id,
+                info.has_mask,
+            );
             self.compositor.update_mask_binding(
-                &self.gpu.device, info.id, info.mask_enabled, info.show_mask,
+                &self.gpu.device,
+                info.id,
+                info.mask_enabled,
+                info.show_mask,
             );
         }
 
         // Sync non-passthrough group state
-        let groups: Vec<(u64, f32, BlendMode, bool)> = self.doc.all_groups()
+        let groups: Vec<(u64, f32, BlendMode, bool)> = self
+            .doc
+            .all_groups()
             .iter()
             .filter(|g| !g.passthrough)
             .map(|g| (g.id, g.opacity, g.blend_mode, g.show_mask))
             .collect();
         for (id, opacity, blend_mode, show_mask) in groups {
-            self.compositor.ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
-            self.compositor.update_group_uniforms(&self.gpu.queue, id, opacity, blend_mode, show_mask);
+            self.compositor
+                .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
+            self.compositor.update_group_uniforms(
+                &self.gpu.queue,
+                id,
+                opacity,
+                blend_mode,
+                show_mask,
+            );
         }
     }
 }
 
-enum UndoDirection { Undo, Redo }
+enum UndoDirection {
+    Undo,
+    Redo,
+}
 
 // ---------------------------------------------------------------------------
 // Thumbnail generation — nearest-neighbor sampling from GPU readback pixels
@@ -416,8 +525,10 @@ enum UndoDirection { Undo, Redo }
 
 fn generate_rgba_thumbnail_from_pixels(
     pixels: &[u8],
-    doc_w: u32, doc_h: u32,
-    thumb_w: u32, thumb_h: u32,
+    doc_w: u32,
+    doc_h: u32,
+    thumb_w: u32,
+    thumb_h: u32,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; (thumb_w * thumb_h * 4) as usize];
 
@@ -428,16 +539,25 @@ fn generate_rgba_thumbnail_from_pixels(
 
             let src = ((cy * doc_w + cx) * 4) as usize;
             let (r, g, b, a) = if src + 3 < pixels.len() {
-                (pixels[src], pixels[src + 1], pixels[src + 2], pixels[src + 3])
+                (
+                    pixels[src],
+                    pixels[src + 1],
+                    pixels[src + 2],
+                    pixels[src + 3],
+                )
             } else {
                 (0, 0, 0, 0)
             };
 
             let off = ((oy * thumb_w + ox) * 4) as usize;
             // Checkerboard behind transparent areas
-            let check = if ((ox / 4) + (oy / 4)) % 2 == 0 { 102u8 } else { 153u8 };
+            let check = if ((ox / 4) + (oy / 4)) % 2 == 0 {
+                102u8
+            } else {
+                153u8
+            };
             let af = a as f32 / 255.0;
-            buf[off]     = (r as f32 * af + check as f32 * (1.0 - af)) as u8;
+            buf[off] = (r as f32 * af + check as f32 * (1.0 - af)) as u8;
             buf[off + 1] = (g as f32 * af + check as f32 * (1.0 - af)) as u8;
             buf[off + 2] = (b as f32 * af + check as f32 * (1.0 - af)) as u8;
             buf[off + 3] = 255;
@@ -448,8 +568,10 @@ fn generate_rgba_thumbnail_from_pixels(
 
 fn generate_mask_thumbnail_from_pixels(
     pixels: &[u8],
-    doc_w: u32, doc_h: u32,
-    thumb_w: u32, thumb_h: u32,
+    doc_w: u32,
+    doc_h: u32,
+    thumb_w: u32,
+    thumb_h: u32,
 ) -> Vec<u8> {
     let mut buf = vec![0u8; (thumb_w * thumb_h * 4) as usize];
 
@@ -458,10 +580,13 @@ fn generate_mask_thumbnail_from_pixels(
         for ox in 0..thumb_w {
             let cx = (ox * doc_w / thumb_w).min(doc_w - 1);
 
-            let v = pixels.get((cy * doc_w + cx) as usize).copied().unwrap_or(255);
+            let v = pixels
+                .get((cy * doc_w + cx) as usize)
+                .copied()
+                .unwrap_or(255);
 
             let off = ((oy * thumb_w + ox) * 4) as usize;
-            buf[off]     = v;
+            buf[off] = v;
             buf[off + 1] = v;
             buf[off + 2] = v;
             buf[off + 3] = 255;

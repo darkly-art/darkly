@@ -49,11 +49,9 @@ pub fn request_readback(
     rect: [u32; 4],
 ) -> ReadbackRequest {
     let [x, y, w, h] = rect;
-    let bpp = format.block_copy_size(None).unwrap_or(1) as u32;
+    let bpp = format.block_copy_size(None).unwrap_or(1);
     let unpadded_row_bytes = w * bpp;
-    let padded_row_bytes = (unpadded_row_bytes + COPY_ROW_ALIGNMENT - 1)
-        / COPY_ROW_ALIGNMENT
-        * COPY_ROW_ALIGNMENT;
+    let padded_row_bytes = unpadded_row_bytes.div_ceil(COPY_ROW_ALIGNMENT) * COPY_ROW_ALIGNMENT;
     let buffer_size = padded_row_bytes as u64 * h as u64;
 
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -78,7 +76,11 @@ pub fn request_readback(
                 rows_per_image: Some(h),
             },
         },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
 
     ReadbackRequest {
@@ -204,7 +206,10 @@ impl<C> ReadbackScheduler<C> {
         while i < self.tasks.len() {
             // Skip the device.poll inside ReadbackRequest::poll — we already
             // did it above. Just check the channel directly.
-            let ready = self.tasks[i].0.rx.as_ref()
+            let ready = self.tasks[i]
+                .0
+                .rx
+                .as_ref()
                 .and_then(|rx| rx.try_recv().ok());
 
             match ready {

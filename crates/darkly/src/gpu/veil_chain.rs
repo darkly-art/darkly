@@ -59,8 +59,7 @@ impl VeilChain {
         is_software: bool,
     ) -> Self {
         let registry = VeilRegistry::new();
-        let blit_pipeline =
-            effect::create_blit_pipeline(device, surface_format, "blit-to-surface");
+        let blit_pipeline = effect::create_blit_pipeline(device, surface_format, "blit-to-surface");
 
         VeilChain {
             registry,
@@ -106,20 +105,22 @@ impl VeilChain {
     // --- Veil management ---
 
     /// Add a veil to the chain. Creates GPU resources immediately.
-    pub fn add_veil(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        veil: Box<dyn Veil>,
-    ) {
+    pub fn add_veil(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, veil: Box<dyn Veil>) {
         self.ensure_textures(device);
         self.ensure_scaling_pipeline(device);
         let native_views = self.views.as_ref().unwrap();
 
         let (scaling, cache) = create_veil_resources(
-            device, queue, &*veil, native_views, &self.sampler,
-            self.scaling_pipeline.as_ref(), self.accum_format,
-            self.viewport_width, self.viewport_height, self.is_software,
+            device,
+            queue,
+            &*veil,
+            native_views,
+            &self.sampler,
+            self.scaling_pipeline.as_ref(),
+            self.accum_format,
+            self.viewport_width,
+            self.viewport_height,
+            self.is_software,
         );
         self.entries.push(VeilEntry {
             veil,
@@ -184,9 +185,16 @@ impl VeilChain {
         let native_views = self.views.as_ref().unwrap();
 
         let (scaling, cache) = create_veil_resources(
-            device, queue, &*new_veil, native_views, &self.sampler,
-            self.scaling_pipeline.as_ref(), self.accum_format,
-            self.viewport_width, self.viewport_height, self.is_software,
+            device,
+            queue,
+            &*new_veil,
+            native_views,
+            &self.sampler,
+            self.scaling_pipeline.as_ref(),
+            self.accum_format,
+            self.viewport_width,
+            self.viewport_height,
+            self.is_software,
         );
         let visible = self.entries[index].visible;
         self.entries[index] = VeilEntry {
@@ -234,7 +242,9 @@ impl VeilChain {
 
     /// Returns true if any visible veil needs continuous animation frames.
     pub fn needs_animation(&self) -> bool {
-        self.entries.iter().any(|e| e.visible && e.veil.needs_animation())
+        self.entries
+            .iter()
+            .any(|e| e.visible && e.veil.needs_animation())
     }
 
     // --- Animation ---
@@ -253,13 +263,7 @@ impl VeilChain {
     // --- Viewport ---
 
     /// Update viewport dimensions. Recreates veil textures and caches if needed.
-    pub fn resize(
-        &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        width: u32,
-        height: u32,
-    ) {
+    pub fn resize(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, width: u32, height: u32) {
         if self.viewport_width == width && self.viewport_height == height {
             return;
         }
@@ -318,20 +322,28 @@ impl VeilChain {
                 let sp = self.scaling_pipeline.as_ref().unwrap();
                 // Downscale: native pp[current_src] → reduced[0]
                 blit_pass(
-                    encoder, &sp.pipeline,
-                    &scaling.downscale_bgs[current_src], &scaling.views[0],
+                    encoder,
+                    &sp.pipeline,
+                    &scaling.downscale_bgs[current_src],
+                    &scaling.views[0],
                     "veil-downscale",
                 );
                 // Run veil at reduced resolution: reads reduced[0], writes reduced[1]
-                entry.veil.encode(encoder, &entry.cache, 0, &scaling.views[1]);
+                entry
+                    .veil
+                    .encode(encoder, &entry.cache, 0, &scaling.views[1]);
                 // Upscale: reduced[1] → native pp[dst]
                 blit_pass(
-                    encoder, &sp.pipeline,
-                    &scaling.upscale_bg, &veil_views[dst],
+                    encoder,
+                    &sp.pipeline,
+                    &scaling.upscale_bg,
+                    &veil_views[dst],
                     "veil-upscale",
                 );
             } else {
-                entry.veil.encode(encoder, &entry.cache, current_src, &veil_views[dst]);
+                entry
+                    .veil
+                    .encode(encoder, &entry.cache, current_src, &veil_views[dst]);
             }
 
             current_src = dst;
@@ -367,9 +379,11 @@ impl VeilChain {
     /// Ensure the scaling blit pipeline exists (needed for CPU-scaled veils).
     fn ensure_scaling_pipeline(&mut self, device: &wgpu::Device) {
         if self.is_software && self.scaling_pipeline.is_none() {
-            self.scaling_pipeline = Some(
-                effect::create_blit_pipeline(device, self.accum_format, "veil-scaling"),
-            );
+            self.scaling_pipeline = Some(effect::create_blit_pipeline(
+                device,
+                self.accum_format,
+                "veil-scaling",
+            ));
         }
     }
 
@@ -448,9 +462,16 @@ impl VeilChain {
         let native_views = self.views.as_ref().unwrap();
         for entry in &mut self.entries {
             let (scaling, cache) = create_veil_resources(
-                device, queue, &*entry.veil, native_views, &self.sampler,
-                self.scaling_pipeline.as_ref(), self.accum_format,
-                self.viewport_width, self.viewport_height, self.is_software,
+                device,
+                queue,
+                &*entry.veil,
+                native_views,
+                &self.sampler,
+                self.scaling_pipeline.as_ref(),
+                self.accum_format,
+                self.viewport_width,
+                self.viewport_height,
+                self.is_software,
             );
             entry.cache = cache;
             entry.scaling = scaling;
@@ -490,7 +511,12 @@ fn create_veil_resources(
         (Some(scaling), cache)
     } else {
         let cache = veil.create_cache(
-            device, queue, native_views, sampler, viewport_width, viewport_height,
+            device,
+            queue,
+            native_views,
+            sampler,
+            viewport_width,
+            viewport_height,
         );
         (None, cache)
     }
@@ -518,8 +544,7 @@ fn create_veil_scaling(
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -534,15 +559,16 @@ fn create_veil_scaling(
     // Downscale: [i] reads native pp[i], draws to reduced[0].
     let downscale_bgs: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
         effect::create_blit_bind_group(
-            device, layout, &native_views[i], sampler,
+            device,
+            layout,
+            &native_views[i],
+            sampler,
             &format!("veil-downscale-{i}"),
         )
     });
 
     // Upscale: reads reduced[1] (veil output), draws to native pp[dst].
-    let upscale_bg = effect::create_blit_bind_group(
-        device, layout, &v1, sampler, "veil-upscale",
-    );
+    let upscale_bg = effect::create_blit_bind_group(device, layout, &v1, sampler, "veil-upscale");
 
     VeilScaling {
         _textures: [t0, t1],

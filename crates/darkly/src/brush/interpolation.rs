@@ -94,8 +94,11 @@ fn catmull_rom_angle(p0: f32, p1: f32, p2: f32, p3: f32, t: f32) -> f32 {
     // Unwrap all angles relative to p1.
     let unwrap = |a: f32, ref_: f32| -> f32 {
         let mut d = (a - ref_) % TAU;
-        if d > PI { d -= TAU; }
-        else if d < -PI { d += TAU; }
+        if d > PI {
+            d -= TAU;
+        } else if d < -PI {
+            d += TAU;
+        }
         ref_ + d
     };
     let u0 = unwrap(p0, p1);
@@ -118,27 +121,45 @@ pub fn catmull_rom_paint_info(
 ) -> PaintInformation {
     PaintInformation {
         pos: catmull_rom2(p0.pos, p1.pos, p2.pos, p3.pos, t),
-        pressure: catmull_rom(p0.pressure, p1.pressure, p2.pressure, p3.pressure, t).clamp(0.0, 1.0),
+        pressure: catmull_rom(p0.pressure, p1.pressure, p2.pressure, p3.pressure, t)
+            .clamp(0.0, 1.0),
         x_tilt: catmull_rom(p0.x_tilt, p1.x_tilt, p2.x_tilt, p3.x_tilt, t),
         y_tilt: catmull_rom(p0.y_tilt, p1.y_tilt, p2.y_tilt, p3.y_tilt, t),
         rotation: catmull_rom_angle(p0.rotation, p1.rotation, p2.rotation, p3.rotation, t),
         tangential_pressure: catmull_rom(
-            p0.tangential_pressure, p1.tangential_pressure,
-            p2.tangential_pressure, p3.tangential_pressure, t,
-        ).clamp(0.0, 1.0),
+            p0.tangential_pressure,
+            p1.tangential_pressure,
+            p2.tangential_pressure,
+            p3.tangential_pressure,
+            t,
+        )
+        .clamp(0.0, 1.0),
         time: catmull_rom(p0.time, p1.time, p2.time, p3.time, t),
         speed: catmull_rom(p0.speed, p1.speed, p2.speed, p3.speed, t).clamp(0.0, 1.0),
         distance: catmull_rom(p0.distance, p1.distance, p2.distance, p3.distance, t),
         drawing_angle: catmull_rom_angle(
-            p0.drawing_angle, p1.drawing_angle, p2.drawing_angle, p3.drawing_angle, t,
+            p0.drawing_angle,
+            p1.drawing_angle,
+            p2.drawing_angle,
+            p3.drawing_angle,
+            t,
         ),
         // Same rationale as the lerp path: motion is per-segment, not per-dab.
         motion: p2.motion,
         tilt_magnitude: catmull_rom(
-            p0.tilt_magnitude, p1.tilt_magnitude, p2.tilt_magnitude, p3.tilt_magnitude, t,
-        ).clamp(0.0, 1.0),
+            p0.tilt_magnitude,
+            p1.tilt_magnitude,
+            p2.tilt_magnitude,
+            p3.tilt_magnitude,
+            t,
+        )
+        .clamp(0.0, 1.0),
         tilt_direction: catmull_rom_angle(
-            p0.tilt_direction, p1.tilt_direction, p2.tilt_direction, p3.tilt_direction, t,
+            p0.tilt_direction,
+            p1.tilt_direction,
+            p2.tilt_direction,
+            p3.tilt_direction,
+            t,
         ),
         index: p2.index,
         fade: catmull_rom(p0.fade, p1.fade, p2.fade, p3.fade, t),
@@ -183,7 +204,13 @@ impl<'a> CatmullRomSegment<'a> {
             cumulative[i] = cumulative[i - 1] + (dx * dx + dy * dy).sqrt();
             prev_pos = pos;
         }
-        Self { p0, p1, p2, p3, cumulative }
+        Self {
+            p0,
+            p1,
+            p2,
+            p3,
+            cumulative,
+        }
     }
 
     /// Total arc length of this segment.
@@ -214,7 +241,11 @@ impl<'a> CatmullRomSegment<'a> {
                 let seg_start = self.cumulative[i - 1];
                 let seg_end = self.cumulative[i];
                 let seg_len = seg_end - seg_start;
-                let frac = if seg_len > 1e-6 { (d - seg_start) / seg_len } else { 0.0 };
+                let frac = if seg_len > 1e-6 {
+                    (d - seg_start) / seg_len
+                } else {
+                    0.0
+                };
                 let t_start = (i - 1) as f32 / ARC_LEN_SUBDIVISIONS as f32;
                 let t_step = 1.0 / ARC_LEN_SUBDIVISIONS as f32;
                 return t_start + frac * t_step;
@@ -248,8 +279,14 @@ mod tests {
 
     #[test]
     fn lerp_endpoints() {
-        let a = PaintInformation { pressure: 0.3, ..Default::default() };
-        let b = PaintInformation { pressure: 0.9, ..Default::default() };
+        let a = PaintInformation {
+            pressure: 0.3,
+            ..Default::default()
+        };
+        let b = PaintInformation {
+            pressure: 0.9,
+            ..Default::default()
+        };
         let at_a = lerp_paint_info(&a, &b, 0.0);
         let at_b = lerp_paint_info(&a, &b, 1.0);
         assert!((at_a.pressure - 0.3).abs() < 1e-6);
@@ -268,11 +305,18 @@ mod tests {
     // ── Catmull-Rom tests ────────────────────────────────────────────
 
     fn pt(x: f32, y: f32) -> PaintInformation {
-        PaintInformation { pos: [x, y], ..Default::default() }
+        PaintInformation {
+            pos: [x, y],
+            ..Default::default()
+        }
     }
 
     fn pt_full(x: f32, y: f32, pressure: f32) -> PaintInformation {
-        PaintInformation { pos: [x, y], pressure, ..Default::default() }
+        PaintInformation {
+            pos: [x, y],
+            pressure,
+            ..Default::default()
+        }
     }
 
     #[test]

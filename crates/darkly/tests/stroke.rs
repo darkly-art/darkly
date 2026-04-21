@@ -4,13 +4,15 @@
 //! GpuPaintTarget, GpuRegionAction) without a full DarklyEngine.
 //! Run with: `cargo test -p darkly --test stroke`
 
-use darkly::gpu::test_utils::*;
 use darkly::gpu::diff_rect::DiffRectPass;
-use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use darkly::gpu::region_store::RegionStore;
+use darkly::gpu::test_utils::*;
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
-    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test") })
+    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("test"),
+    })
 }
 
 fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) {
@@ -44,14 +46,38 @@ fn gpu_stroke_paint_undo_redo() {
     submit(&queue, enc);
 
     // --- stroke_to: two circles ---
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
 
     let mut enc = encoder(&device);
-    target.composite_circle(&mut enc, &pipelines, &queue, 50.0, 50.0, 5.0, [255, 0, 0, 255], 1.0);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        50.0,
+        50.0,
+        5.0,
+        [255, 0, 0, 255],
+        1.0,
+    );
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    target.composite_circle(&mut enc, &pipelines, &queue, 60.0, 50.0, 5.0, [255, 0, 0, 255], 1.0);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        60.0,
+        50.0,
+        5.0,
+        [255, 0, 0, 255],
+        1.0,
+    );
     submit(&queue, enc);
 
     // --- end_stroke: commit the stroke rect ---
@@ -64,11 +90,23 @@ fn gpu_stroke_paint_undo_redo() {
     // Verify paint landed.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     let center1 = pixel_at(&pixels, w, 50, 50, 4);
-    assert_eq!(center1[0], 255, "circle 1 center should be red, R={}", center1[0]);
-    assert_eq!(center1[3], 255, "circle 1 center should be opaque, A={}", center1[3]);
+    assert_eq!(
+        center1[0], 255,
+        "circle 1 center should be red, R={}",
+        center1[0]
+    );
+    assert_eq!(
+        center1[3], 255,
+        "circle 1 center should be opaque, A={}",
+        center1[3]
+    );
 
     let center2 = pixel_at(&pixels, w, 60, 50, 4);
-    assert!(center2[3] > 0, "circle 2 center should be visible, A={}", center2[3]);
+    assert!(
+        center2[3] > 0,
+        "circle 2 center should be visible, A={}",
+        center2[3]
+    );
 
     let painted_snapshot = pixels.clone();
 
@@ -79,7 +117,11 @@ fn gpu_stroke_paint_undo_redo() {
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     let center1 = pixel_at(&pixels, w, 50, 50, 4);
-    assert_eq!(center1[3], 0, "after undo, circle 1 should be gone, A={}", center1[3]);
+    assert_eq!(
+        center1[3], 0,
+        "after undo, circle 1 should be gone, A={}",
+        center1[3]
+    );
 
     let corner = pixel_at(&pixels, w, 0, 0, 4);
     assert_eq!(corner[3], 0, "corner should still be transparent");
@@ -96,7 +138,11 @@ fn gpu_stroke_paint_undo_redo() {
         for x in sx..sx + sw {
             let p = pixel_at(&pixels, w, x, y, 4);
             let expected = pixel_at(&painted_snapshot, w, x, y, 4);
-            assert_eq!(p, expected, "redo mismatch at ({x},{y}): got {:?}, expected {:?}", p, expected);
+            assert_eq!(
+                p, expected,
+                "redo mismatch at ({x},{y}): got {:?}, expected {:?}",
+                p, expected
+            );
         }
     }
 }
@@ -111,8 +157,11 @@ fn stroke_rect_tracking() {
     // Simulated GpuStrokeState expand logic (mirrors engine.rs).
     fn expand_rect(
         rect: Option<[u32; 4]>,
-        cx: f32, cy: f32, radius: f32,
-        canvas_w: u32, canvas_h: u32,
+        cx: f32,
+        cy: f32,
+        radius: f32,
+        canvas_w: u32,
+        canvas_h: u32,
     ) -> [u32; 4] {
         let pad = 2.0;
         let x0 = (cx - radius - pad).max(0.0) as u32;
@@ -138,14 +187,28 @@ fn stroke_rect_tracking() {
     let rect = expand_rect(None, 100.0, 100.0, 10.0, canvas.0, canvas.1);
     assert!(rect[0] <= 88, "x0 should be ≤ 88, got {}", rect[0]);
     assert!(rect[1] <= 88, "y0 should be ≤ 88, got {}", rect[1]);
-    assert!(rect[0] + rect[2] >= 112, "x1 should be ≥ 112, got {}", rect[0] + rect[2]);
-    assert!(rect[1] + rect[3] >= 112, "y1 should be ≥ 112, got {}", rect[1] + rect[3]);
+    assert!(
+        rect[0] + rect[2] >= 112,
+        "x1 should be ≥ 112, got {}",
+        rect[0] + rect[2]
+    );
+    assert!(
+        rect[1] + rect[3] >= 112,
+        "y1 should be ≥ 112, got {}",
+        rect[1] + rect[3]
+    );
 
     // Second circle at (200, 200, r=10) — rect should expand.
     let rect = expand_rect(Some(rect), 200.0, 200.0, 10.0, canvas.0, canvas.1);
     assert!(rect[0] <= 88, "expanded x0 should still cover first circle");
-    assert!(rect[0] + rect[2] >= 212, "expanded x1 should cover second circle");
-    assert!(rect[1] + rect[3] >= 212, "expanded y1 should cover second circle");
+    assert!(
+        rect[0] + rect[2] >= 212,
+        "expanded x1 should cover second circle"
+    );
+    assert!(
+        rect[1] + rect[3] >= 212,
+        "expanded y1 should cover second circle"
+    );
 
     // Circle near edge (0, 0, r=5) — clamped to canvas bounds.
     let rect = expand_rect(None, 0.0, 0.0, 5.0, canvas.0, canvas.1);
@@ -154,8 +217,16 @@ fn stroke_rect_tracking() {
 
     // Small stroke rect should be << canvas size.
     let small = expand_rect(None, 128.0, 128.0, 3.0, canvas.0, canvas.1);
-    assert!(small[2] < 20, "small stroke width should be < 20, got {}", small[2]);
-    assert!(small[3] < 20, "small stroke height should be < 20, got {}", small[3]);
+    assert!(
+        small[2] < 20,
+        "small stroke width should be < 20, got {}",
+        small[2]
+    );
+    assert!(
+        small[3] < 20,
+        "small stroke height should be < 20, got {}",
+        small[3]
+    );
 }
 
 // ============================================================================
@@ -181,10 +252,25 @@ fn gpu_stroke_on_mask_undo() {
     submit(&queue, enc);
 
     // stroke_to: paint black circles → mask toward 0.
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
 
     let mut enc = encoder(&device);
-    target.composite_circle(&mut enc, &pipelines, &queue, 64.0, 64.0, 10.0, [0, 0, 0, 255], 1.0);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        64.0,
+        64.0,
+        10.0,
+        [0, 0, 0, 255],
+        1.0,
+    );
     submit(&queue, enc);
 
     // end_stroke: commit.
@@ -195,7 +281,11 @@ fn gpu_stroke_on_mask_undo() {
     // Verify mask is painted.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     let center = (64 * w + 64) as usize;
-    assert!(pixels[center] < 10, "mask center should be near 0, got {}", pixels[center]);
+    assert!(
+        pixels[center] < 10,
+        "mask center should be near 0, got {}",
+        pixels[center]
+    );
     assert_eq!(pixels[0], 255, "mask corner should be 255");
 
     // Undo: restore mask to 255.
@@ -204,7 +294,11 @@ fn gpu_stroke_on_mask_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixels[center], 255, "after undo, mask center should be 255, got {}", pixels[center]);
+    assert_eq!(
+        pixels[center], 255,
+        "after undo, mask center should be 255, got {}",
+        pixels[center]
+    );
 }
 
 // ============================================================================
@@ -227,9 +321,24 @@ fn gpu_two_strokes_sequential_undo() {
     store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
     submit(&queue, enc);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
-    target.composite_circle(&mut enc, &pipelines, &queue, 30.0, 30.0, 5.0, [255, 0, 0, 255], 1.0);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        30.0,
+        30.0,
+        5.0,
+        [255, 0, 0, 255],
+        1.0,
+    );
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
@@ -243,9 +352,24 @@ fn gpu_two_strokes_sequential_undo() {
     store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
     submit(&queue, enc);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
-    target.composite_circle(&mut enc, &pipelines, &queue, 90.0, 90.0, 5.0, [0, 0, 255, 255], 1.0);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        90.0,
+        90.0,
+        5.0,
+        [0, 0, 255, 255],
+        1.0,
+    );
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
@@ -254,8 +378,16 @@ fn gpu_two_strokes_sequential_undo() {
 
     // Verify both painted.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 30, 30, 4)[0], 255, "red circle should be present");
-    assert_eq!(pixel_at(&pixels, w, 90, 90, 4)[2], 255, "blue circle should be present");
+    assert_eq!(
+        pixel_at(&pixels, w, 30, 30, 4)[0],
+        255,
+        "red circle should be present"
+    );
+    assert_eq!(
+        pixel_at(&pixels, w, 90, 90, 4)[2],
+        255,
+        "blue circle should be present"
+    );
 
     // --- Undo stroke 2 → blue gone, red remains ---
     let mut enc = encoder(&device);
@@ -263,8 +395,16 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 30, 30, 4)[0], 255, "red should remain after undo stroke 2");
-    assert_eq!(pixel_at(&pixels, w, 90, 90, 4)[3], 0, "blue should be gone after undo stroke 2");
+    assert_eq!(
+        pixel_at(&pixels, w, 30, 30, 4)[0],
+        255,
+        "red should remain after undo stroke 2"
+    );
+    assert_eq!(
+        pixel_at(&pixels, w, 90, 90, 4)[3],
+        0,
+        "blue should be gone after undo stroke 2"
+    );
 
     // Compare with snapshot after stroke 1.
     let [sx, sy, sw, sh] = [23, 23, 14, 14];
@@ -284,7 +424,11 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 30, 30, 4)[3], 0, "red should be gone after undo stroke 1");
+    assert_eq!(
+        pixel_at(&pixels, w, 30, 30, 4)[3],
+        0,
+        "red should be gone after undo stroke 1"
+    );
     assert_eq!(pixel_at(&pixels, w, 90, 90, 4)[3], 0, "blue still gone");
 
     // --- Redo stroke 1 → red back ---
@@ -293,8 +437,16 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 30, 30, 4)[0], 255, "red should be back after redo stroke 1");
-    assert_eq!(pixel_at(&pixels, w, 90, 90, 4)[3], 0, "blue still gone (only redid stroke 1)");
+    assert_eq!(
+        pixel_at(&pixels, w, 30, 30, 4)[0],
+        255,
+        "red should be back after redo stroke 1"
+    );
+    assert_eq!(
+        pixel_at(&pixels, w, 90, 90, 4)[3],
+        0,
+        "blue still gone (only redid stroke 1)"
+    );
 
     // --- Redo stroke 2 → blue back ---
     let mut enc = encoder(&device);
@@ -302,8 +454,16 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 30, 30, 4)[0], 255, "red should still be present");
-    assert_eq!(pixel_at(&pixels, w, 90, 90, 4)[2], 255, "blue should be back after redo stroke 2");
+    assert_eq!(
+        pixel_at(&pixels, w, 30, 30, 4)[0],
+        255,
+        "red should still be present"
+    );
+    assert_eq!(
+        pixel_at(&pixels, w, 90, 90, 4)[2],
+        255,
+        "blue should be back after redo stroke 2"
+    );
 }
 
 // ============================================================================
@@ -314,7 +474,7 @@ fn gpu_two_strokes_sequential_undo() {
 #[test]
 fn gpu_region_action_undo_stack() {
     use darkly::document::Document;
-    use darkly::undo::{UndoStack, GpuRegionAction};
+    use darkly::undo::{GpuRegionAction, UndoStack};
 
     let (device, queue) = test_device();
     let (w, h) = (64, 64);
@@ -332,9 +492,24 @@ fn gpu_region_action_undo_stack() {
     store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
     submit(&queue, enc);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
-    target.composite_circle(&mut enc, &pipelines, &queue, 32.0, 32.0, 8.0, [0, 255, 0, 255], 1.0);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        32.0,
+        32.0,
+        8.0,
+        [0, 255, 0, 255],
+        1.0,
+    );
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
@@ -360,7 +535,12 @@ fn gpu_region_action_undo_stack() {
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     let center = pixel_at(&pixels, w, 32, 32, 4);
-    assert_eq!(center, &[255, 0, 0, 255], "after undo, should be red, got {:?}", center);
+    assert_eq!(
+        center,
+        &[255, 0, 0, 255],
+        "after undo, should be red, got {:?}",
+        center
+    );
 
     assert!(!undo_stack.can_undo());
     assert!(undo_stack.can_redo());
@@ -380,7 +560,11 @@ fn gpu_region_action_undo_stack() {
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     let center = pixel_at(&pixels, w, 32, 32, 4);
-    assert!(center[1] > 0, "after redo, green should be visible, got G={}", center[1]);
+    assert!(
+        center[1] > 0,
+        "after redo, green should be visible, got G={}",
+        center[1]
+    );
 
     assert!(undo_stack.can_undo());
     assert!(!undo_stack.can_redo());
@@ -395,8 +579,8 @@ fn gpu_region_action_undo_stack() {
 fn gpu_cpu_undo_interleaved() {
     use darkly::document::Document;
     use darkly::layer::Layer;
-    use darkly::undo::{UndoStack, GpuRegionAction, PropertyAction};
     use darkly::undo::property::Property;
+    use darkly::undo::{GpuRegionAction, PropertyAction, UndoStack};
 
     let (device, queue) = test_device();
     let (w, h) = (64, 64);
@@ -414,9 +598,24 @@ fn gpu_cpu_undo_interleaved() {
     store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
     submit(&queue, enc);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
-    target.composite_circle(&mut enc, &pipelines, &queue, 32.0, 32.0, 5.0, [255, 0, 0, 255], 1.0);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        32.0,
+        32.0,
+        5.0,
+        [255, 0, 0, 255],
+        1.0,
+    );
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
@@ -437,11 +636,17 @@ fn gpu_cpu_undo_interleaved() {
     // Undo #1: property change (CPU — no GPU work).
     let mut action = undo_stack.pop_for_undo().unwrap();
     let _affected = action.undo(&mut doc);
-    assert!(action.gpu_region_entry_mut().is_none(), "property action should not be GPU");
+    assert!(
+        action.gpu_region_entry_mut().is_none(),
+        "property action should not be GPU"
+    );
     undo_stack.complete_undo(action);
 
     if let Some(Layer::Raster(r)) = doc.layer(layer_id) {
-        assert!((r.opacity - 1.0).abs() < f32::EPSILON, "opacity should be restored to 1.0");
+        assert!(
+            (r.opacity - 1.0).abs() < f32::EPSILON,
+            "opacity should be restored to 1.0"
+        );
     }
 
     // Undo #2: GPU paint stroke.
@@ -456,7 +661,11 @@ fn gpu_cpu_undo_interleaved() {
     undo_stack.complete_undo(action);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 32, 32, 4)[3], 0, "paint should be undone");
+    assert_eq!(
+        pixel_at(&pixels, w, 32, 32, 4)[3],
+        0,
+        "paint should be undone"
+    );
 
     // Redo both.
     let mut action = undo_stack.pop_for_redo().unwrap();
@@ -470,14 +679,20 @@ fn gpu_cpu_undo_interleaved() {
     undo_stack.complete_redo(action);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert!(pixel_at(&pixels, w, 32, 32, 4)[0] > 0, "paint should be redone");
+    assert!(
+        pixel_at(&pixels, w, 32, 32, 4)[0] > 0,
+        "paint should be redone"
+    );
 
     let mut action = undo_stack.pop_for_redo().unwrap();
     let _affected = action.redo(&mut doc);
     undo_stack.complete_redo(action);
 
     if let Some(Layer::Raster(r)) = doc.layer(layer_id) {
-        assert!((r.opacity - 0.5).abs() < f32::EPSILON, "opacity should be 0.5 after redo");
+        assert!(
+            (r.opacity - 0.5).abs() < f32::EPSILON,
+            "opacity should be 0.5 after redo"
+        );
     }
 }
 
@@ -503,7 +718,13 @@ fn gpu_erase_stroke_undo() {
     submit(&queue, enc);
 
     // stroke_to: erase circle at center.
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
     target.erase_circle(&mut enc, &pipelines, &queue, 64.0, 64.0, 10.0);
     submit(&queue, enc);
@@ -515,8 +736,16 @@ fn gpu_erase_stroke_undo() {
 
     // Verify erased.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 64, 64, 4)[3], 0, "center should be erased");
-    assert_eq!(pixel_at(&pixels, w, 0, 0, 4)[3], 255, "corner should be unchanged");
+    assert_eq!(
+        pixel_at(&pixels, w, 64, 64, 4)[3],
+        0,
+        "center should be erased"
+    );
+    assert_eq!(
+        pixel_at(&pixels, w, 0, 0, 4)[3],
+        255,
+        "corner should be unchanged"
+    );
 
     // Undo.
     let mut enc = encoder(&device);
@@ -524,7 +753,11 @@ fn gpu_erase_stroke_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 64, 64, 4), &[255, 0, 0, 255], "center should be restored to red");
+    assert_eq!(
+        pixel_at(&pixels, w, 64, 64, 4),
+        &[255, 0, 0, 255],
+        "center should be restored to red"
+    );
 }
 
 // ============================================================================
@@ -543,17 +776,30 @@ fn diff_rect_finds_painted_region() {
 
     // Two identical transparent textures.
     let blank = vec![0u8; (w * h * 4) as usize];
-    let (scratch_tex, scratch_view) = create_test_texture(&device, &queue, w, h, &blank);
+    let (_scratch_tex, scratch_view) = create_test_texture(&device, &queue, w, h, &blank);
     let (canvas_tex, canvas_view) = create_test_texture(&device, &queue, w, h, &blank);
 
     // Paint a circle at (100, 100) on the canvas only — simulating a
     // scattered dab that landed far from where the stroke engine tracked.
     let pipelines = PaintPipelines::new(&device, &queue);
     let target = GpuPaintTarget {
-        texture: &canvas_tex, view: &canvas_view, format: fmt, width: w, height: h,
+        texture: &canvas_tex,
+        view: &canvas_view,
+        format: fmt,
+        width: w,
+        height: h,
     };
     let mut enc = encoder(&device);
-    target.composite_circle(&mut enc, &pipelines, &queue, 100.0, 100.0, 8.0, [255, 0, 0, 255], 1.0);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        100.0,
+        100.0,
+        8.0,
+        [255, 0, 0, 255],
+        1.0,
+    );
     submit(&queue, enc);
 
     // Dispatch the diff.
@@ -565,7 +811,10 @@ fn diff_rect_finds_painted_region() {
         if let Some(result) = diff.poll(&device) {
             break result;
         }
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     };
 
     let rect = rect.expect("diff should find changed pixels");
@@ -573,8 +822,18 @@ fn diff_rect_finds_painted_region() {
 
     // The circle is at (100, 100) with radius 8. The diff rect should
     // contain the circle — center must be inside the rect.
-    assert!(rx <= 100 && 100 < rx + rw, "diff rect x range [{}, {}) should contain 100", rx, rx + rw);
-    assert!(ry <= 100 && 100 < ry + rh, "diff rect y range [{}, {}) should contain 100", ry, ry + rh);
+    assert!(
+        rx <= 100 && 100 < rx + rw,
+        "diff rect x range [{}, {}) should contain 100",
+        rx,
+        rx + rw
+    );
+    assert!(
+        ry <= 100 && 100 < ry + rh,
+        "diff rect y range [{}, {}) should contain 100",
+        ry,
+        ry + rh
+    );
 
     // Rect should be reasonably tight (not the full canvas).
     assert!(rw < 30, "diff rect width should be tight, got {rw}");
@@ -601,14 +860,32 @@ fn diff_rect_undo_restores_offset_paint() {
     submit(&queue, enc);
 
     // Paint a circle at (100, 100) — far from origin, simulating scatter.
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
-    target.composite_circle(&mut enc, &pipelines, &queue, 100.0, 100.0, 8.0, [255, 0, 0, 255], 1.0);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        100.0,
+        100.0,
+        8.0,
+        [255, 0, 0, 255],
+        1.0,
+    );
     submit(&queue, enc);
 
     // Verify paint landed.
     let painted = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert!(pixel_at(&painted, w, 100, 100, 4)[3] > 0, "paint should be visible at (100,100)");
+    assert!(
+        pixel_at(&painted, w, 100, 100, 4)[3] > 0,
+        "paint should be visible at (100,100)"
+    );
 
     // Compute diff rect via GPU (instead of hand-tracking).
     let scratch_view = store.scratch_view(fmt);
@@ -619,7 +896,10 @@ fn diff_rect_undo_restores_offset_paint() {
         if let Some(result) = diff.poll(&device) {
             break result;
         }
-        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let _ = device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        });
     };
     let rect = rect.expect("should have a diff rect");
 
@@ -636,7 +916,8 @@ fn diff_rect_undo_restores_offset_paint() {
     // The entire canvas should be back to transparent.
     let restored = readback_texture(&device, &queue, &tex, fmt, w, h);
     assert_eq!(
-        pixel_at(&restored, w, 100, 100, 4)[3], 0,
+        pixel_at(&restored, w, 100, 100, 4)[3],
+        0,
         "after undo, scattered paint at (100,100) should be gone"
     );
 
@@ -644,7 +925,10 @@ fn diff_rect_undo_restores_offset_paint() {
     for y in 0..h {
         for x in 0..w {
             let a = pixel_at(&restored, w, x, y, 4)[3];
-            assert_eq!(a, 0, "pixel ({x},{y}) should be transparent after undo, got A={a}");
+            assert_eq!(
+                a, 0,
+                "pixel ({x},{y}) should be transparent after undo, got A={a}"
+            );
         }
     }
 }

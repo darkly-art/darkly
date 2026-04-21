@@ -15,7 +15,7 @@ use super::interpolation::{lerp_paint_info, CatmullRomSegment};
 use super::paint_info::{PaintInformation, StrokeRecord};
 use super::save_points::SavePointStore;
 use super::spacing::SpacingConfig;
-use super::stabilizer::{StabilizerAlgorithm, StabilizeResult};
+use super::stabilizer::{StabilizeResult, StabilizerAlgorithm};
 
 /// Reference maximum speed in px/sec for normalizing speed to 0-1.
 const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
@@ -171,7 +171,11 @@ impl StrokeEngine {
     /// stabilized polyline from `start_vector_index` to tip, computing derived
     /// values (speed, distance, angle) between consecutive points, and
     /// placing dabs at spacing intervals.
-    pub fn render_from_stabilized_range(&mut self, gpu: &mut BrushGpuContext, start_vector_index: usize) {
+    pub fn render_from_stabilized_range(
+        &mut self,
+        gpu: &mut BrushGpuContext,
+        start_vector_index: usize,
+    ) {
         let end = self.stabilizer.len().saturating_sub(1);
         self.render_from_stabilized_range_to(gpu, start_vector_index, end);
     }
@@ -216,14 +220,17 @@ impl StrokeEngine {
             let mut info = raw;
 
             // Compute derived values from the stabilized positions.
-            info.tilt_magnitude = (info.x_tilt * info.x_tilt + info.y_tilt * info.y_tilt).sqrt().min(1.0);
+            info.tilt_magnitude = (info.x_tilt * info.x_tilt + info.y_tilt * info.y_tilt)
+                .sqrt()
+                .min(1.0);
             info.tilt_direction = info.y_tilt.atan2(info.x_tilt);
 
             // First point of the stroke: no segment to place dabs along.
             if self.last_point.is_none() {
                 self.place_dab(&info, gpu, i);
                 self.last_point = Some(info);
-                self.save_points.finalize_render_state(i, self.capture_render_state());
+                self.save_points
+                    .finalize_render_state(i, self.capture_render_state());
                 continue;
             }
 
@@ -235,7 +242,11 @@ impl StrokeEngine {
             let p0_pt = if i >= 2 { stabilized[i - 2] } else { prev };
             let p1_pt = prev;
             let p2_pt = info;
-            let p3_pt = if i + 1 < stabilized.len() { stabilized[i + 1] } else { info };
+            let p3_pt = if i + 1 < stabilized.len() {
+                stabilized[i + 1]
+            } else {
+                info
+            };
 
             let seg = CatmullRomSegment::new(&p0_pt, &p1_pt, &p2_pt, &p3_pt);
             let arc_len = seg.arc_length();
@@ -260,7 +271,8 @@ impl StrokeEngine {
 
             if arc_len < 0.001 {
                 self.last_point = Some(info);
-                self.save_points.finalize_render_state(i, self.capture_render_state());
+                self.save_points
+                    .finalize_render_state(i, self.capture_render_state());
                 continue;
             }
 
@@ -283,7 +295,8 @@ impl StrokeEngine {
             // Capture end-of-segment state on ALL save points for this vector
             // index.  This represents "everything through vector index i is
             // fully processed" — the checkpoint restore starts from i+1.
-            self.save_points.finalize_render_state(i, self.capture_render_state());
+            self.save_points
+                .finalize_render_state(i, self.capture_render_state());
         }
     }
 
@@ -301,7 +314,12 @@ impl StrokeEngine {
     }
 
     /// Evaluate the brush graph for a single dab at the given position.
-    fn place_dab(&mut self, info: &PaintInformation, gpu: &mut BrushGpuContext, vector_index: usize) {
+    fn place_dab(
+        &mut self,
+        info: &PaintInformation,
+        gpu: &mut BrushGpuContext,
+        vector_index: usize,
+    ) {
         let mut dab_info = *info;
         dab_info.fade = (dab_info.distance / FADE_DISTANCE_PX).min(1.0);
 
@@ -356,13 +374,17 @@ impl StrokeEngine {
         // Render state is captured at end-of-segment, not per-dab.
         // Push a placeholder; the loop in render_from_stabilized_range
         // overwrites the last save point's render_state after each segment.
-        self.save_points.push([x, y, w, h], vector_index, RenderCheckpoint {
-            last_point: None,
-            accumulated_distance: 0.0,
-            leftover_distance: 0.0,
-            last_dab_size: [0.0, 0.0],
-            dab_count: 0,
-        });
+        self.save_points.push(
+            [x, y, w, h],
+            vector_index,
+            RenderCheckpoint {
+                last_point: None,
+                accumulated_distance: 0.0,
+                leftover_distance: 0.0,
+                last_dab_size: [0.0, 0.0],
+                dab_count: 0,
+            },
+        );
 
         self.dab_count += 1;
     }
@@ -382,13 +404,16 @@ impl StrokeEngine {
         let raw_pt = stabilized[len - 1];
         let mut info = raw_pt;
 
-        info.tilt_magnitude = (info.x_tilt * info.x_tilt + info.y_tilt * info.y_tilt).sqrt().min(1.0);
+        info.tilt_magnitude = (info.x_tilt * info.x_tilt + info.y_tilt * info.y_tilt)
+            .sqrt()
+            .min(1.0);
         info.tilt_direction = info.y_tilt.atan2(info.x_tilt);
 
         if self.last_point.is_none() {
             self.place_dab(&info, gpu, len - 1);
             self.last_point = Some(info);
-            self.save_points.finalize_render_state(len - 1, self.capture_render_state());
+            self.save_points
+                .finalize_render_state(len - 1, self.capture_render_state());
             return;
         }
 
@@ -437,7 +462,8 @@ impl StrokeEngine {
 
         self.leftover_distance = traveled - arc_len;
         self.last_point = Some(info);
-        self.save_points.finalize_render_state(len - 1, self.capture_render_state());
+        self.save_points
+            .finalize_render_state(len - 1, self.capture_render_state());
     }
 
     /// Delegate the stroke-start / rewind-boundary lifecycle hook to every

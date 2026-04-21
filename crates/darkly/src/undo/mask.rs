@@ -16,13 +16,13 @@ pub struct MaskPropertyAction {
 }
 
 impl MaskPropertyAction {
-    pub fn new(
-        layer_id: LayerId,
-        had_mask: bool,
-        mask_enabled: bool,
-        show_mask: bool,
-    ) -> Self {
-        MaskPropertyAction { layer_id, had_mask, mask_enabled, show_mask }
+    pub fn new(layer_id: LayerId, had_mask: bool, mask_enabled: bool, show_mask: bool) -> Self {
+        MaskPropertyAction {
+            layer_id,
+            had_mask,
+            mask_enabled,
+            show_mask,
+        }
     }
 }
 

@@ -17,13 +17,16 @@ pub fn register() -> BrushNodeRegistration {
         type_id: "random",
         category: "sensor",
         display_name: "Random",
-        ports: vec![
-            PortDef::output("value", BrushWireType::Scalar)
-                .with_description("Random value (-1 to 1)"),
-        ],
+        ports: vec![PortDef::output("value", BrushWireType::Scalar)
+            .with_description("Random value (-1 to 1)")],
         params: &[
             // 0 = per-dab, 1 = per-stroke
-            ParamDef::Int { name: "mode", min: 0, max: 1, default: 0 },
+            ParamDef::Int {
+                name: "mode",
+                min: 0,
+                max: 1,
+                default: 0,
+            },
         ],
         is_gpu: false,
     }
@@ -45,7 +48,7 @@ pub struct RandomEvaluator;
 
 impl BrushNodeEvaluator for RandomEvaluator {
     fn evaluate_cpu(&self, ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        let mode = match ctx.params.get(0) {
+        let mode = match ctx.params.first() {
             Some(crate::gpu::params::ParamValue::Int(v)) => *v,
             _ => 0,
         };
@@ -56,7 +59,7 @@ impl BrushNodeEvaluator for RandomEvaluator {
         let salted_seed = ctx.stroke_seed.wrapping_add(salt.wrapping_mul(0x9E3779B9));
 
         let raw = match mode {
-            1 => prng_f32(salted_seed, 0),         // per-stroke: constant
+            1 => prng_f32(salted_seed, 0),             // per-stroke: constant
             _ => prng_f32(salted_seed, ctx.dab_index), // per-dab: varies
         };
 

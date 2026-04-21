@@ -3,8 +3,16 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int  { name: "scale", min: 1, max: 6, default: 2 },
-    ParamDef::Bool { name: "soft",  default: false },
+    ParamDef::Int {
+        name: "scale",
+        min: 1,
+        max: 6,
+        default: 2,
+    },
+    ParamDef::Bool {
+        name: "soft",
+        default: false,
+    },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -13,8 +21,14 @@ pub fn register() -> VeilRegistration {
         params: PARAMS,
         create_pipeline: create_pixelate_pipeline,
         from_params: |params, shared| {
-            let scale = match params.get(0) { Some(ParamValue::Int(v)) => *v as u32, _ => 2 };
-            let soft = match params.get(1) { Some(ParamValue::Bool(v)) => *v, _ => true };
+            let scale = match params.first() {
+                Some(ParamValue::Int(v)) => *v as u32,
+                _ => 2,
+            };
+            let soft = match params.get(1) {
+                Some(ParamValue::Bool(v)) => *v,
+                _ => true,
+            };
             Box::new(Pixelate::new(scale, soft, shared))
         },
     }
@@ -77,8 +91,8 @@ impl Veil for Pixelate {
     ) -> EffectCache {
         let n = self.num_halvings();
         let layout = self.bind_group_layout();
-        let tex_usage = wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING;
+        let tex_usage =
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING;
 
         // Create intermediate textures at each halving level.
         let mut aux_textures = Vec::with_capacity(n as usize);
@@ -91,7 +105,11 @@ impl Veil for Pixelate {
             h = (h / 2).max(1);
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("pixelate-aux-{i}")),
-                size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -270,10 +288,7 @@ impl Veil for Pixelate {
     }
 }
 
-fn create_pixelate_pipeline(
-    device: &wgpu::Device,
-    format: wgpu::TextureFormat,
-) -> EffectPipeline {
+fn create_pixelate_pipeline(device: &wgpu::Device, format: wgpu::TextureFormat) -> EffectPipeline {
     // Pixelate uses the shared blit shader — the effect comes from
     // iteratively halving to a small texture (proper 2x2 averaging),
     // then upscaling with linear or nearest filtering.

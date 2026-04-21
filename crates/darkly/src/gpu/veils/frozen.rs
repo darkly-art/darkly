@@ -7,9 +7,24 @@ use std::sync::Arc;
 const FROZEN_NORMAL_BYTES: &[u8] = include_bytes!("../../../resources/veils/frozen.jpg");
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float { name: "strength",  min: 0.0, max: 0.2,  default: 0.04 },
-    ParamDef::Float { name: "scale",     min: 0.1, max: 5.0,  default: 1.0 },
-    ParamDef::Float { name: "chromatic", min: 0.0, max: 1.0,  default: 0.1 },
+    ParamDef::Float {
+        name: "strength",
+        min: 0.0,
+        max: 0.2,
+        default: 0.04,
+    },
+    ParamDef::Float {
+        name: "scale",
+        min: 0.1,
+        max: 5.0,
+        default: 1.0,
+    },
+    ParamDef::Float {
+        name: "chromatic",
+        min: 0.0,
+        max: 1.0,
+        default: 0.1,
+    },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -18,9 +33,18 @@ pub fn register() -> VeilRegistration {
         params: PARAMS,
         create_pipeline: create_frozen_pipeline,
         from_params: |params, shared| {
-            let strength  = match params.get(0) { Some(ParamValue::Float(v)) => *v, _ => 0.04 };
-            let scale     = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 1.0 };
-            let chromatic = match params.get(2) { Some(ParamValue::Float(v)) => *v, _ => 0.1 };
+            let strength = match params.first() {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.04,
+            };
+            let scale = match params.get(1) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 1.0,
+            };
+            let chromatic = match params.get(2) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.1,
+            };
             Box::new(Frozen::new(strength, scale, chromatic, shared))
         },
     }
@@ -54,7 +78,12 @@ pub struct Frozen {
 
 impl Frozen {
     pub fn new(strength: f32, scale: f32, chromatic: f32, shared: Arc<EffectPipeline>) -> Self {
-        Frozen { strength, scale, chromatic, shared }
+        Frozen {
+            strength,
+            scale,
+            chromatic,
+            shared,
+        }
     }
 }
 
@@ -93,7 +122,11 @@ impl Veil for Frozen {
 
         let normal_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("frozen-normal"),
-            size: wgpu::Extent3d { width: nw, height: nh, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: nw,
+                height: nh,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -114,7 +147,11 @@ impl Veil for Frozen {
                 bytes_per_row: Some(nw * 4),
                 rows_per_image: Some(nh),
             },
-            wgpu::Extent3d { width: nw, height: nh, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: nw,
+                height: nh,
+                depth_or_array_layers: 1,
+            },
         );
         let normal_view = normal_tex.create_view(&Default::default());
 
@@ -214,10 +251,7 @@ impl Veil for Frozen {
     }
 }
 
-fn create_frozen_pipeline(
-    device: &wgpu::Device,
-    _format: wgpu::TextureFormat,
-) -> EffectPipeline {
+fn create_frozen_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("frozen-bgl"),
         entries: &[

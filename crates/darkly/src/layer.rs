@@ -60,8 +60,8 @@ pub struct LayerGroup {
     pub opacity: f32,
     pub blend_mode: BlendMode,
     pub visible: bool,
-    pub passthrough: bool,  // true = passthrough (default), false = normal group
-    pub collapsed: bool,    // UI state: whether the group is visually collapsed
+    pub passthrough: bool, // true = passthrough (default), false = normal group
+    pub collapsed: bool,   // UI state: whether the group is visually collapsed
     /// Whether this group has an associated mask texture on the GPU.
     pub has_mask: bool,
     pub mask_enabled: bool,
@@ -117,12 +117,24 @@ pub trait Masked {
 macro_rules! impl_masked {
     ($t:ty) => {
         impl Masked for $t {
-            fn has_mask(&self) -> bool { self.has_mask }
-            fn set_has_mask(&mut self, has: bool) { self.has_mask = has; }
-            fn mask_enabled(&self) -> bool { self.mask_enabled }
-            fn set_mask_enabled(&mut self, enabled: bool) { self.mask_enabled = enabled; }
-            fn show_mask(&self) -> bool { self.show_mask }
-            fn set_show_mask(&mut self, show: bool) { self.show_mask = show; }
+            fn has_mask(&self) -> bool {
+                self.has_mask
+            }
+            fn set_has_mask(&mut self, has: bool) {
+                self.has_mask = has;
+            }
+            fn mask_enabled(&self) -> bool {
+                self.mask_enabled
+            }
+            fn set_mask_enabled(&mut self, enabled: bool) {
+                self.mask_enabled = enabled;
+            }
+            fn show_mask(&self) -> bool {
+                self.show_mask
+            }
+            fn set_show_mask(&mut self, show: bool) {
+                self.show_mask = show;
+            }
         }
     };
 }

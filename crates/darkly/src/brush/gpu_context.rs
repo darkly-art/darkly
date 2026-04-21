@@ -110,9 +110,10 @@ impl<'a> BrushGpuContext<'a> {
         if self.pipelines.rings_nearly_full() {
             let finished = std::mem::replace(
                 &mut self.encoder,
-                self.device.create_command_encoder(
-                    &wgpu::CommandEncoderDescriptor { label: Some("brush-ring-flush") },
-                ),
+                self.device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("brush-ring-flush"),
+                    }),
             );
             self.queue.submit([finished.finish()]);
             self.pipelines.reset_uniform_rings();
@@ -152,7 +153,11 @@ impl<'a> BrushGpuContext<'a> {
             wgpu::TexelCopyTextureInfo {
                 texture: self.stroke_scratch_texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d { x: origin_x, y: origin_y, z: 0 },
+                origin: wgpu::Origin3d {
+                    x: origin_x,
+                    y: origin_y,
+                    z: 0,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {
@@ -161,7 +166,11 @@ impl<'a> BrushGpuContext<'a> {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
         );
         self.canvas_copy_origin = Some([origin_x, origin_y]);
     }

@@ -151,13 +151,16 @@ impl DabTexturePool {
         let idx = self.entries.len();
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(&format!("dab-texture-{idx}")),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -216,7 +219,10 @@ impl DabTexturePool {
     pub fn bind_group(&self, handle: TextureHandle) -> &wgpu::BindGroup {
         if handle.0 & STATIC_HANDLE_BIT != 0 {
             let idx = (handle.0 & !STATIC_HANDLE_BIT) as usize;
-            &self.static_entries[idx].as_ref().expect("static texture released").bind_group
+            &self.static_entries[idx]
+                .as_ref()
+                .expect("static texture released")
+                .bind_group
         } else {
             &self.entries[handle.0 as usize].bind_group
         }
@@ -230,7 +236,9 @@ impl DabTexturePool {
     pub fn texture_size(&self, handle: TextureHandle) -> (u32, u32) {
         if handle.0 & STATIC_HANDLE_BIT != 0 {
             let idx = (handle.0 & !STATIC_HANDLE_BIT) as usize;
-            let e = self.static_entries[idx].as_ref().expect("static texture released");
+            let e = self.static_entries[idx]
+                .as_ref()
+                .expect("static texture released");
             (e.width, e.height)
         } else {
             let e = &self.entries[handle.0 as usize];
@@ -240,7 +248,9 @@ impl DabTexturePool {
 
     /// Check whether a static texture handle is still valid (not released).
     pub fn is_static_valid(&self, handle: TextureHandle) -> bool {
-        if handle.0 & STATIC_HANDLE_BIT == 0 { return false; }
+        if handle.0 & STATIC_HANDLE_BIT == 0 {
+            return false;
+        }
         let idx = (handle.0 & !STATIC_HANDLE_BIT) as usize;
         idx < self.static_entries.len() && self.static_entries[idx].is_some()
     }
@@ -334,7 +344,9 @@ impl DabTexturePool {
     /// `texture_size()` calls on it will panic.  The slot is tombstoned
     /// and may be reused by a future `upload_image()`.
     pub fn release_static(&mut self, handle: TextureHandle) {
-        if handle.0 & STATIC_HANDLE_BIT == 0 { return; }
+        if handle.0 & STATIC_HANDLE_BIT == 0 {
+            return;
+        }
         let idx = (handle.0 & !STATIC_HANDLE_BIT) as usize;
         if idx < self.static_entries.len() {
             self.static_entries[idx] = None; // drops GPU resources

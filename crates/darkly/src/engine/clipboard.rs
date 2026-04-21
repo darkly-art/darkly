@@ -1,7 +1,7 @@
 //! Copy, cut, paste operations.
 
-use super::{DarklyEngine, PendingCopy, ReadbackContext};
 use super::types::ClipboardExport;
+use super::{DarklyEngine, PendingCopy, ReadbackContext};
 use crate::clipboard::{Clipboard, ImageClip};
 use crate::document::MoveTarget;
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -14,13 +14,14 @@ impl DarklyEngine {
     /// clipboard. Kicks off an async GPU readback — the result is available via
     /// `poll_copy_result()` on the next frame. Returns `None` immediately.
     pub fn copy(&mut self, layer_id: u64) -> Option<ClipboardExport> {
-        if self.doc.layer(layer_id).is_none() {
-            return None;
-        }
+        self.doc.layer(layer_id)?;
 
         if self.gpu_selection.active && self.gpu_selection.cpu_cache.is_none() {
             // Selection cache not ready — defer until SelectionReadback completes.
-            self.pending_copy = Some(PendingCopy { layer_id, is_cut: false });
+            self.pending_copy = Some(PendingCopy {
+                layer_id,
+                is_cut: false,
+            });
             return None;
         }
 
@@ -51,10 +52,14 @@ impl DarklyEngine {
 
         // Determine format and check texture exists.
         let format = if is_mask {
-            if self.compositor.mask_texture(layer_id).is_none() { return; }
+            if self.compositor.mask_texture(layer_id).is_none() {
+                return;
+            }
             wgpu::TextureFormat::R8Unorm
         } else {
-            if self.compositor.layer_texture(layer_id).is_none() { return; }
+            if self.compositor.layer_texture(layer_id).is_none() {
+                return;
+            }
             wgpu::TextureFormat::Rgba8Unorm
         };
 
@@ -68,7 +73,9 @@ impl DarklyEngine {
             }
         };
         let [rx, ry, rw, rh] = region;
-        if rw == 0 || rh == 0 { return; }
+        if rw == 0 || rh == 0 {
+            return;
+        }
 
         let has_selection = self.gpu_selection.active;
 
@@ -83,7 +90,10 @@ impl DarklyEngine {
                 };
                 self.gpu.encode("cut-save", |encoder| {
                     self.region_store.save_region(
-                        encoder, texture, format, [0, 0, canvas_w, canvas_h],
+                        encoder,
+                        texture,
+                        format,
+                        [0, 0, canvas_w, canvas_h],
                     );
                 });
             }
@@ -91,7 +101,11 @@ impl DarklyEngine {
             // Create staging texture for the masked copy.
             let staging_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("copy-staging"),
-                size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: rw,
+                    height: rh,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -107,13 +121,16 @@ impl DarklyEngine {
             // Create a cropped selection R8 texture for the copy region.
             let sel_crop_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("copy-sel-crop"),
-                size: wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: rw,
+                    height: rh,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::R8Unorm,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_DST,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
             let sel_crop_view = sel_crop_tex.create_view(&wgpu::TextureViewDescriptor::default());
@@ -124,7 +141,9 @@ impl DarklyEngine {
                 ..Default::default()
             });
             let sel_crop_bg = self.paint_pipelines.create_selection_bind_group(
-                &self.gpu.device, &sel_crop_view, &sel_sampler,
+                &self.gpu.device,
+                &sel_crop_view,
+                &sel_sampler,
             );
 
             // Get texture references before entering the encode closure.
@@ -154,7 +173,11 @@ impl DarklyEngine {
                         origin: wgpu::Origin3d::ZERO,
                         aspect: wgpu::TextureAspect::All,
                     },
-                    wgpu::Extent3d { width: rw, height: rh, depth_or_array_layers: 1 },
+                    wgpu::Extent3d {
+                        width: rw,
+                        height: rh,
+                        depth_or_array_layers: 1,
+                    },
                 );
 
                 // 2. Copy selection region → cropped selection texture.
@@ -172,7 +195,11 @@ impl DarklyEngine {
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
                         },
-                        wgpu::Extent3d { width: sel_copy_w, height: sel_copy_h, depth_or_array_layers: 1 },
+                        wgpu::Extent3d {
+                            width: sel_copy_w,
+                            height: sel_copy_h,
+                            depth_or_array_layers: 1,
+                        },
                     );
                 }
 
@@ -187,7 +214,10 @@ impl DarklyEngine {
                     height: rh,
                 };
                 staging_target.multiply_alpha_by_mask(
-                    encoder, &self.paint_pipelines, &self.gpu.queue, &sel_crop_bg,
+                    encoder,
+                    &self.paint_pipelines,
+                    &self.gpu.queue,
+                    &sel_crop_bg,
                 );
 
                 // 4. If cut: reduce layer alpha by selection on selected pixels.
@@ -201,25 +231,40 @@ impl DarklyEngine {
                         (GpuPaintTarget::from_layer(t, canvas_w, canvas_h), ())
                     };
                     layer_target.multiply_alpha_by_inverse_mask(
-                        encoder, &self.paint_pipelines, &self.gpu.queue,
+                        encoder,
+                        &self.paint_pipelines,
+                        &self.gpu.queue,
                         self.gpu_selection.paint_bind_group(),
                     );
                 }
 
                 // 5. Kick async readback of the masked staging texture.
                 let request = readback::request_readback(
-                    &self.gpu.device, encoder, &staging_tex, format, [0, 0, rw, rh],
+                    &self.gpu.device,
+                    encoder,
+                    &staging_tex,
+                    format,
+                    [0, 0, rw, rh],
                 );
-                self.readbacks.submit(request, ReadbackContext::Copy {
-                    is_mask, region, is_cut, layer_id,
-                });
+                self.readbacks.submit(
+                    request,
+                    ReadbackContext::Copy {
+                        is_mask,
+                        region,
+                        is_cut,
+                        layer_id,
+                    },
+                );
             });
 
             // Commit undo for cut.
             if is_cut {
                 self.gpu.encode("cut-commit", |encoder| {
                     let entry = self.region_store.commit_region(
-                        encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
+                        encoder,
+                        layer_id,
+                        format,
+                        [0, 0, canvas_w, canvas_h],
                     );
                     self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
                 });
@@ -234,12 +279,17 @@ impl DarklyEngine {
             };
 
             self.gpu.encode("copy-readback", |encoder| {
-                let request = readback::request_readback(
-                    &self.gpu.device, encoder, texture, format, region,
+                let request =
+                    readback::request_readback(&self.gpu.device, encoder, texture, format, region);
+                self.readbacks.submit(
+                    request,
+                    ReadbackContext::Copy {
+                        is_mask,
+                        region,
+                        is_cut,
+                        layer_id,
+                    },
                 );
-                self.readbacks.submit(request, ReadbackContext::Copy {
-                    is_mask, region, is_cut, layer_id,
-                });
             });
 
             if is_cut {
@@ -259,7 +309,9 @@ impl DarklyEngine {
         if self.gpu_selection.pixel_bounds.is_none() {
             let data = self.gpu_selection.cpu_cache.as_ref()?;
             self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
-                data, self.gpu_selection.width, self.gpu_selection.height,
+                data,
+                self.gpu_selection.width,
+                self.gpu_selection.height,
             );
         }
         if let Some([x, y, w, h]) = self.gpu_selection.pixel_bounds {
@@ -275,8 +327,12 @@ impl DarklyEngine {
     /// Pixels arrive pre-masked from the GPU staging texture (when selection
     /// was active) or raw from the layer (when no selection).
     pub(crate) fn complete_copy(
-        &mut self, is_mask: bool, region: [u32; 4],
-        is_cut: bool, layer_id: u64, pixels: Vec<u8>,
+        &mut self,
+        is_mask: bool,
+        region: [u32; 4],
+        is_cut: bool,
+        layer_id: u64,
+        pixels: Vec<u8>,
     ) {
         let [rx, ry, rw, rh] = region;
 
@@ -318,12 +374,13 @@ impl DarklyEngine {
     /// Cut = copy + clear. The clear happens on GPU during start_copy_readback.
     /// Returns `None` immediately; result available via `poll_copy_result()`.
     pub fn cut(&mut self, layer_id: u64) -> Option<ClipboardExport> {
-        if self.doc.layer(layer_id).is_none() {
-            return None;
-        }
+        self.doc.layer(layer_id)?;
 
         if self.gpu_selection.active && self.gpu_selection.cpu_cache.is_none() {
-            self.pending_copy = Some(PendingCopy { layer_id, is_cut: true });
+            self.pending_copy = Some(PendingCopy {
+                layer_id,
+                is_cut: true,
+            });
             return None;
         }
 
@@ -348,7 +405,8 @@ impl DarklyEngine {
             r.name = "Pasted Layer".to_string();
         }
 
-        self.compositor.ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
+        self.compositor
+            .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
 
         // Write RGBA data directly to the GPU layer texture.
         let canvas_w = self.compositor.canvas_width();
@@ -378,7 +436,11 @@ impl DarklyEngine {
                     wgpu::TexelCopyTextureInfo {
                         texture: &layer_tex.texture,
                         mip_level: 0,
-                        origin: wgpu::Origin3d { x: dst_x, y: dst_y, z: 0 },
+                        origin: wgpu::Origin3d {
+                            x: dst_x,
+                            y: dst_y,
+                            z: 0,
+                        },
                         aspect: wgpu::TextureAspect::All,
                     },
                     &buf,
@@ -405,7 +467,8 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack.push(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.undo_stack
+            .push(Box::new(LayerAddAction::new(id, parent, pos)));
 
         id
     }

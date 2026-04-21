@@ -200,7 +200,10 @@ impl<F: TileFormat> TileStore<F> {
 
     /// Convert pixel coordinates to tile coordinates.
     pub fn tile_coords_for_pixel(x: i32, y: i32) -> (i32, i32) {
-        (x.div_euclid(TILE_SIZE as i32), y.div_euclid(TILE_SIZE as i32))
+        (
+            x.div_euclid(TILE_SIZE as i32),
+            y.div_euclid(TILE_SIZE as i32),
+        )
     }
 
     /// Iterate over all tiles.
@@ -258,7 +261,9 @@ mod tests {
     fn cow_clone_on_write() {
         let t1 = Tile::<Rgba>::empty();
         let mut t2 = t1.clone();
-        t2.write().pixel_mut(0, 0).copy_from_slice(&[255, 0, 0, 255]);
+        t2.write()
+            .pixel_mut(0, 0)
+            .copy_from_slice(&[255, 0, 0, 255]);
         assert_eq!(t1.data().pixel(0, 0), &[0, 0, 0, 0]);
         assert_eq!(t2.data().pixel(0, 0), &[255, 0, 0, 255]);
     }
@@ -268,20 +273,31 @@ mod tests {
         let mut store = TileStore::<Rgba>::new();
         assert!(store.get(0, 0).is_none());
         let tile = store.get_or_create(0, 0);
-        tile.write().pixel_mut(5, 5).copy_from_slice(&[0, 255, 0, 255]);
+        tile.write()
+            .pixel_mut(5, 5)
+            .copy_from_slice(&[0, 255, 0, 255]);
         assert!(store.get(0, 0).is_some());
-        assert_eq!(store.get(0, 0).unwrap().data().pixel(5, 5), &[0, 255, 0, 255]);
+        assert_eq!(
+            store.get(0, 0).unwrap().data().pixel(5, 5),
+            &[0, 255, 0, 255]
+        );
     }
 
     #[test]
     fn tile_coords_for_pixel() {
         let ts = TILE_SIZE as i32;
         assert_eq!(TileStore::<Rgba>::tile_coords_for_pixel(0, 0), (0, 0));
-        assert_eq!(TileStore::<Rgba>::tile_coords_for_pixel(ts - 1, ts - 1), (0, 0));
+        assert_eq!(
+            TileStore::<Rgba>::tile_coords_for_pixel(ts - 1, ts - 1),
+            (0, 0)
+        );
         assert_eq!(TileStore::<Rgba>::tile_coords_for_pixel(ts, 0), (1, 0));
         assert_eq!(TileStore::<Rgba>::tile_coords_for_pixel(-1, -1), (-1, -1));
         assert_eq!(TileStore::<Rgba>::tile_coords_for_pixel(-ts, 0), (-1, 0));
-        assert_eq!(TileStore::<Rgba>::tile_coords_for_pixel(-ts - 1, 0), (-2, 0));
+        assert_eq!(
+            TileStore::<Rgba>::tile_coords_for_pixel(-ts - 1, 0),
+            (-2, 0)
+        );
     }
 
     // --- AlphaMask tests ---

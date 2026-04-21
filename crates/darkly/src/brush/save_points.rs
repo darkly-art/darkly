@@ -28,13 +28,26 @@ pub struct SavePointStore {
     points: Vec<DabSavePoint>,
 }
 
+impl Default for SavePointStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SavePointStore {
     pub fn new() -> Self {
-        Self { points: Vec::with_capacity(512) }
+        Self {
+            points: Vec::with_capacity(512),
+        }
     }
 
     /// Record a new dab.  `dab_bbox` is `[x, y, w, h]` in canvas pixels.
-    pub fn push(&mut self, dab_bbox: [u32; 4], vector_index: usize, render_state: RenderCheckpoint) {
+    pub fn push(
+        &mut self,
+        dab_bbox: [u32; 4],
+        vector_index: usize,
+        render_state: RenderCheckpoint,
+    ) {
         let cumulative = if let Some(prev) = self.points.last() {
             union_bbox(prev.cumulative_bbox, dab_bbox)
         } else {

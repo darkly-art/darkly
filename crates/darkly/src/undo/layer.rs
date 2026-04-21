@@ -40,8 +40,6 @@ impl UndoAction for LayerAddAction {
         }
         HashMap::new()
     }
-
-
 }
 
 /// Undo action for removing a layer/group.
@@ -80,12 +78,8 @@ impl UndoAction for LayerRemoveAction {
         // The node was reinserted by undo, so find it from parent+position.
         let container = match self.parent {
             Some(pid) => {
-                if let Some(node) = doc.find_node(pid) {
-                    if let LayerNode::Group(g) = node {
-                        g.children.get(self.position).map(|n| n.id())
-                    } else {
-                        None
-                    }
+                if let Some(LayerNode::Group(g)) = doc.find_node(pid) {
+                    g.children.get(self.position).map(|n| n.id())
                 } else {
                     None
                 }
@@ -98,8 +92,6 @@ impl UndoAction for LayerRemoveAction {
         }
         HashMap::new()
     }
-
-
 }
 
 /// Undo action for moving a layer/group to a new position.
@@ -147,6 +139,4 @@ impl UndoAction for LayerMoveAction {
         }
         HashMap::new()
     }
-
-
 }

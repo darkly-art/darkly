@@ -3,12 +3,14 @@
 //! Tests the GPU paint operations that don't involve selection masking.
 //! Run with: `cargo test -p darkly --test paint_ops`
 
-use darkly::gpu::test_utils::*;
-use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
+use darkly::gpu::region_store::RegionStore;
+use darkly::gpu::test_utils::*;
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
-    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test") })
+    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("test"),
+    })
 }
 
 fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) {
@@ -35,13 +37,23 @@ fn gpu_gradient_linear_interpolation() {
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
 
     let mut enc = encoder(&device);
     target.linear_gradient(
-        &mut enc, &pipelines, &queue,
-        0.0, 0.0, // start: top-left
-        128.0, 128.0, // end: bottom-right
+        &mut enc,
+        &pipelines,
+        &queue,
+        0.0,
+        0.0, // start: top-left
+        128.0,
+        128.0,                // end: bottom-right
         [255, 255, 255, 255], // white
         [0, 0, 0, 255],       // black
         None,
@@ -62,8 +74,11 @@ fn gpu_gradient_linear_interpolation() {
 
     // Center should be roughly midpoint.
     let mid = pixel_at(&pixels, w, 64, 64, 4);
-    assert!(mid[0] > 80 && mid[0] < 175,
-        "center R should be roughly 128, got {}", mid[0]);
+    assert!(
+        mid[0] > 80 && mid[0] < 175,
+        "center R should be roughly 128, got {}",
+        mid[0]
+    );
 }
 
 /// Gradient with undo: render gradient → undo → verify layer is blank.
@@ -83,12 +98,25 @@ fn gpu_gradient_undo() {
     submit(&queue, enc);
 
     // Render gradient.
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
     target.linear_gradient(
-        &mut enc, &pipelines, &queue,
-        0.0, 0.0, 64.0, 0.0,
-        [255, 0, 0, 255], [0, 0, 255, 255], None,
+        &mut enc,
+        &pipelines,
+        &queue,
+        0.0,
+        0.0,
+        64.0,
+        0.0,
+        [255, 0, 0, 255],
+        [0, 0, 255, 255],
+        None,
     );
     submit(&queue, enc);
 
@@ -100,7 +128,10 @@ fn gpu_gradient_undo() {
     // Verify gradient was painted.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     assert!(pixel_at(&pixels, w, 0, 0, 4)[0] > 200, "left should be red");
-    assert!(pixel_at(&pixels, w, 63, 0, 4)[2] > 200, "right should be blue");
+    assert!(
+        pixel_at(&pixels, w, 63, 0, 4)[2] > 200,
+        "right should be blue"
+    );
 
     // Undo.
     let mut enc = encoder(&device);
@@ -108,8 +139,16 @@ fn gpu_gradient_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 0, 0, 4)[3], 0, "after undo, should be transparent");
-    assert_eq!(pixel_at(&pixels, w, 63, 0, 4)[3], 0, "after undo, should be transparent");
+    assert_eq!(
+        pixel_at(&pixels, w, 0, 0, 4)[3],
+        0,
+        "after undo, should be transparent"
+    );
+    assert_eq!(
+        pixel_at(&pixels, w, 63, 0, 4)[3],
+        0,
+        "after undo, should be transparent"
+    );
 }
 
 // ============================================================================
@@ -128,7 +167,13 @@ fn gpu_flood_fill_interior() {
     let pipelines = PaintPipelines::new(&device, &queue);
 
     // Paint a red border rectangle (10,10)-(50,50) by filling 4 sides.
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
 
     // Use fill_rect to paint 4 border strips.
     let red = [255u8, 0, 0, 255];
@@ -152,15 +197,27 @@ fn gpu_flood_fill_interior() {
     let fill_mask = darkly::gpu::flood_fill::flood_fill_rgba(&pixels, w, h, 30, 30, 0);
 
     // Verify the fill mask covers the interior.
-    assert_eq!(fill_mask[(30 * w + 30) as usize], 255, "interior should be filled");
-    assert_eq!(fill_mask[(0 * w + 0) as usize], 0, "exterior should not be filled");
+    assert_eq!(
+        fill_mask[(30 * w + 30) as usize],
+        255,
+        "interior should be filled"
+    );
+    assert_eq!(fill_mask[0], 0, "exterior should not be filled");
     // Border pixel should not be filled (it's red, not transparent).
-    assert_eq!(fill_mask[(10 * w + 10) as usize], 0, "border should not be filled");
+    assert_eq!(
+        fill_mask[(10 * w + 10) as usize],
+        0,
+        "border should not be filled"
+    );
 
     // Upload mask and stamp.
     let mask_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("test-fill-mask"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -181,7 +238,11 @@ fn gpu_flood_fill_interior() {
             bytes_per_row: Some(w),
             rows_per_image: Some(h),
         },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
     let mask_view = mask_tex.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -193,8 +254,12 @@ fn gpu_flood_fill_interior() {
 
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
-        &mut enc, &pipelines, &queue,
-        [0, 0, w, h], [0, 0, 255, 255], &mask_bg,
+        &mut enc,
+        &pipelines,
+        &queue,
+        [0, 0, w, h],
+        [0, 0, 255, 255],
+        &mask_bg,
     );
     submit(&queue, enc);
 
@@ -202,8 +267,16 @@ fn gpu_flood_fill_interior() {
 
     // Interior should be blue.
     let interior = pixel_at(&pixels, w, 30, 30, 4);
-    assert!(interior[2] > 200, "interior should be blue, B={}", interior[2]);
-    assert!(interior[0] < 55, "interior R should be low, got {}", interior[0]);
+    assert!(
+        interior[2] > 200,
+        "interior should be blue, B={}",
+        interior[2]
+    );
+    assert!(
+        interior[0] < 55,
+        "interior R should be low, got {}",
+        interior[0]
+    );
 
     // Border should still be red.
     let border = pixel_at(&pixels, w, 10, 10, 4);
@@ -236,7 +309,11 @@ fn gpu_flood_fill_undo() {
 
     let mask_tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("test-fill-mask"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -245,10 +322,23 @@ fn gpu_flood_fill_undo() {
         view_formats: &[],
     });
     queue.write_texture(
-        wgpu::TexelCopyTextureInfo { texture: &mask_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+        wgpu::TexelCopyTextureInfo {
+            texture: &mask_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
         &fill_mask,
-        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w), rows_per_image: Some(h) },
-        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(w),
+            rows_per_image: Some(h),
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
     let mask_view = mask_tex.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -258,11 +348,21 @@ fn gpu_flood_fill_undo() {
     });
     let mask_bg = pipelines.create_selection_bind_group(&device, &mask_view, &sampler);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
-        &mut enc, &pipelines, &queue,
-        [0, 0, w, h], [0, 255, 0, 255], &mask_bg,
+        &mut enc,
+        &pipelines,
+        &queue,
+        [0, 0, w, h],
+        [0, 255, 0, 255],
+        &mask_bg,
     );
     submit(&queue, enc);
 
@@ -273,7 +373,10 @@ fn gpu_flood_fill_undo() {
 
     // Verify fill landed.
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert!(pixel_at(&pixels, w, 32, 32, 4)[1] > 200, "should be green after fill");
+    assert!(
+        pixel_at(&pixels, w, 32, 32, 4)[1] > 200,
+        "should be green after fill"
+    );
 
     // Undo.
     let mut enc = encoder(&device);
@@ -281,7 +384,11 @@ fn gpu_flood_fill_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(pixel_at(&pixels, w, 32, 32, 4)[3], 0, "after undo, should be transparent");
+    assert_eq!(
+        pixel_at(&pixels, w, 32, 32, 4)[3],
+        0,
+        "after undo, should be transparent"
+    );
 }
 
 // ============================================================================
@@ -299,35 +406,67 @@ fn gpu_color_pick_readback() {
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
 
     let mut enc = encoder(&device);
-    target.fill_rect(&mut enc, &pipelines, &queue, [10, 10, 1, 1], [255, 0, 0, 255]);
+    target.fill_rect(
+        &mut enc,
+        &pipelines,
+        &queue,
+        [10, 10, 1, 1],
+        [255, 0, 0, 255],
+    );
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    target.fill_rect(&mut enc, &pipelines, &queue, [50, 50, 1, 1], [0, 0, 255, 255]);
+    target.fill_rect(
+        &mut enc,
+        &pipelines,
+        &queue,
+        [50, 50, 1, 1],
+        [0, 0, 255, 255],
+    );
     submit(&queue, enc);
 
     // Read back individual pixels.
     let pick = |x: u32, y: u32| -> [u8; 4] {
         let mut enc = encoder(&device);
-        let request = darkly::gpu::readback::request_readback(
-            &device, &mut enc, &tex, fmt, [x, y, 1, 1],
-        );
+        let request =
+            darkly::gpu::readback::request_readback(&device, &mut enc, &tex, fmt, [x, y, 1, 1]);
         submit(&queue, enc);
         let data = request.blocking_read(&device);
         [data[0], data[1], data[2], data[3]]
     };
 
     let red = pick(10, 10);
-    assert_eq!(red, [255, 0, 0, 255], "should pick red at (10,10), got {:?}", red);
+    assert_eq!(
+        red,
+        [255, 0, 0, 255],
+        "should pick red at (10,10), got {:?}",
+        red
+    );
 
     let blue = pick(50, 50);
-    assert_eq!(blue, [0, 0, 255, 255], "should pick blue at (50,50), got {:?}", blue);
+    assert_eq!(
+        blue,
+        [0, 0, 255, 255],
+        "should pick blue at (50,50), got {:?}",
+        blue
+    );
 
     let empty = pick(0, 0);
-    assert_eq!(empty, [0, 0, 0, 0], "should pick transparent at (0,0), got {:?}", empty);
+    assert_eq!(
+        empty,
+        [0, 0, 0, 0],
+        "should pick transparent at (0,0), got {:?}",
+        empty
+    );
 }
 
 // ============================================================================
@@ -346,13 +485,24 @@ fn gpu_gradient_on_mask() {
     let (tex, view) = create_test_texture_with_format(&device, &queue, w, h, &white, fmt);
     let pipelines = PaintPipelines::new(&device, &queue);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
 
     // Gradient from white to black (left to right).
     let mut enc = encoder(&device);
     target.linear_gradient(
-        &mut enc, &pipelines, &queue,
-        0.0, 0.0, 64.0, 0.0,
+        &mut enc,
+        &pipelines,
+        &queue,
+        0.0,
+        0.0,
+        64.0,
+        0.0,
         [255, 255, 255, 255], // luminance = 1.0
         [0, 0, 0, 255],       // luminance = 0.0
         None,
@@ -362,12 +512,18 @@ fn gpu_gradient_on_mask() {
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
 
     // Left side should be bright (near 255).
-    assert!(pixels[(32 * w + 2) as usize] > 200,
-        "left should be bright, got {}", pixels[(32 * w + 2) as usize]);
+    assert!(
+        pixels[(32 * w + 2) as usize] > 200,
+        "left should be bright, got {}",
+        pixels[(32 * w + 2) as usize]
+    );
 
     // Right side should be dark (near 0).
-    assert!(pixels[(32 * w + 62) as usize] < 55,
-        "right should be dark, got {}", pixels[(32 * w + 62) as usize]);
+    assert!(
+        pixels[(32 * w + 62) as usize] < 55,
+        "right should be dark, got {}",
+        pixels[(32 * w + 62) as usize]
+    );
 }
 
 // ============================================================================
@@ -392,7 +548,12 @@ fn gpu_fill_rect_with_mask() {
         }
     }
     let (mask_tex, _) = create_test_texture_with_format(
-        &device, &queue, w, h, &mask_data, wgpu::TextureFormat::R8Unorm,
+        &device,
+        &queue,
+        w,
+        h,
+        &mask_data,
+        wgpu::TextureFormat::R8Unorm,
     );
     let mask_view = mask_tex.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -402,11 +563,21 @@ fn gpu_fill_rect_with_mask() {
     });
     let mask_bg = pipelines.create_selection_bind_group(&device, &mask_view, &sampler);
 
-    let target = GpuPaintTarget { texture: &tex, view: &view, format: fmt, width: w, height: h };
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: w,
+        height: h,
+    };
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
-        &mut enc, &pipelines, &queue,
-        [0, 0, w, h], [0, 255, 0, 255], &mask_bg,
+        &mut enc,
+        &pipelines,
+        &queue,
+        [0, 0, w, h],
+        [0, 255, 0, 255],
+        &mask_bg,
     );
     submit(&queue, enc);
 
@@ -414,10 +585,18 @@ fn gpu_fill_rect_with_mask() {
 
     // Inside mask: should be green.
     let inside = pixel_at(&pixels, w, 32, 32, 4);
-    assert_eq!(inside[1], 255, "inside mask should be green, G={}", inside[1]);
+    assert_eq!(
+        inside[1], 255,
+        "inside mask should be green, G={}",
+        inside[1]
+    );
     assert_eq!(inside[3], 255, "inside mask alpha should be 255");
 
     // Outside mask: should be transparent.
     let outside = pixel_at(&pixels, w, 0, 0, 4);
-    assert_eq!(outside[3], 0, "outside mask should be transparent, A={}", outside[3]);
+    assert_eq!(
+        outside[3], 0,
+        "outside mask should be transparent, A={}",
+        outside[3]
+    );
 }

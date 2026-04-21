@@ -58,8 +58,20 @@ impl RegionStore {
         canvas_height: u32,
         capacity: u64,
     ) -> Self {
-        let scratch_rgba = Self::create_scratch(device, canvas_width, canvas_height, wgpu::TextureFormat::Rgba8Unorm, "scratch-rgba");
-        let scratch_r8 = Self::create_scratch(device, canvas_width, canvas_height, wgpu::TextureFormat::R8Unorm, "scratch-r8");
+        let scratch_rgba = Self::create_scratch(
+            device,
+            canvas_width,
+            canvas_height,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "scratch-rgba",
+        );
+        let scratch_r8 = Self::create_scratch(
+            device,
+            canvas_width,
+            canvas_height,
+            wgpu::TextureFormat::R8Unorm,
+            "scratch-r8",
+        );
 
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("undo-ring-buffer"),
@@ -105,7 +117,11 @@ impl RegionStore {
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -119,7 +135,7 @@ impl RegionStore {
         rect: [u32; 4],
     ) -> UndoRegionEntry {
         let [x, y, w, h] = rect;
-        let bpp = format.block_copy_size(None).unwrap_or(1) as u32;
+        let bpp = format.block_copy_size(None).unwrap_or(1);
         let padded_row_bytes = padded_row(w, bpp);
         let byte_size = padded_row_bytes as u64 * h as u64;
 
@@ -141,7 +157,11 @@ impl RegionStore {
                     rows_per_image: Some(h),
                 },
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
 
         let entry = UndoRegionEntry {
@@ -168,7 +188,11 @@ impl RegionStore {
     ) -> UndoRegionEntry {
         let [x, y, w, h] = entry.rect;
         let origin = wgpu::Origin3d { x, y, z: 0 };
-        let extent = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+        let extent = wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        };
         let src_info = wgpu::TexelCopyTextureInfo {
             texture,
             mip_level: 0,
@@ -262,7 +286,11 @@ impl RegionStore {
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -271,8 +299,20 @@ impl RegionStore {
         if width == self.scratch_width && height == self.scratch_height {
             return;
         }
-        self.scratch_rgba = Self::create_scratch(device, width, height, wgpu::TextureFormat::Rgba8Unorm, "scratch-rgba");
-        self.scratch_r8 = Self::create_scratch(device, width, height, wgpu::TextureFormat::R8Unorm, "scratch-r8");
+        self.scratch_rgba = Self::create_scratch(
+            device,
+            width,
+            height,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "scratch-rgba",
+        );
+        self.scratch_r8 = Self::create_scratch(
+            device,
+            width,
+            height,
+            wgpu::TextureFormat::R8Unorm,
+            "scratch-r8",
+        );
         self.scratch_width = width;
         self.scratch_height = height;
     }
@@ -280,7 +320,8 @@ impl RegionStore {
     /// Create a texture view for the scratch texture of the given format.
     /// Used by `DiffRectPass` to compare pre-stroke state against current canvas.
     pub fn scratch_view(&self, format: wgpu::TextureFormat) -> wgpu::TextureView {
-        self.scratch_for(format).create_view(&wgpu::TextureViewDescriptor::default())
+        self.scratch_for(format)
+            .create_view(&wgpu::TextureViewDescriptor::default())
     }
 
     /// Canvas dimensions of the scratch textures.
@@ -306,12 +347,18 @@ impl RegionStore {
     ) -> wgpu::Texture {
         device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         })
     }
@@ -348,7 +395,7 @@ impl RegionStore {
 /// Compute the row byte count padded to wgpu's copy alignment.
 fn padded_row(width: u32, bytes_per_pixel: u32) -> u32 {
     let unpadded = width * bytes_per_pixel;
-    (unpadded + COPY_ROW_ALIGNMENT - 1) / COPY_ROW_ALIGNMENT * COPY_ROW_ALIGNMENT
+    unpadded.div_ceil(COPY_ROW_ALIGNMENT) * COPY_ROW_ALIGNMENT
 }
 
 #[cfg(test)]
@@ -378,7 +425,11 @@ mod tests {
 
     impl MockRing {
         fn new(capacity: u64) -> Self {
-            MockRing { capacity, head: 0, entries: VecDeque::new() }
+            MockRing {
+                capacity,
+                head: 0,
+                entries: VecDeque::new(),
+            }
         }
 
         fn alloc(&mut self, size: u64) -> u64 {

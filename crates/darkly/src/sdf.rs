@@ -166,7 +166,11 @@ pub fn sdf_coverage(sdf: f32, antialias: bool, feather: f32) -> f32 {
         smoothstep(0.5, -0.5, sdf)
     } else {
         // Hard edge: binary
-        if sdf <= 0.0 { 1.0 } else { 0.0 }
+        if sdf <= 0.0 {
+            1.0
+        } else {
+            0.0
+        }
     }
 }
 
@@ -285,14 +289,20 @@ mod tests {
     fn polygon_triangle_inside() {
         let verts = [[0.0, 0.0], [10.0, 0.0], [5.0, 10.0]];
         let d = sdf_polygon(5.0, 3.0, &verts);
-        assert!(d < 0.0, "point inside triangle should have negative SDF, got {d}");
+        assert!(
+            d < 0.0,
+            "point inside triangle should have negative SDF, got {d}"
+        );
     }
 
     #[test]
     fn polygon_triangle_outside() {
         let verts = [[0.0, 0.0], [10.0, 0.0], [5.0, 10.0]];
         let d = sdf_polygon(0.0, 10.0, &verts);
-        assert!(d > 0.0, "point outside triangle should have positive SDF, got {d}");
+        assert!(
+            d > 0.0,
+            "point outside triangle should have positive SDF, got {d}"
+        );
     }
 
     #[test]
@@ -307,7 +317,10 @@ mod tests {
         let verts = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]];
         let d = sdf_polygon(5.0, 5.0, &verts);
         assert!(d < 0.0);
-        assert!((d - (-5.0)).abs() < EPS, "center of 10x10 square: expected -5, got {d}");
+        assert!(
+            (d - (-5.0)).abs() < EPS,
+            "center of 10x10 square: expected -5, got {d}"
+        );
     }
 
     #[test]
@@ -329,7 +342,7 @@ mod tests {
     #[test]
     fn coverage_antialiased() {
         assert_eq!(sdf_coverage(-1.0, true, 0.0), 1.0); // deep inside
-        assert_eq!(sdf_coverage(1.0, true, 0.0), 0.0);  // deep outside
+        assert_eq!(sdf_coverage(1.0, true, 0.0), 0.0); // deep outside
         let c = sdf_coverage(0.0, true, 0.0);
         assert!((c - 0.5).abs() < EPS, "on boundary should be ~0.5, got {c}");
     }
@@ -337,7 +350,7 @@ mod tests {
     #[test]
     fn coverage_feathered() {
         assert_eq!(sdf_coverage(-10.0, false, 4.0), 1.0); // deep inside
-        assert_eq!(sdf_coverage(10.0, false, 4.0), 0.0);  // deep outside
+        assert_eq!(sdf_coverage(10.0, false, 4.0), 0.0); // deep outside
         let c = sdf_coverage(0.0, false, 4.0);
         assert!((c - 0.5).abs() < EPS, "on boundary should be ~0.5, got {c}");
         // At sdf = feather/2 = 2.0, should be ~0

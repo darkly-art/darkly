@@ -3,8 +3,18 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float { name: "evolution", min: 0.0, max: 1.0, default: 0.05 },
-    ParamDef::Float { name: "color",     min: 0.0, max: 1.0, default: 0.0 },
+    ParamDef::Float {
+        name: "evolution",
+        min: 0.0,
+        max: 1.0,
+        default: 0.05,
+    },
+    ParamDef::Float {
+        name: "color",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+    },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -13,8 +23,14 @@ pub fn register() -> VeilRegistration {
         params: PARAMS,
         create_pipeline: create_evolve_pipeline,
         from_params: |params, shared| {
-            let evolution = match params.get(0) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
-            let color     = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
+            let evolution = match params.first() {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.0,
+            };
+            let color = match params.get(1) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.0,
+            };
             Box::new(Noise::new(evolution, color, shared))
         },
     }
@@ -44,7 +60,13 @@ pub struct Noise {
 
 impl Noise {
     pub fn new(evolution: f32, color: f32, shared: Arc<EffectPipeline>) -> Self {
-        Noise { evolution, color, frame_count: 0.0, noise_idx: 0, shared }
+        Noise {
+            evolution,
+            color,
+            frame_count: 0.0,
+            noise_idx: 0,
+            shared,
+        }
     }
 }
 
@@ -405,42 +427,38 @@ fn pcg_hash(n: u32) -> u32 {
     (h >> 22) ^ h
 }
 
-fn create_evolve_pipeline(
-    device: &wgpu::Device,
-    _format: wgpu::TextureFormat,
-) -> EffectPipeline {
-    let bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("noise-evolve-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+fn create_evolve_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("noise-evolve-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+                count: None,
+            },
+        ],
+    });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("noise-evolve-pipeline-layout"),

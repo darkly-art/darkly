@@ -79,7 +79,7 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("position", BrushWireType::Vec2)
                 .with_description("Brush center in canvas pixels"),
             PortDef::input("direction", BrushWireType::Scalar)
-                .with_range(-6.2832, 6.2832, 0.0)
+                .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_description("Warp direction in radians (typically wired from pen_input.drawing_angle). 0 = east."),
             PortDef::input("distance", BrushWireType::Scalar)
                 .with_description("Cumulative pen travel in pixels (typically wired from pen_input.distance). Used as a 'has the pen moved yet' gate — the first dab of a stationary click has distance=0 and is skipped so liquify doesn't warp in a default direction before the stroke actually has one."),
@@ -166,10 +166,8 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         // every fragment in the quad has a valid canvas_copy texel to read.
         let copy_x = x0.floor() as u32;
         let copy_y = y0.floor() as u32;
-        let copy_w = ((x1.ceil() as u32).saturating_sub(copy_x))
-            .min(gpu.canvas_width - copy_x);
-        let copy_h = ((y1.ceil() as u32).saturating_sub(copy_y))
-            .min(gpu.canvas_height - copy_y);
+        let copy_w = ((x1.ceil() as u32).saturating_sub(copy_x)).min(gpu.canvas_width - copy_x);
+        let copy_h = ((y1.ceil() as u32).saturating_sub(copy_y)).min(gpu.canvas_height - copy_y);
         if copy_w == 0 || copy_h == 0 {
             return vec![];
         }
@@ -216,9 +214,12 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 ..Default::default()
             });
             pass.set_viewport(
-                0.0, 0.0,
-                gpu.canvas_width as f32, gpu.canvas_height as f32,
-                0.0, 1.0,
+                0.0,
+                0.0,
+                gpu.canvas_width as f32,
+                gpu.canvas_height as f32,
+                0.0,
+                1.0,
             );
             pass.set_pipeline(gpu.pipelines.liquify_pipeline());
             pass.set_bind_group(0, &gpu.pipelines.liquify_uniform_bind_group, &[offset]);
@@ -238,7 +239,9 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
     /// of prior commits. Reading `layer_texture` instead would compound
     /// warps exponentially on each rewind.
     fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let Some(pre_stroke) = gpu.pre_stroke_texture else { return };
+        let Some(pre_stroke) = gpu.pre_stroke_texture else {
+            return;
+        };
         let w = gpu.canvas_width;
         let h = gpu.canvas_height;
         gpu.encoder.copy_texture_to_texture(
@@ -254,7 +257,11 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -262,7 +269,9 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
     /// the scratch already holds the finished image because warp dabs
     /// produced the full canvas state (pre-stroke + displacement) in place.
     fn commit(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let Some(layer) = gpu.layer_texture else { return };
+        let Some(layer) = gpu.layer_texture else {
+            return;
+        };
         let w = gpu.canvas_width;
         let h = gpu.canvas_height;
         gpu.encoder.copy_texture_to_texture(
@@ -278,7 +287,11 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -290,7 +303,9 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let Some(target_view) = gpu.preview_mask_view else { return vec![] };
+        let Some(target_view) = gpu.preview_mask_view else {
+            return vec![];
+        };
         let (target_w, target_h) = gpu.preview_mask_size;
         if target_w == 0 || target_h == 0 {
             return vec![];
@@ -305,13 +320,17 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         // Render the circle mask into a dab pool texture sized to the brush
         // extent. `acquire_sized` makes the texture self-describe its size,
         // so we don't need a separate size-reporting channel.
-        let handle = gpu.dab_pool.acquire_sized(gpu.device, diameter_px, diameter_px);
+        let handle = gpu
+            .dab_pool
+            .acquire_sized(gpu.device, diameter_px, diameter_px);
         let circle_view = gpu.dab_pool.view(handle);
         let circle_uniforms = CircleUniforms {
             softness: preview_softness,
             _pad: [0.0; 3],
         };
-        let circle_offset = gpu.pipelines.write_circle_uniforms(gpu.queue, &circle_uniforms);
+        let circle_offset = gpu
+            .pipelines
+            .write_circle_uniforms(gpu.queue, &circle_uniforms);
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquify-preview-circle"),
@@ -328,7 +347,11 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             });
             pass.set_viewport(0.0, 0.0, diameter_px as f32, diameter_px as f32, 0.0, 1.0);
             pass.set_pipeline(gpu.pipelines.circle_pipeline());
-            pass.set_bind_group(0, &gpu.pipelines.circle_uniform_bind_group, &[circle_offset]);
+            pass.set_bind_group(
+                0,
+                &gpu.pipelines.circle_uniform_bind_group,
+                &[circle_offset],
+            );
             pass.draw(0..3, 0..1);
         }
 

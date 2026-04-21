@@ -71,7 +71,11 @@ impl CheckpointSlot {
         let alloc_h = h.next_power_of_two().max(64);
         self.texture = Some(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("checkpoint-slot"),
-            size: wgpu::Extent3d { width: alloc_w, height: alloc_h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: alloc_w,
+                height: alloc_h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -106,6 +110,12 @@ pub struct CheckpointRing {
     slots: Vec<CheckpointSlot>,
 }
 
+impl Default for CheckpointRing {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CheckpointRing {
     pub fn new() -> Self {
         let mut slots = Vec::with_capacity(RING_CAPACITY);
@@ -117,7 +127,8 @@ impl CheckpointRing {
 
     /// The vector_index of the newest valid checkpoint, if any.
     pub fn newest_vector_index(&self) -> Option<usize> {
-        self.slots.iter()
+        self.slots
+            .iter()
             .filter(|s| s.valid)
             .map(|s| s.vector_index)
             .max()
@@ -133,7 +144,9 @@ impl CheckpointRing {
         if let Some(i) = self.slots.iter().position(|s| !s.valid) {
             return i;
         }
-        self.slots.iter().enumerate()
+        self.slots
+            .iter()
+            .enumerate()
             .min_by_key(|(_, s)| s.vector_index)
             .map(|(i, _)| i)
             .unwrap_or(0)
@@ -152,12 +165,16 @@ impl CheckpointRing {
         render_state: RenderCheckpoint,
     ) {
         let [x, y, w, h] = bbox;
-        if w == 0 || h == 0 { return; }
+        if w == 0 || h == 0 {
+            return;
+        }
         // Clamp bbox to texture bounds.
         let tex_size = stroke_texture.size();
         let w = w.min(tex_size.width.saturating_sub(x));
         let h = h.min(tex_size.height.saturating_sub(y));
-        if w == 0 || h == 0 { return; }
+        if w == 0 || h == 0 {
+            return;
+        }
         let bbox = [x, y, w, h];
 
         let slot_idx = self.pick_slot();
@@ -183,7 +200,11 @@ impl CheckpointRing {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
     }
 
@@ -231,7 +252,9 @@ impl CheckpointRing {
         let tex_size = stroke_texture.size();
         w = w.min(tex_size.width.saturating_sub(x));
         h = h.min(tex_size.height.saturating_sub(y));
-        if w == 0 || h == 0 { return None; }
+        if w == 0 || h == 0 {
+            return None;
+        }
 
         // Copy checkpoint bbox region back to stroke buffer. The caller
         // has already reset outside-bbox pixels to the terminal's starting
@@ -249,7 +272,11 @@ impl CheckpointRing {
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
         );
 
         Some(CheckpointRestore {
@@ -277,7 +304,9 @@ impl CheckpointRing {
 
     /// Compute the ideal checkpoint spacing for the given divergence window.
     pub fn spacing(max_divergence_window: usize) -> usize {
-        if max_divergence_window == 0 { return 1; }
+        if max_divergence_window == 0 {
+            return 1;
+        }
         (max_divergence_window / (RING_CAPACITY - 1)).max(1)
     }
 
@@ -291,7 +320,9 @@ impl CheckpointRing {
     ) -> Vec<usize> {
         let spacing = Self::spacing(max_divergence_window);
         let range = tip_vi.saturating_sub(start_vi);
-        if range == 0 { return vec![]; }
+        if range == 0 {
+            return vec![];
+        }
 
         let mut boundaries = Vec::new();
         let mut pos = start_vi + spacing;

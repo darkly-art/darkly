@@ -53,7 +53,7 @@ fn run_paint_benchmark(
     queue: &wgpu::Queue,
     compositor: &mut Compositor,
     doc: &mut Document,
-    paint_layer_id: u64,
+    _paint_layer_id: u64,
     num_frames: usize,
 ) -> Vec<FrameTiming> {
     let mut timings = Vec::with_capacity(num_frames);
@@ -103,7 +103,10 @@ fn profile_render_pipeline() {
     let t_warmup = Instant::now();
     let _ = compositor.render_offscreen(&device, &queue, &mut doc);
     let warmup_us = t_warmup.elapsed().as_micros();
-    eprintln!("warmup (full composite): {:.1}ms", warmup_us as f64 / 1000.0);
+    eprintln!(
+        "warmup (full composite): {:.1}ms",
+        warmup_us as f64 / 1000.0
+    );
 
     // Benchmark: 10000 frames of brush dabs on the top paint layer
     let num_frames = 10_000;

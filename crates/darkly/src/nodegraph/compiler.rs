@@ -147,7 +147,10 @@ pub fn compile<W: WireKind>(
             if p.dir != PortDir::Input {
                 return false;
             }
-            let pr = PortRef { node: node_id, port: p.name.clone() };
+            let pr = PortRef {
+                node: node_id,
+                port: p.name.clone(),
+            };
             input_wire
                 .get(&pr)
                 .and_then(|src| phase.get(&src.node))
@@ -203,9 +206,9 @@ pub fn compile<W: WireKind>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nodegraph::tests::TestWireKind;
     use crate::nodegraph::graph::{Graph, PortDef, PortRef};
     use crate::nodegraph::registration::NodeRegistration;
+    use crate::nodegraph::tests::TestWireKind;
 
     fn test_registry() -> HashMap<String, NodeRegistration<TestWireKind>> {
         let mut map = HashMap::new();
@@ -251,7 +254,11 @@ mod tests {
     #[test]
     fn topological_sort_linear_chain() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("source", vec![PortDef::output("out", TestWireKind::Scalar)], vec![]);
+        let a = g.add_node(
+            "source",
+            vec![PortDef::output("out", TestWireKind::Scalar)],
+            vec![],
+        );
         let b = g.add_node(
             "passthrough",
             vec![
@@ -260,16 +267,32 @@ mod tests {
             ],
             vec![],
         );
-        let c = g.add_node("sink", vec![PortDef::input("in", TestWireKind::Scalar)], vec![]);
+        let c = g.add_node(
+            "sink",
+            vec![PortDef::input("in", TestWireKind::Scalar)],
+            vec![],
+        );
 
         g.connect(
-            PortRef { node: a, port: "out".into() },
-            PortRef { node: b, port: "in".into() },
+            PortRef {
+                node: a,
+                port: "out".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in".into(),
+            },
         )
         .unwrap();
         g.connect(
-            PortRef { node: b, port: "out".into() },
-            PortRef { node: c, port: "in".into() },
+            PortRef {
+                node: b,
+                port: "out".into(),
+            },
+            PortRef {
+                node: c,
+                port: "in".into(),
+            },
         )
         .unwrap();
 
@@ -286,12 +309,26 @@ mod tests {
     #[test]
     fn slot_indices_wired_correctly() {
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("source", vec![PortDef::output("out", TestWireKind::Scalar)], vec![]);
-        let b = g.add_node("sink", vec![PortDef::input("in", TestWireKind::Scalar)], vec![]);
+        let a = g.add_node(
+            "source",
+            vec![PortDef::output("out", TestWireKind::Scalar)],
+            vec![],
+        );
+        let b = g.add_node(
+            "sink",
+            vec![PortDef::input("in", TestWireKind::Scalar)],
+            vec![],
+        );
 
         g.connect(
-            PortRef { node: a, port: "out".into() },
-            PortRef { node: b, port: "in".into() },
+            PortRef {
+                node: a,
+                port: "out".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in".into(),
+            },
         )
         .unwrap();
 
@@ -310,7 +347,11 @@ mod tests {
     fn diamond_graph() {
         // A → B, A → C, B → D, C → D
         let mut g = Graph::<TestWireKind>::new();
-        let a = g.add_node("source", vec![PortDef::output("out", TestWireKind::Scalar)], vec![]);
+        let a = g.add_node(
+            "source",
+            vec![PortDef::output("out", TestWireKind::Scalar)],
+            vec![],
+        );
         let b = g.add_node(
             "passthrough",
             vec![
@@ -337,23 +378,47 @@ mod tests {
         );
 
         g.connect(
-            PortRef { node: a, port: "out".into() },
-            PortRef { node: b, port: "in".into() },
+            PortRef {
+                node: a,
+                port: "out".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in".into(),
+            },
         )
         .unwrap();
         g.connect(
-            PortRef { node: a, port: "out".into() },
-            PortRef { node: c, port: "in".into() },
+            PortRef {
+                node: a,
+                port: "out".into(),
+            },
+            PortRef {
+                node: c,
+                port: "in".into(),
+            },
         )
         .unwrap();
         g.connect(
-            PortRef { node: b, port: "out".into() },
-            PortRef { node: d, port: "in_a".into() },
+            PortRef {
+                node: b,
+                port: "out".into(),
+            },
+            PortRef {
+                node: d,
+                port: "in_a".into(),
+            },
         )
         .unwrap();
         g.connect(
-            PortRef { node: c, port: "out".into() },
-            PortRef { node: d, port: "in_b".into() },
+            PortRef {
+                node: c,
+                port: "out".into(),
+            },
+            PortRef {
+                node: d,
+                port: "in_b".into(),
+            },
         )
         .unwrap();
 
@@ -398,31 +463,57 @@ mod tests {
         );
 
         g.connect(
-            PortRef { node: a, port: "out1".into() },
-            PortRef { node: b, port: "in1".into() },
-        ).unwrap();
+            PortRef {
+                node: a,
+                port: "out1".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in1".into(),
+            },
+        )
+        .unwrap();
         g.connect(
-            PortRef { node: a, port: "out2".into() },
-            PortRef { node: b, port: "in2".into() },
-        ).unwrap();
+            PortRef {
+                node: a,
+                port: "out2".into(),
+            },
+            PortRef {
+                node: b,
+                port: "in2".into(),
+            },
+        )
+        .unwrap();
 
         let mut reg = test_registry();
-        reg.insert("source".into(), NodeRegistration {
-            type_id: "source", category: "test", display_name: "Source",
-            ports: vec![
-                PortDef::output("out1", TestWireKind::Scalar),
-                PortDef::output("out2", TestWireKind::Scalar),
-            ],
-            params: &[], is_gpu: false,
-        });
-        reg.insert("sink".into(), NodeRegistration {
-            type_id: "sink", category: "test", display_name: "Sink",
-            ports: vec![
-                PortDef::input("in1", TestWireKind::Scalar),
-                PortDef::input("in2", TestWireKind::Scalar),
-            ],
-            params: &[], is_gpu: false,
-        });
+        reg.insert(
+            "source".into(),
+            NodeRegistration {
+                type_id: "source",
+                category: "test",
+                display_name: "Source",
+                ports: vec![
+                    PortDef::output("out1", TestWireKind::Scalar),
+                    PortDef::output("out2", TestWireKind::Scalar),
+                ],
+                params: &[],
+                is_gpu: false,
+            },
+        );
+        reg.insert(
+            "sink".into(),
+            NodeRegistration {
+                type_id: "sink",
+                category: "test",
+                display_name: "Sink",
+                ports: vec![
+                    PortDef::input("in1", TestWireKind::Scalar),
+                    PortDef::input("in2", TestWireKind::Scalar),
+                ],
+                params: &[],
+                is_gpu: false,
+            },
+        );
 
         let plan = compile(&g, &reg).unwrap();
         assert_eq!(plan.steps.len(), 2);

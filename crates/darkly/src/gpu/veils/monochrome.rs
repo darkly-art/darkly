@@ -3,11 +3,36 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Float { name: "red_weight",    min: 0.0, max: 1.0, default: 0.299 },
-    ParamDef::Float { name: "green_weight",  min: 0.0, max: 1.0, default: 0.587 },
-    ParamDef::Float { name: "blue_weight",   min: 0.0, max: 1.0, default: 0.114 },
-    ParamDef::Float { name: "tint_hue",      min: 0.0, max: 360.0, default: 0.0 },
-    ParamDef::Float { name: "tint_strength", min: 0.0, max: 1.0, default: 0.0 },
+    ParamDef::Float {
+        name: "red_weight",
+        min: 0.0,
+        max: 1.0,
+        default: 0.299,
+    },
+    ParamDef::Float {
+        name: "green_weight",
+        min: 0.0,
+        max: 1.0,
+        default: 0.587,
+    },
+    ParamDef::Float {
+        name: "blue_weight",
+        min: 0.0,
+        max: 1.0,
+        default: 0.114,
+    },
+    ParamDef::Float {
+        name: "tint_hue",
+        min: 0.0,
+        max: 360.0,
+        default: 0.0,
+    },
+    ParamDef::Float {
+        name: "tint_strength",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+    },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -16,12 +41,34 @@ pub fn register() -> VeilRegistration {
         params: PARAMS,
         create_pipeline: create_monochrome_pipeline,
         from_params: |params, shared| {
-            let red_weight    = match params.get(0) { Some(ParamValue::Float(v)) => *v, _ => 0.299 };
-            let green_weight  = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 0.587 };
-            let blue_weight   = match params.get(2) { Some(ParamValue::Float(v)) => *v, _ => 0.114 };
-            let tint_hue      = match params.get(3) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
-            let tint_strength = match params.get(4) { Some(ParamValue::Float(v)) => *v, _ => 0.0 };
-            Box::new(Monochrome::new(red_weight, green_weight, blue_weight, tint_hue, tint_strength, shared))
+            let red_weight = match params.first() {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.299,
+            };
+            let green_weight = match params.get(1) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.587,
+            };
+            let blue_weight = match params.get(2) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.114,
+            };
+            let tint_hue = match params.get(3) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.0,
+            };
+            let tint_strength = match params.get(4) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 0.0,
+            };
+            Box::new(Monochrome::new(
+                red_weight,
+                green_weight,
+                blue_weight,
+                tint_hue,
+                tint_strength,
+                shared,
+            ))
         },
     }
 }
@@ -60,7 +107,14 @@ impl Monochrome {
         tint_strength: f32,
         shared: Arc<EffectPipeline>,
     ) -> Self {
-        Monochrome { red_weight, green_weight, blue_weight, tint_hue, tint_strength, shared }
+        Monochrome {
+            red_weight,
+            green_weight,
+            blue_weight,
+            tint_hue,
+            tint_strength,
+            shared,
+        }
     }
 }
 
@@ -171,38 +225,37 @@ fn create_monochrome_pipeline(
     device: &wgpu::Device,
     _format: wgpu::TextureFormat,
 ) -> EffectPipeline {
-    let bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("monochrome-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("monochrome-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+                count: None,
+            },
+        ],
+    });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("monochrome-pipeline-layout"),

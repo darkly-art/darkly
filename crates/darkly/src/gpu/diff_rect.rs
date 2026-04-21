@@ -37,75 +37,76 @@ impl DiffRectPass {
             ),
         });
 
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("diff-rect-bgl"),
-                entries: &[
-                    // binding 0: texture A (scratch / pre-stroke)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("diff-rect-bgl"),
+            entries: &[
+                // binding 0: texture A (scratch / pre-stroke)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // binding 1: texture B (current canvas)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // binding 1: texture B (current canvas)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
-                    // binding 2: atomic bounds storage buffer
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // binding 2: atomic bounds storage buffer
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // binding 3: params uniform
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 3,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // binding 3: params uniform
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
-        let pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("diff-rect-pipeline-layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                immediate_size: 0,
-            });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("diff-rect-pipeline-layout"),
+            bind_group_layouts: &[&bind_group_layout],
+            immediate_size: 0,
+        });
 
-        let pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("diff-rect-pipeline"),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("diff-rect-pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
-        DiffRectPass { pipeline, bind_group_layout, pending: None }
+        DiffRectPass {
+            pipeline,
+            bind_group_layout,
+            pending: None,
+        }
     }
 
     /// Dispatch the diff compute shader comparing two textures.
@@ -190,8 +191,8 @@ impl DiffRectPass {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, Some(&bind_group), &[]);
-            let wg_x = (width + 15) / 16;
-            let wg_y = (height + 15) / 16;
+            let wg_x = width.div_ceil(16);
+            let wg_y = height.div_ceil(16);
             pass.dispatch_workgroups(wg_x, wg_y, 1);
         }
 

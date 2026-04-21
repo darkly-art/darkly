@@ -21,13 +21,12 @@ pub fn register() -> BrushNodeRegistration {
         type_id: "image",
         category: "gpu",
         display_name: "Image",
-        ports: vec![
-            PortDef::output("texture", BrushWireType::Texture)
-                .with_description("The loaded brush tip image as a GPU texture"),
-        ],
-        params: &[
-            ParamDef::String { name: "resource_name", default: "" },
-        ],
+        ports: vec![PortDef::output("texture", BrushWireType::Texture)
+            .with_description("The loaded brush tip image as a GPU texture")],
+        params: &[ParamDef::String {
+            name: "resource_name",
+            default: "",
+        }],
         is_gpu: true,
     }
 }

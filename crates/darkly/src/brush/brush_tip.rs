@@ -69,6 +69,12 @@ impl Default for BrushTip {
     }
 }
 
-fn default_half() -> f32 { 0.5 }
-fn default_one() -> u32 { 1 }
-fn default_one_f() -> f32 { 1.0 }
+fn default_half() -> f32 {
+    0.5
+}
+fn default_one() -> u32 {
+    1
+}
+fn default_one_f() -> f32 {
+    1.0
+}

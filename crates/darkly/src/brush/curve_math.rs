@@ -35,10 +35,10 @@ impl CurveLut {
             let [x0, y0] = points[0];
             let [x1, y1] = points[1];
             let dx = (x1 - x0).max(1e-6);
-            for i in 0..LUT_SIZE {
+            for (i, slot) in table.iter_mut().enumerate() {
                 let t = i as f32 / (LUT_SIZE - 1) as f32;
                 let frac = ((t - x0) / dx).clamp(0.0, 1.0);
-                table[i] = (y0 + frac * (y1 - y0)).clamp(0.0, 1.0);
+                *slot = (y0 + frac * (y1 - y0)).clamp(0.0, 1.0);
             }
             return CurveLut { table };
         }
@@ -47,9 +47,9 @@ impl CurveLut {
         let spline = NaturalCubicSpline::from_points(points);
 
         // Sample the spline into the LUT.
-        for i in 0..LUT_SIZE {
+        for (i, slot) in table.iter_mut().enumerate() {
             let t = i as f32 / (LUT_SIZE - 1) as f32;
-            table[i] = spline.evaluate(t).clamp(0.0, 1.0);
+            *slot = spline.evaluate(t).clamp(0.0, 1.0);
         }
 
         CurveLut { table }
@@ -120,8 +120,7 @@ impl NaturalCubicSpline {
 
             for i in 0..inner {
                 tri_b[i] = 2.0 * (h[i] + h[i + 1]);
-                tri_f[i] = 6.0
-                    * ((a[i + 2] - a[i + 1]) / h[i + 1] - (a[i + 1] - a[i]) / h[i]);
+                tri_f[i] = 6.0 * ((a[i + 2] - a[i + 1]) / h[i + 1] - (a[i + 1] - a[i]) / h[i]);
             }
 
             // Sub/super-diagonal: h[1], h[2], ..., h[n-2]
@@ -144,8 +143,7 @@ impl NaturalCubicSpline {
         let mut b = vec![0.0f32; intervals];
         for i in 0..intervals {
             d[i] = (c[i + 1] - c[i]) / h[i];
-            b[i] = -0.5 * c[i] * h[i] - (1.0 / 6.0) * d[i] * h[i] * h[i]
-                + (a[i + 1] - a[i]) / h[i];
+            b[i] = -0.5 * c[i] * h[i] - (1.0 / 6.0) * d[i] * h[i] * h[i] + (a[i + 1] - a[i]) / h[i];
         }
 
         NaturalCubicSpline { a, b, c, d, h, x }
@@ -162,7 +160,10 @@ impl NaturalCubicSpline {
         }
 
         let dx = t - self.x[i];
-        self.a[i] + self.b[i] * dx + 0.5 * self.c[i] * dx * dx + (1.0 / 6.0) * self.d[i] * dx * dx * dx
+        self.a[i]
+            + self.b[i] * dx
+            + 0.5 * self.c[i] * dx * dx
+            + (1.0 / 6.0) * self.d[i] * dx * dx * dx
     }
 }
 
@@ -192,8 +193,7 @@ fn tridiagonal_solve(sub: &[f32], diag: &[f32], sup: &[f32], rhs: &[f32]) -> Vec
 
     // Back substitution.
     let mut x = vec![0.0f32; n];
-    x[n - 1] =
-        (rhs[n - 1] - sub[n - 2] * beta[n - 1]) / (diag[n - 1] + sub[n - 2] * alpha[n - 1]);
+    x[n - 1] = (rhs[n - 1] - sub[n - 2] * beta[n - 1]) / (diag[n - 1] + sub[n - 2] * alpha[n - 1]);
 
     for i in (0..n - 1).rev() {
         x[i] = alpha[i + 1] * x[i + 1] + beta[i + 1];
@@ -220,19 +220,26 @@ mod tests {
     fn endpoints_exact() {
         let points = [[0.0, 0.2], [0.5, 0.8], [1.0, 0.6]];
         let lut = CurveLut::from_points(&points);
-        assert!((lut.evaluate(0.0) - 0.2).abs() < 0.01, "start: {}", lut.evaluate(0.0));
-        assert!((lut.evaluate(1.0) - 0.6).abs() < 0.01, "end: {}", lut.evaluate(1.0));
+        assert!(
+            (lut.evaluate(0.0) - 0.2).abs() < 0.01,
+            "start: {}",
+            lut.evaluate(0.0)
+        );
+        assert!(
+            (lut.evaluate(1.0) - 0.6).abs() < 0.01,
+            "end: {}",
+            lut.evaluate(1.0)
+        );
     }
 
     #[test]
     fn s_curve_midpoint() {
-        let lut = CurveLut::from_points(&[
-            [0.0, 0.0],
-            [0.5, 0.2],
-            [1.0, 1.0],
-        ]);
+        let lut = CurveLut::from_points(&[[0.0, 0.0], [0.5, 0.2], [1.0, 1.0]]);
         let v = lut.evaluate(0.5);
-        assert!((v - 0.2).abs() < 0.05, "s-curve at 0.5: got {v}, expected ~0.2");
+        assert!(
+            (v - 0.2).abs() < 0.05,
+            "s-curve at 0.5: got {v}, expected ~0.2"
+        );
     }
 
     #[test]
@@ -245,18 +252,20 @@ mod tests {
     #[test]
     fn smooth_bump() {
         // Bump curve: should be smooth and symmetric around the peak.
-        let lut = CurveLut::from_points(&[
-            [0.0, 0.0],
-            [0.5, 1.0],
-            [1.0, 0.0],
-        ]);
+        let lut = CurveLut::from_points(&[[0.0, 0.0], [0.5, 1.0], [1.0, 0.0]]);
         let v = lut.evaluate(0.5);
         assert!((v - 1.0).abs() < 0.05, "peak at 0.5: got {v}");
         let v_low = lut.evaluate(0.25);
         let v_high = lut.evaluate(0.75);
-        assert!((v_low - v_high).abs() < 0.05, "symmetry: {v_low} vs {v_high}");
+        assert!(
+            (v_low - v_high).abs() < 0.05,
+            "symmetry: {v_low} vs {v_high}"
+        );
         // Should be smooth — intermediate values between 0 and 1.
-        assert!(v_low > 0.3 && v_low < 0.8, "smooth rise at 0.25: got {v_low}");
+        assert!(
+            v_low > 0.3 && v_low < 0.8,
+            "smooth rise at 0.25: got {v_low}"
+        );
     }
 
     #[test]
@@ -285,11 +294,7 @@ mod tests {
         // should NOT distort the curve between interior points.
         // Test: two curves with same interior point but different endpoints
         // should have similar values near the interior point.
-        let lut_a = CurveLut::from_points(&[
-            [0.0, 0.0],
-            [0.5, 0.5],
-            [1.0, 1.0],
-        ]);
+        let lut_a = CurveLut::from_points(&[[0.0, 0.0], [0.5, 0.5], [1.0, 1.0]]);
         let lut_b = CurveLut::from_points(&[
             [0.0, 0.3], // endpoint moved up
             [0.5, 0.5],

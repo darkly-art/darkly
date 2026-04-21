@@ -17,7 +17,10 @@ pub struct SpacingConfig {
 
 impl Default for SpacingConfig {
     fn default() -> Self {
-        Self { ratio: 0.10, min_px: 1.0 }
+        Self {
+            ratio: 0.10,
+            min_px: 1.0,
+        }
     }
 }
 
@@ -41,7 +44,10 @@ mod tests {
 
     #[test]
     fn min_spacing_clamp() {
-        let s = SpacingConfig { ratio: 0.1, min_px: 2.0 };
+        let s = SpacingConfig {
+            ratio: 0.1,
+            min_px: 2.0,
+        };
         // 5px diameter → 0.5px spacing, clamped to 2.0
         assert!((s.distance(5.0) - 2.0).abs() < 1e-6);
     }

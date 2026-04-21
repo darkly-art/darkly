@@ -36,7 +36,9 @@ fn load_preambles(files: &[PathBuf]) -> Vec<(PathBuf, String)> {
 #[test]
 fn all_wgsl_shaders_compile() {
     let shader_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shaders");
-    let shader_dir = shader_dir.canonicalize().expect("shaders/ directory not found");
+    let shader_dir = shader_dir
+        .canonicalize()
+        .expect("shaders/ directory not found");
     let files = find_wgsl_files(&shader_dir);
     assert!(!files.is_empty(), "no .wgsl files found in {shader_dir:?}");
 
@@ -60,17 +62,14 @@ fn all_wgsl_shaders_compile() {
         let mut full_source = String::new();
         for (_, preamble_src) in &preambles {
             // Extract the function name from the preamble (first `fn <name>` line).
-            if let Some(fn_name) = preamble_src
-                .lines()
-                .find_map(|line| {
-                    let line = line.trim();
-                    if line.starts_with("fn ") {
-                        line.strip_prefix("fn ")?.split('(').next()
-                    } else {
-                        None
-                    }
-                })
-            {
+            if let Some(fn_name) = preamble_src.lines().find_map(|line| {
+                let line = line.trim();
+                if line.starts_with("fn ") {
+                    line.strip_prefix("fn ")?.split('(').next()
+                } else {
+                    None
+                }
+            }) {
                 if source.contains(fn_name) {
                     full_source.push_str(preamble_src);
                     full_source.push('\n');
@@ -95,5 +94,8 @@ fn all_wgsl_shaders_compile() {
         );
     }
 
-    eprintln!("validated {validated} WGSL shaders ({} preambles skipped)", preambles.len());
+    eprintln!(
+        "validated {validated} WGSL shaders ({} preambles skipped)",
+        preambles.len()
+    );
 }

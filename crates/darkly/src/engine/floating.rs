@@ -2,7 +2,7 @@
 
 use super::{DarklyEngine, PendingTransform};
 use crate::gpu::paint_target::GpuPaintTarget;
-use crate::gpu::transform::{FloatingContent, FloatingMode, Affine2D, IDENTITY};
+use crate::gpu::transform::{Affine2D, FloatingContent, FloatingMode, IDENTITY};
 use crate::layer::Layer;
 use crate::undo::GpuRegionAction;
 
@@ -25,13 +25,15 @@ impl DarklyEngine {
     /// (source_origin_x, source_origin_y, source_width, source_height, matrix[6]).
     /// Returns None if no floating content is active.
     pub fn floating_info(&self) -> Option<(f32, f32, f32, f32, Affine2D)> {
-        self.floating.as_ref().map(|fc| (
-            fc.source_origin.0 as f32,
-            fc.source_origin.1 as f32,
-            fc.source_width as f32,
-            fc.source_height as f32,
-            fc.matrix,
-        ))
+        self.floating.as_ref().map(|fc| {
+            (
+                fc.source_origin.0 as f32,
+                fc.source_origin.1 as f32,
+                fc.source_width as f32,
+                fc.source_height as f32,
+                fc.matrix,
+            )
+        })
     }
 
     /// Paste from the internal clipboard as floating content on the current
@@ -95,7 +97,9 @@ impl DarklyEngine {
         }
         if target_is_mask {
             let has_mask = matches!(self.doc.layer(layer_id), Some(Layer::Raster(r)) if r.has_mask);
-            if !has_mask { return false; }
+            if !has_mask {
+                return false;
+            }
         }
 
         let canvas_w = self.doc.width;
@@ -108,11 +112,16 @@ impl DarklyEngine {
             if self.gpu_selection.pixel_bounds.is_none() {
                 if let Some(ref data) = self.gpu_selection.cpu_cache {
                     self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
-                        data, self.gpu_selection.width, self.gpu_selection.height,
+                        data,
+                        self.gpu_selection.width,
+                        self.gpu_selection.height,
                     );
                 } else {
                     // Cache not ready — defer until SelectionReadback completes.
-                    self.pending_transform = Some(PendingTransform { layer_id, target_is_mask });
+                    self.pending_transform = Some(PendingTransform {
+                        layer_id,
+                        target_is_mask,
+                    });
                     return false;
                 }
             }
@@ -137,13 +146,18 @@ impl DarklyEngine {
             if let Some(bounds) = self.compositor.content_bounds(layer_id) {
                 // Bounds are cached — set up synchronously.
                 let [bx, by, bw, bh] = bounds;
-                if bw == 0 || bh == 0 { return false; }
+                if bw == 0 || bh == 0 {
+                    return false;
+                }
                 self.setup_transform(layer_id, target_is_mask, (bx as i32, by as i32), bw, bh);
                 true
             } else {
                 // Bounds not yet computed — request async GPU compute.
                 self.compositor.request_content_bounds(
-                    &self.gpu.device, &self.gpu.queue, layer_id, target_is_mask,
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    layer_id,
+                    target_is_mask,
                 );
                 self.pending_transform = Some(super::PendingTransform {
                     layer_id,
@@ -183,7 +197,9 @@ impl DarklyEngine {
             if let Some(texture) = texture {
                 self.gpu.encode("transform-save", |encoder| {
                     self.region_store.save_region(
-                        encoder, texture, format,
+                        encoder,
+                        texture,
+                        format,
                         [0, 0, canvas_w, canvas_h],
                     );
                 });
@@ -209,9 +225,8 @@ impl DarklyEngine {
         let has_selection = self.gpu_selection.active;
         if has_selection {
             // Upload a cropped selection mask matching the source region dimensions.
-            let cropped_sel_bg = self.upload_cropped_selection_r8(
-                source_origin, source_width, source_height,
-            );
+            let cropped_sel_bg =
+                self.upload_cropped_selection_r8(source_origin, source_width, source_height);
             // Full-canvas selection bind group from GPU selection.
             let full_sel_bg = Some(self.gpu_selection.paint_bind_group());
 
@@ -227,7 +242,10 @@ impl DarklyEngine {
                     };
                     self.gpu.encode("transform-sel-mask", |encoder| {
                         target.multiply_by_mask(
-                            encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg,
+                            encoder,
+                            &self.paint_pipelines,
+                            &self.gpu.queue,
+                            sel_bg,
                         );
                     });
                 }
@@ -236,16 +254,21 @@ impl DarklyEngine {
             if let Some(sel_bg) = full_sel_bg {
                 // Clear selected pixels on the layer using erase_with_selection.
                 let layer_target = if target_is_mask {
-                    self.compositor.mask_texture(layer_id)
+                    self.compositor
+                        .mask_texture(layer_id)
                         .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
                 } else {
-                    self.compositor.layer_texture(layer_id)
+                    self.compositor
+                        .layer_texture(layer_id)
                         .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
                 };
                 if let Some(target) = layer_target {
                     self.gpu.encode("transform-clear-sel", |encoder| {
                         target.erase_with_selection(
-                            encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg,
+                            encoder,
+                            &self.paint_pipelines,
+                            &self.gpu.queue,
+                            sel_bg,
                         );
                     });
                 }
@@ -259,18 +282,17 @@ impl DarklyEngine {
             let clear_rect = [clear_x, clear_y, clear_w, clear_h];
 
             let target = if target_is_mask {
-                self.compositor.mask_texture(layer_id)
+                self.compositor
+                    .mask_texture(layer_id)
                     .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
             } else {
-                self.compositor.layer_texture(layer_id)
+                self.compositor
+                    .layer_texture(layer_id)
                     .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
             };
             if let Some(target) = target {
                 self.gpu.encode("transform-clear", |encoder| {
-                    target.clear_rect(
-                        encoder, &self.paint_pipelines, &self.gpu.queue,
-                        clear_rect,
-                    );
+                    target.clear_rect(encoder, &self.paint_pipelines, &self.gpu.queue, clear_rect);
                 });
             }
         }
@@ -356,7 +378,9 @@ impl DarklyEngine {
             if let Some(texture) = texture {
                 self.gpu.encode("paste-save", |encoder| {
                     self.region_store.save_region(
-                        encoder, texture, format,
+                        encoder,
+                        texture,
+                        format,
                         [0, 0, canvas_w, canvas_h],
                     );
                 });
@@ -366,14 +390,19 @@ impl DarklyEngine {
         // Commit the pre-operation state (from scratch) to the undo ring buffer,
         // then render the transform.
         self.gpu.encode("transform-commit", |encoder| {
-            let entry = self.region_store.commit_region(
-                encoder, layer_id, format, affected_rect,
-            );
+            let entry = self
+                .region_store
+                .commit_region(encoder, layer_id, format, affected_rect);
 
             // GPU render pass: write transformed source pixels to layer/mask texture.
             self.compositor.commit_floating_to_texture(
-                &self.gpu.device, encoder, &self.gpu.queue,
-                &fc.matrix, fc.source_origin, fc.source_width, fc.source_height,
+                &self.gpu.device,
+                encoder,
+                &self.gpu.queue,
+                &fc.matrix,
+                fc.source_origin,
+                fc.source_width,
+                fc.source_height,
             );
 
             // Push GPU undo action.
@@ -399,15 +428,18 @@ impl DarklyEngine {
                 // Restore the pre-clear state from the RegionStore scratch
                 // texture (saved during begin_transform).
                 let texture = if fc.target_is_mask {
-                    self.compositor.mask_texture(fc.target_layer).map(|t| &t.texture)
+                    self.compositor
+                        .mask_texture(fc.target_layer)
+                        .map(|t| &t.texture)
                 } else {
-                    self.compositor.layer_texture(fc.target_layer).map(|t| &t.texture)
+                    self.compositor
+                        .layer_texture(fc.target_layer)
+                        .map(|t| &t.texture)
                 };
                 if let Some(texture) = texture {
                     self.gpu.encode("cancel-restore", |encoder| {
-                        self.region_store.restore_from_scratch(
-                            encoder, format, clear_rect, texture,
-                        );
+                        self.region_store
+                            .restore_from_scratch(encoder, format, clear_rect, texture);
                     });
                 }
             }

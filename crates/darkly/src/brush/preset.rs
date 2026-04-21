@@ -131,7 +131,9 @@ impl PresetBundle {
                 .map_err(|e| format!("zip write error: {e}"))?;
         }
 
-        let cursor = zip.finish().map_err(|e| format!("zip finalize error: {e}"))?;
+        let cursor = zip
+            .finish()
+            .map_err(|e| format!("zip finalize error: {e}"))?;
         Ok(cursor.into_inner())
     }
 
@@ -149,8 +151,7 @@ impl PresetBundle {
             let mut json = String::new();
             file.read_to_string(&mut json)
                 .map_err(|e| format!("failed to read preset.json: {e}"))?;
-            serde_json::from_str(&json)
-                .map_err(|e| format!("invalid preset.json: {e}"))?
+            serde_json::from_str(&json).map_err(|e| format!("invalid preset.json: {e}"))?
         };
 
         // Migrate: the stamp node's per-dab alpha port was renamed from
@@ -224,8 +225,7 @@ impl PresetBundle {
     /// Load from a file path.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
-        let bytes =
-            std::fs::read(path).map_err(|e| format!("failed to read preset file: {e}"))?;
+        let bytes = std::fs::read(path).map_err(|e| format!("failed to read preset file: {e}"))?;
         Self::from_bytes(&bytes)
     }
 }
@@ -297,10 +297,9 @@ fn migrate_drop_preview_output(graph: &mut Graph<BrushWireType>) {
         .map(|(id, _)| *id)
         .collect();
     if !preview_output_ids.is_empty() {
-        graph
-            .connections
-            .retain(|c| !preview_output_ids.contains(&c.to.node)
-                     && !preview_output_ids.contains(&c.from.node));
+        graph.connections.retain(|c| {
+            !preview_output_ids.contains(&c.to.node) && !preview_output_ids.contains(&c.from.node)
+        });
         for id in &preview_output_ids {
             graph.nodes.remove(id);
         }
@@ -325,9 +324,10 @@ fn migrate_drop_preview_output(graph: &mut Graph<BrushWireType>) {
     let stamp_id = stamps[0];
     let color_id = color_outputs[0];
 
-    let already_wired = graph.connections.iter().any(|c| {
-        c.to.node == color_id && c.to.port == "brush_preview"
-    });
+    let already_wired = graph
+        .connections
+        .iter()
+        .any(|c| c.to.node == color_id && c.to.port == "brush_preview");
     if already_wired {
         return;
     }
@@ -339,8 +339,12 @@ fn migrate_drop_preview_output(graph: &mut Graph<BrushWireType>) {
     // current registration so `connect` accepts the wire.
     let registry = crate::brush::BrushNodeRegistry::new();
     for (id, type_id) in [(stamp_id, "stamp"), (color_id, "color_output")] {
-        let Some(reg) = registry.get(type_id) else { continue };
-        let Some(node) = graph.nodes.get_mut(&id) else { continue };
+        let Some(reg) = registry.get(type_id) else {
+            continue;
+        };
+        let Some(node) = graph.nodes.get_mut(&id) else {
+            continue;
+        };
         for reg_port in &reg.ports {
             let exists = node.ports.iter().any(|p| p.name == reg_port.name);
             if !exists {
@@ -350,8 +354,14 @@ fn migrate_drop_preview_output(graph: &mut Graph<BrushWireType>) {
     }
 
     let _ = graph.connect(
-        PortRef { node: stamp_id, port: "preview".into() },
-        PortRef { node: color_id, port: "brush_preview".into() },
+        PortRef {
+            node: stamp_id,
+            port: "preview".into(),
+        },
+        PortRef {
+            node: color_id,
+            port: "brush_preview".into(),
+        },
     );
 }
 
@@ -364,8 +374,7 @@ fn migrate_drop_preview_output(graph: &mut Graph<BrushWireType>) {
 fn migrate_stamp_scatter_to_node(graph: &mut Graph<BrushWireType>) {
     use crate::nodegraph::{NodeId, PortRef};
 
-    const LEGACY_STAMP_SCATTER_PORTS: &[&str] =
-        &["scatter_x", "scatter_y", "scatter_offset"];
+    const LEGACY_STAMP_SCATTER_PORTS: &[&str] = &["scatter_x", "scatter_y", "scatter_offset"];
 
     let stamp_ids: Vec<NodeId> = graph
         .nodes
@@ -385,8 +394,7 @@ fn migrate_stamp_scatter_to_node(graph: &mut Graph<BrushWireType>) {
     // enough — the user may never have touched those ports.
     let needs_splice = stamp_ids.iter().any(|sid| {
         graph.connections.iter().any(|c| {
-            (c.to.node == *sid
-                && (c.to.port == "scatter_x" || c.to.port == "scatter_y"))
+            (c.to.node == *sid && (c.to.port == "scatter_x" || c.to.port == "scatter_y"))
                 || (c.from.node == *sid && c.from.port == "scatter_offset")
         })
     });
@@ -429,8 +437,12 @@ fn migrate_stamp_scatter_to_node(graph: &mut Graph<BrushWireType>) {
     let color_id = color_output_ids[0];
 
     let registry = crate::brush::BrushNodeRegistry::new();
-    let Some(scatter_reg) = registry.get("scatter") else { return };
-    let Some(split_reg) = registry.get("split_vec2") else { return };
+    let Some(scatter_reg) = registry.get("scatter") else {
+        return;
+    };
+    let Some(split_reg) = registry.get("split_vec2") else {
+        return;
+    };
 
     let scatter_id = graph.add_node("scatter", scatter_reg.ports.clone(), vec![]);
     let split_id = graph.add_node("split_vec2", split_reg.ports.clone(), vec![]);
@@ -450,25 +462,49 @@ fn migrate_stamp_scatter_to_node(graph: &mut Graph<BrushWireType>) {
     if let Some(pos_from) = existing_position {
         graph.disconnect(
             &pos_from,
-            &PortRef { node: color_id, port: "position".into() },
+            &PortRef {
+                node: color_id,
+                port: "position".into(),
+            },
         );
         let _ = graph.connect(
             pos_from,
-            PortRef { node: scatter_id, port: "position".into() },
+            PortRef {
+                node: scatter_id,
+                port: "position".into(),
+            },
         );
     }
     let _ = graph.connect(
-        PortRef { node: scatter_id, port: "position".into() },
-        PortRef { node: color_id, port: "position".into() },
+        PortRef {
+            node: scatter_id,
+            port: "position".into(),
+        },
+        PortRef {
+            node: color_id,
+            port: "position".into(),
+        },
     );
     // stamp.dab_size (Vec2) → split_vec2 → scatter.dab_size (Scalar)
     let _ = graph.connect(
-        PortRef { node: stamp_id, port: "dab_size".into() },
-        PortRef { node: split_id, port: "vec".into() },
+        PortRef {
+            node: stamp_id,
+            port: "dab_size".into(),
+        },
+        PortRef {
+            node: split_id,
+            port: "vec".into(),
+        },
     );
     let _ = graph.connect(
-        PortRef { node: split_id, port: "x".into() },
-        PortRef { node: scatter_id, port: "dab_size".into() },
+        PortRef {
+            node: split_id,
+            port: "x".into(),
+        },
+        PortRef {
+            node: scatter_id,
+            port: "dab_size".into(),
+        },
     );
 }
 
@@ -565,8 +601,11 @@ mod tests {
         let registry = BrushNodeRegistry::new();
         let mut graph: Graph<BrushWireType> = Graph::new();
 
-        let pen = graph.add_node("pen_input",
-            registry.get("pen_input").unwrap().ports.clone(), vec![]);
+        let pen = graph.add_node(
+            "pen_input",
+            registry.get("pen_input").unwrap().ports.clone(),
+            vec![],
+        );
 
         // Clone the stamp port defs and rename "flow" back to "opacity" to
         // mimic the pre-refactor layout.
@@ -577,14 +616,24 @@ mod tests {
                 p.label = "Opacity".into();
             }
         }
-        let stamp = graph.add_node("stamp", stamp_ports, vec![
-            crate::gpu::params::ParamValue::Int(0),
-        ]);
+        let stamp = graph.add_node(
+            "stamp",
+            stamp_ports,
+            vec![crate::gpu::params::ParamValue::Int(0)],
+        );
 
-        graph.connect(
-            PortRef { node: pen, port: "pressure".into() },
-            PortRef { node: stamp, port: "opacity".into() },
-        ).expect("legacy wire should connect");
+        graph
+            .connect(
+                PortRef {
+                    node: pen,
+                    port: "pressure".into(),
+                },
+                PortRef {
+                    node: stamp,
+                    port: "opacity".into(),
+                },
+            )
+            .expect("legacy wire should connect");
 
         // Round-trip through the preset ZIP so the migration runs on load.
         let preset = BrushPreset::from_graph("Legacy", graph);
@@ -593,7 +642,11 @@ mod tests {
         let loaded = PresetBundle::from_bytes(&bytes).unwrap();
 
         // The stamp's port should now be called "flow".
-        let stamp_node = loaded.preset.graph.nodes.get(&stamp)
+        let stamp_node = loaded
+            .preset
+            .graph
+            .nodes
+            .get(&stamp)
             .expect("stamp survived round-trip");
         let has_flow = stamp_node.ports.iter().any(|p| p.name == "flow");
         let has_opacity = stamp_node.ports.iter().any(|p| p.name == "opacity");
@@ -601,20 +654,34 @@ mod tests {
         assert!(!has_opacity, "migrated stamp has no opacity port");
 
         // Wires should be rewritten too — pressure → stamp.flow.
-        let rewritten = loaded.preset.graph.connections.iter().any(|c| {
-            c.to.node == stamp && c.to.port == "flow"
-        });
-        assert!(rewritten,
-            "legacy wire pen→stamp.opacity should rewrite to pen→stamp.flow");
-        let stale = loaded.preset.graph.connections.iter().any(|c| {
-            c.to.node == stamp && c.to.port == "opacity"
-        });
-        assert!(!stale, "no wire should still reference the old opacity port");
+        let rewritten = loaded
+            .preset
+            .graph
+            .connections
+            .iter()
+            .any(|c| c.to.node == stamp && c.to.port == "flow");
+        assert!(
+            rewritten,
+            "legacy wire pen→stamp.opacity should rewrite to pen→stamp.flow"
+        );
+        let stale = loaded
+            .preset
+            .graph
+            .connections
+            .iter()
+            .any(|c| c.to.node == stamp && c.to.port == "opacity");
+        assert!(
+            !stale,
+            "no wire should still reference the old opacity port"
+        );
 
         // Compiles cleanly with the new port name.
         let compile = crate::brush::compile_graph(&loaded.preset.graph);
-        assert!(compile.is_ok(),
-            "migrated graph should compile: {:?}", compile.err());
+        assert!(
+            compile.is_ok(),
+            "migrated graph should compile: {:?}",
+            compile.err()
+        );
     }
 
     #[test]
@@ -630,12 +697,21 @@ mod tests {
         let registry = BrushNodeRegistry::new();
         let mut graph: Graph<BrushWireType> = Graph::new();
 
-        let pen = graph.add_node("pen_input",
-            registry.get("pen_input").unwrap().ports.clone(), vec![]);
-        let paint_color = graph.add_node("paint_color",
-            registry.get("paint_color").unwrap().ports.clone(), vec![]);
-        let circle = graph.add_node("circle",
-            registry.get("circle").unwrap().ports.clone(), vec![]);
+        let pen = graph.add_node(
+            "pen_input",
+            registry.get("pen_input").unwrap().ports.clone(),
+            vec![],
+        );
+        let paint_color = graph.add_node(
+            "paint_color",
+            registry.get("paint_color").unwrap().ports.clone(),
+            vec![],
+        );
+        let circle = graph.add_node(
+            "circle",
+            registry.get("circle").unwrap().ports.clone(),
+            vec![],
+        );
 
         // Stamp ports: current registration + legacy scatter inputs/output.
         let mut stamp_ports = registry.get("stamp").unwrap().ports.clone();
@@ -643,7 +719,9 @@ mod tests {
             name: name.into(),
             dir: PortDir::Input,
             wire_type: BrushWireType::Scalar,
-            min: -1.0, max: 1.0, default: 0.0,
+            min: -1.0,
+            max: 1.0,
+            default: 0.0,
             description: String::new(),
             unit_type: Default::default(),
             icon: String::new(),
@@ -656,16 +734,20 @@ mod tests {
             name: "scatter_offset".into(),
             dir: PortDir::Output,
             wire_type: BrushWireType::Vec2,
-            min: 0.0, max: 0.0, default: 0.0,
+            min: 0.0,
+            max: 0.0,
+            default: 0.0,
             description: String::new(),
             unit_type: Default::default(),
             icon: String::new(),
             label: String::new(),
             exposed: false,
         });
-        let stamp = graph.add_node("stamp", stamp_ports, vec![
-            crate::gpu::params::ParamValue::Int(0),
-        ]);
+        let stamp = graph.add_node(
+            "stamp",
+            stamp_ports,
+            vec![crate::gpu::params::ParamValue::Int(0)],
+        );
 
         // color_output ports: current registration + legacy scatter_offset input.
         let mut out_ports = registry.get("color_output").unwrap().ports.clone();
@@ -673,7 +755,9 @@ mod tests {
             name: "scatter_offset".into(),
             dir: PortDir::Input,
             wire_type: BrushWireType::Vec2,
-            min: 0.0, max: 0.0, default: 0.0,
+            min: 0.0,
+            max: 0.0,
+            default: 0.0,
             description: String::new(),
             unit_type: Default::default(),
             icon: String::new(),
@@ -683,12 +767,16 @@ mod tests {
         let color_output = graph.add_node("color_output", out_ports, vec![]);
 
         // Scatter was typically driven by two per-dab random nodes.
-        let rand_x = graph.add_node("random",
+        let rand_x = graph.add_node(
+            "random",
             registry.get("random").unwrap().ports.clone(),
-            vec![crate::gpu::params::ParamValue::Int(0)]);
-        let rand_y = graph.add_node("random",
+            vec![crate::gpu::params::ParamValue::Int(0)],
+        );
+        let rand_y = graph.add_node(
+            "random",
             registry.get("random").unwrap().ports.clone(),
-            vec![crate::gpu::params::ParamValue::Int(0)]);
+            vec![crate::gpu::params::ParamValue::Int(0)],
+        );
 
         let wires = [
             (circle, "texture", stamp, "tip"),
@@ -702,10 +790,18 @@ mod tests {
             (stamp, "scatter_offset", color_output, "scatter_offset"),
         ];
         for (fn_, fp, tn, tp) in wires {
-            graph.connect(
-                PortRef { node: fn_, port: fp.into() },
-                PortRef { node: tn, port: tp.into() },
-            ).expect("legacy wire should connect");
+            graph
+                .connect(
+                    PortRef {
+                        node: fn_,
+                        port: fp.into(),
+                    },
+                    PortRef {
+                        node: tn,
+                        port: tp.into(),
+                    },
+                )
+                .expect("legacy wire should connect");
         }
 
         let preset = BrushPreset::from_graph("Legacy Scatter", graph);
@@ -730,51 +826,68 @@ mod tests {
 
         // No connections reference the dead ports.
         for c in &g.connections {
-            assert!(c.to.port != "scatter_x" && c.to.port != "scatter_y"
-                 && c.to.port != "scatter_offset" && c.from.port != "scatter_offset",
-                "dead scatter wire survived migration: {:?} → {:?}", c.from, c.to);
+            assert!(
+                c.to.port != "scatter_x"
+                    && c.to.port != "scatter_y"
+                    && c.to.port != "scatter_offset"
+                    && c.from.port != "scatter_offset",
+                "dead scatter wire survived migration: {:?} → {:?}",
+                c.from,
+                c.to
+            );
         }
 
         // A scatter node was spliced between pen.position and
         // color_output.position.
-        let scatter_id = g.nodes.iter()
+        let scatter_id = g
+            .nodes
+            .iter()
             .find(|(_, n)| n.type_id == "scatter")
             .map(|(id, _)| *id)
             .expect("migration should add a scatter node");
         assert!(
-            g.connections.iter().any(|c|
-                c.from.node == pen && c.from.port == "position"
-                && c.to.node == scatter_id && c.to.port == "position"),
+            g.connections.iter().any(|c| c.from.node == pen
+                && c.from.port == "position"
+                && c.to.node == scatter_id
+                && c.to.port == "position"),
             "pen.position → scatter.position wire missing"
         );
         assert!(
-            g.connections.iter().any(|c|
-                c.from.node == scatter_id && c.from.port == "position"
-                && c.to.node == color_output && c.to.port == "position"),
+            g.connections.iter().any(|c| c.from.node == scatter_id
+                && c.from.port == "position"
+                && c.to.node == color_output
+                && c.to.port == "position"),
             "scatter.position → color_output.position wire missing"
         );
         // stamp.dab_size (Vec2) → split_vec2 → scatter.dab_size (Scalar).
-        let split_id = g.nodes.iter()
+        let split_id = g
+            .nodes
+            .iter()
             .find(|(_, n)| n.type_id == "split_vec2")
             .map(|(id, _)| *id)
             .expect("migration should add a split_vec2 node");
         assert!(
-            g.connections.iter().any(|c|
-                c.from.node == stamp && c.from.port == "dab_size"
-                && c.to.node == split_id && c.to.port == "vec"),
+            g.connections.iter().any(|c| c.from.node == stamp
+                && c.from.port == "dab_size"
+                && c.to.node == split_id
+                && c.to.port == "vec"),
             "stamp.dab_size → split_vec2.vec wire missing"
         );
         assert!(
-            g.connections.iter().any(|c|
-                c.from.node == split_id && c.from.port == "x"
-                && c.to.node == scatter_id && c.to.port == "dab_size"),
+            g.connections.iter().any(|c| c.from.node == split_id
+                && c.from.port == "x"
+                && c.to.node == scatter_id
+                && c.to.port == "dab_size"),
             "split_vec2.x → scatter.dab_size wire missing"
         );
 
         // Migrated graph compiles.
         let compile = crate::brush::compile_graph(g);
-        assert!(compile.is_ok(),
-            "migrated graph should compile: {:?}", compile.err());
+        assert!(
+            compile.is_ok(),
+            "migrated graph should compile: {:?}",
+            compile.err()
+        );
     }
 
     #[test]
@@ -782,8 +895,7 @@ mod tests {
         // Simulate a preset with extra fields (forward-compat).
         let graph = brush::default_graph();
         let preset = BrushPreset::from_graph("Compat", graph);
-        let mut json_val: serde_json::Value =
-            serde_json::to_value(&preset).unwrap();
+        let mut json_val: serde_json::Value = serde_json::to_value(&preset).unwrap();
         json_val["unknown_field"] = serde_json::json!("should be ignored");
         json_val["nested_unknown"] = serde_json::json!({"a": 1, "b": [2,3]});
 

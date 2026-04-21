@@ -8,12 +8,31 @@ pub struct LayerTexture {
 impl LayerTexture {
     /// RGBA layer texture — default fill is 0 (transparent), which is the GPU's init value.
     pub fn new(device: &wgpu::Device, canvas_width: u32, canvas_height: u32) -> Self {
-        Self::with_format(device, None, canvas_width, canvas_height, wgpu::TextureFormat::Rgba8Unorm, "layer-texture")
+        Self::with_format(
+            device,
+            None,
+            canvas_width,
+            canvas_height,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "layer-texture",
+        )
     }
 
     /// R8Unorm mask texture — default fill is 255 (white = reveal all).
-    pub fn new_mask(device: &wgpu::Device, queue: &wgpu::Queue, canvas_width: u32, canvas_height: u32) -> Self {
-        Self::with_format(device, Some(queue), canvas_width, canvas_height, wgpu::TextureFormat::R8Unorm, "mask-texture")
+    pub fn new_mask(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) -> Self {
+        Self::with_format(
+            device,
+            Some(queue),
+            canvas_width,
+            canvas_height,
+            wgpu::TextureFormat::R8Unorm,
+            "mask-texture",
+        )
     }
 
     fn with_format(
@@ -24,7 +43,7 @@ impl LayerTexture {
         format: wgpu::TextureFormat,
         label: &str,
     ) -> Self {
-        let bpp = format.block_copy_size(None).unwrap_or(1) as u32;
+        let bpp = format.block_copy_size(None).unwrap_or(1);
         let fill_byte = match format {
             wgpu::TextureFormat::R8Unorm => 255u8, // white = reveal all
             _ => 0u8,                              // transparent
@@ -66,16 +85,17 @@ impl LayerTexture {
                         bytes_per_row: Some(row_bytes),
                         rows_per_image: Some(canvas_height),
                     },
-                    wgpu::Extent3d { width: canvas_width, height: canvas_height, depth_or_array_layers: 1 },
+                    wgpu::Extent3d {
+                        width: canvas_width,
+                        height: canvas_height,
+                        depth_or_array_layers: 1,
+                    },
                 );
             }
         }
 
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        LayerTexture {
-            texture,
-            view,
-        }
+        LayerTexture { texture, view }
     }
 }

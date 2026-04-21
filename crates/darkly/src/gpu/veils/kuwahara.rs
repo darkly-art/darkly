@@ -3,9 +3,24 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
-    ParamDef::Int   { name: "kernel_size", min: 1, max: 12, default: 6 },
-    ParamDef::Float { name: "sharpness",   min: 1.0, max: 18.0, default: 8.0 },
-    ParamDef::Float { name: "hardness",    min: 1.0, max: 200.0, default: 100.0 },
+    ParamDef::Int {
+        name: "kernel_size",
+        min: 1,
+        max: 12,
+        default: 6,
+    },
+    ParamDef::Float {
+        name: "sharpness",
+        min: 1.0,
+        max: 18.0,
+        default: 8.0,
+    },
+    ParamDef::Float {
+        name: "hardness",
+        min: 1.0,
+        max: 200.0,
+        default: 100.0,
+    },
 ];
 
 pub fn register() -> VeilRegistration {
@@ -14,9 +29,18 @@ pub fn register() -> VeilRegistration {
         params: PARAMS,
         create_pipeline: create_kuwahara_pipeline,
         from_params: |params, shared| {
-            let kernel_size = match params.get(0) { Some(ParamValue::Int(v)) => *v, _ => 6 };
-            let sharpness = match params.get(1) { Some(ParamValue::Float(v)) => *v, _ => 8.0 };
-            let hardness = match params.get(2) { Some(ParamValue::Float(v)) => *v, _ => 100.0 };
+            let kernel_size = match params.first() {
+                Some(ParamValue::Int(v)) => *v,
+                _ => 6,
+            };
+            let sharpness = match params.get(1) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 8.0,
+            };
+            let hardness = match params.get(2) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 100.0,
+            };
             Box::new(Kuwahara::new(kernel_size, sharpness, hardness, shared))
         },
     }
@@ -44,7 +68,12 @@ pub struct Kuwahara {
 }
 
 impl Kuwahara {
-    pub fn new(kernel_size: i32, sharpness: f32, hardness: f32, shared: Arc<EffectPipeline>) -> Self {
+    pub fn new(
+        kernel_size: i32,
+        sharpness: f32,
+        hardness: f32,
+        shared: Arc<EffectPipeline>,
+    ) -> Self {
         Kuwahara {
             kernel_size: kernel_size.max(1),
             sharpness,
@@ -157,42 +186,38 @@ impl Veil for Kuwahara {
     }
 }
 
-fn create_kuwahara_pipeline(
-    device: &wgpu::Device,
-    _format: wgpu::TextureFormat,
-) -> EffectPipeline {
-    let bind_group_layout =
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("kuwahara-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
+fn create_kuwahara_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
+    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("kuwahara-bgl"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
+                count: None,
+            },
+        ],
+    });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("kuwahara-pipeline-layout"),

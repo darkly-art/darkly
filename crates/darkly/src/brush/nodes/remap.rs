@@ -4,8 +4,8 @@
 //! Useful for restricting a sensor to a sub-range (e.g. only the top
 //! half of pressure affecting size).
 
-use crate::brush::wire::BrushWireType;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
@@ -18,16 +18,35 @@ pub fn register() -> BrushNodeRegistration {
         category: "math",
         display_name: "Remap",
         ports: vec![
-            PortDef::input("value", BrushWireType::Scalar)
-                .with_description("Input value to remap"),
+            PortDef::input("value", BrushWireType::Scalar).with_description("Input value to remap"),
             PortDef::output("result", BrushWireType::Scalar)
                 .with_description("Remapped output value"),
         ],
         params: &[
-            ParamDef::Float { name: "in_min", min: -1.0, max: 1.0, default: 0.0 },
-            ParamDef::Float { name: "in_max", min: -1.0, max: 1.0, default: 1.0 },
-            ParamDef::Float { name: "out_min", min: -1.0, max: 1.0, default: 0.0 },
-            ParamDef::Float { name: "out_max", min: -1.0, max: 1.0, default: 1.0 },
+            ParamDef::Float {
+                name: "in_min",
+                min: -1.0,
+                max: 1.0,
+                default: 0.0,
+            },
+            ParamDef::Float {
+                name: "in_max",
+                min: -1.0,
+                max: 1.0,
+                default: 1.0,
+            },
+            ParamDef::Float {
+                name: "out_min",
+                min: -1.0,
+                max: 1.0,
+                default: 0.0,
+            },
+            ParamDef::Float {
+                name: "out_max",
+                min: -1.0,
+                max: 1.0,
+                default: 1.0,
+            },
         ],
         is_gpu: false,
     }

@@ -52,7 +52,11 @@ impl StrokeBuffer {
     ) -> Self {
         let stroke_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("stroke-buffer"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -67,7 +71,11 @@ impl StrokeBuffer {
 
         let pre_stroke_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("pre-stroke-snapshot"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -77,7 +85,8 @@ impl StrokeBuffer {
                 | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let pre_stroke_view = pre_stroke_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let pre_stroke_view =
+            pre_stroke_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("stroke-buffer-sampler"),
@@ -156,7 +165,11 @@ impl StrokeBuffer {
     }
 
     /// Save a snapshot of the layer texture before the stroke starts.
-    pub fn save_pre_stroke(&self, encoder: &mut wgpu::CommandEncoder, layer_texture: &wgpu::Texture) {
+    pub fn save_pre_stroke(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        layer_texture: &wgpu::Texture,
+    ) {
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: layer_texture,
@@ -170,7 +183,11 @@ impl StrokeBuffer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::Extent3d { width: self.width, height: self.height, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
         );
     }
 }

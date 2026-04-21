@@ -14,12 +14,16 @@ impl DarklyEngine {
         };
 
         self.doc.add_mask(layer_id);
-        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
+        self.compositor
+            .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, snap.has_mask, snap.mask_enabled, snap.show_mask,
+            layer_id,
+            snap.has_mask,
+            snap.mask_enabled,
+            snap.show_mask,
         )));
     }
 
@@ -40,11 +44,16 @@ impl DarklyEngine {
             let mut entry = None;
             self.gpu.encode("remove-mask-save", |encoder| {
                 self.region_store.save_region(
-                    encoder, &mask_tex.texture, format,
+                    encoder,
+                    &mask_tex.texture,
+                    format,
                     [0, 0, canvas_w, canvas_h],
                 );
                 entry = Some(self.region_store.commit_region(
-                    encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
+                    encoder,
+                    layer_id,
+                    format,
+                    [0, 0, canvas_w, canvas_h],
                 ));
             });
             entry
@@ -54,19 +63,24 @@ impl DarklyEngine {
 
         self.doc.remove_mask(layer_id);
         self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
-        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, false);
+        self.compositor
+            .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, false);
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
         // Wrap GpuRegionAction + MaskPropertyAction in a CompoundAction so
         // undo restores both the mask flag and the mask pixel data.
         let mask_action = Box::new(MaskPropertyAction::new(
-            layer_id, snap.has_mask, snap.mask_enabled, snap.show_mask,
+            layer_id,
+            snap.has_mask,
+            snap.mask_enabled,
+            snap.show_mask,
         ));
         if let Some(entry) = gpu_region_entry {
             let region_action = Box::new(GpuRegionAction::new(entry));
             self.undo_stack.push(Box::new(CompoundAction::new(vec![
-                region_action, mask_action,
+                region_action,
+                mask_action,
             ])));
         } else {
             self.undo_stack.push(mask_action);
@@ -91,7 +105,9 @@ impl DarklyEngine {
         if let Some(layer_tex) = self.compositor.layer_texture(layer_id) {
             self.gpu.encode("apply-mask-save", |encoder| {
                 self.region_store.save_region(
-                    encoder, &layer_tex.texture, format,
+                    encoder,
+                    &layer_tex.texture,
+                    format,
                     [0, 0, canvas_w, canvas_h],
                 );
             });
@@ -106,7 +122,9 @@ impl DarklyEngine {
                 ..Default::default()
             });
             self.paint_pipelines.create_selection_bind_group(
-                &self.gpu.device, &mask_tex.view, &sampler,
+                &self.gpu.device,
+                &mask_tex.view,
+                &sampler,
             )
         });
 
@@ -118,7 +136,10 @@ impl DarklyEngine {
             let target = GpuPaintTarget::from_layer(layer_tex, canvas_w, canvas_h);
             self.gpu.encode("apply-mask-multiply", |encoder| {
                 target.multiply_alpha_by_mask(
-                    encoder, &self.paint_pipelines, &self.gpu.queue, mask_bg,
+                    encoder,
+                    &self.paint_pipelines,
+                    &self.gpu.queue,
+                    mask_bg,
                 );
             });
         }
@@ -126,13 +147,17 @@ impl DarklyEngine {
         // Commit undo region.
         self.gpu.encode("apply-mask-undo", |encoder| {
             let entry = self.region_store.commit_region(
-                encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
+                encoder,
+                layer_id,
+                format,
+                [0, 0, canvas_w, canvas_h],
             );
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
 
         self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
-        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, false);
+        self.compositor
+            .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, false);
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
@@ -140,7 +165,10 @@ impl DarklyEngine {
         self.doc.remove_mask(layer_id);
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, old_has, old_enabled, old_show,
+            layer_id,
+            old_has,
+            old_enabled,
+            old_show,
         )));
     }
 
@@ -154,7 +182,10 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, snap.has_mask, snap.mask_enabled, snap.show_mask,
+            layer_id,
+            snap.has_mask,
+            snap.mask_enabled,
+            snap.show_mask,
         )));
     }
 
@@ -168,7 +199,10 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, snap.has_mask, snap.mask_enabled, snap.show_mask,
+            layer_id,
+            snap.has_mask,
+            snap.mask_enabled,
+            snap.show_mask,
         )));
     }
 
@@ -190,7 +224,8 @@ impl DarklyEngine {
         // which we no longer maintain — the guard is now gpu_selection.active,
         // checked by the caller).
         self.doc.add_mask(layer_id);
-        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
+        self.compositor
+            .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
         // Copy selection texture → mask texture on GPU. Both are R8, same
         // canvas dimensions. No CPU round-trip needed.
@@ -212,7 +247,11 @@ impl DarklyEngine {
                             origin: wgpu::Origin3d::ZERO,
                             aspect: wgpu::TextureAspect::All,
                         },
-                        wgpu::Extent3d { width: canvas_w, height: canvas_h, depth_or_array_layers: 1 },
+                        wgpu::Extent3d {
+                            width: canvas_w,
+                            height: canvas_h,
+                            depth_or_array_layers: 1,
+                        },
                     );
                 });
             }
@@ -222,7 +261,10 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
-            layer_id, snap.has_mask, snap.mask_enabled, snap.show_mask,
+            layer_id,
+            snap.has_mask,
+            snap.mask_enabled,
+            snap.show_mask,
         )));
     }
 
@@ -241,11 +283,14 @@ impl DarklyEngine {
         let mask_tex = self.compositor.mask_texture(layer_id).unwrap();
         self.gpu.encode("mask-to-sel-readback", |encoder| {
             let request = readback::request_readback(
-                &self.gpu.device, encoder, &mask_tex.texture,
+                &self.gpu.device,
+                encoder,
+                &mask_tex.texture,
                 wgpu::TextureFormat::R8Unorm,
                 [0, 0, canvas_w, canvas_h],
             );
-            self.readbacks.submit(request, ReadbackContext::MaskToSelection { was_active });
+            self.readbacks
+                .submit(request, ReadbackContext::MaskToSelection { was_active });
         });
     }
 
@@ -253,7 +298,9 @@ impl DarklyEngine {
     pub(crate) fn complete_mask_to_selection(&mut self, was_active: bool, pixels: Vec<u8>) {
         // Upload the mask data directly to the GPU selection texture.
         self.gpu_selection.upload_replace_full(
-            &self.gpu.device, &self.gpu.queue, &pixels,
+            &self.gpu.device,
+            &self.gpu.queue,
+            &pixels,
             self.brush_pipelines.selection_bind_group_layout(),
             &self.paint_pipelines.selection_bind_group_layout,
         );
@@ -273,21 +320,29 @@ impl DarklyEngine {
         let mask_enabled = m.mask_enabled();
         let show_mask = m.show_mask();
 
-        self.compositor.set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, has_mask);
-        self.compositor.update_mask_binding(
-            &self.gpu.device, layer_id, mask_enabled, show_mask,
-        );
+        self.compositor
+            .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, has_mask);
+        self.compositor
+            .update_mask_binding(&self.gpu.device, layer_id, mask_enabled, show_mask);
 
         // Update uniforms for the appropriate cache type
         match node {
             LayerNode::Layer(Layer::Raster(r)) => {
                 self.compositor.update_raster_uniforms_full(
-                    &self.gpu.queue, layer_id, r.opacity, r.blend_mode, show_mask,
+                    &self.gpu.queue,
+                    layer_id,
+                    r.opacity,
+                    r.blend_mode,
+                    show_mask,
                 );
             }
             LayerNode::Group(g) => {
                 self.compositor.update_group_uniforms(
-                    &self.gpu.queue, layer_id, g.opacity, g.blend_mode, show_mask,
+                    &self.gpu.queue,
+                    layer_id,
+                    g.opacity,
+                    g.blend_mode,
+                    show_mask,
                 );
             }
         }

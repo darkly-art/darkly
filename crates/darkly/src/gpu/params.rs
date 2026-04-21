@@ -3,19 +3,51 @@
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ParamDef {
-    Float { name: &'static str, min: f32, max: f32, default: f32 },
-    Int   { name: &'static str, min: i32, max: i32, default: i32 },
-    Bool  { name: &'static str, default: bool },
-    String { name: &'static str, default: &'static str },
-    Curve { name: &'static str, default: &'static [[f32; 2]] },
+    Float {
+        name: &'static str,
+        min: f32,
+        max: f32,
+        default: f32,
+    },
+    Int {
+        name: &'static str,
+        min: i32,
+        max: i32,
+        default: i32,
+    },
+    Bool {
+        name: &'static str,
+        default: bool,
+    },
+    String {
+        name: &'static str,
+        default: &'static str,
+    },
+    Curve {
+        name: &'static str,
+        default: &'static [[f32; 2]],
+    },
     /// Enum displayed as a dropdown.  Stored as Int (index into `options`).
-    Enum  { name: &'static str, options: &'static [&'static str], default: i32 },
+    Enum {
+        name: &'static str,
+        options: &'static [&'static str],
+        default: i32,
+    },
     /// Float displayed as a plain text input instead of a scrub bar.
     /// Use for values where dragging is impractical (large ranges, precise entry).
-    FloatInput { name: &'static str, min: f32, max: f32, default: f32 },
+    FloatInput {
+        name: &'static str,
+        min: f32,
+        max: f32,
+        default: f32,
+    },
     /// Icon picker displayed as a dropdown with FA icon previews.
     /// Stored as String (FA class name).  `options` lists the available icons.
-    Icon  { name: &'static str, options: &'static [(&'static str, &'static str)], default: &'static str },
+    Icon {
+        name: &'static str,
+        options: &'static [(&'static str, &'static str)],
+        default: &'static str,
+    },
 }
 
 /// A concrete runtime parameter value, read from an effect instance.
@@ -40,58 +72,65 @@ pub fn param_values_from_json(obj: &serde_json::Value, defs: &[ParamDef]) -> Vec
         Some(m) => m,
         None => return defs.iter().map(|d| d.default_value()).collect(),
     };
-    defs.iter().map(|def| match def {
-        ParamDef::Float { name, default, .. } => {
-            let v = map.get(*name)
-                .and_then(|v| v.as_f64())
-                .unwrap_or(*default as f64) as f32;
-            ParamValue::Float(v)
-        }
-        ParamDef::Int { name, default, .. } => {
-            let v = map.get(*name)
-                .and_then(|v| v.as_f64())
-                .unwrap_or(*default as f64) as i32;
-            ParamValue::Int(v)
-        }
-        ParamDef::Bool { name, default } => {
-            let v = map.get(*name)
-                .and_then(|v| v.as_bool())
-                .unwrap_or(*default);
-            ParamValue::Bool(v)
-        }
-        ParamDef::String { name, default } => {
-            let v = map.get(*name)
-                .and_then(|v| v.as_str())
-                .unwrap_or(default)
-                .to_string();
-            ParamValue::String(v)
-        }
-        ParamDef::Curve { name, default } => {
-            let points = map.get(*name)
-                .and_then(|v| serde_json::from_value::<Vec<[f32; 2]>>(v.clone()).ok())
-                .unwrap_or_else(|| default.to_vec());
-            ParamValue::Curve(points)
-        }
-        ParamDef::Enum { name, default, .. } => {
-            let v = map.get(*name)
-                .and_then(|v| v.as_f64())
-                .unwrap_or(*default as f64) as i32;
-            ParamValue::Int(v)
-        }
-        ParamDef::FloatInput { name, default, .. } => {
-            let v = map.get(*name)
-                .and_then(|v| v.as_f64())
-                .unwrap_or(*default as f64) as f32;
-            ParamValue::Float(v)
-        }
-        ParamDef::Icon { name, default, .. } => {
-            let v = map.get(*name)
-                .and_then(|v| v.as_str())
-                .unwrap_or(default)
-                .to_string();
-            ParamValue::String(v)
-        }
-    }).collect()
+    defs.iter()
+        .map(|def| match def {
+            ParamDef::Float { name, default, .. } => {
+                let v = map
+                    .get(*name)
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(*default as f64) as f32;
+                ParamValue::Float(v)
+            }
+            ParamDef::Int { name, default, .. } => {
+                let v = map
+                    .get(*name)
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(*default as f64) as i32;
+                ParamValue::Int(v)
+            }
+            ParamDef::Bool { name, default } => {
+                let v = map.get(*name).and_then(|v| v.as_bool()).unwrap_or(*default);
+                ParamValue::Bool(v)
+            }
+            ParamDef::String { name, default } => {
+                let v = map
+                    .get(*name)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(default)
+                    .to_string();
+                ParamValue::String(v)
+            }
+            ParamDef::Curve { name, default } => {
+                let points = map
+                    .get(*name)
+                    .and_then(|v| serde_json::from_value::<Vec<[f32; 2]>>(v.clone()).ok())
+                    .unwrap_or_else(|| default.to_vec());
+                ParamValue::Curve(points)
+            }
+            ParamDef::Enum { name, default, .. } => {
+                let v = map
+                    .get(*name)
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(*default as f64) as i32;
+                ParamValue::Int(v)
+            }
+            ParamDef::FloatInput { name, default, .. } => {
+                let v = map
+                    .get(*name)
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(*default as f64) as f32;
+                ParamValue::Float(v)
+            }
+            ParamDef::Icon { name, default, .. } => {
+                let v = map
+                    .get(*name)
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(default)
+                    .to_string();
+                ParamValue::String(v)
+            }
+        })
+        .collect()
 }
 
 impl ParamDef {

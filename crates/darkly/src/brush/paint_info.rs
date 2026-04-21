@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PaintInformation {
     // ── Raw tablet data (0-1 normalised) ────────────────────────────
-
     /// Canvas-space position in pixels.
     pub pos: [f32; 2],
     /// Pen pressure (0 = no contact, 1 = max).
@@ -32,7 +31,6 @@ pub struct PaintInformation {
     pub time: f32,
 
     // ── Derived values (computed by stroke engine) ──────────────────
-
     /// Pen speed in pixels/second, normalised to 0-1 via a reference max.
     pub speed: f32,
     /// Cumulative distance travelled in pixels (not normalised — used for

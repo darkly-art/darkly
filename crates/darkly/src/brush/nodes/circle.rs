@@ -79,8 +79,6 @@ impl BrushNodeEvaluator for CircleEvaluator {
             pass.draw(0..3, 0..1);
         }
 
-        vec![
-            ("texture".into(), ScalarValue::Texture(handle)),
-        ]
+        vec![("texture".into(), ScalarValue::Texture(handle))]
     }
 }

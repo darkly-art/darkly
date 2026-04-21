@@ -82,7 +82,13 @@ impl ScalarValue {
         match self {
             Self::Scalar(v) => v,
             Self::Int(v) => v as f32,
-            Self::Bool(v) => if v { 1.0 } else { 0.0 },
+            Self::Bool(v) => {
+                if v {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             _ => 0.0,
         }
     }
@@ -144,21 +150,39 @@ mod tests {
 
     #[test]
     fn compatible_coercions() {
-        assert!(BrushWireType::compatible(BrushWireType::Scalar, BrushWireType::Int));
-        assert!(BrushWireType::compatible(BrushWireType::Scalar, BrushWireType::Color));
-        assert!(BrushWireType::compatible(BrushWireType::Texture, BrushWireType::Mask));
+        assert!(BrushWireType::compatible(
+            BrushWireType::Scalar,
+            BrushWireType::Int
+        ));
+        assert!(BrushWireType::compatible(
+            BrushWireType::Scalar,
+            BrushWireType::Color
+        ));
+        assert!(BrushWireType::compatible(
+            BrushWireType::Texture,
+            BrushWireType::Mask
+        ));
     }
 
     #[test]
     fn incompatible_types() {
-        assert!(!BrushWireType::compatible(BrushWireType::Color, BrushWireType::Scalar));
-        assert!(!BrushWireType::compatible(BrushWireType::Vec2, BrushWireType::Color));
+        assert!(!BrushWireType::compatible(
+            BrushWireType::Color,
+            BrushWireType::Scalar
+        ));
+        assert!(!BrushWireType::compatible(
+            BrushWireType::Vec2,
+            BrushWireType::Color
+        ));
     }
 
     #[test]
     fn scalar_value_coerce() {
         let v = ScalarValue::Scalar(0.75);
-        assert_eq!(v.coerce(BrushWireType::Color), ScalarValue::Color([0.75, 0.75, 0.75, 1.0]));
+        assert_eq!(
+            v.coerce(BrushWireType::Color),
+            ScalarValue::Color([0.75, 0.75, 0.75, 1.0])
+        );
         assert_eq!(v.as_f32(), 0.75);
     }
 }

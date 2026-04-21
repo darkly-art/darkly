@@ -1,7 +1,7 @@
 //! Multiply node — Scalar * Scalar → Scalar.
 
-use crate::brush::wire::BrushWireType;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 

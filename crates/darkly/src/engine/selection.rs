@@ -7,7 +7,7 @@ use super::{DarklyEngine, ReadbackContext};
 use crate::document::SelectionMode;
 use crate::engine::gpu_selection::CombineMode;
 use crate::gpu::flood_fill;
-use crate::gpu::overlay::{OverlayPrimitive, KIND_DASHED_LINE, FLAG_CANVAS_SPACE};
+use crate::gpu::overlay::{OverlayPrimitive, FLAG_CANVAS_SPACE, KIND_DASHED_LINE};
 use crate::gpu::readback;
 use crate::mask::RasterizedMask;
 use crate::undo::SelectionAction;
@@ -15,7 +15,10 @@ use crate::undo::SelectionAction;
 impl DarklyEngine {
     pub fn select_rect(
         &mut self,
-        x: f32, y: f32, w: f32, h: f32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
         mode: SelectionMode,
         antialias: bool,
         feather: f32,
@@ -26,17 +29,22 @@ impl DarklyEngine {
         let half_h = h * 0.5;
 
         let mask = crate::mask::rasterize_sdf_r8(
-            self.doc.width, self.doc.height,
+            self.doc.width,
+            self.doc.height,
             (x as i32, y as i32, w.ceil() as i32, h.ceil() as i32),
             |px, py| crate::sdf::sdf_rect(px, py, cx, cy, half_w, half_h),
-            antialias, feather,
+            antialias,
+            feather,
         );
         self.apply_selection_mask(mask, mode);
     }
 
     pub fn select_ellipse(
         &mut self,
-        x: f32, y: f32, w: f32, h: f32,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
         mode: SelectionMode,
         antialias: bool,
         feather: f32,
@@ -47,10 +55,12 @@ impl DarklyEngine {
         let ry = h * 0.5;
 
         let mask = crate::mask::rasterize_sdf_r8(
-            self.doc.width, self.doc.height,
+            self.doc.width,
+            self.doc.height,
             (x as i32, y as i32, w.ceil() as i32, h.ceil() as i32),
             |px, py| crate::sdf::sdf_ellipse(px, py, cx, cy, rx, ry),
-            antialias, feather,
+            antialias,
+            feather,
         );
         self.apply_selection_mask(mask, mode);
     }
@@ -66,9 +76,8 @@ impl DarklyEngine {
             return;
         }
 
-        let mask = crate::mask::rasterize_polygon_r8(
-            self.doc.width, self.doc.height, vertices, antialias,
-        );
+        let mask =
+            crate::mask::rasterize_polygon_r8(self.doc.width, self.doc.height, vertices, antialias);
         self.apply_selection_mask(mask, mode);
     }
 
@@ -92,25 +101,39 @@ impl DarklyEngine {
         let layer_tex = self.compositor.layer_texture(layer_id).unwrap();
         self.gpu.encode("magic-wand-readback", |encoder| {
             let request = readback::request_readback(
-                &self.gpu.device, encoder, &layer_tex.texture,
-                wgpu::TextureFormat::Rgba8Unorm, [0, 0, canvas_w, canvas_h],
+                &self.gpu.device,
+                encoder,
+                &layer_tex.texture,
+                wgpu::TextureFormat::Rgba8Unorm,
+                [0, 0, canvas_w, canvas_h],
             );
-            self.readbacks.submit(request, ReadbackContext::MagicWand {
-                was_active, seed_x, seed_y, tolerance, mode,
-            });
+            self.readbacks.submit(
+                request,
+                ReadbackContext::MagicWand {
+                    was_active,
+                    seed_x,
+                    seed_y,
+                    tolerance,
+                    mode,
+                },
+            );
         });
     }
 
     pub(crate) fn complete_magic_wand(
-        &mut self, was_active: bool, seed_x: i32, seed_y: i32,
-        tolerance: u8, mode: SelectionMode, pixels: Vec<u8>,
+        &mut self,
+        was_active: bool,
+        seed_x: i32,
+        seed_y: i32,
+        tolerance: u8,
+        mode: SelectionMode,
+        pixels: Vec<u8>,
     ) {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        let fill_mask = flood_fill::flood_fill_rgba(
-            &pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance,
-        );
+        let fill_mask =
+            flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance);
 
         self.apply_selection_full(fill_mask, mode, was_active);
     }
@@ -135,9 +158,17 @@ impl DarklyEngine {
 
         let w = self.doc.width;
         let h = self.doc.height;
-        let mask = RasterizedMask { data: vec![255u8; (w * h) as usize], x: 0, y: 0, width: w, height: h };
+        let mask = RasterizedMask {
+            data: vec![255u8; (w * h) as usize],
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        };
         self.gpu_selection.upload_replace(
-            &self.gpu.device, &self.gpu.queue, &mask,
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mask,
             self.brush_pipelines.selection_bind_group_layout(),
             &self.paint_pipelines.selection_bind_group_layout,
         );
@@ -155,7 +186,9 @@ impl DarklyEngine {
 
         self.gpu.encode("invert-sel", |encoder| {
             self.selection_pipelines.invert(
-                encoder, &self.gpu.device, &self.gpu.queue,
+                encoder,
+                &self.gpu.device,
+                &self.gpu.queue,
                 &mut self.gpu_selection,
                 self.brush_pipelines.selection_bind_group_layout(),
                 &self.paint_pipelines.selection_bind_group_layout,
@@ -193,7 +226,9 @@ impl DarklyEngine {
         match mode {
             SelectionMode::Replace => {
                 self.gpu_selection.upload_replace(
-                    &self.gpu.device, &self.gpu.queue, &mask,
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &mask,
                     self.brush_pipelines.selection_bind_group_layout(),
                     &self.paint_pipelines.selection_bind_group_layout,
                 );
@@ -269,12 +304,17 @@ impl DarklyEngine {
 
     /// Apply a full-canvas R8 buffer (from magic wand, mask-to-selection).
     fn apply_selection_full(
-        &mut self, shape_pixels: Vec<u8>, mode: SelectionMode, was_active: bool,
+        &mut self,
+        shape_pixels: Vec<u8>,
+        mode: SelectionMode,
+        was_active: bool,
     ) {
         match mode {
             SelectionMode::Replace => {
                 self.gpu_selection.upload_replace_full(
-                    &self.gpu.device, &self.gpu.queue, &shape_pixels,
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &shape_pixels,
                     self.brush_pipelines.selection_bind_group_layout(),
                     &self.paint_pipelines.selection_bind_group_layout,
                 );
@@ -293,7 +333,9 @@ impl DarklyEngine {
         let combine_mode = CombineMode::from_selection_mode(&mode);
         self.gpu.encode("sel-combine", |encoder| {
             self.selection_pipelines.combine(
-                encoder, &self.gpu.device, &self.gpu.queue,
+                encoder,
+                &self.gpu.device,
+                &self.gpu.queue,
                 &mut self.gpu_selection,
                 shape_pixels,
                 combine_mode,
@@ -311,24 +353,25 @@ impl DarklyEngine {
         let rect = self.selection_dirty_rect();
         let texture = self.gpu_selection.texture();
         self.gpu.encode("sel-undo-save", |encoder| {
-            self.region_store.save_region(
-                encoder, texture, wgpu::TextureFormat::R8Unorm, rect,
-            );
+            self.region_store
+                .save_region(encoder, texture, wgpu::TextureFormat::R8Unorm, rect);
         });
     }
 
     pub(crate) fn commit_selection_undo(&mut self, was_active: bool) {
         let rect = self.selection_dirty_rect();
         self.gpu.encode("sel-undo-commit", |encoder| {
-            let entry = self.region_store.commit_region(
-                encoder, 0, wgpu::TextureFormat::R8Unorm, rect,
-            );
-            self.undo_stack.push(Box::new(SelectionAction::new(was_active, entry)));
+            let entry =
+                self.region_store
+                    .commit_region(encoder, 0, wgpu::TextureFormat::R8Unorm, rect);
+            self.undo_stack
+                .push(Box::new(SelectionAction::new(was_active, entry)));
         });
     }
 
     fn selection_dirty_rect(&self) -> [u32; 4] {
-        self.gpu_selection.pixel_bounds
+        self.gpu_selection
+            .pixel_bounds
             .unwrap_or([0, 0, self.doc.width, self.doc.height])
     }
 
@@ -339,10 +382,14 @@ impl DarklyEngine {
         let texture = self.gpu_selection.texture();
         self.gpu.encode("sel-readback", |encoder| {
             let request = readback::request_readback(
-                &self.gpu.device, encoder, texture,
-                wgpu::TextureFormat::R8Unorm, [0, 0, w, h],
+                &self.gpu.device,
+                encoder,
+                texture,
+                wgpu::TextureFormat::R8Unorm,
+                [0, 0, w, h],
             );
-            self.readbacks.submit(request, ReadbackContext::SelectionReadback);
+            self.readbacks
+                .submit(request, ReadbackContext::SelectionReadback);
         });
     }
 
@@ -360,7 +407,9 @@ impl DarklyEngine {
         // Update pixel_bounds from readback if not already known.
         if self.gpu_selection.pixel_bounds.is_none() {
             self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
-                &pixels, self.gpu_selection.width, self.gpu_selection.height,
+                &pixels,
+                self.gpu_selection.width,
+                self.gpu_selection.height,
             );
         }
 
@@ -421,9 +470,8 @@ impl DarklyEngine {
 
     /// Upload the mask texture sampled by KIND_MASKED_STAMP overlay primitives.
     pub fn set_overlay_mask(&mut self, width: u32, height: u32, rgba: &[u8]) {
-        self.compositor.set_overlay_mask(
-            &self.gpu.device, &self.gpu.queue, width, height, rgba,
-        );
+        self.compositor
+            .set_overlay_mask(&self.gpu.device, &self.gpu.queue, width, height, rgba);
     }
 
     pub fn clear_overlay_mask(&mut self) {

@@ -1,7 +1,7 @@
 //! Stroke lifecycle, flood fill, erase helpers, and paint infrastructure.
 
-use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use super::types::StrokeOp;
+use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::paint_info::PaintInformation;
@@ -37,7 +37,9 @@ impl DarklyEngine {
         if !self.diff_rect.is_pending() {
             return;
         }
-        let Some(commit) = self.pending_undo_commit.take() else { return };
+        let Some(commit) = self.pending_undo_commit.take() else {
+            return;
+        };
 
         // Try to collect the result without blocking.
         let _ = self.gpu.device.poll(wgpu::PollType::Poll);
@@ -52,16 +54,20 @@ impl DarklyEngine {
         };
 
         self.gpu.encode("brush-stroke-end-flush", |encoder| {
-            let entry = self.region_store.commit_region(
-                encoder, commit.layer_id, commit.format, rect,
-            );
+            let entry =
+                self.region_store
+                    .commit_region(encoder, commit.layer_id, commit.format, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
     }
 
     // --- Painting ---
 
-    pub fn fill_gradient(&mut self, layer_id: u64) {
+    /// Fill the layer with the default background image, centered and clipped
+    /// to the canvas. The image is baked into the binary at build time.
+    pub fn fill_background(&mut self, layer_id: u64) {
+        const IMAGE_BYTES: &[u8] = include_bytes!("../../resources/backgrounds/quiet-night.jpg");
+
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         let rect = [0, 0, canvas_w, canvas_h];
@@ -73,23 +79,65 @@ impl DarklyEngine {
         };
 
         // Save current state to scratch for undo.
-        self.gpu.encode("fill-gradient-save", |encoder| {
-            self.region_store.save_region(encoder, &layer_tex.texture, format, rect);
-            let entry = self.region_store.commit_region(encoder, layer_id, format, rect);
+        self.gpu.encode("fill-background-save", |encoder| {
+            self.region_store
+                .save_region(encoder, &layer_tex.texture, format, rect);
+            let entry = self
+                .region_store
+                .commit_region(encoder, layer_id, format, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
 
-        // Render gradient via GPU paint target.
-        let layer_tex = self.compositor.layer_texture(layer_id).unwrap();
-        let target = GpuPaintTarget::from_layer(layer_tex, canvas_w, canvas_h);
-        self.gpu.encode("fill-gradient-render", |encoder| {
-            target.linear_gradient(
-                encoder, &self.paint_pipelines, &self.gpu.queue,
-                0.0, 0.0, canvas_w as f32, canvas_h as f32,
-                [0, 0, 0, 255], [255, 255, 255, 255],
-                None,
+        let decoded = image::load_from_memory(IMAGE_BYTES)
+            .expect("failed to decode embedded background image")
+            .to_rgba8();
+        let (img_w, img_h) = decoded.dimensions();
+
+        // Center the image on the canvas, clipped to canvas bounds.
+        let offset_x = (canvas_w as i32 - img_w as i32) / 2;
+        let offset_y = (canvas_h as i32 - img_h as i32) / 2;
+        let src_x = (-offset_x).max(0) as u32;
+        let src_y = (-offset_y).max(0) as u32;
+        let dst_x = offset_x.max(0) as u32;
+        let dst_y = offset_y.max(0) as u32;
+        let copy_w = (img_w - src_x).min(canvas_w - dst_x);
+        let copy_h = (img_h - src_y).min(canvas_h - dst_y);
+
+        if copy_w > 0 && copy_h > 0 {
+            let layer_tex = self.compositor.layer_texture(layer_id).unwrap();
+            let row_bytes = copy_w as usize * 4;
+            let mut buf = vec![0u8; row_bytes * copy_h as usize];
+            let full = decoded.as_raw();
+            for row in 0..copy_h as usize {
+                let src_row = (src_y as usize + row) * img_w as usize * 4 + src_x as usize * 4;
+                let dst_row = row * row_bytes;
+                buf[dst_row..dst_row + row_bytes]
+                    .copy_from_slice(&full[src_row..src_row + row_bytes]);
+            }
+            self.gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &layer_tex.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: dst_x,
+                        y: dst_y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &buf,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row_bytes as u32),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: copy_w,
+                    height: copy_h,
+                    depth_or_array_layers: 1,
+                },
             );
-        });
+        }
 
         self.compositor.mark_dirty();
     }
@@ -102,9 +150,12 @@ impl DarklyEngine {
 
     pub fn begin_stroke(&mut self, layer_id: u64) {
         self.auto_commit_floating();
-        self.doc.set_mask_editing(
-            if self.editing_mask_layer == Some(layer_id) { Some(layer_id) } else { None }
-        );
+        self.doc
+            .set_mask_editing(if self.editing_mask_layer == Some(layer_id) {
+                Some(layer_id)
+            } else {
+                None
+            });
         self.active_stroke_layer = Some(layer_id);
         // GPU setup is deferred to first stroke_to (lazy init).
     }
@@ -139,7 +190,8 @@ impl DarklyEngine {
             };
 
             self.gpu.encode("stroke-begin", |encoder| {
-                self.region_store.save_region(encoder, texture, format, [0, 0, canvas_w, canvas_h]);
+                self.region_store
+                    .save_region(encoder, texture, format, [0, 0, canvas_w, canvas_h]);
             });
 
             self.scratch_saved = true;
@@ -148,36 +200,99 @@ impl DarklyEngine {
         macro_rules! paint_target {
             () => {
                 if mask_editing {
-                    self.compositor.mask_texture(layer_id)
+                    self.compositor
+                        .mask_texture(layer_id)
                         .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
                 } else {
-                    self.compositor.layer_texture(layer_id)
+                    self.compositor
+                        .layer_texture(layer_id)
                         .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
                 }
             };
         }
 
         match op {
-            StrokeOp::LinearGradient { x0, y0, x1, y1, r0, g0, b0, a0, r1, g1, b1, a1 } => {
-                let target = match paint_target!() { Some(t) => t, None => return };
+            StrokeOp::LinearGradient {
+                x0,
+                y0,
+                x1,
+                y1,
+                r0,
+                g0,
+                b0,
+                a0,
+                r1,
+                g1,
+                b1,
+                a1,
+            } => {
+                let target = match paint_target!() {
+                    Some(t) => t,
+                    None => return,
+                };
                 self.gpu.encode("stroke-gradient", |encoder| {
                     target.linear_gradient(
-                        encoder, &self.paint_pipelines, &self.gpu.queue,
-                        x0, y0, x1, y1, [r0, g0, b0, a0], [r1, g1, b1, a1], None,
+                        encoder,
+                        &self.paint_pipelines,
+                        &self.gpu.queue,
+                        x0,
+                        y0,
+                        x1,
+                        y1,
+                        [r0, g0, b0, a0],
+                        [r1, g1, b1, a1],
+                        None,
                     );
                 });
             }
-            StrokeOp::FloodFill { x, y, r, g, b, a, tolerance } => {
-                self.gpu_flood_fill(layer_id, mask_editing,
-                    x as i32, y as i32, [r, g, b, a], tolerance,
-                    canvas_w, canvas_h);
+            StrokeOp::FloodFill {
+                x,
+                y,
+                r,
+                g,
+                b,
+                a,
+                tolerance,
+            } => {
+                self.gpu_flood_fill(
+                    layer_id,
+                    mask_editing,
+                    x as i32,
+                    y as i32,
+                    [r, g, b, a],
+                    tolerance,
+                    canvas_w,
+                    canvas_h,
+                );
             }
-            StrokeOp::BrushStroke { x, y, pressure, x_tilt, y_tilt, rotation, tangential_pressure, time_ms, cr, cg, cb, ca } => {
+            StrokeOp::BrushStroke {
+                x,
+                y,
+                pressure,
+                x_tilt,
+                y_tilt,
+                rotation,
+                tangential_pressure,
+                time_ms,
+                cr,
+                cg,
+                cb,
+                ca,
+            } => {
                 self.brush_stroke_to(
-                    layer_id, mask_editing,
-                    x, y, pressure, x_tilt, y_tilt, rotation, tangential_pressure, time_ms,
+                    layer_id,
+                    mask_editing,
+                    x,
+                    y,
+                    pressure,
+                    x_tilt,
+                    y_tilt,
+                    rotation,
+                    tangential_pressure,
+                    time_ms,
                     [cr, cg, cb, ca],
-                    canvas_w, canvas_h,
+                    canvas_w,
+                    canvas_h,
                 );
             }
         }
@@ -194,14 +309,17 @@ impl DarklyEngine {
         &mut self,
         layer_id: u64,
         mask_editing: bool,
-        x: f32, y: f32,
+        x: f32,
+        y: f32,
         pressure: f32,
-        x_tilt: f32, y_tilt: f32,
+        x_tilt: f32,
+        y_tilt: f32,
         rotation: f32,
         tangential_pressure: f32,
         time_ms: f64,
         color: [f32; 4],
-        canvas_w: u32, canvas_h: u32,
+        canvas_w: u32,
+        canvas_h: u32,
     ) {
         // True on the lazy-init path below — the terminal's `begin_stroke`
         // hook must run once before the first dab to initialise the scratch.
@@ -228,10 +346,15 @@ impl DarklyEngine {
             } else {
                 crate::brush::stabilizer::StabilizerConfig::default()
             };
-            let stabilizer = self.stabilizer_registry.create_from_config(&stabilizer_config);
+            let stabilizer = self
+                .stabilizer_registry
+                .create_from_config(&stabilizer_config);
 
             self.brush_stroke_engine = Some(StrokeEngine::new(
-                runner, color, SpacingConfig::default(), stabilizer,
+                runner,
+                color,
+                SpacingConfig::default(),
+                stabilizer,
             ));
 
             // Create the stroke buffer and save the pre-stroke snapshot.
@@ -325,7 +448,9 @@ impl DarklyEngine {
                 ($label:expr) => {
                     BrushGpuContext {
                         encoder: self.gpu.device.create_command_encoder(
-                            &wgpu::CommandEncoderDescriptor { label: Some($label) },
+                            &wgpu::CommandEncoderDescriptor {
+                                label: Some($label),
+                            },
                         ),
                         device: &self.gpu.device,
                         queue: &self.gpu.queue,
@@ -399,13 +524,14 @@ impl DarklyEngine {
                     0
                 };
                 // Render in segments with checkpoints at boundaries.
-                let boundaries = CheckpointRing::compute_segment_boundaries(
-                    start_vi, tip_vi, max_div,
-                );
+                let boundaries =
+                    CheckpointRing::compute_segment_boundaries(start_vi, tip_vi, max_div);
 
                 let mut seg_start = start_vi;
                 for &boundary in &boundaries {
-                    if boundary <= seg_start || boundary > tip_vi { continue; }
+                    if boundary <= seg_start || boundary > tip_vi {
+                        continue;
+                    }
 
                     // Render segment.
                     let mut gpu_ctx = make_gpu_ctx!("brush-rerender-seg");
@@ -418,9 +544,13 @@ impl DarklyEngine {
                         let render_state = engine.capture_render_state();
                         self.gpu.encode("checkpoint-save", |encoder| {
                             self.checkpoint_ring.save(
-                                &self.gpu.device, encoder,
+                                &self.gpu.device,
+                                encoder,
                                 stroke_buffer.stroke_texture(),
-                                sp_idx, boundary, bbox, render_state,
+                                sp_idx,
+                                boundary,
+                                bbox,
+                                render_state,
                             );
                         });
                     }
@@ -452,9 +582,13 @@ impl DarklyEngine {
                         let render_state = engine.capture_render_state();
                         self.gpu.encode("checkpoint-save", |encoder| {
                             self.checkpoint_ring.save(
-                                &self.gpu.device, encoder,
+                                &self.gpu.device,
+                                encoder,
                                 stroke_buffer.stroke_texture(),
-                                sp_idx, tip_vi, bbox, render_state,
+                                sp_idx,
+                                tip_vi,
+                                bbox,
+                                render_state,
                             );
                         });
                     }
@@ -483,7 +617,9 @@ impl DarklyEngine {
                 let canvas_texture = &layer_tex.texture;
                 let mut gpu_ctx = BrushGpuContext {
                     encoder: self.gpu.device.create_command_encoder(
-                        &wgpu::CommandEncoderDescriptor { label: Some("brush-dab") },
+                        &wgpu::CommandEncoderDescriptor {
+                            label: Some("brush-dab"),
+                        },
                     ),
                     device: &self.gpu.device,
                     queue: &self.gpu.queue,
@@ -543,23 +679,47 @@ impl DarklyEngine {
             }
         };
 
-        let mut encoder = self.gpu.device.create_command_encoder(
-            &wgpu::CommandEncoderDescriptor { label: Some("flood-fill-readback") },
-        );
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flood-fill-readback"),
+            });
         let request = readback::request_readback(
-            &self.gpu.device, &mut encoder, texture, format,
+            &self.gpu.device,
+            &mut encoder,
+            texture,
+            format,
             [0, 0, canvas_w, canvas_h],
         );
         self.gpu.queue.submit([encoder.finish()]);
-        self.readbacks.submit(request, ReadbackContext::FloodFill {
-            layer_id, mask_editing, seed_x, seed_y, color, tolerance, canvas_w, canvas_h,
-        });
+        self.readbacks.submit(
+            request,
+            ReadbackContext::FloodFill {
+                layer_id,
+                mask_editing,
+                seed_x,
+                seed_y,
+                color,
+                tolerance,
+                canvas_w,
+                canvas_h,
+            },
+        );
     }
 
     /// Complete a pending flood fill once readback data is available.
     pub(crate) fn complete_flood_fill(
-        &mut self, layer_id: u64, mask_editing: bool, seed_x: i32, seed_y: i32,
-        color: [u8; 4], tolerance: u8, canvas_w: u32, canvas_h: u32, pixels: Vec<u8>,
+        &mut self,
+        layer_id: u64,
+        mask_editing: bool,
+        seed_x: i32,
+        seed_y: i32,
+        color: [u8; 4],
+        tolerance: u8,
+        canvas_w: u32,
+        canvas_h: u32,
+        pixels: Vec<u8>,
     ) {
         // 1. CPU scanline fill → produce R8 mask.
         let fill_mask = if mask_editing {
@@ -571,7 +731,9 @@ impl DarklyEngine {
         // 2. Combine fill mask with active selection (if any), then upload.
         let effective_mask = if self.gpu_selection.active {
             if let Some(sel) = &self.gpu_selection.cpu_cache {
-                fill_mask.iter().zip(sel.iter())
+                fill_mask
+                    .iter()
+                    .zip(sel.iter())
                     .map(|(&f, &s)| ((f as u16 * s as u16) / 255) as u8)
                     .collect()
             } else {
@@ -582,8 +744,12 @@ impl DarklyEngine {
         };
 
         let mask_bind_group = self.paint_pipelines.upload_r8_bind_group(
-            &self.gpu.device, &self.gpu.queue, canvas_w, canvas_h,
-            &effective_mask, "flood-fill-mask",
+            &self.gpu.device,
+            &self.gpu.queue,
+            canvas_w,
+            canvas_h,
+            &effective_mask,
+            "flood-fill-mask",
         );
 
         let (target, _) = match self.get_paint_target(layer_id, mask_editing) {
@@ -593,8 +759,12 @@ impl DarklyEngine {
 
         self.gpu.encode("flood-fill-stamp", |encoder| {
             target.fill_rect_with_selection(
-                encoder, &self.paint_pipelines, &self.gpu.queue,
-                [0, 0, canvas_w, canvas_h], color, &mask_bind_group,
+                encoder,
+                &self.paint_pipelines,
+                &self.gpu.queue,
+                [0, 0, canvas_w, canvas_h],
+                color,
+                &mask_bind_group,
             );
         });
 
@@ -606,9 +776,9 @@ impl DarklyEngine {
         };
         let rect = [0u32, 0, canvas_w, canvas_h];
         self.gpu.encode("flood-fill-undo", |encoder| {
-            let entry = self.region_store.commit_region(
-                encoder, layer_id, format, rect,
-            );
+            let entry = self
+                .region_store
+                .commit_region(encoder, layer_id, format, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
         self.scratch_saved = false;
@@ -620,7 +790,10 @@ impl DarklyEngine {
         if let Some(layer_id) = self.active_stroke_layer.take() {
             // If a flood fill is pending, defer undo commit — complete_flood_fill
             // will handle it when the readback arrives.
-            if self.readbacks.any(|c| matches!(c, ReadbackContext::FloodFill { .. })) {
+            if self
+                .readbacks
+                .any(|c| matches!(c, ReadbackContext::FloodFill { .. }))
+            {
                 self.doc.set_mask_editing(None);
                 return;
             }
@@ -648,12 +821,14 @@ impl DarklyEngine {
                     let scratch_view = self.region_store.scratch_view(format);
                     let (w, h) = self.region_store.scratch_dimensions();
                     self.diff_rect.request(
-                        &self.gpu.device, &self.gpu.queue,
-                        &scratch_view, current_view, w, h,
+                        &self.gpu.device,
+                        &self.gpu.queue,
+                        &scratch_view,
+                        current_view,
+                        w,
+                        h,
                     );
-                    self.pending_undo_commit = Some(PendingUndoCommit {
-                        layer_id, format,
-                    });
+                    self.pending_undo_commit = Some(PendingUndoCommit { layer_id, format });
                 }
             }
             self.scratch_saved = false;
@@ -680,22 +855,28 @@ impl DarklyEngine {
 
         // Save region for undo.
         self.gpu.encode("clear-sel-save", |encoder| {
-            self.region_store.save_region(encoder, target.texture, format, [0, 0, canvas_w, canvas_h]);
+            self.region_store.save_region(
+                encoder,
+                target.texture,
+                format,
+                [0, 0, canvas_w, canvas_h],
+            );
         });
 
         // Erase within selection using the cached GPU selection bind group.
         let (target, _) = self.get_paint_target(layer_id, mask_editing).unwrap();
         let sel_bg = self.gpu_selection.paint_bind_group();
         self.gpu.encode("clear-sel-erase", |encoder| {
-            target.erase_with_selection(
-                encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg,
-            );
+            target.erase_with_selection(encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg);
         });
 
         // Commit for undo.
         self.gpu.encode("clear-sel-commit", |encoder| {
             let entry = self.region_store.commit_region(
-                encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
+                encoder,
+                layer_id,
+                format,
+                [0, 0, canvas_w, canvas_h],
             );
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
@@ -715,14 +896,21 @@ impl DarklyEngine {
 
         // Save region for undo.
         self.gpu.encode("clear-layer-save", |encoder| {
-            self.region_store.save_region(encoder, target.texture, format, [0, 0, canvas_w, canvas_h]);
+            self.region_store.save_region(
+                encoder,
+                target.texture,
+                format,
+                [0, 0, canvas_w, canvas_h],
+            );
         });
 
         // Clear the full canvas.
         let (target, _) = self.get_paint_target(layer_id, mask_editing).unwrap();
         self.gpu.encode("clear-layer", |encoder| {
             target.clear_rect(
-                encoder, &self.paint_pipelines, &self.gpu.queue,
+                encoder,
+                &self.paint_pipelines,
+                &self.gpu.queue,
                 [0, 0, canvas_w, canvas_h],
             );
         });
@@ -730,7 +918,10 @@ impl DarklyEngine {
         // Commit for undo.
         self.gpu.encode("clear-layer-commit", |encoder| {
             let entry = self.region_store.commit_region(
-                encoder, layer_id, format, [0, 0, canvas_w, canvas_h],
+                encoder,
+                layer_id,
+                format,
+                [0, 0, canvas_w, canvas_h],
             );
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
@@ -738,15 +929,27 @@ impl DarklyEngine {
     }
 
     /// Get a GpuPaintTarget for a layer (or its mask), plus its format.
-    pub(crate) fn get_paint_target(&self, layer_id: u64, mask_editing: bool) -> Option<(GpuPaintTarget<'_>, wgpu::TextureFormat)> {
+    pub(crate) fn get_paint_target(
+        &self,
+        layer_id: u64,
+        mask_editing: bool,
+    ) -> Option<(GpuPaintTarget<'_>, wgpu::TextureFormat)> {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         if mask_editing {
-            self.compositor.mask_texture(layer_id)
-                .map(|t| (GpuPaintTarget::from_mask(t, canvas_w, canvas_h), wgpu::TextureFormat::R8Unorm))
+            self.compositor.mask_texture(layer_id).map(|t| {
+                (
+                    GpuPaintTarget::from_mask(t, canvas_w, canvas_h),
+                    wgpu::TextureFormat::R8Unorm,
+                )
+            })
         } else {
-            self.compositor.layer_texture(layer_id)
-                .map(|t| (GpuPaintTarget::from_layer(t, canvas_w, canvas_h), wgpu::TextureFormat::Rgba8Unorm))
+            self.compositor.layer_texture(layer_id).map(|t| {
+                (
+                    GpuPaintTarget::from_layer(t, canvas_w, canvas_h),
+                    wgpu::TextureFormat::Rgba8Unorm,
+                )
+            })
         }
     }
 
@@ -773,14 +976,19 @@ impl DarklyEngine {
                 let sx = ox + px as i32;
                 let sy = oy + py as i32;
                 if sx >= 0 && sy >= 0 && (sx as u32) < cw && (sy as u32) < ch {
-                    pixels[(py * width + px) as usize] = full[(sy as u32 * cw + sx as u32) as usize];
+                    pixels[(py * width + px) as usize] =
+                        full[(sy as u32 * cw + sx as u32) as usize];
                 }
             }
         }
 
         Some(self.paint_pipelines.upload_r8_bind_group(
-            &self.gpu.device, &self.gpu.queue, width, height,
-            &pixels, "selection-cropped",
+            &self.gpu.device,
+            &self.gpu.queue,
+            width,
+            height,
+            &pixels,
+            "selection-cropped",
         ))
     }
 }

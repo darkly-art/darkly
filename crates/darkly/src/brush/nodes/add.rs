@@ -1,7 +1,7 @@
 //! Add node — Scalar + Scalar → Scalar.
 
-use crate::brush::wire::BrushWireType;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
@@ -19,8 +19,7 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("b", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
                 .with_description("Second addend"),
-            PortDef::output("result", BrushWireType::Scalar)
-                .with_description("Sum of a + b"),
+            PortDef::output("result", BrushWireType::Scalar).with_description("Sum of a + b"),
         ],
         params: &[],
         is_gpu: false,

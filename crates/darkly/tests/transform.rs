@@ -3,15 +3,16 @@
 //! Tests TransformPass::commit_to_texture() with various transforms and undo.
 //! Run with: `cargo test -p darkly --test transform`
 
-use darkly::gpu::test_utils::*;
 use darkly::gpu::region_store::RegionStore;
+use darkly::gpu::test_utils::*;
 use darkly::gpu::transform::{
-    TransformPass, Affine2D, IDENTITY,
-    affine_translate, affine_inverse, affine_multiply,
+    affine_inverse, affine_multiply, affine_translate, Affine2D, TransformPass, IDENTITY,
 };
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
-    device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("test") })
+    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("test"),
+    })
 }
 
 fn submit(queue: &wgpu::Queue, encoder: wgpu::CommandEncoder) {
@@ -43,7 +44,11 @@ fn setup_transform_pass(
     let make_dummy = || {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("dummy-accum"),
-            size: wgpu::Extent3d { width: canvas_w, height: canvas_h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: canvas_w,
+                height: canvas_h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -69,7 +74,11 @@ fn setup_transform_pass(
 /// Helper: create flat RGBA pixel data with a solid-color rectangle.
 /// Returns (rgba_data, origin, width, height).
 fn make_source_rect(
-    x: i32, y: i32, w: u32, h: u32, color: [u8; 4],
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    color: [u8; 4],
 ) -> (Vec<u8>, (i32, i32), u32, u32) {
     let mut data = vec![0u8; (w * h * 4) as usize];
     for py in 0..h {
@@ -104,10 +113,19 @@ fn transform_commit_translate() {
     let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [255, 0, 0, 255]);
 
     pass.set_floating_content(
-        &device, &queue, &sampler,
-        &accum_views, &cache_view,
-        &source_data, origin, sw, sh, cw, ch,
-        1, false,
+        &device,
+        &queue,
+        &sampler,
+        &accum_views,
+        &cache_view,
+        &source_data,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+        1,
+        false,
     );
 
     // Translate by (10, 10).
@@ -115,8 +133,18 @@ fn transform_commit_translate() {
 
     let mut enc = encoder(&device);
     pass.commit_to_texture(
-        &device, &mut enc, &queue, &target_tex, &target_view, fmt,
-        &matrix, origin, sw, sh, cw, ch,
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        fmt,
+        &matrix,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
     );
     submit(&queue, enc);
 
@@ -126,8 +154,20 @@ fn transform_commit_translate() {
     for dy in 0..4u32 {
         for dx in 0..4u32 {
             let p = pixel_at(&pixels, cw, 20 + dx, 20 + dy, 4);
-            assert!(p[0] > 200, "pixel at ({},{}) should be red, got R={}", 20 + dx, 20 + dy, p[0]);
-            assert!(p[3] > 200, "pixel at ({},{}) should be opaque, got A={}", 20 + dx, 20 + dy, p[3]);
+            assert!(
+                p[0] > 200,
+                "pixel at ({},{}) should be red, got R={}",
+                20 + dx,
+                20 + dy,
+                p[0]
+            );
+            assert!(
+                p[3] > 200,
+                "pixel at ({},{}) should be opaque, got A={}",
+                20 + dx,
+                20 + dy,
+                p[3]
+            );
         }
     }
 
@@ -136,7 +176,14 @@ fn transform_commit_translate() {
     for dy in 0..4u32 {
         for dx in 0..4u32 {
             let p = pixel_at(&pixels, cw, 10 + dx, 10 + dy, 4);
-            assert_eq!(p[3], 0, "old position ({},{}) should be transparent, A={}", 10 + dx, 10 + dy, p[3]);
+            assert_eq!(
+                p[3],
+                0,
+                "old position ({},{}) should be transparent, A={}",
+                10 + dx,
+                10 + dy,
+                p[3]
+            );
         }
     }
 
@@ -161,10 +208,19 @@ fn transform_commit_translate_undo() {
     let (source_data, origin, sw, sh) = make_source_rect(5, 5, 4, 4, [0, 255, 0, 255]);
 
     pass.set_floating_content(
-        &device, &queue, &sampler,
-        &accum_views, &cache_view,
-        &source_data, origin, sw, sh, cw, ch,
-        1, false,
+        &device,
+        &queue,
+        &sampler,
+        &accum_views,
+        &cache_view,
+        &source_data,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+        1,
+        false,
     );
 
     // Save pre-commit state.
@@ -175,7 +231,20 @@ fn transform_commit_translate_undo() {
     // Commit with translation (15, 15).
     let matrix = affine_translate(15.0, 15.0);
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &matrix, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        fmt,
+        &matrix,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+    );
     submit(&queue, enc);
 
     // Commit undo entry.
@@ -194,8 +263,16 @@ fn transform_commit_translate_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
-    assert_eq!(pixel_at(&pixels, cw, 20, 20, 4)[3], 0, "after undo, should be transparent");
-    assert_eq!(pixel_at(&pixels, cw, 5, 5, 4)[3], 0, "after undo, original pos still transparent");
+    assert_eq!(
+        pixel_at(&pixels, cw, 20, 20, 4)[3],
+        0,
+        "after undo, should be transparent"
+    );
+    assert_eq!(
+        pixel_at(&pixels, cw, 5, 5, 4)[3],
+        0,
+        "after undo, original pos still transparent"
+    );
 }
 
 // ============================================================================
@@ -226,17 +303,39 @@ fn transform_commit_rotate_90() {
     }
 
     pass.set_floating_content(
-        &device, &queue, &sampler,
-        &accum_views, &cache_view,
-        &source_data, (ox, oy), sw, sh, cw, ch,
-        1, false,
+        &device,
+        &queue,
+        &sampler,
+        &accum_views,
+        &cache_view,
+        &source_data,
+        (ox, oy),
+        sw,
+        sh,
+        cw,
+        ch,
+        1,
+        false,
     );
 
     // Rotate 90° CW: matrix [0, 1, 0, -1, 0, 5]
     let matrix: Affine2D = [0.0, 1.0, 0.0, -1.0, 0.0, 5.0];
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &matrix, (ox, oy), sw, sh, cw, ch);
+    pass.commit_to_texture(
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        fmt,
+        &matrix,
+        (ox, oy),
+        sw,
+        sh,
+        cw,
+        ch,
+    );
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -244,15 +343,33 @@ fn transform_commit_rotate_90() {
     // Horizontal line at y=12, x=10..14.
     for x in 10..15u32 {
         let p = pixel_at(&pixels, cw, x, 12, 4);
-        assert!(p[2] > 200, "rotated line at ({},12) should be blue, B={}", x, p[2]);
-        assert!(p[3] > 200, "rotated line at ({},12) should be opaque, A={}", x, p[3]);
+        assert!(
+            p[2] > 200,
+            "rotated line at ({},12) should be blue, B={}",
+            x,
+            p[2]
+        );
+        assert!(
+            p[3] > 200,
+            "rotated line at ({},12) should be opaque, A={}",
+            x,
+            p[3]
+        );
     }
 
     // Original vertical line position (x=12, y=10..11) should be transparent.
     let p = pixel_at(&pixels, cw, 12, 10, 4);
-    assert_eq!(p[3], 0, "original vert line pos (12,10) should be clear, A={}", p[3]);
+    assert_eq!(
+        p[3], 0,
+        "original vert line pos (12,10) should be clear, A={}",
+        p[3]
+    );
     let p = pixel_at(&pixels, cw, 12, 11, 4);
-    assert_eq!(p[3], 0, "original vert line pos (12,11) should be clear, A={}", p[3]);
+    assert_eq!(
+        p[3], 0,
+        "original vert line pos (12,11) should be clear, A={}",
+        p[3]
+    );
 }
 
 // ============================================================================
@@ -275,32 +392,72 @@ fn paste_commit_identity() {
         setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: 8×8 magenta block at (20, 20).
-    let (source_data, origin, sw, sh) =
-        make_source_rect(20, 20, 8, 8, [255, 0, 255, 255]);
+    let (source_data, origin, sw, sh) = make_source_rect(20, 20, 8, 8, [255, 0, 255, 255]);
 
     pass.set_floating_content(
-        &device, &queue, &sampler,
-        &accum_views, &cache_view,
-        &source_data, origin, sw, sh, cw, ch,
-        1, false,
+        &device,
+        &queue,
+        &sampler,
+        &accum_views,
+        &cache_view,
+        &source_data,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+        1,
+        false,
     );
 
     // Commit with identity — pixels land at their original position.
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &IDENTITY, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        fmt,
+        &IDENTITY,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+    );
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
 
     // Center of pasted block.
     let p = pixel_at(&pixels, cw, 24, 24, 4);
-    assert!(p[0] > 200 && p[2] > 200, "should be magenta, got [{},{},{},{}]", p[0], p[1], p[2], p[3]);
+    assert!(
+        p[0] > 200 && p[2] > 200,
+        "should be magenta, got [{},{},{},{}]",
+        p[0],
+        p[1],
+        p[2],
+        p[3]
+    );
     assert!(p[3] > 200, "should be opaque");
 
     // Outside the block.
-    assert_eq!(pixel_at(&pixels, cw, 0, 0, 4)[3], 0, "outside should be transparent");
-    assert_eq!(pixel_at(&pixels, cw, 19, 20, 4)[3], 0, "just outside should be transparent");
-    assert_eq!(pixel_at(&pixels, cw, 28, 20, 4)[3], 0, "just outside right should be transparent");
+    assert_eq!(
+        pixel_at(&pixels, cw, 0, 0, 4)[3],
+        0,
+        "outside should be transparent"
+    );
+    assert_eq!(
+        pixel_at(&pixels, cw, 19, 20, 4)[3],
+        0,
+        "just outside should be transparent"
+    );
+    assert_eq!(
+        pixel_at(&pixels, cw, 28, 20, 4)[3],
+        0,
+        "just outside right should be transparent"
+    );
 }
 
 /// Paste commit with undo round-trip.
@@ -317,14 +474,22 @@ fn paste_commit_undo() {
     let (mut pass, accum_views, cache_view, sampler) =
         setup_transform_pass(&device, &queue, cw, ch);
 
-    let (source_data, origin, sw, sh) =
-        make_source_rect(10, 10, 6, 6, [255, 255, 0, 255]);
+    let (source_data, origin, sw, sh) = make_source_rect(10, 10, 6, 6, [255, 255, 0, 255]);
 
     pass.set_floating_content(
-        &device, &queue, &sampler,
-        &accum_views, &cache_view,
-        &source_data, origin, sw, sh, cw, ch,
-        1, false,
+        &device,
+        &queue,
+        &sampler,
+        &accum_views,
+        &cache_view,
+        &source_data,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+        1,
+        false,
     );
 
     // Save pre-paste state.
@@ -334,7 +499,20 @@ fn paste_commit_undo() {
 
     // Commit paste.
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &IDENTITY, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        fmt,
+        &IDENTITY,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+    );
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
@@ -344,7 +522,14 @@ fn paste_commit_undo() {
     // Verify yellow pixels.
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
     let p = pixel_at(&pixels, cw, 12, 12, 4);
-    assert!(p[0] > 200 && p[1] > 200, "should be yellow, got [{},{},{},{}]", p[0], p[1], p[2], p[3]);
+    assert!(
+        p[0] > 200 && p[1] > 200,
+        "should be yellow, got [{},{},{},{}]",
+        p[0],
+        p[1],
+        p[2],
+        p[3]
+    );
 
     // Undo.
     let mut enc = encoder(&device);
@@ -352,7 +537,11 @@ fn paste_commit_undo() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
-    assert_eq!(pixel_at(&pixels, cw, 12, 12, 4)[3], 0, "after undo, should be transparent");
+    assert_eq!(
+        pixel_at(&pixels, cw, 12, 12, 4)[3],
+        0,
+        "after undo, should be transparent"
+    );
 
     // Redo.
     let mut enc = encoder(&device);
@@ -383,26 +572,55 @@ fn commit_composites_over_existing() {
         setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: semi-transparent red (alpha=128) at (10,10) size 4×4.
-    let (source_data, origin, sw, sh) =
-        make_source_rect(10, 10, 4, 4, [255, 0, 0, 128]);
+    let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [255, 0, 0, 128]);
 
     pass.set_floating_content(
-        &device, &queue, &sampler,
-        &accum_views, &cache_view,
-        &source_data, origin, sw, sh, cw, ch,
-        1, false,
+        &device,
+        &queue,
+        &sampler,
+        &accum_views,
+        &cache_view,
+        &source_data,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+        1,
+        false,
     );
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, fmt, &IDENTITY, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        fmt,
+        &IDENTITY,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+    );
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
 
     // At (12, 12): semi-transparent red over blue.
     let p = pixel_at(&pixels, cw, 12, 12, 4);
-    assert!(p[0] > 100 && p[0] < 180, "blended R should be ~128, got {}", p[0]);
-    assert!(p[2] > 80 && p[2] < 180, "blended B should be ~127, got {}", p[2]);
+    assert!(
+        p[0] > 100 && p[0] < 180,
+        "blended R should be ~128, got {}",
+        p[0]
+    );
+    assert!(
+        p[2] > 80 && p[2] < 180,
+        "blended B should be ~127, got {}",
+        p[2]
+    );
     assert_eq!(p[3], 255, "result alpha should be 255 (fully opaque bg)");
 
     // Outside the source rect, blue should be untouched.
@@ -422,29 +640,56 @@ fn transform_commit_on_mask() {
     let mask_fmt = wgpu::TextureFormat::R8Unorm;
 
     // Target: fully transparent mask (0).
-    let (target_tex, target_view) =
-        create_test_texture_with_format(&device, &queue, cw, ch, &vec![0u8; (cw * ch) as usize], mask_fmt);
+    let (target_tex, target_view) = create_test_texture_with_format(
+        &device,
+        &queue,
+        cw,
+        ch,
+        &vec![0u8; (cw * ch) as usize],
+        mask_fmt,
+    );
 
     // TransformPass still uses Rgba8Unorm for its accumulator format (preview path).
     let (mut pass, accum_views, cache_view, sampler) =
         setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: 4×4 white block at (10, 10). White RGB → luminance = 1.0 → mask value 255.
-    let (source_data, origin, sw, sh) =
-        make_source_rect(10, 10, 4, 4, [255, 255, 255, 255]);
+    let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [255, 255, 255, 255]);
 
     pass.set_floating_content(
-        &device, &queue, &sampler,
-        &accum_views, &cache_view,
-        &source_data, origin, sw, sh, cw, ch,
-        1, true, // target_is_mask = true
+        &device,
+        &queue,
+        &sampler,
+        &accum_views,
+        &cache_view,
+        &source_data,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+        1,
+        true, // target_is_mask = true
     );
 
     // Translate by (5, 5).
     let matrix = affine_translate(5.0, 5.0);
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(&device, &mut enc, &queue, &target_tex, &target_view, mask_fmt, &matrix, origin, sw, sh, cw, ch);
+    pass.commit_to_texture(
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        mask_fmt,
+        &matrix,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+    );
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, mask_fmt, cw, ch);
@@ -453,13 +698,22 @@ fn transform_commit_on_mask() {
     for dy in 0..4u32 {
         for dx in 0..4u32 {
             let idx = ((15 + dy) * cw + 15 + dx) as usize;
-            assert!(pixels[idx] > 200,
-                "mask at ({},{}) should be ~255, got {}", 15 + dx, 15 + dy, pixels[idx]);
+            assert!(
+                pixels[idx] > 200,
+                "mask at ({},{}) should be ~255, got {}",
+                15 + dx,
+                15 + dy,
+                pixels[idx]
+            );
         }
     }
 
     // Original position and unrelated areas should be 0.
-    assert_eq!(pixels[(10 * cw + 10) as usize], 0, "original pos should be 0");
+    assert_eq!(
+        pixels[(10 * cw + 10) as usize],
+        0,
+        "original pos should be 0"
+    );
     assert_eq!(pixels[0], 0, "corner should be 0");
 }
 
@@ -471,8 +725,12 @@ fn transform_commit_on_mask() {
 fn affine_inverse_identity() {
     let inv = affine_inverse(&IDENTITY).unwrap();
     for i in 0..6 {
-        assert!((inv[i] - IDENTITY[i]).abs() < 1e-6,
-            "inverse of identity should be identity, element {} = {}", i, inv[i]);
+        assert!(
+            (inv[i] - IDENTITY[i]).abs() < 1e-6,
+            "inverse of identity should be identity, element {} = {}",
+            i,
+            inv[i]
+        );
     }
 }
 

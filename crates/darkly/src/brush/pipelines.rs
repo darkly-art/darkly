@@ -17,28 +17,27 @@
 use std::cell::Cell;
 use std::num::NonZeroU64;
 
-
 /// Uniform data for the circle mask generation shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CircleUniforms {
-    pub softness: f32,       // 0-1 fraction of radius
-    pub _pad: [f32; 3],      // padding to 16-byte alignment
+    pub softness: f32,  // 0-1 fraction of radius
+    pub _pad: [f32; 3], // padding to 16-byte alignment
 }
 
 /// Uniform data for the stamp dab generation shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct StampUniforms {
-    pub dab_width: f32,      // dab viewport width in pixels
-    pub dab_height: f32,     // dab viewport height in pixels
-    pub opacity: f32,        // dab opacity (0-1)
-    pub rotation: f32,       // dab rotation in radians
-    pub color: [f32; 4],     // RGBA paint color (straight alpha)
-    pub mirror_x: f32,       // 1.0 = flip horizontally
-    pub mirror_y: f32,       // 1.0 = flip vertically
-    pub application: u32,    // BrushTipApplication as u32
-    pub ratio: f32,          // user-controlled aspect ratio squeeze (1.0 = none)
+    pub dab_width: f32,   // dab viewport width in pixels
+    pub dab_height: f32,  // dab viewport height in pixels
+    pub opacity: f32,     // dab opacity (0-1)
+    pub rotation: f32,    // dab rotation in radians
+    pub color: [f32; 4],  // RGBA paint color (straight alpha)
+    pub mirror_x: f32,    // 1.0 = flip horizontally
+    pub mirror_y: f32,    // 1.0 = flip vertically
+    pub application: u32, // BrushTipApplication as u32
+    pub ratio: f32,       // user-controlled aspect ratio squeeze (1.0 = none)
 }
 
 /// Uniform data for the texture overlay shader.
@@ -114,8 +113,8 @@ pub struct CompositeUniforms {
     pub origin: [f32; 2],      // quad top-left in canvas pixels
     pub size: [f32; 2],        // quad size in canvas pixels
     pub canvas_size: [f32; 2], // canvas dimensions
-    pub uv_min: [f32; 2],     // min UV in dab texture (nonzero when clipped at top/left)
-    pub uv_max: [f32; 2],     // max UV in dab texture
+    pub uv_min: [f32; 2],      // min UV in dab texture (nonzero when clipped at top/left)
+    pub uv_max: [f32; 2],      // max UV in dab texture
     pub blend_mode: u32,       // 0 = source-over, 1 = erase (destination-out)
     pub fg_premultiplied: u32, // 1 = dab input is premultiplied, 0 = straight alpha
     pub stroke_opacity: f32,   // stroke-level opacity cap (1.0 = no cap)
@@ -149,7 +148,12 @@ impl DynamicUniformRing {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { buffer, aligned_stride, capacity, next_index: Cell::new(0) }
+        Self {
+            buffer,
+            aligned_stride,
+            capacity,
+            next_index: Cell::new(0),
+        }
     }
 
     /// Write uniform data to the next slot.  Returns the byte offset for
@@ -265,9 +269,11 @@ impl BrushPipelines {
             label: Some("brush-composite"),
             source: wgpu::ShaderSource::Wgsl(
                 concat!(
-                    include_str!("../../../../shaders/source_over.wgsl"), "\n",
+                    include_str!("../../../../shaders/source_over.wgsl"),
+                    "\n",
                     include_str!("../../../../shaders/brush/composite.wgsl"),
-                ).into(),
+                )
+                .into(),
             ),
         });
 
@@ -396,8 +402,10 @@ impl BrushPipelines {
 
         // --- Dynamic uniform rings ---
         let circle_uniform_ring = DynamicUniformRing::new(
-            device, "brush-circle-uniforms",
-            std::mem::size_of::<CircleUniforms>() as u64, min_align,
+            device,
+            "brush-circle-uniforms",
+            std::mem::size_of::<CircleUniforms>() as u64,
+            min_align,
         );
         let circle_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-circle-uniform-bg"),
@@ -413,8 +421,10 @@ impl BrushPipelines {
         });
 
         let stamp_uniform_ring = DynamicUniformRing::new(
-            device, "brush-stamp-uniforms",
-            std::mem::size_of::<StampUniforms>() as u64, min_align,
+            device,
+            "brush-stamp-uniforms",
+            std::mem::size_of::<StampUniforms>() as u64,
+            min_align,
         );
         let stamp_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-stamp-uniform-bg"),
@@ -430,8 +440,10 @@ impl BrushPipelines {
         });
 
         let tex_overlay_uniform_ring = DynamicUniformRing::new(
-            device, "brush-tex-overlay-uniforms",
-            std::mem::size_of::<TexOverlayUniforms>() as u64, min_align,
+            device,
+            "brush-tex-overlay-uniforms",
+            std::mem::size_of::<TexOverlayUniforms>() as u64,
+            min_align,
         );
         let tex_overlay_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-tex-overlay-uniform-bg"),
@@ -447,8 +459,10 @@ impl BrushPipelines {
         });
 
         let composite_uniform_ring = DynamicUniformRing::new(
-            device, "brush-composite-uniforms",
-            std::mem::size_of::<CompositeUniforms>() as u64, min_align,
+            device,
+            "brush-composite-uniforms",
+            std::mem::size_of::<CompositeUniforms>() as u64,
+            min_align,
         );
         let composite_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-composite-uniform-bg"),
@@ -464,8 +478,10 @@ impl BrushPipelines {
         });
 
         let blit_uniform_ring = DynamicUniformRing::new(
-            device, "brush-blit-uniforms",
-            std::mem::size_of::<BlitUniforms>() as u64, min_align,
+            device,
+            "brush-blit-uniforms",
+            std::mem::size_of::<BlitUniforms>() as u64,
+            min_align,
         );
         let blit_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-blit-uniform-bg"),
@@ -481,8 +497,10 @@ impl BrushPipelines {
         });
 
         let liquify_uniform_ring = DynamicUniformRing::new(
-            device, "brush-liquify-uniforms",
-            std::mem::size_of::<LiquifyUniforms>() as u64, min_align,
+            device,
+            "brush-liquify-uniforms",
+            std::mem::size_of::<LiquifyUniforms>() as u64,
+            min_align,
         );
         let liquify_uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("brush-liquify-uniform-bg"),
@@ -500,7 +518,11 @@ impl BrushPipelines {
         // --- Default selection (1x1 white = fully selected) ---
         let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-default-selection"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -521,7 +543,11 @@ impl BrushPipelines {
                 bytes_per_row: Some(1),
                 rows_per_image: Some(1),
             },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
         let sel_view = sel_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sel_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -562,7 +588,8 @@ impl BrushPipelines {
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let canvas_copy_view = canvas_copy_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let canvas_copy_view =
+            canvas_copy_texture.create_view(&wgpu::TextureViewDescriptor::default());
         // Linear sampler — `composite.wgsl` reads at integer pixel origins
         // (produces the same value as Nearest at pixel centres), while
         // `liquify.wgsl` reads at displaced sub-pixel UVs and needs bilinear
@@ -849,37 +876,51 @@ impl BrushPipelines {
     /// Write circle mask uniforms to the next ring slot.
     /// Returns the dynamic byte offset for `set_bind_group`.
     pub fn write_circle_uniforms(&self, queue: &wgpu::Queue, uniforms: &CircleUniforms) -> u32 {
-        self.circle_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
+        self.circle_uniform_ring
+            .write(queue, bytemuck::bytes_of(uniforms))
     }
 
     /// Write stamp dab uniforms to the next ring slot.
     /// Returns the dynamic byte offset for `set_bind_group`.
     pub fn write_stamp_uniforms(&self, queue: &wgpu::Queue, uniforms: &StampUniforms) -> u32 {
-        self.stamp_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
+        self.stamp_uniform_ring
+            .write(queue, bytemuck::bytes_of(uniforms))
     }
 
     /// Write texture overlay uniforms to the next ring slot.
     /// Returns the dynamic byte offset for `set_bind_group`.
-    pub fn write_tex_overlay_uniforms(&self, queue: &wgpu::Queue, uniforms: &TexOverlayUniforms) -> u32 {
-        self.tex_overlay_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
+    pub fn write_tex_overlay_uniforms(
+        &self,
+        queue: &wgpu::Queue,
+        uniforms: &TexOverlayUniforms,
+    ) -> u32 {
+        self.tex_overlay_uniform_ring
+            .write(queue, bytemuck::bytes_of(uniforms))
     }
 
     /// Write composite uniforms to the next ring slot.
     /// Returns the dynamic byte offset for `set_bind_group`.
-    pub fn write_composite_uniforms(&self, queue: &wgpu::Queue, uniforms: &CompositeUniforms) -> u32 {
-        self.composite_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
+    pub fn write_composite_uniforms(
+        &self,
+        queue: &wgpu::Queue,
+        uniforms: &CompositeUniforms,
+    ) -> u32 {
+        self.composite_uniform_ring
+            .write(queue, bytemuck::bytes_of(uniforms))
     }
 
     /// Write blit uniforms to the next ring slot.
     /// Returns the dynamic byte offset for `set_bind_group`.
     pub fn write_blit_uniforms(&self, queue: &wgpu::Queue, uniforms: &BlitUniforms) -> u32 {
-        self.blit_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
+        self.blit_uniform_ring
+            .write(queue, bytemuck::bytes_of(uniforms))
     }
 
     /// Write liquify uniforms to the next ring slot.
     /// Returns the dynamic byte offset for `set_bind_group`.
     pub fn write_liquify_uniforms(&self, queue: &wgpu::Queue, uniforms: &LiquifyUniforms) -> u32 {
-        self.liquify_uniform_ring.write(queue, bytemuck::bytes_of(uniforms))
+        self.liquify_uniform_ring
+            .write(queue, bytemuck::bytes_of(uniforms))
     }
 
     /// True if any ring is close to capacity.  The caller should flush

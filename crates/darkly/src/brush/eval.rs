@@ -116,10 +116,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     ///
     /// Called once per dab for each CPU node in topological order.
     /// GPU nodes return empty from this — they use `evaluate_gpu` instead.
-    fn evaluate_cpu(
-        &self,
-        ctx: &EvalContext,
-    ) -> Vec<(String, ScalarValue)>;
+    fn evaluate_cpu(&self, ctx: &EvalContext) -> Vec<(String, ScalarValue)>;
 
     /// Evaluate the node on the GPU, recording render passes into the
     /// encoder.  Returns named output values (e.g. texture handles).
@@ -251,11 +248,14 @@ impl BrushGraphRunner {
                     ParamValue::Curve(pts) if pts.len() >= 2 => Some(CurveLut::from_points(pts)),
                     _ => None,
                 });
-                node_data.insert(step.node_id, NodeData {
-                    params: node.params.clone(),
-                    port_defs: node.ports.clone(),
-                    lut,
-                });
+                node_data.insert(
+                    step.node_id,
+                    NodeData {
+                        params: node.params.clone(),
+                        port_defs: node.ports.clone(),
+                        lut,
+                    },
+                );
             }
         }
 
@@ -409,8 +409,11 @@ impl BrushGraphRunner {
     /// writes the resulting outputs back to their slots.
     fn dispatch_gpu<F>(&mut self, gpu: &mut BrushGpuContext, mut f: F)
     where
-        F: FnMut(&dyn BrushNodeEvaluator, &EvalContext, &mut BrushGpuContext)
-            -> Vec<(String, ScalarValue)>,
+        F: FnMut(
+            &dyn BrushNodeEvaluator,
+            &EvalContext,
+            &mut BrushGpuContext,
+        ) -> Vec<(String, ScalarValue)>,
     {
         for step in &self.plan.steps {
             if !step.is_gpu {
@@ -566,7 +569,9 @@ impl BrushGraphRunner {
         // (disconnected ports fall back to defaults and never appear here),
         // so a `brush_preview` input slot is proof of a wire.
         self.plan.steps.iter().any(|s| {
-            s.input_slots.iter().any(|(name, _)| name == "brush_preview")
+            s.input_slots
+                .iter()
+                .any(|(name, _)| name == "brush_preview")
         })
     }
 }

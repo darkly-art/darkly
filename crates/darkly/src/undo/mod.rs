@@ -1,16 +1,16 @@
+mod compound;
+mod gpu_region;
 mod layer;
 mod mask;
 pub mod property;
 mod selection;
-mod compound;
-mod gpu_region;
 
-pub use layer::{LayerAddAction, LayerRemoveAction, LayerMoveAction};
+pub use compound::CompoundAction;
+pub use gpu_region::GpuRegionAction;
+pub use layer::{LayerAddAction, LayerMoveAction, LayerRemoveAction};
 pub use mask::MaskPropertyAction;
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
-pub use compound::CompoundAction;
-pub use gpu_region::GpuRegionAction;
 
 use crate::document::Document;
 use crate::gpu::region_store::UndoRegionEntry;
@@ -144,7 +144,6 @@ impl UndoStack {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,7 +216,9 @@ mod tests {
         let new_parent = doc.parent_of(l1);
         let new_pos = doc.position_in_parent(l1).unwrap();
 
-        undo.push(Box::new(LayerMoveAction::new(l1, old_parent, old_pos, new_parent, new_pos)));
+        undo.push(Box::new(LayerMoveAction::new(
+            l1, old_parent, old_pos, new_parent, new_pos,
+        )));
 
         let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
         assert_eq!(flat, vec![l2, l3, l1]);
@@ -294,7 +295,9 @@ mod tests {
         // Should be exactly 1 undo step, not 4.
         assert!(undo.can_undo());
         assert_eq!(
-            doc.layer(id).map(|l| match l { Layer::Raster(r) => r.opacity }),
+            doc.layer(id).map(|l| match l {
+                Layer::Raster(r) => r.opacity,
+            }),
             Some(0.3),
         );
 
@@ -323,5 +326,4 @@ mod tests {
             "redo should restore final opacity 0.3, got {after_redo}"
         );
     }
-
 }

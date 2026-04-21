@@ -87,13 +87,28 @@ impl PresetBuilder {
             (stamp, "preview", color_output, "brush_preview"),
         ];
         for (from_node, from_port, to_node, to_port) in wires {
-            graph.connect(
-                PortRef { node: from_node, port: from_port.into() },
-                PortRef { node: to_node, port: to_port.into() },
-            ).unwrap();
+            graph
+                .connect(
+                    PortRef {
+                        node: from_node,
+                        port: from_port.into(),
+                    },
+                    PortRef {
+                        node: to_node,
+                        port: to_port.into(),
+                    },
+                )
+                .unwrap();
         }
 
-        PresetBuilder { graph, registry, pen, paint_color, stamp, color_output }
+        PresetBuilder {
+            graph,
+            registry,
+            pen,
+            paint_color,
+            stamp,
+            color_output,
+        }
     }
 
     /// Set the stabilization strength and expose it in the toolbar.
@@ -108,7 +123,9 @@ impl PresetBuilder {
             self.registry.get("circle").unwrap().ports.clone(),
             vec![],
         );
-        self.graph.set_port_default(circle, "softness", softness).unwrap();
+        self.graph
+            .set_port_default(circle, "softness", softness)
+            .unwrap();
         self.wire(circle, "texture", self.stamp, "tip");
     }
 
@@ -205,8 +222,14 @@ impl PresetBuilder {
             vec![],
         );
         self.graph.disconnect(
-            &PortRef { node: self.pen, port: "position".into() },
-            &PortRef { node: self.color_output, port: "position".into() },
+            &PortRef {
+                node: self.pen,
+                port: "position".into(),
+            },
+            &PortRef {
+                node: self.color_output,
+                port: "position".into(),
+            },
         );
         self.wire(self.pen, "position", scatter, "position");
         self.wire(scatter, "position", self.color_output, "position");
@@ -219,10 +242,18 @@ impl PresetBuilder {
 
     /// Generic wire helper.
     fn wire(&mut self, from: NodeId, from_port: &str, to: NodeId, to_port: &str) {
-        self.graph.connect(
-            PortRef { node: from, port: from_port.into() },
-            PortRef { node: to, port: to_port.into() },
-        ).unwrap();
+        self.graph
+            .connect(
+                PortRef {
+                    node: from,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
     }
 
     /// Build the preset (no resources).
@@ -247,12 +278,24 @@ impl PresetBuilder {
 
         // Disconnect stamp → color_output for dab and dab_size.
         self.graph.disconnect(
-            &PortRef { node: self.stamp, port: "dab".into() },
-            &PortRef { node: self.color_output, port: "dab".into() },
+            &PortRef {
+                node: self.stamp,
+                port: "dab".into(),
+            },
+            &PortRef {
+                node: self.color_output,
+                port: "dab".into(),
+            },
         );
         self.graph.disconnect(
-            &PortRef { node: self.stamp, port: "dab_size".into() },
-            &PortRef { node: self.color_output, port: "dab_size".into() },
+            &PortRef {
+                node: self.stamp,
+                port: "dab_size".into(),
+            },
+            &PortRef {
+                node: self.color_output,
+                port: "dab_size".into(),
+            },
         );
 
         // Wire stamp → texture_overlay → color_output.
@@ -297,7 +340,10 @@ impl PresetBuilder {
             resource_data.push((res_name.to_string(), data.to_vec()));
         }
 
-        PresetBundle { preset, resource_data }
+        PresetBundle {
+            preset,
+            resource_data,
+        }
     }
 }
 
@@ -326,7 +372,11 @@ fn ink_pen() -> PresetBundle {
     b.add_circle(0.1);
     // pressure → curve (approx sqrt) → stamp.size
     let curve = b.add_curve(vec![
-        [0.0, 0.0], [0.25, 0.5], [0.5, 0.71], [0.75, 0.87], [1.0, 1.0],
+        [0.0, 0.0],
+        [0.25, 0.5],
+        [0.5, 0.71],
+        [0.75, 0.87],
+        [1.0, 1.0],
     ]);
     b.wire(b.pen, "pressure", curve, "input");
     b.wire(curve, "output", b.stamp, "size");
@@ -363,9 +413,11 @@ fn calligraphy() -> PresetBundle {
     b.set_stabilize(0.6);
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/calligraphy.png");
-    b.build_with_resources("Calligraphy", "inking", vec![
-        ("calligraphy.png", ResourceKind::BrushTip, tip_bytes),
-    ])
+    b.build_with_resources(
+        "Calligraphy",
+        "inking",
+        vec![("calligraphy.png", ResourceKind::BrushTip, tip_bytes)],
+    )
 }
 
 fn textured_ink() -> PresetBundle {
@@ -378,16 +430,24 @@ fn textured_ink() -> PresetBundle {
     b.wire(b.paint_color, "color", b.stamp, "color");
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");
-    b.build_with_resources("Textured Ink", "effects", vec![
-        ("ink_dry.png", ResourceKind::BrushTip, tip_bytes),
-    ])
+    b.build_with_resources(
+        "Textured Ink",
+        "effects",
+        vec![("ink_dry.png", ResourceKind::BrushTip, tip_bytes)],
+    )
 }
 
 fn size_slider() -> PresetBundle {
     let mut b = PresetBuilder::new();
     b.add_circle(0.5);
     let slider = b.add_user_input(
-        "Size", 128.0, 1.0, 500.0, 1, "fa-solid fa-circle", "Brush diameter in pixels",
+        "Size",
+        128.0,
+        1.0,
+        500.0,
+        1,
+        "fa-solid fa-circle",
+        "Brush diameter in pixels",
     );
     b.wire(slider, "value", b.stamp, "size");
     b.wire(b.paint_color, "color", b.stamp, "color");
@@ -410,9 +470,11 @@ fn pencil() -> PresetBundle {
     b.set_port(tex, "strength", 0.8);
 
     let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/paper_grain.png");
-    b.build_with_resources("Pencil", "sketching", vec![
-        ("paper_grain.png", ResourceKind::Pattern, pattern_bytes),
-    ])
+    b.build_with_resources(
+        "Pencil",
+        "sketching",
+        vec![("paper_grain.png", ResourceKind::Pattern, pattern_bytes)],
+    )
 }
 
 fn charcoal() -> PresetBundle {
@@ -430,9 +492,11 @@ fn charcoal() -> PresetBundle {
     b.set_port(tex, "strength", 0.9);
 
     let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/canvas_grain.png");
-    b.build_with_resources("Charcoal", "sketching", vec![
-        ("canvas_grain.png", ResourceKind::Pattern, pattern_bytes),
-    ])
+    b.build_with_resources(
+        "Charcoal",
+        "sketching",
+        vec![("canvas_grain.png", ResourceKind::Pattern, pattern_bytes)],
+    )
 }
 
 fn canvas_brush() -> PresetBundle {
@@ -449,9 +513,11 @@ fn canvas_brush() -> PresetBundle {
     b.expose_port(tex, "strength", 0.6);
 
     let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/canvas_grain.png");
-    b.build_with_resources("Canvas Brush", "painting", vec![
-        ("canvas_grain.png", ResourceKind::Pattern, pattern_bytes),
-    ])
+    b.build_with_resources(
+        "Canvas Brush",
+        "painting",
+        vec![("canvas_grain.png", ResourceKind::Pattern, pattern_bytes)],
+    )
 }
 
 /// Liquify warp brush. Pushes pixels along pen motion with a radial
@@ -474,22 +540,46 @@ fn liquify_push() -> PresetBundle {
     );
 
     // pen_input.position → liquify.position
-    graph.connect(
-        PortRef { node: pen, port: "position".into() },
-        PortRef { node: liquify, port: "position".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "position".into(),
+            },
+            PortRef {
+                node: liquify,
+                port: "position".into(),
+            },
+        )
+        .unwrap();
     // pen_input.drawing_angle → liquify.direction (radians; shader turns
     // it into a unit direction vector). Magnitude comes from strength.
-    graph.connect(
-        PortRef { node: pen, port: "drawing_angle".into() },
-        PortRef { node: liquify, port: "direction".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "drawing_angle".into(),
+            },
+            PortRef {
+                node: liquify,
+                port: "direction".into(),
+            },
+        )
+        .unwrap();
     // pen_input.distance → liquify.distance (gates the first dab so a
     // stationary click doesn't smear in the default direction).
-    graph.connect(
-        PortRef { node: pen, port: "distance".into() },
-        PortRef { node: liquify, port: "distance".into() },
-    ).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "distance".into(),
+            },
+            PortRef {
+                node: liquify,
+                port: "distance".into(),
+            },
+        )
+        .unwrap();
 
     // size / strength / softness are already `.exposed()` on the liquify
     // node-def, so the toolbar picks them up without extra preset work.
@@ -564,5 +654,4 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), presets.len(), "duplicate preset names");
     }
-
 }
