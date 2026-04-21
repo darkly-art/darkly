@@ -82,13 +82,7 @@ impl ScalarValue {
         match self {
             Self::Scalar(v) => v,
             Self::Int(v) => v as f32,
-            Self::Bool(v) => {
-                if v {
-                    1.0
-                } else {
-                    0.0
-                }
-            }
+            Self::Bool(v) => v as u8 as f32,
             _ => 0.0,
         }
     }
