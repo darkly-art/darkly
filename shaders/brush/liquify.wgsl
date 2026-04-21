@@ -13,10 +13,13 @@
 // final pixel value.
 //
 // Softness waveshape (Krita's warp brush uses Gaussian; we parameterise):
-//   softness = 0   → saw     (linear 1-d)
+//   softness = 0   → spike   (pow(1-d, 8): sharp peak, almost zero past mid-radius)
+//   softness = 0.4 → saw     (linear 1-d)
 //   softness = 0.5 → sine    (cosine bump, zero-slope at endpoints)
 //   softness = 1   → square  (hard-edged disc, step function)
-// Interpolated linearly between these three shapes.
+// Spike→saw fills [0, 0.4] via the pow exponent ramping 8→1; saw→sine
+// is a narrow blend [0.4, 0.5] (the difference is visually subtle so it
+// doesn't deserve much room); sine→square fills [0.5, 1].
 
 struct LiquifyUniforms {
     rect_origin:  vec2f,  // quad top-left in canvas pixels
@@ -63,18 +66,24 @@ struct VertexOutput {
     return out;
 }
 
-/// Falloff: waveshape morph driven by softness.
+/// Falloff: waveshape morph driven by softness ∈ [0, 1].
 fn falloff(d: f32, softness: f32) -> f32 {
     // Each piece is 1 at d=0 and 0 at d=1, monotonically decreasing.
-    let saw    = 1.0 - d;
-    let sine   = 0.5 + 0.5 * cos(3.14159265 * d);
-    let square = 1.0;   // hard cutoff is handled by the outside-radius discard
-    if softness <= 0.5 {
-        let t = softness * 2.0;            // 0 → saw, 1 → sine
+    let saw  = 1.0 - d;
+    let sine = 0.5 + 0.5 * cos(3.14159265 * d);
+    let saw_break  = 0.4;        // softness at which the spike has fully relaxed to saw
+    let sine_break = 0.5;        // softness at which saw has fully blended to sine
+    let k_max      = 8.0;        // sharpest spike exponent (0.5^8 ≈ 0.004 at mid-radius)
+    if softness <= saw_break {
+        let t = softness / saw_break;              // 0 → spike, 1 → saw
+        let k = mix(k_max, 1.0, t);
+        return pow(max(saw, 0.0), k);
+    } else if softness <= sine_break {
+        let t = (softness - saw_break) / (sine_break - saw_break);
         return mix(saw, sine, t);
     } else {
-        let t = (softness - 0.5) * 2.0;    // 0 → sine, 1 → square
-        return mix(sine, square, t);
+        let t = (softness - sine_break) / (1.0 - sine_break);
+        return mix(sine, 1.0, t);                  // square = 1.0; edge handled by outside-radius discard
     }
 }
 

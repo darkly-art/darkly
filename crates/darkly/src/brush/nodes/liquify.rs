@@ -37,8 +37,8 @@
 //! scales with the brush footprint, not the canvas.
 //!
 //! The `softness` input is a waveshape knob (not an edge-softness slider):
-//! 0 → saw (linear), 0.5 → sine (smooth), 1 → square (hard edge). See
-//! `liquify.wgsl` for the interpolation formula.
+//! 0 → spike (sharp peak), 0.4 → saw (linear), 0.5 → sine (smooth),
+//! 1 → square (hard edge). See `liquify.wgsl` for the interpolation formula.
 
 use crate::brush::dab_pool::MAX_DAB_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, BrushPreviewInfo, EvalContext};
@@ -75,7 +75,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-wave-square")
                 .exposed()
-                .with_description("Falloff waveshape: 0 = saw, 0.5 = sine, 1 = square"),
+                .with_description("Falloff waveshape: 0 = spike (sharp peak), 0.4 = saw, 0.5 = sine, 1 = square"),
             PortDef::input("position", BrushWireType::Vec2)
                 .with_description("Brush center in canvas pixels"),
             PortDef::input("direction", BrushWireType::Scalar)
