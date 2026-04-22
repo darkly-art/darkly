@@ -65,13 +65,14 @@ pub fn register() -> BrushNodeRegistration {
             // defaults out-of-band; both move together when the brush
             // settings bar gets redesigned.
             PortDef::input("spacing", BrushWireType::Scalar)
-                .with_range(0.005, 1.0, 0.10)
+                .with_range(0.04, 1.0, 0.10)
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-grip-lines-vertical")
                 .with_label("Spacing")
                 .with_description(
                     "Distance between dabs as a fraction of dab diameter. \
-                     10% is the paint default; warp/smudge brushes typically want 1\u{2013}3%.",
+                     10% is the paint default; warp/smudge brushes typically want 4\u{2013}5%. \
+                     Floor of 4% — anything lower swamps the stabilizer.",
                 ),
         ],
         params: &[],

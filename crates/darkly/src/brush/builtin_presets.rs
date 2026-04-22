@@ -411,6 +411,9 @@ fn calligraphy() -> PresetBundle {
     b.wire(b.pen, "tilt_direction", b.stamp, "rotation");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.set_stabilize(0.6);
+    // Tighter spacing than the 10% default — calligraphic strokes need
+    // smooth edges as the angled tip rotates with tilt direction.
+    b.set_port(b.pen, "spacing", 0.05);
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/calligraphy.png");
     b.build_with_resources(
@@ -587,12 +590,13 @@ fn liquify_push() -> PresetBundle {
     // Tighten dab spacing well below the paint default (10%). Liquify's
     // per-dab displacement is ~25% of radius (DRAG_FACTOR in liquify.rs),
     // so spacing must be much smaller for warps to accumulate smoothly.
-    graph.set_port_default(pen, "spacing", 0.02).unwrap();
+    // 4% is the port floor — anything lower kills stabilizer performance.
+    graph.set_port_default(pen, "spacing", 0.04).unwrap();
 
-    // Compensate the per-dab strength for the ~5× denser dabs — total
+    // Compensate the per-dab strength for the ~2.5× denser dabs — total
     // accumulated displacement along the stroke stays roughly what it was
     // at the old 10% spacing / 0.5 strength combination. Tune empirically.
-    graph.set_port_default(liquify, "strength", 0.1).unwrap();
+    graph.set_port_default(liquify, "strength", 0.2).unwrap();
 
     let mut preset = BrushPreset::from_graph("Liquify", graph);
     preset.category = "effects".to_string();
