@@ -584,6 +584,16 @@ fn liquify_push() -> PresetBundle {
     // size / strength / softness are already `.exposed()` on the liquify
     // node-def, so the toolbar picks them up without extra preset work.
 
+    // Tighten dab spacing well below the paint default (10%). Liquify's
+    // per-dab displacement is ~25% of radius (DRAG_FACTOR in liquify.rs),
+    // so spacing must be much smaller for warps to accumulate smoothly.
+    graph.set_port_default(pen, "spacing", 0.02).unwrap();
+
+    // Compensate the per-dab strength for the ~5× denser dabs — total
+    // accumulated displacement along the stroke stays roughly what it was
+    // at the old 10% spacing / 0.5 strength combination. Tune empirically.
+    graph.set_port_default(liquify, "strength", 0.1).unwrap();
+
     let mut preset = BrushPreset::from_graph("Liquify", graph);
     preset.category = "effects".to_string();
     PresetBundle::without_resources(preset)
@@ -653,5 +663,31 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), presets.len(), "duplicate preset names");
+    }
+
+    /// Liquify needs much tighter spacing than the paint default — its
+    /// per-dab displacement is ~25% of radius, so spacing must be well
+    /// below that for warps to compose smoothly. Don't let this drift back
+    /// to the default 10%.
+    #[test]
+    fn liquify_preset_has_tight_spacing() {
+        let bundle = liquify_push();
+        let pen = bundle
+            .preset
+            .graph
+            .nodes
+            .values()
+            .find(|n| n.type_id == "pen_input")
+            .expect("liquify preset has a pen_input node");
+        let spacing = pen
+            .ports
+            .iter()
+            .find(|p| p.name == "spacing")
+            .expect("pen_input has a spacing port");
+        assert!(
+            spacing.default <= 0.05,
+            "liquify spacing default is {}, expected <= 5% for smooth warps",
+            spacing.default
+        );
     }
 }

@@ -59,6 +59,20 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description(
                     "Stroke stabilization strength (0 = off, 100% = maximum smoothing)",
                 ),
+            // Dab spacing — read at stroke start as a fraction of the dab
+            // diameter. Like `stabilize`, this is preset-level config that
+            // currently lives here because the engine reads pen_input port
+            // defaults out-of-band; both move together when the brush
+            // settings bar gets redesigned.
+            PortDef::input("spacing", BrushWireType::Scalar)
+                .with_range(0.005, 1.0, 0.10)
+                .with_unit(UnitType::Percent)
+                .with_icon("fa-solid fa-grip-lines-vertical")
+                .with_label("Spacing")
+                .with_description(
+                    "Distance between dabs as a fraction of dab diameter. \
+                     10% is the paint default; warp/smudge brushes typically want 1\u{2013}3%.",
+                ),
         ],
         params: &[],
         is_gpu: false,
