@@ -38,6 +38,9 @@ impl DarklyEngine {
         preset.category = category.to_string();
         self.preset_library
             .insert(PresetBundle::without_resources(preset));
+        // Saving establishes a new "preset baseline" — what the user just
+        // saved IS what reset-to-default should now return to.
+        self.snapshot_preset_defaults();
         Ok(())
     }
 

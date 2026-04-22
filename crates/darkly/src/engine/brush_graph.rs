@@ -45,6 +45,7 @@ impl DarklyEngine {
         let graph: Graph<BrushWireType> =
             serde_json::from_str(json).map_err(|e| format!("JSON parse error: {e}"))?;
         self.active_brush_graph = graph;
+        self.snapshot_preset_defaults();
         // Run the post-mutation pipeline so the brush preview mask (and any
         // other graph-dependent state) refreshes from the new graph.
         self.compile_active()?;
@@ -54,7 +55,35 @@ impl DarklyEngine {
     /// Reset the active brush graph to the built-in default.
     pub fn reset_brush_graph(&mut self) {
         self.active_brush_graph = crate::brush::default_graph();
+        self.snapshot_preset_defaults();
         let _ = self.compile_active();
+    }
+
+    /// Capture every input port's current default into `preset_defaults`.
+    /// Called whenever the active graph is replaced as a whole — preset
+    /// load, reset, save — so that "reset to default" returns to the
+    /// loaded/saved baseline rather than the node-type registration value.
+    /// Not called on individual port edits; that's the whole point.
+    ///
+    /// Also captures the legacy `user_input` node's `value` param under
+    /// a synthetic ("value") key — that node surfaces in the toolbar via
+    /// the legacy compat path and needs the same reset semantics.
+    pub(crate) fn snapshot_preset_defaults(&mut self) {
+        self.preset_defaults.clear();
+        for node in self.active_brush_graph.nodes.values() {
+            for port in &node.ports {
+                if port.dir == PortDir::Input {
+                    self.preset_defaults
+                        .insert((node.id, port.name.clone()), port.default);
+                }
+            }
+            if node.type_id == "user_input" {
+                if let Some(ParamValue::Float(v)) = node.params.get(1) {
+                    self.preset_defaults
+                        .insert((node.id, "value".to_string()), *v);
+                }
+            }
+        }
     }
 
     // --- Fine-grained graph commands ---
@@ -457,6 +486,18 @@ impl DarklyEngine {
                 let description =
                     reg_port.map_or_else(|| port.description.clone(), |rp| rp.description.clone());
 
+                // Reset target = the value snapshotted at preset load
+                // time. Falls back to the registration default for ports
+                // on nodes the user added after load (those weren't part
+                // of the preset, so registration default is the right
+                // baseline).
+                let reset_default = self
+                    .preset_defaults
+                    .get(&(node.id, port.name.clone()))
+                    .copied()
+                    .unwrap_or_else(|| {
+                        reg_port.map(|rp| rp.default).unwrap_or(port.default)
+                    });
                 result.push(ExposedPortInfo {
                     node_id: node.id.0,
                     port_name: port.name.clone(),
@@ -469,6 +510,7 @@ impl DarklyEngine {
                         value: unit_type.to_display(port.default),
                         min: unit_type.to_display(port.min),
                         max: unit_type.to_display(port.max),
+                        default: unit_type.to_display(reset_default),
                         unit_type,
                     },
                 });
@@ -533,6 +575,15 @@ impl DarklyEngine {
             _ => UnitType::Percent, // 0 = percent
         };
 
+        // Reset target = snapshotted preset value if available; otherwise
+        // fall back to the midpoint of the user-defined range (legacy
+        // user_input nodes don't have a registration default to reach
+        // for, since the value is itself a node param).
+        let reset_default = self
+            .preset_defaults
+            .get(&(node.id, "value".to_string()))
+            .copied()
+            .unwrap_or((min + max) * 0.5);
         Some(ExposedPortInfo {
             node_id: node.id.0,
             port_name: "value".to_string(),
@@ -545,6 +596,7 @@ impl DarklyEngine {
                 value,
                 min,
                 max,
+                default: reset_default,
                 unit_type,
             },
         })
@@ -628,6 +680,9 @@ pub enum ExposedValue {
         min: f32,
         /// Display-space maximum.
         max: f32,
+        /// Display-space default — what double-click reset returns to.
+        /// Sourced from the node-type registration, not the loaded preset.
+        default: f32,
         /// Unit type for formatting and conversion.
         #[serde(rename = "unitType")]
         unit_type: UnitType,

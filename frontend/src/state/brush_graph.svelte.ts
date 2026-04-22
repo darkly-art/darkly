@@ -63,7 +63,7 @@ export interface PresetInfo {
 }
 
 export type ExposedValue =
-    | { kind: 'scalar'; value: number; min: number; max: number; unitType: string }
+    | { kind: 'scalar'; value: number; min: number; max: number; default: number; unitType: string }
     // Future: | { kind: 'int'; value: number; min: number; max: number }
     // Future: | { kind: 'bool'; value: boolean }
     ;

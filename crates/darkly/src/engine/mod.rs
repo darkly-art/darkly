@@ -153,6 +153,14 @@ pub struct DarklyEngine {
     /// Defaults to `brush::default_graph()`.  Updated via `set_brush_graph()`.
     pub(crate) active_brush_graph: crate::nodegraph::Graph<BrushWireType>,
 
+    /// Snapshot of input port defaults captured the last time the graph
+    /// was loaded as a whole (preset load / reset / save). Drives
+    /// double-click-to-reset on toolbar scrubs — reset returns to the
+    /// preset's shipped value, not the node-type registration default.
+    /// Keyed by (node_id, port_name); raw values (not display-space).
+    pub(crate) preset_defaults:
+        std::collections::HashMap<(crate::nodegraph::NodeId, String), f32>,
+
     /// Canvas-space positioning info for the brush preview overlay, cached
     /// after each `regenerate_brush_preview()` call. Consumed by the brush
     /// tool to size/rotate the hover overlay primitive. `None` when the
@@ -255,6 +263,7 @@ impl DarklyEngine {
             brush_pipelines,
             brush_stroke_engine: None,
             active_brush_graph: crate::brush::default_graph(),
+            preset_defaults: std::collections::HashMap::new(),
             brush_preview_info: None,
             preset_library: {
                 let mut lib = PresetLibrary::new();
@@ -279,6 +288,10 @@ impl DarklyEngine {
             last_picked_color: [0, 0, 0, 0],
             thumbnail_cache: ThumbnailCache::new(),
         };
+
+        // Snapshot the default graph's port defaults so reset-to-default
+        // works even before the user loads a preset.
+        engine.snapshot_preset_defaults();
 
         // Populate the brush preview mask + cached info from the default
         // graph so the hover overlay is live immediately, without needing
