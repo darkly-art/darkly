@@ -39,7 +39,7 @@ Pluggable algorithm behind a `StabilizerAlgorithm` trait. Each frame:
 
 The divergence index tells the rendering system "everything from here to the tip changed, re-render it."
 
-**Laplacian relaxation** (`stabilizers/laplacian.rs`) is the current algorithm. It runs N iterations of neighbor-averaging on interior points, with first and last points pinned. `iterations = ceil(strength * 5)`, so strength 0.0 is pass-through, strength 1.0 is 5 iterations.
+**Laplacian relaxation** (`stabilizers/laplacian.rs`) is the current algorithm. It runs N iterations of neighbor-averaging on interior points, with first and last points pinned. `iterations = ceil(strength * 10)`, so strength 0.0 is pass-through, strength 1.0 is 10 iterations.
 
 Each stabilizer also reports `max_divergence_window()` — a conservative upper bound on how far back divergence can reach. This drives checkpoint spacing.
 
@@ -77,7 +77,7 @@ A ring buffer of 8 GPU texture slots, each storing the stroke buffer's **bbox re
 - The remaining 7 checkpoints are densely packed in the volatile zone
 - Worst-case re-render per frame: ~1/7th of the divergence window
 
-At max stabilization strength (window = 55), that's ~8 vector indices of dabs re-rendered per frame instead of the entire stroke.
+At max stabilization strength (window = 105), that's ~15 vector indices of dabs re-rendered per frame instead of the entire stroke.
 
 **Slot selection**: When saving a new checkpoint and all 8 slots are occupied, the ring overwrites the slot with the **lowest vector_index** — the one furthest from the tip and least useful for future divergences. This naturally keeps all slots concentrated within the divergence window near the tip. Do NOT use FIFO (write-cursor) slot selection or "even spread" heuristics — both cause the ring to lose coverage of the divergence window, leading to catastrophic full re-renders (see invariants below).
 
