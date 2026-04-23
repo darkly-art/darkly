@@ -234,8 +234,7 @@ impl DarklyEngine {
         let was_active = self.gpu_selection.active;
         // Undo rect must cover both the pre-op selection and the new shape —
         // any pixel that might change sits inside this union.
-        let rect = self
-            .selection_undo_rect_for_shape([mask.x, mask.y, mask.width, mask.height]);
+        let rect = self.selection_undo_rect_for_shape([mask.x, mask.y, mask.width, mask.height]);
         self.save_selection_for_undo(rect);
 
         match mode {
@@ -399,7 +398,12 @@ impl DarklyEngine {
         let cw = self.doc.width;
         let ch = self.doc.height;
         let [sx, sy, sw, sh] = shape;
-        let [sx, sy, sw, sh] = [sx.min(cw), sy.min(ch), sw.min(cw - sx.min(cw)), sh.min(ch - sy.min(ch))];
+        let [sx, sy, sw, sh] = [
+            sx.min(cw),
+            sy.min(ch),
+            sw.min(cw - sx.min(cw)),
+            sh.min(ch - sy.min(ch)),
+        ];
         match self.gpu_selection.pixel_bounds {
             Some([ox, oy, ow, oh]) if sw > 0 && sh > 0 => {
                 let x = ox.min(sx);

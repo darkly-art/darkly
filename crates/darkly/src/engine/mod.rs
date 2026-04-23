@@ -158,8 +158,7 @@ pub struct DarklyEngine {
     /// double-click-to-reset on toolbar scrubs — reset returns to the
     /// preset's shipped value, not the node-type registration default.
     /// Keyed by (node_id, port_name); raw values (not display-space).
-    pub(crate) preset_defaults:
-        std::collections::HashMap<(crate::nodegraph::NodeId, String), f32>,
+    pub(crate) preset_defaults: std::collections::HashMap<(crate::nodegraph::NodeId, String), f32>,
 
     /// Canvas-space positioning info for the brush preview overlay, cached
     /// after each `regenerate_brush_preview()` call. Consumed by the brush

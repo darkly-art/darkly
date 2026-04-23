@@ -482,12 +482,7 @@ impl Compositor {
         let mut group_state = HashMap::new();
         group_state.insert(ROOT_ID, root_state);
 
-        let veil_chain = VeilChain::new(
-            device,
-            sampler.clone(),
-            surface_format,
-            accum_format,
-        );
+        let veil_chain = VeilChain::new(device, sampler.clone(), surface_format, accum_format);
 
         let tool_overlay = ToolOverlay::new(device, queue, surface_format);
 

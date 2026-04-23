@@ -495,9 +495,7 @@ impl DarklyEngine {
                     .preset_defaults
                     .get(&(node.id, port.name.clone()))
                     .copied()
-                    .unwrap_or_else(|| {
-                        reg_port.map(|rp| rp.default).unwrap_or(port.default)
-                    });
+                    .unwrap_or_else(|| reg_port.map(|rp| rp.default).unwrap_or(port.default));
                 result.push(ExposedPortInfo {
                     node_id: node.id.0,
                     port_name: port.name.clone(),

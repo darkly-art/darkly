@@ -90,7 +90,7 @@ fn profile_render_pipeline() {
     // we never call render() with a surface.
     let surface_format = wgpu::TextureFormat::Rgba8Unorm;
 
-    let mut compositor = Compositor::new(&device, &queue, surface_format, width, height, false);
+    let mut compositor = Compositor::new(&device, &queue, surface_format, width, height);
     let mut doc = Document::new(width, height);
 
     // Set up layers: bg + paint layer (gradient fill removed — GPU-only now).
