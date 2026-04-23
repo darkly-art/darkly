@@ -197,6 +197,15 @@ impl PresetBuilder {
         )
     }
 
+    /// Add a multiply node (Scalar × Scalar → Scalar).
+    fn add_multiply(&mut self) -> NodeId {
+        self.graph.add_node(
+            "multiply",
+            self.registry.get("multiply").unwrap().ports.clone(),
+            vec![],
+        )
+    }
+
     /// Add a random node. `mode`: 0 = per-dab, 1 = per-stroke.
     fn add_random(&mut self, mode: i32) -> NodeId {
         self.graph.add_node(
@@ -428,8 +437,13 @@ fn textured_ink() -> PresetBundle {
     b.add_image("ink_dry.png");
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.pen, "pressure", b.stamp, "flow");
+    // random.value is in -1..1; stamp.rotation wants radians. Scale by π
+    // so rotation jitters across a full turn (-π..π).
     let rand_rot = b.add_random(0);
-    b.wire(rand_rot, "value", b.stamp, "rotation");
+    let scale_rot = b.add_multiply();
+    b.set_port(scale_rot, "b", std::f32::consts::PI);
+    b.wire(rand_rot, "value", scale_rot, "a");
+    b.wire(scale_rot, "result", b.stamp, "rotation");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");

@@ -736,6 +736,7 @@ impl DarklyHandle {
         tilt_y: f32,
         rotation: f32,
         tangential_pressure: f32,
+        drawing_angle: f32,
     ) -> JsValue {
         self.flush_if_needed();
 
@@ -753,6 +754,11 @@ impl DarklyHandle {
         // Derived — stroke_engine computes these the same way.
         pen.tilt_magnitude = (tilt_x * tilt_x + tilt_y * tilt_y).sqrt().min(1.0);
         pen.tilt_direction = tilt_y.atan2(tilt_x);
+        // `drawing_angle` comes from the caller — the Svelte brush tool
+        // tracks consecutive hover positions and passes the atan2 of their
+        // delta so the preview rotates along the hover direction when the
+        // graph wires `pen_input.drawing_angle → stamp.rotation`.
+        pen.drawing_angle = drawing_angle;
 
         self.engine
             .borrow_mut()

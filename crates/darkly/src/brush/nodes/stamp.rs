@@ -46,11 +46,15 @@ pub fn register() -> BrushNodeRegistration {
                 .exposed()
                 .with_description("Size multiplier"),
             PortDef::input("rotation", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
+                .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_label("Rotation")
                 .with_unit(UnitType::Degrees)
                 .with_icon("fa-solid fa-rotate")
-                .with_description("Brush rotation angle"),
+                .with_description(
+                    "Brush rotation in radians. Wire `pen_input.drawing_angle` \
+                     here to rotate the brush along the stroke direction; \
+                     wire an `add` node for an angle offset.",
+                ),
             PortDef::input("mirror_x", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
                 .with_description("Flip horizontally"),
@@ -136,7 +140,7 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
         ratio,
         flow,
         color,
-        rotation_rad: rotation_input * std::f32::consts::TAU,
+        rotation_rad: rotation_input,
         mirror_x: if mirror_x_input > 0.5 { 1.0 } else { 0.0 },
         mirror_y: if mirror_y_input > 0.5 { 1.0 } else { 0.0 },
         application_int,

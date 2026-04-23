@@ -27,7 +27,7 @@ pub fn register() -> BrushNodeRegistration {
                 "How far the pen is tilted from vertical (0 = upright, 1 = flat)",
             ),
             PortDef::output("tilt_direction", BrushWireType::Scalar)
-                .with_description("Compass direction of pen tilt (0\u{2013}1 wrapping, 0 = right)"),
+                .with_description("Compass direction of pen tilt in radians (0 = right, π/2 = down)"),
             PortDef::output("rotation", BrushWireType::Scalar)
                 .with_description("Barrel rotation of the pen around its own axis (0\u{2013}1)"),
             PortDef::output("tangential_pressure", BrushWireType::Scalar)
@@ -37,7 +37,7 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::output("distance", BrushWireType::Scalar)
                 .with_description("Cumulative distance traveled along the stroke (pixels)"),
             PortDef::output("drawing_angle", BrushWireType::Scalar)
-                .with_description("Direction of motion along the stroke (0\u{2013}1, 0 = right)"),
+                .with_description("Direction of motion along the stroke in radians (0 = right, π/2 = down). Wire to `stamp.rotation` for brushes that face the stroke."),
             PortDef::output("time", BrushWireType::Scalar)
                 .with_description("Elapsed time since the stroke began (seconds)"),
             PortDef::output("position", BrushWireType::Vec2)

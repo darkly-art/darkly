@@ -170,7 +170,8 @@
     function toDisplay(value: number): number {
         switch (regPort?.unit_type) {
             case 'Percent': return value * 100;
-            case 'Degrees': return value * 360;
+            // Wire unit for angle ports is radians; display in degrees.
+            case 'Degrees': return value * (180 / Math.PI);
             default: return value;
         }
     }
