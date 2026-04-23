@@ -17,9 +17,6 @@ use super::save_points::SavePointStore;
 use super::spacing::SpacingConfig;
 use super::stabilizer::{StabilizeResult, StabilizerAlgorithm};
 
-/// Reference maximum speed in px/sec for normalizing speed to 0-1.
-const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
-
 /// Snapshot of the stroke engine's render state at a specific dab.
 ///
 /// Used by the checkpoint system to restore the engine to a known state
@@ -219,14 +216,9 @@ impl StrokeEngine {
             let raw = stabilized[i];
             let mut info = raw;
 
-            // Compute derived values from the stabilized positions.
-            info.tilt_magnitude = (info.x_tilt * info.x_tilt + info.y_tilt * info.y_tilt)
-                .sqrt()
-                .min(1.0);
-            info.tilt_direction = info.y_tilt.atan2(info.x_tilt);
-
             // First point of the stroke: no segment to place dabs along.
             if self.last_point.is_none() {
+                info.derive_sensors(None, 0.0);
                 self.place_dab(&info, gpu, i);
                 self.last_point = Some(info);
                 self.save_points
@@ -251,23 +243,10 @@ impl StrokeEngine {
             let seg = CatmullRomSegment::new(&p0_pt, &p1_pt, &p2_pt, &p3_pt);
             let arc_len = seg.arc_length();
 
-            // Derived sensor values at the stabilized endpoint use the
-            // segment's arc length (chord distance would under-count on
-            // curved strokes).
-            self.accumulated_distance += arc_len;
-            info.distance = self.accumulated_distance;
-            let dx = info.pos[0] - prev.pos[0];
-            let dy = info.pos[1] - prev.pos[1];
-            info.drawing_angle = dy.atan2(dx);
-            info.motion = [dx, dy];
-
-            let dt = info.time - prev.time;
-            if dt > 0.0 {
-                let speed_px_per_sec = arc_len / dt;
-                info.speed = (speed_px_per_sec / MAX_SPEED_PX_PER_SEC).min(1.0);
-            } else {
-                info.speed = prev.speed;
-            }
+            // Segment-derived sensors use the Catmull-Rom arc length —
+            // chord distance would under-count on curved strokes.
+            info.derive_sensors(Some(&prev), arc_len);
+            self.accumulated_distance = info.distance;
 
             if arc_len < 0.001 {
                 self.last_point = Some(info);
@@ -404,12 +383,8 @@ impl StrokeEngine {
         let raw_pt = stabilized[len - 1];
         let mut info = raw_pt;
 
-        info.tilt_magnitude = (info.x_tilt * info.x_tilt + info.y_tilt * info.y_tilt)
-            .sqrt()
-            .min(1.0);
-        info.tilt_direction = info.y_tilt.atan2(info.x_tilt);
-
         if self.last_point.is_none() {
+            info.derive_sensors(None, 0.0);
             self.place_dab(&info, gpu, len - 1);
             self.last_point = Some(info);
             self.save_points
@@ -430,20 +405,8 @@ impl StrokeEngine {
         let seg = CatmullRomSegment::new(&p0_pt, &p1_pt, &p2_pt, &p3_pt);
         let arc_len = seg.arc_length();
 
-        self.accumulated_distance += arc_len;
-        info.distance = self.accumulated_distance;
-        let dx = info.pos[0] - prev.pos[0];
-        let dy = info.pos[1] - prev.pos[1];
-        info.drawing_angle = dy.atan2(dx);
-        info.motion = [dx, dy];
-
-        let dt = info.time - prev.time;
-        if dt > 0.0 {
-            let speed_px_per_sec = arc_len / dt;
-            info.speed = (speed_px_per_sec / MAX_SPEED_PX_PER_SEC).min(1.0);
-        } else {
-            info.speed = prev.speed;
-        }
+        info.derive_sensors(Some(&prev), arc_len);
+        self.accumulated_distance = info.distance;
 
         if arc_len < 0.001 {
             self.last_point = Some(info);

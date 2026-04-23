@@ -166,6 +166,14 @@ pub struct DarklyEngine {
     /// graph has no `color_output.preview` wire.
     pub(crate) brush_preview_info: Option<crate::brush::eval::BrushPreviewInfo>,
 
+    /// Previous hover sample fed into `regenerate_brush_preview_with_pen`.
+    /// Kept so segment-derived sensors (drawing_angle, motion, distance,
+    /// speed) can be derived on the next hover using the same helper the
+    /// stroke engine uses. Reset on pointer-leave / stroke-start via
+    /// `clear_brush_preview_pose()` so a return-from-offscreen hover
+    /// doesn't synthesize a spurious direction.
+    pub(crate) last_preview_pose: Option<crate::brush::paint_info::PaintInformation>,
+
     // --- Preset Library (Phase 7) ---
     pub(crate) preset_library: PresetLibrary,
     /// Resource name → TextureHandle for images uploaded by the current preset.
@@ -263,6 +271,7 @@ impl DarklyEngine {
             active_brush_graph: crate::brush::default_graph(),
             preset_defaults: std::collections::HashMap::new(),
             brush_preview_info: None,
+            last_preview_pose: None,
             preset_library: {
                 let mut lib = PresetLibrary::new();
                 for bundle in crate::brush::builtin_presets::all() {

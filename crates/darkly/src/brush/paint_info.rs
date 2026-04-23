@@ -55,6 +55,10 @@ pub struct PaintInformation {
     pub fade: f32,
 }
 
+/// Speed normalization cutoff — `speed_px_per_sec / MAX_SPEED_PX_PER_SEC`
+/// clamped to [0, 1] gives the `speed` sensor value.
+pub const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
+
 impl PaintInformation {
     /// Synthetic pen input for dry-run previews.
     /// Neutral tablet state with mid-pressure so pressure-driven sensors
@@ -63,6 +67,44 @@ impl PaintInformation {
         Self {
             pressure: 0.5,
             ..Default::default()
+        }
+    }
+
+    /// Fill derived sensor fields from this sample's raw data and an
+    /// optional previous sample. Used by both the stroke engine and the
+    /// hover preview so a compiled graph sees the same sensor values
+    /// regardless of which path is driving it.
+    ///
+    /// Tilt-derived sensors (`tilt_magnitude`, `tilt_direction`) always
+    /// fill — they depend only on this sample.
+    ///
+    /// Segment-derived sensors (`drawing_angle`, `motion`, `distance`,
+    /// `speed`) fill only when `prev` is present. `segment_length` is the
+    /// arc length between prev and this sample — use the chord length for
+    /// straight paths (preview) or the Catmull-Rom arc length for smoothed
+    /// strokes.
+    pub fn derive_sensors(&mut self, prev: Option<&Self>, segment_length: f32) {
+        self.tilt_magnitude = (self.x_tilt * self.x_tilt + self.y_tilt * self.y_tilt)
+            .sqrt()
+            .min(1.0);
+        self.tilt_direction = self.y_tilt.atan2(self.x_tilt);
+
+        let Some(prev) = prev else {
+            return;
+        };
+
+        let dx = self.pos[0] - prev.pos[0];
+        let dy = self.pos[1] - prev.pos[1];
+        self.drawing_angle = dy.atan2(dx);
+        self.motion = [dx, dy];
+        self.distance = prev.distance + segment_length;
+
+        let dt = self.time - prev.time;
+        if dt > 0.0 {
+            let speed_px_per_sec = segment_length / dt;
+            self.speed = (speed_px_per_sec / MAX_SPEED_PX_PER_SEC).min(1.0);
+        } else {
+            self.speed = prev.speed;
         }
     }
 }

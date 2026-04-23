@@ -33,32 +33,15 @@ function previewStrength(halfExtent: [number, number]): number {
     return MAX_STRENGTH + (BASE_STRENGTH - MAX_STRENGTH) * smooth;
 }
 
-/** Previous hover canvas position, used to derive `drawing_angle` for the
- *  preview when the graph wires `pen_input.drawing_angle → stamp.rotation`. */
-let prevHover: { x: number; y: number } | null = null;
-/** Minimum squared canvas-pixel distance between consecutive hovers before
- *  we trust the delta as a direction. Jittery hovers yield garbage angles;
- *  below this we reuse the last known angle. */
-const HOVER_DIR_MIN_D2 = 1.0;
-let lastDrawingAngle = 0;
-
 function pushHoverOverlay(handle: any, e: PointerEvent, cx: number, cy: number) {
-    if (prevHover) {
-        const dx = cx - prevHover.x;
-        const dy = cy - prevHover.y;
-        if (dx * dx + dy * dy >= HOVER_DIR_MIN_D2) {
-            lastDrawingAngle = Math.atan2(dy, dx);
-        }
-    }
-    prevHover = { x: cx, y: cy };
-
     const info = handle.refresh_brush_preview(
+        cx,
+        cy,
         e.pressure,
         (e.tiltX ?? 0) / 90,
         (e.tiltY ?? 0) / 90,
         (e.twist ?? 0) / 360,
         (e as any).tangentialPressure ?? 0,
-        lastDrawingAngle,
     ) as BrushPreviewInfo | null;
     if (!info) {
         handle.clear_overlay();
@@ -140,7 +123,7 @@ export const brushTool: Tool = {
         // Clear the hover overlay while painting — the stamp renders onto
         // the canvas directly; a ghost at the cursor would just clutter.
         ctx.handle.clear_overlay();
-        prevHover = null;
+        ctx.handle.clear_brush_preview_pose();
         ctx.handle.begin_stroke(layerId);
         ctx.handle.stroke_to('brush_stroke', brushStrokeParams(e, cx, cy));
     },
@@ -162,6 +145,6 @@ export const brushTool: Tool = {
         // Pointer left the canvas: drop the hover ghost so it doesn't
         // linger at the last-seen edge position.
         ctx.handle.clear_overlay();
-        prevHover = null;
+        ctx.handle.clear_brush_preview_pose();
     },
 };

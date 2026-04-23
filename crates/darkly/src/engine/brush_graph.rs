@@ -90,31 +90,59 @@ impl DarklyEngine {
 
     /// Re-render the brush preview into the overlay's preview mask using
     /// fully-synthetic pen inputs. Fired on graph/param changes where no
-    /// real pen data is available.
+    /// real pen data is available — clears any hover history so the next
+    /// hover starts fresh (no bogus direction carried across a preset
+    /// swap, etc.).
     pub fn regenerate_brush_preview(&mut self) {
+        self.last_preview_pose = None;
         let dummy = crate::brush::paint_info::PaintInformation::preview_dummy();
-        self.regenerate_brush_preview_with_pen(&dummy);
+        self.regenerate_brush_preview_with_pen_internal(dummy);
     }
 
-    /// Re-render the brush preview using the supplied pen data.
+    /// Drop the remembered hover pose so the next
+    /// `regenerate_brush_preview_with_pen` starts a fresh hover with no
+    /// derived direction/motion/distance/speed. Call this on pointer-leave
+    /// and at the start of a stroke.
+    pub fn clear_brush_preview_pose(&mut self) {
+        self.last_preview_pose = None;
+    }
+
+    /// Re-render the brush preview using live hover data.
     ///
-    /// Called by the brush tool on hover so the preview reflects live tilt
-    /// / rotation / pressure. `pen` carries whatever the PointerEvent
-    /// reported; fields the hardware doesn't populate should be zeroed
-    /// (tablet quirk: most pens report tilt even while hovering above the
-    /// canvas, so we plumb them through).
+    /// Pre-fills `pen`'s segment-derived sensors (drawing_angle, motion,
+    /// distance, speed) using the previous hover pose — the same helper
+    /// the stroke engine uses — so a compiled graph wiring any sensor
+    /// into any input sees the same values the upcoming stroke would.
     ///
-    /// Dispatches the graph through `render_preview_pipeline` — each GPU
-    /// node's `render_preview` hook runs (defaults to `evaluate_gpu`,
-    /// terminals override). The terminal that owns the preview reads the
-    /// `brush_preview` input texture, blits it into the overlay's preview
-    /// mask, and publishes placement info via `gpu.brush_preview_info`.
-    ///
-    /// No-op with cleared state when the graph has no `brush_preview`
-    /// wire connected.
+    /// The rest of `pen` (pos, pressure, tilts, rotation,
+    /// tangential_pressure, time) comes from the PointerEvent; tilt
+    /// magnitude/direction are derived from the reported tilts. The pose
+    /// is stored for the next call's derivation.
     pub fn regenerate_brush_preview_with_pen(
         &mut self,
-        pen: &crate::brush::paint_info::PaintInformation,
+        mut pen: crate::brush::paint_info::PaintInformation,
+    ) {
+        // Chord length between the previous and current hover positions.
+        // Chord rather than Catmull-Rom arc length — there is no spline
+        // through a single sample.
+        let segment_length = match &self.last_preview_pose {
+            Some(prev) => {
+                let dx = pen.pos[0] - prev.pos[0];
+                let dy = pen.pos[1] - prev.pos[1];
+                (dx * dx + dy * dy).sqrt()
+            }
+            None => 0.0,
+        };
+        pen.derive_sensors(self.last_preview_pose.as_ref(), segment_length);
+        self.last_preview_pose = Some(pen);
+        self.regenerate_brush_preview_with_pen_internal(pen);
+    }
+
+    /// Shared render body — no pose tracking, no sensor derivation.
+    /// `pen` must already be fully populated by the caller.
+    fn regenerate_brush_preview_with_pen_internal(
+        &mut self,
+        pen: crate::brush::paint_info::PaintInformation,
     ) {
         use crate::brush::gpu_context::BrushGpuContext;
 
@@ -190,7 +218,7 @@ impl DarklyEngine {
 
         self.brush_pipelines.reset_uniform_rings();
         runner.clear_slots();
-        runner.seed_sensors(pen, [1.0, 1.0, 1.0, 1.0], 0, 0);
+        runner.seed_sensors(&pen, [1.0, 1.0, 1.0, 1.0], 0, 0);
         runner.execute_cpu();
         runner.render_preview_pipeline(&mut gpu_ctx);
 

@@ -731,16 +731,18 @@ impl DarklyHandle {
     /// pen presses now."
     pub fn refresh_brush_preview(
         &self,
+        x: f32,
+        y: f32,
         pressure: f32,
         tilt_x: f32,
         tilt_y: f32,
         rotation: f32,
         tangential_pressure: f32,
-        drawing_angle: f32,
     ) -> JsValue {
         self.flush_if_needed();
 
         let mut pen = PaintInformation::preview_dummy();
+        pen.pos = [x, y];
         // Hover reports pressure=0 (no contact) — keep the dummy's 0.5 as
         // a "what-if-pressed-now" fallback. If the pen is actively pressed
         // during hover (some hardware does this near the surface), use it.
@@ -751,19 +753,18 @@ impl DarklyHandle {
         pen.y_tilt = tilt_y;
         pen.rotation = rotation;
         pen.tangential_pressure = tangential_pressure;
-        // Derived — stroke_engine computes these the same way.
-        pen.tilt_magnitude = (tilt_x * tilt_x + tilt_y * tilt_y).sqrt().min(1.0);
-        pen.tilt_direction = tilt_y.atan2(tilt_x);
-        // `drawing_angle` comes from the caller — the Svelte brush tool
-        // tracks consecutive hover positions and passes the atan2 of their
-        // delta so the preview rotates along the hover direction when the
-        // graph wires `pen_input.drawing_angle → stamp.rotation`.
-        pen.drawing_angle = drawing_angle;
 
         self.engine
             .borrow_mut()
-            .regenerate_brush_preview_with_pen(&pen);
+            .regenerate_brush_preview_with_pen(pen);
         brush_preview_info_as_js(&self.engine.borrow())
+    }
+
+    /// Drop any remembered hover pose so the next `refresh_brush_preview`
+    /// starts fresh with no derived direction/motion/distance/speed.
+    /// Call on pointer-leave and at stroke start.
+    pub fn clear_brush_preview_pose(&self) {
+        self.engine.borrow_mut().clear_brush_preview_pose();
     }
 
     // --- Brush config ---
