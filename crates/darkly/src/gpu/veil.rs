@@ -4,19 +4,6 @@ use std::sync::Arc;
 pub use super::effect::{EffectCache, EffectPipeline};
 pub use super::params::{ParamDef, ParamValue};
 
-/// Compute reduced render dimensions that fit within a given pixel budget
-/// while preserving the source aspect ratio.
-pub fn budget_scaled_dimensions(width: u32, height: u32, pixel_budget: f32) -> (u32, u32) {
-    let pixels = width as f32 * height as f32;
-    if pixels <= pixel_budget {
-        return (width, height);
-    }
-    let aspect = width as f32 / height.max(1) as f32;
-    let ih = (pixel_budget / aspect).sqrt().round().max(1.0);
-    let iw = (ih * aspect).round().max(1.0);
-    (iw as u32, ih as u32)
-}
-
 /// Viewport-level post-processing effect ("veil").
 /// Veils run on the fully-presented image at screen resolution,
 /// after the view transform has been applied. They are ephemeral
@@ -36,8 +23,8 @@ pub trait Veil: std::fmt::Debug {
     /// Create GPU resources for this veil instance.
     /// `ping_pong_views` are the veil chain's render textures — veils read
     /// from and write to these at whatever resolution the chain provides.
-    /// On a software renderer the chain creates smaller textures automatically;
-    /// veils never need to know or care about the distinction.
+    /// When `rendering.veil_scale` is below 1.0 the chain passes smaller
+    /// textures automatically; veils never need to know about the distinction.
     fn create_cache(
         &self,
         device: &wgpu::Device,
@@ -47,16 +34,6 @@ pub trait Veil: std::fmt::Debug {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache;
-
-    /// Maximum pixel count when running on a software renderer (CPU).
-    /// Veils that are too expensive for CPU should return `Some(budget)`.
-    /// The veil chain will automatically downscale the input, run the veil
-    /// at reduced resolution, and upscale the output — the veil itself
-    /// never needs to know about it.
-    /// Returns `None` (default) for veils that are cheap enough at native res.
-    fn cpu_pixel_budget(&self) -> Option<f32> {
-        None
-    }
 
     /// Whether this veil uses time-based animation.
     /// When true (and speed > 0 and visible), the compositor drives

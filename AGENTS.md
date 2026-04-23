@@ -71,3 +71,16 @@ The correct pattern is async readback: `request_readback()` → `readbacks.submi
 ## Engineering Principle
 
 Every system that is implemented must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. It's okay to take a step back from the current task, in order to do things right. This relates directly to the modularity principle above.
+
+## Lint / CI Checks
+
+Run before committing. All must pass:
+
+```bash
+cargo fmt --all -- --check
+RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --exclude darkly-wasm -- -D warnings
+RUSTFLAGS="-D warnings" cargo clippy -p darkly-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
+cargo test --workspace --exclude darkly-wasm
+(cd frontend/wasm && wasm-pack build --release --target web --out-dir pkg)
+(cd frontend && npm run build)
+```

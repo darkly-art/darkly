@@ -228,7 +228,6 @@ impl Compositor {
         surface_format: wgpu::TextureFormat,
         width: u32,
         height: u32,
-        is_software: bool,
     ) -> Self {
         // Accumulator dimensions match layer textures exactly (no tile padding).
         let padded_w = width;
@@ -488,7 +487,6 @@ impl Compositor {
             sampler.clone(),
             surface_format,
             accum_format,
-            is_software,
         );
 
         let tool_overlay = ToolOverlay::new(device, queue, surface_format);
@@ -1652,6 +1650,11 @@ impl Compositor {
         doc: &mut Document,
     ) {
         perf::time("render-total");
+
+        // Re-read `rendering.veil_scale` and rebuild per-veil resources if it
+        // changed. This sets needs_present when applicable, so config changes
+        // wake up an otherwise-idle app.
+        self.veil_chain.sync_resolution_scale(device, queue);
 
         if !self.has_pending_work(doc) {
             perf::time_end("render-total");

@@ -137,10 +137,6 @@ impl Veil for RainyGlass {
         Box::new(self.clone())
     }
 
-    fn cpu_pixel_budget(&self) -> Option<f32> {
-        Some(200_000.0)
-    }
-
     fn param_values(&self) -> Vec<ParamValue> {
         vec![
             ParamValue::Float(self.speed),

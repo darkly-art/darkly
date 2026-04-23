@@ -220,7 +220,6 @@ impl DarklyEngine {
             gpu.surface_format(),
             doc_width,
             doc_height,
-            gpu.is_software,
         );
         let doc = Document::new(doc_width, doc_height);
         let undo_stack = UndoStack::new(50);
