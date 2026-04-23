@@ -284,10 +284,14 @@ class BrushGraphState {
         }
     }
 
-    /** Add a node of the given type at the given position. */
-    addNode(typeId: string, x: number, y: number) {
-        if (!app.handle) return;
+    /** Add a node of the given type at the given position. Returns the new node's ID. */
+    addNode(typeId: string, x: number, y: number): number | null {
+        if (!app.handle) return null;
         this.applyResult(app.handle.brush_graph_add_node(typeId, x, y));
+        // brush_graph_add_node assigns the pre-increment value of next_id,
+        // so the new node's ID is next_id - 1 after the result is applied.
+        if (!this.graph) return null;
+        return this.graph.next_id - 1;
     }
 
     /** Remove a node and all its connections. */
