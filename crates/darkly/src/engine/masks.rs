@@ -274,8 +274,10 @@ impl DarklyEngine {
         }
 
         let was_active = self.gpu_selection.active;
-        // Save selection for undo before mutation.
-        self.save_selection_for_undo();
+        // Mask-to-selection uploads a full-canvas buffer — reserve a full-canvas
+        // undo rect so the matching commit in complete_mask_to_selection aligns.
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
 
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
@@ -305,7 +307,9 @@ impl DarklyEngine {
             &self.paint_pipelines.selection_bind_group_layout,
         );
 
-        self.commit_selection_undo(was_active);
+        // Matches the full-canvas save reserved in `mask_to_selection`.
+        let rect = self.selection_full_canvas_rect();
+        self.commit_selection_undo(was_active, rect);
         self.kick_selection_readback();
     }
 

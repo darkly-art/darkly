@@ -96,7 +96,9 @@ impl DarklyEngine {
         let canvas_h = self.doc.height;
 
         let was_active = self.gpu_selection.active;
-        self.save_selection_for_undo();
+        // Magic wand operates on full-canvas data — reserve full-canvas undo rect.
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
 
         let layer_tex = self.compositor.layer_texture(layer_id).unwrap();
         self.gpu.encode("magic-wand-readback", |encoder| {
@@ -142,18 +144,25 @@ impl DarklyEngine {
         if !self.gpu_selection.active {
             return;
         }
-        self.save_selection_for_undo();
+        // Only the pre-op selection region is affected by clear.
+        let rect = self
+            .gpu_selection
+            .pixel_bounds
+            .unwrap_or_else(|| self.selection_full_canvas_rect());
+        self.save_selection_for_undo(rect);
         let was_active = self.gpu_selection.active;
 
         self.gpu_selection.clear(&self.gpu.queue);
 
-        self.commit_selection_undo(was_active);
+        self.commit_selection_undo(was_active, rect);
         self.selection_overlay.clear();
         self.push_merged_overlay();
     }
 
     pub fn select_all(&mut self) {
-        self.save_selection_for_undo();
+        // Post-op selection fills the canvas; use full-canvas undo rect.
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
         let was_active = self.gpu_selection.active;
 
         let w = self.doc.width;
@@ -173,7 +182,7 @@ impl DarklyEngine {
             &self.paint_pipelines.selection_bind_group_layout,
         );
 
-        self.commit_selection_undo(was_active);
+        self.commit_selection_undo(was_active, rect);
         self.generate_contours_from_mask(&mask);
     }
 
@@ -181,7 +190,9 @@ impl DarklyEngine {
         if !self.gpu_selection.active {
             return;
         }
-        self.save_selection_for_undo();
+        // Invert can produce a selection anywhere on the canvas.
+        let rect = self.selection_full_canvas_rect();
+        self.save_selection_for_undo(rect);
         let was_active = self.gpu_selection.active;
 
         self.gpu.encode("invert-sel", |encoder| {
@@ -196,7 +207,7 @@ impl DarklyEngine {
         });
         // Bounds unknown after invert — readback will recompute.
         self.gpu_selection.pixel_bounds = None;
-        self.commit_selection_undo(was_active);
+        self.commit_selection_undo(was_active, rect);
         self.kick_selection_readback();
     }
 
@@ -221,7 +232,11 @@ impl DarklyEngine {
     /// a single GPU submission so they don't add latency.
     fn apply_selection_mask(&mut self, mask: RasterizedMask, mode: SelectionMode) {
         let was_active = self.gpu_selection.active;
-        self.save_selection_for_undo();
+        // Undo rect must cover both the pre-op selection and the new shape —
+        // any pixel that might change sits inside this union.
+        let rect = self
+            .selection_undo_rect_for_shape([mask.x, mask.y, mask.width, mask.height]);
+        self.save_selection_for_undo(rect);
 
         match mode {
             SelectionMode::Replace => {
@@ -249,7 +264,7 @@ impl DarklyEngine {
             }
         }
 
-        self.commit_selection_undo(was_active);
+        self.commit_selection_undo(was_active, rect);
     }
 
     /// Generate marching ants contours directly from a RasterizedMask (no readback).
@@ -324,7 +339,10 @@ impl DarklyEngine {
             }
         }
 
-        self.commit_selection_undo(was_active);
+        // Callers (magic wand, mask-to-selection) reserved a full-canvas save
+        // before the async readback — commit must match.
+        let rect = self.selection_full_canvas_rect();
+        self.commit_selection_undo(was_active, rect);
         self.kick_selection_readback();
     }
 
@@ -349,8 +367,7 @@ impl DarklyEngine {
 
     // --- Undo helpers ---
 
-    pub(crate) fn save_selection_for_undo(&mut self) {
-        let rect = self.selection_dirty_rect();
+    pub(crate) fn save_selection_for_undo(&mut self, rect: [u32; 4]) {
         let texture = self.gpu_selection.texture();
         self.gpu.encode("sel-undo-save", |encoder| {
             self.region_store
@@ -358,8 +375,7 @@ impl DarklyEngine {
         });
     }
 
-    pub(crate) fn commit_selection_undo(&mut self, was_active: bool) {
-        let rect = self.selection_dirty_rect();
+    pub(crate) fn commit_selection_undo(&mut self, was_active: bool, rect: [u32; 4]) {
         self.gpu.encode("sel-undo-commit", |encoder| {
             let entry =
                 self.region_store
@@ -369,10 +385,32 @@ impl DarklyEngine {
         });
     }
 
-    fn selection_dirty_rect(&self) -> [u32; 4] {
-        self.gpu_selection
-            .pixel_bounds
-            .unwrap_or([0, 0, self.doc.width, self.doc.height])
+    /// Full-canvas undo rect — used when the post-op selection extent isn't
+    /// known ahead of time (invert, select-all, magic wand, combine into unknown bounds).
+    pub(crate) fn selection_full_canvas_rect(&self) -> [u32; 4] {
+        [0, 0, self.doc.width, self.doc.height]
+    }
+
+    /// Undo rect that covers both the current (pre-op) selection and a new shape
+    /// that will be applied. Save and commit must use the same rect, otherwise
+    /// the R8 scratch's stale contents outside the save rect would leak into the
+    /// commit buffer and corrupt the selection on undo.
+    pub(crate) fn selection_undo_rect_for_shape(&self, shape: [u32; 4]) -> [u32; 4] {
+        let cw = self.doc.width;
+        let ch = self.doc.height;
+        let [sx, sy, sw, sh] = shape;
+        let [sx, sy, sw, sh] = [sx.min(cw), sy.min(ch), sw.min(cw - sx.min(cw)), sh.min(ch - sy.min(ch))];
+        match self.gpu_selection.pixel_bounds {
+            Some([ox, oy, ow, oh]) if sw > 0 && sh > 0 => {
+                let x = ox.min(sx);
+                let y = oy.min(sy);
+                let x_end = (ox + ow).max(sx + sw);
+                let y_end = (oy + oh).max(sy + sh);
+                [x, y, x_end - x, y_end - y]
+            }
+            Some(old) => old,
+            None => [0, 0, cw, ch],
+        }
     }
 
     /// Kick an async readback for contour extraction (marching ants).
