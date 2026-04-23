@@ -117,6 +117,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
         Box::new(nodes::user_input::UserInputEvaluator),
     );
     map.insert("random".into(), Box::new(nodes::random::RandomEvaluator));
+    map.insert("jitter".into(), Box::new(nodes::jitter::JitterEvaluator));
     map.insert("scatter".into(), Box::new(nodes::scatter::ScatterEvaluator));
     // GPU nodes.
     map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
@@ -559,6 +560,113 @@ mod tests {
             runner.is_ok(),
             "default_runner() failed: {:?}",
             runner.err()
+        );
+    }
+
+    /// Jitter passes `input` through unchanged when `amount` is zero, and
+    /// stays inside `[input - amount, input + amount]` otherwise.
+    /// Two jitter nodes in the same graph produce independent streams.
+    #[test]
+    fn jitter_bounds_and_independence() {
+        let registry = BrushNodeRegistry::new();
+        let mut graph = Graph::new();
+
+        let pen = graph.add_node(
+            "pen_input",
+            registry.get("pen_input").unwrap().ports.clone(),
+            vec![],
+        );
+        let jit_a = graph.add_node(
+            "jitter",
+            registry.get("jitter").unwrap().ports.clone(),
+            vec![],
+        );
+        let jit_b = graph.add_node(
+            "jitter",
+            registry.get("jitter").unwrap().ports.clone(),
+            vec![],
+        );
+
+        // A: pressure → input, amount=0 (default). Should pass through.
+        graph
+            .connect(
+                PortRef {
+                    node: pen,
+                    port: "pressure".into(),
+                },
+                PortRef {
+                    node: jit_a,
+                    port: "input".into(),
+                },
+            )
+            .unwrap();
+
+        // B: pressure → input, amount=0.25 via port default.
+        graph
+            .connect(
+                PortRef {
+                    node: pen,
+                    port: "pressure".into(),
+                },
+                PortRef {
+                    node: jit_b,
+                    port: "input".into(),
+                },
+            )
+            .unwrap();
+        graph.set_port_default(jit_b, "amount", 0.25).unwrap();
+
+        let evaluators = default_evaluators();
+        let mut runner =
+            BrushGraphRunner::new(&graph, registry.as_map(), evaluators).unwrap();
+
+        let slot_a = runner.find_node_output_slot(jit_a, "value").unwrap();
+        let slot_b = runner.find_node_output_slot(jit_b, "value").unwrap();
+
+        let info = PaintInformation {
+            pressure: 0.5,
+            ..Default::default()
+        };
+
+        let mut distinct_pairs = 0;
+        let mut seen_b: Vec<f32> = Vec::new();
+        for dab in 0..32 {
+            runner.clear_slots();
+            runner.seed_sensors(&info, [0.0; 4], 7, dab);
+            runner.execute_cpu();
+
+            let a = match runner.read_slot(slot_a).unwrap() {
+                ScalarValue::Scalar(v) => v,
+                _ => unreachable!(),
+            };
+            let b = match runner.read_slot(slot_b).unwrap() {
+                ScalarValue::Scalar(v) => v,
+                _ => unreachable!(),
+            };
+
+            // A has amount=0 so it must equal the input exactly.
+            assert!(
+                (a - 0.5).abs() < 1e-6,
+                "jitter with amount=0 must pass input through, got {a}"
+            );
+            // B must stay within input ± amount.
+            assert!(
+                b >= 0.25 - 1e-6 && b <= 0.75 + 1e-6,
+                "jitter with input=0.5 amount=0.25 out of bounds: {b}"
+            );
+
+            // Independence from A's stream — A is constant 0.5 so this
+            // collapses to "B varies." Check B varies across dabs.
+            if let Some(&prev_b) = seen_b.last() {
+                if (b - prev_b).abs() > 1e-6 {
+                    distinct_pairs += 1;
+                }
+            }
+            seen_b.push(b);
+        }
+        assert!(
+            distinct_pairs > 20,
+            "per-dab jitter should vary most dabs, got {distinct_pairs} changes in 32 dabs"
         );
     }
 }

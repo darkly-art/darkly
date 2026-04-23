@@ -59,19 +59,6 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
-/// Deterministic PRNG: hash seed + index to produce a 0-1 float.
-/// Same construction as the `random` node so replays and checkpoint
-/// restores reproduce identical jitter.
-fn prng_f32(seed: u32, index: u32) -> f32 {
-    let mut h = seed.wrapping_add(index.wrapping_mul(2654435761));
-    h ^= h >> 16;
-    h = h.wrapping_mul(0x45d9f3b);
-    h ^= h >> 16;
-    h = h.wrapping_mul(0x45d9f3b);
-    h ^= h >> 16;
-    (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
-}
-
 pub struct ScatterEvaluator;
 
 impl BrushNodeEvaluator for ScatterEvaluator {
@@ -81,12 +68,9 @@ impl BrushNodeEvaluator for ScatterEvaluator {
         let amount_y = ctx.input_f32("amount_y");
         let dab_size = ctx.input_f32("dab_size");
 
-        // Independent streams per node via node_id salt; two PRNG pulls
-        // per dab (one for each axis).
-        let salt = ctx.node_id.0 as u32;
-        let salted_seed = ctx.stroke_seed.wrapping_add(salt.wrapping_mul(0x9E3779B9));
-        let raw_x = prng_f32(salted_seed, ctx.dab_index.wrapping_mul(2));
-        let raw_y = prng_f32(salted_seed, ctx.dab_index.wrapping_mul(2).wrapping_add(1));
+        // Two PRNG pulls per dab (one per axis) via `prng_at`'s index arg.
+        let raw_x = ctx.prng_at(ctx.dab_index.wrapping_mul(2));
+        let raw_y = ctx.prng_at(ctx.dab_index.wrapping_mul(2).wrapping_add(1));
 
         let offset_x = (raw_x * 2.0 - 1.0) * amount_x * dab_size;
         let offset_y = (raw_y * 2.0 - 1.0) * amount_y * dab_size;

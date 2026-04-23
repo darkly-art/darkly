@@ -257,6 +257,79 @@ fn stamp_rotation_port_default_is_radians() {
     );
 }
 
+/// User reproduction: `pen.drawing_angle → jitter.input → stamp.rotation`
+/// with `jitter.amount` left at its default of 0. Jitter should
+/// pass-through in this configuration — the tip should rotate to face the
+/// stroke exactly as it does without jitter in the middle.
+#[test]
+fn jitter_passthrough_preserves_drawing_angle() {
+    let mut engine = test_engine();
+    let layer_id = engine.add_raster_layer();
+    let (stamp_id, _image_id) = install_bar_tip(&mut engine);
+
+    engine
+        .brush_graph_set_port_default(stamp_id.0, "size", 0.2)
+        .unwrap();
+    engine
+        .brush_graph_set_port_default(stamp_id.0, "scale", 1.0)
+        .unwrap();
+
+    let pen_id = find_node_id(&engine, "pen_input");
+    engine
+        .brush_graph_set_port_default(pen_id.0, "stabilize", 0.0)
+        .unwrap();
+    engine
+        .brush_graph_set_port_default(pen_id.0, "spacing", 0.05)
+        .unwrap();
+
+    // Insert a jitter node between pen.drawing_angle and stamp.rotation
+    // with amount=0 (default). Pass-through is expected.
+    let before_ids: std::collections::HashSet<u64> = engine
+        .active_brush_graph_ref()
+        .nodes
+        .keys()
+        .map(|id| id.0)
+        .collect();
+    engine
+        .brush_graph_add_node("jitter", 200.0, 400.0)
+        .expect("add jitter node");
+    let jitter_id = engine
+        .active_brush_graph_ref()
+        .nodes
+        .keys()
+        .map(|id| id.0)
+        .find(|id| !before_ids.contains(id))
+        .expect("new jitter node id");
+
+    engine
+        .brush_graph_connect(pen_id.0, "drawing_angle", jitter_id, "input")
+        .unwrap();
+    engine
+        .brush_graph_connect(jitter_id, "value", stamp_id.0, "rotation")
+        .unwrap();
+
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(stroke_event(128.0, 20.0, 0.0));
+    for i in 1..=5 {
+        engine.stroke_to(stroke_event(128.0, 20.0 + i as f32 * 40.0, i as f64 * 16.0));
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_layer(layer_id);
+    let bbox = painted_bbox(&pixels, CANVAS, 0, 150, CANVAS, CANVAS)
+        .expect("downward stroke through jitter should still paint below y=150");
+    let (x0, y0, x1, y1) = bbox;
+    let w = x1 - x0;
+    let h = y1 - y0;
+    assert!(
+        h > w * 2,
+        "jitter pass-through (amount=0) should preserve drawing_angle → \
+         rotation; got {w}x{h} (bbox {x0},{y0}-{x1},{y1}). If the tip is \
+         flat horizontal, rotation was dropped to 0."
+    );
+}
+
 /// Wire `pen_input.drawing_angle → stamp.rotation` and draw a short
 /// downward stroke. The bar tip should orient vertically at the end of
 /// the stroke, proving the sensor → port wire unit contract works.
