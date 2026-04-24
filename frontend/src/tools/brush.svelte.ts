@@ -1,6 +1,7 @@
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
+import { srgbToLinear } from '../lib/color';
 import {
     KIND_MASKED_STAMP,
     FLAG_CANVAS_SPACE,
@@ -65,12 +66,6 @@ export const MAX_SIZE = 500;
 export const SIZE_STEP = 4;
 export const INITIAL_SIZE = 24;
 export const INITIAL_OPACITY = 1.0;
-
-/** Convert sRGB 0-255 to linear 0-1. */
-function srgbToLinear(c: number): number {
-    const s = c / 255;
-    return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-}
 
 /** Build a brush_stroke params object from a PointerEvent. */
 function brushStrokeParams(e: PointerEvent, cx: number, cy: number) {

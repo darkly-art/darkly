@@ -767,6 +767,39 @@ impl DarklyHandle {
         self.engine.borrow_mut().clear_brush_preview_pose();
     }
 
+    /// Full-stroke brush editor preview — renders an S-curve sample stroke
+    /// into an offscreen texture and returns the RGBA bytes. First call
+    /// returns a zero-filled placeholder while the async readback is in
+    /// flight; subsequent calls return the cached bytes, refreshed on a
+    /// later frame once the readback completes.
+    ///
+    /// Uses the theme colors stored via `set_preview_theme` — the editor
+    /// preview visually matches the brush picker's preset thumbnails so
+    /// users can scan across both without chromatic surprises. Same shape
+    /// as `layer_thumbnail`: no promises, no async JS boundary plumbing.
+    pub fn brush_editor_preview(&self, width: u32, height: u32) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().brush_editor_preview(width, height)
+    }
+
+    /// Push the current UI theme colors into the engine. Used by both the
+    /// live editor preview and preset thumbnail baking — call on theme
+    /// change so the live preview re-renders with the new palette.
+    pub fn set_preview_theme(&self, fg: &[f32], bg: &[f32]) {
+        self.flush_if_needed();
+        let fg = if fg.len() >= 4 {
+            [fg[0], fg[1], fg[2], fg[3]]
+        } else {
+            [1.0, 1.0, 1.0, 1.0]
+        };
+        let bg = if bg.len() >= 4 {
+            [bg[0], bg[1], bg[2], bg[3]]
+        } else {
+            [0.08, 0.08, 0.08, 1.0]
+        };
+        self.engine.borrow_mut().set_preview_theme(fg, bg);
+    }
+
     // --- Brush config ---
 
     pub fn set_brush_blend_mode(&self, mode: u32) {

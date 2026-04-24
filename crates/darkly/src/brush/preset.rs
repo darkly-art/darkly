@@ -64,6 +64,12 @@ pub struct PresetBundle {
     pub preset: BrushPreset,
     /// Resource data keyed by the `name` field in `PresetResourceMeta`.
     pub resource_data: Vec<(String, Vec<u8>)>,
+    /// Optional pre-rendered preview PNG, stored in the ZIP as
+    /// `preview.png`. Produced by the async thumbnail bake on preset save
+    /// and consumed by the brush picker grid. `None` for presets that
+    /// haven't been baked (older archives, or freshly-saved presets whose
+    /// bake hasn't completed yet).
+    pub thumbnail_png: Option<Vec<u8>>,
 }
 
 fn default_engine_version() -> String {
@@ -94,8 +100,12 @@ impl PresetBundle {
         PresetBundle {
             preset,
             resource_data: Vec::new(),
+            thumbnail_png: None,
         }
     }
+
+    /// ZIP entry path for the optional preview PNG.
+    const PREVIEW_PNG_PATH: &'static str = "preview.png";
 
     /// Serialize to `.darkly-brush` ZIP bytes.
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
@@ -128,6 +138,14 @@ impl PresetBundle {
             zip.start_file(&path, options)
                 .map_err(|e| format!("zip write error: {e}"))?;
             zip.write_all(data)
+                .map_err(|e| format!("zip write error: {e}"))?;
+        }
+
+        // Optional pre-baked preview PNG for the brush picker grid.
+        if let Some(png) = &self.thumbnail_png {
+            zip.start_file(Self::PREVIEW_PNG_PATH, options)
+                .map_err(|e| format!("zip write error: {e}"))?;
+            zip.write_all(png)
                 .map_err(|e| format!("zip write error: {e}"))?;
         }
 
@@ -201,9 +219,22 @@ impl PresetBundle {
             }
         }
 
+        // Read the optional preview PNG — older archives don't have one
+        // and we treat that as `None`, not an error.
+        let thumbnail_png = match archive.by_name(Self::PREVIEW_PNG_PATH) {
+            Ok(mut file) => {
+                let mut data = Vec::with_capacity(file.size() as usize);
+                file.read_to_end(&mut data)
+                    .map_err(|e| format!("failed to read preview.png: {e}"))?;
+                Some(data)
+            }
+            Err(_) => None,
+        };
+
         Ok(PresetBundle {
             preset,
             resource_data,
+            thumbnail_png,
         })
     }
 
@@ -545,6 +576,7 @@ mod tests {
         let bundle = PresetBundle {
             preset,
             resource_data: vec![("tip.png".into(), tip_data.clone())],
+            thumbnail_png: None,
         };
 
         let bytes = bundle.to_bytes().unwrap();
@@ -888,6 +920,35 @@ mod tests {
             "migrated graph should compile: {:?}",
             compile.err()
         );
+    }
+
+    #[test]
+    fn thumbnail_png_round_trip() {
+        // A preset with a baked thumbnail should serialize the PNG as a
+        // `preview.png` ZIP entry and reload it back into `thumbnail_png`.
+        let graph = brush::default_graph();
+        let preset = BrushPreset::from_graph("Thumbnailed", graph);
+        let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+        let mut bundle = PresetBundle::without_resources(preset);
+        bundle.thumbnail_png = Some(png.clone());
+
+        let bytes = bundle.to_bytes().unwrap();
+        let loaded = PresetBundle::from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.thumbnail_png, Some(png));
+    }
+
+    #[test]
+    fn thumbnail_absent_loads_as_none() {
+        // Archives without `preview.png` — the case for older presets and
+        // freshly-saved ones whose bake hasn't landed yet — must load as
+        // `thumbnail_png: None`, not error.
+        let graph = brush::default_graph();
+        let preset = BrushPreset::from_graph("Bare", graph);
+        let bundle = PresetBundle::without_resources(preset);
+        let bytes = bundle.to_bytes().unwrap();
+
+        let loaded = PresetBundle::from_bytes(&bytes).unwrap();
+        assert!(loaded.thumbnail_png.is_none());
     }
 
     #[test]

@@ -8,6 +8,7 @@
     import type { ToolContext } from '../tools/registry';
     import { screenToCanvas } from './coordinates';
     import { toast } from '../state/toast.svelte';
+    import { theme } from '../state/theme.svelte';
 
     let canvas = $state<HTMLCanvasElement>(undefined!);
 
@@ -53,6 +54,10 @@
             const handle = await initEditor(canvas);
             handle.resize(canvas.width, canvas.height);
             app.handle = handle;
+
+            // Push the initial UI theme colors so preset-thumbnail bakes
+            // match the user's current theme from frame one.
+            theme.pushToWasm();
 
             // Demo setup: background image + paint layer in a group
             const bg = handle.add_raster_layer();

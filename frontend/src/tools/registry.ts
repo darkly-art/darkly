@@ -49,8 +49,10 @@ class ToolRegistry {
     private order: string[] = [];
 
     register(tool: Tool) {
+        if (!this.tools.has(tool.id)) {
+            this.order.push(tool.id);
+        }
         this.tools.set(tool.id, tool);
-        this.order.push(tool.id);
     }
 
     get(id: string): Tool | undefined {

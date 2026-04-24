@@ -197,90 +197,120 @@ impl DarklyEngine {
         }
 
         for (ctx, pixels) in completed {
-            match ctx {
-                ReadbackContext::FloodFill {
-                    layer_id,
-                    mask_editing,
-                    seed_x,
-                    seed_y,
-                    color,
-                    tolerance,
-                    canvas_w,
-                    canvas_h,
-                } => self.complete_flood_fill(
-                    layer_id,
-                    mask_editing,
-                    seed_x,
-                    seed_y,
-                    color,
-                    tolerance,
-                    canvas_w,
-                    canvas_h,
-                    pixels,
-                ),
-                ReadbackContext::ColorPick => {
-                    if pixels.len() >= 4 {
-                        self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
-                    }
+            self.handle_completed_readback(ctx, pixels);
+        }
+        true
+    }
+
+    /// Dispatch a completed readback to the appropriate handler. Shared
+    /// between the frame-loop poll and the test-only flush so both paths
+    /// honour every variant identically.
+    pub(crate) fn handle_completed_readback(&mut self, ctx: ReadbackContext, pixels: Vec<u8>) {
+        match ctx {
+            ReadbackContext::FloodFill {
+                layer_id,
+                mask_editing,
+                seed_x,
+                seed_y,
+                color,
+                tolerance,
+                canvas_w,
+                canvas_h,
+            } => self.complete_flood_fill(
+                layer_id,
+                mask_editing,
+                seed_x,
+                seed_y,
+                color,
+                tolerance,
+                canvas_w,
+                canvas_h,
+                pixels,
+            ),
+            ReadbackContext::ColorPick => {
+                if pixels.len() >= 4 {
+                    self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
                 }
-                ReadbackContext::Copy {
-                    is_mask,
-                    region,
-                    is_cut,
-                    layer_id,
-                } => {
-                    self.complete_copy(is_mask, region, is_cut, layer_id, pixels);
+            }
+            ReadbackContext::Copy {
+                is_mask,
+                region,
+                is_cut,
+                layer_id,
+            } => {
+                self.complete_copy(is_mask, region, is_cut, layer_id, pixels);
+            }
+            ReadbackContext::MagicWand {
+                was_active,
+                seed_x,
+                seed_y,
+                tolerance,
+                mode,
+            } => {
+                self.complete_magic_wand(was_active, seed_x, seed_y, tolerance, mode, pixels);
+            }
+            ReadbackContext::MaskToSelection { was_active } => {
+                self.complete_mask_to_selection(was_active, pixels);
+            }
+            ReadbackContext::SelectionReadback => {
+                self.update_selection_overlay_from_readback(pixels);
+                // Resume deferred operations that were waiting for
+                // selection cpu_cache / pixel_bounds.
+                if let Some(pc) = self.pending_copy.take() {
+                    self.start_copy_readback(pc.layer_id, pc.is_cut);
                 }
-                ReadbackContext::MagicWand {
-                    was_active,
-                    seed_x,
-                    seed_y,
-                    tolerance,
-                    mode,
-                } => {
-                    self.complete_magic_wand(was_active, seed_x, seed_y, tolerance, mode, pixels);
-                }
-                ReadbackContext::MaskToSelection { was_active } => {
-                    self.complete_mask_to_selection(was_active, pixels);
-                }
-                ReadbackContext::SelectionReadback => {
-                    self.update_selection_overlay_from_readback(pixels);
-                    // Resume deferred operations that were waiting for
-                    // selection cpu_cache / pixel_bounds.
-                    if let Some(pc) = self.pending_copy.take() {
-                        self.start_copy_readback(pc.layer_id, pc.is_cut);
-                    }
-                    if self.gpu_selection.pixel_bounds.is_some() {
-                        if let Some(pt) = self.pending_transform.take() {
-                            if self.floating.is_none() {
-                                self.begin_transform(pt.layer_id);
-                            }
+                if self.gpu_selection.pixel_bounds.is_some() {
+                    if let Some(pt) = self.pending_transform.take() {
+                        if self.floating.is_none() {
+                            self.begin_transform(pt.layer_id);
                         }
                     }
                 }
-                ReadbackContext::Thumbnail {
-                    layer_id,
-                    is_mask,
-                    thumb_w,
-                    thumb_h,
-                } => {
-                    let doc_w = self.doc.width;
-                    let doc_h = self.doc.height;
-                    if is_mask {
-                        let thumb = generate_mask_thumbnail_from_pixels(
-                            &pixels, doc_w, doc_h, thumb_w, thumb_h,
-                        );
-                        self.thumbnail_cache.mask.insert(layer_id, thumb);
-                    } else {
-                        let thumb = generate_rgba_thumbnail_from_pixels(
-                            &pixels, doc_w, doc_h, thumb_w, thumb_h,
-                        );
-                        self.thumbnail_cache.layer.insert(layer_id, thumb);
-                    }
+            }
+            ReadbackContext::Thumbnail {
+                layer_id,
+                is_mask,
+                thumb_w,
+                thumb_h,
+            } => {
+                let doc_w = self.doc.width;
+                let doc_h = self.doc.height;
+                if is_mask {
+                    let thumb = generate_mask_thumbnail_from_pixels(
+                        &pixels, doc_w, doc_h, thumb_w, thumb_h,
+                    );
+                    self.thumbnail_cache.mask.insert(layer_id, thumb);
+                } else {
+                    let thumb = generate_rgba_thumbnail_from_pixels(
+                        &pixels, doc_w, doc_h, thumb_w, thumb_h,
+                    );
+                    self.thumbnail_cache.layer.insert(layer_id, thumb);
+                }
+            }
+            ReadbackContext::BrushEditorPreview {
+                width,
+                height,
+                graph_version,
+            } => {
+                // Drop stale results — if the graph has changed since
+                // this render was issued, a fresher render has already
+                // been queued and will supersede this one.
+                if graph_version == self.brush_graph_version {
+                    self.brush_editor_preview_cache = Some(pixels);
+                    self.brush_editor_preview_cache_size = Some((width, height));
+                }
+            }
+            ReadbackContext::PresetThumbnailForSave {
+                name,
+                width,
+                height,
+            } => {
+                let png_bytes = encode_rgba_as_png(&pixels, width, height);
+                if !png_bytes.is_empty() {
+                    self.preset_library.set_thumbnail(&name, png_bytes);
                 }
             }
         }
-        true
     }
 
     /// Get the most recently picked color (updated asynchronously).
@@ -564,6 +594,33 @@ fn generate_rgba_thumbnail_from_pixels(
         }
     }
     buf
+}
+
+/// Encode an RGBA8 buffer as a PNG. Used for baking preset thumbnails —
+/// the PNG goes into the `.darkly-brush` ZIP as `preview.png`.
+fn encode_rgba_as_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let expected = (width * height * 4) as usize;
+    if pixels.len() < expected {
+        log::error!(
+            "preset thumbnail pixel buffer too small: {} < {expected}",
+            pixels.len()
+        );
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(expected / 4);
+    let cursor = std::io::Cursor::new(&mut out);
+    let encoder = image::codecs::png::PngEncoder::new(cursor);
+    use image::ImageEncoder;
+    if let Err(e) = encoder.write_image(
+        &pixels[..expected],
+        width,
+        height,
+        image::ExtendedColorType::Rgba8,
+    ) {
+        log::error!("preset thumbnail PNG encode failed: {e}");
+        return Vec::new();
+    }
+    out
 }
 
 fn generate_mask_thumbnail_from_pixels(

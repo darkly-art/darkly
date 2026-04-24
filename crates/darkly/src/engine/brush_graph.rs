@@ -3,7 +3,7 @@
 //! Provides the API surface for the WASM bridge to query node types,
 //! get/set the active brush graph, and compile graphs.
 
-use super::DarklyEngine;
+use super::{DarklyEngine, ReadbackContext};
 use crate::brush::wire::BrushWireType;
 use crate::brush::{BrushNodeRegistration, BrushNodeRegistry};
 use crate::gpu::params::ParamValue;
@@ -273,11 +273,153 @@ impl DarklyEngine {
             }
         }
 
+        // Every compile bumps the version so the editor preview knows to
+        // re-render and stale in-flight readbacks can be discarded on arrival.
+        self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+
         // Refresh the brush preview overlay now that the graph is compiled —
         // size, rotation, and tip changes all land here.
         self.regenerate_brush_preview();
 
         Ok(())
+    }
+
+    /// Set the theme colors used by the editor live preview and by
+    /// preset thumbnail baking. Both paths share one palette so the live
+    /// preview visually matches the brush picker's grid thumbnails.
+    ///
+    /// Invalidates the cached editor preview so the next request re-renders
+    /// with the new colors.
+    pub fn set_preview_theme(&mut self, fg: [f32; 4], bg: [f32; 4]) {
+        if self.preview_theme_fg == fg && self.preview_theme_bg == bg {
+            return;
+        }
+        self.preview_theme_fg = fg;
+        self.preview_theme_bg = bg;
+        self.invalidate_brush_editor_preview();
+    }
+
+    /// Render a full-stroke brush editor preview and return the most recent
+    /// cached bytes synchronously. The pixels update on a later frame once
+    /// the async readback completes — same shape as `layer_thumbnail`.
+    ///
+    /// Uses the theme colors stored via `set_preview_theme`, not the user's
+    /// active paint color — keeps the editor preview visually consistent
+    /// with the brush picker's preset thumbnails.
+    pub fn brush_editor_preview(&mut self, width: u32, height: u32) -> Vec<u8> {
+        // Guard against painting while a real stroke is in flight — the
+        // preview shares `dab_pool` and `brush_pipelines` with the engine,
+        // and running mid-stroke would step on acquired handles and
+        // uniform rings.
+        let in_stroke = self.brush_stroke_engine.is_some();
+
+        let zero_buffer = || vec![0u8; (width * height * 4) as usize];
+        let cached = self
+            .brush_editor_preview_cache
+            .clone()
+            .filter(|_| self.brush_editor_preview_cache_size == Some((width, height)));
+
+        // Skip work when nothing has changed and the cache is good. Also
+        // skip if a real stroke is in progress — return the most recent
+        // cached bytes so the UI stays responsive without clobbering the
+        // stroke's GPU state.
+        let nothing_to_do = in_stroke
+            || (self.last_rendered_preview_version == self.brush_graph_version
+                && self.brush_editor_preview_cache_size == Some((width, height)));
+        if nothing_to_do {
+            return cached.unwrap_or_else(zero_buffer);
+        }
+
+        // Don't queue a second readback on top of an in-flight one — it
+        // would race with whichever lands first and the stale result
+        // could overwrite the fresh one.
+        let already_pending = self
+            .readbacks
+            .any(|c| matches!(c, ReadbackContext::BrushEditorPreview { .. }));
+        if already_pending {
+            return cached.unwrap_or_else(zero_buffer);
+        }
+
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+
+        self.render_preview_and_request_readback(
+            width,
+            height,
+            fg,
+            bg,
+            ReadbackContext::BrushEditorPreview {
+                width,
+                height,
+                graph_version: self.brush_graph_version,
+            },
+        );
+        self.last_rendered_preview_version = self.brush_graph_version;
+
+        cached.unwrap_or_else(zero_buffer)
+    }
+
+    /// Invalidate any cached editor preview — call when the theme colors
+    /// change so the next `brush_editor_preview` request re-renders with
+    /// the new palette instead of returning the stale cached pixels.
+    pub fn invalidate_brush_editor_preview(&mut self) {
+        self.brush_editor_preview_cache = None;
+        self.brush_editor_preview_cache_size = None;
+        // Bumping the version forces the skip-check in
+        // `brush_editor_preview` to trigger a fresh render; also drops
+        // any in-flight readback as stale when it lands.
+        self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+    }
+
+    /// Shared helper: render a preview stroke into the preview renderer's
+    /// texture, then encode an async readback tagged with `context`. The
+    /// caller decides what to do with the bytes when they arrive.
+    pub(crate) fn render_preview_and_request_readback(
+        &mut self,
+        width: u32,
+        height: u32,
+        fg: [f32; 4],
+        bg: [f32; 4],
+        context: ReadbackContext,
+    ) {
+        use crate::brush::preview_renderer::synthesize_preview_stroke;
+
+        let path = synthesize_preview_stroke(width as f32, height as f32, 30);
+        let Some(texture) = self.brush_preview_renderer.render_stroke(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.dab_pool,
+            &self.brush_pipelines,
+            &self.resource_handles,
+            &self.active_brush_graph,
+            &path,
+            fg,
+            bg,
+            width,
+            height,
+        ) else {
+            return;
+        };
+
+        // Encode the readback manually (not via `gpu.encode`) so the
+        // borrow of `self.brush_preview_renderer` that produced
+        // `texture` coexists with borrows of `self.gpu` and
+        // `self.readbacks` — they're disjoint fields of `self`.
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("brush-editor-preview-readback"),
+            });
+        let request = crate::gpu::readback::request_readback(
+            &self.gpu.device,
+            &mut encoder,
+            texture,
+            wgpu::TextureFormat::Rgba8Unorm,
+            [0, 0, width, height],
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        self.readbacks.submit(request, context);
     }
 
     /// Serialize the active graph as JSON.
