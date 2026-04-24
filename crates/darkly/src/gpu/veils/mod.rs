@@ -9,6 +9,7 @@ pub mod monochrome;
 pub mod noise;
 pub mod pixelate;
 pub mod rainy_glass;
+pub mod vhs;
 pub mod watercolor;
 
 use crate::gpu::veil::VeilRegistration;
@@ -23,6 +24,7 @@ pub fn registrations() -> Vec<VeilRegistration> {
         noise::register(),
         pixelate::register(),
         rainy_glass::register(),
+        vhs::register(),
         watercolor::register(),
     ]
 }

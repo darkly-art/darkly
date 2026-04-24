@@ -28,8 +28,10 @@
         refresh();
     }
 
+    const ACRONYMS: Record<string, string> = { vhs: 'VHS' };
+
     function displayName(typeId: string): string {
-        return typeId.replace(/_/g, ' ');
+        return ACRONYMS[typeId] ?? typeId.replace(/_/g, ' ');
     }
 
     function onDragOver(e: DragEvent) {
