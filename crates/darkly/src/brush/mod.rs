@@ -15,6 +15,7 @@ pub mod paint_info;
 pub mod pipelines;
 pub mod preset;
 pub mod preset_library;
+pub mod preview_renderer;
 pub mod save_points;
 pub mod spacing;
 pub mod stabilizer;

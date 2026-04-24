@@ -1,8 +1,12 @@
 //! Brush preset management methods on DarklyEngine.
 
-use super::DarklyEngine;
+use super::{DarklyEngine, ReadbackContext};
 use crate::brush::preset::{BrushPreset, PresetBundle};
 use crate::brush::preset_library::PresetInfo;
+
+/// Dimensions used for baked preset thumbnails. Matches the live editor
+/// preview so presets look identical in the picker grid.
+const PRESET_THUMBNAIL_SIZE: (u32, u32) = (320, 120);
 
 impl DarklyEngine {
     /// List all presets in the library (summary info only).
@@ -33,6 +37,14 @@ impl DarklyEngine {
     }
 
     /// Save the active brush graph as a preset in the library.
+    ///
+    /// Returns immediately with the preset registered (no thumbnail yet).
+    /// A theme-colored preview render is scheduled; when its readback
+    /// lands, the resulting PNG is installed on the library entry via
+    /// `PresetLibrary::set_thumbnail`. Callers that export the preset
+    /// before the bake completes simply get an archive without
+    /// `preview.png` — loads still work, pickers fall back to whatever
+    /// placeholder they prefer.
     pub fn brush_preset_save(&mut self, name: &str, category: &str) -> Result<(), String> {
         let mut preset = BrushPreset::from_graph(name, self.active_brush_graph.clone());
         preset.category = category.to_string();
@@ -41,6 +53,23 @@ impl DarklyEngine {
         // Saving establishes a new "preset baseline" — what the user just
         // saved IS what reset-to-default should now return to.
         self.snapshot_preset_defaults();
+
+        // Kick off the thumbnail bake. Uses theme colors (not the active
+        // fg) so the picker grid looks consistent across presets.
+        let (w, h) = PRESET_THUMBNAIL_SIZE;
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        self.render_preview_and_request_readback(
+            w,
+            h,
+            fg,
+            bg,
+            ReadbackContext::PresetThumbnailForSave {
+                name: name.to_string(),
+                width: w,
+                height: h,
+            },
+        );
         Ok(())
     }
 

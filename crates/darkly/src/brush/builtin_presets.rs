@@ -352,6 +352,7 @@ impl PresetBuilder {
         PresetBundle {
             preset,
             resource_data,
+            thumbnail_png: None,
         }
     }
 }

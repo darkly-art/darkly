@@ -6,6 +6,8 @@
     import HamburgerMenu from './HamburgerMenu.svelte';
 
     let showColorPicker = $state(false);
+    let pickerEl: HTMLDivElement | undefined = $state();
+    let swatchEl: HTMLButtonElement | undefined = $state();
 
     function colorStyle(c: { r: number; g: number; b: number; a: number }): string {
         return `rgb(${c.r}, ${c.g}, ${c.b})`;
@@ -14,6 +16,19 @@
     function toggleColorPicker() {
         showColorPicker = !showColorPicker;
     }
+
+    $effect(() => {
+        if (!showColorPicker) return;
+        const onPointerDown = (e: PointerEvent) => {
+            const t = e.target as Node | null;
+            if (!t) return;
+            if (pickerEl?.contains(t)) return;
+            if (swatchEl?.contains(t)) return;
+            showColorPicker = false;
+        };
+        window.addEventListener('pointerdown', onPointerDown, true);
+        return () => window.removeEventListener('pointerdown', onPointerDown, true);
+    });
 
     // Group tools by their group property for visual separation
     interface ToolGroup { tools: ReturnType<typeof toolRegistry.all> }
@@ -62,7 +77,7 @@
     <!-- Color swatches + swap (bottom) -->
     <div class="toolbar-bottom">
         <div class="color-swatches">
-            <button class="swatch-stack" onclick={toggleColorPicker} title="Pick color">
+            <button bind:this={swatchEl} class="swatch-stack" onclick={toggleColorPicker} title="Pick color">
                 <div
                     class="swatch bg"
                     style="background: {colorStyle(app.background)}"
@@ -79,7 +94,9 @@
     </div>
 
     {#if showColorPicker}
-        <ColorPicker onclose={() => showColorPicker = false} />
+        <div bind:this={pickerEl} class="color-picker-wrapper">
+            <ColorPicker onclose={() => showColorPicker = false} />
+        </div>
     {/if}
 </div>
 
@@ -189,5 +206,9 @@
         gap: 6px;
         padding-top: 6px;
         border-top: 1px solid var(--bg-hover);
+    }
+
+    .color-picker-wrapper {
+        display: contents;
     }
 </style>

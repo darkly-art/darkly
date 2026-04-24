@@ -17,6 +17,7 @@ use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
 use crate::brush::pipelines::BrushPipelines;
 use crate::brush::preset_library::PresetLibrary;
+use crate::brush::preview_renderer::BrushPreviewRenderer;
 use crate::brush::stabilizer::StabilizerRegistry;
 use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
@@ -96,6 +97,25 @@ pub(crate) enum ReadbackContext {
         thumb_w: u32,
         thumb_h: u32,
     },
+    /// Async readback of a freshly-rendered brush editor preview. Completion
+    /// caches the bytes on the engine so the next `brush_editor_preview()`
+    /// call returns them synchronously.
+    BrushEditorPreview {
+        width: u32,
+        height: u32,
+        /// Graph version at the time the render was issued — used to skip
+        /// caching stale results if another render has superseded this one.
+        graph_version: u64,
+    },
+    /// Async readback of the preview render used to bake a `.darkly-brush`
+    /// preset's embedded `preview.png`. Completion PNG-encodes the pixels
+    /// and installs the result on the library entry via
+    /// `PresetLibrary::set_thumbnail`.
+    PresetThumbnailForSave {
+        name: String,
+        width: u32,
+        height: u32,
+    },
 }
 
 /// Cached thumbnail data per layer.
@@ -173,6 +193,32 @@ pub struct DarklyEngine {
     /// `clear_brush_preview_pose()` so a return-from-offscreen hover
     /// doesn't synthesize a spurious direction.
     pub(crate) last_preview_pose: Option<crate::brush::paint_info::PaintInformation>,
+
+    // --- Full-stroke brush editor preview ---
+    /// Renderer for the Krita-style S-curve preview shown in the brush
+    /// editor widget. Reused across calls; holds its own scratch target.
+    pub(crate) brush_preview_renderer: BrushPreviewRenderer,
+    /// Cached RGBA bytes of the most recently-completed editor preview.
+    /// `brush_editor_preview()` returns this synchronously; it's refreshed
+    /// asynchronously via `ReadbackContext::BrushEditorPreview`.
+    pub(crate) brush_editor_preview_cache: Option<Vec<u8>>,
+    /// Dimensions of the bytes in `brush_editor_preview_cache`. Cleared
+    /// alongside the cache on invalidation.
+    pub(crate) brush_editor_preview_cache_size: Option<(u32, u32)>,
+    /// Bumped on every brush-graph mutation (`compile_active`). Used both
+    /// as the key the preview render is identified by (so stale readbacks
+    /// can be discarded) and as a skip predicate — if the last-rendered
+    /// version matches the current version, there's nothing to re-render.
+    pub(crate) brush_graph_version: u64,
+    /// Graph version at the last time we issued a preview render. Compared
+    /// against `brush_graph_version` to skip redundant work.
+    pub(crate) last_rendered_preview_version: u64,
+    /// Theme colors for preset thumbnails (not the live editor preview —
+    /// that uses the caller-supplied fg and auto-picked contrast bg). The
+    /// frontend sets these via `set_preview_theme()` when the UI theme
+    /// toggles.
+    pub(crate) preview_theme_fg: [f32; 4],
+    pub(crate) preview_theme_bg: [f32; 4],
 
     // --- Preset Library (Phase 7) ---
     pub(crate) preset_library: PresetLibrary,
@@ -272,6 +318,15 @@ impl DarklyEngine {
             preset_defaults: std::collections::HashMap::new(),
             brush_preview_info: None,
             last_preview_pose: None,
+            brush_preview_renderer: BrushPreviewRenderer::new(),
+            brush_editor_preview_cache: None,
+            brush_editor_preview_cache_size: None,
+            brush_graph_version: 0,
+            last_rendered_preview_version: 0,
+            // Default theme: dark (white on dark). Frontend overrides via
+            // `set_preview_theme()` as soon as the UI loads.
+            preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
+            preview_theme_bg: [0.08, 0.08, 0.08, 1.0],
             preset_library: {
                 let mut lib = PresetLibrary::new();
                 for bundle in crate::brush::builtin_presets::all() {
@@ -361,29 +416,16 @@ impl DarklyEngine {
 
     /// Block until all pending async readbacks complete. For tests only.
     /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
-    /// processes all completed readbacks.
+    /// dispatches every completed readback through the shared handler —
+    /// same semantics as a real frame's `poll_pending`.
     pub fn test_flush_readbacks(&mut self) {
         let _ = self.gpu.device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: None,
         });
-        // Manually process completed readbacks (same as poll_pending's readback loop).
         let completed = self.readbacks.poll(&self.gpu.device);
         for (ctx, pixels) in completed {
-            match ctx {
-                ReadbackContext::Copy {
-                    is_mask,
-                    region,
-                    is_cut,
-                    layer_id,
-                } => {
-                    self.complete_copy(is_mask, region, is_cut, layer_id, pixels);
-                }
-                ReadbackContext::SelectionReadback => {
-                    self.update_selection_overlay_from_readback(pixels);
-                }
-                _ => {}
-            }
+            self.handle_completed_readback(ctx, pixels);
         }
     }
 }

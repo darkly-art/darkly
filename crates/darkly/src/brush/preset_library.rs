@@ -76,6 +76,20 @@ impl PresetLibrary {
         self.presets.remove(name).is_some()
     }
 
+    /// Attach a baked `preview.png` to an existing preset. Used by the
+    /// async thumbnail bake path — save returns immediately without a
+    /// thumbnail, and this method installs the PNG once the readback
+    /// completes on a later frame.
+    pub fn set_thumbnail(&mut self, name: &str, png: Vec<u8>) -> bool {
+        match self.presets.get_mut(name) {
+            Some(bundle) => {
+                bundle.thumbnail_png = Some(png);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Import a preset from `.darkly-brush` ZIP bytes.
     pub fn import_bytes(&mut self, bytes: &[u8]) -> Result<String, String> {
         let bundle = PresetBundle::from_bytes(bytes)?;

@@ -1,16 +1,14 @@
 <script lang="ts">
-    let open = $state(false);
+    import { theme, type ThemeName } from '../state/theme.svelte';
 
-    let currentTheme = $state(document.body.classList.contains('light') ? 'light' : 'dark');
+    let open = $state(false);
 
     function toggle() {
         open = !open;
     }
 
-    function setTheme(theme: string) {
-        document.body.classList.remove('dark', 'light');
-        document.body.classList.add(theme);
-        currentTheme = theme;
+    function setTheme(name: ThemeName) {
+        theme.set(name);
     }
 
     function onWindowClick(e: MouseEvent) {
@@ -34,12 +32,12 @@
                 <div class="theme-options">
                     <button
                         class="theme-btn"
-                        class:active={currentTheme === 'dark'}
+                        class:active={theme.current === 'dark'}
                         onclick={() => setTheme('dark')}
                     >Dark</button>
                     <button
                         class="theme-btn"
-                        class:active={currentTheme === 'light'}
+                        class:active={theme.current === 'light'}
                         onclick={() => setTheme('light')}
                     >Light</button>
                 </div>
