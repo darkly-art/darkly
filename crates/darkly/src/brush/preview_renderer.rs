@@ -7,9 +7,12 @@
 //!
 //! Distinct from the hover overlay path (`render_preview_pipeline` in
 //! `eval.rs`), which forces `flow=1` and white color to produce a tip-mask
-//! for the cursor-follow overlay. The editor preview wants the full colored
-//! deposition, so it goes through the normal `begin_stroke` / `execute_gpu`
-//! / `commit` pipeline.
+//! for the cursor-follow overlay. The editor preview runs the real
+//! deposition pipeline — `begin_stroke` / `execute_gpu` / `commit` — so
+//! flow, opacity, and other per-dab settings affect the output. The
+//! stroke/background colors are theme-sourced (set via the engine's
+//! `set_preview_theme`), not the active paint color, so all previews
+//! share a consistent palette.
 
 use std::collections::HashMap;
 
