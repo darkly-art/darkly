@@ -6,7 +6,6 @@
 //! only; the wasm path does async readback via the ReadbackScheduler.
 
 use std::collections::HashMap;
-use std::time::Instant;
 
 use darkly::brush::{
     dab_pool::DabTexturePool,
@@ -32,28 +31,6 @@ fn renders_s_curve_over_black_background() {
     let fg = [1.0, 1.0, 1.0, 1.0]; // white stroke
     let bg = [0.0, 0.0, 0.0, 1.0]; // black background
 
-    // Warm-up render — the first call pays for shader pipeline
-    // compilation, texture allocation, and other first-time setup that
-    // can run several hundred ms on software-fallback backends (CI). We
-    // want the perf assertion below to catch algorithmic regressions,
-    // not cold-start cost, so throw the first render away.
-    renderer
-        .render_stroke(
-            &device,
-            &queue,
-            &mut dab_pool,
-            &pipelines,
-            &resources,
-            &graph,
-            &path,
-            fg,
-            bg,
-            width,
-            height,
-        )
-        .expect("warm-up render_stroke should succeed");
-
-    let t0 = Instant::now();
     let texture = renderer
         .render_stroke(
             &device,
@@ -69,7 +46,6 @@ fn renders_s_curve_over_black_background() {
             height,
         )
         .expect("render_stroke should return a texture for the default graph");
-    let elapsed_ms = t0.elapsed().as_secs_f32() * 1000.0;
 
     let pixels = readback_texture(
         &device,
@@ -119,16 +95,12 @@ fn renders_s_curve_over_black_background() {
         "expected bright pixels near the center along the S-curve"
     );
 
-    // Performance guard — steady-state only (warm-up render above paid
-    // for pipeline compile + texture alloc). The default graph at
-    // 320×120 / 30 dabs should render in well under 50 ms on native
-    // GPU backends; the 200 ms ceiling leaves headroom for CI's
-    // software-fallback backend without losing the ability to catch
-    // algorithmic regressions.
-    assert!(
-        elapsed_ms < 200.0,
-        "preview render took {elapsed_ms} ms, expected < 200 ms for default graph"
-    );
+    // Deliberately no wall-clock assertion here. Render time is dominated
+    // by the GPU backend: ~5-20 ms on native Vulkan/Metal, several
+    // hundred ms on CI's software fallback (lavapipe). Any bound loose
+    // enough for CI catches only cartoonish regressions; any bound tight
+    // enough to be meaningful flakes on CI. Perf tracking for this path
+    // belongs in a dedicated bench on hardware, not here.
 }
 
 #[test]
