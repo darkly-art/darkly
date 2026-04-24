@@ -1,67 +1,66 @@
-import type { ToastLevel } from './state/toast.svelte';
-
-export interface GpuCheckResult {
-    level: ToastLevel;
-    message: string;
-    isSoftware: boolean;
+export interface AdapterInfo {
+    vendor: string;
+    architecture: string;
+    device: string;
+    description: string;
 }
 
-/** Known software renderer identifiers (case-insensitive substring match). */
-const SOFTWARE_RENDERERS = [
-    'swiftshader',
-    'softpipe',
-    'llvmpipe',
-    'software rasterizer',
-    'microsoft basic render',
-];
+export type GpuCheckFailure =
+    | { reason: 'no-webgpu' }
+    | { reason: 'no-adapter' }
+    | { reason: 'fallback-adapter'; adapterInfo: AdapterInfo };
 
-function isSoftwareRenderer(description: string): boolean {
-    const lower = description.toLowerCase();
-    return SOFTWARE_RENDERERS.some(name => lower.includes(name));
+export type GpuCheckResult =
+    | { ok: true; adapterInfo: AdapterInfo }
+    | ({ ok: false } & GpuCheckFailure);
+
+const ADAPTER_RETRY_DELAY_MS = 150;
+
+async function requestAdapterWithRetry(): Promise<GPUAdapter | null> {
+    const first = await navigator.gpu.requestAdapter({
+        powerPreference: 'high-performance',
+    });
+    if (first) return first;
+
+    await new Promise(resolve => setTimeout(resolve, ADAPTER_RETRY_DELAY_MS));
+    return navigator.gpu.requestAdapter({
+        powerPreference: 'high-performance',
+    });
+}
+
+function readAdapterInfo(adapter: GPUAdapter): AdapterInfo {
+    const info = adapter.info;
+    return {
+        vendor: info.vendor ?? '',
+        architecture: info.architecture ?? '',
+        device: info.device ?? '',
+        description: info.description ?? '',
+    };
 }
 
 /**
- * Probes the WebGPU adapter to determine whether hardware acceleration
- * is active. Returns a toast-ready result plus an `isSoftware` flag
- * for passing into the WASM engine.
+ * Strict WebGPU availability check. Only fails on reliable signals:
+ * missing `navigator.gpu`, null adapter after one retry, or
+ * `adapter.info.isFallbackAdapter === true` (the W3C-spec signal that the
+ * browser itself fell back to software).
+ *
+ * Real-GPU users must never see a failure here.
  */
 export async function checkGpu(): Promise<GpuCheckResult> {
     if (!navigator.gpu) {
-        return {
-            level: 'error',
-            message: 'WebGPU is not supported in this browser.',
-            isSoftware: true,
-        };
+        return { ok: false, reason: 'no-webgpu' };
     }
 
-    const adapter = await navigator.gpu.requestAdapter({
-        powerPreference: 'high-performance',
-    });
-
+    const adapter = await requestAdapterWithRetry();
     if (!adapter) {
-        return {
-            level: 'error',
-            message: 'No GPU adapter found. Hardware acceleration may be disabled.',
-            isSoftware: true,
-        };
+        return { ok: false, reason: 'no-adapter' };
     }
 
-    const info = adapter.info;
-    const description = info.description || info.device || '';
-    const vendor = info.vendor || '';
-    const label = description || vendor || 'Unknown GPU';
+    const adapterInfo = readAdapterInfo(adapter);
 
-    if (info.isFallbackAdapter || isSoftwareRenderer(description) || isSoftwareRenderer(vendor)) {
-        return {
-            level: 'warning',
-            message: `Software renderer detected (${label}). Enable hardware acceleration for best performance.`,
-            isSoftware: true,
-        };
+    if (adapter.info.isFallbackAdapter) {
+        return { ok: false, reason: 'fallback-adapter', adapterInfo };
     }
 
-    return {
-        level: 'success',
-        message: `GPU: ${label}`,
-        isSoftware: false,
-    };
+    return { ok: true, adapterInfo };
 }

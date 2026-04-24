@@ -141,6 +141,12 @@ impl Config {
         d!("animation.veil_divisor", int 2);
         d!("animation.overlay_divisor", int 4);
 
+        // Rendering
+        // Fraction of native viewport resolution to render veils at.
+        // 1.0 = full res (default, no overhead). Values below 1.0 trigger a
+        // downscale → render → upscale path to trade veil quality for speed.
+        d!("rendering.veil_scale", float 1.0);
+
         // Input
         d!("input.fingerPainting", bool false);
 

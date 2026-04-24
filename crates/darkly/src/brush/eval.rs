@@ -96,6 +96,34 @@ impl EvalContext<'_> {
             None => t,
         }
     }
+
+    /// Deterministic pseudo-random scalar in `[0, 1)` keyed by `index`.
+    /// The PRNG is salted with this node's ID so multiple random-using
+    /// nodes in the same graph yield independent streams; the stroke
+    /// seed makes runs reproducible for replays and checkpoint restores.
+    ///
+    /// Callers pulling multiple independent values on a single dab
+    /// encode that into `index` — e.g. scatter uses `dab_index * 2` and
+    /// `dab_index * 2 + 1` for its x and y offsets.
+    #[inline]
+    pub fn prng_at(&self, index: u32) -> f32 {
+        let salt = self.node_id.0 as u32;
+        let seed = self.stroke_seed.wrapping_add(salt.wrapping_mul(0x9E3779B9));
+        prng_f32(seed, index)
+    }
+}
+
+/// Deterministic PRNG: hash seed + index to produce a 0-1 float.
+/// xorshift-style for speed; shared by all nodes via `EvalContext::prng_at`.
+#[inline]
+fn prng_f32(seed: u32, index: u32) -> f32 {
+    let mut h = seed.wrapping_add(index.wrapping_mul(2654435761));
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x45d9f3b);
+    h ^= h >> 16;
+    h = h.wrapping_mul(0x45d9f3b);
+    h ^= h >> 16;
+    (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
 }
 
 /// Canvas-space positioning info read from the graph's preview terminal

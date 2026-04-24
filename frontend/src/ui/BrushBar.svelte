@@ -142,7 +142,7 @@
                     title={port.description || undefined}
                     onpointerdown={(e) => {
                         e.preventDefault();
-                        const d = port.data as { kind: 'scalar'; value: number; min: number; max: number; unitType: string };
+                        const d = port.data as { kind: 'scalar'; value: number; min: number; max: number; default: number; unitType: string };
                         const startX = e.clientX;
                         const startVal = d.value;
                         const speed = exposedDragSpeed(d.min, d.max);
@@ -161,6 +161,10 @@
                         };
                         el.addEventListener('pointermove', onMove);
                         el.addEventListener('pointerup', onUp);
+                    }}
+                    ondblclick={() => {
+                        const d = port.data as { kind: 'scalar'; default: number };
+                        handleExposedPort(port.nodeId, port.portName, d.default);
                     }}
                 >
                     <i class="{port.icon || 'fa-solid fa-sliders'} scrub-icon"></i>

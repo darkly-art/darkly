@@ -3,9 +3,6 @@ pub struct GpuContext {
     pub queue: wgpu::Queue,
     pub surface: Option<wgpu::Surface<'static>>,
     pub surface_config: Option<wgpu::SurfaceConfiguration>,
-    /// True when running on a software renderer (e.g. llvmpipe, SwiftShader).
-    /// Determined by the caller (platform layer) and passed in at construction.
-    pub is_software: bool,
 }
 
 impl GpuContext {
@@ -16,16 +13,12 @@ impl GpuContext {
     /// `limits` controls device capability requirements (e.g.
     /// `Limits::downlevel_webgl2_defaults()` for WASM,
     /// `Limits::default()` for native).
-    ///
-    /// `is_software` should be set by the platform layer — e.g. on the web,
-    /// via `adapter.info.isFallbackAdapter` or renderer string matching.
     pub async fn new(
         instance: wgpu::Instance,
         surface: wgpu::Surface<'static>,
         limits: wgpu::Limits,
         initial_width: u32,
         initial_height: u32,
-        is_software: bool,
     ) -> Self {
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -66,14 +59,11 @@ impl GpuContext {
         };
         surface.configure(&device, &surface_config);
 
-        log::info!("GPU context: is_software = {is_software}");
-
         GpuContext {
             device,
             queue,
             surface: Some(surface),
             surface_config: Some(surface_config),
-            is_software,
         }
     }
 
@@ -85,7 +75,6 @@ impl GpuContext {
             queue,
             surface: None,
             surface_config: None,
-            is_software: true,
         }
     }
 

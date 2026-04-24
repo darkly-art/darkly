@@ -45,6 +45,7 @@ impl DarklyEngine {
         let graph: Graph<BrushWireType> =
             serde_json::from_str(json).map_err(|e| format!("JSON parse error: {e}"))?;
         self.active_brush_graph = graph;
+        self.snapshot_preset_defaults();
         // Run the post-mutation pipeline so the brush preview mask (and any
         // other graph-dependent state) refreshes from the new graph.
         self.compile_active()?;
@@ -54,38 +55,94 @@ impl DarklyEngine {
     /// Reset the active brush graph to the built-in default.
     pub fn reset_brush_graph(&mut self) {
         self.active_brush_graph = crate::brush::default_graph();
+        self.snapshot_preset_defaults();
         let _ = self.compile_active();
+    }
+
+    /// Capture every input port's current default into `preset_defaults`.
+    /// Called whenever the active graph is replaced as a whole — preset
+    /// load, reset, save — so that "reset to default" returns to the
+    /// loaded/saved baseline rather than the node-type registration value.
+    /// Not called on individual port edits; that's the whole point.
+    ///
+    /// Also captures the legacy `user_input` node's `value` param under
+    /// a synthetic ("value") key — that node surfaces in the toolbar via
+    /// the legacy compat path and needs the same reset semantics.
+    pub(crate) fn snapshot_preset_defaults(&mut self) {
+        self.preset_defaults.clear();
+        for node in self.active_brush_graph.nodes.values() {
+            for port in &node.ports {
+                if port.dir == PortDir::Input {
+                    self.preset_defaults
+                        .insert((node.id, port.name.clone()), port.default);
+                }
+            }
+            if node.type_id == "user_input" {
+                if let Some(ParamValue::Float(v)) = node.params.get(1) {
+                    self.preset_defaults
+                        .insert((node.id, "value".to_string()), *v);
+                }
+            }
+        }
     }
 
     // --- Fine-grained graph commands ---
 
     /// Re-render the brush preview into the overlay's preview mask using
     /// fully-synthetic pen inputs. Fired on graph/param changes where no
-    /// real pen data is available.
+    /// real pen data is available — clears any hover history so the next
+    /// hover starts fresh (no bogus direction carried across a preset
+    /// swap, etc.).
     pub fn regenerate_brush_preview(&mut self) {
+        self.last_preview_pose = None;
         let dummy = crate::brush::paint_info::PaintInformation::preview_dummy();
-        self.regenerate_brush_preview_with_pen(&dummy);
+        self.regenerate_brush_preview_with_pen_internal(dummy);
     }
 
-    /// Re-render the brush preview using the supplied pen data.
+    /// Drop the remembered hover pose so the next
+    /// `regenerate_brush_preview_with_pen` starts a fresh hover with no
+    /// derived direction/motion/distance/speed. Call this on pointer-leave
+    /// and at the start of a stroke.
+    pub fn clear_brush_preview_pose(&mut self) {
+        self.last_preview_pose = None;
+    }
+
+    /// Re-render the brush preview using live hover data.
     ///
-    /// Called by the brush tool on hover so the preview reflects live tilt
-    /// / rotation / pressure. `pen` carries whatever the PointerEvent
-    /// reported; fields the hardware doesn't populate should be zeroed
-    /// (tablet quirk: most pens report tilt even while hovering above the
-    /// canvas, so we plumb them through).
+    /// Pre-fills `pen`'s segment-derived sensors (drawing_angle, motion,
+    /// distance, speed) using the previous hover pose — the same helper
+    /// the stroke engine uses — so a compiled graph wiring any sensor
+    /// into any input sees the same values the upcoming stroke would.
     ///
-    /// Dispatches the graph through `render_preview_pipeline` — each GPU
-    /// node's `render_preview` hook runs (defaults to `evaluate_gpu`,
-    /// terminals override). The terminal that owns the preview reads the
-    /// `brush_preview` input texture, blits it into the overlay's preview
-    /// mask, and publishes placement info via `gpu.brush_preview_info`.
-    ///
-    /// No-op with cleared state when the graph has no `brush_preview`
-    /// wire connected.
+    /// The rest of `pen` (pos, pressure, tilts, rotation,
+    /// tangential_pressure, time) comes from the PointerEvent; tilt
+    /// magnitude/direction are derived from the reported tilts. The pose
+    /// is stored for the next call's derivation.
     pub fn regenerate_brush_preview_with_pen(
         &mut self,
-        pen: &crate::brush::paint_info::PaintInformation,
+        mut pen: crate::brush::paint_info::PaintInformation,
+    ) {
+        // Chord length between the previous and current hover positions.
+        // Chord rather than Catmull-Rom arc length — there is no spline
+        // through a single sample.
+        let segment_length = match &self.last_preview_pose {
+            Some(prev) => {
+                let dx = pen.pos[0] - prev.pos[0];
+                let dy = pen.pos[1] - prev.pos[1];
+                (dx * dx + dy * dy).sqrt()
+            }
+            None => 0.0,
+        };
+        pen.derive_sensors(self.last_preview_pose.as_ref(), segment_length);
+        self.last_preview_pose = Some(pen);
+        self.regenerate_brush_preview_with_pen_internal(pen);
+    }
+
+    /// Shared render body — no pose tracking, no sensor derivation.
+    /// `pen` must already be fully populated by the caller.
+    fn regenerate_brush_preview_with_pen_internal(
+        &mut self,
+        pen: crate::brush::paint_info::PaintInformation,
     ) {
         use crate::brush::gpu_context::BrushGpuContext;
 
@@ -161,7 +218,7 @@ impl DarklyEngine {
 
         self.brush_pipelines.reset_uniform_rings();
         runner.clear_slots();
-        runner.seed_sensors(pen, [1.0, 1.0, 1.0, 1.0], 0, 0);
+        runner.seed_sensors(&pen, [1.0, 1.0, 1.0, 1.0], 0, 0);
         runner.execute_cpu();
         runner.render_preview_pipeline(&mut gpu_ctx);
 
@@ -457,6 +514,16 @@ impl DarklyEngine {
                 let description =
                     reg_port.map_or_else(|| port.description.clone(), |rp| rp.description.clone());
 
+                // Reset target = the value snapshotted at preset load
+                // time. Falls back to the registration default for ports
+                // on nodes the user added after load (those weren't part
+                // of the preset, so registration default is the right
+                // baseline).
+                let reset_default = self
+                    .preset_defaults
+                    .get(&(node.id, port.name.clone()))
+                    .copied()
+                    .unwrap_or_else(|| reg_port.map(|rp| rp.default).unwrap_or(port.default));
                 result.push(ExposedPortInfo {
                     node_id: node.id.0,
                     port_name: port.name.clone(),
@@ -469,6 +536,7 @@ impl DarklyEngine {
                         value: unit_type.to_display(port.default),
                         min: unit_type.to_display(port.min),
                         max: unit_type.to_display(port.max),
+                        default: unit_type.to_display(reset_default),
                         unit_type,
                     },
                 });
@@ -533,6 +601,15 @@ impl DarklyEngine {
             _ => UnitType::Percent, // 0 = percent
         };
 
+        // Reset target = snapshotted preset value if available; otherwise
+        // fall back to the midpoint of the user-defined range (legacy
+        // user_input nodes don't have a registration default to reach
+        // for, since the value is itself a node param).
+        let reset_default = self
+            .preset_defaults
+            .get(&(node.id, "value".to_string()))
+            .copied()
+            .unwrap_or((min + max) * 0.5);
         Some(ExposedPortInfo {
             node_id: node.id.0,
             port_name: "value".to_string(),
@@ -545,6 +622,7 @@ impl DarklyEngine {
                 value,
                 min,
                 max,
+                default: reset_default,
                 unit_type,
             },
         })
@@ -628,6 +706,9 @@ pub enum ExposedValue {
         min: f32,
         /// Display-space maximum.
         max: f32,
+        /// Display-space default — what double-click reset returns to.
+        /// Sourced from the node-type registration, not the loaded preset.
+        default: f32,
         /// Unit type for formatting and conversion.
         #[serde(rename = "unitType")]
         unit_type: UnitType,

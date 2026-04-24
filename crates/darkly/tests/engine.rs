@@ -357,3 +357,82 @@ fn scatter_brush_survives_checkpoint_restore() {
          unscattered bbox because checkpoint restore wipes outside-bbox pixels"
     );
 }
+
+// ============================================================================
+// pen_input.spacing port controls dab spacing
+// ============================================================================
+
+/// Sum of alpha across the canvas — proxy for "amount of paint deposited."
+fn alpha_sum(pixels: &[u8], w: u32, h: u32) -> u64 {
+    let mut s: u64 = 0;
+    for y in 0..h {
+        for x in 0..w {
+            s += alpha_at(pixels, w, x, y) as u64;
+        }
+    }
+    s
+}
+
+fn paint_horizontal_stroke(engine: &mut DarklyEngine, layer_id: u64, w: u32, h: u32) {
+    engine.begin_stroke(layer_id);
+    let samples = 40;
+    for i in 0..samples {
+        let t = i as f32 / (samples - 1) as f32;
+        let x = 16.0 + t * (w as f32 - 32.0);
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y: (h / 2) as f32,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: i as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+}
+
+/// Setting `pen_input.spacing` to a larger ratio drops fewer dabs along the
+/// stroke, so total deposited alpha is lower than at the default 10%.
+/// Guards the wiring from `pen_input.spacing` port → `SpacingConfig.ratio`.
+#[test]
+fn pen_input_spacing_port_controls_dab_density() {
+    let (w, h) = (256, 256);
+
+    // Baseline: default spacing (port default = 0.10).
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+    let pen_id = find_node_id(&engine, "pen_input");
+    engine
+        .brush_graph_set_port_default(pen_id, "spacing", 0.10)
+        .expect("default spacing port must exist");
+    paint_horizontal_stroke(&mut engine, layer_id, w, h);
+    let dense_alpha = alpha_sum(&engine.test_readback_layer(layer_id), w, h);
+
+    // Sparse: 100% spacing — dabs separated by a full diameter.
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+    let pen_id = find_node_id(&engine, "pen_input");
+    engine
+        .brush_graph_set_port_default(pen_id, "spacing", 1.0)
+        .expect("spacing port must exist");
+    paint_horizontal_stroke(&mut engine, layer_id, w, h);
+    let sparse_alpha = alpha_sum(&engine.test_readback_layer(layer_id), w, h);
+
+    // 100% spacing (dabs separated by a full diameter) means each pixel
+    // is touched by at most ~1 soft dab, vs. ~10× overlap at 10%. Soft
+    // tips with falloff don't yield a 10× alpha ratio (each pixel saturates),
+    // but the difference is comfortably more than 25%.
+    assert!(
+        sparse_alpha * 4 < dense_alpha * 3,
+        "expected 100% spacing to deposit noticeably less paint than 10%; \
+         got dense={dense_alpha}, sparse={sparse_alpha} (sparse/dense = {:.2})",
+        sparse_alpha as f64 / dense_alpha as f64
+    );
+}

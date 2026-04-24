@@ -64,7 +64,7 @@ impl LaplacianStabilizer {
             return;
         }
 
-        let iterations = (self.strength * 5.0).ceil() as u32;
+        let iterations = (self.strength * 10.0).ceil() as u32;
         let s = self.strength;
 
         for _ in 0..iterations {
@@ -174,7 +174,7 @@ impl StabilizerAlgorithm for LaplacianStabilizer {
         if self.strength == 0.0 {
             return 0;
         }
-        let iterations = (self.strength * 5.0).ceil() as usize;
+        let iterations = (self.strength * 10.0).ceil() as usize;
         iterations * 10 + 5
     }
 

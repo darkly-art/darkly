@@ -173,8 +173,8 @@
 <style>
     .color-picker {
         position: absolute;
-        left: 48px;
-        top: 4px;
+        left: 45px;
+        bottom: 45px;
         background: var(--bg-active);
         border: 1px solid var(--bg-hover);
         border-radius: 6px;

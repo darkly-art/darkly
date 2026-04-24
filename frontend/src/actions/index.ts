@@ -110,18 +110,30 @@ export function registerActions() {
             readImageFromClipboard().then(clip => {
                 if (!clip || !app.handle) return;
 
-                // If brush builder is open with a selected Image node,
-                // paste into that node instead of the main canvas.
-                if (brushGraph.isOpen && brushGraph.selectedNode != null) {
-                    const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];
-                    if (node?.type_id === 'image') {
+                // If the brush builder is open, paste into the node editor
+                // instead of the main canvas.  Fill the selected Image node
+                // when there is one; otherwise spawn a new Image node.
+                if (brushGraph.isOpen) {
+                    let nodeId: number | null = null;
+                    if (brushGraph.selectedNode != null) {
+                        const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];
+                        if (node?.type_id === 'image') nodeId = brushGraph.selectedNode;
+                    }
+                    if (nodeId == null) {
+                        const count = brushGraph.nodeList.length;
+                        const x = 100 + (count % 4) * 180;
+                        const y = 50 + Math.floor(count / 4) * 120;
+                        nodeId = brushGraph.addNode('image', x, y);
+                    }
+                    if (nodeId != null) {
                         brushGraph.uploadImageToNode(
-                            brushGraph.selectedNode,
-                            `image_${brushGraph.selectedNode}`,
+                            nodeId,
+                            `image_${nodeId}`,
                             clip.rgba,
                             clip.width,
                             clip.height,
                         );
+                        brushGraph.selectedNode = nodeId;
                         return;
                     }
                 }

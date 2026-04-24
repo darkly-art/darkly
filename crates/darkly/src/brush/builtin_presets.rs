@@ -197,6 +197,15 @@ impl PresetBuilder {
         )
     }
 
+    /// Add a multiply node (Scalar × Scalar → Scalar).
+    fn add_multiply(&mut self) -> NodeId {
+        self.graph.add_node(
+            "multiply",
+            self.registry.get("multiply").unwrap().ports.clone(),
+            vec![],
+        )
+    }
+
     /// Add a random node. `mode`: 0 = per-dab, 1 = per-stroke.
     fn add_random(&mut self, mode: i32) -> NodeId {
         self.graph.add_node(
@@ -411,6 +420,9 @@ fn calligraphy() -> PresetBundle {
     b.wire(b.pen, "tilt_direction", b.stamp, "rotation");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.set_stabilize(0.6);
+    // Tighter spacing than the 10% default — calligraphic strokes need
+    // smooth edges as the angled tip rotates with tilt direction.
+    b.set_port(b.pen, "spacing", 0.05);
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/calligraphy.png");
     b.build_with_resources(
@@ -425,8 +437,13 @@ fn textured_ink() -> PresetBundle {
     b.add_image("ink_dry.png");
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.pen, "pressure", b.stamp, "flow");
+    // random.value is in -1..1; stamp.rotation wants radians. Scale by π
+    // so rotation jitters across a full turn (-π..π).
     let rand_rot = b.add_random(0);
-    b.wire(rand_rot, "value", b.stamp, "rotation");
+    let scale_rot = b.add_multiply();
+    b.set_port(scale_rot, "b", std::f32::consts::PI);
+    b.wire(rand_rot, "value", scale_rot, "a");
+    b.wire(scale_rot, "result", b.stamp, "rotation");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");
@@ -584,6 +601,17 @@ fn liquify_push() -> PresetBundle {
     // size / strength / softness are already `.exposed()` on the liquify
     // node-def, so the toolbar picks them up without extra preset work.
 
+    // Tighten dab spacing well below the paint default (10%). Liquify's
+    // per-dab displacement is ~25% of radius (DRAG_FACTOR in liquify.rs),
+    // so spacing must be much smaller for warps to accumulate smoothly.
+    // 4% is the port floor — anything lower kills stabilizer performance.
+    graph.set_port_default(pen, "spacing", 0.04).unwrap();
+
+    // Compensate the per-dab strength for the ~2.5× denser dabs — total
+    // accumulated displacement along the stroke stays roughly what it was
+    // at the old 10% spacing / 0.5 strength combination. Tune empirically.
+    graph.set_port_default(liquify, "strength", 0.2).unwrap();
+
     let mut preset = BrushPreset::from_graph("Liquify", graph);
     preset.category = "effects".to_string();
     PresetBundle::without_resources(preset)
@@ -653,5 +681,31 @@ mod tests {
         names.sort();
         names.dedup();
         assert_eq!(names.len(), presets.len(), "duplicate preset names");
+    }
+
+    /// Liquify needs much tighter spacing than the paint default — its
+    /// per-dab displacement is ~25% of radius, so spacing must be well
+    /// below that for warps to compose smoothly. Don't let this drift back
+    /// to the default 10%.
+    #[test]
+    fn liquify_preset_has_tight_spacing() {
+        let bundle = liquify_push();
+        let pen = bundle
+            .preset
+            .graph
+            .nodes
+            .values()
+            .find(|n| n.type_id == "pen_input")
+            .expect("liquify preset has a pen_input node");
+        let spacing = pen
+            .ports
+            .iter()
+            .find(|p| p.name == "spacing")
+            .expect("pen_input has a spacing port");
+        assert!(
+            spacing.default <= 0.05,
+            "liquify spacing default is {}, expected <= 5% for smooth warps",
+            spacing.default
+        );
     }
 }

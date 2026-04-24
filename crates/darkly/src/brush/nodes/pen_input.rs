@@ -27,7 +27,7 @@ pub fn register() -> BrushNodeRegistration {
                 "How far the pen is tilted from vertical (0 = upright, 1 = flat)",
             ),
             PortDef::output("tilt_direction", BrushWireType::Scalar)
-                .with_description("Compass direction of pen tilt (0\u{2013}1 wrapping, 0 = right)"),
+                .with_description("Compass direction of pen tilt in radians (0 = right, π/2 = down)"),
             PortDef::output("rotation", BrushWireType::Scalar)
                 .with_description("Barrel rotation of the pen around its own axis (0\u{2013}1)"),
             PortDef::output("tangential_pressure", BrushWireType::Scalar)
@@ -37,7 +37,7 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::output("distance", BrushWireType::Scalar)
                 .with_description("Cumulative distance traveled along the stroke (pixels)"),
             PortDef::output("drawing_angle", BrushWireType::Scalar)
-                .with_description("Direction of motion along the stroke (0\u{2013}1, 0 = right)"),
+                .with_description("Direction of motion along the stroke in radians (0 = right, π/2 = down). Wire to `stamp.rotation` for brushes that face the stroke."),
             PortDef::output("time", BrushWireType::Scalar)
                 .with_description("Elapsed time since the stroke began (seconds)"),
             PortDef::output("position", BrushWireType::Vec2)
@@ -58,6 +58,21 @@ pub fn register() -> BrushNodeRegistration {
                 .with_label("Stabilize")
                 .with_description(
                     "Stroke stabilization strength (0 = off, 100% = maximum smoothing)",
+                ),
+            // Dab spacing — read at stroke start as a fraction of the dab
+            // diameter. Like `stabilize`, this is preset-level config that
+            // currently lives here because the engine reads pen_input port
+            // defaults out-of-band; both move together when the brush
+            // settings bar gets redesigned.
+            PortDef::input("spacing", BrushWireType::Scalar)
+                .with_range(0.04, 1.0, 0.10)
+                .with_unit(UnitType::Percent)
+                .with_icon("fa-solid fa-grip-lines-vertical")
+                .with_label("Spacing")
+                .with_description(
+                    "Distance between dabs as a fraction of dab diameter. \
+                     10% is the paint default; warp/smudge brushes typically want 4\u{2013}5%. \
+                     Floor of 4% — anything lower swamps the stabilizer.",
                 ),
         ],
         params: &[],

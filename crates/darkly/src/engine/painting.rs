@@ -30,6 +30,23 @@ impl DarklyEngine {
         0.0
     }
 
+    /// Read the dab spacing ratio from the pen_input node's "spacing" port
+    /// default. Falls back to `SpacingConfig::default().ratio` for graphs
+    /// that predate the port (loaded from older presets).
+    fn pen_input_spacing_ratio(&self) -> f32 {
+        use crate::nodegraph::PortDir;
+        for node in self.active_brush_graph.nodes.values() {
+            if node.type_id == "pen_input" {
+                for port in &node.ports {
+                    if port.name == "spacing" && port.dir == PortDir::Input {
+                        return port.default;
+                    }
+                }
+            }
+        }
+        SpacingConfig::default().ratio
+    }
+
     /// Flush any pending diff-based undo commit. Called before overwriting the
     /// scratch texture (e.g. at the start of a new stroke). Uses Poll (not Wait)
     /// — if the diff hasn't completed yet, falls back to a full-canvas rect.
@@ -353,7 +370,10 @@ impl DarklyEngine {
             self.brush_stroke_engine = Some(StrokeEngine::new(
                 runner,
                 color,
-                SpacingConfig::default(),
+                SpacingConfig {
+                    ratio: self.pen_input_spacing_ratio(),
+                    ..SpacingConfig::default()
+                },
                 stabilizer,
             ));
 

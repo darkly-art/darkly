@@ -1,10 +1,21 @@
 use crate::gpu::effect::{self, EffectCache, EffectPipeline};
-use crate::gpu::veil::{budget_scaled_dimensions, ParamValue, Veil, VeilRegistry};
+use crate::gpu::veil::{ParamValue, Veil, VeilRegistry};
 
-/// Per-veil reduced-resolution resources for CPU rendering.
-/// Created when a veil declares a `cpu_pixel_budget` and we're on a
-/// software renderer. The veil chain handles downscale/upscale around
-/// the veil — the veil itself is resolution-agnostic.
+/// Fraction of native viewport resolution to render veils at. Read from
+/// the `rendering.veil_scale` config key each frame; changes trigger a
+/// rebuild of per-veil scaling resources.
+const FULL_SCALE_EPSILON: f32 = 1.0e-3;
+const MIN_VEIL_SCALE: f32 = 0.05;
+
+fn config_veil_scale() -> f32 {
+    let v = crate::config::get_f64("rendering.veil_scale") as f32;
+    v.clamp(MIN_VEIL_SCALE, 1.0)
+}
+
+/// Per-veil reduced-resolution resources. Created when
+/// `rendering.veil_scale` < 1.0 — the veil chain downscales its input,
+/// runs the veil at reduced resolution, and upscales the output. Veils
+/// themselves are resolution-agnostic and never see the distinction.
 struct VeilScaling {
     /// Kept alive so the GPU textures aren't dropped.
     _textures: [wgpu::Texture; 2],
@@ -43,8 +54,10 @@ pub struct VeilChain {
     viewport_width: u32,
     viewport_height: u32,
     accum_format: wgpu::TextureFormat,
-    /// True when running on a software renderer (CPU).
-    is_software: bool,
+    /// Last applied `rendering.veil_scale` value. Resources were built for
+    /// this scale; `sync_resolution_scale` rebuilds them if it drifts from
+    /// the current config value.
+    applied_scale: f32,
     /// Set when structural changes occur (add/remove/visibility/reorder).
     /// Animation-driven re-renders are handled by the compositor's frame scheduler.
     needs_present: bool,
@@ -56,7 +69,6 @@ impl VeilChain {
         sampler: wgpu::Sampler,
         surface_format: wgpu::TextureFormat,
         accum_format: wgpu::TextureFormat,
-        is_software: bool,
     ) -> Self {
         let registry = VeilRegistry::new();
         let blit_pipeline = effect::create_blit_pipeline(device, surface_format, "blit-to-surface");
@@ -73,8 +85,24 @@ impl VeilChain {
             viewport_width: 0,
             viewport_height: 0,
             accum_format,
-            is_software,
+            applied_scale: config_veil_scale(),
             needs_present: false,
+        }
+    }
+
+    /// Re-read `rendering.veil_scale` from config and, if it changed since
+    /// the last call, rebuild per-veil scaling resources. Called once per
+    /// frame by the compositor — no-op when the value is unchanged or no
+    /// veils are active.
+    pub fn sync_resolution_scale(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let desired = config_veil_scale();
+        if (self.applied_scale - desired).abs() < FULL_SCALE_EPSILON {
+            return;
+        }
+        self.applied_scale = desired;
+        if !self.entries.is_empty() {
+            self.recreate_resources(device, queue);
+            self.needs_present = true;
         }
     }
 
@@ -120,7 +148,7 @@ impl VeilChain {
             self.accum_format,
             self.viewport_width,
             self.viewport_height,
-            self.is_software,
+            self.applied_scale,
         );
         self.entries.push(VeilEntry {
             veil,
@@ -194,7 +222,7 @@ impl VeilChain {
             self.accum_format,
             self.viewport_width,
             self.viewport_height,
-            self.is_software,
+            self.applied_scale,
         );
         let visible = self.entries[index].visible;
         self.entries[index] = VeilEntry {
@@ -376,9 +404,10 @@ impl VeilChain {
 
     // --- Internal helpers ---
 
-    /// Ensure the scaling blit pipeline exists (needed for CPU-scaled veils).
+    /// Ensure the scaling blit pipeline exists (needed when veils render at
+    /// reduced resolution).
     fn ensure_scaling_pipeline(&mut self, device: &wgpu::Device) {
-        if self.is_software && self.scaling_pipeline.is_none() {
+        if self.applied_scale < 1.0 - FULL_SCALE_EPSILON && self.scaling_pipeline.is_none() {
             self.scaling_pipeline = Some(effect::create_blit_pipeline(
                 device,
                 self.accum_format,
@@ -471,7 +500,7 @@ impl VeilChain {
                 self.accum_format,
                 self.viewport_width,
                 self.viewport_height,
-                self.is_software,
+                self.applied_scale,
             );
             entry.cache = cache;
             entry.scaling = scaling;
@@ -482,9 +511,9 @@ impl VeilChain {
 // --- Free functions ---
 
 /// Create the veil's EffectCache and optional VeilScaling.
-/// If the veil declares a `cpu_pixel_budget` and we're on CPU,
-/// creates reduced-res textures and passes those to the veil.
-/// Otherwise passes the native ping-pong views directly.
+/// At full scale (1.0) the veil reads and writes the native ping-pong
+/// views directly. Below 1.0 we allocate reduced-resolution textures and
+/// the encoder wraps the veil in downscale/upscale passes.
 fn create_veil_resources(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -495,21 +524,9 @@ fn create_veil_resources(
     accum_format: wgpu::TextureFormat,
     viewport_width: u32,
     viewport_height: u32,
-    is_software: bool,
+    scale: f32,
 ) -> (Option<VeilScaling>, EffectCache) {
-    let budget = if is_software {
-        veil.cpu_pixel_budget()
-    } else {
-        None
-    };
-
-    if let Some(pixel_budget) = budget {
-        let (rw, rh) = budget_scaled_dimensions(viewport_width, viewport_height, pixel_budget);
-        let sp = scaling_pipeline.expect("scaling pipeline must exist for CPU-scaled veils");
-        let scaling = create_veil_scaling(device, sampler, sp, accum_format, rw, rh, native_views);
-        let cache = veil.create_cache(device, queue, &scaling.views, sampler, rw, rh);
-        (Some(scaling), cache)
-    } else {
+    if scale >= 1.0 - FULL_SCALE_EPSILON {
         let cache = veil.create_cache(
             device,
             queue,
@@ -518,8 +535,15 @@ fn create_veil_resources(
             viewport_width,
             viewport_height,
         );
-        (None, cache)
+        return (None, cache);
     }
+
+    let rw = ((viewport_width as f32 * scale).round() as u32).max(1);
+    let rh = ((viewport_height as f32 * scale).round() as u32).max(1);
+    let sp = scaling_pipeline.expect("scaling pipeline must exist for scaled veils");
+    let scaling = create_veil_scaling(device, sampler, sp, accum_format, rw, rh, native_views);
+    let cache = veil.create_cache(device, queue, &scaling.views, sampler, rw, rh);
+    (Some(scaling), cache)
 }
 
 /// Create per-veil reduced-resolution textures and scaling bind groups.

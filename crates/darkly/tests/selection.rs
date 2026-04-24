@@ -637,6 +637,50 @@ fn selection_undo_redo() {
     );
 }
 
+/// Regression test: undoing an Add after a narrower Replace (which followed
+/// a wider selection) must not restore stale pixels outside the pre-Add bounds.
+///
+/// The R8 scratch used for selection undo is reused across ops. A prior
+/// full-canvas `save_region` would leave 1s in scratch outside the current
+/// selection bounds. A subsequent Add operation would then save a tight
+/// old-bounds rect into scratch but commit a full-canvas rect — picking up
+/// those stale 1s and restoring them to the texture on undo.
+#[test]
+fn selection_add_undo_does_not_restore_stale_pixels() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+
+    // Pollute the R8 scratch: select_all then narrow to a left band.
+    // The narrow replace's save_region captures the full-canvas 1s state.
+    engine.select_all();
+    engine.select_rect(0.0, 0.0, 32.0, h as f32, SelectionMode::Replace, false, 0.0);
+
+    // Add a disjoint right band (shift-modifier path).
+    engine.select_rect(96.0, 0.0, 32.0, h as f32, SelectionMode::Add, false, 0.0);
+
+    // Undo the Add — selection must revert to just the left band.
+    engine.undo();
+
+    paint_full_stroke(&mut engine, layer_id, w, h);
+    let px = engine.test_readback_layer(layer_id);
+
+    assert!(
+        alpha_at(&px, w, 16, h / 2) > 0,
+        "left band should still be selected after undoing the Add"
+    );
+    assert_eq!(
+        alpha_at(&px, w, 64, h / 2),
+        0,
+        "middle was never selected — must stay unpainted after undo"
+    );
+    assert_eq!(
+        alpha_at(&px, w, 112, h / 2),
+        0,
+        "right band was added then undone — must stay unpainted"
+    );
+}
+
 // ============================================================================
 // Clear selection contents (delete key)
 // ============================================================================

@@ -32,18 +32,6 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
-/// Deterministic PRNG: hash seed + index to produce a 0-1 float.
-/// Uses a simple xorshift-style hash for speed.
-fn prng_f32(seed: u32, index: u32) -> f32 {
-    let mut h = seed.wrapping_add(index.wrapping_mul(2654435761));
-    h ^= h >> 16;
-    h = h.wrapping_mul(0x45d9f3b);
-    h ^= h >> 16;
-    h = h.wrapping_mul(0x45d9f3b);
-    h ^= h >> 16;
-    (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
-}
-
 pub struct RandomEvaluator;
 
 impl BrushNodeEvaluator for RandomEvaluator {
@@ -53,14 +41,9 @@ impl BrushNodeEvaluator for RandomEvaluator {
             _ => 0,
         };
 
-        // Salt the stroke seed with this node's ID so multiple random
-        // nodes in the same graph produce independent sequences.
-        let salt = ctx.node_id.0 as u32;
-        let salted_seed = ctx.stroke_seed.wrapping_add(salt.wrapping_mul(0x9E3779B9));
-
         let raw = match mode {
-            1 => prng_f32(salted_seed, 0),             // per-stroke: constant
-            _ => prng_f32(salted_seed, ctx.dab_index), // per-dab: varies
+            1 => ctx.prng_at(0),             // per-stroke: constant
+            _ => ctx.prng_at(ctx.dab_index), // per-dab: varies
         };
 
         // Map 0..1 → -1..1
