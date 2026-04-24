@@ -113,7 +113,9 @@ fn install_bar_tip(engine: &mut DarklyEngine) -> (NodeId, u64) {
             pixels[idx + 3] = 255;
         }
     }
-    engine.brush_upload_image("test-bar", N, N, &pixels).unwrap();
+    engine
+        .brush_upload_image("test-bar", N, N, &pixels)
+        .unwrap();
 
     (stamp_id, image_id)
 }

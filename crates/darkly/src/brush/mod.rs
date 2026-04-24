@@ -617,8 +617,7 @@ mod tests {
         graph.set_port_default(jit_b, "amount", 0.25).unwrap();
 
         let evaluators = default_evaluators();
-        let mut runner =
-            BrushGraphRunner::new(&graph, registry.as_map(), evaluators).unwrap();
+        let mut runner = BrushGraphRunner::new(&graph, registry.as_map(), evaluators).unwrap();
 
         let slot_a = runner.find_node_output_slot(jit_a, "value").unwrap();
         let slot_b = runner.find_node_output_slot(jit_b, "value").unwrap();
@@ -651,7 +650,7 @@ mod tests {
             );
             // B must stay within input ± amount.
             assert!(
-                b >= 0.25 - 1e-6 && b <= 0.75 + 1e-6,
+                (0.25 - 1e-6..=0.75 + 1e-6).contains(&b),
                 "jitter with input=0.5 amount=0.25 out of bounds: {b}"
             );
 
