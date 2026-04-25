@@ -1,6 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
+    import { config } from '../../config/store.svelte';
     import BrushPreview from './BrushPreview.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
     import NodePalette from './NodePalette.svelte';
@@ -30,53 +31,30 @@
 
     let fullscreen = $state(false);
 
-    /** Brush preview visibility. Persisted per-browser via localStorage so the
-     *  user's choice survives across sessions. */
-    const PREVIEW_STORAGE_KEY = 'darkly.brush-preview-visible';
-    function loadPreviewVisible(): boolean {
-        try {
-            const raw = localStorage.getItem(PREVIEW_STORAGE_KEY);
-            if (raw === null) return true; // default on
-            return raw !== '0';
-        } catch {
-            return true;
-        }
-    }
-    let previewVisible = $state(loadPreviewVisible());
+    /** Brush preview visibility. Persisted via the unified config store
+     *  (`ui.brushBuilder.previewVisible` — declared as `Hidden` in the Rust
+     *  schema so it's stored but not exposed in the Settings modal). */
+    const previewVisible = $derived((config.get('ui.brushBuilder.previewVisible') as boolean | undefined) ?? true);
     function togglePreview() {
-        previewVisible = !previewVisible;
-        try {
-            localStorage.setItem(PREVIEW_STORAGE_KEY, previewVisible ? '1' : '0');
-        } catch {
-            // Private mode / disabled storage — visibility still toggles
-            // for the current session, just doesn't persist.
-        }
+        config.set('ui.brushBuilder.previewVisible', !previewVisible);
     }
 
     // --- Resizable preview dimensions ---
 
-    const PREVIEW_SIZE_STORAGE_KEY = 'darkly.brush-preview-size';
-    const DEFAULT_PREVIEW_SIZE = { w: 320, h: 120 };
-    /** Minimum renderable size — below this, the S-curve is too cramped to
-     *  read. Upper bound keeps one careless drag from consuming the whole
-     *  editor; WASM renders are still cheap at that size. */
+    // Bounds live in the schema (`ui.brushBuilder.previewWidth/Height`).
+    // Local clamps match the schema bounds so `config.set` never receives an
+    // out-of-range value; if the schema bounds change, the validator on load
+    // will clamp existing stored values.
     const MIN_W = 160, MIN_H = 60;
     const MAX_W = 800, MAX_H = 400;
 
-    function loadPreviewSize(): { w: number; h: number } {
-        try {
-            const raw = localStorage.getItem(PREVIEW_SIZE_STORAGE_KEY);
-            if (!raw) return { ...DEFAULT_PREVIEW_SIZE };
-            const parsed = JSON.parse(raw);
-            const w = Math.max(MIN_W, Math.min(MAX_W, Math.round(parsed?.w ?? DEFAULT_PREVIEW_SIZE.w)));
-            const h = Math.max(MIN_H, Math.min(MAX_H, Math.round(parsed?.h ?? DEFAULT_PREVIEW_SIZE.h)));
-            return { w, h };
-        } catch {
-            return { ...DEFAULT_PREVIEW_SIZE };
-        }
-    }
+    const configW = $derived((config.get('ui.brushBuilder.previewWidth') as number | undefined) ?? 320);
+    const configH = $derived((config.get('ui.brushBuilder.previewHeight') as number | undefined) ?? 120);
 
-    let previewSize = $state(loadPreviewSize());
+    // During a drag, track size locally for 60fps responsiveness without a
+    // WASM hop per frame; on `endResize` we persist the final value.
+    let liveSize = $state<{ w: number; h: number } | null>(null);
+    const previewSize = $derived(liveSize ?? { w: configW, h: configH });
 
     let resizing = false;
     let startClientX = 0;
@@ -92,6 +70,7 @@
         startClientY = e.clientY;
         startW = previewSize.w;
         startH = previewSize.h;
+        liveSize = { w: startW, h: startH };
         (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
         // Suppress the engine's continuous render loop so resize pointer
         // events stay on the hot path.
@@ -107,8 +86,8 @@
         const dy = e.clientY - startClientY;
         const w = Math.max(MIN_W, Math.min(MAX_W, Math.round(startW - dx)));
         const h = Math.max(MIN_H, Math.min(MAX_H, Math.round(startH - dy)));
-        if (w !== previewSize.w || h !== previewSize.h) {
-            previewSize = { w, h };
+        if (!liveSize || w !== liveSize.w || h !== liveSize.h) {
+            liveSize = { w, h };
         }
     }
 
@@ -117,15 +96,11 @@
         resizing = false;
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
         app.endInteraction();
-        try {
-            localStorage.setItem(
-                PREVIEW_SIZE_STORAGE_KEY,
-                JSON.stringify(previewSize),
-            );
-        } catch {
-            // Private mode / disabled storage — size still applies for
-            // this session, just doesn't persist.
+        if (liveSize) {
+            config.set('ui.brushBuilder.previewWidth', liveSize.w);
+            config.set('ui.brushBuilder.previewHeight', liveSize.h);
         }
+        liveSize = null;
     }
 
     function onKeydown(e: KeyboardEvent) {

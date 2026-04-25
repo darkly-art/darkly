@@ -18,6 +18,11 @@ fn main() {
         &src.join("brush/stabilizers"),
         "crate::brush::stabilizer::StabilizerRegistration",
     );
+
+    generate_registry(
+        &src.join("config/sections"),
+        "crate::config::schema::SchemaSection",
+    );
 }
 
 /// Scan a directory for .rs module files (excluding mod.rs) and generate

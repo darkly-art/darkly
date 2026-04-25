@@ -1,6 +1,7 @@
 import { actions, sites } from './registry';
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
+import { settings } from '../state/settings.svelte';
 import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
@@ -244,6 +245,15 @@ export function registerActions() {
             if (layerId == null || !app.handle) return;
             toggleIsolation(layerId, true);
         },
+    });
+
+    // -- View --
+    actions.register({
+        id: 'openSettings',
+        displayName: 'Open Settings',
+        category: 'view',
+        description: 'Show the preferences modal.',
+        handler: () => { settings.open = true; },
     });
 }
 

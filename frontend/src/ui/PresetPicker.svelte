@@ -1,54 +1,33 @@
 <script lang="ts">
     import { config } from '../config/store.svelte';
-    import { actions } from '../actions/registry';
-    import { registerHotkeys } from '../config/hotkeys.svelte';
+    import Modal from './Modal.svelte';
 
     function pick(name: string) {
-        config.applyPreset(name);
-        config.needsPresetChoice = false;
-        // Re-register hotkeys only if actions are already registered
-        // (initEditor may not have run yet — it will call registerHotkeys itself)
-        if (actions.ids().length > 0) {
-            registerHotkeys();
-        }
+        // Auto-creates the user's first writable preset, seeded from this
+        // built-in template, and switches to it. After this, the user is just
+        // editing settings; the template name is forgotten.
+        void config.pickInitialTemplate(name);
     }
 </script>
 
-{#if config.needsPresetChoice}
-    <div class="backdrop">
-        <div class="modal">
-            <h2>Choose your keybinding preset</h2>
-            <p>This sets keyboard shortcuts and modifier behaviors. You can change it later in settings.</p>
-            <div class="presets">
-                {#each config.presets as preset}
-                    <button class="preset-btn" onclick={() => pick(preset.name)}>
-                        <span class="preset-name">{preset.name}</span>
-                        <span class="preset-desc">{preset.description}</span>
-                    </button>
-                {/each}
-            </div>
+<Modal bind:open={config.needsPresetChoice} size="sm" bare>
+    <div class="preset-picker">
+        <h2>Choose your starting keybindings</h2>
+        <p>Pick a familiar layout to seed your settings. You can change any binding later, or load another layout from Settings.</p>
+        <div class="presets">
+            {#each config.builtinPresets as preset (preset.name)}
+                <button type="button" class="preset-btn" onclick={() => pick(preset.name)}>
+                    <span class="preset-name">{preset.name}</span>
+                    <span class="preset-desc">{preset.description}</span>
+                </button>
+            {/each}
         </div>
     </div>
-{/if}
+</Modal>
 
 <style>
-    .backdrop {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.7);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        z-index: 2000;
-    }
-
-    .modal {
-        background: var(--bg-active);
-        border: 1px solid var(--bg-hover);
-        border-radius: 8px;
+    .preset-picker {
         padding: 32px;
-        max-width: 400px;
-        width: 90%;
         text-align: center;
     }
 
