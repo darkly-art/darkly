@@ -1,6 +1,7 @@
 import { actions, sites } from './registry';
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
+import { settings } from '../state/settings.svelte';
 import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
@@ -18,12 +19,14 @@ export function registerActions() {
         id: 'undo',
         displayName: 'Undo',
         category: 'edit',
+        defaultHotkey: '$mod+KeyZ',
         handler: () => { app.handle?.undo(); app.refreshLayerTree(); },
     });
     actions.register({
         id: 'redo',
         displayName: 'Redo',
         category: 'edit',
+        defaultHotkey: '$mod+Shift+KeyZ',
         handler: () => { app.handle?.redo(); app.refreshLayerTree(); },
     });
 
@@ -32,12 +35,14 @@ export function registerActions() {
         id: 'resetColors',
         displayName: 'Reset Colors',
         category: 'colors',
+        defaultHotkey: 'KeyD',
         handler: () => app.resetColors(),
     });
     actions.register({
         id: 'swapColors',
         displayName: 'Swap Colors',
         category: 'colors',
+        defaultHotkey: 'KeyX',
         handler: () => app.swapColors(),
     });
 
@@ -46,18 +51,21 @@ export function registerActions() {
         id: 'selectAll',
         displayName: 'Select All',
         category: 'selection',
+        defaultHotkey: '$mod+KeyA',
         handler: () => app.handle?.select_all(),
     });
     actions.register({
         id: 'clearSelection',
         displayName: 'Clear Selection',
         category: 'selection',
+        defaultHotkey: '$mod+Shift+KeyA',
         handler: () => app.handle?.clear_selection(),
     });
     actions.register({
         id: 'clearSelectionContents',
         displayName: 'Clear Selection Contents',
         category: 'selection',
+        defaultHotkey: 'Delete',
         handler: () => {
             if (app.activeLayerId != null) {
                 app.handle?.clear_selection_contents(app.activeLayerId);
@@ -68,6 +76,7 @@ export function registerActions() {
         id: 'invertSelection',
         displayName: 'Invert Selection',
         category: 'selection',
+        defaultHotkey: '$mod+Shift+KeyI',
         handler: () => app.handle?.invert_selection(),
     });
 
@@ -76,6 +85,7 @@ export function registerActions() {
         id: 'copy',
         displayName: 'Copy',
         category: 'edit',
+        defaultHotkey: '$mod+KeyC',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             app.handle.copy(app.activeLayerId);
@@ -90,6 +100,7 @@ export function registerActions() {
         id: 'cut',
         displayName: 'Cut',
         category: 'edit',
+        defaultHotkey: '$mod+KeyX',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             app.handle.cut(app.activeLayerId);
@@ -105,6 +116,7 @@ export function registerActions() {
         id: 'paste',
         displayName: 'Paste',
         category: 'edit',
+        defaultHotkey: '$mod+KeyV',
         handler: () => {
             if (!app.handle) return;
             readImageFromClipboard().then(clip => {
@@ -156,6 +168,7 @@ export function registerActions() {
         id: 'pasteInPlace',
         displayName: 'Paste in Place',
         category: 'edit',
+        defaultHotkey: '$mod+Shift+KeyV',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const ok = app.handle.paste_in_place_floating(app.activeLayerId);
@@ -176,6 +189,7 @@ export function registerActions() {
         id: 'commitFloating',
         displayName: 'Commit Floating',
         category: 'transform',
+        defaultHotkey: 'Enter',
         handler: () => {
             if (!app.handle) return;
             app.handle.commit_floating();
@@ -186,6 +200,7 @@ export function registerActions() {
         id: 'cancelFloating',
         displayName: 'Cancel Floating',
         category: 'transform',
+        defaultHotkey: 'Escape',
         handler: () => {
             if (!app.handle) return;
             app.handle.cancel_floating();
@@ -194,12 +209,28 @@ export function registerActions() {
     });
 
     // -- Tools (generated from registry) --
+    // Tools' default hotkeys live alongside the action registration here
+    // (rather than on the Tool interface) so all action defaults stay
+    // co-located. Override these via `hotkeys.<toolHotkeyAction>` in config.
+    const TOOL_DEFAULT_HOTKEYS: Record<string, string> = {
+        brushTool: 'KeyB',
+        eraserTool: 'KeyE',
+        fillTool: 'KeyF',
+        gradientTool: 'KeyG',
+        colorPickerTool: 'KeyP',
+        rectSelectTool: 'KeyR',
+        ellipseSelectTool: 'Shift+KeyR',
+        lassoSelectTool: 'KeyL',
+        magicWandTool: 'KeyW',
+        transformTool: 'KeyT',
+    };
     for (const tool of toolRegistry.all()) {
         actions.register({
             id: tool.hotkeyAction,
             displayName: tool.name,
             category: 'tools',
             description: `Switch to ${tool.name} tool`,
+            defaultHotkey: TOOL_DEFAULT_HOTKEYS[tool.hotkeyAction],
             handler: () => { app.activeToolId = tool.id; },
         });
     }
@@ -226,6 +257,7 @@ export function registerActions() {
         category: 'layers',
         description: 'Solo this layer, hiding all others. Press again to restore.',
         accepts: ['layerId'],
+        defaultHotkey: 'KeyI',
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.handle) return;
@@ -239,11 +271,24 @@ export function registerActions() {
         category: 'layers',
         description: 'Solo this layer and show its mask as grayscale. Press again to restore.',
         accepts: ['layerId'],
+        // No default keyboard or mouse trigger — Photoshop's preset turns on
+        // the alt+click default on `maskThumb`. Krita-style users have no
+        // mouse trigger by default.
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.handle) return;
             toggleIsolation(layerId, true);
         },
+    });
+
+    // -- View --
+    actions.register({
+        id: 'openSettings',
+        displayName: 'Open Settings',
+        category: 'view',
+        description: 'Show the preferences modal.',
+        defaultHotkey: '$mod+Comma',
+        handler: () => { settings.open = true; },
     });
 }
 

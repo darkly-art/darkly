@@ -2,27 +2,36 @@ import { tinykeys } from 'tinykeys';
 import { config } from './store.svelte';
 import { actions } from '../actions/registry';
 import { app } from '../state/app.svelte';
-import { validateBindings } from '../actions/validation';
 
 let cleanup: (() => void) | null = null;
 
 /**
+ * Resolve an action's effective keyboard trigger:
+ *   user override (`hotkeys.<id>` in config) ?? action.defaultHotkey ?? unbound.
+ *
+ * Empty string is meaningful — it explicitly means "no keyboard trigger" and
+ * suppresses any default. Used by presets that disable a default (e.g.
+ * Photoshop sets `hotkeys.isolateLayer = ""` to remove Krita's `KeyI`).
+ */
+export function effectiveHotkey(actionId: string): string {
+    const override = config.get(`hotkeys.${actionId}`);
+    if (typeof override === 'string') return override;
+    const action = actions.get(actionId);
+    return action?.defaultHotkey ?? '';
+}
+
+/**
  * Register all hotkeys from the action registry + Rust config.
- * Call on init and whenever the preset changes.
- * Iterates registered action IDs, looks up keyboard bindings from config,
- * and dispatches to the action registry.
+ * Call on init and whenever the preset/config changes.
  */
 export function registerHotkeys() {
     cleanup?.();
 
-    // Validate all bindings — logs warnings for conflicts and context mismatches
-    validateBindings((k) => config.get(k));
-
     const bindings: Record<string, (e: KeyboardEvent) => void> = {};
 
-    for (const id of actions.ids()) {
-        const key = config.get(`hotkeys.${id}`) as string | undefined;
-        if (!key || typeof key !== 'string') continue;
+    for (const action of actions.all()) {
+        const key = effectiveHotkey(action.id);
+        if (!key) continue;
 
         bindings[key] = (e: KeyboardEvent) => {
             const el = e.target as HTMLElement;
@@ -31,8 +40,7 @@ export function registerHotkeys() {
             if (tag === 'INPUT' && (el as HTMLInputElement).type !== 'range') return;
             if (tag === 'TEXTAREA' || tag === 'SELECT') return;
             e.preventDefault();
-            // dispatch() validates that ctx satisfies action.requires at runtime
-            actions.dispatch(id, { layerId: app.activeLayerId ?? undefined });
+            actions.dispatch(action.id, { layerId: app.activeLayerId ?? undefined });
         };
     }
 

@@ -5,18 +5,12 @@ use wasm_bindgen::prelude::*;
 /// (number, string, boolean) or `undefined` if the key is unknown.
 #[wasm_bindgen]
 pub fn config_get(key: &str) -> JsValue {
-    match config::get(key) {
-        Some(ConfigValue::Float(f)) => JsValue::from(f),
-        Some(ConfigValue::Int(i)) => JsValue::from(i as f64),
-        Some(ConfigValue::Str(s)) => JsValue::from_str(&s),
-        Some(ConfigValue::Bool(b)) => JsValue::from(b),
-        None => JsValue::UNDEFINED,
-    }
+    config_value_to_js(config::get(key).as_ref())
 }
 
-/// Set a user override for a config key. The value type is inferred
-/// from the JS value: boolean → Bool, string → Str, number → Int or Float
-/// (Int if the default for this key is Int and the number has no fractional part).
+/// Set a setting for a config key. The value type is inferred from the JS
+/// value: boolean → Bool, string → Str, number → Int or Float (Int if the
+/// default for this key is Int and the number has no fractional part).
 #[wasm_bindgen]
 pub fn config_set(key: &str, value: JsValue) {
     let cv = if let Some(b) = value.as_bool() {
@@ -35,47 +29,58 @@ pub fn config_set(key: &str, value: JsValue) {
     config::set(key, cv);
 }
 
-/// Remove a user override for a key, reverting it to the preset or default value.
+/// Remove a setting for a key, reverting it to its default.
 #[wasm_bindgen]
 pub fn config_reset(key: &str) {
     config::reset(key);
 }
 
-/// Clear all user overrides.
+/// Clear all settings — every key falls back to its default.
 #[wasm_bindgen]
 pub fn config_reset_all() {
     config::reset_all();
 }
 
-/// Apply a named preset (e.g., "Krita", "Photoshop", "GIMP").
-/// Returns false if the preset name is unknown.
-#[wasm_bindgen]
-pub fn config_apply_preset(name: &str) -> bool {
-    config::apply_preset(name)
-}
-
-/// Get a JS array of available preset names.
+/// List built-in template names.
 #[wasm_bindgen]
 pub fn config_preset_names() -> JsValue {
     let arr = js_sys::Array::new();
     for name in config::preset_names() {
-        arr.push(&JsValue::from_str(name));
+        arr.push(&JsValue::from_str(&name));
     }
     arr.into()
 }
 
-/// Get all default values as a flat JS object: `{ "key.path": value, ... }`.
+/// Materialize a built-in template's full settings snapshot as a flat JS
+/// object: `{ "key.path": value, ... }`. Returns `null` for unknown names.
 #[wasm_bindgen]
-pub fn config_defaults() -> JsValue {
+pub fn config_preset_values(name: &str) -> JsValue {
+    let Some(values) = config::preset_values(name) else {
+        return JsValue::NULL;
+    };
     let obj = js_sys::Object::new();
-    for (key, value) in config::defaults() {
-        let js_val = match value {
-            ConfigValue::Float(f) => JsValue::from(f),
-            ConfigValue::Int(i) => JsValue::from(i as f64),
-            ConfigValue::Str(s) => JsValue::from_str(&s),
-            ConfigValue::Bool(b) => JsValue::from(b),
-        };
-        js_sys::Reflect::set(&obj, &JsValue::from_str(&key), &js_val).ok();
+    for (k, v) in values {
+        let js_v = config_value_to_js(Some(&v));
+        js_sys::Reflect::set(&obj, &JsValue::from_str(&k), &js_v).ok();
     }
     obj.into()
+}
+
+/// Get the full preferences schema as JSON: an array of section objects,
+/// each containing the section's metadata and the flat list of prefs with
+/// their display label, kind, default, and widget hint. Sorted by section
+/// order.
+#[wasm_bindgen]
+pub fn config_schema() -> String {
+    serde_json::to_string(&config::schema_info()).unwrap_or_else(|_| "[]".into())
+}
+
+fn config_value_to_js(value: Option<&ConfigValue>) -> JsValue {
+    match value {
+        Some(ConfigValue::Float(f)) => JsValue::from(*f),
+        Some(ConfigValue::Int(i)) => JsValue::from(*i as f64),
+        Some(ConfigValue::Str(s)) => JsValue::from_str(s),
+        Some(ConfigValue::Bool(b)) => JsValue::from(*b),
+        None => JsValue::UNDEFINED,
+    }
 }

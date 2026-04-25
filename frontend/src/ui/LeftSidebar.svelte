@@ -64,7 +64,7 @@
                     class="tool"
                     class:active={app.activeToolId === tool.id}
                     onclick={() => app.activeToolId = tool.id}
-                    title={(() => { const hk = formatHotkey(config.get(`hotkeys.${tool.hotkeyAction}`)); return hk ? `${tool.name} (${hk})` : tool.name; })()}
+                    title={(() => { const hk = formatHotkey(config.get(`hotkeys.${tool.hotkeyAction}`) as string | undefined); return hk ? `${tool.name} (${hk})` : tool.name; })()}
                 >
                     <i class={tool.faIcon}></i>
                 </button>
@@ -88,7 +88,7 @@
                 ></div>
             </button>
         </div>
-        <button class="tool swap" onclick={() => app.swapColors()} title={(() => { const hk = formatHotkey(config.get('hotkeys.swapColors')); return hk ? `Swap colors (${hk})` : 'Swap colors'; })()}>
+        <button class="tool swap" onclick={() => app.swapColors()} title={(() => { const hk = formatHotkey(config.get('hotkeys.swapColors') as string | undefined); return hk ? `Swap colors (${hk})` : 'Swap colors'; })()}>
             <i class="fa-solid fa-arrow-right-arrow-left"></i>
         </button>
     </div>

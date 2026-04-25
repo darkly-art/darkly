@@ -5,6 +5,7 @@
     import BrushBar from './ui/BrushBar.svelte';
     import Toast from './ui/Toast.svelte';
     import PresetPicker from './ui/PresetPicker.svelte';
+    import SettingsModal from './ui/settings/SettingsModal.svelte';
     // Register all tools
     import './tools/index';
     // Initialize hotkeys
@@ -21,6 +22,7 @@
 </div>
 <Toast />
 <PresetPicker />
+<SettingsModal />
 
 <style>
     .app-layout {
