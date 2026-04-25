@@ -774,7 +774,7 @@ impl DarklyHandle {
     /// later frame once the readback completes.
     ///
     /// Uses the theme colors stored via `set_preview_theme` — the editor
-    /// preview visually matches the brush picker's preset thumbnails so
+    /// preview visually matches the brush picker's thumbnails so
     /// users can scan across both without chromatic surprises. Same shape
     /// as `layer_thumbnail`: no promises, no async JS boundary plumbing.
     pub fn brush_editor_preview(&self, width: u32, height: u32) -> Vec<u8> {
@@ -783,7 +783,7 @@ impl DarklyHandle {
     }
 
     /// Push the current UI theme colors into the engine. Used by both the
-    /// live editor preview and preset thumbnail baking — call on theme
+    /// live editor preview and brush thumbnail baking — call on theme
     /// change so the live preview re-renders with the new palette.
     pub fn set_preview_theme(&self, fg: &[f32], bg: &[f32]) {
         self.flush_if_needed();
@@ -1089,14 +1089,14 @@ impl DarklyHandle {
         }
     }
 
-    // --- Brush presets (direct) ---
+    // --- Brush library (direct) ---
 
-    /// Load a preset.  Returns `null` on success (no auto-layout needed),
+    /// Load a brush.  Returns `null` on success (no auto-layout needed),
     /// `true` if auto-layout was applied (frontend should re-layout with
     /// DOM sizes), or an error string.
-    pub fn brush_preset_load(&self, name: &str) -> JsValue {
+    pub fn brush_load(&self, name: &str) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow_mut().brush_preset_load(name) {
+        match self.engine.borrow_mut().brush_load(name) {
             Ok(needs_layout) => {
                 if needs_layout {
                     JsValue::TRUE
@@ -1108,17 +1108,17 @@ impl DarklyHandle {
         }
     }
 
-    pub fn brush_preset_save(&self, name: &str, category: &str) -> JsValue {
+    pub fn brush_save(&self, name: &str, category: &str) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow_mut().brush_preset_save(name, category) {
+        match self.engine.borrow_mut().brush_save(name, category) {
             Ok(()) => JsValue::NULL,
             Err(e) => JsValue::from_str(&e),
         }
     }
 
-    pub fn brush_preset_import(&self, bytes: &[u8]) -> JsValue {
+    pub fn brush_import(&self, bytes: &[u8]) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow_mut().brush_preset_import(bytes) {
+        match self.engine.borrow_mut().brush_import(bytes) {
             Ok(name) => JsValue::from_str(&name),
             Err(e) => JsValue::from_str(&e),
         }
@@ -1240,15 +1240,14 @@ impl DarklyHandle {
         ))
     }
 
-    pub fn brush_preset_list(&self) -> String {
+    pub fn brush_list(&self) -> String {
         self.flush_if_needed();
-        serde_json::to_string(&self.engine.borrow().brush_preset_list())
-            .unwrap_or_else(|_| "[]".into())
+        serde_json::to_string(&self.engine.borrow().brush_list()).unwrap_or_else(|_| "[]".into())
     }
 
-    pub fn brush_preset_export(&self, name: &str) -> JsValue {
+    pub fn brush_export(&self, name: &str) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow().brush_preset_export(name) {
+        match self.engine.borrow().brush_export(name) {
             Ok(bytes) => {
                 let arr = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
                 arr.copy_from(&bytes);

@@ -32,7 +32,7 @@ impl DarklyEngine {
 
     /// Read the dab spacing ratio from the pen_input node's "spacing" port
     /// default. Falls back to `SpacingConfig::default().ratio` for graphs
-    /// that predate the port (loaded from older presets).
+    /// that predate the port (loaded from older brushes).
     fn pen_input_spacing_ratio(&self) -> f32 {
         use crate::nodegraph::PortDir;
         for node in self.active_brush_graph.nodes.values() {

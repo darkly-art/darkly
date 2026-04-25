@@ -284,13 +284,13 @@ fn preview_short_circuits_when_brush_preview_unconnected() {
     );
 }
 
-/// A preset saved before the redesign carries a `preview_output` node and
+/// A brush saved before the redesign carries a `preview_output` node and
 /// `stamp.dab → preview_output.dab` wires. Loading it should silently
 /// migrate to the new wiring (`stamp.preview → color_output.brush_preview`)
 /// and produce a working preview.
 #[test]
 fn legacy_preview_output_migrates_on_load() {
-    use darkly::brush::preset::{BrushPreset, PresetBundle};
+    use darkly::brush::bundle::{Brush, BrushMetadata};
 
     // Build a graph the old way: pen / circle / stamp / color_output, plus
     // a `preview_output` node wired from stamp.
@@ -385,14 +385,14 @@ fn legacy_preview_output_migrates_on_load() {
             .unwrap();
     }
 
-    let preset = BrushPreset::from_graph("Legacy", graph);
-    let bundle = PresetBundle::without_resources(preset);
-    let bytes = bundle.to_bytes().unwrap();
-    let loaded = PresetBundle::from_bytes(&bytes).unwrap();
+    let metadata = BrushMetadata::from_graph("Legacy", graph);
+    let brush = Brush::without_resources(metadata);
+    let bytes = brush.to_bytes().unwrap();
+    let loaded = Brush::from_bytes(&bytes).unwrap();
 
     // Migration removed the legacy node.
     let has_preview_output = loaded
-        .preset
+        .metadata
         .graph
         .nodes
         .values()
@@ -404,7 +404,7 @@ fn legacy_preview_output_migrates_on_load() {
 
     // Migration installed the new wire.
     let has_new_wire = loaded
-        .preset
+        .metadata
         .graph
         .connections
         .iter()
@@ -415,7 +415,7 @@ fn legacy_preview_output_migrates_on_load() {
     );
 
     // The migrated graph must compile.
-    let runner = darkly::brush::compile_graph(&loaded.preset.graph);
+    let runner = darkly::brush::compile_graph(&loaded.metadata.graph);
     assert!(
         runner.is_ok(),
         "migrated graph should compile: {:?}",

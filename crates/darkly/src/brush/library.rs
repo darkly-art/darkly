@@ -1,18 +1,17 @@
-//! In-memory preset library with optional filesystem backing.
+//! In-memory brush library with optional filesystem backing.
 //!
-//! Stores loaded `PresetBundle`s keyed by name.  On native targets,
-//! can scan a directory for `.darkly-brush` files and save new presets
-//! to disk.
+//! Stores loaded `Brush`es keyed by name.  On native targets, can scan
+//! a directory for `.darkly-brush` files and save brushes to disk.
 
 use std::collections::HashMap;
 
-use super::preset::{BrushPreset, PresetBundle};
+use super::bundle::{Brush, BrushMetadata};
 use crate::brush::wire::BrushWireType;
 use crate::nodegraph::Graph;
 
-/// Summary info for listing presets without loading the full graph.
+/// Summary info for listing brushes without loading the full graph.
 #[derive(Clone, Debug, serde::Serialize)]
-pub struct PresetInfo {
+pub struct BrushInfo {
     pub name: String,
     pub category: String,
     pub author: String,
@@ -20,9 +19,9 @@ pub struct PresetInfo {
     pub tags: Vec<String>,
 }
 
-impl From<&BrushPreset> for PresetInfo {
-    fn from(p: &BrushPreset) -> Self {
-        PresetInfo {
+impl From<&BrushMetadata> for BrushInfo {
+    fn from(p: &BrushMetadata) -> Self {
+        BrushInfo {
             name: p.name.clone(),
             category: p.category.clone(),
             author: p.author.clone(),
@@ -32,88 +31,88 @@ impl From<&BrushPreset> for PresetInfo {
     }
 }
 
-/// In-memory library of brush presets.
-pub struct PresetLibrary {
-    presets: HashMap<String, PresetBundle>,
+/// In-memory library of brushes.
+pub struct BrushLibrary {
+    brushes: HashMap<String, Brush>,
 }
 
-impl PresetLibrary {
+impl BrushLibrary {
     pub fn new() -> Self {
-        PresetLibrary {
-            presets: HashMap::new(),
+        BrushLibrary {
+            brushes: HashMap::new(),
         }
     }
 
-    /// List all loaded presets (summary info only).
-    pub fn list(&self) -> Vec<PresetInfo> {
-        let mut infos: Vec<PresetInfo> = self
-            .presets
+    /// List all loaded brushes (summary info only).
+    pub fn list(&self) -> Vec<BrushInfo> {
+        let mut infos: Vec<BrushInfo> = self
+            .brushes
             .values()
-            .map(|b| PresetInfo::from(&b.preset))
+            .map(|b| BrushInfo::from(&b.metadata))
             .collect();
         infos.sort_by(|a, b| a.name.cmp(&b.name));
         infos
     }
 
-    /// Get a preset bundle by name.
-    pub fn get(&self, name: &str) -> Option<&PresetBundle> {
-        self.presets.get(name)
+    /// Get a brush by name.
+    pub fn get(&self, name: &str) -> Option<&Brush> {
+        self.brushes.get(name)
     }
 
-    /// Get the graph for a preset by name.
+    /// Get the graph for a brush by name.
     pub fn graph(&self, name: &str) -> Option<&Graph<BrushWireType>> {
-        self.presets.get(name).map(|b| &b.preset.graph)
+        self.brushes.get(name).map(|b| &b.metadata.graph)
     }
 
-    /// Add or replace a preset in the library.
-    pub fn insert(&mut self, bundle: PresetBundle) {
-        let name = bundle.preset.name.clone();
-        self.presets.insert(name, bundle);
+    /// Add or replace a brush in the library.
+    pub fn insert(&mut self, brush: Brush) {
+        let name = brush.metadata.name.clone();
+        self.brushes.insert(name, brush);
     }
 
-    /// Remove a preset by name.  Returns true if it existed.
+    /// Remove a brush by name.  Returns true if it existed.
     pub fn remove(&mut self, name: &str) -> bool {
-        self.presets.remove(name).is_some()
+        self.brushes.remove(name).is_some()
     }
 
-    /// Attach a baked `preview.png` to an existing preset. Used by the
+    /// Attach a baked `preview.png` to an existing brush. Used by the
     /// async thumbnail bake path — save returns immediately without a
     /// thumbnail, and this method installs the PNG once the readback
     /// completes on a later frame.
     pub fn set_thumbnail(&mut self, name: &str, png: Vec<u8>) -> bool {
-        match self.presets.get_mut(name) {
-            Some(bundle) => {
-                bundle.thumbnail_png = Some(png);
+        match self.brushes.get_mut(name) {
+            Some(brush) => {
+                brush.thumbnail_png = Some(png);
                 true
             }
             None => false,
         }
     }
 
-    /// Import a preset from `.darkly-brush` ZIP bytes.
+    /// Import a brush from `.darkly-brush` ZIP bytes.
     pub fn import_bytes(&mut self, bytes: &[u8]) -> Result<String, String> {
-        let bundle = PresetBundle::from_bytes(bytes)?;
-        let name = bundle.preset.name.clone();
-        self.insert(bundle);
+        let brush = Brush::from_bytes(bytes)?;
+        let name = brush.metadata.name.clone();
+        self.insert(brush);
         Ok(name)
     }
 
-    /// Export a preset to `.darkly-brush` ZIP bytes.
+    /// Export a brush to `.darkly-brush` ZIP bytes.
     pub fn export_bytes(&self, name: &str) -> Result<Vec<u8>, String> {
-        let bundle = self
-            .presets
+        let brush = self
+            .brushes
             .get(name)
-            .ok_or_else(|| format!("preset '{}' not found", name))?;
-        bundle.to_bytes()
+            .ok_or_else(|| format!("brush '{}' not found", name))?;
+        brush.to_bytes()
     }
 
-    /// Number of presets in the library.
+    /// Number of brushes in the library.
     pub fn len(&self) -> usize {
-        self.presets.len()
+        self.brushes.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.presets.is_empty()
+        self.brushes.is_empty()
     }
 
     /// Scan a directory for `.darkly-brush` files and load them all.
@@ -127,13 +126,13 @@ impl PresetLibrary {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("darkly-brush") {
-                match PresetBundle::load(&path) {
-                    Ok(bundle) => {
-                        self.insert(bundle);
+                match Brush::load(&path) {
+                    Ok(brush) => {
+                        self.insert(brush);
                         count += 1;
                     }
                     Err(e) => {
-                        log::warn!("skipping preset '{}': {e}", path.display());
+                        log::warn!("skipping brush '{}': {e}", path.display());
                     }
                 }
             }
@@ -141,31 +140,31 @@ impl PresetLibrary {
         Ok(count)
     }
 
-    /// Save a preset to a directory as `<name>.darkly-brush`.
+    /// Save a brush to a directory as `<name>.darkly-brush`.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn save_to_directory(
         &self,
         name: &str,
         dir: &std::path::Path,
     ) -> Result<std::path::PathBuf, String> {
-        let bundle = self
-            .presets
+        let brush = self
+            .brushes
             .get(name)
-            .ok_or_else(|| format!("preset '{}' not found", name))?;
+            .ok_or_else(|| format!("brush '{}' not found", name))?;
         let filename = sanitize_filename(name);
         let path = dir.join(format!("{filename}.darkly-brush"));
-        bundle.save(&path)?;
+        brush.save(&path)?;
         Ok(path)
     }
 }
 
-impl Default for PresetLibrary {
+impl Default for BrushLibrary {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// Sanitize a preset name for use as a filename.
+/// Sanitize a brush name for use as a filename.
 #[cfg(not(target_arch = "wasm32"))]
 fn sanitize_filename(name: &str) -> String {
     name.chars()
@@ -180,18 +179,18 @@ fn sanitize_filename(name: &str) -> String {
 mod tests {
     use super::*;
     use crate::brush;
-    use crate::brush::preset::BrushPreset;
+    use crate::brush::bundle::BrushMetadata;
 
     #[test]
     fn library_insert_list_get() {
-        let mut lib = PresetLibrary::new();
+        let mut lib = BrushLibrary::new();
         assert!(lib.is_empty());
 
-        let preset = BrushPreset::from_graph("Alpha", brush::default_graph());
-        lib.insert(PresetBundle::without_resources(preset));
+        let metadata = BrushMetadata::from_graph("Alpha", brush::default_graph());
+        lib.insert(Brush::without_resources(metadata));
 
-        let preset2 = BrushPreset::from_graph("Beta", brush::default_graph());
-        lib.insert(PresetBundle::without_resources(preset2));
+        let metadata2 = BrushMetadata::from_graph("Beta", brush::default_graph());
+        lib.insert(Brush::without_resources(metadata2));
 
         assert_eq!(lib.len(), 2);
 
@@ -207,25 +206,25 @@ mod tests {
 
     #[test]
     fn library_import_export_round_trip() {
-        let mut lib = PresetLibrary::new();
+        let mut lib = BrushLibrary::new();
 
-        let preset = BrushPreset::from_graph("Roundtrip", brush::default_graph());
-        let bundle = PresetBundle::without_resources(preset);
-        let bytes = bundle.to_bytes().unwrap();
+        let metadata = BrushMetadata::from_graph("Roundtrip", brush::default_graph());
+        let brush = Brush::without_resources(metadata);
+        let bytes = brush.to_bytes().unwrap();
 
         let name = lib.import_bytes(&bytes).unwrap();
         assert_eq!(name, "Roundtrip");
 
         let exported = lib.export_bytes("Roundtrip").unwrap();
-        let reloaded = PresetBundle::from_bytes(&exported).unwrap();
-        assert_eq!(reloaded.preset.name, "Roundtrip");
+        let reloaded = Brush::from_bytes(&exported).unwrap();
+        assert_eq!(reloaded.metadata.name, "Roundtrip");
     }
 
     #[test]
     fn library_remove() {
-        let mut lib = PresetLibrary::new();
-        let preset = BrushPreset::from_graph("ToRemove", brush::default_graph());
-        lib.insert(PresetBundle::without_resources(preset));
+        let mut lib = BrushLibrary::new();
+        let metadata = BrushMetadata::from_graph("ToRemove", brush::default_graph());
+        lib.insert(Brush::without_resources(metadata));
         assert_eq!(lib.len(), 1);
 
         assert!(lib.remove("ToRemove"));
@@ -235,23 +234,23 @@ mod tests {
 
     #[test]
     fn library_scan_directory() {
-        let dir = std::env::temp_dir().join("darkly_preset_test");
+        let dir = std::env::temp_dir().join("darkly_brush_library_test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
-        // Write two presets.
+        // Write two brushes.
         for name in &["Scan A", "Scan B"] {
-            let preset = BrushPreset::from_graph(*name, brush::default_graph());
-            let bundle = PresetBundle::without_resources(preset);
-            bundle
+            let metadata = BrushMetadata::from_graph(*name, brush::default_graph());
+            let brush = Brush::without_resources(metadata);
+            brush
                 .save(&dir.join(format!("{name}.darkly-brush")))
                 .unwrap();
         }
 
-        // Also write a non-preset file (should be ignored).
-        std::fs::write(dir.join("readme.txt"), "not a preset").unwrap();
+        // Also write a non-brush file (should be ignored).
+        std::fs::write(dir.join("readme.txt"), "not a brush").unwrap();
 
-        let mut lib = PresetLibrary::new();
+        let mut lib = BrushLibrary::new();
         let count = lib.scan_directory(&dir).unwrap();
         assert_eq!(count, 2);
         assert_eq!(lib.len(), 2);

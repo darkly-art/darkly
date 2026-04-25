@@ -1,5 +1,5 @@
 mod brush_graph;
-mod brush_preset;
+mod brush_library;
 mod clipboard;
 mod floating;
 pub(crate) mod gpu_selection;
@@ -15,8 +15,8 @@ pub use types::{ClipboardExport, LayerInfo, ParamInfo, StrokeOp, VeilInfo, VeilT
 
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
+use crate::brush::library::BrushLibrary;
 use crate::brush::pipelines::BrushPipelines;
-use crate::brush::preset_library::PresetLibrary;
 use crate::brush::preview_renderer::BrushPreviewRenderer;
 use crate::brush::stabilizer::StabilizerRegistry;
 use crate::brush::stroke_buffer::StrokeBuffer;
@@ -108,10 +108,10 @@ pub(crate) enum ReadbackContext {
         graph_version: u64,
     },
     /// Async readback of the preview render used to bake a `.darkly-brush`
-    /// preset's embedded `preview.png`. Completion PNG-encodes the pixels
+    /// archive's embedded `preview.png`. Completion PNG-encodes the pixels
     /// and installs the result on the library entry via
-    /// `PresetLibrary::set_thumbnail`.
-    PresetThumbnailForSave {
+    /// `BrushLibrary::set_thumbnail`.
+    BrushThumbnailForSave {
         name: String,
         width: u32,
         height: u32,
@@ -174,11 +174,11 @@ pub struct DarklyEngine {
     pub(crate) active_brush_graph: crate::nodegraph::Graph<BrushWireType>,
 
     /// Snapshot of input port defaults captured the last time the graph
-    /// was loaded as a whole (preset load / reset / save). Drives
+    /// was loaded as a whole (brush load / reset / save). Drives
     /// double-click-to-reset on toolbar scrubs — reset returns to the
-    /// preset's shipped value, not the node-type registration default.
+    /// brush's shipped value, not the node-type registration default.
     /// Keyed by (node_id, port_name); raw values (not display-space).
-    pub(crate) preset_defaults: std::collections::HashMap<(crate::nodegraph::NodeId, String), f32>,
+    pub(crate) brush_defaults: std::collections::HashMap<(crate::nodegraph::NodeId, String), f32>,
 
     /// Canvas-space positioning info for the brush preview overlay, cached
     /// after each `regenerate_brush_preview()` call. Consumed by the brush
@@ -213,17 +213,17 @@ pub struct DarklyEngine {
     /// Graph version at the last time we issued a preview render. Compared
     /// against `brush_graph_version` to skip redundant work.
     pub(crate) last_rendered_preview_version: u64,
-    /// Theme colors for preset thumbnails (not the live editor preview —
+    /// Theme colors for brush thumbnails (not the live editor preview —
     /// that uses the caller-supplied fg and auto-picked contrast bg). The
     /// frontend sets these via `set_preview_theme()` when the UI theme
     /// toggles.
     pub(crate) preview_theme_fg: [f32; 4],
     pub(crate) preview_theme_bg: [f32; 4],
 
-    // --- Preset Library (Phase 7) ---
-    pub(crate) preset_library: PresetLibrary,
-    /// Resource name → TextureHandle for images uploaded by the current preset.
-    /// Built by `upload_preset_resources()`, read by Image nodes via BrushGpuContext.
+    // --- Brush Library (Phase 7) ---
+    pub(crate) brush_library: BrushLibrary,
+    /// Resource name → TextureHandle for images uploaded by the current brush.
+    /// Built by `upload_brush_resources()`, read by Image nodes via BrushGpuContext.
     pub(crate) resource_handles:
         std::collections::HashMap<String, crate::brush::wire::TextureHandle>,
 
@@ -315,7 +315,7 @@ impl DarklyEngine {
             brush_pipelines,
             brush_stroke_engine: None,
             active_brush_graph: crate::brush::default_graph(),
-            preset_defaults: std::collections::HashMap::new(),
+            brush_defaults: std::collections::HashMap::new(),
             brush_preview_info: None,
             last_preview_pose: None,
             brush_preview_renderer: BrushPreviewRenderer::new(),
@@ -327,10 +327,10 @@ impl DarklyEngine {
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
             preview_theme_bg: [0.08, 0.08, 0.08, 1.0],
-            preset_library: {
-                let mut lib = PresetLibrary::new();
-                for bundle in crate::brush::builtin_presets::all() {
-                    lib.insert(bundle);
+            brush_library: {
+                let mut lib = BrushLibrary::new();
+                for brush in crate::brush::builtin_brushes::all() {
+                    lib.insert(brush);
                 }
                 lib
             },
@@ -352,8 +352,8 @@ impl DarklyEngine {
         };
 
         // Snapshot the default graph's port defaults so reset-to-default
-        // works even before the user loads a preset.
-        engine.snapshot_preset_defaults();
+        // works even before the user loads a brush.
+        engine.snapshot_brush_defaults();
 
         // Populate the brush preview mask + cached info from the default
         // graph so the hover overlay is live immediately, without needing

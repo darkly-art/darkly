@@ -300,14 +300,14 @@ impl DarklyEngine {
                     self.brush_editor_preview_cache_size = Some((width, height));
                 }
             }
-            ReadbackContext::PresetThumbnailForSave {
+            ReadbackContext::BrushThumbnailForSave {
                 name,
                 width,
                 height,
             } => {
                 let png_bytes = encode_rgba_as_png(&pixels, width, height);
                 if !png_bytes.is_empty() {
-                    self.preset_library.set_thumbnail(&name, png_bytes);
+                    self.brush_library.set_thumbnail(&name, png_bytes);
                 }
             }
         }
@@ -596,13 +596,13 @@ fn generate_rgba_thumbnail_from_pixels(
     buf
 }
 
-/// Encode an RGBA8 buffer as a PNG. Used for baking preset thumbnails —
+/// Encode an RGBA8 buffer as a PNG. Used for baking brush thumbnails —
 /// the PNG goes into the `.darkly-brush` ZIP as `preview.png`.
 fn encode_rgba_as_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
     let expected = (width * height * 4) as usize;
     if pixels.len() < expected {
         log::error!(
-            "preset thumbnail pixel buffer too small: {} < {expected}",
+            "brush thumbnail pixel buffer too small: {} < {expected}",
             pixels.len()
         );
         return Vec::new();
@@ -617,7 +617,7 @@ fn encode_rgba_as_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
         height,
         image::ExtendedColorType::Rgba8,
     ) {
-        log::error!("preset thumbnail PNG encode failed: {e}");
+        log::error!("brush thumbnail PNG encode failed: {e}");
         return Vec::new();
     }
     out

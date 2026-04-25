@@ -1,7 +1,7 @@
 //! Stroke stabilizer — retroactive stroke reshaping with zero lag.
 //!
 //! The stabilizer processes the full stroke history before dabs are placed.
-//! It operates outside the per-dab node graph: presets configure which
+//! It operates outside the per-dab node graph: brushes configure which
 //! algorithm to use and its parameters, and the engine constructs the
 //! algorithm at stroke start.
 //!
@@ -165,7 +165,7 @@ impl StabilizerRegistry {
     }
 }
 
-/// Per-preset stabilizer configuration — stored in `BrushPreset`.
+/// Per-brush stabilizer configuration — stored in `BrushMetadata`.
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct StabilizerConfig {
     /// Algorithm type_id.  Empty string or "none" = pass-through.

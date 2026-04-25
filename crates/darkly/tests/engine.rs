@@ -279,9 +279,7 @@ fn scatter_brush_survives_checkpoint_restore() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
 
-    engine
-        .brush_preset_load("Scatter Brush")
-        .expect("preset load");
+    engine.brush_load("Scatter Brush").expect("brush load");
 
     // Configure the scatter brush graph to exercise the checkpoint path.
     let pen_id = find_node_id(&engine, "pen_input");

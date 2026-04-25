@@ -249,8 +249,8 @@ fn set_preview_theme_invalidates_cache() {
 }
 
 #[test]
-fn preset_save_bakes_thumbnail_asynchronously() {
-    use darkly::brush::preset::PresetBundle;
+fn brush_save_bakes_thumbnail_asynchronously() {
+    use darkly::brush::bundle::Brush;
     use darkly::engine::DarklyEngine;
     use darkly::gpu::context::GpuContext;
 
@@ -258,15 +258,13 @@ fn preset_save_bakes_thumbnail_asynchronously() {
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
-    // Save a preset — kicks off an async thumbnail readback against the
+    // Save a brush — kicks off an async thumbnail readback against the
     // engine's library copy.
-    engine.brush_preset_save("TestPreset", "basic").unwrap();
+    engine.brush_save("TestBrush", "basic").unwrap();
 
     // Before the readback lands, the library entry has no thumbnail.
-    let exported_before = engine
-        .brush_preset_export("TestPreset")
-        .expect("preset exported");
-    let bundle_before = PresetBundle::from_bytes(&exported_before).unwrap();
+    let exported_before = engine.brush_export("TestBrush").expect("brush exported");
+    let bundle_before = Brush::from_bytes(&exported_before).unwrap();
     assert!(
         bundle_before.thumbnail_png.is_none(),
         "thumbnail should be absent before readback completes"
@@ -276,8 +274,8 @@ fn preset_save_bakes_thumbnail_asynchronously() {
     // back onto the library entry.
     engine.test_flush_readbacks();
 
-    let exported_after = engine.brush_preset_export("TestPreset").unwrap();
-    let bundle_after = PresetBundle::from_bytes(&exported_after).unwrap();
+    let exported_after = engine.brush_export("TestBrush").unwrap();
+    let bundle_after = Brush::from_bytes(&exported_after).unwrap();
     let png = bundle_after
         .thumbnail_png
         .expect("thumbnail present after readback");

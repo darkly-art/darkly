@@ -1,10 +1,10 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
     import { brushGraph } from '../state/brush_graph.svelte';
-    import type { PresetInfo } from '../state/brush_graph.svelte';
+    import type { BrushInfo } from '../state/brush_graph.svelte';
     import BrushBuilder from './brush_builder/BrushBuilder.svelte';
 
-    let presetDropdownOpen = $state(false);
+    let brushPickerOpen = $state(false);
 
     function ensureInit() {
         if (!brushGraph.graph && app.handle) brushGraph.init();
@@ -15,10 +15,10 @@
         brushGraph.isOpen = !brushGraph.isOpen;
     }
 
-    function selectPreset(preset: PresetInfo) {
+    function selectBrush(brush: BrushInfo) {
         ensureInit();
-        brushGraph.loadPreset(preset.name);
-        presetDropdownOpen = false;
+        brushGraph.loadBrush(brush.name);
+        brushPickerOpen = false;
     }
 
     function handleExposedPort(nodeId: number, portName: string, displayValue: number) {
@@ -43,8 +43,8 @@
     }
 
     function handleClickOutside(e: MouseEvent) {
-        if (presetDropdownOpen) {
-            presetDropdownOpen = false;
+        if (brushPickerOpen) {
+            brushPickerOpen = false;
         }
     }
 
@@ -70,10 +70,10 @@
         el.addEventListener('pointerup', onUp);
     }
 
-    // Group presets by category
-    function groupedPresets(): Map<string, PresetInfo[]> {
-        const groups = new Map<string, PresetInfo[]>();
-        for (const p of brushGraph.presets) {
+    // Group brushes by category
+    function groupedBrushes(): Map<string, BrushInfo[]> {
+        const groups = new Map<string, BrushInfo[]>();
+        for (const p of brushGraph.brushes) {
             const cat = p.category || 'uncategorized';
             if (!groups.has(cat)) groups.set(cat, []);
             groups.get(cat)!.push(p);
@@ -97,37 +97,37 @@
 
     <!-- Tool options bar (always visible) -->
     <div class="tool-options">
-        <!-- Preset selector -->
-        <div class="preset-section">
+        <!-- Brush picker -->
+        <div class="brush-picker-section">
             <button
-                class="preset-button"
-                onclick={(e) => { e.stopPropagation(); ensureInit(); presetDropdownOpen = !presetDropdownOpen; }}
-                title="Select brush preset"
+                class="brush-picker-button"
+                onclick={(e) => { e.stopPropagation(); ensureInit(); brushPickerOpen = !brushPickerOpen; }}
+                title="Select brush"
             >
-                <span class="preset-name">{brushGraph.activePreset ?? 'Custom'}</span>
+                <span class="brush-name">{brushGraph.activeBrush ?? 'Custom'}</span>
                 <svg class="chevron" width="10" height="6" viewBox="0 0 10 6">
                     <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/>
                 </svg>
             </button>
 
-            {#if presetDropdownOpen}
+            {#if brushPickerOpen}
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <div class="preset-dropdown dropdown-surface" onclick={(e) => e.stopPropagation()}>
-                    {#each [...groupedPresets()] as [category, presets]}
-                        <div class="preset-category">{category}</div>
-                        {#each presets as preset}
+                <div class="brush-picker-dropdown dropdown-surface" onclick={(e) => e.stopPropagation()}>
+                    {#each [...groupedBrushes()] as [category, brushes]}
+                        <div class="brush-category">{category}</div>
+                        {#each brushes as brush}
                             <button
-                                class="preset-item"
-                                class:active={brushGraph.activePreset === preset.name}
-                                onclick={() => selectPreset(preset)}
+                                class="brush-item"
+                                class:active={brushGraph.activeBrush === brush.name}
+                                onclick={() => selectBrush(brush)}
                             >
-                                {preset.name}
+                                {brush.name}
                             </button>
                         {/each}
                     {/each}
-                    {#if brushGraph.presets.length === 0}
-                        <div class="preset-empty">No presets available</div>
+                    {#if brushGraph.brushes.length === 0}
+                        <div class="brush-picker-empty">No brushes available</div>
                     {/if}
                 </div>
             {/if}
@@ -266,14 +266,14 @@
         line-height: 1.3;
     }
 
-    /* ── Preset Selector ── */
+    /* ── Brush Picker ── */
 
-    .preset-section {
+    .brush-picker-section {
         position: relative;
         flex-shrink: 0;
     }
 
-    .preset-button {
+    .brush-picker-button {
         display: flex;
         align-items: center;
         gap: 4px;
@@ -287,11 +287,11 @@
         min-width: 100px;
         transition: background 0.1s;
     }
-    .preset-button:hover {
+    .brush-picker-button:hover {
         background: var(--bg-active);
     }
 
-    .preset-name {
+    .brush-name {
         flex: 1;
         text-align: left;
         overflow: hidden;
@@ -304,7 +304,7 @@
         color: var(--text-muted);
     }
 
-    .preset-dropdown {
+    .brush-picker-dropdown {
         position: absolute;
         bottom: 100%;
         left: 0;
@@ -316,7 +316,7 @@
         z-index: 100;
     }
 
-    .preset-category {
+    .brush-category {
         font-size: 9px;
         color: var(--text-muted);
         text-transform: uppercase;
@@ -324,7 +324,7 @@
         padding: 6px 12px 2px;
     }
 
-    .preset-item {
+    .brush-item {
         display: block;
         width: 100%;
         text-align: left;
@@ -335,14 +335,14 @@
         font-size: 11px;
         padding: 4px 12px;
     }
-    .preset-item:hover {
+    .brush-item:hover {
         background: var(--bg-hover);
     }
-    .preset-item.active {
+    .brush-item.active {
         color: var(--accent);
     }
 
-    .preset-empty {
+    .brush-picker-empty {
         font-size: 11px;
         color: var(--text-dim);
         padding: 8px 12px;

@@ -3,7 +3,7 @@
 //! Runs the real `StrokeEngine` against a self-owned offscreen target to
 //! produce a preview of a synthetic S-curve stroke — what the brush would
 //! look like in actual use, not a single hover dab. Used by the brush
-//! editor's live preview and by preset thumbnail baking.
+//! editor's live preview and by brush thumbnail baking.
 //!
 //! Distinct from the hover overlay path (`render_preview_pipeline` in
 //! `eval.rs`), which forces `flow=1` and white color to produce a tip-mask

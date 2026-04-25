@@ -1,18 +1,18 @@
-//! Built-in brush presets shipped with the application.
+//! Built-in brushes shipped with the application.
 //!
-//! Each preset is a programmatically constructed node graph wrapped in a
-//! `PresetBundle`.  Image-based presets embed their tip PNGs via
-//! `include_bytes!`.  All presets are inserted into the `PresetLibrary`
+//! Each brush is a programmatically constructed node graph wrapped in a
+//! `Brush`.  Image-based brushes embed their tip PNGs via
+//! `include_bytes!`.  All brushes are inserted into the `BrushLibrary`
 //! at engine startup.
 
-use crate::brush::preset::{BrushPreset, PresetBundle, PresetResourceMeta, ResourceKind};
+use crate::brush::bundle::{Brush, BrushMetadata, BrushResourceMeta, ResourceKind};
 use crate::brush::wire::BrushWireType;
 use crate::brush::BrushNodeRegistry;
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::{Graph, NodeId, PortRef};
 
-/// Return all built-in presets.
-pub fn all() -> Vec<PresetBundle> {
+/// Return all built-in brushes.
+pub fn all() -> Vec<Brush> {
     vec![
         soft_round(),
         hard_round(),
@@ -30,10 +30,10 @@ pub fn all() -> Vec<PresetBundle> {
 }
 
 // ---------------------------------------------------------------------------
-// PresetBuilder — eliminates boilerplate across presets
+// BrushBuilder — eliminates boilerplate across brushes
 // ---------------------------------------------------------------------------
 
-struct PresetBuilder {
+struct BrushBuilder {
     graph: Graph<BrushWireType>,
     registry: BrushNodeRegistry,
     pen: NodeId,
@@ -43,14 +43,14 @@ struct PresetBuilder {
     color_output: NodeId,
 }
 
-impl PresetBuilder {
+impl BrushBuilder {
     /// Create a new builder with the standard nodes and output wiring.
     ///
     /// Pre-wires: stamp.dab → color_output.dab, stamp.dab_size →
     /// color_output.dab_size, pen_input.position → color_output.position,
     /// and stamp.preview → color_output.brush_preview (the hover preview
     /// path — terminal's `render_preview` hook blits this into the
-    /// overlay). Presets that want jitter call `wire_scatter` to splice
+    /// overlay). Brushes that want jitter call `wire_scatter` to splice
     /// a `scatter` node onto the position wire.
     fn new() -> Self {
         let registry = BrushNodeRegistry::new();
@@ -77,7 +77,7 @@ impl PresetBuilder {
             vec![],
         );
 
-        // Standard output wiring (every preset needs this).
+        // Standard output wiring (every brush needs this).
         let wires = [
             (stamp, "dab", color_output, "dab"),
             (stamp, "dab_size", color_output, "dab_size"),
@@ -101,7 +101,7 @@ impl PresetBuilder {
                 .unwrap();
         }
 
-        PresetBuilder {
+        BrushBuilder {
             graph,
             registry,
             pen,
@@ -152,8 +152,8 @@ impl PresetBuilder {
     /// Set a port's default value and expose it as a user-adjustable control.
     ///
     /// The port's existing metadata (label, unit, icon, range) drives the UI.
-    /// Use this for preset-specific knobs that reuse a port's built-in label.
-    /// If you need a custom label for a specific preset, fall back to
+    /// Use this for brush-specific knobs that reuse a port's built-in label.
+    /// If you need a custom label for a specific brush, fall back to
     /// `add_user_input` + `wire`.
     fn expose_port(&mut self, node: NodeId, port: &str, value: f32) {
         self.graph.set_port_default(node, port, value).unwrap();
@@ -265,11 +265,11 @@ impl PresetBuilder {
             .unwrap();
     }
 
-    /// Build the preset (no resources).
-    fn build(self, name: &str, category: &str) -> PresetBundle {
-        let mut preset = BrushPreset::from_graph(name, self.graph);
-        preset.category = category.to_string();
-        PresetBundle::without_resources(preset)
+    /// Build the brush (no resources).
+    fn build(self, name: &str, category: &str) -> Brush {
+        let mut metadata = BrushMetadata::from_graph(name, self.graph);
+        metadata.category = category.to_string();
+        Brush::without_resources(metadata)
     }
 
     /// Insert a texture_overlay node between stamp and color_output.
@@ -329,19 +329,19 @@ impl PresetBuilder {
         self.wire(image, "texture", tex_overlay, "pattern");
     }
 
-    /// Build the preset with embedded PNG resources.
+    /// Build the brush with embedded PNG resources.
     fn build_with_resources(
         self,
         name: &str,
         category: &str,
         resources: Vec<(&str, ResourceKind, &[u8])>,
-    ) -> PresetBundle {
-        let mut preset = BrushPreset::from_graph(name, self.graph);
-        preset.category = category.to_string();
+    ) -> Brush {
+        let mut metadata = BrushMetadata::from_graph(name, self.graph);
+        metadata.category = category.to_string();
 
         let mut resource_data = Vec::new();
         for (res_name, kind, data) in &resources {
-            preset.resources.push(PresetResourceMeta {
+            metadata.resources.push(BrushResourceMeta {
                 name: res_name.to_string(),
                 kind: kind.clone(),
                 path: format!("resources/{}", res_name),
@@ -349,8 +349,8 @@ impl PresetBuilder {
             resource_data.push((res_name.to_string(), data.to_vec()));
         }
 
-        PresetBundle {
-            preset,
+        Brush {
+            metadata,
             resource_data,
             thumbnail_png: None,
         }
@@ -358,27 +358,27 @@ impl PresetBuilder {
 }
 
 // ---------------------------------------------------------------------------
-// Preset definitions
+// Brush definitions
 // ---------------------------------------------------------------------------
 
-fn soft_round() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn soft_round() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_circle(0.7);
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Soft Round", "basic")
 }
 
-fn hard_round() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn hard_round() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_circle(0.05);
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Hard Round", "basic")
 }
 
-fn ink_pen() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn ink_pen() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_circle(0.1);
     // pressure → curve (approx sqrt) → stamp.size
     let curve = b.add_curve(vec![
@@ -396,8 +396,8 @@ fn ink_pen() -> PresetBundle {
     b.build("Ink Pen", "inking")
 }
 
-fn airbrush() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn airbrush() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_circle(1.0);
     b.set_port(b.stamp, "size", 0.15);
     b.wire(b.pen, "pressure", b.stamp, "flow");
@@ -405,8 +405,8 @@ fn airbrush() -> PresetBundle {
     b.build("Airbrush", "basic")
 }
 
-fn scatter_brush() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn scatter_brush() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_circle(0.3);
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.paint_color, "color", b.stamp, "color");
@@ -414,8 +414,8 @@ fn scatter_brush() -> PresetBundle {
     b.build("Scatter Brush", "effects")
 }
 
-fn calligraphy() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn calligraphy() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_image("calligraphy.png");
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.pen, "tilt_direction", b.stamp, "rotation");
@@ -433,8 +433,8 @@ fn calligraphy() -> PresetBundle {
     )
 }
 
-fn textured_ink() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn textured_ink() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_image("ink_dry.png");
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.pen, "pressure", b.stamp, "flow");
@@ -455,8 +455,8 @@ fn textured_ink() -> PresetBundle {
     )
 }
 
-fn size_slider() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn size_slider() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_circle(0.5);
     let slider = b.add_user_input(
         "Size",
@@ -472,8 +472,8 @@ fn size_slider() -> PresetBundle {
     b.build("Size Slider", "basic")
 }
 
-fn pencil() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn pencil() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_circle(0.15);
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.pen, "pressure", b.stamp, "flow");
@@ -495,8 +495,8 @@ fn pencil() -> PresetBundle {
     )
 }
 
-fn charcoal() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn charcoal() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_circle(0.6);
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.pen, "pressure", b.stamp, "flow");
@@ -517,8 +517,8 @@ fn charcoal() -> PresetBundle {
     )
 }
 
-fn canvas_brush() -> PresetBundle {
-    let mut b = PresetBuilder::new();
+fn canvas_brush() -> Brush {
+    let mut b = BrushBuilder::new();
     b.add_circle(0.4);
     b.wire(b.pen, "pressure", b.stamp, "size");
     b.wire(b.paint_color, "color", b.stamp, "color");
@@ -539,10 +539,10 @@ fn canvas_brush() -> PresetBundle {
 }
 
 /// Liquify warp brush. Pushes pixels along pen motion with a radial
-/// falloff. Unlike paint presets, the graph has no stamp / paint_color /
+/// falloff. Unlike paint brushes, the graph has no stamp / paint_color /
 /// color_output — the liquify node is itself the terminal, with its own
 /// `begin_stroke` / `commit` / `render_preview` lifecycle.
-fn liquify_push() -> PresetBundle {
+fn liquify_push() -> Brush {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::<BrushWireType>::new();
 
@@ -600,7 +600,7 @@ fn liquify_push() -> PresetBundle {
         .unwrap();
 
     // size / strength / softness are already `.exposed()` on the liquify
-    // node-def, so the toolbar picks them up without extra preset work.
+    // node-def, so the toolbar picks them up without extra brush work.
 
     // Tighten dab spacing well below the paint default (10%). Liquify's
     // per-dab displacement is ~25% of radius (DRAG_FACTOR in liquify.rs),
@@ -613,9 +613,9 @@ fn liquify_push() -> PresetBundle {
     // at the old 10% spacing / 0.5 strength combination. Tune empirically.
     graph.set_port_default(liquify, "strength", 0.2).unwrap();
 
-    let mut preset = BrushPreset::from_graph("Liquify", graph);
-    preset.category = "effects".to_string();
-    PresetBundle::without_resources(preset)
+    let mut metadata = BrushMetadata::from_graph("Liquify", graph);
+    metadata.category = "effects".to_string();
+    Brush::without_resources(metadata)
 }
 
 // ---------------------------------------------------------------------------
@@ -627,37 +627,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builtin_presets_compile() {
-        for bundle in all() {
-            let result = crate::brush::compile_graph(&bundle.preset.graph);
+    fn builtin_brushes_compile() {
+        for brush in all() {
+            let result = crate::brush::compile_graph(&brush.metadata.graph);
             assert!(
                 result.is_ok(),
-                "preset '{}' failed to compile: {:?}",
-                bundle.preset.name,
+                "brush '{}' failed to compile: {:?}",
+                brush.metadata.name,
                 result.err(),
             );
         }
     }
 
     #[test]
-    fn builtin_presets_round_trip() {
-        for bundle in all() {
-            let name = bundle.preset.name.clone();
-            let bytes = bundle.to_bytes().unwrap();
-            let loaded = PresetBundle::from_bytes(&bytes).unwrap();
-            assert_eq!(loaded.preset.name, name);
+    fn builtin_brushes_round_trip() {
+        for brush in all() {
+            let name = brush.metadata.name.clone();
+            let bytes = brush.to_bytes().unwrap();
+            let loaded = Brush::from_bytes(&bytes).unwrap();
+            assert_eq!(loaded.metadata.name, name);
         }
     }
 
     #[test]
-    fn builtin_presets_no_overlapping_nodes() {
-        for mut bundle in all() {
-            // Presets ship without positions; auto-layout before checking.
-            if bundle.preset.graph.needs_layout() {
-                bundle.preset.graph.auto_layout();
+    fn builtin_brushes_no_overlapping_nodes() {
+        for mut brush in all() {
+            // Brushes ship without positions; auto-layout before checking.
+            if brush.metadata.graph.needs_layout() {
+                brush.metadata.graph.auto_layout();
             }
-            let positions: Vec<[i32; 2]> = bundle
-                .preset
+            let positions: Vec<[i32; 2]> = brush
+                .metadata
                 .graph
                 .nodes
                 .values()
@@ -667,8 +667,8 @@ mod tests {
                 for b in &positions[i + 1..] {
                     assert_ne!(
                         a, b,
-                        "preset '{}' has overlapping nodes at {:?}",
-                        bundle.preset.name, a,
+                        "brush '{}' has overlapping nodes at {:?}",
+                        brush.metadata.name, a,
                     );
                 }
             }
@@ -676,12 +676,12 @@ mod tests {
     }
 
     #[test]
-    fn builtin_presets_unique_names() {
-        let presets = all();
-        let mut names: Vec<_> = presets.iter().map(|b| b.preset.name.clone()).collect();
+    fn builtin_brushes_unique_names() {
+        let brushes = all();
+        let mut names: Vec<_> = brushes.iter().map(|b| b.metadata.name.clone()).collect();
         names.sort();
         names.dedup();
-        assert_eq!(names.len(), presets.len(), "duplicate preset names");
+        assert_eq!(names.len(), brushes.len(), "duplicate brush names");
     }
 
     /// Liquify needs much tighter spacing than the paint default — its
@@ -689,15 +689,15 @@ mod tests {
     /// below that for warps to compose smoothly. Don't let this drift back
     /// to the default 10%.
     #[test]
-    fn liquify_preset_has_tight_spacing() {
-        let bundle = liquify_push();
-        let pen = bundle
-            .preset
+    fn liquify_brush_has_tight_spacing() {
+        let brush = liquify_push();
+        let pen = brush
+            .metadata
             .graph
             .nodes
             .values()
             .find(|n| n.type_id == "pen_input")
-            .expect("liquify preset has a pen_input node");
+            .expect("liquify brush has a pen_input node");
         let spacing = pen
             .ports
             .iter()

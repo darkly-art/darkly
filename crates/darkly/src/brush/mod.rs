@@ -3,18 +3,18 @@
 //! Phase 9: Texture overlay.
 
 pub mod brush_tip;
-pub mod builtin_presets;
+pub mod builtin_brushes;
+pub mod bundle;
 pub mod checkpoint_ring;
 pub mod curve_math;
 pub mod dab_pool;
 pub mod eval;
 pub mod gpu_context;
 pub mod interpolation;
+pub mod library;
 pub mod nodes;
 pub mod paint_info;
 pub mod pipelines;
-pub mod preset;
-pub mod preset_library;
 pub mod preview_renderer;
 pub mod save_points;
 pub mod spacing;
