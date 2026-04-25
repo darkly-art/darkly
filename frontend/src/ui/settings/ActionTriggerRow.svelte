@@ -96,11 +96,11 @@
     .trigger-col {
         display: flex;
         gap: 18px;
-        align-items: center;
+        align-items: flex-start;
     }
     .trigger-cell {
         display: inline-flex;
-        align-items: center;
+        align-items: flex-start;
         gap: 4px;
     }
 

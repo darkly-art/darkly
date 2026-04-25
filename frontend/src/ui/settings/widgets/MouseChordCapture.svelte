@@ -89,7 +89,7 @@
     }
 </script>
 
-<div class="row">
+<div class="stack">
     <select value={parts.site} onchange={pickSite} class="site">
         <option value="">(no mouse trigger)</option>
         {#each compatibleSites as site (site.name)}
@@ -98,30 +98,43 @@
     </select>
 
     {#if parts.site}
-        <button
-            type="button"
-            class="chord"
-            class:capturing
-            onclick={beginCaptureChord}
-            onmousedown={captureClick}
-            title={capturing ? 'Click anywhere with your modifiers' : 'Click to set a modifier+click chord'}
-        >
-            {#if capturing}
-                <span class="hint">Click here with modifiers…</span>
-            {:else}
-                <span class="value">{formatChord(parts.chord)}</span>
-            {/if}
-        </button>
-        {#if parts.chord && !capturing}
-            <button type="button" class="clear" onclick={clearChord} title="Clear">
-                <i class="fa-solid fa-xmark"></i>
+        <div class="chord-row">
+            <button
+                type="button"
+                class="chord"
+                class:capturing
+                onclick={beginCaptureChord}
+                onmousedown={captureClick}
+                title={capturing ? 'Click anywhere with your modifiers' : 'Click to set a modifier+click chord'}
+            >
+                {#if capturing}
+                    <span class="hint">Click here with modifiers…</span>
+                {:else}
+                    <span class="value">{formatChord(parts.chord)}</span>
+                {/if}
             </button>
-        {/if}
+            {#if parts.chord && !capturing}
+                <button type="button" class="clear" onclick={clearChord} title="Clear">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            {/if}
+        </div>
     {/if}
 </div>
 
 <style>
-    .row { display: inline-flex; align-items: center; gap: 6px; }
+    .stack {
+        display: inline-flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+    }
+    .chord-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .chord-row .chord { flex: 1; }
     .site, .chord, .clear {
         background: var(--bg-hover);
         border: 1px solid var(--bg-hover);
