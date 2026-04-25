@@ -2,6 +2,7 @@
     import { config } from '../../config/store.svelte';
     import { settings } from '../../state/settings.svelte';
     import { actions, type ActionRegistration } from '../../actions/registry';
+    import { exportRootAsZip, downloadBlob } from '../../storage/root';
     import Modal from '../Modal.svelte';
     import PrefRow from './PrefRow.svelte';
     import ActionTriggerRow from './ActionTriggerRow.svelte';
@@ -97,6 +98,22 @@
         saveAsName = '';
         presetMenuOpen = false;
     }
+
+    let exporting = $state(false);
+    async function exportZip() {
+        if (exporting) return;
+        exporting = true;
+        try {
+            const blob = await exportRootAsZip();
+            const stamp = new Date().toISOString().slice(0, 10);
+            downloadBlob(blob, `darkly-${stamp}.zip`);
+        } catch (e) {
+            console.error('[storage] export failed', e);
+            alert('Export failed — see console for details.');
+        } finally {
+            exporting = false;
+        }
+    }
 </script>
 
 <Modal bind:open={settings.open} title="Settings" size="md">
@@ -185,6 +202,18 @@
                                 {p.name}
                             </button>
                         {/each}
+                        <div class="sep"></div>
+                        <div class="menu-label">Storage</div>
+                        <button
+                            type="button"
+                            class="menu-item"
+                            onclick={exportZip}
+                            disabled={exporting}
+                            title="Bundle the whole Darkly directory into a downloadable .zip"
+                        >
+                            <i class="fa-solid fa-file-export"></i>
+                            {exporting ? 'Exporting…' : 'Export everything as .zip'}
+                        </button>
                     </div>
                 {/if}
             </div>

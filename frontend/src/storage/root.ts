@@ -13,6 +13,7 @@
  * Acquire the root via `getRoot()`. For a subdirectory, use `getDir(name)`
  * — it creates the subdir if missing.
  */
+import { zip } from 'fflate';
 
 let root: FileSystemDirectoryHandle | null = null;
 
@@ -124,4 +125,64 @@ export function sanitizeFilename(name: string): string {
         .replace(/[\x00-\x1f\x7f/\\:*?"<>|]/g, '_')
         .trim()
         .slice(0, 80);
+}
+
+// ---------------------------------------------------------------------------
+// Zip export
+// ---------------------------------------------------------------------------
+
+/** Walk a directory recursively, yielding `(path, FileSystemFileHandle)`
+ *  pairs. Paths use forward-slash separators relative to `prefix`. */
+async function* walkFiles(
+    dir: FileSystemDirectoryHandle,
+    prefix: string = '',
+): AsyncIterable<[string, FileSystemFileHandle]> {
+    for await (const [name, handle] of dir as unknown as AsyncIterable<[string, FileSystemHandle]>) {
+        const path = prefix ? `${prefix}/${name}` : name;
+        if (handle.kind === 'file') {
+            yield [path, handle as FileSystemFileHandle];
+        } else if (handle.kind === 'directory') {
+            yield* walkFiles(handle as FileSystemDirectoryHandle, path);
+        }
+    }
+}
+
+/**
+ * Bundle the entire Darkly directory (everything reachable from `getRoot()`)
+ * into a single Zip blob. Synchronous on the user side: resolves with the
+ * Blob ready to download / save.
+ *
+ * Note: builds the whole archive in memory. Fine for our scale (settings +
+ * preset JSONs + brush bundles). If we ever need 1 GB+ archives, switch to
+ * fflate's streaming `Zip` constructor.
+ */
+export async function exportRootAsZip(): Promise<Blob> {
+    const root = await getRoot();
+    const entries: Record<string, Uint8Array> = {};
+    for await (const [path, fh] of walkFiles(root)) {
+        const file = await fh.getFile();
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        entries[path] = bytes;
+    }
+    const data: Uint8Array = await new Promise((resolve, reject) => {
+        zip(entries, { level: 6 }, (err, out) => {
+            if (err) reject(err);
+            else resolve(out);
+        });
+    });
+    return new Blob([data], { type: 'application/zip' });
+}
+
+/** Download a Blob as a file by triggering a one-shot anchor click. */
+export function downloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Browsers keep the URL valid until the next tick; revoking immediately
+    // would race the download dispatch in Safari.
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
