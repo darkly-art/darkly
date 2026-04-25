@@ -1,9 +1,18 @@
 import type { PrefInfo, SectionInfo } from './schema';
 
 /**
- * Validate stored user overrides against the live schema. Unknown keys are
+ * Per-action keys are accepted by prefix even though no schema entry
+ * declares them — the action registry is their source of truth. We don't
+ * validate against a specific action ID here (the action might not yet be
+ * registered on early init); we just accept the namespace and require a
+ * string value.
+ */
+const PER_ACTION_PREFIXES = ['hotkeys.', 'mouseclicks.'];
+
+/**
+ * Validate stored settings against the live schema. Unknown keys are
  * dropped; type-mismatched values are dropped; numerics out of range are
- * clamped. Returns the cleaned override set. The caller is responsible for
+ * clamped. Returns the cleaned set. The caller is responsible for
  * persisting the cleaned set back if anything changed.
  */
 export function validateOverrides(
@@ -21,6 +30,20 @@ export function validateOverrides(
     for (const [key, value] of Object.entries(overrides)) {
         const pref = byKey.get(key);
         if (!pref) {
+            // Per-action keys (`hotkeys.<id>`, `mouseclicks.<id>`) aren't in
+            // the schema; they're owned by the action registry. Accept any
+            // string.
+            if (PER_ACTION_PREFIXES.some(p => key.startsWith(p))) {
+                if (typeof value === 'string') {
+                    cleaned[key] = value;
+                } else {
+                    console.warn(
+                        `[config] Dropping ${key}: per-action keys must be strings, got ${typeof value}`,
+                    );
+                    changed = true;
+                }
+                continue;
+            }
             console.warn(`[config] Dropping unknown pref key: ${key}`);
             changed = true;
             continue;

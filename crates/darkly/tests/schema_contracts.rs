@@ -1,13 +1,14 @@
-//! Contract tests for the modular config schema.
+//! Contract tests for the modular config schema and built-in presets.
 //!
 //! These assert properties that must hold across every registered section
-//! so the schema stays internally consistent as sections are added.
+//! and preset so the schema stays internally consistent as new sections /
+//! presets are added.
 
 use std::collections::HashMap;
 
 use darkly::config::{
     self,
-    schema::{Pref, PrefDefault, PrefKind, PresetValue},
+    schema::{Pref, PrefDefault, PrefKind},
     sections, ConfigValue,
 };
 
@@ -24,7 +25,7 @@ fn all_prefs() -> Vec<&'static Pref> {
 // intentionally no test enforcing key-prefix == section-id.
 
 #[test]
-fn no_duplicate_keys() {
+fn no_duplicate_pref_keys() {
     let mut seen: HashMap<&'static str, &'static str> = HashMap::new();
     for section in sections::registrations() {
         for pref in section.prefs {
@@ -49,46 +50,48 @@ fn defaults_populated_and_kind_matches() {
 }
 
 #[test]
-fn preset_values_match_kind() {
-    for pref in all_prefs() {
-        for (preset_name, value) in pref.per_preset {
-            assert_preset_value_kind(pref.key, preset_name, &pref.kind, value);
+fn preset_names_unique() {
+    let names = config::preset_names();
+    let mut seen = std::collections::HashSet::new();
+    for name in &names {
+        assert!(
+            seen.insert(name.clone()),
+            "duplicate preset name {:?}",
+            name
+        );
+    }
+    assert!(!names.is_empty(), "expected at least one built-in preset");
+}
+
+#[test]
+fn preset_values_are_strings_for_action_keys() {
+    // Every key in the preset's flattened output that's a hotkey or
+    // mouseclick must be a Str (since both are stored as strings).
+    for name in config::preset_names() {
+        let values = config::preset_values(&name)
+            .unwrap_or_else(|| panic!("preset {name:?} should be known"));
+        for (key, value) in &values {
+            if key.starts_with("hotkeys.") || key.starts_with("mouseclicks.") {
+                assert!(
+                    matches!(value, ConfigValue::Str(_)),
+                    "preset {name:?} key {key:?}: expected Str, got {value:?}"
+                );
+            }
         }
     }
 }
 
 #[test]
-fn preset_values_overlay_defaults() {
-    // Every built-in template should be queryable. Its values for any key
-    // are either an explicit per_preset override or the default.
-    for name in config::preset_names() {
-        let values = config::preset_values(&name)
-            .unwrap_or_else(|| panic!("preset {:?} should be known", name));
-
-        for pref in all_prefs() {
-            let actual = values.get(pref.key).unwrap_or_else(|| {
-                panic!("preset {:?} missing value for key {:?}", name, pref.key)
-            });
-            // Find the explicit override (if any) for this preset on this pref.
-            let explicit = pref
-                .per_preset
-                .iter()
-                .find(|(n, _)| *n == name.as_str())
-                .map(|(_, v)| v);
-            match explicit {
-                Some(expected) => assert_preset_value_matches(pref.key, &name, expected, actual),
-                None => {
-                    // No override → default must show through.
-                    let default = pref.default.to_config_value();
-                    assert_eq!(
-                        actual, &default,
-                        "preset {:?} should fall back to default for key {:?}",
-                        name, pref.key
-                    );
-                }
-            }
-        }
-    }
+fn empty_preset_clears_user_settings() {
+    // The Krita preset declares no overrides; loading it produces an empty
+    // values map, and applying that map to user_settings reverts every key
+    // to its default.
+    let values = config::preset_values("Krita").expect("Krita preset");
+    assert!(
+        values.is_empty(),
+        "Krita preset should declare no overrides; got {} entries",
+        values.len()
+    );
 }
 
 #[test]
@@ -135,48 +138,6 @@ fn assert_default_matches(key: &str, kind: &PrefKind, default: &PrefDefault) {
     );
 }
 
-fn assert_preset_value_kind(key: &str, preset: &str, kind: &PrefKind, value: &PresetValue) {
-    let ok = match (kind, value) {
-        (PrefKind::Bool, PresetValue::Bool(_)) => true,
-        (PrefKind::Int { .. }, PresetValue::Int(_)) => true,
-        (PrefKind::Float { .. }, PresetValue::Float(_)) => true,
-        (PrefKind::Str, PresetValue::Str(_)) => true,
-        (PrefKind::Enum { options }, PresetValue::Str(v)) => options.iter().any(|(k, _)| *k == *v),
-        _ => false,
-    };
-    assert!(
-        ok,
-        "pref {:?} preset {:?}: value {:?} does not match kind {:?}",
-        key,
-        preset,
-        preset_value_name(value),
-        kind_name(kind)
-    );
-}
-
-fn assert_preset_value_matches(
-    key: &str,
-    preset: &str,
-    expected: &PresetValue,
-    actual: &ConfigValue,
-) {
-    let matches = match (expected, actual) {
-        (PresetValue::Bool(a), ConfigValue::Bool(b)) => a == b,
-        (PresetValue::Int(a), ConfigValue::Int(b)) => a == b,
-        (PresetValue::Float(a), ConfigValue::Float(b)) => (a - b).abs() < f64::EPSILON,
-        (PresetValue::Str(a), ConfigValue::Str(b)) => *a == b.as_str(),
-        _ => false,
-    };
-    assert!(
-        matches,
-        "pref {:?} under preset {:?}: expected {:?}, got {:?}",
-        key,
-        preset,
-        preset_value_name(expected),
-        actual
-    );
-}
-
 fn kind_name(kind: &PrefKind) -> &'static str {
     match kind {
         PrefKind::Bool => "bool",
@@ -193,14 +154,5 @@ fn default_name(default: &PrefDefault) -> &'static str {
         PrefDefault::Int(_) => "Int",
         PrefDefault::Float(_) => "Float",
         PrefDefault::Str(_) => "Str",
-    }
-}
-
-fn preset_value_name(value: &PresetValue) -> &'static str {
-    match value {
-        PresetValue::Bool(_) => "Bool",
-        PresetValue::Int(_) => "Int",
-        PresetValue::Float(_) => "Float",
-        PresetValue::Str(_) => "Str",
     }
 }

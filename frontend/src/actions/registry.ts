@@ -13,6 +13,14 @@ export interface ActionRegistration {
     requires?: string[];
     accepts?: string[];
     type?: ActionType;
+    /** Default keyboard trigger (tinykeys notation, e.g. "$mod+KeyZ").
+     *  Used when no `hotkeys.<id>` setting is present. Empty/undefined =
+     *  no keyboard trigger by default. */
+    defaultHotkey?: string;
+    /** Default mouse trigger ("<site>:<chord>", e.g. "layerEye:alt+click").
+     *  Used when no `mouseclicks.<id>` setting is present. Empty/undefined =
+     *  no mouse trigger by default. */
+    defaultMouseClick?: string;
     handler: (ctx: ActionContext) => void;
     deactivate?: (ctx: ActionContext) => void;
 }

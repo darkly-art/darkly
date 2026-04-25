@@ -7,7 +7,6 @@ const PREFS: &[Pref] = &[Pref {
     kind: PrefKind::Bool,
     default: PrefDefault::Bool(false),
     widget: WidgetHint::Auto,
-    per_preset: &[],
 }];
 
 pub fn register() -> SchemaSection {

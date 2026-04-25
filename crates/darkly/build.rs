@@ -23,6 +23,8 @@ fn main() {
         &src.join("config/sections"),
         "crate::config::schema::SchemaSection",
     );
+
+    generate_registry(&src.join("config/presets"), "crate::config::schema::Preset");
 }
 
 /// Scan a directory for .rs module files (excluding mod.rs) and generate

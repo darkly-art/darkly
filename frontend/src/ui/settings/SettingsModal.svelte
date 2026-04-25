@@ -1,15 +1,16 @@
 <script lang="ts">
     import { config } from '../../config/store.svelte';
     import { settings } from '../../state/settings.svelte';
+    import { actions, type ActionRegistration } from '../../actions/registry';
     import Modal from '../Modal.svelte';
     import PrefRow from './PrefRow.svelte';
+    import ActionTriggerRow from './ActionTriggerRow.svelte';
     import type { PrefInfo } from '../../config/schema';
 
     let search = $state('');
+    let activeTab = $state<'settings' | 'hotkeys'>('settings');
 
-    /** Flat list of every visible pref across every section, in section
-     *  order. Hidden prefs (UI-state stored via the same backend) are
-     *  filtered out — they're not user-facing. */
+    /** Settings tab: every visible (non-Hidden) schema-defined pref. */
     const visiblePrefs = $derived.by(() => {
         const all: PrefInfo[] = [];
         for (const section of config.schema) {
@@ -27,10 +28,39 @@
         );
     });
 
+    /** Hotkeys tab: walk the action registry. Each row gets a keyboard
+     *  trigger field and a mouse trigger field. */
+    const visibleActions = $derived.by(() => {
+        // Touching config.schema makes us reactive to schema/init changes.
+        void config.schema;
+        const all = actions.all();
+        const q = search.trim().toLowerCase();
+        if (!q) return all;
+        return all.filter((a: ActionRegistration) =>
+            a.displayName.toLowerCase().includes(q)
+            || a.id.toLowerCase().includes(q)
+            || (a.description ?? '').toLowerCase().includes(q)
+        );
+    });
+
     let presetMenuOpen = $state(false);
     let saveAsName = $state('');
     let savingAs = $state(false);
     let saveAsInput: HTMLInputElement | undefined = $state();
+    let presetBtnEl: HTMLButtonElement | undefined = $state();
+    let menuTop = $state(0);
+    let menuLeft = $state(0);
+
+    // The menu uses position: fixed so it escapes the modal's overflow:auto
+    // clipping. Anchor the menu's left edge to the button's left edge.
+    function togglePresetMenu() {
+        if (!presetMenuOpen && presetBtnEl) {
+            const rect = presetBtnEl.getBoundingClientRect();
+            menuTop = rect.bottom + 4;
+            menuLeft = rect.left;
+        }
+        presetMenuOpen = !presetMenuOpen;
+    }
 
     // Focus the rename input when it becomes visible — the user just clicked
     // "Save as…" and expects to start typing immediately.
@@ -72,11 +102,12 @@
 <Modal bind:open={settings.open} title="Settings" size="md">
     <div class="settings-body">
         <header class="topbar">
-            <div class="preset-control">
+            <div>
                 <button
                     type="button"
                     class="preset-btn"
-                    onclick={() => presetMenuOpen = !presetMenuOpen}
+                    bind:this={presetBtnEl}
+                    onclick={togglePresetMenu}
                     title="Manage presets"
                 >
                     <span class="preset-label">Preset</span>
@@ -84,7 +115,7 @@
                     <i class="fa-solid fa-chevron-down"></i>
                 </button>
                 {#if presetMenuOpen}
-                    <div class="preset-menu">
+                    <div class="preset-menu" style="top: {menuTop}px; left: {menuLeft}px;">
                         {#if config.userPresetNames.length > 0}
                             <div class="menu-label">Your presets</div>
                             {#each config.userPresetNames as name (name)}
@@ -162,19 +193,53 @@
                 <input
                     type="search"
                     bind:value={search}
-                    placeholder="Search settings…"
+                    placeholder={activeTab === 'hotkeys' ? 'Search shortcuts…' : 'Search settings…'}
                 />
             </div>
         </header>
 
-        <div class="prefs-list">
-            {#if visiblePrefs.length === 0}
-                <div class="empty">No matching settings.</div>
-            {:else}
-                {#each visiblePrefs as pref (pref.key)}
-                    <PrefRow {pref} />
-                {/each}
-            {/if}
+        <div class="main">
+            <nav class="tab-strip">
+                <button
+                    type="button"
+                    class="tab"
+                    class:active={activeTab === 'settings'}
+                    onclick={() => activeTab = 'settings'}
+                >Settings</button>
+                <button
+                    type="button"
+                    class="tab"
+                    class:active={activeTab === 'hotkeys'}
+                    onclick={() => activeTab = 'hotkeys'}
+                >Hotkeys</button>
+            </nav>
+
+            <div class="prefs-list">
+                {#if activeTab === 'settings'}
+                    {#if visiblePrefs.length === 0}
+                        <div class="empty">No matching settings.</div>
+                    {:else}
+                        {#each visiblePrefs as pref (pref.key)}
+                            <PrefRow {pref} />
+                        {/each}
+                    {/if}
+                {:else}
+                    {#if visibleActions.length === 0}
+                        <div class="empty">No matching actions.</div>
+                    {:else}
+                        <header class="trigger-header">
+                            <span class="label-col">Action</span>
+                            <span class="trigger-col">
+                                <span>Keyboard</span>
+                                <span>Mouse</span>
+                            </span>
+                        </header>
+                        {#each visibleActions as action (action.id)}
+                            <ActionTriggerRow {action} />
+                        {/each}
+                    {/if}
+                {/if}
+            </div>
         </div>
     </div>
 </Modal>
@@ -220,7 +285,6 @@
         min-width: 0;
     }
 
-    .preset-control { position: relative; }
     .preset-btn {
         display: flex;
         align-items: center;
@@ -238,9 +302,7 @@
     .preset-name { font-weight: 600; }
 
     .preset-menu {
-        position: absolute;
-        right: 0;
-        top: calc(100% + 4px);
+        position: fixed;
         z-index: 10;
         min-width: 260px;
         background: var(--bg-surface, var(--bg));
@@ -311,6 +373,72 @@
     }
 
     .sep { height: 1px; background: var(--bg-hover); margin: 4px 0; }
+
+    .main {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: row;
+    }
+
+    .tab-strip {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 8px 0;
+        border-right: 1px solid var(--bg-hover);
+        flex-shrink: 0;
+        min-width: 140px;
+    }
+    .tab {
+        background: transparent;
+        border: none;
+        color: var(--text-muted);
+        font-size: 13px;
+        font-weight: 500;
+        padding: 8px 16px;
+        cursor: pointer;
+        position: relative;
+        border-radius: 0;
+        text-align: left;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+        color: var(--text);
+    }
+    .tab.active::after {
+        content: '';
+        position: absolute;
+        top: 6px;
+        bottom: 6px;
+        right: -1px;
+        width: 2px;
+        background: var(--accent);
+    }
+
+    .trigger-header {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 16px;
+        padding: 8px 12px;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--text-muted);
+        font-weight: 600;
+        border-bottom: 1px solid var(--bg-hover);
+        position: sticky;
+        top: 0;
+        background: var(--bg-active);
+        z-index: 1;
+    }
+    .trigger-header .trigger-col {
+        display: flex;
+        gap: 18px;
+    }
+    .trigger-header .trigger-col span {
+        min-width: 170px;
+    }
 
     .prefs-list {
         flex: 1;

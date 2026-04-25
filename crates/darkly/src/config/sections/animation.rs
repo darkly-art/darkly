@@ -13,7 +13,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Int { min: 1, max: 16 },
         default: PrefDefault::Int(2),
         widget: WidgetHint::Auto,
-        per_preset: &[],
     },
     Pref {
         key: "animation.overlay_divisor",
@@ -22,7 +21,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Int { min: 1, max: 16 },
         default: PrefDefault::Int(4),
         widget: WidgetHint::Auto,
-        per_preset: &[],
     },
 ];
 

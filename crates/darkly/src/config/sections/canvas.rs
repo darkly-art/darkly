@@ -8,7 +8,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Int { min: 1, max: 16384 },
         default: PrefDefault::Int(1920),
         widget: WidgetHint::NumberInput,
-        per_preset: &[],
     },
     Pref {
         key: "canvas.height",
@@ -17,7 +16,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Int { min: 1, max: 16384 },
         default: PrefDefault::Int(1080),
         widget: WidgetHint::NumberInput,
-        per_preset: &[],
     },
     Pref {
         key: "canvas.backgroundColor",
@@ -26,7 +24,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Str,
         default: PrefDefault::Str("#1a1a1a"),
         widget: WidgetHint::Color,
-        per_preset: &[],
     },
 ];
 

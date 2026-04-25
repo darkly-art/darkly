@@ -1,9 +1,8 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import { getLayerThumbnail, getMaskThumbnail, THUMB_SIZE } from './thumbnails';
-    import { dispatchBinding } from '../../actions/triggers';
+    import { dispatchClick } from '../../actions/triggers';
     import { actions } from '../../actions/registry';
-    import { config } from '../../config/store.svelte';
 
     let { layer, depth = 0, onupdate }: {
         layer: {
@@ -32,7 +31,7 @@
 
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchBinding('layerEye', e, { layerId: layer.id }, config)) {
+        if (dispatchClick('layerEye', e, { layerId: layer.id })) {
             onupdate();
             return;
         }
@@ -63,7 +62,7 @@
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchBinding('maskThumb', e, { layerId: layer.id }, config)) {
+        if (dispatchClick('maskThumb', e, { layerId: layer.id })) {
             onupdate();
             return;
         }

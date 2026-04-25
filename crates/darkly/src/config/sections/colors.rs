@@ -8,7 +8,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Str,
         default: PrefDefault::Str("#000000"),
         widget: WidgetHint::Color,
-        per_preset: &[],
     },
     Pref {
         key: "colors.defaultBackground",
@@ -17,7 +16,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Str,
         default: PrefDefault::Str("#ffffff"),
         widget: WidgetHint::Color,
-        per_preset: &[],
     },
 ];
 

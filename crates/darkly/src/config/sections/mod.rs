@@ -3,10 +3,8 @@
 // that exports `pub fn register() -> crate::config::schema::SchemaSection`.
 
 pub mod animation;
-pub mod bindings;
 pub mod canvas;
 pub mod colors;
-pub mod hotkeys;
 pub mod input;
 pub mod nav;
 pub mod rendering;
@@ -18,10 +16,8 @@ use crate::config::schema::SchemaSection;
 pub fn registrations() -> Vec<SchemaSection> {
     vec![
         animation::register(),
-        bindings::register(),
         canvas::register(),
         colors::register(),
-        hotkeys::register(),
         input::register(),
         nav::register(),
         rendering::register(),

@@ -13,7 +13,6 @@ const PREFS: &[Pref] = &[Pref {
     },
     default: PrefDefault::Float(1.0),
     widget: WidgetHint::Auto,
-    per_preset: &[],
 }];
 
 pub fn register() -> SchemaSection {

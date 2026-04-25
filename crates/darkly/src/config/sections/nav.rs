@@ -11,7 +11,6 @@ const PREFS: &[Pref] = &[
         },
         default: PrefDefault::Float(0.5),
         widget: WidgetHint::Auto,
-        per_preset: &[],
     },
     Pref {
         key: "hotkeys.nav.trigger",
@@ -20,7 +19,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Str,
         default: PrefDefault::Str("Space"),
         widget: WidgetHint::Hotkey,
-        per_preset: &[],
     },
     Pref {
         key: "hotkeys.nav.rotate",
@@ -29,7 +27,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Str,
         default: PrefDefault::Str("Shift"),
         widget: WidgetHint::Hotkey,
-        per_preset: &[],
     },
     Pref {
         key: "hotkeys.nav.zoom",
@@ -38,7 +35,6 @@ const PREFS: &[Pref] = &[
         kind: PrefKind::Str,
         default: PrefDefault::Str("Ctrl"),
         widget: WidgetHint::Hotkey,
-        per_preset: &[],
     },
 ];
 

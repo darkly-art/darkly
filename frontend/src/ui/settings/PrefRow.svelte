@@ -8,7 +8,6 @@
     import EnumDropdown from './widgets/EnumDropdown.svelte';
     import ColorInput from './widgets/ColorInput.svelte';
     import HotkeyCapture from './widgets/HotkeyCapture.svelte';
-    import MouseBindingCapture from './widgets/MouseBindingCapture.svelte';
 
     type Props = { pref: PrefInfo };
     let { pref }: Props = $props();
@@ -36,8 +35,6 @@
                 <ColorInput value={value as string} {onchange} />
             {:else if pref.widget === 'hotkey'}
                 <HotkeyCapture prefKey={pref.key} value={value as string} {onchange} />
-            {:else if pref.widget === 'mouseBinding'}
-                <MouseBindingCapture prefKey={pref.key} value={value as string} {onchange} />
             {:else if pref.kind === 'bool'}
                 <BoolToggle value={value as boolean} {onchange} />
             {:else if pref.kind === 'enum'}

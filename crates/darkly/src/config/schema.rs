@@ -46,9 +46,6 @@ pub struct Pref {
     pub default: PrefDefault,
     /// Hint for which widget the Settings UI should render.
     pub widget: WidgetHint,
-    /// Per-preset overrides attached to this pref. Empty = pref is the same
-    /// across every preset. Flat list of `(preset_name, override_value)`.
-    pub per_preset: &'static [(&'static str, PresetValue)],
 }
 
 /// What kind of value a pref stores and what constraints it has.
@@ -101,6 +98,31 @@ pub enum PresetValue {
     Str(&'static str),
 }
 
+/// A built-in preset: a structured snapshot of overrides, grouped by facet.
+///
+/// Each preset is one self-contained file in `config/presets/<name>.rs`,
+/// auto-discovered by `build.rs`. A preset only declares the keys it
+/// changes; everything else is inherited from defaults (for schema-defined
+/// settings) or from action registrations (for hotkeys/mouseclicks).
+///
+/// At apply time, the structured facets are flattened to a key/value map
+/// and bulk-written into the user's settings:
+/// - `hotkeys[i] = (actionId, key)` -> `hotkeys.<actionId> = key`
+/// - `mouse_clicks[i] = (actionId, "<site>:<chord>")` -> `mouseclicks.<actionId> = "<site>:<chord>"`
+/// - `settings[i] = (key, PresetValue)` -> stored as-is (key already namespaced)
+///
+/// Empty string values are meaningful: they mean "no binding" — use them to
+/// suppress an action's default trigger under a particular preset (e.g.
+/// Photoshop disables the keyboard `KeyI` for `isolateLayer` by setting
+/// `hotkeys: &[("isolateLayer", "")]`).
+pub struct Preset {
+    pub name: &'static str,
+    pub description: Option<&'static str>,
+    pub hotkeys: &'static [(&'static str, &'static str)],
+    pub mouse_clicks: &'static [(&'static str, &'static str)],
+    pub settings: &'static [(&'static str, PresetValue)],
+}
+
 impl PresetValue {
     pub fn to_config_value(&self) -> ConfigValue {
         match self {
@@ -123,9 +145,6 @@ pub enum WidgetHint {
     NumberInput,
     /// `Str` rendered as a tinykeys-style hotkey capture box.
     Hotkey,
-    /// `Str` rendered as a click-chord capture / action dropdown for
-    /// `bindings.<site>.<chord>` keys. Empty string = "no action".
-    MouseBinding,
     /// `Str` rendered as a color picker (hex `#rrggbb`).
     Color,
     /// Persisted via the backend but not rendered in the Settings UI.
@@ -224,7 +243,6 @@ fn widget_hint_str(hint: &WidgetHint) -> &'static str {
         WidgetHint::Auto => "auto",
         WidgetHint::NumberInput => "numberInput",
         WidgetHint::Hotkey => "hotkey",
-        WidgetHint::MouseBinding => "mouseBinding",
         WidgetHint::Color => "color",
         WidgetHint::Hidden => "hidden",
     }

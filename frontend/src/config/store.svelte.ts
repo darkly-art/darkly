@@ -42,6 +42,72 @@ const PRESET_DESCRIPTIONS: Record<string, string> = {
 
 type ChangeListener = () => void;
 
+/**
+ * Structured on-disk representation of a preset. The runtime config store
+ * holds a flat key/value map; we group by namespace at write time and
+ * un-group at read time so the JSON file is human-readable / editable.
+ */
+interface StructuredPreset {
+    name: string;
+    hotkeys?: Record<string, string>;
+    mouse_clicks?: Record<string, string>;
+    settings?: Record<string, unknown>;
+}
+
+/** Group a flat key/value map into the on-disk facets. */
+function structure(name: string, flat: Record<string, unknown>): StructuredPreset {
+    const hotkeys: Record<string, string> = {};
+    const mouseClicks: Record<string, string> = {};
+    const settings: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(flat)) {
+        if (key.startsWith('hotkeys.') && typeof value === 'string') {
+            hotkeys[key.slice('hotkeys.'.length)] = value;
+        } else if (key.startsWith('mouseclicks.') && typeof value === 'string') {
+            mouseClicks[key.slice('mouseclicks.'.length)] = value;
+        } else {
+            settings[key] = value;
+        }
+    }
+    const out: StructuredPreset = { name };
+    if (Object.keys(hotkeys).length) out.hotkeys = hotkeys;
+    if (Object.keys(mouseClicks).length) out.mouse_clicks = mouseClicks;
+    if (Object.keys(settings).length) out.settings = settings;
+    return out;
+}
+
+/** Flatten a structured preset back into the runtime key/value map. Tolerates
+ *  legacy flat-shaped JSON: any key not under a known facet is kept as-is. */
+function unstructure(raw: unknown): Record<string, unknown> {
+    if (!raw || typeof raw !== 'object') return {};
+    const obj = raw as Record<string, unknown>;
+    // If it doesn't have any of the known facets and has no `name`, treat as
+    // a legacy flat map.
+    const looksStructured = 'hotkeys' in obj || 'mouse_clicks' in obj
+        || 'settings' in obj || 'name' in obj;
+    if (!looksStructured) return { ...obj };
+
+    const flat: Record<string, unknown> = {};
+    const hk = obj.hotkeys;
+    if (hk && typeof hk === 'object') {
+        for (const [k, v] of Object.entries(hk as Record<string, unknown>)) {
+            if (typeof v === 'string') flat[`hotkeys.${k}`] = v;
+        }
+    }
+    const mc = obj.mouse_clicks;
+    if (mc && typeof mc === 'object') {
+        for (const [k, v] of Object.entries(mc as Record<string, unknown>)) {
+            if (typeof v === 'string') flat[`mouseclicks.${k}`] = v;
+        }
+    }
+    const s = obj.settings;
+    if (s && typeof s === 'object') {
+        for (const [k, v] of Object.entries(s as Record<string, unknown>)) {
+            flat[k] = v;
+        }
+    }
+    return flat;
+}
+
 export interface BuiltinPreset {
     name: string;
     description: string;
@@ -268,8 +334,9 @@ class ConfigStore {
 
     /** Read a preset file and load it as the active value map. */
     async #loadIntoMemory(dir: FileSystemDirectoryHandle, name: string) {
-        const raw = (await readJson<Record<string, unknown>>(dir, `${name}.json`)) ?? {};
-        const { cleaned, changed } = validateOverrides(this.schema, raw);
+        const raw = (await readJson<unknown>(dir, `${name}.json`)) ?? {};
+        const flat = unstructure(raw);
+        const { cleaned, changed } = validateOverrides(this.schema, flat);
         this.#values = cleaned;
         this.activePresetName = name;
         // Push to Rust.
@@ -277,14 +344,14 @@ class ConfigStore {
         for (const [k, v] of Object.entries(cleaned)) config_set(k, v);
         if (changed) {
             // Write the cleaned-up values back so we don't keep warning.
-            await writeJson(dir, `${name}.json`, cleaned);
+            await writeJson(dir, `${name}.json`, structure(name, cleaned));
         }
     }
 
     /** Create a new preset file with the given values. */
     async #createPreset(name: string, values: Record<string, unknown>) {
         const dir = await getDir(PRESETS_DIR);
-        await writeJson(dir, `${name}.json`, values);
+        await writeJson(dir, `${name}.json`, structure(name, values));
         if (!this.userPresetNames.includes(name)) {
             this.userPresetNames = [...this.userPresetNames, name].sort();
         }
@@ -299,12 +366,13 @@ class ConfigStore {
 
     /** Replace the active preset's values entirely (used by applyTemplate). */
     async #replaceActiveValues(values: Record<string, unknown>) {
-        if (!this.activePresetName) return;
+        const name = this.activePresetName;
+        if (!name) return;
         config_reset_all();
         for (const [k, v] of Object.entries(values)) config_set(k, v);
         this.#values = values;
         const dir = await getDir(PRESETS_DIR);
-        await writeJson(dir, `${this.activePresetName}.json`, values);
+        await writeJson(dir, `${name}.json`, structure(name, values));
     }
 
     /** Persist the .active pointer file (or remove it if name is null). */
@@ -330,7 +398,7 @@ class ConfigStore {
             (async () => {
                 try {
                     const dir = await getDir(PRESETS_DIR);
-                    await writeJson(dir, `${name}.json`, snapshot);
+                    await writeJson(dir, `${name}.json`, structure(name, snapshot));
                 } catch (e) {
                     console.error('[config] preset write failed', e);
                 }

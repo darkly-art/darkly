@@ -1,3 +1,4 @@
+pub mod presets;
 pub mod schema;
 pub mod sections;
 
@@ -26,16 +27,8 @@ thread_local! {
     static CONFIG: RefCell<Config> = RefCell::new(Config::new());
 }
 
-/// Built-in template names. All ship as read-only data: their values are
-/// computed by overlaying each pref's `per_preset` entry for this name on
-/// top of the defaults. "Krita" has no `per_preset` entries because the
-/// defaults already match what Krita's keybindings would dictate, but it's
-/// still listed here so users can pick it on first launch and still get
-/// "the canonical Krita feel" semantics.
-const BUILTIN_PRESETS: &[&str] = &["Krita", "Photoshop", "GIMP"];
-
 // ---------------------------------------------------------------------------
-// Schema-driven defaults + built-in templates
+// Schema-driven defaults
 // ---------------------------------------------------------------------------
 
 impl Config {
@@ -61,22 +54,32 @@ impl Config {
     }
 }
 
-/// Materialize a built-in template's full settings snapshot: defaults
-/// overlaid with this template's `per_preset` overrides. Returns `None` if
-/// the name isn't a known built-in.
+/// Flatten a built-in preset's structured facets into a key/value map ready
+/// to bulk-write into user_settings. Returns `None` if the name isn't a
+/// registered built-in preset.
+///
+/// Schema-defined defaults are NOT included here — applying a preset writes
+/// only the keys the preset *changes*, leaving the underlying defaults to
+/// show through for everything the preset is silent about.
 pub fn preset_values(name: &str) -> Option<HashMap<String, ConfigValue>> {
-    if !BUILTIN_PRESETS.contains(&name) {
-        return None;
+    let preset = presets::registrations()
+        .into_iter()
+        .find(|p| p.name == name)?;
+    let mut out = HashMap::new();
+    for (action_id, key) in preset.hotkeys {
+        out.insert(
+            format!("hotkeys.{action_id}"),
+            ConfigValue::Str((*key).to_string()),
+        );
     }
-    let mut out = CONFIG.with(|c| c.borrow().defaults.clone());
-    for section in sections::registrations() {
-        for pref in section.prefs {
-            for (preset_name, value) in pref.per_preset {
-                if *preset_name == name {
-                    out.insert(pref.key.to_string(), value.to_config_value());
-                }
-            }
-        }
+    for (action_id, chord) in preset.mouse_clicks {
+        out.insert(
+            format!("mouseclicks.{action_id}"),
+            ConfigValue::Str((*chord).to_string()),
+        );
+    }
+    for (key, value) in preset.settings {
+        out.insert((*key).to_string(), value.to_config_value());
     }
     Some(out)
 }
@@ -145,9 +148,12 @@ pub fn reset_all() {
     });
 }
 
-/// List all built-in template names.
+/// List all built-in preset names.
 pub fn preset_names() -> Vec<String> {
-    BUILTIN_PRESETS.iter().map(|s| s.to_string()).collect()
+    presets::registrations()
+        .into_iter()
+        .map(|p| p.name.to_string())
+        .collect()
 }
 
 /// Check whether the default type for a key is `Int` (used by the WASM
@@ -207,24 +213,28 @@ mod tests {
     }
 
     #[test]
-    fn preset_values_overlay_defaults() {
+    fn preset_values_flatten_facets() {
         reset_state();
-        // Krita has no per_preset entries — its values equal the defaults.
-        let krita = preset_values("Krita").expect("Krita preset");
-        assert_eq!(
-            krita.get("hotkeys.colorPickerTool"),
-            Some(&ConfigValue::Str("KeyP".into()))
-        );
 
-        // Photoshop has per_preset for colorPickerTool.
+        // Krita is the implicit-default preset: no overrides, empty map.
+        let krita = preset_values("Krita").expect("Krita preset");
+        assert!(krita.is_empty(), "Krita preset should declare no overrides");
+
+        // Photoshop overrides colorPickerTool's hotkey and isolateLayer's
+        // mouse click. The flattened map uses the conventional namespaces.
         let photoshop = preset_values("Photoshop").expect("Photoshop preset");
         assert_eq!(
             photoshop.get("hotkeys.colorPickerTool"),
             Some(&ConfigValue::Str("KeyI".into()))
         );
+        assert_eq!(
+            photoshop.get("mouseclicks.isolateLayer"),
+            Some(&ConfigValue::Str("layerEye:alt+click".into()))
+        );
 
-        // Untouched keys come from defaults.
-        assert_eq!(photoshop.get("canvas.width"), Some(&ConfigValue::Int(1920)));
+        // Photoshop is silent about canvas.width — it's not in the flattened
+        // map (resolution falls back to the schema default).
+        assert!(!photoshop.contains_key("canvas.width"));
 
         // Unknown preset name → None.
         assert!(preset_values("Bogus").is_none());
