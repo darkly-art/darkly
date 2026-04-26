@@ -38,6 +38,13 @@ impl DarklyEngine {
         self.view_transform.screen_to_canvas(screen_x, screen_y)
     }
 
+    /// Push the workspace background color (the area shown outside the
+    /// canvas rectangle by the present shader). Frontend calls this on
+    /// theme change with the resolved `--canvas-bg` CSS value.
+    pub fn set_viewport_bg(&mut self, bg: [f32; 4]) {
+        self.compositor.set_viewport_bg(&self.gpu.queue, bg);
+    }
+
     /// Start an async color pick at canvas coordinates.
     pub fn pick_color(&mut self, x: f32, y: f32) -> [u8; 4] {
         let canvas_w = self.compositor.canvas_width();
@@ -308,6 +315,17 @@ impl DarklyEngine {
                 let png_bytes = encode_rgba_as_png(&pixels, width, height);
                 if !png_bytes.is_empty() {
                     self.brush_library.set_thumbnail(&name, png_bytes);
+                }
+            }
+            ReadbackContext::ActiveBrushDab {
+                width,
+                height,
+                graph_version,
+            } => {
+                // Drop stale results — same logic as BrushEditorPreview.
+                if graph_version == self.brush_graph_version {
+                    self.active_dab_preview_cache = Some(pixels);
+                    self.active_dab_preview_cache_size = Some((width, height));
                 }
             }
         }

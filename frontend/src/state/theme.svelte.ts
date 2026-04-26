@@ -35,6 +35,52 @@ function systemTheme(): ThemeName {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+/** Read `--canvas-bg` from the active theme and return it as an RGBA
+ *  Float32Array in 0..1 sRGB space (matching the convention used by
+ *  the rest of the WASM color plumbing). Returns null if the variable
+ *  isn't defined or is in an unsupported format. */
+function readCanvasBg(): Float32Array | null {
+    if (typeof document === 'undefined') return null;
+    const raw = getComputedStyle(document.body).getPropertyValue('--canvas-bg').trim();
+    if (!raw) return null;
+
+    // Hex: #rgb, #rrggbb, #rrggbbaa.
+    const hex = raw.match(/^#([0-9a-f]{3,8})$/i);
+    if (hex) {
+        const h = hex[1];
+        const expand = (c: string) => parseInt(c.length === 1 ? c + c : c, 16) / 255;
+        if (h.length === 3) return new Float32Array([expand(h[0]), expand(h[1]), expand(h[2]), 1]);
+        if (h.length === 6)
+            return new Float32Array([
+                expand(h.slice(0, 2)),
+                expand(h.slice(2, 4)),
+                expand(h.slice(4, 6)),
+                1,
+            ]);
+        if (h.length === 8)
+            return new Float32Array([
+                expand(h.slice(0, 2)),
+                expand(h.slice(2, 4)),
+                expand(h.slice(4, 6)),
+                expand(h.slice(6, 8)),
+            ]);
+    }
+
+    // rgb()/rgba() — getComputedStyle on hex-defined custom props in some
+    // browsers returns them already normalized to this form.
+    const rgb = raw.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.%]+))?\s*\)$/i);
+    if (rgb) {
+        const r = parseFloat(rgb[1]) / 255;
+        const g = parseFloat(rgb[2]) / 255;
+        const b = parseFloat(rgb[3]) / 255;
+        let a = 1;
+        if (rgb[4] != null) a = rgb[4].endsWith('%') ? parseFloat(rgb[4]) / 100 : parseFloat(rgb[4]);
+        return new Float32Array([r, g, b, a]);
+    }
+
+    return null;
+}
+
 class ThemeState {
     /** The user's stated preference (what's persisted). */
     preference = $state<ThemePreference>('dark');
@@ -67,6 +113,11 @@ class ThemeState {
         if (!app.handle) return;
         const colors = PREVIEW_COLORS[this.current];
         app.handle.set_preview_theme(colors.fg, colors.bg);
+        const viewportBg = readCanvasBg();
+        if (viewportBg) {
+            app.handle.set_viewport_bg(viewportBg);
+            app.requestFrame();
+        }
     }
 
     #applyToDom() {

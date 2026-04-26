@@ -255,6 +255,20 @@ impl Default for BrushPreviewRenderer {
     }
 }
 
+/// Synthesize a single full-pressure dab at the centre of a target rect.
+///
+/// Drives the brush graph through the regular stroke pipeline with one
+/// stationary sample — useful for the brush picker's tile-shape thumbnail
+/// (and the BrushBar trigger button), where the user wants to see the
+/// tip silhouette without a full stroke arc.
+pub fn synthesize_preview_dab(width: f32, height: f32) -> Vec<PaintInformation> {
+    vec![PaintInformation {
+        pos: [width * 0.5, height * 0.5],
+        pressure: 1.0,
+        ..Default::default()
+    }]
+}
+
 /// Synthesize an S-curve preview stroke of the given dimensions.
 ///
 /// Samples `n_points` evenly along a cubic Bezier from lower-left to upper-

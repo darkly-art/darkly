@@ -2,9 +2,7 @@
 //! and optional binary resources (brush tips, textures).
 //!
 //! Format:
-//!   preset.json        — metadata + serialized node graph (filename
-//!                        grandfathered for compatibility with archives
-//!                        already in the wild; do not rename)
+//!   brush.json         — metadata + serialized node graph
 //!   resources/<name>   — binary assets referenced by the graph
 
 use std::io::{Cursor, Read, Write};
@@ -15,8 +13,8 @@ use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::nodegraph::Graph;
 
-/// Current format version.  Bump when the schema changes in a
-/// backwards-incompatible way.
+/// Current format version. Loaders reject any archive whose stored
+/// version is greater than this; older versions are not supported.
 pub const FORMAT_VERSION: u32 = 1;
 
 /// Metadata for a brush — the JSON-serialized envelope inside a
@@ -108,9 +106,8 @@ impl Brush {
         }
     }
 
-    /// ZIP entry path for the JSON envelope. Filename is grandfathered;
-    /// archives in the wild reference it under this name.
-    const METADATA_JSON_PATH: &'static str = "preset.json";
+    /// ZIP entry path for the JSON envelope.
+    const METADATA_JSON_PATH: &'static str = "brush.json";
 
     /// ZIP entry path for the optional preview PNG.
     const PREVIEW_PNG_PATH: &'static str = "preview.png";
@@ -170,7 +167,7 @@ impl Brush {
             zip::ZipArchive::new(cursor).map_err(|e| format!("invalid ZIP archive: {e}"))?;
 
         // Read the JSON envelope.
-        let mut metadata: BrushMetadata = {
+        let metadata: BrushMetadata = {
             let mut file = archive
                 .by_name(Self::METADATA_JSON_PATH)
                 .map_err(|e| format!("missing {}: {e}", Self::METADATA_JSON_PATH))?;
@@ -180,27 +177,6 @@ impl Brush {
             serde_json::from_str(&json)
                 .map_err(|e| format!("invalid {}: {e}", Self::METADATA_JSON_PATH))?
         };
-
-        // Migrate: the stamp node's per-dab alpha port was renamed from
-        // "opacity" to "flow" during the paint refactor. Any brush saved
-        // before that carries the old name; rewrite in place so compilation
-        // finds the right port. Silent one-way upgrade — old brushes keep
-        // working without a format bump.
-        migrate_stamp_opacity_to_flow(&mut metadata.graph);
-
-        // Migrate: the `preview_output` node was removed when terminals
-        // gained a `render_preview` lifecycle hook. Drop any legacy
-        // `preview_output` nodes and install the new
-        // `stamp.preview → color_output.brush_preview` wire so loaded
-        // brushes continue to show a hover preview.
-        migrate_drop_preview_output(&mut metadata.graph);
-
-        // Migrate: `scatter_x`/`scatter_y` inputs and the `scatter_offset`
-        // output were removed from `stamp` (and `scatter_offset` from
-        // `color_output`) when scatter became its own node on the position
-        // pipeline. Strip the dead ports/wires, and for typical shapes
-        // splice in a `scatter` node that reproduces the original effect.
-        migrate_stamp_scatter_to_node(&mut metadata.graph);
 
         if metadata.format_version > FORMAT_VERSION {
             return Err(format!(

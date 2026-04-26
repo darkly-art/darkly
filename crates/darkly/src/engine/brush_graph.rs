@@ -288,8 +288,9 @@ impl DarklyEngine {
     /// brush thumbnail baking. Both paths share one palette so the live
     /// preview visually matches the brush picker's grid thumbnails.
     ///
-    /// Invalidates the cached editor preview so the next request re-renders
-    /// with the new colors.
+    /// Invalidates the cached editor preview, the active-dab preview,
+    /// and every per-brush PNG thumbnail in the library so the next
+    /// picker refresh re-bakes against the new palette.
     pub fn set_preview_theme(&mut self, fg: [f32; 4], bg: [f32; 4]) {
         if self.preview_theme_fg == fg && self.preview_theme_bg == bg {
             return;
@@ -297,6 +298,9 @@ impl DarklyEngine {
         self.preview_theme_fg = fg;
         self.preview_theme_bg = bg;
         self.invalidate_brush_editor_preview();
+        // Drop baked PNG thumbnails so picker tiles re-bake on demand.
+        // The frontend's rAF poll handles the empty→bake→present flow.
+        self.brush_library.clear_thumbnails();
     }
 
     /// Render a full-stroke brush editor preview and return the most recent
@@ -343,7 +347,17 @@ impl DarklyEngine {
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
 
+        // Clone the active graph so we can pass it through the shared
+        // helper without holding a borrow on `self` across the call.
+        let graph = self.active_brush_graph.clone();
+        let path = crate::brush::preview_renderer::synthesize_preview_stroke(
+            width as f32,
+            height as f32,
+            30,
+        );
         self.render_preview_and_request_readback(
+            &graph,
+            &path,
             width,
             height,
             fg,
@@ -362,37 +376,105 @@ impl DarklyEngine {
     /// Invalidate any cached editor preview — call when the theme colors
     /// change so the next `brush_editor_preview` request re-renders with
     /// the new palette instead of returning the stale cached pixels.
+    /// Also drops the active-dab preview cache so the BrushBar trigger
+    /// thumbnail and the picker's active-brush strip refresh on the same
+    /// signal.
     pub fn invalidate_brush_editor_preview(&mut self) {
         self.brush_editor_preview_cache = None;
         self.brush_editor_preview_cache_size = None;
+        self.active_dab_preview_cache = None;
+        self.active_dab_preview_cache_size = None;
         // Bumping the version forces the skip-check in
         // `brush_editor_preview` to trigger a fresh render; also drops
         // any in-flight readback as stale when it lands.
         self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
     }
 
-    /// Shared helper: render a preview stroke into the preview renderer's
+    /// Render a single-dab preview of the active brush and return the
+    /// most recent cached bytes synchronously. Pixels update on a later
+    /// frame once the async readback completes — same shape as
+    /// `brush_editor_preview` and `layer_thumbnail`. Used by the
+    /// BrushBar trigger button and the picker's active-brush strip.
+    pub fn brush_active_dab_preview(&mut self, width: u32, height: u32) -> Vec<u8> {
+        // Guard against painting while a real stroke is in flight — the
+        // preview shares `dab_pool` and `brush_pipelines` with the engine,
+        // and running mid-stroke would step on acquired handles and
+        // uniform rings.
+        let in_stroke = self.brush_stroke_engine.is_some();
+
+        let zero_buffer = || vec![0u8; (width * height * 4) as usize];
+        let cached = self
+            .active_dab_preview_cache
+            .clone()
+            .filter(|_| self.active_dab_preview_cache_size == Some((width, height)));
+
+        // Skip work when nothing has changed and the cache is good. Also
+        // skip while a real stroke is in progress — return the most recent
+        // cached bytes so the UI stays responsive without clobbering the
+        // stroke's GPU state.
+        let nothing_to_do = in_stroke
+            || (self.last_rendered_dab_version == self.brush_graph_version
+                && self.active_dab_preview_cache_size == Some((width, height)));
+        if nothing_to_do {
+            return cached.unwrap_or_else(zero_buffer);
+        }
+
+        // Don't queue a second readback on top of an in-flight one.
+        let already_pending = self
+            .readbacks
+            .any(|c| matches!(c, ReadbackContext::ActiveBrushDab { .. }));
+        if already_pending {
+            return cached.unwrap_or_else(zero_buffer);
+        }
+
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        let graph = self.active_brush_graph.clone();
+        let path =
+            crate::brush::preview_renderer::synthesize_preview_dab(width as f32, height as f32);
+        self.render_preview_and_request_readback(
+            &graph,
+            &path,
+            width,
+            height,
+            fg,
+            bg,
+            ReadbackContext::ActiveBrushDab {
+                width,
+                height,
+                graph_version: self.brush_graph_version,
+            },
+        );
+        self.last_rendered_dab_version = self.brush_graph_version;
+
+        cached.unwrap_or_else(zero_buffer)
+    }
+
+    /// Shared helper: render a preview path into the preview renderer's
     /// texture, then encode an async readback tagged with `context`. The
-    /// caller decides what to do with the bytes when they arrive.
+    /// caller decides what to do with the bytes when they arrive. The
+    /// graph is taken explicitly so callers can render thumbnails for
+    /// library brushes without touching the active graph; the path lets
+    /// callers choose between the S-curve stroke and a single-dab preview.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_preview_and_request_readback(
         &mut self,
+        graph: &Graph<BrushWireType>,
+        path: &[crate::brush::paint_info::PaintInformation],
         width: u32,
         height: u32,
         fg: [f32; 4],
         bg: [f32; 4],
         context: ReadbackContext,
     ) {
-        use crate::brush::preview_renderer::synthesize_preview_stroke;
-
-        let path = synthesize_preview_stroke(width as f32, height as f32, 30);
         let Some(texture) = self.brush_preview_renderer.render_stroke(
             &self.gpu.device,
             &self.gpu.queue,
             &mut self.dab_pool,
             &self.brush_pipelines,
             &self.resource_handles,
-            &self.active_brush_graph,
-            &path,
+            graph,
+            path,
             fg,
             bg,
             width,

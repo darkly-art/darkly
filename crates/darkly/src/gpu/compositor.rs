@@ -4,7 +4,7 @@ use crate::gpu::blend::BlendPipelines;
 use crate::gpu::content_bounds::ContentBoundsPass;
 use crate::gpu::overlay::{OverlayPrimitive, ToolOverlay};
 use crate::gpu::veil_chain::VeilChain;
-use crate::gpu::view::ViewTransform;
+use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
 use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
 use std::collections::HashMap;
 
@@ -139,6 +139,10 @@ pub struct Compositor {
     tool_overlay: ToolOverlay,
     /// Cached view transform for overlay forward matrix computation.
     cached_view_transform: ViewTransform,
+    /// Workspace color drawn by the present shader outside the canvas
+    /// rectangle. Stamped onto every transform on upload, so changing it
+    /// only requires re-uploading the cached transform.
+    viewport_bg: [f32; 4],
 
     // --- Content Bounds (GPU compute) ---
     content_bounds: ContentBoundsPass,
@@ -516,6 +520,7 @@ impl Compositor {
             content_bounds,
             tool_overlay,
             cached_view_transform: identity,
+            viewport_bg: DEFAULT_WORKSPACE_BG,
             frame_count: 0,
             last_wall_time: 0.0,
         }
@@ -739,10 +744,29 @@ impl Compositor {
         self.tool_overlay.needs_animation() || self.veil_chain.needs_animation()
     }
 
-    /// Update the view transform uniform buffer.
+    /// Update the view transform uniform buffer. The compositor owns the
+    /// workspace background color, so it stamps it onto the uploaded copy
+    /// rather than relying on every caller to set it.
     pub fn update_view_transform(&mut self, queue: &wgpu::Queue, transform: &ViewTransform) {
-        queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(transform));
-        self.cached_view_transform = *transform;
+        let mut t = *transform;
+        t.bg = self.viewport_bg;
+        queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
+        self.cached_view_transform = t;
+    }
+
+    /// Set the workspace background color (the area shown outside the canvas
+    /// rectangle in the present shader). Triggers a re-upload of the cached
+    /// transform and a re-present so the color takes effect immediately.
+    pub fn set_viewport_bg(&mut self, queue: &wgpu::Queue, bg: [f32; 4]) {
+        if self.viewport_bg == bg {
+            return;
+        }
+        self.viewport_bg = bg;
+        let mut t = self.cached_view_transform;
+        t.bg = bg;
+        queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
+        self.cached_view_transform = t;
+        self.needs_present = true;
     }
 
     /// Update a raster layer's uniforms (called when opacity, blend mode, or show_mask changes).

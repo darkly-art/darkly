@@ -3,6 +3,8 @@
     import { brushGraph } from '../state/brush_graph.svelte';
     import type { BrushInfo } from '../state/brush_graph.svelte';
     import BrushBuilder from './brush_builder/BrushBuilder.svelte';
+    import BrushDabView from './brush_picker/BrushDabView.svelte';
+    import BrushPicker from './brush_picker/BrushPicker.svelte';
 
     let brushPickerOpen = $state(false);
 
@@ -69,18 +71,6 @@
         el.addEventListener('pointermove', onMove);
         el.addEventListener('pointerup', onUp);
     }
-
-    // Group brushes by category
-    function groupedBrushes(): Map<string, BrushInfo[]> {
-        const groups = new Map<string, BrushInfo[]>();
-        for (const p of brushGraph.brushes) {
-            const cat = p.category || 'uncategorized';
-            if (!groups.has(cat)) groups.set(cat, []);
-            groups.get(cat)!.push(p);
-        }
-        return groups;
-    }
-
 </script>
 
 <svelte:window onclick={handleClickOutside} />
@@ -104,6 +94,7 @@
                 onclick={(e) => { e.stopPropagation(); ensureInit(); brushPickerOpen = !brushPickerOpen; }}
                 title="Select brush"
             >
+                <BrushDabView width={20} height={20} />
                 <span class="brush-name">{brushGraph.activeBrush ?? 'Custom'}</span>
                 <svg class="chevron" width="10" height="6" viewBox="0 0 10 6">
                     <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/>
@@ -111,25 +102,7 @@
             </button>
 
             {#if brushPickerOpen}
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <div class="brush-picker-dropdown dropdown-surface" onclick={(e) => e.stopPropagation()}>
-                    {#each [...groupedBrushes()] as [category, brushes]}
-                        <div class="brush-category">{category}</div>
-                        {#each brushes as brush}
-                            <button
-                                class="brush-item"
-                                class:active={brushGraph.activeBrush === brush.name}
-                                onclick={() => selectBrush(brush)}
-                            >
-                                {brush.name}
-                            </button>
-                        {/each}
-                    {/each}
-                    {#if brushGraph.brushes.length === 0}
-                        <div class="brush-picker-empty">No brushes available</div>
-                    {/if}
-                </div>
+                <BrushPicker onSelect={selectBrush} />
             {/if}
         </div>
 
@@ -302,51 +275,6 @@
     .chevron {
         flex-shrink: 0;
         color: var(--text-muted);
-    }
-
-    .brush-picker-dropdown {
-        position: absolute;
-        bottom: 100%;
-        left: 0;
-        min-width: 180px;
-        max-height: 300px;
-        overflow-y: auto;
-        margin-bottom: 4px;
-        padding: 4px 0;
-        z-index: 100;
-    }
-
-    .brush-category {
-        font-size: 9px;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        padding: 6px 12px 2px;
-    }
-
-    .brush-item {
-        display: block;
-        width: 100%;
-        text-align: left;
-        background: none;
-        border: none;
-        color: var(--text);
-        cursor: pointer;
-        font-size: 11px;
-        padding: 4px 12px;
-    }
-    .brush-item:hover {
-        background: var(--bg-hover);
-    }
-    .brush-item.active {
-        color: var(--accent);
-    }
-
-    .brush-picker-empty {
-        font-size: 11px;
-        color: var(--text-dim);
-        padding: 8px 12px;
-        font-style: italic;
     }
 
     /* ── Spacer & Toggle ── */

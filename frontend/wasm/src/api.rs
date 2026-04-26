@@ -782,6 +782,26 @@ impl DarklyHandle {
         self.engine.borrow_mut().brush_editor_preview(width, height)
     }
 
+    /// Render a single-dab preview of the active brush — the small
+    /// tip-shape thumbnail used by the BrushBar trigger and the picker's
+    /// active-brush strip. Returns the most recent cached bytes
+    /// synchronously; the async readback updates them on a later frame.
+    pub fn brush_active_dab_preview(&self, width: u32, height: u32) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine
+            .borrow_mut()
+            .brush_active_dab_preview(width, height)
+    }
+
+    /// Return the cached PNG thumbnail bytes for a library brush, kicking
+    /// off a bake on first call. Returns an empty `Uint8Array` while the
+    /// bake is in flight (or for unknown brush names); callers poll on
+    /// rAF until non-empty bytes arrive.
+    pub fn brush_thumbnail(&self, name: &str) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().brush_thumbnail(name)
+    }
+
     /// Push the current UI theme colors into the engine. Used by both the
     /// live editor preview and brush thumbnail baking — call on theme
     /// change so the live preview re-renders with the new palette.
@@ -798,6 +818,19 @@ impl DarklyHandle {
             [0.08, 0.08, 0.08, 1.0]
         };
         self.engine.borrow_mut().set_preview_theme(fg, bg);
+    }
+
+    /// Push the workspace background color (the area shown around the
+    /// canvas in the viewport — the `--canvas-bg` CSS token). Call on
+    /// theme change so the present shader uses the new color.
+    pub fn set_viewport_bg(&self, bg: &[f32]) {
+        self.flush_if_needed();
+        let bg = if bg.len() >= 4 {
+            [bg[0], bg[1], bg[2], bg[3]]
+        } else {
+            [0.11, 0.11, 0.11, 1.0]
+        };
+        self.engine.borrow_mut().set_viewport_bg(bg);
     }
 
     // --- Brush config ---

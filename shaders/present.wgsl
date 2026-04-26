@@ -17,6 +17,7 @@ struct ViewTransform {
     row0: vec4f,
     row1: vec4f,
     row2: vec4f,
+    bg: vec4f,
 }
 
 @group(0) @binding(0) var t_source: texture_2d<f32>;
@@ -40,6 +41,5 @@ struct ViewTransform {
     let canvas_dims = vec2f(view.row0.z, view.row1.z);
     let oob = canvas_x < 0.0 || canvas_x > canvas_dims.x
            || canvas_y < 0.0 || canvas_y > canvas_dims.y;
-    let bg = vec4f(0.11, 0.11, 0.11, 1.0);
-    return select(vec4f(color.rgb, 1.0), bg, oob);
+    return select(vec4f(color.rgb, 1.0), view.bg, oob);
 }

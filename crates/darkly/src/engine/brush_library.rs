@@ -27,7 +27,7 @@ impl DarklyEngine {
             .clone();
 
         // Upload brush tip resources to the GPU.
-        self.upload_brush_resources(&brush);
+        self.ensure_brush_resources(&brush);
 
         let json = serde_json::to_string(&brush.metadata.graph)
             .map_err(|e| format!("failed to serialize graph: {e}"))?;
@@ -59,7 +59,12 @@ impl DarklyEngine {
         let (w, h) = BRUSH_THUMBNAIL_SIZE;
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
+        let graph = self.active_brush_graph.clone();
+        let path =
+            crate::brush::preview_renderer::synthesize_preview_stroke(w as f32, h as f32, 30);
         self.render_preview_and_request_readback(
+            &graph,
+            &path,
             w,
             h,
             fg,
@@ -78,6 +83,51 @@ impl DarklyEngine {
         self.brush_library.export_bytes(name)
     }
 
+    /// Return the cached PNG thumbnail bytes for a library brush, kicking
+    /// off an async bake if none exists yet. Returns an empty vector when
+    /// the bake is in flight (or the brush is missing); the frontend polls
+    /// on rAF until non-empty bytes arrive. Subsequent calls hit the cache.
+    pub fn brush_thumbnail(&mut self, name: &str) -> Vec<u8> {
+        if let Some(png) = self.brush_library.thumbnail_png(name) {
+            return png.to_vec();
+        }
+        // A bake for this brush is already pending — don't queue another;
+        // racing readbacks would step on each other's library entry.
+        let already_pending = self.readbacks.any(
+            |c| matches!(c, ReadbackContext::BrushThumbnailForSave { name: n, .. } if n == name),
+        );
+        if already_pending {
+            return Vec::new();
+        }
+        let Some(brush) = self.brush_library.get(name).cloned() else {
+            return Vec::new();
+        };
+        // Image-based brushes (Calligraphy, Textured Ink, Pencil, ...)
+        // need their tip/pattern textures on the GPU before the bake;
+        // without this, picker tiles for inactive image brushes render
+        // bg-only.
+        self.ensure_brush_resources(&brush);
+        let (w, h) = BRUSH_THUMBNAIL_SIZE;
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        let path =
+            crate::brush::preview_renderer::synthesize_preview_stroke(w as f32, h as f32, 30);
+        self.render_preview_and_request_readback(
+            &brush.metadata.graph,
+            &path,
+            w,
+            h,
+            fg,
+            bg,
+            ReadbackContext::BrushThumbnailForSave {
+                name: name.to_string(),
+                width: w,
+                height: h,
+            },
+        );
+        Vec::new()
+    }
+
     /// Import a brush from `.darkly-brush` ZIP bytes into the library.
     ///
     /// Uploads brush tip resources to the GPU if the brush is loaded.
@@ -85,17 +135,24 @@ impl DarklyEngine {
         self.brush_library.import_bytes(bytes)
     }
 
-    /// Upload image resources from a brush bundle to the GPU.
+    /// Ensure every image resource referenced by `brush` is uploaded to
+    /// the GPU and registered in `self.resource_handles`. Idempotent —
+    /// names already present are skipped, so loading the active brush,
+    /// baking inactive picker thumbnails, and reloading the same brush
+    /// all share one cache entry per resource.
     ///
-    /// Populates `self.resource_handles` so Image nodes can resolve their
-    /// `resource_name` param to a `TextureHandle` at evaluation time.
     /// Handles both `BrushTip` and `Pattern` resource kinds — both are
-    /// uploaded as static textures and accessed identically by node evaluators.
-    fn upload_brush_resources(&mut self, brush: &Brush) {
-        self.dab_pool.clear_static();
-        self.resource_handles.clear();
-
+    /// uploaded as static textures and accessed identically by node
+    /// evaluators.
+    ///
+    /// v1 keeps every uploaded resource for the engine's lifetime. With
+    /// only built-in brushes that's a fixed, tiny set; v2 imported
+    /// brushes will need a name-collision strategy and eviction policy.
+    pub(crate) fn ensure_brush_resources(&mut self, brush: &Brush) {
         for meta in &brush.metadata.resources {
+            if self.resource_handles.contains_key(&meta.name) {
+                continue;
+            }
             let Some(data) = brush.resource(meta.name.as_str()) else {
                 log::warn!("brush resource '{}' not found in bundle", meta.name);
                 continue;

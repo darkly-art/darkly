@@ -75,6 +75,24 @@ impl BrushLibrary {
         self.brushes.remove(name).is_some()
     }
 
+    /// Read a brush's baked thumbnail PNG bytes. Returns `None` if the
+    /// brush doesn't exist or its thumbnail hasn't been baked yet.
+    pub fn thumbnail_png(&self, name: &str) -> Option<&[u8]> {
+        self.brushes
+            .get(name)
+            .and_then(|b| b.thumbnail_png.as_deref())
+    }
+
+    /// Drop every baked `preview.png` in the library. Called on theme
+    /// change so the next picker refresh re-bakes against the new
+    /// palette — without this, brushes stay frozen at whatever theme
+    /// they were first viewed under.
+    pub fn clear_thumbnails(&mut self) {
+        for brush in self.brushes.values_mut() {
+            brush.thumbnail_png = None;
+        }
+    }
+
     /// Attach a baked `preview.png` to an existing brush. Used by the
     /// async thumbnail bake path — save returns immediately without a
     /// thumbnail, and this method installs the PNG once the readback
