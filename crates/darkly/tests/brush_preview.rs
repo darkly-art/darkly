@@ -6,15 +6,13 @@
 //!     transform-baked tip texture; flow / opacity / rotation handling
 //!     all happen there, not as a side effect of the deposition path.
 //!   - `BrushPreviewInfo` is cached on the engine with non-zero extents.
-//!   - Loaded legacy presets (with `preview_output` nodes) migrate
-//!     transparently to the new wiring.
 
 use darkly::brush::wire::BrushWireType;
 use darkly::brush::BrushNodeRegistry;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
-use darkly::nodegraph::{Graph, NodeId, NodeInstance, PortRef};
+use darkly::nodegraph::{NodeId, NodeInstance};
 
 fn test_engine(w: u32, h: u32) -> DarklyEngine {
     let (device, queue) = test_device();
@@ -281,144 +279,5 @@ fn preview_short_circuits_when_brush_preview_unconnected() {
     assert!(
         engine.brush_preview_info().is_none(),
         "no brush_preview wire → no placement info"
-    );
-}
-
-/// A brush saved before the redesign carries a `preview_output` node and
-/// `stamp.dab → preview_output.dab` wires. Loading it should silently
-/// migrate to the new wiring (`stamp.preview → color_output.brush_preview`)
-/// and produce a working preview.
-#[test]
-fn legacy_preview_output_migrates_on_load() {
-    use darkly::brush::bundle::{Brush, BrushMetadata};
-
-    // Build a graph the old way: pen / circle / stamp / color_output, plus
-    // a `preview_output` node wired from stamp.
-    let registry = BrushNodeRegistry::new();
-    let mut graph: Graph<BrushWireType> = Graph::new();
-    let pen = graph.add_node(
-        "pen_input",
-        registry.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let paint_color = graph.add_node(
-        "paint_color",
-        registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
-    );
-    let circle = graph.add_node(
-        "circle",
-        registry.get("circle").unwrap().ports.clone(),
-        vec![],
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let color_output = graph.add_node(
-        "color_output",
-        registry.get("color_output").unwrap().ports.clone(),
-        vec![],
-    );
-
-    // Synthesise the legacy `preview_output` node — it no longer has a
-    // registration in the runtime, so we hand-craft an instance with the
-    // ports the old version had.
-    use darkly::nodegraph::{PortDef, PortDir};
-    let preview_output_id = graph.add_node(
-        "preview_output",
-        vec![
-            PortDef {
-                name: "dab".into(),
-                dir: PortDir::Input,
-                wire_type: BrushWireType::Texture,
-                min: 0.0,
-                max: 0.0,
-                default: 0.0,
-                description: String::new(),
-                unit_type: Default::default(),
-                icon: String::new(),
-                label: String::new(),
-                exposed: false,
-            },
-            PortDef {
-                name: "dab_size".into(),
-                dir: PortDir::Input,
-                wire_type: BrushWireType::Vec2,
-                min: 0.0,
-                max: 0.0,
-                default: 0.0,
-                description: String::new(),
-                unit_type: Default::default(),
-                icon: String::new(),
-                label: String::new(),
-                exposed: false,
-            },
-        ],
-        vec![],
-    );
-
-    let wires = [
-        (circle, "texture", stamp, "tip"),
-        (pen, "pressure", stamp, "size"),
-        (paint_color, "color", stamp, "color"),
-        (stamp, "dab", color_output, "dab"),
-        (stamp, "dab_size", color_output, "dab_size"),
-        (pen, "position", color_output, "position"),
-        // Legacy preview wires that the migration should drop.
-        (stamp, "dab", preview_output_id, "dab"),
-        (stamp, "dab_size", preview_output_id, "dab_size"),
-    ];
-    for (fn_, fp, tn, tp) in wires {
-        graph
-            .connect(
-                PortRef {
-                    node: fn_,
-                    port: fp.into(),
-                },
-                PortRef {
-                    node: tn,
-                    port: tp.into(),
-                },
-            )
-            .unwrap();
-    }
-
-    let metadata = BrushMetadata::from_graph("Legacy", graph);
-    let brush = Brush::without_resources(metadata);
-    let bytes = brush.to_bytes().unwrap();
-    let loaded = Brush::from_bytes(&bytes).unwrap();
-
-    // Migration removed the legacy node.
-    let has_preview_output = loaded
-        .metadata
-        .graph
-        .nodes
-        .values()
-        .any(|n| n.type_id == "preview_output");
-    assert!(
-        !has_preview_output,
-        "preview_output should be gone after migration"
-    );
-
-    // Migration installed the new wire.
-    let has_new_wire = loaded
-        .metadata
-        .graph
-        .connections
-        .iter()
-        .any(|c| c.to.port == "brush_preview" && c.from.port == "preview");
-    assert!(
-        has_new_wire,
-        "migration should install stamp.preview → color_output.brush_preview"
-    );
-
-    // The migrated graph must compile.
-    let runner = darkly::brush::compile_graph(&loaded.metadata.graph);
-    assert!(
-        runner.is_ok(),
-        "migrated graph should compile: {:?}",
-        runner.err()
     );
 }

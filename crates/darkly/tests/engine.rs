@@ -267,7 +267,7 @@ fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
 /// `spacing` dabs and the synthetic tip divergence fires on every pen
 /// event, so the drop happens continuously during live drawing.
 ///
-/// Setup: loads the "Scatter Brush" preset (scatter node on the position
+/// Setup: loads the "Scatter Brush" built-in (scatter node on the position
 /// wire, size-proportional via `stamp.dab_size`). Amount_y is forced
 /// high and the scatter node's own random is deterministic (hash of
 /// `stroke_seed + node_id + dab_index`), so replays reproduce the same
