@@ -74,16 +74,7 @@ Every system that is implemented must be implemented properly. No hacks, no hard
 
 ## No Migrations / No Backwards Compatibility (pre-release)
 
-Darkly is in pre-release / alpha. Until the first public release, **breaking on-disk and on-the-wire formats is fine**. Do not write migration code, format-version upgrade paths, legacy-name shims, fallback parsers, or "old preset still loads" compatibility code.
-
-When a format or schema needs to change:
-
-- **DO:** make the breaking change directly. Rename fields, remove ports, restructure the JSON, change ZIP entry filenames. Update every producer and consumer in the same change.
-- **DO NOT:** keep the old shape readable. Don't add a one-way migration that rewrites old graphs into the new shape. Don't keep accepting an old field name "for files in the wild." Don't ship two parsers.
-
-The user's existing `.darkly-brush` files, OPFS data, and saved settings can be invalidated by the change. That's the trade we get for being pre-release; we cash it in for a clean codebase.
-
-This policy ends at the first public release, after which a deprecation discipline kicks in. Until then, prefer the smaller, sharper change.
+Darkly is in pre-release / alpha. Until the first public release, breaking on-disk and on-the-wire formats is fine — do not write migrations, format-version upgrade paths, or legacy compatibility shims. Make the breaking change directly and update every producer and consumer in the same pass; existing user data can be invalidated.
 
 ## Lint / CI Checks
 
