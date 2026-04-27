@@ -45,14 +45,13 @@ export interface PenPose {
     tangentialPressure: number;
 }
 
-/** Pose for the on-canvas cursor preview. Tilt / twist track the live event
- *  (so tilt-driven brushes like calligraphy rotate with the pen), but
- *  pressure is forced to 1.0 so the preview circle always shows the
- *  brush's *maximum* extent at the user's current size — pressure-induced
- *  shrinkage is a stroke-time effect, not something the cursor reflects. */
+/** Pose for the on-canvas cursor preview. Tracks the live PointerEvent
+ *  verbatim so the cursor circle reflects what a dab at this pose would
+ *  actually look like — pressure-driven dynamics included. The resize
+ *  scrub uses the same pose, keeping cursor and stroke in lockstep. */
 export function cursorPose(e: PointerEvent): PenPose {
     return {
-        pressure: 1,
+        pressure: e.pressure,
         tiltX: (e.tiltX ?? 0) / 90,
         tiltY: (e.tiltY ?? 0) / 90,
         twist: (e.twist ?? 0) / 360,

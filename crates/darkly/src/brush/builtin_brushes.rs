@@ -335,7 +335,6 @@ impl BrushBuilder {
 fn soft_round() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_circle(0.7);
-    b.wire(b.pen, "pressure", b.stamp, "size_input");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Soft Round", "basic")
 }
@@ -343,7 +342,6 @@ fn soft_round() -> Brush {
 fn hard_round() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_circle(0.05);
-    b.wire(b.pen, "pressure", b.stamp, "size_input");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Hard Round", "basic")
 }
