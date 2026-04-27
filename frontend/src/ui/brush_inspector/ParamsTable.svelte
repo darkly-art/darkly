@@ -1,6 +1,8 @@
 <script lang="ts">
-    import type { KritaParam } from '../../state/brush_inspector.svelte';
+    import { onDestroy } from 'svelte';
+    import { inspector, type KritaParam } from '../../state/brush_inspector.svelte';
     import SensorCurveSparkline from './SensorCurveSparkline.svelte';
+    import XmlNodeView from './XmlNodeView.svelte';
 
     interface Props {
         params: KritaParam[];
@@ -11,19 +13,24 @@
 
     // Group by the prefix before the first '/' — Krita uses
     // "MaskingBrush/Preset/FlowSensor"-style namespaced names.
+    interface GroupItem {
+        param: KritaParam;
+        index: number; // index into the original params[] (for WASM lookups)
+    }
     interface Group {
         name: string;
-        items: KritaParam[];
+        items: GroupItem[];
     }
     const groups = $derived.by(() => {
         const filterLower = filter.trim().toLowerCase();
-        const map = new Map<string, KritaParam[]>();
-        for (const p of params) {
+        const map = new Map<string, GroupItem[]>();
+        for (let i = 0; i < params.length; i++) {
+            const p = params[i];
             if (filterLower && !matches(p, filterLower)) continue;
             const slash = p.name.indexOf('/');
             const key = slash > 0 ? p.name.slice(0, slash) : '(root)';
             if (!map.has(key)) map.set(key, []);
-            map.get(key)!.push(p);
+            map.get(key)!.push({ param: p, index: i });
         }
         return [...map.entries()]
             .sort(([a], [b]) => a.localeCompare(b))
@@ -36,9 +43,26 @@
         return false;
     }
 
-    function shortType(p: KritaParam): string {
-        return p.raw_type ?? '(no type)';
+    // Lazily mint blob URLs for embedded-image params; revoke on unmount.
+    const imageUrls = new Map<number, string>();
+
+    function imageUrlFor(paramIndex: number): string | null {
+        if (imageUrls.has(paramIndex)) return imageUrls.get(paramIndex)!;
+        const url = inspector.paramImageBlobUrl(paramIndex);
+        if (url) imageUrls.set(paramIndex, url);
+        return url;
     }
+
+    function formatBytes(n: number): string {
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+        return `${(n / 1024 / 1024).toFixed(2)} MB`;
+    }
+
+    onDestroy(() => {
+        for (const url of imageUrls.values()) URL.revokeObjectURL(url);
+        imageUrls.clear();
+    });
 </script>
 
 <section class="params">
@@ -64,47 +88,59 @@
             <table>
                 <colgroup>
                     <col class="col-name" />
-                    <col class="col-type" />
                     <col class="col-value" />
                 </colgroup>
                 <tbody>
-                    {#each group.items as param (param.name)}
+                    {#each group.items as item (item.param.name)}
+                        {@const param = item.param}
+                        {@const decoded = param.decoded}
                         <tr>
                             <td class="name"><code>{param.name}</code></td>
-                            <td class="type">{shortType(param)}</td>
                             <td class="value">
-                                {#if param.decoded.kind === 'plain'}
-                                    <code>{param.decoded.value || '(empty)'}</code>
-                                {:else if param.decoded.kind === 'curve'}
+                                {#if decoded.kind === 'plain'}
+                                    <code>{decoded.value || '(empty)'}</code>
+                                {:else if decoded.kind === 'curve'}
                                     <div class="curve-cell">
-                                        <SensorCurveSparkline points={param.decoded.points} />
+                                        <SensorCurveSparkline points={decoded.points} />
                                         <span class="curve-points">
-                                            {param.decoded.points.length} pts:
-                                            {param.decoded.points
-                                                .map(([x, y]) => `(${x.toFixed(2)},${y.toFixed(2)})`)
+                                            {decoded.points.length} pts:
+                                            {decoded.points
+                                                .map(
+                                                    ([x, y]: [number, number]) =>
+                                                        `(${x.toFixed(2)},${y.toFixed(2)})`,
+                                                )
                                                 .join(' ')}
                                         </span>
                                     </div>
-                                {:else if param.decoded.kind === 'sensor_xml'}
+                                {:else if decoded.kind === 'sensor_xml'}
                                     <div>
                                         <span class="sensor-id">
                                             sensor:
-                                            <code>{param.decoded.sensor_id ?? '?'}</code>
+                                            <code>{decoded.sensor_id ?? '?'}</code>
                                         </span>
                                         <details>
                                             <summary>raw xml</summary>
-                                            <pre>{param.decoded.xml}</pre>
+                                            <pre>{decoded.xml}</pre>
                                         </details>
                                     </div>
-                                {:else if param.decoded.kind === 'nested_xml'}
-                                    <details>
-                                        <summary>nested xml</summary>
-                                        <pre>{param.decoded.xml}</pre>
-                                    </details>
-                                {:else if param.decoded.kind === 'bytearray'}
+                                {:else if decoded.kind === 'nested_xml'}
+                                    <XmlNodeView node={decoded.root} />
+                                {:else if decoded.kind === 'bytearray'}
                                     <span class="bytes">
-                                        bytearray, {param.decoded.byte_length} bytes (base64)
+                                        bytearray, {decoded.byte_length} bytes (base64)
                                     </span>
+                                {:else if decoded.kind === 'embedded_image'}
+                                    {@const url = imageUrlFor(item.index)}
+                                    <div class="image-cell">
+                                        {#if url}
+                                            <img src={url} alt={param.name} />
+                                        {/if}
+                                        <span class="image-meta">
+                                            {decoded.format.kind}{#if decoded.format.kind === 'png' && decoded.format.width !== null}
+                                                &nbsp;{decoded.format.width}×{decoded.format.height}{/if},
+                                            {formatBytes(decoded.byte_length)}
+                                        </span>
+                                    </div>
                                 {/if}
                             </td>
                         </tr>
@@ -169,9 +205,6 @@
     .col-name {
         width: 30%;
     }
-    .col-type {
-        width: 80px;
-    }
     .col-value {
         width: auto;
     }
@@ -185,9 +218,6 @@
         background: transparent;
         padding: 0;
         color: var(--text);
-    }
-    td.type {
-        color: var(--text-muted);
     }
     td.value code {
         background: var(--bg-hover);
@@ -212,6 +242,24 @@
     .bytes {
         color: var(--text-muted);
         font-style: italic;
+    }
+    .image-cell {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+    }
+    .image-cell img {
+        max-width: 128px;
+        max-height: 128px;
+        background: var(--canvas-bg);
+        border: 1px solid var(--bg-hover);
+        border-radius: var(--radius-sm);
+        image-rendering: pixelated;
+    }
+    .image-meta {
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        align-self: center;
     }
     pre {
         background: var(--bg);

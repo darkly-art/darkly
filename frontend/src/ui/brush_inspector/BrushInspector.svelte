@@ -80,15 +80,22 @@
 </div>
 
 <style>
+    /* The main editor sets `body { overflow: hidden; user-select: none }`
+       in reset.css. The inspector lives in its own fixed layer so it can
+       scroll and select text without fighting that. */
     .page {
+        position: fixed;
+        inset: 0;
+        overflow: auto;
         background: var(--bg);
         color: var(--text);
-        min-height: 100vh;
         padding: 32px;
         display: flex;
         flex-direction: column;
         gap: 16px;
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        user-select: text;
+        -webkit-user-select: text;
     }
     .page-header h1 {
         margin: 0 0 4px;
@@ -176,8 +183,12 @@
         padding: 12px;
         background: var(--bg);
         border-radius: var(--radius-sm);
-        overflow-x: auto;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
         font-size: 0.8rem;
         max-height: 600px;
+        font-family: monospace;
+        line-height: 1.4;
     }
 </style>

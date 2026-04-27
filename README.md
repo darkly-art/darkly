@@ -91,3 +91,11 @@ Adding a doc page: drop a `.md` file under `website/src/content/docs/guides/` �
 Darkly uses auto-discovery: drop a `.rs` file in `crates/darkly/src/gpu/filters/` or `crates/darkly/src/gpu/veils/` and export a `pub fn register()`. The build script generates `mod.rs` automatically. No other files need to be touched.
 
 See `filters/noise.rs` or `veils/pixelate.rs` for the pattern.
+
+## Acknowledgments
+
+Darkly stands on the shoulders of giants. Two free software paint programs in particular have shaped how we think about every part of this project, and we love them dearly.
+
+**[GIMP](https://www.gimp.org/)** ([source](https://github.com/GNOME/gimp)) — originally written by **Spencer Kimball** and **Peter Mattis** in 1995, and maintained today by **Michael Natterer** and **Jehan Pagès**, with decades of contributions from a community far too large to list here (see the upstream [`AUTHORS`](https://github.com/GNOME/gimp/blob/master/AUTHORS) file).
+
+**[Krita](https://krita.org/)** ([source](https://github.com/KDE/krita)) — led by **Halla Rempt** (formerly Boudewijn Rempt), with core contributions over the years from **Dmitry Kazakov**, **Cyrille Berger**, **Sven Langkamp**, **Wolthera van Hövell tot Westerflier**, **L. E. Segovia**, **Scott Petrovic**, and many more (see the upstream [`developers.txt`](https://github.com/KDE/krita/blob/master/krita/data/aboutdata/developers.txt)).

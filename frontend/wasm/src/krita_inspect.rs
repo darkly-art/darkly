@@ -6,6 +6,7 @@
 //! resource bytes directly (for `URL.createObjectURL`) without round-tripping
 //! base64 through JSON.
 
+use darkly::brush::import::krita::kpp::ParamDecoded;
 use darkly::brush::import::krita::{parse_kpp, KritaPreset};
 use wasm_bindgen::prelude::*;
 
@@ -42,5 +43,19 @@ impl KritaInspector {
     /// Number of embedded resources. Convenience for the frontend.
     pub fn resource_count(&self) -> usize {
         self.preset.resources.len()
+    }
+
+    /// Raw bytes of an inline-image param (e.g. `Texture/Pattern/Pattern`),
+    /// looked up by its index in `preset.params`. Returns the bytes as a
+    /// `Uint8Array` so the frontend can wrap them in a `Blob` for `<img>`
+    /// display.
+    pub fn param_image_bytes(&self, index: usize) -> Result<Vec<u8>, JsError> {
+        match self.preset.params.get(index).map(|p| &p.decoded) {
+            Some(ParamDecoded::EmbeddedImage { bytes, .. }) => Ok(bytes.clone()),
+            Some(_) => Err(JsError::new(&format!(
+                "param at index {index} is not an embedded image"
+            ))),
+            None => Err(JsError::new(&format!("param index {index} out of range"))),
+        }
     }
 }

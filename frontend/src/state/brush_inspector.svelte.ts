@@ -12,12 +12,20 @@ import init, { KritaInspector } from '../../wasm/pkg/darkly_wasm';
 // gain fields, add them here too.
 // --------------------------------------------------------------------------
 
+export interface XmlNode {
+    tag: string;
+    attrs: [string, string][];
+    children: XmlNode[];
+    text: string | null;
+}
+
 export type ParamDecoded =
     | { kind: 'plain'; value: string }
     | { kind: 'curve'; points: [number, number][] }
     | { kind: 'sensor_xml'; sensor_id: string | null; xml: string }
     | { kind: 'bytearray'; byte_length: number }
-    | { kind: 'nested_xml'; xml: string };
+    | { kind: 'nested_xml'; root: XmlNode }
+    | { kind: 'embedded_image'; format: ResourceFormat; byte_length: number };
 
 export interface KritaParam {
     name: string;
@@ -131,6 +139,17 @@ class InspectorState {
         const fmt = this.file.preset.resources[index]?.format.kind;
         const mime = mimeForFormat(fmt);
         const blob = new Blob([bytes], { type: mime });
+        return URL.createObjectURL(blob);
+    }
+
+    /** Get a Blob URL for a base64-image-shaped param value (e.g.
+     *  `Texture/Pattern/Pattern`). Caller revokes on unmount. */
+    paramImageBlobUrl(paramIndex: number): string | null {
+        if (!this.file) return null;
+        const decoded = this.file.preset.params[paramIndex]?.decoded;
+        if (decoded?.kind !== 'embedded_image') return null;
+        const bytes = this.file.handle.param_image_bytes(paramIndex);
+        const blob = new Blob([bytes], { type: mimeForFormat(decoded.format.kind) });
         return URL.createObjectURL(blob);
     }
 }
