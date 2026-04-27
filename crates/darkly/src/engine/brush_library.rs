@@ -8,6 +8,13 @@ use crate::brush::library::BrushInfo;
 /// preview so brushes look identical in the picker grid.
 pub(crate) const BRUSH_THUMBNAIL_SIZE: (u32, u32) = (320, 120);
 
+/// Render canvas for dab previews. Square and oversized relative to
+/// what we cache — the readback handler bbox-crops the rendered dab and
+/// downscales to a stable cache size, so brushes with small `size`
+/// ports or with `scatter` displacement still produce a recognizable
+/// thumbnail (no truncation, auto-centered).
+pub(crate) const BRUSH_DAB_RENDER_SIZE: (u32, u32) = (256, 256);
+
 impl DarklyEngine {
     /// List all brushes in the library (summary info only).
     pub fn brush_list(&self) -> Vec<BrushInfo> {
@@ -120,6 +127,47 @@ impl DarklyEngine {
             fg,
             bg,
             ReadbackContext::BrushThumbnailForSave {
+                name: name.to_string(),
+                width: w,
+                height: h,
+            },
+        );
+        Vec::new()
+    }
+
+    /// Return the cached dab thumbnail PNG bytes for a library brush,
+    /// kicking off an async bake if none exists yet. Same shape as
+    /// `brush_thumbnail` but renders a single full-pressure dab instead
+    /// of an S-curve, giving the picker a tip silhouette to show next
+    /// to the stroke preview.
+    pub fn brush_dab_thumbnail(&mut self, name: &str) -> Vec<u8> {
+        if let Some(png) = self.brush_library.dab_thumbnail_png(name) {
+            return png.to_vec();
+        }
+        let already_pending = self
+            .readbacks
+            .any(|c| matches!(c, ReadbackContext::BrushDabThumbnail { name: n, .. } if n == name));
+        if already_pending {
+            return Vec::new();
+        }
+        let Some(brush) = self.brush_library.get(name).cloned() else {
+            return Vec::new();
+        };
+        // Image-based brushes need their tip texture on the GPU before
+        // the bake — same path as the stroke thumbnail.
+        self.ensure_brush_resources(&brush);
+        let (w, h) = BRUSH_DAB_RENDER_SIZE;
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        let path = crate::brush::preview_renderer::synthesize_preview_dab(w as f32, h as f32);
+        self.render_preview_and_request_readback(
+            &brush.metadata.graph,
+            &path,
+            w,
+            h,
+            fg,
+            bg,
+            ReadbackContext::BrushDabThumbnail {
                 name: name.to_string(),
                 width: w,
                 height: h,

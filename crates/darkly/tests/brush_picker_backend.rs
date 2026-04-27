@@ -86,6 +86,131 @@ fn theme_change_invalidates_brush_thumbnail() {
     );
 }
 
+#[test]
+fn brush_dab_thumbnail_first_call_kicks_bake_then_returns_png() {
+    let mut engine = fresh_engine();
+
+    // First call schedules a bake and returns empty; second call is a
+    // duplicate-suppress no-op until the readback lands.
+    let first = engine.brush_dab_thumbnail("Soft Round");
+    assert!(
+        first.is_empty(),
+        "first call returns empty while the dab bake is in flight"
+    );
+    let second = engine.brush_dab_thumbnail("Soft Round");
+    assert!(
+        second.is_empty(),
+        "back-to-back call before flush stays empty (no double-queue)"
+    );
+
+    engine.test_flush_readbacks();
+    let third = engine.brush_dab_thumbnail("Soft Round");
+    assert!(
+        !third.is_empty(),
+        "after flush the dab cache holds a baked PNG"
+    );
+    assert_eq!(
+        &third[..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        "bytes start with the PNG signature"
+    );
+}
+
+#[test]
+fn theme_change_invalidates_dab_thumbnail() {
+    let mut engine = fresh_engine();
+
+    let _ = engine.brush_dab_thumbnail("Soft Round");
+    engine.test_flush_readbacks();
+    let dark = engine.brush_dab_thumbnail("Soft Round");
+    assert!(!dark.is_empty(), "dark-theme dab bake produced bytes");
+
+    engine.set_preview_theme([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
+    let pending = engine.brush_dab_thumbnail("Soft Round");
+    assert!(
+        pending.is_empty(),
+        "first call after theme swap returns empty while the re-bake is in flight"
+    );
+
+    engine.test_flush_readbacks();
+    let light = engine.brush_dab_thumbnail("Soft Round");
+    assert!(!light.is_empty(), "rebake produces fresh bytes");
+    assert_ne!(
+        light, dark,
+        "inverted theme should produce different dab PNG bytes"
+    );
+}
+
+/// Decode a baked dab thumbnail and report what fraction of pixels are
+/// non-bg (stroke content). The default preview theme bg is roughly
+/// (20, 20, 20); anything brighter than mid-grey can only have come
+/// from the white stroke fg.
+fn decoded_dab_content_ratio(png: &[u8]) -> f64 {
+    let img = image::load_from_memory(png).expect("valid PNG");
+    let rgba = img.to_rgba8();
+    let bright = rgba.pixels().filter(|p| p.0[0] > 128).count();
+    let total = (rgba.width() * rgba.height()) as usize;
+    bright as f64 / total as f64
+}
+
+/// Regression: brushes with deliberately small `size` ports (Airbrush
+/// holds `stamp.size = 0.15`) used to render as a tiny dot in the
+/// middle of the dab thumbnail because the canvas was sized for
+/// pressure-driven brushes that go full-bleed at pressure=1. The bake
+/// path now bbox-crops the rendered dab and rescales, so the picker
+/// tile shows a recognizable shape regardless of the brush's size port
+/// setting.
+#[test]
+fn small_size_brush_dab_thumbnail_is_framed() {
+    let mut engine = fresh_engine();
+    let _ = engine.brush_dab_thumbnail("Airbrush");
+    engine.test_flush_readbacks();
+    let png = engine.brush_dab_thumbnail("Airbrush");
+    let ratio = decoded_dab_content_ratio(&png);
+    assert!(
+        ratio > 0.10,
+        "Airbrush dab should fill at least 10% of the framed thumbnail; got {:.1}%",
+        ratio * 100.0
+    );
+}
+
+/// Same shape as `small_size_brush_dab_thumbnail_is_framed`, but for
+/// the Size Slider built-in which routes a `user_input` node directly
+/// into `stamp.size`. Without bbox cropping the rendered dab landed
+/// off-canvas / truncated in the small render area.
+#[test]
+fn size_slider_dab_thumbnail_is_framed() {
+    let mut engine = fresh_engine();
+    let _ = engine.brush_dab_thumbnail("Size Slider");
+    engine.test_flush_readbacks();
+    let png = engine.brush_dab_thumbnail("Size Slider");
+    let ratio = decoded_dab_content_ratio(&png);
+    assert!(
+        ratio > 0.10,
+        "Size Slider dab should fill at least 10% of the framed thumbnail; got {:.1}%",
+        ratio * 100.0
+    );
+}
+
+/// Scatter Brush displaces every dab by ±dab_size in x/y via a scatter
+/// node. With a single-sample dab path that was enough to push the
+/// dab off the small render canvas entirely for some seeds. The bake
+/// must produce visible content regardless — render headroom + bbox
+/// crop keeps the dab visible no matter where the scatter lands.
+#[test]
+fn scatter_brush_dab_thumbnail_has_visible_content() {
+    let mut engine = fresh_engine();
+    let _ = engine.brush_dab_thumbnail("Scatter Brush");
+    engine.test_flush_readbacks();
+    let png = engine.brush_dab_thumbnail("Scatter Brush");
+    let ratio = decoded_dab_content_ratio(&png);
+    assert!(
+        ratio > 0.05,
+        "Scatter Brush dab should produce visible content somewhere in the framed thumbnail; got {:.1}%",
+        ratio * 100.0
+    );
+}
+
 /// Regression: image-based brushes (Calligraphy, Textured Ink, Pencil,
 /// Charcoal, Canvas Brush) embed PNG tip resources. The picker's lazy
 /// thumbnail bake fired against the active brush's `resource_handles`,

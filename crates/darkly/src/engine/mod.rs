@@ -116,6 +116,16 @@ pub(crate) enum ReadbackContext {
         width: u32,
         height: u32,
     },
+    /// Async readback of a single-dab preview rendered from a library
+    /// brush's graph. Completion PNG-encodes the pixels and installs the
+    /// result in the library's dab thumbnail cache via
+    /// `BrushLibrary::set_dab_thumbnail`. Used by the picker tiles to
+    /// show a tip silhouette next to the stroke thumbnail.
+    BrushDabThumbnail {
+        name: String,
+        width: u32,
+        height: u32,
+    },
     /// Async readback of a single-dab preview rendered from the active
     /// graph. Completion caches the RGBA bytes on the engine so the next
     /// `brush_active_dab_preview` call returns them synchronously. The

@@ -69,7 +69,7 @@
     });
 
     function handleKey(e: KeyboardEvent) {
-        const cols = 3; // matches grid-template-columns: repeat(auto-fill, minmax(...))
+        const cols = 2; // matches grid-template-columns: repeat(2, 1fr)
         const len = filtered.length;
         if (len === 0) return;
         switch (e.key) {
@@ -157,7 +157,10 @@
         left: 0;
         margin-bottom: 4px;
         padding: 10px;
-        min-width: 480px;
+        /* Bounded so the absolute panel can't push past the viewport
+         * edge (which would surface a horizontal scrollbar on body). */
+        width: 480px;
+        max-width: calc(100vw - 32px);
         max-height: 60vh;
         overflow-y: auto;
         z-index: 100;
@@ -246,7 +249,10 @@
     }
     .grid {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+        /* `minmax(0, 1fr)` disables the implicit `auto` min-track-size,
+         * so a wide stroke preview can't push columns past the
+         * container's width. */
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 8px;
     }
     /* Outline rather than swap colors so it stacks cleanly with `.active`

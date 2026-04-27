@@ -15,32 +15,55 @@
     /** Same throttle cadence as the dab and editor previews. */
     const REFRESH_MS = 100;
 
-    /** Object URL pointing at the most recent baked PNG bytes. Object
-     *  URLs are cheaper than data URLs across remounts (we hand the
-     *  browser bytes once, not on every render), and they're trivially
-     *  revoked when bytes change or the tile unmounts. */
-    let objectUrl = $state('');
-    /** Track the bytes that produced `objectUrl` so we can skip redundant
-     *  Blob/URL churn on cache hits. */
-    let lastByteLength = 0;
+    /** Cached object URLs for the two PNGs we display. Object URLs are
+     *  cheaper than data URLs across remounts (we hand the browser
+     *  bytes once, not on every render), and they're trivially revoked
+     *  when bytes change or the tile unmounts. */
+    let strokeUrl = $state('');
+    let dabUrl = $state('');
+    /** Byte lengths that produced the current URLs — used to skip
+     *  redundant Blob/URL churn on cache hits. */
+    let lastStrokeLen = 0;
+    let lastDabLen = 0;
 
-    /** rAF poll budget — single-dab thumbnails bake fast; 30 frames is
-     *  more than enough for the readback to land. */
+    /** rAF poll budget — both bakes fit comfortably inside 30 frames. */
     const POLL_FRAMES_PER_REQUEST = 30;
     let framesRemaining = 0;
     let rafHandle = 0;
 
+    function loadPng(
+        bytes: Uint8Array | undefined,
+        prevUrl: string,
+        prevLen: number,
+    ): { url: string; len: number } | null {
+        if (!bytes || bytes.length === 0) return null;
+        if (bytes.length === prevLen && prevUrl) return null;
+        const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
+        const next = URL.createObjectURL(blob);
+        if (prevUrl) URL.revokeObjectURL(prevUrl);
+        return { url: next, len: bytes.length };
+    }
+
     function refresh() {
         if (!app.handle) return;
-        const png = app.handle.brush_thumbnail(brush.name);
-        if (!png || png.length === 0) return;
-        // Same bytes as last time — skip the Blob/URL churn.
-        if (png.length === lastByteLength && objectUrl) return;
-        lastByteLength = png.length;
-        const blob = new Blob([new Uint8Array(png)], { type: 'image/png' });
-        const next = URL.createObjectURL(blob);
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
-        objectUrl = next;
+        const stroke = loadPng(
+            app.handle.brush_thumbnail(brush.name),
+            strokeUrl,
+            lastStrokeLen,
+        );
+        if (stroke) {
+            strokeUrl = stroke.url;
+            lastStrokeLen = stroke.len;
+        }
+        const dab = loadPng(
+            app.handle.brush_dab_thumbnail(brush.name),
+            dabUrl,
+            lastDabLen,
+        );
+        if (dab) {
+            dabUrl = dab.url;
+            lastDabLen = dab.len;
+        }
     }
 
     const compressor = new SignalCompressor(REFRESH_MS, () => {
@@ -64,7 +87,7 @@
     }
 
     // Reactive trigger: WASM handle becoming available and theme swaps
-    // both require a fresh thumbnail. The brush prop is per-tile and
+    // both require fresh thumbnails. The brush prop is per-tile and
     // doesn't change for a mounted instance, but include it so the
     // effect's dependency set is explicit.
     $effect(() => {
@@ -77,7 +100,8 @@
     onDestroy(() => {
         compressor.cancel();
         if (rafHandle) cancelAnimationFrame(rafHandle);
-        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        if (strokeUrl) URL.revokeObjectURL(strokeUrl);
+        if (dabUrl) URL.revokeObjectURL(dabUrl);
     });
 </script>
 
@@ -87,42 +111,77 @@
     onclick={() => onSelect(brush)}
     title={brush.description || brush.name}
 >
-    <div class="thumb">
-        {#if objectUrl}
-            <img src={objectUrl} alt="" />
-        {/if}
+    <div class="thumbs">
+        <div class="dab">
+            {#if dabUrl}
+                <img src={dabUrl} alt="" />
+            {/if}
+        </div>
+        <div class="stroke">
+            {#if strokeUrl}
+                <img src={strokeUrl} alt="" />
+            {/if}
+        </div>
     </div>
     <span class="name">{brush.name}</span>
 </button>
 
 <style>
+    /* Card-style container so each brush reads as one unit even when
+     * the picker is dense. Stronger border + slightly inset bg gives
+     * each tile clear visual edges against the picker surface. */
     .brush-tile {
         display: flex;
         flex-direction: column;
         gap: 6px;
         padding: 8px;
-        background: var(--bg-hover);
-        border: 1px solid transparent;
+        background: var(--bg);
+        border: 1px solid var(--bg-active);
         border-radius: 6px;
         color: var(--text);
         cursor: pointer;
         text-align: left;
         transition: background 0.1s, border-color 0.1s;
+        /* Backstop for the grid `minmax(0, 1fr)` columns — children
+         * (especially imgs) can't blow the tile out horizontally. */
+        min-width: 0;
     }
     .brush-tile:hover {
-        background: var(--bg-active);
+        background: var(--bg-hover);
+        border-color: var(--text-muted);
     }
     .brush-tile.active {
         border-color: var(--accent);
     }
-    .thumb {
+    /* Dab + stroke read as a single image: shared rounded envelope, no
+     * internal gap or per-panel border. The row aspect is bound on the
+     * parent — square dab plus 320:120 stroke at equal height gives
+     * `(stroke_h + stroke_w) / stroke_h = 1 + 320/120 = 11/3`. With
+     * the parent holding the aspect, both children just stretch to the
+     * row height with `flex` and the dab self-squares via
+     * `aspect-ratio: 1`. Avoids the stretch-vs-aspect grid race that
+     * was clipping the stroke. */
+    .thumbs {
         width: 100%;
-        aspect-ratio: 320 / 120;
-        background: var(--bg);
+        aspect-ratio: 11 / 3;
+        display: flex;
+        background: var(--bg-hover);
         border-radius: 4px;
         overflow: hidden;
     }
-    .thumb img {
+    .dab {
+        aspect-ratio: 1;
+        height: 100%;
+        flex-shrink: 0;
+        overflow: hidden;
+    }
+    .stroke {
+        flex: 1;
+        height: 100%;
+        overflow: hidden;
+    }
+    .dab img,
+    .stroke img {
         width: 100%;
         height: 100%;
         display: block;

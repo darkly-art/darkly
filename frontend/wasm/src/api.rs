@@ -802,6 +802,14 @@ impl DarklyHandle {
         self.engine.borrow_mut().brush_thumbnail(name)
     }
 
+    /// Same shape as `brush_thumbnail`, but bakes a single full-pressure
+    /// dab instead of an S-curve. Used by the picker tiles to display
+    /// the tip silhouette next to the stroke preview.
+    pub fn brush_dab_thumbnail(&self, name: &str) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().brush_dab_thumbnail(name)
+    }
+
     /// Push the current UI theme colors into the engine. Used by both the
     /// live editor preview and brush thumbnail baking — call on theme
     /// change so the live preview re-renders with the new palette.

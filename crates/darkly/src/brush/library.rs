@@ -34,12 +34,18 @@ impl From<&BrushMetadata> for BrushInfo {
 /// In-memory library of brushes.
 pub struct BrushLibrary {
     brushes: HashMap<String, Brush>,
+    /// In-memory dab thumbnails for the picker tiles. Keyed by brush
+    /// name. Not part of the `.darkly-brush` archive — purely a render
+    /// cache that's rebuilt on theme change alongside the stroke
+    /// thumbnails on each `Brush`.
+    dab_thumbnails: HashMap<String, Vec<u8>>,
 }
 
 impl BrushLibrary {
     pub fn new() -> Self {
         BrushLibrary {
             brushes: HashMap::new(),
+            dab_thumbnails: HashMap::new(),
         }
     }
 
@@ -83,14 +89,27 @@ impl BrushLibrary {
             .and_then(|b| b.thumbnail_png.as_deref())
     }
 
-    /// Drop every baked `preview.png` in the library. Called on theme
-    /// change so the next picker refresh re-bakes against the new
-    /// palette — without this, brushes stay frozen at whatever theme
-    /// they were first viewed under.
+    /// Drop every baked stroke + dab thumbnail in the library. Called
+    /// on theme change so the next picker refresh re-bakes against the
+    /// new palette — without this, brushes stay frozen at whatever
+    /// theme they were first viewed under.
     pub fn clear_thumbnails(&mut self) {
         for brush in self.brushes.values_mut() {
             brush.thumbnail_png = None;
         }
+        self.dab_thumbnails.clear();
+    }
+
+    /// Read a brush's cached dab thumbnail PNG bytes. Returns `None` if
+    /// the brush hasn't been baked yet.
+    pub fn dab_thumbnail_png(&self, name: &str) -> Option<&[u8]> {
+        self.dab_thumbnails.get(name).map(|v| v.as_slice())
+    }
+
+    /// Install a freshly-baked dab PNG for `name`. Used by the async
+    /// thumbnail bake completion path.
+    pub fn set_dab_thumbnail(&mut self, name: &str, png: Vec<u8>) {
+        self.dab_thumbnails.insert(name.to_string(), png);
     }
 
     /// Attach a baked `preview.png` to an existing brush. Used by the

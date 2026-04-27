@@ -317,6 +317,16 @@ impl DarklyEngine {
                     self.brush_library.set_thumbnail(&name, png_bytes);
                 }
             }
+            ReadbackContext::BrushDabThumbnail {
+                name,
+                width,
+                height,
+            } => {
+                let png_bytes = frame_dab_thumbnail(&pixels, width, height, self.preview_theme_bg);
+                if !png_bytes.is_empty() {
+                    self.brush_library.set_dab_thumbnail(&name, png_bytes);
+                }
+            }
             ReadbackContext::ActiveBrushDab {
                 width,
                 height,
@@ -612,6 +622,128 @@ fn generate_rgba_thumbnail_from_pixels(
         }
     }
     buf
+}
+
+/// Output side length for cached dab thumbnails. The bake renders into
+/// a larger canvas (see `BRUSH_DAB_RENDER_SIZE`) so brushes whose dabs
+/// are tiny or off-center have enough headroom; the framer below crops
+/// to the actual content and downscales here so picker tiles always
+/// see a stably-sized PNG regardless of how the brush graph chose to
+/// place its stamp.
+const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
+
+/// Frame a rendered dab into a centered, content-fitted PNG.
+///
+/// Generic across every brush — no per-brush logic. The procedure:
+///   1. Scan for non-bg pixels (anything outside the theme bg by more
+///      than a small tolerance) and compute their bounding box.
+///   2. Square the bbox (use the longer side), inflate by 10% margin,
+///      and re-center on the bbox centroid, clamped to canvas bounds.
+///   3. Resize the cropped square to `DAB_THUMBNAIL_OUTPUT_SIZE`.
+///
+/// Brushes that already fill the canvas (Size Slider) bbox to the
+/// canvas → just downscaled. Brushes that paint a small dot (Airbrush)
+/// bbox to the dot → upscaled into the frame. Brushes that displace
+/// the dab off-center (Scatter Brush) bbox to wherever the displaced
+/// dab landed → crop re-centers it. Empty renders (degenerate brushes,
+/// or a scatter that hit fully off-canvas) fall through to a centered
+/// square of the bg, which the picker shows as a flat tile.
+fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> Vec<u8> {
+    let expected = (width * height * 4) as usize;
+    if pixels.len() < expected {
+        log::error!(
+            "dab thumbnail pixel buffer too small: {} < {expected}",
+            pixels.len()
+        );
+        return Vec::new();
+    }
+    let bg_u8 = [
+        (bg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (bg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (bg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+    ];
+    // Tolerance accommodates the GPU's premultiplied-alpha rounding
+    // and any color-management drift; tight enough to still pick up a
+    // pale stroke against the bg.
+    const TOLERANCE: i32 = 12;
+
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+    for y in 0..height {
+        for x in 0..width {
+            let i = ((y * width + x) * 4) as usize;
+            let dr = (pixels[i] as i32 - bg_u8[0] as i32).abs();
+            let dg = (pixels[i + 1] as i32 - bg_u8[1] as i32).abs();
+            let db = (pixels[i + 2] as i32 - bg_u8[2] as i32).abs();
+            if dr > TOLERANCE || dg > TOLERANCE || db > TOLERANCE {
+                if x < min_x {
+                    min_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+                found = true;
+            }
+        }
+    }
+
+    let Some(src) = image::RgbaImage::from_raw(width, height, pixels.to_vec()) else {
+        return Vec::new();
+    };
+
+    let cropped = if found {
+        let bbox_w = max_x - min_x + 1;
+        let bbox_h = max_y - min_y + 1;
+        let raw_side = bbox_w.max(bbox_h);
+        let margin = (raw_side / 10).max(2);
+        // Square crop, clamped to the smaller canvas dim.
+        let side = (raw_side + 2 * margin).min(width.min(height));
+        let cx = min_x + bbox_w / 2;
+        let cy = min_y + bbox_h / 2;
+        let half = side / 2;
+        // `half` may exceed the centroid → saturating_sub clamps to 0;
+        // the upper clamp keeps the crop fully inside the canvas.
+        let crop_x = cx.saturating_sub(half).min(width - side);
+        let crop_y = cy.saturating_sub(half).min(height - side);
+        image::imageops::crop_imm(&src, crop_x, crop_y, side, side).to_image()
+    } else {
+        // Empty render — centered square of bg. Visible as a flat tile.
+        let side = width.min(height);
+        let crop_x = (width - side) / 2;
+        let crop_y = (height - side) / 2;
+        image::imageops::crop_imm(&src, crop_x, crop_y, side, side).to_image()
+    };
+
+    let resized = image::imageops::resize(
+        &cropped,
+        DAB_THUMBNAIL_OUTPUT_SIZE,
+        DAB_THUMBNAIL_OUTPUT_SIZE,
+        image::imageops::FilterType::Triangle,
+    );
+
+    let mut out = Vec::new();
+    let cursor = std::io::Cursor::new(&mut out);
+    let encoder = image::codecs::png::PngEncoder::new(cursor);
+    use image::ImageEncoder;
+    if let Err(e) = encoder.write_image(
+        resized.as_raw(),
+        DAB_THUMBNAIL_OUTPUT_SIZE,
+        DAB_THUMBNAIL_OUTPUT_SIZE,
+        image::ExtendedColorType::Rgba8,
+    ) {
+        log::error!("dab thumbnail PNG encode failed: {e}");
+        return Vec::new();
+    }
+    out
 }
 
 /// Encode an RGBA8 buffer as a PNG. Used for baking brush thumbnails —
