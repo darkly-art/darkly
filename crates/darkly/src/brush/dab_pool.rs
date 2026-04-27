@@ -48,7 +48,7 @@ struct StaticEntry {
 /// to it), then the composite node samples it.  After `execute_gpu()` finishes
 /// for one dab, all dab textures are released back to the pool.
 ///
-/// Static textures are uploaded once (at preset load, etc.) and persist until
+/// Static textures are uploaded once (at brush load, etc.) and persist until
 /// explicitly cleared.  They are read-only texture sources, while dabs are
 /// write-then-read render targets.  Both are accessed through `TextureHandle`
 /// (see `STATIC_HANDLE_BIT`).
@@ -353,7 +353,7 @@ impl DabTexturePool {
         }
     }
 
-    /// Clear all static textures (e.g. when switching brush presets).
+    /// Clear all static textures (e.g. when switching brushes).
     pub fn clear_static(&mut self) {
         self.static_entries.clear();
     }

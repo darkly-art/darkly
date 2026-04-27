@@ -1,6 +1,11 @@
-/// 2D view transform for canvas navigation.
-/// Compositing happens in canvas-pixel space. This transform is applied
-/// only in the present shader to map canvas pixels to screen pixels.
+//! 2D view transform for canvas navigation.
+//! Compositing happens in canvas-pixel space. This transform is applied
+//! only in the present shader to map canvas pixels to screen pixels.
+
+/// Fallback workspace color (matches the legacy hardcoded value previously
+/// baked into `present.wgsl`). The frontend pushes the theme-sourced color
+/// via `set_viewport_bg()` once the UI loads.
+pub const DEFAULT_WORKSPACE_BG: [f32; 4] = [0.11, 0.11, 0.11, 1.0];
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ViewTransform {
@@ -9,6 +14,11 @@ pub struct ViewTransform {
     /// Row 1: [m10, m11, canvas_h, 0]
     /// Row 2: [tx,  ty,  1,        0]
     pub matrix: [[f32; 4]; 3],
+    /// Workspace color shown in the present shader for pixels outside the
+    /// canvas. Only consumed by the present pipeline; other uniform users
+    /// (overlay forward-matrix, etc.) ignore this field. Owned by the
+    /// compositor and stamped onto every transform on upload.
+    pub bg: [f32; 4],
 }
 
 impl ViewTransform {
@@ -19,6 +29,7 @@ impl ViewTransform {
                 [0.0, 1.0, 1.0, 0.0],
                 [0.0, 0.0, 1.0, 0.0],
             ],
+            bg: DEFAULT_WORKSPACE_BG,
         }
     }
 
@@ -63,6 +74,7 @@ impl ViewTransform {
                 [m10, m11, canvas_h, 0.0],
                 [tx, ty, 1.0, 0.0],
             ],
+            bg: DEFAULT_WORKSPACE_BG,
         }
     }
 

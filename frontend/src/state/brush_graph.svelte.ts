@@ -54,7 +54,7 @@ export interface NodeTypeInfo {
 
 // --- Wire type colors ---
 
-export interface PresetInfo {
+export interface BrushInfo {
     name: string;
     category: string;
     author: string;
@@ -124,11 +124,11 @@ class BrushGraphState {
     /** Cached image thumbnails for Image nodes, keyed by resource_name. */
     imageThumbnails = new Map<string, ImageBitmap>();
 
-    /** Available brush presets. */
-    presets = $state<PresetInfo[]>([]);
+    /** Available brushes. */
+    brushes = $state<BrushInfo[]>([]);
 
-    /** Currently loaded preset name (null = custom/modified). */
-    activePreset = $state<string | null>(null);
+    /** Currently loaded brush name (null = custom/modified). */
+    activeBrush = $state<string | null>(null);
 
     /** Ports exposed in the brush properties panel. */
     exposedPorts = $state<ExposedPortInfo[]>([]);
@@ -148,7 +148,7 @@ class BrushGraphState {
                 if (graph && graph.nodes) {
                     this.graph = graph as BrushGraph;
                     this.error = null;
-                    this.activePreset = null; // graph was modified
+                    this.activeBrush = null; // graph was modified
                     this.refreshExposedPorts();
                 }
             } catch {
@@ -173,7 +173,7 @@ class BrushGraphState {
 
     // --- Public API ---
 
-    /** Initialize from WASM — load node types, presets, and default graph. */
+    /** Initialize from WASM — load node types, brushes, and default graph. */
     init() {
         if (!app.handle) return;
         const typesJson = app.handle.brush_node_types();
@@ -183,9 +183,22 @@ class BrushGraphState {
         } catch {
             this.nodeTypes = [];
         }
-        this.fetchGraph();
-        this.refreshPresets();
-        this.refreshExposedPorts();
+        this.refreshBrushes();
+
+        // Boot with a real library brush selected so the BrushBar trigger
+        // (and anywhere else that reads `activeBrush`) has a named brush
+        // to render. The engine's procedural default graph would leave
+        // `activeBrush` null and the trigger would fall back to "Custom".
+        const defaultBrush =
+            this.brushes.find(b => b.name === 'Soft Round') ?? this.brushes[0];
+        if (defaultBrush) {
+            this.loadBrush(defaultBrush.name);
+        } else {
+            // No library brushes available — fall through to the engine's
+            // default graph as a degenerate fallback.
+            this.fetchGraph();
+            this.refreshExposedPorts();
+        }
     }
 
     /** Reset to the default brush graph. */
@@ -195,17 +208,17 @@ class BrushGraphState {
         this.fetchGraph();
         this.refreshExposedPorts();
         this.error = null;
-        this.activePreset = null;
+        this.activeBrush = null;
     }
 
-    /** Refresh the preset list from WASM. */
-    refreshPresets() {
+    /** Refresh the brush list from WASM. */
+    refreshBrushes() {
         if (!app.handle) return;
         try {
-            const list = JSON.parse(app.handle.brush_preset_list());
-            this.presets = Array.isArray(list) ? list : [];
+            const list = JSON.parse(app.handle.brush_list());
+            this.brushes = Array.isArray(list) ? list : [];
         } catch {
-            this.presets = [];
+            this.brushes = [];
         }
     }
 
@@ -242,16 +255,16 @@ class BrushGraphState {
         this.applyResult(app.handle.brush_graph_set_port_exposed(nodeId, portName, exposed));
     }
 
-    /** Load a preset by name. */
-    loadPreset(name: string) {
+    /** Load a brush by name. */
+    loadBrush(name: string) {
         if (!app.handle) return;
-        const result = app.handle.brush_preset_load(name);
+        const result = app.handle.brush_load(name);
         // Error string → load failed.
         if (result !== null && result !== true) {
             this.error = String(result);
             return;
         }
-        this.activePreset = name;
+        this.activeBrush = name;
         this.fetchGraph();
         this.refreshExposedPorts();
         this.error = null;

@@ -266,6 +266,12 @@
             app.requestFrame();
         }
     });
+
+    // HMR'ing this component re-runs onMount and creates a second WASM
+    // engine, wiping the running undo stack. Force a full reload instead.
+    if (import.meta.hot) {
+        import.meta.hot.accept(() => import.meta.hot!.invalidate());
+    }
 </script>
 
 <svelte:window

@@ -95,8 +95,8 @@ impl<W: WireKind> Graph<W> {
     /// at increasing x.  Nodes within a layer are spaced vertically and
     /// ordered to minimize edge crossings.
     ///
-    /// When no measured sizes are available (tests, presets), falls back
-    /// to port-count-based height estimation.
+    /// When no measured sizes are available (tests, freshly loaded brushes),
+    /// falls back to port-count-based height estimation.
     pub fn auto_layout(&mut self) {
         self.auto_layout_with_sizes(&HashMap::new());
     }

@@ -64,7 +64,6 @@ reasons to add a `user_input` node:
 1. **Range rescaling.** The port expects 0–1 but the user should see a range
    in different units (e.g. pixels 1–500). `user_input` normalizes its
    displayed value back to 0–1 before feeding the port.
-   See `size_slider()` for the pattern.
 2. **Fan-out.** One slider drives multiple ports (or one port through some
    math first). The knob must exist as a node to be wired to more than one
    place.

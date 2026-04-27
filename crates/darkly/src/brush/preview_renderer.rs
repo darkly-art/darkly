@@ -3,7 +3,7 @@
 //! Runs the real `StrokeEngine` against a self-owned offscreen target to
 //! produce a preview of a synthetic S-curve stroke — what the brush would
 //! look like in actual use, not a single hover dab. Used by the brush
-//! editor's live preview and by preset thumbnail baking.
+//! editor's live preview and by brush thumbnail baking.
 //!
 //! Distinct from the hover overlay path (`render_preview_pipeline` in
 //! `eval.rs`), which forces `flow=1` and white color to produce a tip-mask
@@ -253,6 +253,20 @@ impl Default for BrushPreviewRenderer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Synthesize a single full-pressure dab at the centre of a target rect.
+///
+/// Drives the brush graph through the regular stroke pipeline with one
+/// stationary sample — useful for the brush picker's tile-shape thumbnail
+/// (and the BrushBar trigger button), where the user wants to see the
+/// tip silhouette without a full stroke arc.
+pub fn synthesize_preview_dab(width: f32, height: f32) -> Vec<PaintInformation> {
+    vec![PaintInformation {
+        pos: [width * 0.5, height * 0.5],
+        pressure: 1.0,
+        ..Default::default()
+    }]
 }
 
 /// Synthesize an S-curve preview stroke of the given dimensions.

@@ -48,9 +48,9 @@ pub enum BrushTip {
         #[serde(default)]
         fade: f32,
     },
-    /// Image-based brush tip loaded from a preset resource.
+    /// Image-based brush tip loaded from a brush bundle resource.
     Predefined {
-        /// Resource name (matches `PresetResourceMeta::name` in the preset ZIP).
+        /// Resource name (matches `BrushResourceMeta::name` in the brush ZIP).
         resource_name: String,
         /// How the image is applied to dabs.
         #[serde(default)]

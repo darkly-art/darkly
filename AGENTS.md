@@ -72,6 +72,10 @@ The correct pattern is async readback: `request_readback()` → `readbacks.submi
 
 Every system that is implemented must be implemented properly. No hacks, no hardcoding, no shortcuts in Rust or the WASM bridge. If we implement one of something, we build a proper system for it. It's okay to take a step back from the current task, in order to do things right. This relates directly to the modularity principle above.
 
+## No Migrations / No Backwards Compatibility (pre-release)
+
+Darkly is in pre-release / alpha. Until the first public release, breaking on-disk and on-the-wire formats is fine — do not write migrations, format-version upgrade paths, or legacy compatibility shims. Make the breaking change directly and update every producer and consumer in the same pass; existing user data can be invalidated.
+
 ## Lint / CI Checks
 
 Run before committing. All must pass:

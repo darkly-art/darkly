@@ -774,7 +774,7 @@ impl DarklyHandle {
     /// later frame once the readback completes.
     ///
     /// Uses the theme colors stored via `set_preview_theme` — the editor
-    /// preview visually matches the brush picker's preset thumbnails so
+    /// preview visually matches the brush picker's thumbnails so
     /// users can scan across both without chromatic surprises. Same shape
     /// as `layer_thumbnail`: no promises, no async JS boundary plumbing.
     pub fn brush_editor_preview(&self, width: u32, height: u32) -> Vec<u8> {
@@ -782,8 +782,36 @@ impl DarklyHandle {
         self.engine.borrow_mut().brush_editor_preview(width, height)
     }
 
+    /// Render a single-dab preview of the active brush — the small
+    /// tip-shape thumbnail used by the BrushBar trigger and the picker's
+    /// active-brush strip. Returns the most recent cached bytes
+    /// synchronously; the async readback updates them on a later frame.
+    pub fn brush_active_dab_preview(&self, width: u32, height: u32) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine
+            .borrow_mut()
+            .brush_active_dab_preview(width, height)
+    }
+
+    /// Return the cached PNG thumbnail bytes for a library brush, kicking
+    /// off a bake on first call. Returns an empty `Uint8Array` while the
+    /// bake is in flight (or for unknown brush names); callers poll on
+    /// rAF until non-empty bytes arrive.
+    pub fn brush_thumbnail(&self, name: &str) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().brush_thumbnail(name)
+    }
+
+    /// Same shape as `brush_thumbnail`, but bakes a single full-pressure
+    /// dab instead of an S-curve. Used by the picker tiles to display
+    /// the tip silhouette next to the stroke preview.
+    pub fn brush_dab_thumbnail(&self, name: &str) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().brush_dab_thumbnail(name)
+    }
+
     /// Push the current UI theme colors into the engine. Used by both the
-    /// live editor preview and preset thumbnail baking — call on theme
+    /// live editor preview and brush thumbnail baking — call on theme
     /// change so the live preview re-renders with the new palette.
     pub fn set_preview_theme(&self, fg: &[f32], bg: &[f32]) {
         self.flush_if_needed();
@@ -798,6 +826,19 @@ impl DarklyHandle {
             [0.08, 0.08, 0.08, 1.0]
         };
         self.engine.borrow_mut().set_preview_theme(fg, bg);
+    }
+
+    /// Push the workspace background color (the area shown around the
+    /// canvas in the viewport — the `--canvas-bg` CSS token). Call on
+    /// theme change so the present shader uses the new color.
+    pub fn set_viewport_bg(&self, bg: &[f32]) {
+        self.flush_if_needed();
+        let bg = if bg.len() >= 4 {
+            [bg[0], bg[1], bg[2], bg[3]]
+        } else {
+            [0.11, 0.11, 0.11, 1.0]
+        };
+        self.engine.borrow_mut().set_viewport_bg(bg);
     }
 
     // --- Brush config ---
@@ -1089,14 +1130,14 @@ impl DarklyHandle {
         }
     }
 
-    // --- Brush presets (direct) ---
+    // --- Brush library (direct) ---
 
-    /// Load a preset.  Returns `null` on success (no auto-layout needed),
+    /// Load a brush.  Returns `null` on success (no auto-layout needed),
     /// `true` if auto-layout was applied (frontend should re-layout with
     /// DOM sizes), or an error string.
-    pub fn brush_preset_load(&self, name: &str) -> JsValue {
+    pub fn brush_load(&self, name: &str) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow_mut().brush_preset_load(name) {
+        match self.engine.borrow_mut().brush_load(name) {
             Ok(needs_layout) => {
                 if needs_layout {
                     JsValue::TRUE
@@ -1108,17 +1149,17 @@ impl DarklyHandle {
         }
     }
 
-    pub fn brush_preset_save(&self, name: &str, category: &str) -> JsValue {
+    pub fn brush_save(&self, name: &str, category: &str) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow_mut().brush_preset_save(name, category) {
+        match self.engine.borrow_mut().brush_save(name, category) {
             Ok(()) => JsValue::NULL,
             Err(e) => JsValue::from_str(&e),
         }
     }
 
-    pub fn brush_preset_import(&self, bytes: &[u8]) -> JsValue {
+    pub fn brush_import(&self, bytes: &[u8]) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow_mut().brush_preset_import(bytes) {
+        match self.engine.borrow_mut().brush_import(bytes) {
             Ok(name) => JsValue::from_str(&name),
             Err(e) => JsValue::from_str(&e),
         }
@@ -1240,15 +1281,14 @@ impl DarklyHandle {
         ))
     }
 
-    pub fn brush_preset_list(&self) -> String {
+    pub fn brush_list(&self) -> String {
         self.flush_if_needed();
-        serde_json::to_string(&self.engine.borrow().brush_preset_list())
-            .unwrap_or_else(|_| "[]".into())
+        serde_json::to_string(&self.engine.borrow().brush_list()).unwrap_or_else(|_| "[]".into())
     }
 
-    pub fn brush_preset_export(&self, name: &str) -> JsValue {
+    pub fn brush_export(&self, name: &str) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow().brush_preset_export(name) {
+        match self.engine.borrow().brush_export(name) {
             Ok(bytes) => {
                 let arr = js_sys::Uint8Array::new_with_length(bytes.len() as u32);
                 arr.copy_from(&bytes);

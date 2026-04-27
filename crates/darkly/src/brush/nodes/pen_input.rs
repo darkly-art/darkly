@@ -60,7 +60,7 @@ pub fn register() -> BrushNodeRegistration {
                     "Stroke stabilization strength (0 = off, 100% = maximum smoothing)",
                 ),
             // Dab spacing — read at stroke start as a fraction of the dab
-            // diameter. Like `stabilize`, this is preset-level config that
+            // diameter. Like `stabilize`, this is brush-level config that
             // currently lives here because the engine reads pen_input port
             // defaults out-of-band; both move together when the brush
             // settings bar gets redesigned.

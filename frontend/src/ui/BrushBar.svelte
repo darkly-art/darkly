@@ -1,10 +1,13 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
     import { brushGraph } from '../state/brush_graph.svelte';
-    import type { PresetInfo } from '../state/brush_graph.svelte';
+    import type { BrushInfo } from '../state/brush_graph.svelte';
     import BrushBuilder from './brush_builder/BrushBuilder.svelte';
+    import BrushDabView from './brush_picker/BrushDabView.svelte';
+    import BrushPicker from './brush_picker/BrushPicker.svelte';
+    import BrushPreviewStrip from './brush_picker/BrushPreviewStrip.svelte';
 
-    let presetDropdownOpen = $state(false);
+    let brushPickerOpen = $state(false);
 
     function ensureInit() {
         if (!brushGraph.graph && app.handle) brushGraph.init();
@@ -15,10 +18,10 @@
         brushGraph.isOpen = !brushGraph.isOpen;
     }
 
-    function selectPreset(preset: PresetInfo) {
+    function selectBrush(brush: BrushInfo) {
         ensureInit();
-        brushGraph.loadPreset(preset.name);
-        presetDropdownOpen = false;
+        brushGraph.loadBrush(brush.name);
+        brushPickerOpen = false;
     }
 
     function handleExposedPort(nodeId: number, portName: string, displayValue: number) {
@@ -43,8 +46,8 @@
     }
 
     function handleClickOutside(e: MouseEvent) {
-        if (presetDropdownOpen) {
-            presetDropdownOpen = false;
+        if (brushPickerOpen) {
+            brushPickerOpen = false;
         }
     }
 
@@ -69,18 +72,6 @@
         el.addEventListener('pointermove', onMove);
         el.addEventListener('pointerup', onUp);
     }
-
-    // Group presets by category
-    function groupedPresets(): Map<string, PresetInfo[]> {
-        const groups = new Map<string, PresetInfo[]>();
-        for (const p of brushGraph.presets) {
-            const cat = p.category || 'uncategorized';
-            if (!groups.has(cat)) groups.set(cat, []);
-            groups.get(cat)!.push(p);
-        }
-        return groups;
-    }
-
 </script>
 
 <svelte:window onclick={handleClickOutside} />
@@ -97,39 +88,32 @@
 
     <!-- Tool options bar (always visible) -->
     <div class="tool-options">
-        <!-- Preset selector -->
-        <div class="preset-section">
+        <!-- Brush picker -->
+        <div class="brush-picker-section">
             <button
-                class="preset-button"
-                onclick={(e) => { e.stopPropagation(); ensureInit(); presetDropdownOpen = !presetDropdownOpen; }}
-                title="Select brush preset"
+                class="brush-picker-button"
+                onclick={(e) => { e.stopPropagation(); ensureInit(); brushPickerOpen = !brushPickerOpen; }}
+                title="Select brush"
             >
-                <span class="preset-name">{brushGraph.activePreset ?? 'Custom'}</span>
+                {#if brushGraph.activeBrush}
+                    <!-- Reuses the picker tile's cached library
+                         thumbnails (dab + stroke) at trigger size; no
+                         extra renders, just a different aspect on the
+                         outer wrapper. -->
+                    <span class="trigger-preview">
+                        <BrushPreviewStrip brushName={brushGraph.activeBrush} />
+                    </span>
+                {:else}
+                    <BrushDabView width={20} height={20} />
+                {/if}
+                <span class="brush-name">{brushGraph.activeBrush ?? 'Custom'}</span>
                 <svg class="chevron" width="10" height="6" viewBox="0 0 10 6">
                     <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/>
                 </svg>
             </button>
 
-            {#if presetDropdownOpen}
-                <!-- svelte-ignore a11y_no_static_element_interactions -->
-                <!-- svelte-ignore a11y_click_events_have_key_events -->
-                <div class="preset-dropdown dropdown-surface" onclick={(e) => e.stopPropagation()}>
-                    {#each [...groupedPresets()] as [category, presets]}
-                        <div class="preset-category">{category}</div>
-                        {#each presets as preset}
-                            <button
-                                class="preset-item"
-                                class:active={brushGraph.activePreset === preset.name}
-                                onclick={() => selectPreset(preset)}
-                            >
-                                {preset.name}
-                            </button>
-                        {/each}
-                    {/each}
-                    {#if brushGraph.presets.length === 0}
-                        <div class="preset-empty">No presets available</div>
-                    {/if}
-                </div>
+            {#if brushPickerOpen}
+                <BrushPicker onSelect={selectBrush} />
             {/if}
         </div>
 
@@ -266,14 +250,23 @@
         line-height: 1.3;
     }
 
-    /* ── Preset Selector ── */
+    /* ── Brush Picker ── */
 
-    .preset-section {
+    .brush-picker-section {
         position: relative;
         flex-shrink: 0;
     }
 
-    .preset-button {
+    /* Width-bound wrapper for the embedded preview strip — the strip
+     * is `width: 100%; aspect-ratio: 11/3`, so the wrapper width
+     * picks the trigger preview's height. 80px → ~22px tall. */
+    .trigger-preview {
+        display: block;
+        width: 80px;
+        flex-shrink: 0;
+    }
+
+    .brush-picker-button {
         display: flex;
         align-items: center;
         gap: 4px;
@@ -287,11 +280,11 @@
         min-width: 100px;
         transition: background 0.1s;
     }
-    .preset-button:hover {
+    .brush-picker-button:hover {
         background: var(--bg-active);
     }
 
-    .preset-name {
+    .brush-name {
         flex: 1;
         text-align: left;
         overflow: hidden;
@@ -302,51 +295,6 @@
     .chevron {
         flex-shrink: 0;
         color: var(--text-muted);
-    }
-
-    .preset-dropdown {
-        position: absolute;
-        bottom: 100%;
-        left: 0;
-        min-width: 180px;
-        max-height: 300px;
-        overflow-y: auto;
-        margin-bottom: 4px;
-        padding: 4px 0;
-        z-index: 100;
-    }
-
-    .preset-category {
-        font-size: 9px;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        padding: 6px 12px 2px;
-    }
-
-    .preset-item {
-        display: block;
-        width: 100%;
-        text-align: left;
-        background: none;
-        border: none;
-        color: var(--text);
-        cursor: pointer;
-        font-size: 11px;
-        padding: 4px 12px;
-    }
-    .preset-item:hover {
-        background: var(--bg-hover);
-    }
-    .preset-item.active {
-        color: var(--accent);
-    }
-
-    .preset-empty {
-        font-size: 11px;
-        color: var(--text-dim);
-        padding: 8px 12px;
-        font-style: italic;
     }
 
     /* ── Spacer & Toggle ── */

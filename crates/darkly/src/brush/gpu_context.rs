@@ -38,7 +38,7 @@ pub struct BrushGpuContext<'a> {
     pub canvas_height: u32,
     /// Selection mask bind group (or default 1x1 white when no selection).
     pub selection_bind_group: &'a wgpu::BindGroup,
-    /// Resource name → TextureHandle for images uploaded by the preset loader.
+    /// Resource name → TextureHandle for images uploaded by the brush loader.
     /// Image nodes read from this to resolve their `resource_name` param.
     pub resource_handles: &'a HashMap<String, TextureHandle>,
     /// Composite blend mode override: 0 = source-over (paint), 1 = destination-out (erase).

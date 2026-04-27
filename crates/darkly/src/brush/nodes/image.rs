@@ -1,7 +1,7 @@
 //! Image source GPU node.
 //!
 //! Outputs a cached brush tip texture as a `Texture` handle.  The image
-//! is uploaded to the `DabTexturePool` tip cache at preset load time;
+//! is uploaded to the `DabTexturePool` tip cache at brush load time;
 //! this node just looks it up by `resource_name` and passes the handle
 //! downstream (e.g. to a stamp node).
 //!

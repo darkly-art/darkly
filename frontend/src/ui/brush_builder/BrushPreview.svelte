@@ -100,14 +100,14 @@
         scheduleFrame();
     }
 
-    // Reactive trigger: graph snapshot, preset, theme, or size changes all
+    // Reactive trigger: graph snapshot, brush, theme, or size changes all
     // invalidate the preview. The compressor debounces bursts (slider
     // drags, resize scrubs) into at most one fire per REFRESH_MS.
     $effect(() => {
         // Track dependencies — field reads establish the subscription;
         // actual values are consumed inside `refresh()` below.
         void brushGraph.graph;
-        void brushGraph.activePreset;
+        void brushGraph.activeBrush;
         void theme.current;
         void app.handle;
         void width;
