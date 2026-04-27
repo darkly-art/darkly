@@ -15,6 +15,10 @@ log = { workspace = true }
 web-time = { workspace = true }
 zip = { workspace = true }
 image = { workspace = true }
+png = { workspace = true }
+quick-xml = { workspace = true }
+base64 = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 pollster = "0.4"

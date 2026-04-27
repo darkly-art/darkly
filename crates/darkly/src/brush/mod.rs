@@ -10,6 +10,7 @@ pub mod curve_math;
 pub mod dab_pool;
 pub mod eval;
 pub mod gpu_context;
+pub mod import;
 pub mod interpolation;
 pub mod library;
 pub mod nodes;

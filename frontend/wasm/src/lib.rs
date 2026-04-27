@@ -2,6 +2,7 @@ use wasm_bindgen::prelude::*;
 
 pub mod api;
 pub mod config_bridge;
+pub mod krita_inspect;
 
 #[wasm_bindgen(start)]
 pub fn start() {
