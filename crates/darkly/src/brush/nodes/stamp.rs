@@ -49,11 +49,11 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-up-right-and-down-left-from-center")
                 .exposed()
-                // Cap dab radius at ~25 px in previews so a stroke is
-                // representable regardless of the user's working size.
-                // Mirrors Krita's `KisPresetLivePreviewView::setupAndPaintStroke`,
-                // which qBound's preview size to [3, 25] px for the same reason.
-                .with_preview_max(0.1)
+                // Size is a working scaling factor, not part of the
+                // brush's identity. Excluded from previews entirely
+                // by spoofing to a fixed ~25 px-radius value — the
+                // preview pipeline never reads the user's actual size.
+                .with_preview_value(0.1)
                 .with_description("Overall brush size"),
             PortDef::input("rotation", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
