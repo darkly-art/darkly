@@ -34,6 +34,10 @@ export function registerHotkeys() {
         if (!key) continue;
 
         bindings[key] = (e: KeyboardEvent) => {
+            // Suppress global hotkeys while a modal dialog is open so the
+            // dialog's own keys (Esc to close, etc.) work and modal-scoped
+            // shortcuts don't leak to the canvas.
+            if (document.querySelector('dialog[open]')) return;
             const el = e.target as HTMLElement;
             const tag = el?.tagName;
             // Allow hotkeys through range sliders — they don't need text input.
