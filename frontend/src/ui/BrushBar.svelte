@@ -5,6 +5,7 @@
     import BrushBuilder from './brush_builder/BrushBuilder.svelte';
     import BrushDabView from './brush_picker/BrushDabView.svelte';
     import BrushPicker from './brush_picker/BrushPicker.svelte';
+    import BrushPreviewStrip from './brush_picker/BrushPreviewStrip.svelte';
 
     let brushPickerOpen = $state(false);
 
@@ -94,7 +95,17 @@
                 onclick={(e) => { e.stopPropagation(); ensureInit(); brushPickerOpen = !brushPickerOpen; }}
                 title="Select brush"
             >
-                <BrushDabView width={20} height={20} />
+                {#if brushGraph.activeBrush}
+                    <!-- Reuses the picker tile's cached library
+                         thumbnails (dab + stroke) at trigger size; no
+                         extra renders, just a different aspect on the
+                         outer wrapper. -->
+                    <span class="trigger-preview">
+                        <BrushPreviewStrip brushName={brushGraph.activeBrush} />
+                    </span>
+                {:else}
+                    <BrushDabView width={20} height={20} />
+                {/if}
                 <span class="brush-name">{brushGraph.activeBrush ?? 'Custom'}</span>
                 <svg class="chevron" width="10" height="6" viewBox="0 0 10 6">
                     <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/>
@@ -243,6 +254,15 @@
 
     .brush-picker-section {
         position: relative;
+        flex-shrink: 0;
+    }
+
+    /* Width-bound wrapper for the embedded preview strip — the strip
+     * is `width: 100%; aspect-ratio: 11/3`, so the wrapper width
+     * picks the trigger preview's height. 80px → ~22px tall. */
+    .trigger-preview {
+        display: block;
+        width: 80px;
         flex-shrink: 0;
     }
 

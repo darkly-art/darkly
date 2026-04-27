@@ -2,7 +2,7 @@
     import { tick } from 'svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import type { BrushInfo } from '../../state/brush_graph.svelte';
-    import BrushDabView from './BrushDabView.svelte';
+    import BrushPreviewStrip from './BrushPreviewStrip.svelte';
     import BrushTile from './BrushTile.svelte';
 
     interface Props {
@@ -100,54 +100,62 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div class="brush-picker dropdown-surface" onclick={(e) => e.stopPropagation()} onkeydown={handleKey}>
-    <input
-        bind:this={searchInput}
-        bind:value={query}
-        type="search"
-        class="search"
-        placeholder="Search brushes…"
-    />
+    <!-- Non-scrolling header: search + active brush stay visible while
+         the user scans the grid below. -->
+    <div class="picker-header">
+        <input
+            bind:this={searchInput}
+            bind:value={query}
+            type="search"
+            class="search"
+            placeholder="Search brushes…"
+        />
 
-    {#if activeBrush}
-        <div class="active-strip">
-            <BrushDabView width={48} height={48} />
-            <div class="active-meta">
-                <span class="active-label">Active</span>
-                <span class="active-name">{activeBrush.name}</span>
-                {#if activeBrush.category}
-                    <span class="active-category">{activeBrush.category}</span>
-                {/if}
+        {#if activeBrush}
+            <div class="active-strip">
+                <span class="active-preview">
+                    <BrushPreviewStrip brushName={activeBrush.name} />
+                </span>
+                <div class="active-meta">
+                    <span class="active-label">Active</span>
+                    <span class="active-name">{activeBrush.name}</span>
+                    {#if activeBrush.category}
+                        <span class="active-category">{activeBrush.category}</span>
+                    {/if}
+                </div>
             </div>
-        </div>
-    {/if}
+        {/if}
+    </div>
 
-    {#if filtered.length === 0}
-        <div class="empty">No brushes match “{query}”.</div>
-    {:else}
-        <div class="groups">
-            {#each groups as group, gi (group.category)}
-                {@const offset = groups
-                    .slice(0, gi)
-                    .reduce((sum, g) => sum + g.brushes.length, 0)}
-                <section class="group">
-                    <div class="group-header">
-                        <span class="group-label">{group.category}</span>
-                        <span class="group-fence" aria-hidden="true"></span>
-                    </div>
-                    <div class="grid">
-                        {#each group.brushes as brush, bi (brush.name)}
-                            <div
-                                class="grid-cell"
-                                class:highlight={offset + bi === highlightIndex}
-                            >
-                                <BrushTile {brush} active={false} {onSelect} />
-                            </div>
-                        {/each}
-                    </div>
-                </section>
-            {/each}
-        </div>
-    {/if}
+    <div class="picker-body">
+        {#if filtered.length === 0}
+            <div class="empty">No brushes match “{query}”.</div>
+        {:else}
+            <div class="groups">
+                {#each groups as group, gi (group.category)}
+                    {@const offset = groups
+                        .slice(0, gi)
+                        .reduce((sum, g) => sum + g.brushes.length, 0)}
+                    <section class="group">
+                        <div class="group-header">
+                            <span class="group-label">{group.category}</span>
+                            <span class="group-fence" aria-hidden="true"></span>
+                        </div>
+                        <div class="grid">
+                            {#each group.brushes as brush, bi (brush.name)}
+                                <div
+                                    class="grid-cell"
+                                    class:highlight={offset + bi === highlightIndex}
+                                >
+                                    <BrushTile {brush} active={false} {onSelect} />
+                                </div>
+                            {/each}
+                        </div>
+                    </section>
+                {/each}
+            </div>
+        {/if}
+    </div>
 </div>
 
 <style>
@@ -156,17 +164,33 @@
         bottom: 100%;
         left: 0;
         margin-bottom: 4px;
-        padding: 10px;
         /* Bounded so the absolute panel can't push past the viewport
          * edge (which would surface a horizontal scrollbar on body). */
         width: 480px;
         max-width: calc(100vw - 32px);
         max-height: 60vh;
-        overflow-y: auto;
         z-index: 100;
+        /* Outer panel is a non-scrolling flex column so the header
+         * stays put while only `.picker-body` scrolls. */
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+    }
+    /* Pinned header: search + active strip. Padding lives here so the
+     * scroll content underneath doesn't bleed through under the
+     * header — `.picker-body` provides its own padding. */
+    .picker-header {
+        flex-shrink: 0;
+        padding: 10px 10px 0;
         display: flex;
         flex-direction: column;
         gap: 10px;
+    }
+    .picker-body {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 10px;
     }
     .search {
         width: 100%;
@@ -180,6 +204,14 @@
     }
     .search:focus {
         border-color: var(--accent);
+    }
+    /* Width-bound wrapper for the strip — strip is `width: 100%;
+     * aspect-ratio: 11/3`, so 176px wide → 48px tall, matching the
+     * previous BrushDabView size in this slot. */
+    .active-preview {
+        display: block;
+        width: 176px;
+        flex-shrink: 0;
     }
     .active-strip {
         display: flex;

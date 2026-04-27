@@ -183,9 +183,22 @@ class BrushGraphState {
         } catch {
             this.nodeTypes = [];
         }
-        this.fetchGraph();
         this.refreshBrushes();
-        this.refreshExposedPorts();
+
+        // Boot with a real library brush selected so the BrushBar trigger
+        // (and anywhere else that reads `activeBrush`) has a named brush
+        // to render. The engine's procedural default graph would leave
+        // `activeBrush` null and the trigger would fall back to "Custom".
+        const defaultBrush =
+            this.brushes.find(b => b.name === 'Soft Round') ?? this.brushes[0];
+        if (defaultBrush) {
+            this.loadBrush(defaultBrush.name);
+        } else {
+            // No library brushes available — fall through to the engine's
+            // default graph as a degenerate fallback.
+            this.fetchGraph();
+            this.refreshExposedPorts();
+        }
     }
 
     /** Reset to the default brush graph. */

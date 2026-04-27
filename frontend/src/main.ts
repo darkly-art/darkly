@@ -7,6 +7,9 @@ import GpuErrorPage from './ui/GpuErrorPage.svelte';
 import { mount } from 'svelte';
 import { checkGpu } from './gpu';
 import { detectPlatform } from './platform';
+import { suppressButtonKeyboardFocus } from './lib/suppressButtonKeyboardFocus';
+
+suppressButtonKeyboardFocus();
 
 const target = document.getElementById('app')!;
 
