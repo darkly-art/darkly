@@ -12,7 +12,7 @@
         "noUnusedLocals": false,
         "noUnusedParameters": false,
         "skipLibCheck": true,
-        "types": ["@webgpu/types"]
+        "types": ["@webgpu/types", "vite/client"]
     },
     "include": ["src/**/*.ts", "src/**/*.svelte"]
 }

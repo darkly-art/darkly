@@ -38,3 +38,9 @@ export async function initEditor(canvas: HTMLCanvasElement): Promise<DarklyHandl
 
     return handle;
 }
+
+// HMR'ing this module would create a second WASM engine with a fresh undo
+// stack. Force a full reload instead.
+if (import.meta.hot) {
+    import.meta.hot.accept(() => import.meta.hot!.invalidate());
+}

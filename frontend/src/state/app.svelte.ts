@@ -138,3 +138,9 @@ class AppState {
 }
 
 export const app = new AppState();
+
+// `app` owns the live DarklyHandle. HMR'ing this module resets `handle` to
+// null, orphaning the running engine. Force a full reload instead.
+if (import.meta.hot) {
+    import.meta.hot.accept(() => import.meta.hot!.invalidate());
+}
