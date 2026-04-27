@@ -281,3 +281,52 @@ fn preview_short_circuits_when_brush_preview_unconnected() {
         "no brush_preview wire → no placement info"
     );
 }
+
+/// Regression: with `size_input` unwired, the user-facing `size` slider must
+/// grow the brush linearly across its full range — no mid-slider clamp,
+/// no halving from the `size_input` default. Wiring pen pressure must not
+/// be required for the resize feature to behave normally.
+#[test]
+fn unwired_brush_grows_linearly_across_size_range() {
+    let mut engine = test_engine(256, 256);
+    let pen = find_node_id(&engine, "pen_input");
+    let stamp = find_node_id(&engine, "stamp");
+
+    // Mimic Soft Round / Hard Round: no pressure wire on the stamp.
+    engine
+        .brush_graph_disconnect(pen.0, "pressure", stamp.0, "size_input")
+        .ok(); // Disconnect is a no-op if already disconnected.
+
+    fn render(engine: &mut DarklyEngine, stamp: NodeId, size: f32) -> f32 {
+        engine
+            .brush_graph_set_port_default(stamp.0, "size", size)
+            .unwrap();
+        engine.regenerate_brush_preview();
+        engine
+            .brush_preview_info()
+            .expect("preview placement info")
+            .half_extent_canvas_px[0]
+    }
+
+    let h_25 = render(&mut engine, stamp, 0.25); // 25% slider
+    let h_50 = render(&mut engine, stamp, 0.5); //  50%
+    let h_100 = render(&mut engine, stamp, 1.0); // 100%
+    let h_200 = render(&mut engine, stamp, 2.0); // 200%
+    let h_400 = render(&mut engine, stamp, 4.0); // 400%
+
+    // Each doubling of `size` must roughly double the half-extent. If the
+    // engine is capping (effective_size clamp) or halving (size_input
+    // default = 0.5), one of these ratios will collapse.
+    let ratios = [
+        (h_50 / h_25, "25% → 50%"),
+        (h_100 / h_50, "50% → 100%"),
+        (h_200 / h_100, "100% → 200%"),
+        (h_400 / h_200, "200% → 400%"),
+    ];
+    for (ratio, label) in ratios {
+        assert!(
+            ratio > 1.8,
+            "{label}: half-extent should ~double, got ratio {ratio:.2}"
+        );
+    }
+}

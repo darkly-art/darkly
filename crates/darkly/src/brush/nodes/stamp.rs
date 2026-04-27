@@ -10,9 +10,11 @@
 //!
 //! The dab viewport may be non-square: if the tip texture has a non-square
 //! aspect ratio, the viewport preserves it so the tip is sampled without
-//! distortion.  The effective size — `size_input * size`, clamped to [0, 1]
-//! — scales the longer axis up to `MAX_DAB_SIZE`; the shorter axis follows
-//! from the tip aspect ratio.
+//! distortion.  The effective size — `size_input * size` — scales the
+//! longer axis; `MAX_DAB_SIZE` is the canvas-pixel reference for
+//! `effective_size = 1.0` (i.e. the slider's "100%" mark) but is no longer
+//! a hard cap, so the user's slider keeps growing the brush past 100%.
+//! The shorter axis follows from the tip aspect ratio.
 
 use crate::brush::brush_tip::BrushTipApplication;
 use crate::brush::dab_pool::MAX_DAB_SIZE;
@@ -34,12 +36,12 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("tip", BrushWireType::Texture)
                 .with_description("Brush tip image"),
             PortDef::input("size_input", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.5)
+                .with_range(0.0, 1.0, 1.0)
                 .with_label("Size Input")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-circle")
                 .with_description(
-                    "Dynamic per-dab size signal. Wire pen pressure or a curve here for pressure sensitivity.",
+                    "Dynamic per-dab size multiplier in [0, 1]. Wire pen pressure or a curve here for pressure sensitivity. Defaults to 1.0 (full strength) so unwired brushes paint at the user-facing size verbatim.",
                 ),
             PortDef::input("size", BrushWireType::Scalar)
                 .with_range(0.0, 4.0, 0.1)
@@ -97,7 +99,8 @@ pub fn register() -> BrushNodeRegistration {
 /// evaluation path and the preview path. Everything here is pure CPU data.
 struct StampInputs {
     tip_handle: TextureHandle,
-    effective_size: f32, // size_input * size, clamped to [0, 1]
+    effective_size: f32, // size_input * size, no upper bound — the user's
+    // `size` slider grows the brush as far as they want.
     ratio: f32,
     /// Per-dab paint deposition (industry "flow"). Feeds the stamp shader's
     /// `opacity` uniform — the stamp pipeline still calls its uniform
@@ -139,7 +142,7 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
 
     Some(StampInputs {
         tip_handle,
-        effective_size: (size_input * size).clamp(0.0, 1.0),
+        effective_size: (size_input * size).max(0.0),
         ratio,
         flow,
         color,
@@ -151,19 +154,21 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
 }
 
 /// Compute the dab's pixel dimensions given the effective size and the tip's
-/// aspect ratio. The longer axis scales up to `max_dim`, the shorter axis
-/// follows from the tip's aspect. Both are clamped into [1, max_dim].
-fn compute_dab_dims(effective_size: f32, tip_w: u32, tip_h: u32, max_dim: u32) -> (u32, u32) {
-    let max = max_dim as f32;
+/// aspect ratio. `nominal_dim` is the canvas-pixel size the brush draws at
+/// `effective_size = 1.0` — i.e. the reference for the "100%" mark on the
+/// user-facing size slider. Above 1.0, the dab grows proportionally; the
+/// engine no longer caps internally so the slider keeps working past 100%.
+fn compute_dab_dims(effective_size: f32, tip_w: u32, tip_h: u32, nominal_dim: u32) -> (u32, u32) {
+    let nominal = nominal_dim as f32;
     let tip_aspect = tip_w as f32 / tip_h as f32;
     if tip_aspect >= 1.0 {
-        let w = (effective_size * max).max(1.0);
+        let w = (effective_size * nominal).max(1.0);
         let h = (w / tip_aspect).max(1.0);
-        (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
+        (w.ceil() as u32, h.ceil() as u32)
     } else {
-        let h = (effective_size * max).max(1.0);
+        let h = (effective_size * nominal).max(1.0);
         let w = (h * tip_aspect).max(1.0);
-        (w.ceil().min(max) as u32, h.ceil().min(max) as u32)
+        (w.ceil() as u32, h.ceil() as u32)
     }
 }
 
@@ -239,7 +244,12 @@ impl BrushNodeEvaluator for StampEvaluator {
         let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
         let (dab_w, dab_h) = compute_dab_dims(inputs.effective_size, tip_w, tip_h, MAX_DAB_SIZE);
 
-        let handle = gpu.dab_pool.acquire(gpu.device);
+        // Allocate the dab texture at the exact size we need. The pool
+        // reuses entries with matching dimensions across dabs, so a
+        // constant-pressure stroke allocates once. Variable-pressure
+        // strokes get one entry per distinct integer pixel size — bounded
+        // by the dab pool's existing free-list reuse.
+        let handle = gpu.dab_pool.acquire_sized(gpu.device, dab_w, dab_h);
         let dab_view = gpu.dab_pool.view(handle).clone();
         let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
         encode_stamp_pass(

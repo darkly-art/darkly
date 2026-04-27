@@ -10,6 +10,21 @@ use crate::gpu::params::ParamValue;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
 
+/// Classifies a brush-graph mutation by which preview consumers it
+/// actually invalidates.
+#[derive(Copy, Clone)]
+enum ChangeKind {
+    /// Structural or non-scrub change: nodes, wires, params, exposed
+    /// flags, non-exposed port defaults, brush load/reset/clear. Bumps
+    /// both `brush_graph_version` and `brush_topology_version`.
+    Topology,
+    /// User-facing exposed-port value change (size scrub, opacity scrub,
+    /// future hardness/rotation scrubs). Bumps only `brush_graph_version`
+    /// — the dab thumbnail render neutralises these via
+    /// `reset_exposed_scrubs`, so its cache stays valid.
+    ScrubOnly,
+}
+
 impl DarklyEngine {
     /// Return metadata for all registered brush node types.
     pub fn brush_node_types(&self) -> Vec<BrushNodeRegistration> {
@@ -48,7 +63,7 @@ impl DarklyEngine {
         self.snapshot_brush_defaults();
         // Run the post-mutation pipeline so the brush preview mask (and any
         // other graph-dependent state) refreshes from the new graph.
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(())
     }
 
@@ -56,7 +71,7 @@ impl DarklyEngine {
     pub fn reset_brush_graph(&mut self) {
         self.active_brush_graph = crate::brush::default_graph();
         self.snapshot_brush_defaults();
-        let _ = self.compile_active();
+        let _ = self.compile_active(ChangeKind::Topology);
     }
 
     /// Capture every input port's current default into `brush_defaults`.
@@ -244,8 +259,16 @@ impl DarklyEngine {
     /// Compile the active graph in-place, then release any static GPU
     /// textures that are no longer referenced by an Image node.
     ///
+    /// `kind` selects which version counters to bump:
+    /// - [`ChangeKind::Topology`] bumps both the graph version (editor /
+    ///   hover preview) and the topology version (dab thumbnail).
+    /// - [`ChangeKind::ScrubOnly`] bumps only the graph version. The dab
+    ///   thumbnail render neutralises exposed-port scrubs via
+    ///   [`crate::brush::reset_exposed_scrubs`], so a scrub change can't
+    ///   change its rendered output — no point invalidating its cache.
+    ///
     /// Returns Ok on success or an error string.
-    fn compile_active(&mut self) -> Result<(), String> {
+    fn compile_active(&mut self, kind: ChangeKind) -> Result<(), String> {
         crate::brush::compile_graph(&self.active_brush_graph).map_err(|e| format!("{e}"))?;
 
         // Collect resource names still referenced by Image nodes.
@@ -273,9 +296,13 @@ impl DarklyEngine {
             }
         }
 
-        // Every compile bumps the version so the editor preview knows to
-        // re-render and stale in-flight readbacks can be discarded on arrival.
+        // Every compile bumps the graph version (editor preview re-renders,
+        // stale in-flight readbacks get discarded). Topology version bumps
+        // only when the change actually affects the dab-thumbnail render.
         self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+        if matches!(kind, ChangeKind::Topology) {
+            self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
+        }
 
         // Refresh the brush preview overlay now that the graph is compiled —
         // size, rotation, and tip changes all land here.
@@ -384,10 +411,11 @@ impl DarklyEngine {
         self.brush_editor_preview_cache_size = None;
         self.active_dab_preview_cache = None;
         self.active_dab_preview_cache_size = None;
-        // Bumping the version forces the skip-check in
-        // `brush_editor_preview` to trigger a fresh render; also drops
-        // any in-flight readback as stale when it lands.
+        // Theme changes alter rendered colors → both editor preview and
+        // dab thumbnail need to re-render and discard any in-flight
+        // readbacks. Bump both versions.
         self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+        self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
     }
 
     /// Render a single-dab preview of the active brush and return the
@@ -413,7 +441,7 @@ impl DarklyEngine {
         // cached bytes so the UI stays responsive without clobbering the
         // stroke's GPU state.
         let nothing_to_do = in_stroke
-            || (self.last_rendered_dab_version == self.brush_graph_version
+            || (self.last_rendered_dab_topology_version == self.brush_topology_version
                 && self.active_dab_preview_cache_size == Some((width, height)));
         if nothing_to_do {
             return cached.unwrap_or_else(zero_buffer);
@@ -429,27 +457,12 @@ impl DarklyEngine {
 
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
-        // Pin the user-facing `size` port on every stamp node to its
-        // registration default. The dab thumbnail represents the brush's
-        // identity (shape, texture, dynamics) — scrubbing the brush bar's
-        // Size control shouldn't visibly redraw the icon.
+        // Reset every exposed scrub (size, opacity, hardness, …) to its
+        // registration default before rendering. The dab thumbnail
+        // represents the brush's identity (shape, texture, dynamics);
+        // user-facing scrubs belong in the brush bar, not the icon.
         let mut graph = self.active_brush_graph.clone();
-        let registry = BrushNodeRegistry::new();
-        let stamp_size_default = registry
-            .get("stamp")
-            .and_then(|r| r.ports.iter().find(|p| p.name == "size"))
-            .map(|p| p.default);
-        if let Some(size_default) = stamp_size_default {
-            let stamp_ids: Vec<NodeId> = graph
-                .nodes
-                .iter()
-                .filter(|(_, n)| n.type_id == "stamp")
-                .map(|(id, _)| *id)
-                .collect();
-            for nid in stamp_ids {
-                let _ = graph.set_port_default(nid, "size", size_default);
-            }
-        }
+        crate::brush::reset_exposed_scrubs(&mut graph);
         let path =
             crate::brush::preview_renderer::synthesize_preview_dab(width as f32, height as f32);
         self.render_preview_and_request_readback(
@@ -462,10 +475,10 @@ impl DarklyEngine {
             ReadbackContext::ActiveBrushDab {
                 width,
                 height,
-                graph_version: self.brush_graph_version,
+                topology_version: self.brush_topology_version,
             },
         );
-        self.last_rendered_dab_version = self.brush_graph_version;
+        self.last_rendered_dab_topology_version = self.brush_topology_version;
 
         cached.unwrap_or_else(zero_buffer)
     }
@@ -554,7 +567,7 @@ impl DarklyEngine {
         // Set position.
         let _ = self.active_brush_graph.set_node_position(id, [x, y]);
 
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -563,7 +576,7 @@ impl DarklyEngine {
         self.active_brush_graph
             .remove_node(NodeId(node_id))
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -593,7 +606,7 @@ impl DarklyEngine {
                 to_ref.clone(),
             )
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -615,7 +628,7 @@ impl DarklyEngine {
                 port: to_port.into(),
             },
         );
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -629,7 +642,7 @@ impl DarklyEngine {
         self.active_brush_graph
             .set_param(NodeId(node_id), param_index, value)
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -643,7 +656,7 @@ impl DarklyEngine {
         self.active_brush_graph
             .set_port_default(NodeId(node_id), port_name, value)
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -914,7 +927,7 @@ impl DarklyEngine {
         self.active_brush_graph
             .set_port_default(nid, port_name, port_value)
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::ScrubOnly)?;
         Ok(self.active_graph_json())
     }
 

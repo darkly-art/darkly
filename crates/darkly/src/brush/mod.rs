@@ -141,7 +141,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
 ///
 /// Graph topology:
 ///   circle ──texture──→     stamp.tip
-///   pen_input ──pressure──→ stamp.size
+///   pen_input ──pressure──→ stamp.size_input
 ///   paint_color ──color──→  stamp.color
 ///   stamp ──dab──→          color_output.dab
 ///   stamp ──dab_size──→     color_output.dab_size
@@ -303,6 +303,33 @@ pub fn compile_from_json(json: &str) -> Result<eval::BrushGraphRunner, String> {
     let graph: crate::nodegraph::Graph<BrushWireType> =
         serde_json::from_str(json).map_err(|e| format!("invalid graph JSON: {e}"))?;
     compile_graph(&graph).map_err(|e| format!("graph compilation failed: {e}"))
+}
+
+/// Reset every exposed input port on every node back to its registration
+/// default. This produces a "canonical" view of the graph that's
+/// independent of any user-facing scrubs (size, opacity, hardness, etc.).
+///
+/// Used by the active-dab thumbnail render so the brush icon represents
+/// the brush's identity (shape, texture, dynamics) rather than the user's
+/// momentary parameter adjustments. Generalizes per-port pinning so adding
+/// a new exposed scrub (opacity hotkey, hardness hotkey, …) requires no
+/// changes here.
+pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) {
+    let registry = BrushNodeRegistry::new();
+    let mut resets: Vec<(crate::nodegraph::NodeId, String, f32)> = Vec::new();
+    for (id, node) in &graph.nodes {
+        let Some(reg) = registry.get(&node.type_id) else {
+            continue;
+        };
+        for port in &reg.ports {
+            if port.exposed && port.dir == crate::nodegraph::PortDir::Input {
+                resets.push((*id, port.name.clone(), port.default));
+            }
+        }
+    }
+    for (id, name, default) in resets {
+        let _ = graph.set_port_default(id, &name, default);
+    }
 }
 
 /// Validate a brush graph from JSON without compiling.

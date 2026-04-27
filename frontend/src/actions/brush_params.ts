@@ -1,7 +1,7 @@
 import { actions } from './registry';
 import { app } from '../state/app.svelte';
 import { brushGraph, exposedDragSpeed } from '../state/brush_graph.svelte';
-import { pushHoverOverlay } from '../tools/brush.svelte';
+import { pushHoverOverlay, cursorPose } from '../tools/brush.svelte';
 
 /** Map of semantic role → which exposed port adjusts it.
  *
@@ -64,14 +64,10 @@ function setBrushParam(role: Role, absolute: number): void {
 
 /** Transient state held while a drag-scrub is in flight. Module-level
  *  because there's only ever one active drag at a time, gated by
- *  pointer capture.
- *
- *  The preview is *anchored* at the pointerdown position with the pose
- *  frozen at the start of the drag — so only size visibly changes,
- *  matching Krita's behavior. */
+ *  pointer capture. The cursor preview is *anchored* at the pointerdown
+ *  position so only size changes visibly during the drag. */
 type SizeDragState = {
     startVal: number;
-    anchorEvent: PointerEvent;
     anchorX: number;
     anchorY: number;
 };
@@ -102,18 +98,17 @@ export function registerBrushParamActions() {
         defaultMouseClick: 'canvas:shift+drag',
         handler: (ctx) => {
             const found = findScalarPort('size');
-            if (!found || !(ctx.event instanceof PointerEvent)) {
+            if (!found) {
                 sizeDrag = null;
                 return;
             }
             sizeDrag = {
                 startVal: found.data.value,
-                anchorEvent: ctx.event,
                 anchorX: typeof ctx.x === 'number' ? ctx.x : 0,
                 anchorY: typeof ctx.y === 'number' ? ctx.y : 0,
             };
         },
-        onMove: (_ctx, _e, dx) => {
+        onMove: (_ctx, e, dx) => {
             if (!sizeDrag) return;
             const found = findScalarPort('size');
             if (!found) return;
@@ -121,11 +116,13 @@ export function registerBrushParamActions() {
             setBrushParam('size', sizeDrag.startVal + dx * speed);
             // Re-render the on-canvas brush cursor preview so the circle
             // grows/shrinks live during the drag. Anchored at the start
-            // position with the pose frozen so only size changes visibly.
+            // position; pose comes from the live event, matching the
+            // normal hover preview (pressure forced to 1 by `cursorPose`
+            // so both paths show the same brush extent).
             if (app.handle) {
                 pushHoverOverlay(
                     app.handle,
-                    sizeDrag.anchorEvent,
+                    cursorPose(e),
                     sizeDrag.anchorX,
                     sizeDrag.anchorY,
                 );

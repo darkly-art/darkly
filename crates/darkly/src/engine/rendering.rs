@@ -330,10 +330,13 @@ impl DarklyEngine {
             ReadbackContext::ActiveBrushDab {
                 width,
                 height,
-                graph_version,
+                topology_version,
             } => {
-                // Drop stale results — same logic as BrushEditorPreview.
-                if graph_version == self.brush_graph_version {
+                // Drop stale results — but key off topology, not graph
+                // version: scrub-only changes don't affect the rendered
+                // dab thanks to `reset_exposed_scrubs`, so a readback
+                // queued before a scrub change is still valid.
+                if topology_version == self.brush_topology_version {
                     self.active_dab_preview_cache = Some(pixels);
                     self.active_dab_preview_cache_size = Some((width, height));
                 }

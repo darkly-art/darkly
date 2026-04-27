@@ -315,6 +315,42 @@ fn theme_change_invalidates_active_dab_preview() {
 }
 
 #[test]
+fn size_scrub_does_not_change_active_dab_pixels() {
+    // The dab thumbnail represents brush identity (shape, texture,
+    // dynamics) — scrubbing the brush bar's user-facing size should leave
+    // the icon visually unchanged. Verified end-to-end: render, scrub
+    // size, render again, compare bytes.
+    let mut engine = fresh_engine();
+    let (w, h) = (32u32, 32u32);
+
+    let _ = engine.brush_active_dab_preview(w, h);
+    engine.test_flush_readbacks();
+    let before = engine.brush_active_dab_preview(w, h);
+    assert!(before.iter().any(|&b| b != 0));
+
+    // Find the stamp's exposed `size` port and adjust it via the same
+    // entry point the brush bar / shift+drag scrub uses.
+    let size = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .find(|p| p.port_name == "size")
+        .expect("default brush exposes a `size` port");
+    engine
+        .brush_set_exposed_port(size.node_id, "size", 250.0)
+        .expect("scrub set");
+
+    // Drain any in-flight readback queued by the scrub. If the cache
+    // were keyed off graph_version it would have invalidated and a
+    // rebake would run; under the topology-version split it doesn't.
+    engine.test_flush_readbacks();
+    let after = engine.brush_active_dab_preview(w, h);
+    assert_eq!(
+        after, before,
+        "scrubbing the user-facing size port must not change the dab thumbnail bytes"
+    );
+}
+
+#[test]
 fn graph_change_triggers_active_dab_rebake() {
     let mut engine = fresh_engine();
 
