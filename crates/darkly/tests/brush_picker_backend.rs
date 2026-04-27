@@ -174,24 +174,6 @@ fn small_size_brush_dab_thumbnail_is_framed() {
     );
 }
 
-/// Same shape as `small_size_brush_dab_thumbnail_is_framed`, but for
-/// the Size Slider built-in which routes a `user_input` node directly
-/// into `stamp.size`. Without bbox cropping the rendered dab landed
-/// off-canvas / truncated in the small render area.
-#[test]
-fn size_slider_dab_thumbnail_is_framed() {
-    let mut engine = fresh_engine();
-    let _ = engine.brush_dab_thumbnail("Size Slider");
-    engine.test_flush_readbacks();
-    let png = engine.brush_dab_thumbnail("Size Slider");
-    let ratio = decoded_dab_content_ratio(&png);
-    assert!(
-        ratio > 0.10,
-        "Size Slider dab should fill at least 10% of the framed thumbnail; got {:.1}%",
-        ratio * 100.0
-    );
-}
-
 /// Scatter Brush displaces every dab by ±dab_size in x/y via a scatter
 /// node. With a single-sample dab path that was enough to push the
 /// dab off the small render canvas entirely for some seeds. The bake

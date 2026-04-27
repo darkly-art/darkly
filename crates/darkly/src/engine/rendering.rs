@@ -641,7 +641,7 @@ const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
 ///      and re-center on the bbox centroid, clamped to canvas bounds.
 ///   3. Resize the cropped square to `DAB_THUMBNAIL_OUTPUT_SIZE`.
 ///
-/// Brushes that already fill the canvas (Size Slider) bbox to the
+/// Brushes that already fill the canvas bbox to the
 /// canvas → just downscaled. Brushes that paint a small dot (Airbrush)
 /// bbox to the dot → upscaled into the frame. Brushes that displace
 /// the dab off-center (Scatter Brush) bbox to wherever the displaced
