@@ -22,6 +22,11 @@ export interface ActionRegistration {
      *  no mouse trigger by default. */
     defaultMouseClick?: string;
     handler: (ctx: ActionContext) => void;
+    /** For drag-bound actions: receives the live pointer event plus the
+     *  total displacement from the pointerdown position (client pixels)
+     *  on each pointermove. Only invoked when the action is triggered via
+     *  `dispatchDrag`. */
+    onMove?: (ctx: ActionContext, e: PointerEvent, dx: number, dy: number) => void;
     deactivate?: (ctx: ActionContext) => void;
 }
 

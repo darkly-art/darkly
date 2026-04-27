@@ -9,6 +9,7 @@
     import { screenToCanvas } from './coordinates';
     import { toast } from '../state/toast.svelte';
     import { theme } from '../state/theme.svelte';
+    import { dispatchDrag } from '../actions/triggers';
 
     let canvas = $state<HTMLCanvasElement>(undefined!);
 
@@ -130,11 +131,15 @@
         // Navigation gets first chance (space+drag)
         if (nav.onPointerDown(e, canvas)) return;
 
+        // Drag-bound actions (e.g. shift+drag → brush size scrub) consume
+        // the pointer lifecycle before the active tool sees it.
+        const pos = getCanvasCoords(e);
+        if (dispatchDrag('canvas', e, { x: pos.x, y: pos.y })) return;
+
         canvas.setPointerCapture(e.pointerId);
 
         const ctx = getToolContext();
         if (!ctx) return;
-        const pos = getCanvasCoords(e);
         const tool = toolRegistry.get(app.activeToolId);
         tool?.onPointerDown(ctx, e, pos.x, pos.y);
         app.requestFrame();

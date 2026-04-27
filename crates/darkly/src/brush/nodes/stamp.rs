@@ -10,8 +10,9 @@
 //!
 //! The dab viewport may be non-square: if the tip texture has a non-square
 //! aspect ratio, the viewport preserves it so the tip is sampled without
-//! distortion.  The `size` input (0-1) scales the longer axis up to
-//! `MAX_DAB_SIZE`; the shorter axis follows from the tip aspect ratio.
+//! distortion.  The effective size — `size_input * size`, clamped to [0, 1]
+//! — scales the longer axis up to `MAX_DAB_SIZE`; the shorter axis follows
+//! from the tip aspect ratio.
 
 use crate::brush::brush_tip::BrushTipApplication;
 use crate::brush::dab_pool::MAX_DAB_SIZE;
@@ -32,19 +33,21 @@ pub fn register() -> BrushNodeRegistration {
         ports: vec![
             PortDef::input("tip", BrushWireType::Texture)
                 .with_description("Brush tip image"),
-            PortDef::input("size", BrushWireType::Scalar)
+            PortDef::input("size_input", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
-                .with_label("Size")
+                .with_label("Size Input")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-circle")
-                .with_description("Base brush size"),
-            PortDef::input("scale", BrushWireType::Scalar)
+                .with_description(
+                    "Dynamic per-dab size signal. Wire pen pressure or a curve here for pressure sensitivity.",
+                ),
+            PortDef::input("size", BrushWireType::Scalar)
                 .with_range(0.0, 4.0, 0.1)
-                .with_label("Scale")
+                .with_label("Size")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-up-right-and-down-left-from-center")
                 .exposed()
-                .with_description("Size multiplier"),
+                .with_description("Overall brush size"),
             PortDef::input("rotation", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_label("Rotation")
@@ -94,7 +97,7 @@ pub fn register() -> BrushNodeRegistration {
 /// evaluation path and the preview path. Everything here is pure CPU data.
 struct StampInputs {
     tip_handle: TextureHandle,
-    effective_size: f32, // size * scale, clamped to [0, 1]
+    effective_size: f32, // size_input * size, clamped to [0, 1]
     ratio: f32,
     /// Per-dab paint deposition (industry "flow"). Feeds the stamp shader's
     /// `opacity` uniform — the stamp pipeline still calls its uniform
@@ -114,8 +117,8 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
         _ => return None,
     };
 
+    let size_input = ctx.input_f32("size_input");
     let size = ctx.input_f32("size");
-    let scale = ctx.input_f32("scale");
     let rotation_input = ctx.input_f32("rotation");
     let mirror_x_input = ctx.input_f32("mirror_x");
     let mirror_y_input = ctx.input_f32("mirror_y");
@@ -136,7 +139,7 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
 
     Some(StampInputs {
         tip_handle,
-        effective_size: (size * scale).clamp(0.0, 1.0),
+        effective_size: (size_input * size).clamp(0.0, 1.0),
         ratio,
         flow,
         color,

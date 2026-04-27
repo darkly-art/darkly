@@ -1,6 +1,6 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
-    import { brushGraph } from '../state/brush_graph.svelte';
+    import { brushGraph, exposedDragSpeed } from '../state/brush_graph.svelte';
     import type { BrushInfo } from '../state/brush_graph.svelte';
     import BrushBuilder from './brush_builder/BrushBuilder.svelte';
     import BrushDabView from './brush_picker/BrushDabView.svelte';
@@ -37,12 +37,6 @@
             case 'Raw': return value.toFixed(2);
             default: return value.toFixed(2); // Normalized
         }
-    }
-
-    /** Drag speed scaled to the display range. */
-    function exposedDragSpeed(min: number, max: number): number {
-        const range = max - min;
-        return range / 400; // ~400px of drag to cover the full range
     }
 
     function handleClickOutside(e: MouseEvent) {

@@ -429,7 +429,27 @@ impl DarklyEngine {
 
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
-        let graph = self.active_brush_graph.clone();
+        // Pin the user-facing `size` port on every stamp node to its
+        // registration default. The dab thumbnail represents the brush's
+        // identity (shape, texture, dynamics) — scrubbing the brush bar's
+        // Size control shouldn't visibly redraw the icon.
+        let mut graph = self.active_brush_graph.clone();
+        let registry = BrushNodeRegistry::new();
+        let stamp_size_default = registry
+            .get("stamp")
+            .and_then(|r| r.ports.iter().find(|p| p.name == "size"))
+            .map(|p| p.default);
+        if let Some(size_default) = stamp_size_default {
+            let stamp_ids: Vec<NodeId> = graph
+                .nodes
+                .iter()
+                .filter(|(_, n)| n.type_id == "stamp")
+                .map(|(id, _)| *id)
+                .collect();
+            for nid in stamp_ids {
+                let _ = graph.set_port_default(nid, "size", size_default);
+            }
+        }
         let path =
             crate::brush::preview_renderer::synthesize_preview_dab(width as f32, height as f32);
         self.render_preview_and_request_readback(

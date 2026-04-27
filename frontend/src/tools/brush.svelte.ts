@@ -34,7 +34,10 @@ function previewStrength(halfExtent: [number, number]): number {
     return MAX_STRENGTH + (BASE_STRENGTH - MAX_STRENGTH) * smooth;
 }
 
-function pushHoverOverlay(handle: any, e: PointerEvent, cx: number, cy: number) {
+/** Refresh the on-canvas brush cursor preview at `(cx, cy)` using the pose
+ *  from `e`. Exported so non-brush callers (e.g. the shift+drag size scrub)
+ *  can keep the preview in sync after mutating the brush graph mid-gesture. */
+export function pushHoverOverlay(handle: any, e: PointerEvent, cx: number, cy: number) {
     const info = handle.refresh_brush_preview(
         cx,
         cy,

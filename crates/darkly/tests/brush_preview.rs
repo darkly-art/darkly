@@ -148,14 +148,14 @@ fn preview_extent_matches_texture_dimensions() {
     let mut engine = test_engine(256, 256);
     let stamp = find_node_id(&engine, "stamp");
 
-    // Pin the stamp's effective size: pressure → size in the default
-    // graph, but we override the scale and disconnect from pressure-driven
-    // dynamics by setting the port default to a known value. (The wire
-    // would dominate; setting the default has no effect when wired. So
-    // instead verify the relationship: half_extent_x * 2 = an integer
-    // pixel count consistent with the brush.)
+    // Pin the stamp's effective size: pressure → size_input in the default
+    // graph, but we override the user-facing `size` (overall brush size)
+    // and disconnect from pressure-driven dynamics by setting the port
+    // default to a known value. (The wire would dominate; setting the
+    // default has no effect when wired. So instead verify the relationship:
+    // half_extent_x * 2 = an integer pixel count consistent with the brush.)
     engine
-        .brush_graph_set_port_default(stamp.0, "scale", 1.0)
+        .brush_graph_set_port_default(stamp.0, "size", 1.0)
         .unwrap();
     engine.regenerate_brush_preview();
 

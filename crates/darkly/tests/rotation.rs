@@ -91,7 +91,7 @@ fn install_bar_tip(engine: &mut DarklyEngine) -> (NodeId, u64) {
         find_node_id(engine, "pen_input").0,
         "pressure",
         stamp_id.0,
-        "size",
+        "size_input",
     );
 
     // Upload last — the graph now references "test-bar", so the upload
@@ -192,10 +192,10 @@ fn stamp_rotation_port_default_is_radians() {
 
     // Big enough to see the orientation; set size/scale to make dab ~128px.
     engine
-        .brush_graph_set_port_default(stamp_id.0, "size", 0.25)
+        .brush_graph_set_port_default(stamp_id.0, "size_input", 0.25)
         .unwrap();
     engine
-        .brush_graph_set_port_default(stamp_id.0, "scale", 1.0)
+        .brush_graph_set_port_default(stamp_id.0, "size", 1.0)
         .unwrap();
     engine
         .brush_graph_set_port_default(stamp_id.0, "rotation", 0.0)
@@ -227,10 +227,10 @@ fn stamp_rotation_port_default_is_radians() {
     let layer_id = engine.add_raster_layer();
     let (stamp_id, _) = install_bar_tip(&mut engine);
     engine
-        .brush_graph_set_port_default(stamp_id.0, "size", 0.25)
+        .brush_graph_set_port_default(stamp_id.0, "size_input", 0.25)
         .unwrap();
     engine
-        .brush_graph_set_port_default(stamp_id.0, "scale", 1.0)
+        .brush_graph_set_port_default(stamp_id.0, "size", 1.0)
         .unwrap();
     engine
         .brush_graph_set_port_default(stamp_id.0, "rotation", std::f32::consts::FRAC_PI_2)
@@ -270,10 +270,10 @@ fn jitter_passthrough_preserves_drawing_angle() {
     let (stamp_id, _image_id) = install_bar_tip(&mut engine);
 
     engine
-        .brush_graph_set_port_default(stamp_id.0, "size", 0.2)
+        .brush_graph_set_port_default(stamp_id.0, "size_input", 0.2)
         .unwrap();
     engine
-        .brush_graph_set_port_default(stamp_id.0, "scale", 1.0)
+        .brush_graph_set_port_default(stamp_id.0, "size", 1.0)
         .unwrap();
 
     let pen_id = find_node_id(&engine, "pen_input");
@@ -342,10 +342,10 @@ fn drawing_angle_wire_rotates_brush_to_face_stroke() {
     let (stamp_id, _image_id) = install_bar_tip(&mut engine);
 
     engine
-        .brush_graph_set_port_default(stamp_id.0, "size", 0.2)
+        .brush_graph_set_port_default(stamp_id.0, "size_input", 0.2)
         .unwrap();
     engine
-        .brush_graph_set_port_default(stamp_id.0, "scale", 1.0)
+        .brush_graph_set_port_default(stamp_id.0, "size", 1.0)
         .unwrap();
 
     let pen_id = find_node_id(&engine, "pen_input");

@@ -191,7 +191,7 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
         )
         .unwrap();
 
-    // pressure → stamp.size
+    // pressure → stamp.size_input
     graph
         .connect(
             PortRef {
@@ -200,7 +200,7 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
             },
             PortRef {
                 node: stamp,
-                port: "size".into(),
+                port: "size_input".into(),
             },
         )
         .unwrap();
