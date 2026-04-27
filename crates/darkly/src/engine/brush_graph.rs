@@ -344,7 +344,12 @@ impl DarklyEngine {
         // uniform rings.
         let in_stroke = self.brush_stroke_engine.is_some();
 
-        let zero_buffer = || vec![0u8; (width * height * 4) as usize];
+        // Caller's frontend treats an empty Vec as "no fresh bytes
+        // available" and skips the data-URL update — preserving whatever
+        // was last shown. A zero-filled buffer of the requested size
+        // would *also* parse cleanly and render as a transparent image,
+        // wiping the visible preview. So: return whatever cached bytes
+        // we have for *this exact size*, or empty if none.
         let cached = self
             .brush_editor_preview_cache
             .clone()
@@ -358,7 +363,7 @@ impl DarklyEngine {
             || (self.last_rendered_preview_version == self.brush_graph_version
                 && self.brush_editor_preview_cache_size == Some((width, height)));
         if nothing_to_do {
-            return cached.unwrap_or_else(zero_buffer);
+            return cached.unwrap_or_default();
         }
 
         // Don't queue a second readback on top of an in-flight one — it
@@ -368,36 +373,44 @@ impl DarklyEngine {
             .readbacks
             .any(|c| matches!(c, ReadbackContext::BrushEditorPreview { .. }));
         if already_pending {
-            return cached.unwrap_or_else(zero_buffer);
+            return cached.unwrap_or_default();
         }
 
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
 
-        // Clone the active graph so we can pass it through the shared
-        // helper without holding a borrow on `self` across the call.
-        let graph = self.active_brush_graph.clone();
+        // Clone the active graph and neutralize any ports flagged with
+        // `preview_max` so the rendered stroke fits the fixed render
+        // canvas regardless of the user's working brush parameters.
+        // Per-node knowledge about what to neutralize lives on the port
+        // registrations; this pipeline doesn't introspect node types.
+        let mut graph = self.active_brush_graph.clone();
+        graph.apply_preview_overrides();
+        let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_preview_stroke(
-            width as f32,
-            height as f32,
+            rw as f32,
+            rh as f32,
             30,
+            super::brush_library::BRUSH_STROKE_PATH_INSET,
         );
         self.render_preview_and_request_readback(
             &graph,
             &path,
-            width,
-            height,
+            rw,
+            rh,
             fg,
             bg,
             ReadbackContext::BrushEditorPreview {
-                width,
-                height,
+                width: rw,
+                height: rh,
+                target_width: width,
+                target_height: height,
                 graph_version: self.brush_graph_version,
             },
         );
         self.last_rendered_preview_version = self.brush_graph_version;
 
-        cached.unwrap_or_else(zero_buffer)
+        cached.unwrap_or_default()
     }
 
     /// Invalidate any cached editor preview — call when the theme colors
@@ -430,7 +443,11 @@ impl DarklyEngine {
         // uniform rings.
         let in_stroke = self.brush_stroke_engine.is_some();
 
-        let zero_buffer = || vec![0u8; (width * height * 4) as usize];
+        // See `brush_editor_preview` for why we return an empty Vec rather
+        // than a zero-filled one when no cache is available for *this*
+        // size — frontends treat empty as "no fresh bytes" and preserve
+        // the last successful render, while a zero buffer would parse as
+        // a transparent image and visibly wipe whatever was on screen.
         let cached = self
             .active_dab_preview_cache
             .clone()
@@ -444,7 +461,7 @@ impl DarklyEngine {
             || (self.last_rendered_dab_topology_version == self.brush_topology_version
                 && self.active_dab_preview_cache_size == Some((width, height)));
         if nothing_to_do {
-            return cached.unwrap_or_else(zero_buffer);
+            return cached.unwrap_or_default();
         }
 
         // Don't queue a second readback on top of an in-flight one.
@@ -452,7 +469,7 @@ impl DarklyEngine {
             .readbacks
             .any(|c| matches!(c, ReadbackContext::ActiveBrushDab { .. }));
         if already_pending {
-            return cached.unwrap_or_else(zero_buffer);
+            return cached.unwrap_or_default();
         }
 
         let fg = self.preview_theme_fg;
@@ -480,7 +497,7 @@ impl DarklyEngine {
         );
         self.last_rendered_dab_topology_version = self.brush_topology_version;
 
-        cached.unwrap_or_else(zero_buffer)
+        cached.unwrap_or_default()
     }
 
     /// Shared helper: render a preview path into the preview renderer's

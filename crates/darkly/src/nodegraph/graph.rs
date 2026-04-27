@@ -111,6 +111,15 @@ pub struct PortDef<W: WireKind> {
     /// Whether this port is exposed in the brush properties panel.
     #[serde(default)]
     pub exposed: bool,
+    /// Cap applied to the port's value when generating previews. When
+    /// set, the preview pipeline calls `apply_preview_overrides`, which
+    /// drops any incoming wire on this port and clamps `default` down
+    /// to this maximum. This is how a node tells the preview system
+    /// "my port can take any value at runtime, but for preview rendering
+    /// please keep it under X" — so previews stay representable without
+    /// the pipeline ever knowing what this port means.
+    #[serde(default)]
+    pub preview_max: Option<f32>,
 }
 
 impl<W: WireKind> PortDef<W> {
@@ -127,6 +136,7 @@ impl<W: WireKind> PortDef<W> {
             icon: String::new(),
             label: String::new(),
             exposed: false,
+            preview_max: None,
         }
     }
 
@@ -143,6 +153,7 @@ impl<W: WireKind> PortDef<W> {
             icon: String::new(),
             label: String::new(),
             exposed: false,
+            preview_max: None,
         }
     }
 
@@ -176,6 +187,16 @@ impl<W: WireKind> PortDef<W> {
     /// Mark this port as exposed in the brush properties panel by default.
     pub fn exposed(mut self) -> Self {
         self.exposed = true;
+        self
+    }
+
+    /// Cap this port's value during preview rendering. See
+    /// [`PortDef::preview_max`] for the contract. Use when a port can
+    /// legitimately take values that would make previews unrepresentable
+    /// (e.g., a brush-size port whose runtime range fills the preview
+    /// canvas with one dab).
+    pub fn with_preview_max(mut self, max: f32) -> Self {
+        self.preview_max = Some(max);
         self
     }
 }
@@ -362,6 +383,40 @@ impl<W: WireKind> Graph<W> {
             .ok_or(GraphError::NodeNotFound(id))?;
         node.position = pos;
         Ok(())
+    }
+
+    /// Neutralize ports annotated with [`PortDef::preview_max`] so the
+    /// graph renders representably as a preview.
+    ///
+    /// For each port carrying a `preview_max`, this drops any incoming
+    /// wire on that port (so the port falls back to its default value)
+    /// and clamps that default down to the annotated maximum. Ports
+    /// without a `preview_max` are left alone.
+    ///
+    /// This is the only place the preview pipeline mutates the graph.
+    /// Per-node knowledge — "what a sane preview-time value of *my*
+    /// port looks like" — lives on the port registration; the pipeline
+    /// is brush-agnostic.
+    pub fn apply_preview_overrides(&mut self) {
+        let mut overrides: Vec<(NodeId, String, f32)> = Vec::new();
+        for node in self.nodes.values() {
+            for port in &node.ports {
+                if let Some(max) = port.preview_max {
+                    overrides.push((node.id, port.name.clone(), max));
+                }
+            }
+        }
+        for (node_id, port_name, max) in overrides {
+            // Drop incoming wires on the port so the (clamped) default
+            // is what the compiler reads.
+            self.connections
+                .retain(|c| !(c.to.node == node_id && c.to.port == port_name));
+            if let Some(node) = self.nodes.get_mut(&node_id) {
+                if let Some(port) = node.ports.iter_mut().find(|p| p.name == port_name) {
+                    port.default = port.default.min(max);
+                }
+            }
+        }
     }
 
     /// Update a port's default value on a node instance.

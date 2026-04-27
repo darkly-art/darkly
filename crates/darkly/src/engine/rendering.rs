@@ -297,14 +297,24 @@ impl DarklyEngine {
             ReadbackContext::BrushEditorPreview {
                 width,
                 height,
+                target_width,
+                target_height,
                 graph_version,
             } => {
                 // Drop stale results — if the graph has changed since
                 // this render was issued, a fresher render has already
                 // been queued and will supersede this one.
                 if graph_version == self.brush_graph_version {
-                    self.brush_editor_preview_cache = Some(pixels);
-                    self.brush_editor_preview_cache_size = Some((width, height));
+                    let framed = frame_stroke_thumbnail(
+                        &pixels,
+                        width,
+                        height,
+                        target_width,
+                        target_height,
+                        self.preview_theme_bg,
+                    );
+                    self.brush_editor_preview_cache = Some(framed);
+                    self.brush_editor_preview_cache_size = Some((target_width, target_height));
                 }
             }
             ReadbackContext::BrushThumbnailForSave {
@@ -312,7 +322,10 @@ impl DarklyEngine {
                 width,
                 height,
             } => {
-                let png_bytes = encode_rgba_as_png(&pixels, width, height);
+                let (tw, th) = super::brush_library::BRUSH_THUMBNAIL_SIZE;
+                let framed =
+                    frame_stroke_thumbnail(&pixels, width, height, tw, th, self.preview_theme_bg);
+                let png_bytes = encode_rgba_as_png(&framed, tw, th);
                 if !png_bytes.is_empty() {
                     self.brush_library.set_thumbnail(&name, png_bytes);
                 }
@@ -749,6 +762,126 @@ fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> 
     out
 }
 
+/// Frame a rendered stroke into the cache aspect ratio and resize.
+///
+/// Same shape as `frame_dab_thumbnail` but for the S-curve preview:
+///   1. Scan for non-bg pixels and compute their bounding box.
+///   2. Expand the bbox to match the target aspect ratio so the stroke
+///      isn't squashed by the resize.
+///   3. Inflate by a 10% margin on each axis, then re-center on the
+///      bbox centroid and clamp to the source bounds.
+///   4. Resize the cropped region to `(dst_w, dst_h)`.
+///
+/// Brush size doesn't enter into any of this — bigger dabs paint a
+/// bigger bbox, smaller dabs paint a smaller bbox, the framer fits
+/// either to the target. The preview path is the same for every brush.
+fn frame_stroke_thumbnail(
+    pixels: &[u8],
+    src_w: u32,
+    src_h: u32,
+    dst_w: u32,
+    dst_h: u32,
+    bg: [f32; 4],
+) -> Vec<u8> {
+    let expected = (src_w * src_h * 4) as usize;
+    if pixels.len() < expected || dst_w == 0 || dst_h == 0 {
+        log::error!(
+            "stroke thumbnail pixel buffer too small: {} < {expected}",
+            pixels.len()
+        );
+        return Vec::new();
+    }
+    let bg_u8 = [
+        (bg[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (bg[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+        (bg[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+    ];
+    // Same tolerance shape as frame_dab_thumbnail — accommodates
+    // premultiplied-alpha rounding on the GPU side.
+    const TOLERANCE: i32 = 12;
+
+    let mut min_x = src_w;
+    let mut min_y = src_h;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+    for y in 0..src_h {
+        for x in 0..src_w {
+            let i = ((y * src_w + x) * 4) as usize;
+            let dr = (pixels[i] as i32 - bg_u8[0] as i32).abs();
+            let dg = (pixels[i + 1] as i32 - bg_u8[1] as i32).abs();
+            let db = (pixels[i + 2] as i32 - bg_u8[2] as i32).abs();
+            if dr > TOLERANCE || dg > TOLERANCE || db > TOLERANCE {
+                if x < min_x {
+                    min_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+                found = true;
+            }
+        }
+    }
+
+    let Some(src) = image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec()) else {
+        return Vec::new();
+    };
+
+    let cropped = if found {
+        let bbox_w = max_x - min_x + 1;
+        let bbox_h = max_y - min_y + 1;
+        let target_aspect = dst_w as f32 / dst_h as f32;
+        let bbox_aspect = bbox_w as f32 / bbox_h as f32;
+
+        // Aspect-fit: expand whichever axis is short of the target
+        // aspect so the resize doesn't squash the stroke.
+        let (mut crop_w, mut crop_h) = if bbox_aspect < target_aspect {
+            let w = (bbox_h as f32 * target_aspect).ceil() as u32;
+            (w.max(bbox_w), bbox_h)
+        } else {
+            let h = (bbox_w as f32 / target_aspect).ceil() as u32;
+            (bbox_w, h.max(bbox_h))
+        };
+
+        // 10% margin on each axis, floor 2 px (matches frame_dab_thumbnail).
+        let margin_w = (crop_w / 10).max(2);
+        let margin_h = (crop_h / 10).max(2);
+        crop_w = (crop_w + 2 * margin_w).min(src_w);
+        crop_h = (crop_h + 2 * margin_h).min(src_h);
+
+        let cx = min_x + bbox_w / 2;
+        let cy = min_y + bbox_h / 2;
+        let crop_x = cx.saturating_sub(crop_w / 2).min(src_w - crop_w);
+        let crop_y = cy.saturating_sub(crop_h / 2).min(src_h - crop_h);
+        image::imageops::crop_imm(&src, crop_x, crop_y, crop_w, crop_h).to_image()
+    } else {
+        // Empty render — return a flat field of bg at the target size.
+        // Skip the resize entirely; constructing it directly is cheaper
+        // and avoids the resize filter introducing rounding.
+        let mut buf = Vec::with_capacity((dst_w * dst_h * 4) as usize);
+        let bg_a = (bg[3].clamp(0.0, 1.0) * 255.0).round() as u8;
+        for _ in 0..(dst_w * dst_h) {
+            buf.extend_from_slice(&[bg_u8[0], bg_u8[1], bg_u8[2], bg_a]);
+        }
+        return buf;
+    };
+
+    let resized = image::imageops::resize(
+        &cropped,
+        dst_w,
+        dst_h,
+        image::imageops::FilterType::Triangle,
+    );
+
+    resized.into_raw()
+}
+
 /// Encode an RGBA8 buffer as a PNG. Used for baking brush thumbnails —
 /// the PNG goes into the `.darkly-brush` ZIP as `preview.png`.
 fn encode_rgba_as_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
@@ -803,4 +936,132 @@ fn generate_mask_thumbnail_from_pixels(
         }
     }
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a `src_w * src_h` RGBA buffer filled with `bg`, then paint a
+    /// solid rectangle of `fg` at `(x0..x1, y0..y1)`.
+    fn fill_with_rect(
+        src_w: u32,
+        src_h: u32,
+        bg: [u8; 4],
+        fg: [u8; 4],
+        x0: u32,
+        y0: u32,
+        x1: u32,
+        y1: u32,
+    ) -> Vec<u8> {
+        let mut buf = vec![0u8; (src_w * src_h * 4) as usize];
+        for y in 0..src_h {
+            for x in 0..src_w {
+                let i = ((y * src_w + x) * 4) as usize;
+                let c = if x >= x0 && x < x1 && y >= y0 && y < y1 {
+                    fg
+                } else {
+                    bg
+                };
+                buf[i..i + 4].copy_from_slice(&c);
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn frame_stroke_empty_render_returns_bg_field() {
+        let bg = [0.05, 0.05, 0.05, 1.0];
+        let bg_u8 = [13u8, 13, 13, 255];
+        let pixels = fill_with_rect(640, 240, bg_u8, bg_u8, 0, 0, 0, 0);
+        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        assert_eq!(framed.len(), (320 * 120 * 4) as usize);
+        // Every pixel matches bg.
+        for chunk in framed.chunks_exact(4) {
+            assert_eq!(chunk[0], bg_u8[0]);
+            assert_eq!(chunk[1], bg_u8[1]);
+            assert_eq!(chunk[2], bg_u8[2]);
+        }
+    }
+
+    #[test]
+    fn frame_stroke_tiny_bbox_is_upscaled() {
+        // Small white square in the middle of a 640x240 dark canvas.
+        // After framing, the central region should be majority bright.
+        let bg = [0.0, 0.0, 0.0, 1.0];
+        let pixels = fill_with_rect(
+            640,
+            240,
+            [0, 0, 0, 255],
+            [255, 255, 255, 255],
+            315,
+            115,
+            325,
+            125,
+        );
+        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        assert_eq!(framed.len(), (320 * 120 * 4) as usize);
+        // Center 80x40 region should be predominantly bright.
+        let mut bright = 0;
+        for y in 40..80 {
+            for x in 120..200 {
+                let i = ((y * 320 + x) * 4) as usize;
+                if framed[i] > 128 {
+                    bright += 1;
+                }
+            }
+        }
+        assert!(
+            bright > 1000,
+            "expected upscaled square to fill most of center region, got {bright}"
+        );
+    }
+
+    #[test]
+    fn frame_stroke_fullcanvas_bbox_resizes_down() {
+        // White stripe across the full width; bbox spans the whole canvas.
+        // Output should still contain the stripe (resized from 640x240 to
+        // 320x120) and not collapse to bg.
+        let bg = [0.0, 0.0, 0.0, 1.0];
+        let pixels = fill_with_rect(
+            640,
+            240,
+            [0, 0, 0, 255],
+            [255, 255, 255, 255],
+            0,
+            110,
+            640,
+            130,
+        );
+        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        let bright = framed.chunks_exact(4).filter(|p| p[0] > 128).count();
+        assert!(
+            bright > 100,
+            "full-canvas stripe should survive the downscale, got {bright} bright pixels"
+        );
+    }
+
+    #[test]
+    fn frame_stroke_off_center_bbox_is_recentered() {
+        // Stripe in the upper-left quadrant only. The framer should crop
+        // around it so the stripe is visible somewhere in the framed
+        // output (not just at the upper-left).
+        let bg = [0.0, 0.0, 0.0, 1.0];
+        let pixels = fill_with_rect(
+            640,
+            240,
+            [0, 0, 0, 255],
+            [255, 255, 255, 255],
+            10,
+            10,
+            120,
+            30,
+        );
+        let framed = frame_stroke_thumbnail(&pixels, 640, 240, 320, 120, bg);
+        let bright = framed.chunks_exact(4).filter(|p| p[0] > 128).count();
+        assert!(
+            bright > 200,
+            "off-center stripe should appear in framed output, got {bright}"
+        );
+    }
 }

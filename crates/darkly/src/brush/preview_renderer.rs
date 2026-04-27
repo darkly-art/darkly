@@ -275,6 +275,11 @@ pub fn synthesize_preview_dab(width: f32, height: f32) -> Vec<PaintInformation> 
 /// right. Pressure ramps 0 → 1 → 0.2 along the curve so users can see
 /// pressure-driven dynamics (size taper, flow attenuation, etc.).
 ///
+/// `inset` is the canvas-pixel margin reserved on every edge so an
+/// endpoint dab of that radius fits inside the canvas. Caller is
+/// responsible for passing a value < `min(width, height) / 2` — this
+/// function does not clamp.
+///
 /// Shape follows Krita's `KisPresetLivePreviewView::setupAndPaintStroke`
 /// — start low-left at pressure 0, end high-right at pressure 0.2, peak
 /// pressure at the midpoint.
@@ -282,13 +287,19 @@ pub fn synthesize_preview_stroke(
     width: f32,
     height: f32,
     n_points: usize,
+    inset: f32,
 ) -> Vec<PaintInformation> {
     let n = n_points.max(2);
-    // Bezier control points: shape matches Krita's S-curve.
-    let p0 = [width * 0.05, height * 0.7];
-    let p1 = [width * 0.30, height * 0.10];
-    let p2 = [width * 0.70, height * 0.90];
-    let p3 = [width * 0.95, height * 0.30];
+    let lx = inset;
+    let rx = width - inset;
+    let ty = inset;
+    let by = height - inset;
+    let span_x = rx - lx;
+    let span_y = by - ty;
+    let p0 = [lx, ty + span_y * 0.7];
+    let p1 = [lx + span_x * 0.30, ty + span_y * 0.10];
+    let p2 = [lx + span_x * 0.70, ty + span_y * 0.90];
+    let p3 = [rx, ty + span_y * 0.30];
 
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
@@ -331,21 +342,20 @@ mod tests {
 
     #[test]
     fn synthesized_stroke_bounds() {
-        let path = synthesize_preview_stroke(320.0, 120.0, 30);
+        let inset = 16.0;
+        let path = synthesize_preview_stroke(320.0, 120.0, 30, inset);
         assert_eq!(path.len(), 30);
 
-        // Start and end anchors follow the Bezier endpoints exactly.
-        assert!((path[0].pos[0] - 320.0 * 0.05).abs() < 1e-3);
-        assert!((path[0].pressure - 0.0).abs() < 1e-6);
-        assert!((path[29].pos[0] - 320.0 * 0.95).abs() < 1e-3);
-        // Pressure ramps to 0.2 at the end.
-        assert!((path[29].pressure - 0.2).abs() < 1e-3);
+        // Endpoints sit at the inset edge so an `inset`-radius dab fits.
+        assert!((path[0].pos[0] - inset).abs() < 1e-3);
+        assert!((path[29].pos[0] - (320.0 - inset)).abs() < 1e-3);
 
-        // Peak pressure at the midpoint.
+        // Pressure profile: 0 at start, ~1.0 at midpoint, 0.2 at end.
+        assert!((path[0].pressure - 0.0).abs() < 1e-6);
+        assert!((path[29].pressure - 0.2).abs() < 1e-3);
         let mid = path.len() / 2;
         assert!(path[mid].pressure > 0.9);
 
-        // All samples lie inside the preview rect.
         for p in &path {
             assert!(p.pos[0] >= 0.0 && p.pos[0] <= 320.0);
             assert!(p.pos[1] >= 0.0 && p.pos[1] <= 120.0);
@@ -354,7 +364,7 @@ mod tests {
 
     #[test]
     fn synthesized_stroke_respects_min_points() {
-        let path = synthesize_preview_stroke(100.0, 100.0, 1);
+        let path = synthesize_preview_stroke(100.0, 100.0, 1, 0.0);
         assert_eq!(path.len(), 2);
     }
 }

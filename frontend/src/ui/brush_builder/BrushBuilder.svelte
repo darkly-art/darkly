@@ -2,7 +2,7 @@
     import { app } from '../../state/app.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import { config } from '../../config/store.svelte';
-    import BrushPreview from './BrushPreview.svelte';
+    import LiveBrushPreviewStrip from '../brush_picker/LiveBrushPreviewStrip.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
     import NodePalette from './NodePalette.svelte';
 
@@ -125,7 +125,7 @@
         <NodeCanvas />
         <div class="preview-dock">
             {#if previewVisible}
-                <BrushPreview width={previewSize.w} height={previewSize.h} />
+                <LiveBrushPreviewStrip width={previewSize.w} />
                 <div
                     class="resize-handle"
                     onpointerdown={startResize}

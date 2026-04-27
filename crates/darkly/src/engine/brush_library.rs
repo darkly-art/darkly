@@ -8,6 +8,20 @@ use crate::brush::library::BrushInfo;
 /// preview so brushes look identical in the picker grid.
 pub(crate) const BRUSH_THUMBNAIL_SIZE: (u32, u32) = (320, 120);
 
+/// Render canvas for stroke previews. Sized once, statically, with
+/// enough headroom around `BRUSH_THUMBNAIL_SIZE` to fit endpoint dabs
+/// at the largest preview-time radius any port's `preview_max` allows
+/// (currently `stamp.size` ≤ 0.1 → ≤ 26 px radius). The pipeline never
+/// inspects the brush graph to size this canvas — `apply_preview_overrides`
+/// has already neutralized any port that would otherwise blow it out.
+pub(crate) const BRUSH_STROKE_RENDER_SIZE: (u32, u32) = (384, 192);
+
+/// Inset reserved on every edge of the stroke render canvas so endpoint
+/// dabs at the preview-time cap radius fit fully inside without
+/// touching the canvas border. Half the gap between the render canvas
+/// and the cache:  (384-320)/2 = 32  ≥  ceil(0.1 * 256) + safety.
+pub(crate) const BRUSH_STROKE_PATH_INSET: f32 = 32.0;
+
 /// Render canvas for dab previews. Square and oversized relative to
 /// what we cache — the readback handler bbox-crops the rendered dab and
 /// downscales to a stable cache size, so brushes with small `size`
@@ -63,23 +77,28 @@ impl DarklyEngine {
 
         // Kick off the thumbnail bake. Uses theme colors (not the active
         // fg) so the picker grid looks consistent across brushes.
-        let (w, h) = BRUSH_THUMBNAIL_SIZE;
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
-        let graph = self.active_brush_graph.clone();
-        let path =
-            crate::brush::preview_renderer::synthesize_preview_stroke(w as f32, h as f32, 30);
+        let mut graph = self.active_brush_graph.clone();
+        graph.apply_preview_overrides();
+        let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_preview_stroke(
+            rw as f32,
+            rh as f32,
+            30,
+            BRUSH_STROKE_PATH_INSET,
+        );
         self.render_preview_and_request_readback(
             &graph,
             &path,
-            w,
-            h,
+            rw,
+            rh,
             fg,
             bg,
             ReadbackContext::BrushThumbnailForSave {
                 name: name.to_string(),
-                width: w,
-                height: h,
+                width: rw,
+                height: rh,
             },
         );
         Ok(())
@@ -114,22 +133,28 @@ impl DarklyEngine {
         // without this, picker tiles for inactive image brushes render
         // bg-only.
         self.ensure_brush_resources(&brush);
-        let (w, h) = BRUSH_THUMBNAIL_SIZE;
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
-        let path =
-            crate::brush::preview_renderer::synthesize_preview_stroke(w as f32, h as f32, 30);
+        let mut graph = brush.metadata.graph.clone();
+        graph.apply_preview_overrides();
+        let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_preview_stroke(
+            rw as f32,
+            rh as f32,
+            30,
+            BRUSH_STROKE_PATH_INSET,
+        );
         self.render_preview_and_request_readback(
-            &brush.metadata.graph,
+            &graph,
             &path,
-            w,
-            h,
+            rw,
+            rh,
             fg,
             bg,
             ReadbackContext::BrushThumbnailForSave {
                 name: name.to_string(),
-                width: w,
-                height: h,
+                width: rw,
+                height: rh,
             },
         );
         Vec::new()

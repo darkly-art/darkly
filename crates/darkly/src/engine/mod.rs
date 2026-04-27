@@ -100,9 +100,18 @@ pub(crate) enum ReadbackContext {
     /// Async readback of a freshly-rendered brush editor preview. Completion
     /// caches the bytes on the engine so the next `brush_editor_preview()`
     /// call returns them synchronously.
+    ///
+    /// `width`/`height` are the source render dimensions (the layout of
+    /// the readback bytes, always `BRUSH_STROKE_RENDER_SIZE`).
+    /// `target_width`/`target_height` are the caller-requested cache
+    /// dimensions; the framer crops the painted region from the source
+    /// and resizes to the target, so the cache always matches what the
+    /// frontend asked for.
     BrushEditorPreview {
         width: u32,
         height: u32,
+        target_width: u32,
+        target_height: u32,
         /// Graph version at the time the render was issued — used to skip
         /// caching stale results if another render has superseded this one.
         graph_version: u64,

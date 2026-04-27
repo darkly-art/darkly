@@ -246,10 +246,12 @@ fn active_dab_preview_first_call_empty_then_present_after_flush() {
 
     let (w, h) = (40u32, 40u32);
     let first = engine.brush_active_dab_preview(w, h);
-    assert_eq!(
-        first,
-        vec![0u8; (w * h * 4) as usize],
-        "first call returns a zero-filled RGBA buffer of the requested size"
+    assert!(
+        first.is_empty(),
+        "cache miss returns an empty Vec — frontends use that as 'no fresh \
+         bytes' so the previous render stays on screen instead of flashing \
+         transparent. Got {} bytes.",
+        first.len(),
     );
 
     engine.test_flush_readbacks();
@@ -296,10 +298,11 @@ fn theme_change_invalidates_active_dab_preview() {
     // the new background colour, so byte-equality must fail.
     engine.set_preview_theme([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
     let after_invalidate_first = engine.brush_active_dab_preview(w, h);
-    assert_eq!(
-        after_invalidate_first,
-        vec![0u8; (w * h * 4) as usize],
-        "theme change drops the cache; next call returns zeros until the rebake lands"
+    assert!(
+        after_invalidate_first.is_empty(),
+        "theme change drops the cache; next call returns empty until the \
+         rebake lands. Got {} bytes.",
+        after_invalidate_first.len(),
     );
 
     engine.test_flush_readbacks();
