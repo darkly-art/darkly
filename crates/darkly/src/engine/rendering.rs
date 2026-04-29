@@ -184,11 +184,19 @@ impl DarklyEngine {
 
                 if self.floating.is_none() {
                     if let Some(bounds) = self.compositor.content_bounds(layer_id) {
+                        // content_bounds are layer-local; translate to canvas.
                         let [bx, by, bw, bh] = bounds;
+                        let (off_x, off_y) = self
+                            .compositor
+                            .layer_texture(layer_id)
+                            .map(|t| (t.offset_x, t.offset_y))
+                            .unwrap_or((0, 0));
+                        let canvas_x = bx as i32 + off_x;
+                        let canvas_y = by as i32 + off_y;
                         self.setup_transform(
                             layer_id,
                             target_is_mask,
-                            (bx as i32, by as i32),
+                            (canvas_x, canvas_y),
                             bw,
                             bh,
                         );
@@ -527,6 +535,7 @@ impl DarklyEngine {
             show_mask: bool,
             mask_enabled: bool,
             has_mask: bool,
+            bounds: crate::layer::LayerBounds,
         }
         let infos: Vec<RasterInfo> = self
             .doc
@@ -539,12 +548,17 @@ impl DarklyEngine {
                 show_mask: r.show_mask,
                 mask_enabled: r.mask_enabled,
                 has_mask: r.has_mask,
+                bounds: r.bounds,
             })
             .collect();
 
         for info in &infos {
-            self.compositor
-                .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, info.id);
+            self.compositor.ensure_raster_layer(
+                &self.gpu.device,
+                &self.gpu.queue,
+                info.id,
+                info.bounds,
+            );
             self.compositor.update_raster_uniforms_full(
                 &self.gpu.queue,
                 info.id,

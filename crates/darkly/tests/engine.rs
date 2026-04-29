@@ -213,6 +213,157 @@ fn paste_floating_cancel_removes_layer() {
     );
 }
 
+/// Regression: `begin_transform` on a layer whose bounds extend past the
+/// canvas (e.g. just-committed oversized paste, no selection) must:
+///   1. compute content bounds over the layer texture's full extent (not
+///      just canvas-sized top-left), and
+///   2. translate those layer-local bounds into canvas-space before
+///      handing them to `setup_transform`, so save_region/clear/restore
+///      land on the correct slice of the layer texture.
+///
+/// Bug symptoms before fix: floating preview snapped to canvas (0, 0),
+/// only the canvas-sized top-left of the texture was transformed, and
+/// cancel destructively cleared the canvas-aligned region of the layer.
+#[test]
+fn transform_on_off_canvas_layer_cancel_restores_pixels() {
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer();
+
+    // 128×128 opaque red, centered: layer bounds (-32, -32, 128, 128).
+    let pw: u32 = 128;
+    let ph: u32 = 128;
+    let mut rgba = vec![0u8; (pw * ph * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 255;
+        px[3] = 255;
+    }
+    let pasted_id = engine.paste_image(pw, ph, &rgba, -32, -32, None);
+
+    let before = engine.test_readback_layer(pasted_id);
+
+    // No selection — drives the async content_bounds compute path.
+    // First call dispatches; subsequent frames complete the readback.
+    let started = engine.begin_transform(pasted_id);
+    assert!(
+        !started,
+        "no-selection path should defer for content_bounds"
+    );
+
+    // Drive readbacks to completion. `test_flush_readbacks` polls Wait,
+    // which also flushes content_bounds map_async callbacks.
+    let mut floating_ready = false;
+    for _ in 0..16 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+        if engine.has_floating() {
+            floating_ready = true;
+            break;
+        }
+    }
+    assert!(
+        floating_ready,
+        "begin_transform did not resolve within 16 iterations"
+    );
+
+    // The floating must report the layer's full extent in canvas-space.
+    let (ox, oy, fw, fh, _) = engine.floating_info().expect("floating info");
+    assert_eq!(
+        (ox as i32, oy as i32),
+        (-32, -32),
+        "source_origin should be canvas-space (layer offset), not layer-local (0,0)"
+    );
+    assert_eq!(fw as u32, pw);
+    assert_eq!(fh as u32, ph);
+
+    // Cancel must restore byte-identical layer pixels — including the
+    // off-canvas region that lives outside `[0, 0, canvas_w, canvas_h]`.
+    engine.cancel_floating();
+
+    let after = engine.test_readback_layer(pasted_id);
+    assert_eq!(
+        before, after,
+        "layer pixels must be byte-identical after cancel"
+    );
+}
+
+/// Regression for the canvas-clamping bug: pasting an image larger than
+/// the canvas must preserve the full extent on the layer, not crop to
+/// canvas dimensions.
+#[test]
+fn paste_image_floating_preserves_off_canvas_extent() {
+    use darkly::layer::LayerBounds;
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer();
+
+    // 4× wider than canvas, 4× taller.
+    let pw: u32 = 256;
+    let ph: u32 = 256;
+    let rgba = vec![0x88u8; (pw * ph * 4) as usize];
+
+    // Center on canvas — paste extent goes from (-96, -96) to (160, 160).
+    let ox = (cw as i32 - pw as i32) / 2;
+    let oy = (ch as i32 - ph as i32) / 2;
+    let pasted_id = engine.paste_image_floating(pw, ph, &rgba, ox, oy, None);
+
+    let bounds = engine
+        .layer_bounds(pasted_id)
+        .expect("pasted layer must have bounds");
+    assert_eq!(
+        bounds,
+        LayerBounds {
+            offset_x: ox,
+            offset_y: oy,
+            width: pw,
+            height: ph,
+        },
+        "layer bounds must match the full paste extent"
+    );
+
+    engine.commit_floating();
+
+    // Bounds survive commit — the layer texture still has the full
+    // off-canvas extent, even though the visible canvas only intersects
+    // the centered 64×64 region.
+    let bounds = engine
+        .layer_bounds(pasted_id)
+        .expect("pasted layer still exists after commit");
+    assert_eq!(bounds.width, pw);
+    assert_eq!(bounds.height, ph);
+}
+
+/// Same guarantee for the non-floating direct paste path (`paste_image`).
+#[test]
+fn paste_image_direct_preserves_off_canvas_extent() {
+    use darkly::layer::LayerBounds;
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer();
+
+    let pw: u32 = 200;
+    let ph: u32 = 100;
+    let rgba = vec![0x44u8; (pw * ph * 4) as usize];
+
+    let pasted_id = engine.paste_image(pw, ph, &rgba, -50, 10, None);
+
+    let bounds = engine
+        .layer_bounds(pasted_id)
+        .expect("pasted layer must have bounds");
+    assert_eq!(
+        bounds,
+        LayerBounds {
+            offset_x: -50,
+            offset_y: 10,
+            width: pw,
+            height: ph,
+        },
+        "direct paste layer bounds must match the full paste extent"
+    );
+}
+
 /// Regression: `floating_target_layer` returns the auto-created layer for
 /// a paste-as-floating, so the frontend can distinguish "user switched away
 /// from floating's layer" from "user just activated floating's own target".

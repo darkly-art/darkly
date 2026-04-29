@@ -454,20 +454,20 @@ impl DarklyEngine {
     }
 
     /// Blocking readback of a layer's RGBA texture. For test assertions only.
+    /// Reads the layer texture's full extent — for canvas-aligned layers
+    /// this is canvas-sized, but paste-extent layers may exceed canvas.
     pub fn test_readback_layer(&self, layer_id: u64) -> Vec<u8> {
         let layer_tex = self
             .compositor
             .layer_texture(layer_id)
             .expect("layer texture not found");
-        let w = self.doc.width;
-        let h = self.doc.height;
         crate::gpu::test_utils::readback_texture(
             &self.gpu.device,
             &self.gpu.queue,
             &layer_tex.texture,
             wgpu::TextureFormat::Rgba8Unorm,
-            w,
-            h,
+            layer_tex.width,
+            layer_tex.height,
         )
     }
 

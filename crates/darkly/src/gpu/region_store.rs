@@ -92,8 +92,47 @@ impl RegionStore {
         }
     }
 
+    /// Grow scratch textures so they can fit a rect of at least `(w, h)`.
+    /// No-op if the current scratch is already large enough. Reallocation
+    /// is rare in practice — only happens when a save rect exceeds canvas
+    /// bounds (paste-extent layer transform, oversized stroke, etc.).
+    ///
+    /// Call this once before encoding `save_region` for any rect that
+    /// might exceed the current scratch dimensions; routine canvas-bounded
+    /// callers can skip it (`save_region` doesn't grow on its own to keep
+    /// borrowing simple at call sites that already hold an immutable
+    /// borrow into `self`).
+    pub fn ensure_scratch_capacity(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+        if w <= self.scratch_width && h <= self.scratch_height {
+            return;
+        }
+        let new_w = w.max(self.scratch_width);
+        let new_h = h.max(self.scratch_height);
+        self.scratch_rgba = Self::create_scratch(
+            device,
+            new_w,
+            new_h,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "scratch-rgba",
+        );
+        self.scratch_r8 = Self::create_scratch(
+            device,
+            new_w,
+            new_h,
+            wgpu::TextureFormat::R8Unorm,
+            "scratch-r8",
+        );
+        self.scratch_width = new_w;
+        self.scratch_height = new_h;
+    }
+
     /// Copy a rect from a layer/mask texture into the scratch texture.
     /// Call this at stroke start to snapshot the region before painting.
+    ///
+    /// The snapshot always lands at scratch (0, 0); only the rect's
+    /// width/height need to fit the scratch. Callers whose rect may
+    /// exceed canvas dimensions must call `ensure_scratch_capacity`
+    /// first.
     pub fn save_region(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -102,6 +141,13 @@ impl RegionStore {
         rect: [u32; 4],
     ) {
         let [x, y, w, h] = rect;
+        debug_assert!(
+            w <= self.scratch_width && h <= self.scratch_height,
+            "save_region rect ({w}x{h}) exceeds scratch capacity \
+             ({}x{}); call ensure_scratch_capacity first",
+            self.scratch_width,
+            self.scratch_height
+        );
         let scratch = self.scratch_for(format);
 
         encoder.copy_texture_to_texture(
@@ -114,7 +160,7 @@ impl RegionStore {
             wgpu::TexelCopyTextureInfo {
                 texture: scratch,
                 mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
+                origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
@@ -134,7 +180,7 @@ impl RegionStore {
         format: wgpu::TextureFormat,
         rect: [u32; 4],
     ) -> UndoRegionEntry {
-        let [x, y, w, h] = rect;
+        let [_x, _y, w, h] = rect;
         let bpp = format.block_copy_size(None).unwrap_or(1);
         let padded_row_bytes = padded_row(w, bpp);
         let byte_size = padded_row_bytes as u64 * h as u64;
@@ -142,11 +188,14 @@ impl RegionStore {
         let offset = self.allocate(byte_size);
         let scratch = self.scratch_for(format);
 
+        // Scratch holds the pre-op snapshot at origin (0, 0) (see
+        // `save_region`); the rect's xy describe where the snapshot came
+        // from on the layer, not where it sits in scratch.
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: scratch,
                 mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
+                origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
@@ -187,29 +236,32 @@ impl RegionStore {
         texture: &wgpu::Texture,
     ) -> UndoRegionEntry {
         let [x, y, w, h] = entry.rect;
-        let origin = wgpu::Origin3d { x, y, z: 0 };
+        let layer_origin = wgpu::Origin3d { x, y, z: 0 };
+        let scratch_origin = wgpu::Origin3d::ZERO;
         let extent = wgpu::Extent3d {
             width: w,
             height: h,
             depth_or_array_layers: 1,
         };
-        let src_info = wgpu::TexelCopyTextureInfo {
-            texture,
-            mip_level: 0,
-            origin,
-            aspect: wgpu::TextureAspect::All,
-        };
 
-        // 1. Copy current texture rect → scratch (save current state).
-        let scratch_info = wgpu::TexelCopyTextureInfo {
-            texture: self.scratch_for(entry.format),
-            mip_level: 0,
-            origin,
-            aspect: wgpu::TextureAspect::All,
-        };
-        encoder.copy_texture_to_texture(src_info, scratch_info, extent);
+        // 1. Copy current texture rect → scratch[0, 0] (save current state).
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: layer_origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: self.scratch_for(entry.format),
+                mip_level: 0,
+                origin: scratch_origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            extent,
+        );
 
-        // 2. Copy saved buffer → texture (restore old state).
+        // 2. Copy saved buffer → texture (restore old state at the layer's rect).
         encoder.copy_buffer_to_texture(
             wgpu::TexelCopyBufferInfo {
                 buffer: &self.buffer,
@@ -222,23 +274,21 @@ impl RegionStore {
             wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
-                origin,
+                origin: layer_origin,
                 aspect: wgpu::TextureAspect::All,
             },
             extent,
         );
 
-        // 3. Copy scratch → buffer (save current state as forward entry).
+        // 3. Copy scratch[0, 0] → buffer (save current state as forward entry).
         let forward_offset = self.allocate(entry.byte_size);
-        let scratch_info = wgpu::TexelCopyTextureInfo {
-            texture: self.scratch_for(entry.format),
-            mip_level: 0,
-            origin,
-            aspect: wgpu::TextureAspect::All,
-        };
-
         encoder.copy_texture_to_buffer(
-            scratch_info,
+            wgpu::TexelCopyTextureInfo {
+                texture: self.scratch_for(entry.format),
+                mip_level: 0,
+                origin: scratch_origin,
+                aspect: wgpu::TextureAspect::All,
+            },
             wgpu::TexelCopyBufferInfo {
                 buffer: &self.buffer,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -277,7 +327,7 @@ impl RegionStore {
             wgpu::TexelCopyTextureInfo {
                 texture: self.scratch_for(format),
                 mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
+                origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {

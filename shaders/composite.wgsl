@@ -23,6 +23,13 @@ struct Uniforms {
     blend_mode: u32,
     show_mask: u32,
     _pad1: f32,
+    // Layer pixel offset in canvas coords (top-left).
+    layer_offset: vec2f,
+    // Layer texture dimensions in pixels.
+    layer_size: vec2f,
+    // Canvas dimensions in pixels.
+    canvas_size: vec2f,
+    _pad2: vec2f,
 }
 @group(0) @binding(3) var<uniform> uniforms: Uniforms;
 
@@ -63,7 +70,18 @@ fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
         return vec4f(mask_alpha, mask_alpha, mask_alpha, 1.0);
     }
 
-    var fg = textureSample(t_layer, t_sampler, in.uv);
+    // Translate canvas UV → layer UV via the layer's offset+size in canvas
+    // coords. When the layer's bounds match the canvas (the default), this
+    // collapses to layer_uv == in.uv.
+    let canvas_pos = in.uv * uniforms.canvas_size;
+    let layer_pos = canvas_pos - uniforms.layer_offset;
+    let layer_uv = layer_pos / uniforms.layer_size;
+
+    // textureSample requires uniform control flow (it uses implicit
+    // derivatives), so sample unconditionally and mask the result for UVs
+    // outside the layer bounds.
+    let in_bounds = all(layer_uv >= vec2f(0.0)) && all(layer_uv <= vec2f(1.0));
+    var fg = select(vec4f(0.0), textureSample(t_layer, t_sampler, layer_uv), in_bounds);
     fg = vec4f(fg.rgb, fg.a * uniforms.opacity * mask_alpha);
     return blend(fg, bg, uniforms.blend_mode);
 }

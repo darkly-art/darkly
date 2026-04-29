@@ -212,6 +212,8 @@ impl DarklyEngine {
                     format,
                     width: rw,
                     height: rh,
+                    offset_x: 0,
+                    offset_y: 0,
                 };
                 staging_target.multiply_alpha_by_mask(
                     encoder,
@@ -399,63 +401,48 @@ impl DarklyEngine {
         offset_y: i32,
         active_layer_id: Option<u64>,
     ) -> u64 {
+        // Size the new layer to fit the paste exactly, so out-of-canvas
+        // pixels are preserved.
+        let layer_bounds = crate::layer::LayerBounds {
+            offset_x,
+            offset_y,
+            width,
+            height,
+        };
+
         // Create a new layer and insert above the active layer.
         let id = self.doc.add_raster_layer();
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
             r.name = "Pasted Layer".to_string();
+            r.bounds = layer_bounds;
         }
 
         self.compositor
-            .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
+            .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, layer_bounds);
 
-        // Write RGBA data directly to the GPU layer texture.
-        let canvas_w = self.compositor.canvas_width();
-        let canvas_h = self.compositor.canvas_height();
-
-        // Clip the paste region to the canvas bounds.
-        let src_x = (-offset_x).max(0) as u32;
-        let src_y = (-offset_y).max(0) as u32;
-        let dst_x = offset_x.max(0) as u32;
-        let dst_y = offset_y.max(0) as u32;
-        let copy_w = (width - src_x).min(canvas_w - dst_x);
-        let copy_h = (height - src_y).min(canvas_h - dst_y);
-
-        if copy_w > 0 && copy_h > 0 {
-            if let Some(layer_tex) = self.compositor.layer_texture(id) {
-                // Build a contiguous buffer for the clipped region.
-                let row_bytes = copy_w as usize * 4;
-                let mut buf = vec![0u8; row_bytes * copy_h as usize];
-                for row in 0..copy_h as usize {
-                    let src_row = (src_y as usize + row) * width as usize * 4 + src_x as usize * 4;
-                    let dst_row = row * row_bytes;
-                    buf[dst_row..dst_row + row_bytes]
-                        .copy_from_slice(&rgba[src_row..src_row + row_bytes]);
-                }
-
-                self.gpu.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &layer_tex.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: dst_x,
-                            y: dst_y,
-                            z: 0,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &buf,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(row_bytes as u32),
-                        rows_per_image: None,
-                    },
-                    wgpu::Extent3d {
-                        width: copy_w,
-                        height: copy_h,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
+        // Upload the entire RGBA buffer to the layer texture — its bounds
+        // exactly match the paste extent so no per-row copy or clipping is
+        // needed.
+        if let Some(layer_tex) = self.compositor.layer_texture(id) {
+            self.gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &layer_tex.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
 
         self.compositor.mark_dirty();

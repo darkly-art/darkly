@@ -468,8 +468,31 @@ impl TransformPass {
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
+        // Source texture is the premultiplied destination for the floating
+        // shaders. We upload the caller's straight-alpha RGBA into a temp
+        // texture and run the existing premultiply pipeline GPU-side — this
+        // avoids a 9M-iteration scalar loop in WASM for a 3K paste.
         let source_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transform-source"),
+            size: wgpu::Extent3d {
+                width: source_width.max(1),
+                height: source_height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+
+        // Staging texture for straight-alpha upload — sampled by the
+        // premultiply shader.
+        let temp_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("transform-source-staging"),
             size: wgpu::Extent3d {
                 width: source_width.max(1),
                 height: source_height.max(1),
@@ -483,26 +506,14 @@ impl TransformPass {
             view_formats: &[],
         });
 
-        // Convert straight alpha → premultiplied alpha for correct bilinear interpolation.
-        let pixel_count = (source_width * source_height) as usize;
-        let mut premul = vec![0u8; pixel_count * 4];
-        for i in 0..pixel_count {
-            let off = i * 4;
-            let a = rgba_data[off + 3] as f32 / 255.0;
-            premul[off] = (rgba_data[off] as f32 * a).round() as u8;
-            premul[off + 1] = (rgba_data[off + 1] as f32 * a).round() as u8;
-            premul[off + 2] = (rgba_data[off + 2] as f32 * a).round() as u8;
-            premul[off + 3] = rgba_data[off + 3];
-        }
-
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &source_texture,
+                texture: &temp_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &premul,
+            rgba_data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(source_width * 4),
@@ -516,6 +527,43 @@ impl TransformPass {
         );
 
         let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Render the staging texture through the premultiply pipeline into
+        // source_texture.
+        {
+            let temp_view = temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let premul_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("transform-source-premul-bg"),
+                layout: &self.single_tex_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&temp_view),
+                }],
+            });
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("transform-source-premul"),
+            });
+            {
+                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("transform-source-premul-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &source_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                rpass.set_pipeline(&self.premultiply_pipeline);
+                rpass.set_bind_group(0, &premul_bg, &[]);
+                rpass.draw(0..3, 0..1);
+            }
+            queue.submit(std::iter::once(encoder.finish()));
+        }
 
         // Uniform buffer (identity matrix initially)
         let uniforms = TransformBlendUniforms {
@@ -602,6 +650,7 @@ impl TransformPass {
     ///
     /// GPU→GPU copy via `copy_texture_to_texture` — no CPU round-trip.
     /// Used by `begin_transform` when extracting content from a GPU-authoritative layer.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_floating_content_from_gpu(
         &mut self,
         device: &wgpu::Device,
@@ -616,6 +665,8 @@ impl TransformPass {
         source_height: u32,
         canvas_width: u32,
         canvas_height: u32,
+        layer_offset: (i32, i32),
+        layer_dims: (u32, u32),
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
@@ -646,12 +697,18 @@ impl TransformPass {
         });
 
         // GPU→GPU copy from layer texture to source texture.
-        let src_x = source_origin.0.max(0) as u32;
-        let src_y = source_origin.1.max(0) as u32;
-        let copy_w = source_width.min(canvas_width.saturating_sub(src_x));
-        let copy_h = source_height.min(canvas_height.saturating_sub(src_y));
-        let dst_x = (-source_origin.0).max(0) as u32;
-        let dst_y = (-source_origin.1).max(0) as u32;
+        // `source_origin` is canvas-space; convert to layer-local pixel
+        // coords by subtracting the layer's offset, then clip the read to
+        // the layer texture's actual extent (which may differ from canvas).
+        let local_src_x_signed = source_origin.0 - layer_offset.0;
+        let local_src_y_signed = source_origin.1 - layer_offset.1;
+        let src_x = local_src_x_signed.max(0) as u32;
+        let src_y = local_src_y_signed.max(0) as u32;
+        let copy_w = source_width.min(layer_dims.0.saturating_sub(src_x));
+        let copy_h = source_height.min(layer_dims.1.saturating_sub(src_y));
+        let dst_x = (-local_src_x_signed).max(0) as u32;
+        let dst_y = (-local_src_y_signed).max(0) as u32;
+        let _ = (canvas_width, canvas_height); // kept on the signature for the uniform write below.
 
         let copy_src = wgpu::TexelCopyTextureInfo {
             texture: layer_texture,

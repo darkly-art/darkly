@@ -6,34 +6,53 @@
 use crate::gpu::atlas::LayerTexture;
 
 /// A GPU texture you can paint on. Lightweight handle — no owned GPU state.
+///
+/// Brush coordinates are passed in **canvas space**. The target's `offset_x`/
+/// `offset_y` describe where its (0, 0) pixel sits in canvas coordinates;
+/// each public paint method subtracts that offset internally before issuing
+/// GPU commands. This mirrors Krita's `KisPaintDevice`, where image-space
+/// coordinates flow into the device and iterators handle the translation
+/// via `KisPaintDevice::x()`/`y()`. Callers don't need to know whether a
+/// layer is canvas-aligned or off-canvas.
 pub struct GpuPaintTarget<'a> {
     pub texture: &'a wgpu::Texture,
     pub view: &'a wgpu::TextureView,
     pub format: wgpu::TextureFormat,
+    /// Texture pixel dimensions.
     pub width: u32,
     pub height: u32,
+    /// Canvas-space offset of pixel (0, 0). Subtracted from canvas coords
+    /// before each paint operation.
+    pub offset_x: i32,
+    pub offset_y: i32,
 }
 
 impl<'a> GpuPaintTarget<'a> {
-    /// Wrap a layer texture as a paint target.
-    pub fn from_layer(tex: &'a LayerTexture, canvas_width: u32, canvas_height: u32) -> Self {
+    /// Wrap a layer texture as a paint target. The dimensions and offset
+    /// come from the texture itself; the canvas args are kept only for
+    /// callers that haven't been migrated yet (they're ignored).
+    pub fn from_layer(tex: &'a LayerTexture, _canvas_width: u32, _canvas_height: u32) -> Self {
         GpuPaintTarget {
             texture: &tex.texture,
             view: &tex.view,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            width: canvas_width,
-            height: canvas_height,
+            width: tex.width,
+            height: tex.height,
+            offset_x: tex.offset_x,
+            offset_y: tex.offset_y,
         }
     }
 
-    /// Wrap a mask texture as a paint target.
-    pub fn from_mask(tex: &'a LayerTexture, canvas_width: u32, canvas_height: u32) -> Self {
+    /// Wrap a mask texture as a paint target. See `from_layer`.
+    pub fn from_mask(tex: &'a LayerTexture, _canvas_width: u32, _canvas_height: u32) -> Self {
         GpuPaintTarget {
             texture: &tex.texture,
             view: &tex.view,
             format: wgpu::TextureFormat::R8Unorm,
-            width: canvas_width,
-            height: canvas_height,
+            width: tex.width,
+            height: tex.height,
+            offset_x: tex.offset_x,
+            offset_y: tex.offset_y,
         }
     }
 
@@ -451,6 +470,11 @@ impl<'a> GpuPaintTarget<'a> {
         opacity: f32,
         selection: Option<&wgpu::BindGroup>,
     ) {
+        // Translate canvas-space input to target-local pixel coords. For
+        // canvas-aligned layers this is a no-op.
+        let cx = cx - self.offset_x as f32;
+        let cy = cy - self.offset_y as f32;
+
         // Pad the quad by softness + 1 pixel so the SDF falloff isn't clipped.
         let softness = 1.0_f32;
         let pad = softness + 1.0;

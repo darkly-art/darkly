@@ -141,8 +141,14 @@ export function registerActions() {
         defaultHotkey: '$mod+KeyV',
         handler: () => {
             if (!app.handle) return;
+            const tStart = performance.now();
             readImageFromClipboard().then(clip => {
+                const tDecoded = performance.now();
                 if (!clip || !app.handle) return;
+                console.log(
+                    `[paste] clipboard decode: ${(tDecoded - tStart).toFixed(1)}ms `
+                    + `(${clip.width}×${clip.height} = ${(clip.rgba.length / 1024 / 1024).toFixed(1)}MB)`,
+                );
 
                 // If the brush builder is open, paste into the node editor
                 // instead of the main canvas.  Fill the selected Image node
@@ -178,6 +184,7 @@ export function registerActions() {
                 const oy = Math.round((docH - clip.height) / 2);
                 const activeId = app.activeLayerId ?? -1;
                 const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
+                const tWasmStart = performance.now();
                 if (activateTransform) {
                     const layerId = app.handle.paste_image_floating(
                         clip.width, clip.height, clip.rgba, ox, oy, activeId,
@@ -190,8 +197,15 @@ export function registerActions() {
                     );
                     app.activeLayerId = layerId;
                 }
+                const tWasmEnd = performance.now();
                 app.refreshLayerTree();
                 app.requestFrame();
+                console.log(
+                    `[paste] wasm paste_image_floating: ${(tWasmEnd - tWasmStart).toFixed(1)}ms`,
+                );
+                console.log(
+                    `[paste] total: ${(tWasmEnd - tStart).toFixed(1)}ms`,
+                );
             });
         },
     });

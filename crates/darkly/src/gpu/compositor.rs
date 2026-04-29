@@ -56,7 +56,10 @@ struct RasterLayerCache {
     uniform_buf: wgpu::Buffer,
 }
 
-/// Uniforms for raster layer compositing.
+/// Uniforms for raster layer compositing. The shader samples the layer
+/// texture at its own UV space, so we pass the layer's pixel offset and
+/// size in canvas coordinates plus the canvas size — the fragment shader
+/// translates per-pixel from canvas UV to layer UV.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct BlendUniforms {
@@ -64,6 +67,13 @@ struct BlendUniforms {
     blend_mode: u32,
     show_mask: u32,
     _pad1: f32,
+    /// Layer's (offset_x, offset_y) in canvas coordinates.
+    layer_offset: [f32; 2],
+    /// Layer texture dimensions in pixels.
+    layer_size: [f32; 2],
+    /// Canvas dimensions in pixels.
+    canvas_size: [f32; 2],
+    _pad2: [f32; 2],
 }
 
 /// GPU state for a passthrough group that has a mask (Photoshop-style).
@@ -199,11 +209,16 @@ impl Compositor {
         let (cache, cache_view) =
             Self::make_accum_texture(device, padded_w, padded_h, &format!("cache-{group_id}"));
 
+        let canvas = [padded_w as f32, padded_h as f32];
         let uniforms = BlendUniforms {
             opacity: 1.0,
             blend_mode: BlendMode::Normal as u32,
             show_mask: 0,
             _pad1: 0.0,
+            layer_offset: [0.0, 0.0],
+            layer_size: canvas,
+            canvas_size: canvas,
+            _pad2: [0.0, 0.0],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(&format!("group-uniforms-{group_id}")),
@@ -528,23 +543,31 @@ impl Compositor {
 
     /// Create GPU texture + uniform buffer for a new raster layer.
     /// Called once when a layer is added, never in the render loop.
+    /// `bounds` describes the layer's pixel-space extent in canvas
+    /// coordinates — typically canvas-aligned and canvas-sized, but a
+    /// paste of an oversized image may pre-allocate larger bounds.
     pub fn ensure_raster_layer(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layer_id: LayerId,
+        bounds: crate::layer::LayerBounds,
     ) {
         if self.layer_textures.contains_key(&layer_id) {
             return;
         }
 
-        let layer_tex = LayerTexture::new(device, self.canvas_width, self.canvas_height);
+        let layer_tex = LayerTexture::with_bounds(device, bounds);
 
         let uniforms = BlendUniforms {
             opacity: 1.0,
             blend_mode: BlendMode::Normal as u32,
             show_mask: 0,
             _pad1: 0.0,
+            layer_offset: [bounds.offset_x as f32, bounds.offset_y as f32],
+            layer_size: [bounds.width as f32, bounds.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            _pad2: [0.0, 0.0],
         };
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -591,11 +614,18 @@ impl Compositor {
         show_mask: bool,
     ) {
         if let Some(gs) = self.group_state.get(&group_id) {
+            // Groups composite a canvas-sized cache against canvas — the
+            // layer-offset translation collapses to identity.
+            let canvas = [self.canvas_width as f32, self.canvas_height as f32];
             let uniforms = BlendUniforms {
                 opacity,
                 blend_mode: blend_mode as u32,
                 show_mask: show_mask as u32,
                 _pad1: 0.0,
+                layer_offset: [0.0, 0.0],
+                layer_size: canvas,
+                canvas_size: canvas,
+                _pad2: [0.0, 0.0],
             };
             queue.write_buffer(&gs.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
         }
@@ -633,6 +663,9 @@ impl Compositor {
 
     /// Request async content bounds computation for a layer.
     /// Results arrive on the next frame — retrieve via [`content_bounds`].
+    /// Bounds are returned in **layer-local** pixel coords (top-left of the
+    /// layer texture is `(0, 0)`). Translate to canvas coords by adding
+    /// the layer's offset (`layer_texture(id).offset_x/y`).
     pub fn request_content_bounds(
         &mut self,
         device: &wgpu::Device,
@@ -642,12 +675,12 @@ impl Compositor {
     ) {
         let (view, w, h) = if is_mask {
             match self.mask_textures.get(&layer_id) {
-                Some(t) => (&t.view, self.canvas_width, self.canvas_height),
+                Some(t) => (&t.view, t.width, t.height),
                 None => return,
             }
         } else {
             match self.layer_textures.get(&layer_id) {
-                Some(t) => (&t.view, self.canvas_width, self.canvas_height),
+                Some(t) => (&t.view, t.width, t.height),
                 None => return,
             }
         };
@@ -781,6 +814,9 @@ impl Compositor {
     }
 
     /// Update a raster layer's uniforms including the show_mask flag.
+    /// Reads the layer's bounds from its `LayerTexture` so callers don't
+    /// need to thread them through; bounds-changing operations update the
+    /// texture's stored offset/size directly via `resize_raster_layer`.
     pub fn update_raster_uniforms_full(
         &mut self,
         queue: &wgpu::Queue,
@@ -789,15 +825,25 @@ impl Compositor {
         blend_mode: BlendMode,
         show_mask: bool,
     ) {
-        if let Some(cache) = self.raster_cache.get(&layer_id) {
-            let uniforms = BlendUniforms {
-                opacity,
-                blend_mode: blend_mode as u32,
-                show_mask: show_mask as u32,
-                _pad1: 0.0,
-            };
-            queue.write_buffer(&cache.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
-        }
+        let cache = match self.raster_cache.get(&layer_id) {
+            Some(c) => c,
+            None => return,
+        };
+        let tex = match self.layer_textures.get(&layer_id) {
+            Some(t) => t,
+            None => return,
+        };
+        let uniforms = BlendUniforms {
+            opacity,
+            blend_mode: blend_mode as u32,
+            show_mask: show_mask as u32,
+            _pad1: 0.0,
+            layer_offset: [tex.offset_x as f32, tex.offset_y as f32],
+            layer_size: [tex.width as f32, tex.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            _pad2: [0.0, 0.0],
+        };
+        queue.write_buffer(&cache.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
     }
 
     /// Create or remove the mask GPU texture for a layer.
@@ -1035,14 +1081,14 @@ impl Compositor {
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
-        let layer_texture = if target_is_mask {
+        let (layer_texture, layer_w, layer_h, layer_off_x, layer_off_y) = if target_is_mask {
             match self.mask_textures.get(&target_layer) {
-                Some(t) => &t.texture,
+                Some(t) => (&t.texture, t.width, t.height, t.offset_x, t.offset_y),
                 None => return,
             }
         } else {
             match self.layer_textures.get(&target_layer) {
-                Some(t) => &t.texture,
+                Some(t) => (&t.texture, t.width, t.height, t.offset_x, t.offset_y),
                 None => return,
             }
         };
@@ -1063,6 +1109,8 @@ impl Compositor {
             source_height,
             self.padded_width,
             self.padded_height,
+            (layer_off_x, layer_off_y),
+            (layer_w, layer_h),
             target_layer,
             target_is_mask,
         );
@@ -1107,17 +1155,43 @@ impl Compositor {
             None => return,
         };
 
-        let (texture, view, format) = if is_mask {
+        let (texture, view, format, target_w, target_h, target_off_x, target_off_y) = if is_mask {
             match self.mask_textures.get(&layer_id) {
-                Some(t) => (&t.texture, &t.view, wgpu::TextureFormat::R8Unorm),
+                Some(t) => (
+                    &t.texture,
+                    &t.view,
+                    wgpu::TextureFormat::R8Unorm,
+                    t.width,
+                    t.height,
+                    t.offset_x,
+                    t.offset_y,
+                ),
                 None => return,
             }
         } else {
             match self.layer_textures.get(&layer_id) {
-                Some(t) => (&t.texture, &t.view, wgpu::TextureFormat::Rgba8Unorm),
+                Some(t) => (
+                    &t.texture,
+                    &t.view,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    t.width,
+                    t.height,
+                    t.offset_x,
+                    t.offset_y,
+                ),
                 None => return,
             }
         };
+
+        // The commit shader walks pixels of the *target* texture and maps
+        // each to a sample in the source. It expresses positions in
+        // "canvas_size" units; pass the target size and rebase
+        // source_origin into target-local pixel coords by subtracting the
+        // target's canvas-space offset.
+        let local_source_origin = (
+            source_origin.0 - target_off_x,
+            source_origin.1 - target_off_y,
+        );
 
         self.transform_pass.commit_to_texture(
             device,
@@ -1127,11 +1201,11 @@ impl Compositor {
             view,
             format,
             matrix,
-            source_origin,
+            local_source_origin,
             source_width,
             source_height,
-            self.padded_width,
-            self.padded_height,
+            target_w,
+            target_h,
         );
     }
 

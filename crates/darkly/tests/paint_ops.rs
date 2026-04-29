@@ -43,6 +43,8 @@ fn gpu_gradient_linear_interpolation() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     let mut enc = encoder(&device);
@@ -104,6 +106,8 @@ fn gpu_gradient_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.linear_gradient(
@@ -173,6 +177,8 @@ fn gpu_flood_fill_interior() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     // Use fill_rect to paint 4 border strips.
@@ -354,6 +360,8 @@ fn gpu_flood_fill_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
@@ -412,6 +420,8 @@ fn gpu_color_pick_readback() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     let mut enc = encoder(&device);
@@ -491,6 +501,8 @@ fn gpu_gradient_on_mask() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     // Gradient from white to black (left to right).
@@ -569,6 +581,8 @@ fn gpu_fill_rect_with_mask() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(

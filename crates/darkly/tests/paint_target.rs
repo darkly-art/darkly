@@ -36,6 +36,8 @@ fn paint_target_composite_circle() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     let mut enc = encoder(&device);
@@ -101,6 +103,8 @@ fn paint_target_alpha_blending() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     // Paint red circle at center with 50% alpha.
@@ -144,6 +148,8 @@ fn paint_target_erase_circle() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     let mut enc = encoder(&device);
@@ -182,6 +188,8 @@ fn paint_target_r8_mask() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     // Composite black → luminance 0 → mask toward 0.
@@ -253,6 +261,8 @@ fn paint_target_selection_masking() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     let mut enc = encoder(&device);

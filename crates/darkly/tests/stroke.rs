@@ -52,6 +52,8 @@ fn gpu_stroke_paint_undo_redo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     let mut enc = encoder(&device);
@@ -258,6 +260,8 @@ fn gpu_stroke_on_mask_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
 
     let mut enc = encoder(&device);
@@ -327,6 +331,8 @@ fn gpu_two_strokes_sequential_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -358,6 +364,8 @@ fn gpu_two_strokes_sequential_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -498,6 +506,8 @@ fn gpu_region_action_undo_stack() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -604,6 +614,8 @@ fn gpu_cpu_undo_interleaved() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -724,6 +736,8 @@ fn gpu_erase_stroke_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.erase_circle(&mut enc, &pipelines, &queue, 64.0, 64.0, 10.0);
@@ -788,6 +802,8 @@ fn diff_rect_finds_painted_region() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -866,6 +882,8 @@ fn diff_rect_undo_restores_offset_paint() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
