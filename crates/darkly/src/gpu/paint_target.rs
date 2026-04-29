@@ -7,13 +7,11 @@ use crate::gpu::atlas::LayerTexture;
 
 /// A GPU texture you can paint on. Lightweight handle — no owned GPU state.
 ///
-/// Brush coordinates are passed in **canvas space**. The target's `offset_x`/
-/// `offset_y` describe where its (0, 0) pixel sits in canvas coordinates;
-/// each public paint method subtracts that offset internally before issuing
-/// GPU commands. This mirrors Krita's `KisPaintDevice`, where image-space
-/// coordinates flow into the device and iterators handle the translation
-/// via `KisPaintDevice::x()`/`y()`. Callers don't need to know whether a
-/// layer is canvas-aligned or off-canvas.
+/// Brush coordinates are passed in **canvas space**. Vertex-stage NDC mapping
+/// uses the target's pixel dimensions (`width`, `height`) and canvas-space
+/// offset (`offset_x`, `offset_y`). Fragment-stage selection sampling uses the
+/// document `canvas_size` so off-canvas pixels sample outside the selection
+/// texture and clamp/wrap correctly.
 pub struct GpuPaintTarget<'a> {
     pub texture: &'a wgpu::Texture,
     pub view: &'a wgpu::TextureView,
@@ -21,17 +19,18 @@ pub struct GpuPaintTarget<'a> {
     /// Texture pixel dimensions.
     pub width: u32,
     pub height: u32,
-    /// Canvas-space offset of pixel (0, 0). Subtracted from canvas coords
-    /// before each paint operation.
+    /// Canvas-space offset of pixel (0, 0).
     pub offset_x: i32,
     pub offset_y: i32,
+    /// Document canvas size — used for fragment-stage selection UV.
+    pub canvas_width: u32,
+    pub canvas_height: u32,
 }
 
 impl<'a> GpuPaintTarget<'a> {
-    /// Wrap a layer texture as a paint target. The dimensions and offset
-    /// come from the texture itself; the canvas args are kept only for
-    /// callers that haven't been migrated yet (they're ignored).
-    pub fn from_layer(tex: &'a LayerTexture, _canvas_width: u32, _canvas_height: u32) -> Self {
+    /// Wrap a layer texture as a paint target. Pass the document's canvas
+    /// size so fragment-stage selection sampling uses correct UVs.
+    pub fn from_layer(tex: &'a LayerTexture, canvas_width: u32, canvas_height: u32) -> Self {
         GpuPaintTarget {
             texture: &tex.texture,
             view: &tex.view,
@@ -40,11 +39,13 @@ impl<'a> GpuPaintTarget<'a> {
             height: tex.height,
             offset_x: tex.offset_x,
             offset_y: tex.offset_y,
+            canvas_width,
+            canvas_height,
         }
     }
 
     /// Wrap a mask texture as a paint target. See `from_layer`.
-    pub fn from_mask(tex: &'a LayerTexture, _canvas_width: u32, _canvas_height: u32) -> Self {
+    pub fn from_mask(tex: &'a LayerTexture, canvas_width: u32, canvas_height: u32) -> Self {
         GpuPaintTarget {
             texture: &tex.texture,
             view: &tex.view,
@@ -53,6 +54,8 @@ impl<'a> GpuPaintTarget<'a> {
             height: tex.height,
             offset_x: tex.offset_x,
             offset_y: tex.offset_y,
+            canvas_width,
+            canvas_height,
         }
     }
 
@@ -174,9 +177,11 @@ impl<'a> GpuPaintTarget<'a> {
         let pipeline = pipelines.erase_pipeline(self.format);
 
         let uniforms = PaintUniforms {
-            origin: [0.0, 0.0],
+            origin: [self.offset_x as f32, self.offset_y as f32],
             size: [self.width as f32, self.height as f32],
-            canvas_size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             center: [0.0, 0.0],
             radius: 0.0, // solid fill — coverage from selection only
             softness: 0.0,
@@ -217,9 +222,11 @@ impl<'a> GpuPaintTarget<'a> {
         // The shader outputs (0, 0, 0, mask_sample) and the blend state
         // computes dst * SrcAlpha = dst * mask_sample.
         let uniforms = PaintUniforms {
-            origin: [0.0, 0.0],
+            origin: [self.offset_x as f32, self.offset_y as f32],
             size: [self.width as f32, self.height as f32],
-            canvas_size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
@@ -252,9 +259,11 @@ impl<'a> GpuPaintTarget<'a> {
         let pipeline = pipelines.inverse_mask_multiply_pipeline(self.format);
 
         let uniforms = PaintUniforms {
-            origin: [0.0, 0.0],
+            origin: [self.offset_x as f32, self.offset_y as f32],
             size: [self.width as f32, self.height as f32],
-            canvas_size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
@@ -289,9 +298,11 @@ impl<'a> GpuPaintTarget<'a> {
         let pipeline = pipelines.alpha_mask_multiply_pipeline(self.format);
 
         let uniforms = PaintUniforms {
-            origin: [0.0, 0.0],
+            origin: [self.offset_x as f32, self.offset_y as f32],
             size: [self.width as f32, self.height as f32],
-            canvas_size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
@@ -324,9 +335,11 @@ impl<'a> GpuPaintTarget<'a> {
         let pipeline = pipelines.alpha_inverse_mask_multiply_pipeline(self.format);
 
         let uniforms = PaintUniforms {
-            origin: [0.0, 0.0],
+            origin: [self.offset_x as f32, self.offset_y as f32],
             size: [self.width as f32, self.height as f32],
-            canvas_size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
@@ -345,6 +358,9 @@ impl<'a> GpuPaintTarget<'a> {
     }
 
     /// Clear a rect to transparent (RGBA) or full reveal (R8).
+    ///
+    /// Rect is in target-local pixel coordinates. (P1c will flip this contract
+    /// to canvas-space.)
     pub fn clear_rect(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -360,10 +376,16 @@ impl<'a> GpuPaintTarget<'a> {
             _ => [0.0, 0.0, 0.0, 0.0],                            // transparent
         };
 
+        // Translate target-local rect to canvas space for the new shader contract.
         let uniforms = PaintUniforms {
-            origin: [x as f32, y as f32],
+            origin: [
+                x as f32 + self.offset_x as f32,
+                y as f32 + self.offset_y as f32,
+            ],
             size: [w as f32, h as f32],
-            canvas_size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             center: [0.0, 0.0],
             radius: 0.0,
             softness: 0.0,
@@ -443,10 +465,16 @@ impl<'a> GpuPaintTarget<'a> {
         let [x, y, w, h] = rect;
         let pipeline = pipelines.composite_pipeline(self.format);
 
+        // Translate target-local rect to canvas space for the new shader contract.
         let uniforms = PaintUniforms {
-            origin: [x as f32, y as f32],
+            origin: [
+                x as f32 + self.offset_x as f32,
+                y as f32 + self.offset_y as f32,
+            ],
             size: [w as f32, h as f32],
-            canvas_size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             center: [0.0, 0.0],
             radius: 0.0, // solid fill — no SDF
             softness: 0.0,
@@ -470,23 +498,25 @@ impl<'a> GpuPaintTarget<'a> {
         opacity: f32,
         selection: Option<&wgpu::BindGroup>,
     ) {
-        // Translate canvas-space input to target-local pixel coords. For
-        // canvas-aligned layers this is a no-op.
-        let cx = cx - self.offset_x as f32;
-        let cy = cy - self.offset_y as f32;
-
-        // Pad the quad by softness + 1 pixel so the SDF falloff isn't clipped.
+        // Inputs are canvas-space. Pad the quad by softness + 1 pixel so the
+        // SDF falloff isn't clipped, then clamp to the layer's canvas extent.
         let softness = 1.0_f32;
         let pad = softness + 1.0;
-        let x0 = (cx - radius - pad).max(0.0);
-        let y0 = (cy - radius - pad).max(0.0);
-        let x1 = (cx + radius + pad).min(self.width as f32);
-        let y1 = (cy + radius + pad).min(self.height as f32);
+        let layer_x0 = self.offset_x as f32;
+        let layer_y0 = self.offset_y as f32;
+        let layer_x1 = layer_x0 + self.width as f32;
+        let layer_y1 = layer_y0 + self.height as f32;
+        let x0 = (cx - radius - pad).max(layer_x0);
+        let y0 = (cy - radius - pad).max(layer_y0);
+        let x1 = (cx + radius + pad).min(layer_x1);
+        let y1 = (cy + radius + pad).min(layer_y1);
 
         let uniforms = PaintUniforms {
             origin: [x0, y0],
             size: [x1 - x0, y1 - y0],
-            canvas_size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             center: [cx, cy],
             radius,
             softness,
@@ -1120,14 +1150,16 @@ impl PaintPipelines {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct PaintUniforms {
-    origin: [f32; 2],      // Quad origin in canvas pixels
-    size: [f32; 2],        // Quad size in canvas pixels
-    canvas_size: [f32; 2], // Unpadded canvas dimensions (viewport is set to match)
-    center: [f32; 2],      // Circle center in canvas pixels
-    radius: f32,           // Circle radius (0 = solid fill)
-    softness: f32,         // Soft edge width in pixels
-    _pad: [f32; 2],        // Align color to 16 bytes
-    color: [f32; 4],       // RGBA paint color (straight alpha)
+    origin: [f32; 2],        // Quad origin in canvas pixels
+    size: [f32; 2],          // Quad size in canvas pixels
+    target_offset: [f32; 2], // Canvas-space offset of target's (0,0) pixel
+    target_size: [f32; 2],   // Target texture pixel dimensions (vertex NDC)
+    canvas_size: [f32; 2],   // Document canvas size (fragment selection UV)
+    center: [f32; 2],        // Circle center in canvas pixels
+    radius: f32,             // Circle radius (0 = solid fill)
+    softness: f32,           // Soft edge width in pixels
+    _pad: [f32; 2],          // Align color to 16 bytes
+    color: [f32; 4],         // RGBA paint color (straight alpha)
 }
 
 /// Uniform data sent to the gradient shader.

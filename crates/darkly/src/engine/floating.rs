@@ -229,20 +229,24 @@ impl DarklyEngine {
             // No selection — use compositor content bounds.
             if let Some(bounds) = self.compositor.content_bounds(layer_id) {
                 // content_bounds are in layer-local coords; translate to
-                // canvas-space via the layer texture's offset so callers
-                // (and floating preview/uniforms) see canvas coords.
+                // canvas-space via the layer texture so callers (and floating
+                // preview/uniforms) see canvas coords.
                 let [bx, by, bw, bh] = bounds;
                 if bw == 0 || bh == 0 {
                     return false;
                 }
-                let (off_x, off_y) = self
+                let canvas_origin = self
                     .compositor
                     .layer_texture(layer_id)
-                    .map(|t| (t.offset_x, t.offset_y))
-                    .unwrap_or((0, 0));
-                let canvas_x = bx as i32 + off_x;
-                let canvas_y = by as i32 + off_y;
-                self.setup_transform(layer_id, target_is_mask, (canvas_x, canvas_y), bw, bh);
+                    .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
+                    .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
+                self.setup_transform(
+                    layer_id,
+                    target_is_mask,
+                    (canvas_origin.x, canvas_origin.y),
+                    bw,
+                    bh,
+                );
                 true
             } else {
                 // Bounds not yet computed — request async GPU compute.
@@ -283,25 +287,40 @@ impl DarklyEngine {
         // canvas-space `source_origin` into layer-local coords for any
         // operation that touches the layer texture directly (save_region,
         // restore_from_scratch, clear_rect on the layer).
-        let (layer_off_x, layer_off_y, layer_w, layer_h) = if target_is_mask {
+        let layer_extent = if target_is_mask {
             self.compositor
                 .mask_texture(layer_id)
-                .map(|t| (t.offset_x, t.offset_y, t.width, t.height))
-                .unwrap_or((0, 0, canvas_w, canvas_h))
+                .map(|t| t.canvas_extent())
+                .unwrap_or(crate::coord::CanvasRect::from_xywh(
+                    0, 0, canvas_w, canvas_h,
+                ))
         } else {
             self.compositor
                 .layer_texture(layer_id)
-                .map(|t| (t.offset_x, t.offset_y, t.width, t.height))
-                .unwrap_or((0, 0, canvas_w, canvas_h))
+                .map(|t| t.canvas_extent())
+                .unwrap_or(crate::coord::CanvasRect::from_xywh(
+                    0, 0, canvas_w, canvas_h,
+                ))
         };
 
         // Layer-local rect of the source region — this is the slice of the
         // layer texture that the transform will modify, and the slice we
         // need to snapshot so cancel/undo can restore it.
-        let local_x = (source_origin.0 - layer_off_x).max(0) as u32;
-        let local_y = (source_origin.1 - layer_off_y).max(0) as u32;
-        let local_w = source_width.min(layer_w.saturating_sub(local_x));
-        let local_h = source_height.min(layer_h.saturating_sub(local_y));
+        let canvas_source = crate::coord::CanvasRect::from_xywh(
+            source_origin.0,
+            source_origin.1,
+            source_width,
+            source_height,
+        );
+        let (local_x, local_y, local_w, local_h) = match layer_extent.intersect(canvas_source) {
+            Some(clipped) => (
+                (clipped.origin.x - layer_extent.origin.x) as u32,
+                (clipped.origin.y - layer_extent.origin.y) as u32,
+                clipped.width,
+                clipped.height,
+            ),
+            None => (0, 0, 0, 0),
+        };
         let layer_rect = [local_x, local_y, local_w, local_h];
 
         // Save the layer-local source region to scratch (pre-clear snapshot
@@ -315,8 +334,11 @@ impl DarklyEngine {
             if let Some(texture) = texture {
                 // Source rect may exceed canvas bounds (paste-extent layer
                 // transform). Pre-grow the scratch.
-                self.region_store
-                    .ensure_scratch_capacity(&self.gpu.device, layer_w, layer_h);
+                self.region_store.ensure_scratch_capacity(
+                    &self.gpu.device,
+                    layer_extent.width,
+                    layer_extent.height,
+                );
                 self.gpu.encode("transform-save", |encoder| {
                     self.region_store
                         .save_region(encoder, texture, format, layer_rect);
@@ -359,6 +381,8 @@ impl DarklyEngine {
                         height: source_height,
                         offset_x: 0,
                         offset_y: 0,
+                        canvas_width: source_width,
+                        canvas_height: source_height,
                     };
                     self.gpu.encode("transform-sel-mask", |encoder| {
                         target.multiply_by_mask(

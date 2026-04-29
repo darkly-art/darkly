@@ -186,17 +186,15 @@ impl DarklyEngine {
                     if let Some(bounds) = self.compositor.content_bounds(layer_id) {
                         // content_bounds are layer-local; translate to canvas.
                         let [bx, by, bw, bh] = bounds;
-                        let (off_x, off_y) = self
+                        let canvas_origin = self
                             .compositor
                             .layer_texture(layer_id)
-                            .map(|t| (t.offset_x, t.offset_y))
-                            .unwrap_or((0, 0));
-                        let canvas_x = bx as i32 + off_x;
-                        let canvas_y = by as i32 + off_y;
+                            .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
+                            .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
                         self.setup_transform(
                             layer_id,
                             target_is_mask,
-                            (canvas_x, canvas_y),
+                            (canvas_origin.x, canvas_origin.y),
                             bw,
                             bh,
                         );

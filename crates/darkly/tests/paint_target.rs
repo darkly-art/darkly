@@ -38,6 +38,8 @@ fn paint_target_composite_circle() {
         height: h,
         offset_x: 0,
         offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     let mut enc = encoder(&device);
@@ -105,6 +107,8 @@ fn paint_target_alpha_blending() {
         height: h,
         offset_x: 0,
         offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     // Paint red circle at center with 50% alpha.
@@ -150,6 +154,8 @@ fn paint_target_erase_circle() {
         height: h,
         offset_x: 0,
         offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     let mut enc = encoder(&device);
@@ -190,6 +196,8 @@ fn paint_target_r8_mask() {
         height: h,
         offset_x: 0,
         offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     // Composite black → luminance 0 → mask toward 0.
@@ -263,6 +271,8 @@ fn paint_target_selection_masking() {
         height: h,
         offset_x: 0,
         offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     let mut enc = encoder(&device);
@@ -372,4 +382,119 @@ fn readback_sub_rect() {
             );
         }
     }
+}
+
+/// Painting on an offset paste-extent layer: the painted pixels must land at
+/// the canvas position requested, not at (canvas_pos − offset). Regression
+/// guard for the paint_circle.wgsl `target_offset` migration.
+#[test]
+fn paint_target_composite_circle_on_offset_layer() {
+    let (device, queue) = test_device();
+    let canvas_w: u32 = 256;
+    let canvas_h: u32 = 256;
+    // Layer's (0,0) sits at canvas (-100, -100). Painting at canvas (50, 50)
+    // should land at layer-local (150, 150).
+    let layer_off_x: i32 = -100;
+    let layer_off_y: i32 = -100;
+    let (lw, lh) = (400u32, 400u32);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    let (tex, view) =
+        create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
+    let pipelines = PaintPipelines::new(&device, &queue);
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: lw,
+        height: lh,
+        offset_x: layer_off_x,
+        offset_y: layer_off_y,
+        canvas_width: canvas_w,
+        canvas_height: canvas_h,
+    };
+
+    let mut enc = encoder(&device);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        50.0,
+        50.0,
+        10.0,
+        [0, 255, 0, 255],
+        1.0,
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
+
+    // Canvas (50, 50) → layer-local (50 - (-100), 50 - (-100)) = (150, 150).
+    let cx_local = (50 - layer_off_x) as u32;
+    let cy_local = (50 - layer_off_y) as u32;
+    let c = ((cy_local * lw + cx_local) * 4) as usize;
+    assert_eq!(pixels[c], 0);
+    assert_eq!(
+        pixels[c + 1],
+        255,
+        "expected green at layer-local (150,150)"
+    );
+    assert_eq!(pixels[c + 2], 0);
+    assert_eq!(pixels[c + 3], 255);
+
+    // The OLD buggy mapping would have painted at canvas (50,50) interpreted
+    // as layer-local — i.e. at layer-local (50, 50). That position must be
+    // empty after the migration.
+    let bug = ((50u32 * lw + 50) * 4) as usize;
+    assert_eq!(
+        pixels[bug + 3],
+        0,
+        "layer-local (50,50) should be untouched (would be wrong-place paint)"
+    );
+}
+
+/// fill_rect on an offset paste-extent layer: caller-provided target-local
+/// rect must still land at the same target-local pixels (no shader regression).
+#[test]
+fn paint_target_fill_rect_target_local_on_offset_layer() {
+    let (device, queue) = test_device();
+    let canvas_w: u32 = 256;
+    let canvas_h: u32 = 256;
+    let (lw, lh) = (300u32, 300u32);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let (tex, view) =
+        create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
+    let pipelines = PaintPipelines::new(&device, &queue);
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: lw,
+        height: lh,
+        offset_x: -50,
+        offset_y: -50,
+        canvas_width: canvas_w,
+        canvas_height: canvas_h,
+    };
+
+    // Target-local rect (10, 10, 20, 20) — clear_rect/fill_rect still take
+    // target-local input until P1c flips the contract.
+    let mut enc = encoder(&device);
+    target.fill_rect(
+        &mut enc,
+        &pipelines,
+        &queue,
+        [10, 10, 20, 20],
+        [0, 0, 255, 255],
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
+    // Pixel inside the rect (15, 15 in target-local).
+    let c = ((15u32 * lw + 15) * 4) as usize;
+    assert_eq!(pixels[c + 2], 255, "rect interior should be blue");
+    assert_eq!(pixels[c + 3], 255);
+    // Pixel outside the rect (50, 50 in target-local).
+    let outside = ((50u32 * lw + 50) * 4) as usize;
+    assert_eq!(pixels[outside + 3], 0, "outside rect should be transparent");
 }

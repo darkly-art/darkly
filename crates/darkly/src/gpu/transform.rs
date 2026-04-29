@@ -5,6 +5,7 @@
 //! texture provides real-time preview during interaction, and the commit
 //! render pass writes transformed pixels directly to the layer texture.
 
+use crate::gpu::atlas::LayerTexture;
 use crate::layer::LayerId;
 
 // ---------------------------------------------------------------------------
@@ -659,17 +660,18 @@ impl TransformPass {
         sampler: &wgpu::Sampler,
         accum_views: &[wgpu::TextureView; 2],
         cache_view: &wgpu::TextureView,
-        layer_texture: &wgpu::Texture,
+        layer: &LayerTexture,
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
         canvas_width: u32,
         canvas_height: u32,
-        layer_offset: (i32, i32),
-        layer_dims: (u32, u32),
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
+        let layer_texture = &layer.texture;
+        let layer_offset = (layer.offset_x, layer.offset_y);
+        let layer_dims = (layer.width, layer.height);
         let src_format = if target_is_mask {
             wgpu::TextureFormat::R8Unorm
         } else {

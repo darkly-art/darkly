@@ -1081,14 +1081,14 @@ impl Compositor {
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
-        let (layer_texture, layer_w, layer_h, layer_off_x, layer_off_y) = if target_is_mask {
+        let layer = if target_is_mask {
             match self.mask_textures.get(&target_layer) {
-                Some(t) => (&t.texture, t.width, t.height, t.offset_x, t.offset_y),
+                Some(t) => t,
                 None => return,
             }
         } else {
             match self.layer_textures.get(&target_layer) {
-                Some(t) => (&t.texture, t.width, t.height, t.offset_x, t.offset_y),
+                Some(t) => t,
                 None => return,
             }
         };
@@ -1103,14 +1103,12 @@ impl Compositor {
             &self.sampler,
             &root.accum.views,
             &root.composite_cache_view,
-            layer_texture,
+            layer,
             source_origin,
             source_width,
             source_height,
             self.padded_width,
             self.padded_height,
-            (layer_off_x, layer_off_y),
-            (layer_w, layer_h),
             target_layer,
             target_is_mask,
         );

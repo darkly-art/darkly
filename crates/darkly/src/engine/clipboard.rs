@@ -214,6 +214,8 @@ impl DarklyEngine {
                     height: rh,
                     offset_x: 0,
                     offset_y: 0,
+                    canvas_width: rw,
+                    canvas_height: rh,
                 };
                 staging_target.multiply_alpha_by_mask(
                     encoder,

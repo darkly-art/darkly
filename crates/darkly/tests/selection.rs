@@ -107,6 +107,8 @@ fn gpu_gradient_with_selection() {
         height: h,
         offset_x: 0,
         offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.linear_gradient(
@@ -181,6 +183,8 @@ fn gpu_clear_selection_contents() {
         height: h,
         offset_x: 0,
         offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     // Erase within selection.
@@ -249,6 +253,8 @@ fn gpu_clear_selection_undo() {
         height: h,
         offset_x: 0,
         offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
@@ -321,6 +327,8 @@ fn gpu_flood_fill_respects_selection() {
         height: h,
         offset_x: 0,
         offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
