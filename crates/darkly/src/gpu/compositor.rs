@@ -1,3 +1,4 @@
+use crate::coord::CanvasRect;
 use crate::document::{Document, ROOT_ID};
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
@@ -7,6 +8,27 @@ use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
 use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
 use std::collections::HashMap;
+
+/// Maximum allowed layer texture dimension in either axis. Strokes that
+/// would push the layer past this are clipped to current bounds.
+pub const MAX_LAYER_DIM: u32 = 16384;
+
+/// Layer-growth quantum. Bounds are rounded outward to multiples of this so
+/// repeated cross-stroke growth amortizes — a typical stroke triggers 0–3
+/// reallocations regardless of dab count.
+pub const LAYER_GROWTH_CHUNK: u32 = 256;
+
+/// Outcome of a `grow_layer_texture` request.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum GrowOutcome {
+    /// New extent already contained — no reallocation performed.
+    NoChange,
+    /// Layer reallocated to the new chunked extent.
+    Grown { new_extent: CanvasRect },
+    /// Growth refused because the new extent would exceed `MAX_LAYER_DIM`.
+    /// The stroke caller should clip its dab to current bounds.
+    AtCap,
+}
 
 /// Timing helpers — compile to no-ops unless `cfg(feature = "profile")`.
 #[cfg(feature = "profile")]
@@ -163,6 +185,11 @@ pub struct Compositor {
     frame_count: u64,
     /// Last wall-clock time for dt computation.
     last_wall_time: f32,
+
+    /// Set once a `grow_layer_texture` call has been refused for hitting
+    /// `MAX_LAYER_DIM` — used to log the cap warning at most once per
+    /// process lifetime.
+    layer_growth_capped: bool,
 }
 
 impl Compositor {
@@ -538,6 +565,7 @@ impl Compositor {
             viewport_bg: DEFAULT_WORKSPACE_BG,
             frame_count: 0,
             last_wall_time: 0.0,
+            layer_growth_capped: false,
         }
     }
 
@@ -581,6 +609,191 @@ impl Compositor {
         self.raster_cache
             .insert(layer_id, RasterLayerCache { uniform_buf });
         self.layer_textures.insert(layer_id, layer_tex);
+    }
+
+    /// Grow a layer's GPU texture so it covers `needed` (canvas-space).
+    ///
+    /// If the layer's existing extent already contains `needed`, this is a
+    /// no-op (`GrowOutcome::NoChange`). Otherwise the texture is reallocated
+    /// to `(current ∪ needed).round_outward(LAYER_GROWTH_CHUNK)` — origin
+    /// floors to a chunk boundary, far edge ceils. Old contents are
+    /// `copy_texture_to_texture`'d into the new texture at the offset that
+    /// preserves their canvas-space anchor; new pixels start zeroed
+    /// (transparent).
+    ///
+    /// If the new extent would exceed `MAX_LAYER_DIM` in either axis, the
+    /// caller is told to clip via `GrowOutcome::AtCap` and a one-time
+    /// warning is logged.
+    ///
+    /// **Bind-group invalidation.** When the layer has a mask, the
+    /// `mask_bind_groups[layer_id]` entry is removed and rebuilt against
+    /// the freshly-allocated mask texture. The mask is grown in lockstep
+    /// with the layer so the composite shader's shared layer-UV sampling
+    /// stays correct.
+    pub fn grow_layer_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        layer_id: LayerId,
+        needed: CanvasRect,
+    ) -> GrowOutcome {
+        let current = match self.layer_textures.get(&layer_id) {
+            Some(t) => t.canvas_extent(),
+            None => return GrowOutcome::NoChange,
+        };
+        if current.contains(needed) {
+            return GrowOutcome::NoChange;
+        }
+
+        let unioned = current.union(needed);
+        let new_extent = unioned.round_outward(LAYER_GROWTH_CHUNK);
+
+        if new_extent.width > MAX_LAYER_DIM || new_extent.height > MAX_LAYER_DIM {
+            // Once-per-process warning. Subsequent at-cap requests are
+            // silent — the dab-clip path does the right thing.
+            if !self.layer_growth_capped {
+                self.layer_growth_capped = true;
+                log::warn!(
+                    "Layer {} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
+                    layer_id,
+                    new_extent.width,
+                    new_extent.height,
+                    MAX_LAYER_DIM,
+                );
+            }
+            return GrowOutcome::AtCap;
+        }
+
+        let new_bounds = crate::layer::LayerBounds {
+            offset_x: new_extent.origin.x,
+            offset_y: new_extent.origin.y,
+            width: new_extent.width,
+            height: new_extent.height,
+        };
+
+        // Allocate the new layer texture. New pixels start at GPU's default
+        // (0 = transparent) — exactly the pre-stroke value, so undo restoring
+        // them via the same restore_region path is correct.
+        let new_layer_tex = LayerTexture::with_bounds(device, new_bounds);
+
+        // Copy old contents into new at the offset that preserves canvas
+        // anchoring. For positive-direction growth this is (0,0); for
+        // negative this is the delta from the new origin to the old.
+        let old_layer_tex = self
+            .layer_textures
+            .get(&layer_id)
+            .expect("layer_textures entry checked above");
+        let copy_dst_x = (current.origin.x - new_extent.origin.x) as u32;
+        let copy_dst_y = (current.origin.y - new_extent.origin.y) as u32;
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &old_layer_tex.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &new_layer_tex.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: copy_dst_x,
+                    y: copy_dst_y,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: current.width,
+                height: current.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // Replace the layer texture; old is dropped at end of scope.
+        self.layer_textures.insert(layer_id, new_layer_tex);
+
+        // Mask grows in lockstep so layer/mask share the same UV. Bind
+        // group must be rebuilt against the new mask view.
+        if self.mask_textures.contains_key(&layer_id) {
+            self.grow_mask_texture(device, queue, encoder, layer_id, new_extent);
+        }
+
+        // The blend-uniform buffer still has the OLD offset/size — the
+        // caller must refresh it via `update_raster_uniforms_full` (the
+        // engine layer owns the doc-side layer state). Likewise, callers
+        // are expected to update `RasterLayer.bounds` on the doc.
+        let _ = (queue, new_bounds);
+        self.mark_dirty();
+        GrowOutcome::Grown { new_extent }
+    }
+
+    /// Reallocate a mask texture to a new canvas extent, copying the old
+    /// contents into the corresponding region. Rebuilds the mask bind group.
+    /// Internal helper — `grow_layer_texture` is the public entry point.
+    fn grow_mask_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        layer_id: LayerId,
+        new_extent: CanvasRect,
+    ) {
+        let old_extent = match self.mask_textures.get(&layer_id) {
+            Some(t) => t.canvas_extent(),
+            None => return,
+        };
+        if old_extent == new_extent {
+            return;
+        }
+
+        let new_mask_tex = LayerTexture::new_mask_with_extent(device, queue, new_extent);
+
+        let old_mask_tex = self
+            .mask_textures
+            .get(&layer_id)
+            .expect("mask_textures entry checked above");
+        let copy_dst_x = (old_extent.origin.x - new_extent.origin.x) as u32;
+        let copy_dst_y = (old_extent.origin.y - new_extent.origin.y) as u32;
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &old_mask_tex.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &new_mask_tex.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: copy_dst_x,
+                    y: copy_dst_y,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: old_extent.width,
+                height: old_extent.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        self.mask_textures.insert(layer_id, new_mask_tex);
+
+        // Bind group references the OLD view — invalidate. The blend stage
+        // sources its mask binding from `mask_bind_groups`; rebuilding it
+        // against the freshly-allocated mask texture is non-optional.
+        let new_view = &self.mask_textures[&layer_id].view;
+        let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&format!("mask-bg-{layer_id}")),
+            layout: &self.blend_pipelines.mask_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(new_view),
+            }],
+        });
+        self.mask_bind_groups.insert(layer_id, mask_bg);
     }
 
     /// Ensure a non-passthrough group has GPU state allocated.

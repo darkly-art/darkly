@@ -791,3 +791,399 @@ fn brush_stroke_on_paste_extent_layer_lands_at_canvas_coords() {
         "layer-local (10, 10) area should be untouched (would be wrong-place stroke)"
     );
 }
+
+// ============================================================================
+// P2 — Brush strokes grow the layer (Phase 2B)
+// ============================================================================
+
+/// Brush stroke whose center falls past the canvas right edge must extend
+/// the layer's canvas extent rightward by at least one growth chunk
+/// (256-pixel multiple), preserving the originally-allocated content.
+#[test]
+fn brush_stroke_off_canvas_grows_layer() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    let bounds_before = engine.layer_bounds(layer_id).expect("layer exists");
+    assert_eq!(bounds_before.offset_x, 0);
+    assert_eq!(bounds_before.offset_y, 0);
+    assert_eq!(bounds_before.width, cw);
+    assert_eq!(bounds_before.height, ch);
+
+    // Paint at canvas (cw + 50, ch / 2) — well past the right edge.
+    paint_at(
+        &mut engine,
+        layer_id,
+        cw as f32 + 50.0,
+        ch as f32 / 2.0,
+        1.0,
+        0.0,
+        0.0,
+    );
+
+    let bounds_after = engine.layer_bounds(layer_id).expect("layer still exists");
+    assert!(
+        bounds_after.width > cw,
+        "layer width should have grown past canvas; before {}, after {}",
+        cw,
+        bounds_after.width,
+    );
+    assert_eq!(
+        bounds_after.offset_x, 0,
+        "positive-direction growth should keep origin at 0"
+    );
+}
+
+/// After a stroke off the canvas right edge grows the layer, the painted
+/// pixel must land at the canvas-space position requested — i.e. at the
+/// layer-local position `(canvas_x - layer_offset_x, canvas_y - layer_offset_y)`.
+#[test]
+fn brush_stroke_off_canvas_pixel_lands_correctly() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    let canvas_x: i32 = cw as i32 + 80;
+    let canvas_y: i32 = ch as i32 / 2;
+    paint_at(
+        &mut engine,
+        layer_id,
+        canvas_x as f32,
+        canvas_y as f32,
+        1.0,
+        0.0,
+        0.0,
+    );
+
+    let bounds = engine.layer_bounds(layer_id).expect("layer exists");
+    let pixels = engine.test_readback_layer(layer_id);
+    assert_eq!(
+        pixels.len(),
+        (bounds.width * bounds.height * 4) as usize,
+        "readback should match grown layer dimensions"
+    );
+
+    let lx = (canvas_x - bounds.offset_x) as u32;
+    let ly = (canvas_y - bounds.offset_y) as u32;
+    // The brush dab's actual radius depends on the active brush graph, so
+    // search a generous box around the expected layer-local center to
+    // accommodate dabs of different sizes.
+    let half: u32 = 64;
+    let mut hit = false;
+    'outer: for dy in 0..(half * 2) {
+        for dx in 0..(half * 2) {
+            let px = lx.saturating_sub(half) + dx;
+            let py = ly.saturating_sub(half) + dy;
+            if px < bounds.width
+                && py < bounds.height
+                && alpha_at(&pixels, bounds.width, px, py) > 0
+            {
+                hit = true;
+                break 'outer;
+            }
+        }
+    }
+    assert!(
+        hit,
+        "off-canvas paint at canvas ({canvas_x}, {canvas_y}) should land at layer-local ({lx}, {ly})"
+    );
+}
+
+/// Negative-direction growth on the X axis: a dab at canvas (-100, h/2)
+/// must shift the layer's `offset_x` more negative by at least one chunk
+/// (256), expand the width to cover, and preserve the original content.
+#[test]
+fn layer_growth_negative_direction() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    paint_at(
+        &mut engine,
+        layer_id,
+        -100.0,
+        ch as f32 / 2.0,
+        0.0,
+        1.0,
+        0.0,
+    );
+
+    let bounds = engine.layer_bounds(layer_id).expect("layer exists");
+    assert!(
+        bounds.offset_x <= -256,
+        "negative-direction growth should shift offset_x by at least one chunk; got {}",
+        bounds.offset_x
+    );
+    assert!(
+        bounds.width >= cw + 256,
+        "width should expand to cover the new origin shift; got {}",
+        bounds.width
+    );
+}
+
+/// Negative-direction growth on the Y axis: same as above but for Y.
+#[test]
+fn layer_growth_negative_direction_y() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    paint_at(
+        &mut engine,
+        layer_id,
+        cw as f32 / 2.0,
+        -100.0,
+        0.0,
+        0.0,
+        1.0,
+    );
+
+    let bounds = engine.layer_bounds(layer_id).expect("layer exists");
+    assert!(
+        bounds.offset_y <= -256,
+        "negative-direction Y growth should shift offset_y by at least one chunk; got {}",
+        bounds.offset_y
+    );
+    assert!(
+        bounds.height >= ch + 256,
+        "height should expand to cover the new origin shift; got {}",
+        bounds.height
+    );
+}
+
+/// A dab one pixel past the canvas right edge must grow the layer width
+/// to at least one full chunk past the canvas — not just one extra pixel.
+/// Confirms `round_outward(LAYER_GROWTH_CHUNK)` is applied to grown bounds.
+#[test]
+fn layer_growth_chunked_to_256() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    // Just one pixel past the right edge.
+    paint_at(
+        &mut engine,
+        layer_id,
+        cw as f32 + 1.0,
+        ch as f32 / 2.0,
+        1.0,
+        0.0,
+        0.0,
+    );
+
+    let bounds = engine.layer_bounds(layer_id).expect("layer exists");
+    assert!(
+        bounds.width >= cw + 256,
+        "1-pixel overshoot should still snap to a full chunk: width={}",
+        bounds.width
+    );
+    // Grown width should be a multiple of 256.
+    assert_eq!(
+        bounds.width % 256,
+        0,
+        "width should be chunk-aligned: {}",
+        bounds.width
+    );
+}
+
+/// A stroke that grows the layer can be undone, restoring pre-stroke
+/// pixels in the original layer extent. Pixels in the newly-grown region
+/// were transparent before the stroke (didn't exist in the layer), and
+/// are transparent again after undo.
+#[test]
+fn undo_after_growth_restores_pixels_in_old_bounds() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    // Pre-stroke: fill a known canvas-aligned region so we can confirm
+    // it's restored byte-for-byte after undo.
+    paint_at(&mut engine, layer_id, 64.0, 64.0, 1.0, 0.0, 0.0);
+
+    let pre_stroke = engine.test_readback_layer(layer_id);
+    let pre_bounds = engine.layer_bounds(layer_id).unwrap();
+
+    // Now paint past the right edge — this triggers growth.
+    paint_at(
+        &mut engine,
+        layer_id,
+        cw as f32 + 80.0,
+        ch as f32 / 2.0,
+        0.0,
+        1.0,
+        0.0,
+    );
+    let grown_bounds = engine.layer_bounds(layer_id).unwrap();
+    assert!(
+        grown_bounds.width > pre_bounds.width,
+        "layer should have grown"
+    );
+
+    engine.undo();
+    engine.render(0.0);
+
+    let after_undo = engine.test_readback_layer(layer_id);
+    let after_bounds = engine.layer_bounds(layer_id).unwrap();
+    // After undo the layer extent stays at its grown size (we don't shrink
+    // on undo; the polish step is a deferred follow-up).
+    assert_eq!(after_bounds, grown_bounds, "undo doesn't shrink bounds");
+
+    // Compare the OLD canvas-aligned region — must match the pre-stroke
+    // byte sequence. We sample a strip at y=64 across the full original
+    // width to keep the assertion fast and informative.
+    for x in 0..pre_bounds.width {
+        let pre_idx = (((64) * pre_bounds.width + x) * 4) as usize;
+        let new_x = x as i32 + (pre_bounds.offset_x - after_bounds.offset_x);
+        let new_y = 64i32 + (pre_bounds.offset_y - after_bounds.offset_y);
+        if new_x < 0 || new_y < 0 {
+            continue;
+        }
+        let cur_idx = (((new_y as u32) * after_bounds.width + new_x as u32) * 4) as usize;
+        assert_eq!(
+            &pre_stroke[pre_idx..pre_idx + 4],
+            &after_undo[cur_idx..cur_idx + 4],
+            "row 64 col {x}: pre-stroke pixels in the old bounds must be restored after undo"
+        );
+    }
+}
+
+/// Growth past the `MAX_LAYER_DIM` cap is refused: the dab is silently
+/// clipped to current bounds, the layer's bounds stay below the cap, and
+/// no panic occurs.
+#[test]
+fn layer_growth_capped_at_max() {
+    use darkly::gpu::compositor::MAX_LAYER_DIM;
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    // Paint far enough out to push past the cap. MAX_LAYER_DIM is 16384.
+    paint_at(
+        &mut engine,
+        layer_id,
+        (MAX_LAYER_DIM as f32) + 1000.0,
+        ch as f32 / 2.0,
+        1.0,
+        0.0,
+        0.0,
+    );
+
+    let bounds = engine.layer_bounds(layer_id).unwrap();
+    assert!(
+        bounds.width <= MAX_LAYER_DIM,
+        "layer width must stay within MAX_LAYER_DIM; got {}",
+        bounds.width
+    );
+    assert!(
+        bounds.height <= MAX_LAYER_DIM,
+        "layer height must stay within MAX_LAYER_DIM; got {}",
+        bounds.height
+    );
+}
+
+/// A long stroke that crosses the canvas boundary mid-stroke triggers
+/// growth between dabs; the saved pre-stroke region must remain valid
+/// after the grow so undo restores the originally-painted pre-stroke
+/// content (canvas-anchored), not random scratch garbage.
+#[test]
+fn mid_stroke_growth_preserves_already_saved_region() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    // Pre-paint distinctive canvas-aligned content so we have a baseline.
+    paint_at(&mut engine, layer_id, 100.0, 100.0, 1.0, 0.0, 0.0);
+    let pre_stroke_bounds = engine.layer_bounds(layer_id).unwrap();
+    let pre_stroke = engine.test_readback_layer(layer_id);
+
+    // Now do a single stroke composed of multiple events, crossing the
+    // canvas right edge. The first event is in-canvas; later events
+    // trigger grow.
+    engine.begin_stroke(layer_id);
+    for x_step in 0..10 {
+        let x = (cw as f32) * 0.4 + (x_step as f32) * 80.0;
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y: ch as f32 / 2.0,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: x_step as f64 * 16.0,
+            cr: 0.0,
+            cg: 0.0,
+            cb: 1.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+
+    let grown_bounds = engine.layer_bounds(layer_id).unwrap();
+    assert!(
+        grown_bounds.width > pre_stroke_bounds.width,
+        "stroke should have grown the layer"
+    );
+
+    engine.undo();
+    engine.render(0.0);
+
+    let after_undo = engine.test_readback_layer(layer_id);
+    let after_bounds = engine.layer_bounds(layer_id).unwrap();
+    // Pre-stroke pixel at canvas (100, 100) was red — confirm it's
+    // restored at the corresponding layer-local position.
+    let lx = (100 - after_bounds.offset_x) as u32;
+    let ly = (100 - after_bounds.offset_y) as u32;
+    let mut found_red = false;
+    for dy in 0..8u32 {
+        for dx in 0..8u32 {
+            let px = lx.saturating_sub(4) + dx;
+            let py = ly.saturating_sub(4) + dy;
+            if px < after_bounds.width && py < after_bounds.height {
+                let idx = ((py * after_bounds.width + px) * 4) as usize;
+                if after_undo[idx] > 200 && after_undo[idx + 3] > 200 {
+                    found_red = true;
+                    break;
+                }
+            }
+        }
+    }
+    let _ = pre_stroke; // kept for potential future byte-exact comparison
+    assert!(
+        found_red,
+        "after-undo: pre-stroke red pixels at canvas (100, 100) must survive mid-stroke grow"
+    );
+}
+
+/// Growing a layer that has an active mask must rebuild the mask bind
+/// group against the new mask texture; otherwise the next render would
+/// trip wgpu validation (stale view inside live bind group).
+#[test]
+fn mid_stroke_growth_invalidates_mask_bind_group() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+    engine.add_mask(layer_id);
+    engine.render(0.0);
+
+    // Paint past the right edge — triggers grow which must rebuild the
+    // mask bind group.
+    paint_at(
+        &mut engine,
+        layer_id,
+        cw as f32 + 80.0,
+        ch as f32 / 2.0,
+        1.0,
+        0.0,
+        0.0,
+    );
+
+    // Render — if the bind group still pointed at the dropped mask
+    // texture, wgpu validation would flag it.
+    engine.render(0.0);
+
+    let bounds = engine.layer_bounds(layer_id).unwrap();
+    assert!(bounds.width > cw, "layer should have grown");
+}

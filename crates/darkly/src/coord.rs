@@ -73,6 +73,23 @@ impl CanvasRect {
         self.width == 0 || self.height == 0
     }
 
+    /// Round the rect's edges outward to a multiple of `chunk` pixels.
+    /// Origin floors toward more-negative; far edge ceils toward more-positive.
+    /// Uses `div_euclid` so the floor is correct for negative coords —
+    /// `(-1).div_euclid(256) = -1`, not 0 (which is what `/` gives in Rust).
+    pub fn round_outward(self, chunk: u32) -> CanvasRect {
+        if self.is_empty() {
+            return self;
+        }
+        let chunk = chunk as i32;
+        let x0 = self.x0().div_euclid(chunk) * chunk;
+        let y0 = self.y0().div_euclid(chunk) * chunk;
+        // Ceiling outward via euclidean division on the inclusive far edge.
+        let x1 = (self.x1() - 1).div_euclid(chunk) * chunk + chunk;
+        let y1 = (self.y1() - 1).div_euclid(chunk) * chunk + chunk;
+        CanvasRect::from_xywh(x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
+    }
+
     pub fn contains(&self, other: CanvasRect) -> bool {
         if other.is_empty() {
             return true;
@@ -305,5 +322,51 @@ mod tests {
         assert_eq!(a.x0(), -256);
         assert_eq!(a.x1(), 256);
         assert_eq!(a.union(a), a);
+    }
+
+    // ------------------------------------------------------------------
+    // round_outward
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn round_outward_already_aligned_is_identity() {
+        let a = r(0, 0, 256, 256);
+        assert_eq!(a.round_outward(256), a);
+    }
+
+    #[test]
+    fn round_outward_grows_far_edge_to_chunk() {
+        // 1px on the far side rounds the whole side up.
+        let a = r(0, 0, 257, 1);
+        assert_eq!(a.round_outward(256), r(0, 0, 512, 256));
+    }
+
+    #[test]
+    fn bounds_align_to_256_handles_negative_canvas_coords() {
+        // Plan-named regression: `(-1, -1, 1, 1)` must round outward to
+        // origin (-256, -256), not (0, 0). This is the div_euclid trap.
+        let a = r(-1, -1, 1, 1);
+        let r256 = a.round_outward(256);
+        assert_eq!(r256.x0(), -256);
+        assert_eq!(r256.y0(), -256);
+        assert_eq!(r256.width, 256);
+        assert_eq!(r256.height, 256);
+    }
+
+    #[test]
+    fn round_outward_negative_origin_just_inside_alignment() {
+        // x0=-257 → floors to -512; x1=-1 → ceils to 0.
+        let a = r(-257, -257, 256, 256);
+        let r256 = a.round_outward(256);
+        assert_eq!(r256.x0(), -512);
+        assert_eq!(r256.y0(), -512);
+        assert_eq!(r256.x1(), 0);
+        assert_eq!(r256.y1(), 0);
+    }
+
+    #[test]
+    fn round_outward_preserves_empty() {
+        let a = r(10, 10, 0, 5);
+        assert_eq!(a.round_outward(256), a);
     }
 }

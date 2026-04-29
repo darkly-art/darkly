@@ -191,6 +191,16 @@ impl DarklyEngine {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
 
+        // Brush strokes may extend past the layer's current canvas extent
+        // (e.g. paste-extent layers, or any stroke that wanders past the
+        // canvas). Grow the layer texture in chunked steps so the dab
+        // dispatch and undo paths see a sufficiently-large layer.
+        // Non-BrushStroke ops (gradient, flood fill, fill rect) operate on
+        // existing pixels and don't need preemptive growth.
+        if let StrokeOp::BrushStroke { x, y, .. } = op {
+            self.ensure_layer_covers_dab(layer_id, mask_editing, x, y);
+        }
+
         // Lazy init: save the layer to scratch for undo on first stroke_to.
         // Use the layer's actual texture dimensions (not canvas) so paste-
         // extent layers preserve off-canvas pixels through undo.
@@ -324,6 +334,152 @@ impl DarklyEngine {
         }
 
         self.compositor.mark_dirty();
+    }
+
+    /// Grow the layer texture if the next dab at canvas `(x, y)` would land
+    /// outside its current bounds. Triggered only when the dab CENTER falls
+    /// outside the layer's canvas extent — strokes within the layer don't
+    /// extend it (matching Krita's behavior of growing only when paint
+    /// actually escapes the layer's recorded bounds; dab footprints that
+    /// cross a layer edge are GPU-clipped).
+    ///
+    /// On growth, the StrokeBuffer scratch and RegionStore scratch are both
+    /// re-anchored to the new layer's local coordinate system so canvas-
+    /// space pre-stroke pixels remain in the right place; bind groups
+    /// referencing the old textures are rebuilt by their owners. Layer
+    /// blend uniforms are refreshed so the next composite pass sees the
+    /// new offset/size.
+    ///
+    /// The `needed` rect padded outward by `MAX_DAB_SIZE/2` so the new
+    /// chunk-aligned extent comfortably covers the dab's worst-case
+    /// footprint, not just its center pixel.
+    fn ensure_layer_covers_dab(&mut self, layer_id: u64, mask_editing: bool, x: f32, y: f32) {
+        // Fetch the current layer extent before mutating the compositor.
+        let current_extent = if mask_editing {
+            match self.compositor.mask_texture(layer_id) {
+                Some(t) => t.canvas_extent(),
+                None => return,
+            }
+        } else {
+            match self.compositor.layer_texture(layer_id) {
+                Some(t) => t.canvas_extent(),
+                None => return,
+            }
+        };
+
+        // Trigger: dab center outside current extent. Doesn't grow when the
+        // user paints inside the canvas with a brush whose footprint
+        // happens to cross the canvas edge — those edge pixels would clip
+        // anyway with the canvas-aligned layer, matching pre-P2 behavior.
+        let cx = x.floor() as i32;
+        let cy = y.floor() as i32;
+        if cx >= current_extent.x0()
+            && cx < current_extent.x1()
+            && cy >= current_extent.y0()
+            && cy < current_extent.y1()
+        {
+            return;
+        }
+
+        // Center-out-of-bounds: pad the requested rect by half of
+        // MAX_DAB_SIZE so the grown extent includes the dab's footprint.
+        const HALF: i32 = (crate::brush::dab_pool::MAX_DAB_SIZE / 2) as i32;
+        let needed = crate::coord::CanvasRect::from_xywh(
+            cx - HALF,
+            cy - HALF,
+            (HALF as u32) * 2,
+            (HALF as u32) * 2,
+        );
+
+        // Encoder discipline: the grow + scratch rebase must run in their
+        // own encoder, submitted before any subsequent dab dispatch can
+        // start a new encoder against the new texture. `gpu.encode` already
+        // does one-encoder-per-call.
+        let outcome = self.gpu.encode_ret("layer-grow", |encoder| {
+            self.compositor.grow_layer_texture(
+                &self.gpu.device,
+                &self.gpu.queue,
+                encoder,
+                layer_id,
+                needed,
+            )
+        });
+
+        let new_extent = match outcome {
+            crate::gpu::compositor::GrowOutcome::Grown { new_extent } => new_extent,
+            crate::gpu::compositor::GrowOutcome::NoChange => return,
+            crate::gpu::compositor::GrowOutcome::AtCap => return,
+        };
+
+        let dx = (current_extent.origin.x - new_extent.origin.x) as u32;
+        let dy = (current_extent.origin.y - new_extent.origin.y) as u32;
+
+        // Re-anchor the StrokeBuffer scratch + pre-stroke snapshot. The
+        // bind groups inside the StrokeBuffer reference the old textures
+        // and are rebuilt against the new ones.
+        if let Some(stroke_buffer) = self.stroke_buffer.as_mut() {
+            self.gpu.encode("stroke-buffer-grow", |encoder| {
+                stroke_buffer.grow_preserving(
+                    &self.gpu.device,
+                    encoder,
+                    new_extent.width,
+                    new_extent.height,
+                    dx,
+                    dy,
+                    self.dab_pool.bind_group_layout(),
+                    self.brush_pipelines.canvas_copy_bind_group_layout(),
+                );
+            });
+        }
+
+        // Re-anchor the region_store scratch so the diff_rect at
+        // end_stroke compares matching coordinate frames. If the scratch
+        // hasn't been saved yet (this is the first dab and lazy init
+        // hasn't run), the rebase is a no-op on still-empty contents.
+        if self.scratch_saved {
+            self.gpu.encode("region-scratch-grow", |encoder| {
+                self.region_store.grow_scratch_preserving(
+                    &self.gpu.device,
+                    encoder,
+                    new_extent.width,
+                    new_extent.height,
+                    dx,
+                    dy,
+                );
+            });
+        } else {
+            // Lazy init will allocate the scratch at the new dimensions
+            // when it next saves; just bump capacity now so the save
+            // doesn't trigger another reallocation.
+            self.region_store.ensure_scratch_capacity(
+                &self.gpu.device,
+                new_extent.width,
+                new_extent.height,
+            );
+        }
+
+        // Update the document's authoritative bounds and refresh the
+        // layer's blend uniforms so the composite pass sees the new
+        // offset/size on the next render.
+        let bounds = crate::layer::LayerBounds {
+            offset_x: new_extent.origin.x,
+            offset_y: new_extent.origin.y,
+            width: new_extent.width,
+            height: new_extent.height,
+        };
+        if let Some(crate::layer::Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
+            r.bounds = bounds;
+            let opacity = r.opacity;
+            let blend_mode = r.blend_mode;
+            let show_mask = r.show_mask;
+            self.compositor.update_raster_uniforms_full(
+                &self.gpu.queue,
+                layer_id,
+                opacity,
+                blend_mode,
+                show_mask,
+            );
+        }
     }
 
     /// Handle a BrushStroke event through the node-graph brush engine.

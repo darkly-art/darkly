@@ -126,6 +126,103 @@ impl RegionStore {
         self.scratch_height = new_h;
     }
 
+    /// Reallocate the scratch textures to `(new_w, new_h)` and copy the
+    /// existing scratch contents into the new textures at
+    /// `(dst_offset_x, dst_offset_y)`. Used during mid-stroke layer
+    /// growth: the scratch holds the pre-stroke snapshot, which must
+    /// remain anchored to the same canvas-space pixels even though the
+    /// layer's local-coord origin has shifted.
+    ///
+    /// The newly-allocated regions outside the copied rect start at the
+    /// GPU default (0 = transparent for RGBA, 0 = full transparency for R8).
+    pub fn grow_scratch_preserving(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        new_w: u32,
+        new_h: u32,
+        dst_offset_x: u32,
+        dst_offset_y: u32,
+    ) {
+        if new_w <= self.scratch_width
+            && new_h <= self.scratch_height
+            && dst_offset_x == 0
+            && dst_offset_y == 0
+        {
+            return;
+        }
+        let copy_w = self.scratch_width;
+        let copy_h = self.scratch_height;
+        let new_rgba = Self::create_scratch(
+            device,
+            new_w.max(self.scratch_width),
+            new_h.max(self.scratch_height),
+            wgpu::TextureFormat::Rgba8Unorm,
+            "scratch-rgba",
+        );
+        let new_r8 = Self::create_scratch(
+            device,
+            new_w.max(self.scratch_width),
+            new_h.max(self.scratch_height),
+            wgpu::TextureFormat::R8Unorm,
+            "scratch-r8",
+        );
+
+        if copy_w > 0 && copy_h > 0 {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.scratch_rgba,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &new_rgba,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: dst_offset_x,
+                        y: dst_offset_y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: copy_w,
+                    height: copy_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.scratch_r8,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &new_r8,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: dst_offset_x,
+                        y: dst_offset_y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: copy_w,
+                    height: copy_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+
+        self.scratch_rgba = new_rgba;
+        self.scratch_r8 = new_r8;
+        self.scratch_width = new_w.max(self.scratch_width);
+        self.scratch_height = new_h.max(self.scratch_height);
+    }
+
     /// Copy a rect from a layer/mask texture into the scratch texture.
     /// Call this at stroke start to snapshot the region before painting.
     ///

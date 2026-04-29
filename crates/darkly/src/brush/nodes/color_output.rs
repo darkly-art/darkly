@@ -97,15 +97,21 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         let foot_h = dab_h;
 
         // Position the composite quad centered on the dab position,
-        // clamped to canvas bounds.
+        // clamped to the LAYER's canvas extent. Paste-extent / grown
+        // layers may extend past the canvas bounds in either direction —
+        // dabs landing on those off-canvas pixels must still render.
         let half_w = foot_w * 0.5;
         let half_h = foot_h * 0.5;
         let unclipped_x0 = position[0] - half_w;
         let unclipped_y0 = position[1] - half_h;
-        let x0 = unclipped_x0.max(0.0);
-        let y0 = unclipped_y0.max(0.0);
-        let x1 = (position[0] + half_w).min(gpu.canvas_width as f32);
-        let y1 = (position[1] + half_h).min(gpu.canvas_height as f32);
+        let layer_x0 = gpu.layer_offset_x as f32;
+        let layer_y0 = gpu.layer_offset_y as f32;
+        let layer_x1 = layer_x0 + gpu.layer_width as f32;
+        let layer_y1 = layer_y0 + gpu.layer_height as f32;
+        let x0 = unclipped_x0.max(layer_x0);
+        let y0 = unclipped_y0.max(layer_y0);
+        let x1 = (position[0] + half_w).min(layer_x1);
+        let y1 = (position[1] + half_h).min(layer_y1);
 
         let quad_w = x1 - x0;
         let quad_h = y1 - y0;
@@ -113,29 +119,37 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             return vec![];
         }
 
-        // Integer pixel rect for the canvas copy.  The composite shader
-        // uses floor(origin) for the copy UV, so the copy must span from
-        // floor(x0) to ceil(x1) to cover every texel the shader can reach.
-        let copy_x = x0 as u32;
-        let copy_y = y0 as u32;
-        let copy_w = ((x1.ceil() as u32).saturating_sub(copy_x)).min(gpu.canvas_width - copy_x);
-        let copy_h = ((y1.ceil() as u32).saturating_sub(copy_y)).min(gpu.canvas_height - copy_y);
+        // Integer canvas-space rect for the dab's footprint. The composite
+        // shader uses floor(origin) for the copy UV, so the copy must span
+        // from floor(x0) to ceil(x1) to cover every texel the shader can
+        // reach.
+        let copy_canvas_x = x0.floor() as i32;
+        let copy_canvas_y = y0.floor() as i32;
+        let copy_w = (x1.ceil() as i32 - copy_canvas_x) as u32;
+        let copy_h = (y1.ceil() as i32 - copy_canvas_y) as u32;
 
         if copy_w == 0 || copy_h == 0 {
             return vec![];
         }
 
-        // Publish the dab's canvas footprint so the stroke engine can
-        // record a save-point bbox that matches what was actually drawn.
-        // This is authoritative — `info.pos ± dab_radius` isn't, because
-        // the graph may offset position (scatter etc.).
-        gpu.push_dab_write_bbox([copy_x, copy_y, copy_w, copy_h]);
+        // canvas_copy and save-point bboxes both index the stroke scratch,
+        // which is layer-sized — translate the canvas-space rect to the
+        // layer's local coord frame for both consumers.
+        let copy_local_x = (copy_canvas_x - gpu.layer_offset_x) as u32;
+        let copy_local_y = (copy_canvas_y - gpu.layer_offset_y) as u32;
+
+        // Publish the dab's layer-local footprint so the stroke engine
+        // can record a save-point bbox that matches what was actually
+        // drawn. Layer-local matches the scratch coord frame the
+        // save_points reference. Authoritative — `info.pos ± dab_radius`
+        // isn't, because the graph may offset position (scatter etc.).
+        gpu.push_dab_write_bbox([copy_local_x, copy_local_y, copy_w, copy_h]);
 
         // Ensure the scratch region under the dab is in canvas_copy for the
         // shader's straight-alpha Porter-Duff read. The bg here is the
         // scratch (not the layer) — source-over against the running stroke
         // accumulation.
-        gpu.ensure_canvas_copy(copy_x, copy_y, copy_w, copy_h);
+        gpu.ensure_canvas_copy(copy_local_x, copy_local_y, copy_w, copy_h);
 
         // UV mapping: the dab content occupies [0..dab_w] x [0..dab_h] within
         // a (tex_w x tex_h) texture allocated by the dab pool. Most stamps
