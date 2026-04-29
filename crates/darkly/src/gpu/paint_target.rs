@@ -413,9 +413,11 @@ impl<'a> GpuPaintTarget<'a> {
         let pipeline = pipelines.gradient_pipeline(self.format);
 
         let uniforms = GradientUniforms {
-            origin: [0.0, 0.0],
+            origin: [self.offset_x as f32, self.offset_y as f32],
             size: [self.width as f32, self.height as f32],
-            canvas_size: [self.width as f32, self.height as f32],
+            target_offset: [self.offset_x as f32, self.offset_y as f32],
+            target_size: [self.width as f32, self.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             start: [x0, y0],
             end: [x1, y1],
             _pad: [0.0; 2],
@@ -1166,14 +1168,16 @@ struct PaintUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct GradientUniforms {
-    origin: [f32; 2],      // Quad origin in canvas pixels
-    size: [f32; 2],        // Quad size in canvas pixels
-    canvas_size: [f32; 2], // Unpadded canvas dimensions (viewport is set to match)
-    start: [f32; 2],       // Gradient start point in canvas pixels
-    end: [f32; 2],         // Gradient end point in canvas pixels
-    _pad: [f32; 2],        // Align colors to 16 bytes
-    color0: [f32; 4],      // Start color (RGBA, straight alpha)
-    color1: [f32; 4],      // End color (RGBA, straight alpha)
+    origin: [f32; 2],        // Quad origin in canvas pixels
+    size: [f32; 2],          // Quad size in canvas pixels
+    target_offset: [f32; 2], // Canvas-space offset of target's (0,0) pixel
+    target_size: [f32; 2],   // Target texture pixel dimensions (vertex NDC)
+    canvas_size: [f32; 2],   // Document canvas size (fragment selection UV)
+    start: [f32; 2],         // Gradient start point in canvas pixels
+    end: [f32; 2],           // Gradient end point in canvas pixels
+    _pad: [f32; 2],          // Align colors to 16 bytes
+    color0: [f32; 4],        // Start color (RGBA, straight alpha)
+    color1: [f32; 4],        // End color (RGBA, straight alpha)
 }
 
 /// Convert u8 RGBA color + opacity to f32 array for the shader.

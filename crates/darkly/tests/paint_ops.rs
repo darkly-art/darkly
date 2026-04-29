@@ -628,3 +628,77 @@ fn gpu_fill_rect_with_mask() {
         outside[3]
     );
 }
+
+/// Linear gradient on an offset paste-extent layer: gradient endpoints are
+/// canvas-space; the white→black transition must follow canvas coordinates,
+/// not target-local. Regression guard for the gradient.wgsl `target_offset`
+/// migration.
+#[test]
+fn gpu_gradient_on_offset_layer_uses_canvas_endpoints() {
+    let (device, queue) = test_device();
+    let canvas_w: u32 = 256;
+    let canvas_h: u32 = 256;
+    // Layer texture is 200×200, positioned at canvas (-50, -50).
+    // So layer-local (0..200, 0..200) maps to canvas (-50..150, -50..150).
+    let off_x: i32 = -50;
+    let off_y: i32 = -50;
+    let (lw, lh) = (200u32, 200u32);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    let (tex, view) =
+        create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
+    let pipelines = PaintPipelines::new(&device, &queue);
+
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: lw,
+        height: lh,
+        offset_x: off_x,
+        offset_y: off_y,
+        canvas_width: canvas_w,
+        canvas_height: canvas_h,
+    };
+
+    // Gradient from canvas (0, 0) → canvas (100, 0): white to black along x.
+    // No selection so the full layer renders.
+    let mut enc = encoder(&device);
+    target.linear_gradient(
+        &mut enc,
+        &pipelines,
+        &queue,
+        0.0,
+        0.0,
+        100.0,
+        0.0,
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+        None,
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
+
+    // Canvas (0, 0) is at layer-local (50, 50) — gradient start, should be white.
+    let start = pixel_at(&pixels, lw, 50, 50, 4);
+    assert!(
+        start[0] > 200,
+        "canvas (0,0) should be near-white (gradient start), got R={}",
+        start[0]
+    );
+    // Canvas (100, 0) is at layer-local (150, 50) — gradient end, should be black.
+    let end = pixel_at(&pixels, lw, 150, 50, 4);
+    assert!(
+        end[0] < 55,
+        "canvas (100,0) should be near-black (gradient end), got R={}",
+        end[0]
+    );
+    // Canvas (50, 0) is at layer-local (100, 50) — midpoint, ~127.
+    let mid = pixel_at(&pixels, lw, 100, 50, 4);
+    assert!(
+        mid[0] > 80 && mid[0] < 175,
+        "canvas (50,0) should be midpoint gradient, got R={}",
+        mid[0]
+    );
+}
