@@ -215,6 +215,11 @@ impl DarklyEngine {
             stroke_scratch_texture: preview_tex,
             canvas_width: target_size.0,
             canvas_height: target_size.1,
+            // Brush-graph preview path: target is canvas-aligned.
+            layer_width: target_size.0,
+            layer_height: target_size.1,
+            layer_offset_x: 0,
+            layer_offset_y: 0,
             selection_bind_group: sel_bg,
             resource_handles: &self.resource_handles,
             blend_mode: 0,

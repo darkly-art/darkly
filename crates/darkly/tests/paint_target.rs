@@ -453,15 +453,19 @@ fn paint_target_composite_circle_on_offset_layer() {
     );
 }
 
-/// fill_rect on an offset paste-extent layer: caller-provided target-local
-/// rect must still land at the same target-local pixels (no shader regression).
+/// fill_rect on an offset paste-extent layer: rect input is canvas-space.
+/// A canvas-space rect at (canvas_x, canvas_y) lands at layer-local
+/// (canvas_x − offset_x, canvas_y − offset_y). Regression for the
+/// `clear_rect`/`fill_rect` canvas-space API contract (P1c).
 #[test]
-fn paint_target_fill_rect_target_local_on_offset_layer() {
+fn paint_target_fill_rect_canvas_space_on_offset_layer() {
     let (device, queue) = test_device();
     let canvas_w: u32 = 256;
     let canvas_h: u32 = 256;
     let (lw, lh) = (300u32, 300u32);
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let off_x: i32 = -50;
+    let off_y: i32 = -50;
     let (tex, view) =
         create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
@@ -471,14 +475,14 @@ fn paint_target_fill_rect_target_local_on_offset_layer() {
         format: fmt,
         width: lw,
         height: lh,
-        offset_x: -50,
-        offset_y: -50,
+        offset_x: off_x,
+        offset_y: off_y,
         canvas_width: canvas_w,
         canvas_height: canvas_h,
     };
 
-    // Target-local rect (10, 10, 20, 20) — clear_rect/fill_rect still take
-    // target-local input until P1c flips the contract.
+    // Canvas-space rect at (10, 10) size (20, 20). Maps to layer-local
+    // (10 - (-50), 10 - (-50)) = (60, 60).
     let mut enc = encoder(&device);
     target.fill_rect(
         &mut enc,
@@ -490,11 +494,72 @@ fn paint_target_fill_rect_target_local_on_offset_layer() {
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
-    // Pixel inside the rect (15, 15 in target-local).
-    let c = ((15u32 * lw + 15) * 4) as usize;
-    assert_eq!(pixels[c + 2], 255, "rect interior should be blue");
+    // Layer-local (65, 65) — interior of the rect.
+    let lx = (15 - off_x) as u32;
+    let ly = (15 - off_y) as u32;
+    let c = ((ly * lw + lx) * 4) as usize;
+    assert_eq!(
+        pixels[c + 2],
+        255,
+        "rect interior should be blue at layer-local ({lx},{ly})"
+    );
     assert_eq!(pixels[c + 3], 255);
-    // Pixel outside the rect (50, 50 in target-local).
+    // Layer-local (50, 50) — would be the OLD (target-local) interpretation;
+    // must be transparent under the canvas-space contract.
     let outside = ((50u32 * lw + 50) * 4) as usize;
-    assert_eq!(pixels[outside + 3], 0, "outside rect should be transparent");
+    assert_eq!(
+        pixels[outside + 3],
+        0,
+        "layer-local (50,50) should be untouched (canvas-space input lands at layer-local (60,60))"
+    );
+}
+
+/// Canvas-negative origin: a fill_rect at canvas (-30, 10) on a layer with
+/// offset (-50, -50) should land at layer-local (20, 60). Confirms the
+/// `[i32; 4]` rect contract handles negative canvas coordinates.
+#[test]
+fn paint_target_fill_rect_canvas_negative_origin_on_offset_layer() {
+    let (device, queue) = test_device();
+    let canvas_w: u32 = 128;
+    let canvas_h: u32 = 128;
+    let (lw, lh) = (200u32, 200u32);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let off_x: i32 = -50;
+    let off_y: i32 = -50;
+    let (tex, view) =
+        create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
+    let pipelines = PaintPipelines::new(&device, &queue);
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: lw,
+        height: lh,
+        offset_x: off_x,
+        offset_y: off_y,
+        canvas_width: canvas_w,
+        canvas_height: canvas_h,
+    };
+
+    // Canvas-space rect at (-30, 10) size (10, 10). Maps to layer-local (20, 60).
+    let mut enc = encoder(&device);
+    target.fill_rect(
+        &mut enc,
+        &pipelines,
+        &queue,
+        [-30, 10, 10, 10],
+        [0, 255, 0, 255],
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
+    // Layer-local (25, 65) — interior.
+    let lx = (-25 - off_x) as u32;
+    let ly = (15 - off_y) as u32;
+    let c = ((ly * lw + lx) * 4) as usize;
+    assert_eq!(
+        pixels[c + 1],
+        255,
+        "rect interior should be green at layer-local ({lx},{ly})"
+    );
 }

@@ -194,6 +194,11 @@ impl BrushPreviewRenderer {
                     stroke_scratch_texture: target.stroke_buffer.stroke_texture(),
                     canvas_width: width,
                     canvas_height: height,
+                    // Preview render target is canvas-aligned.
+                    layer_width: width,
+                    layer_height: height,
+                    layer_offset_x: 0,
+                    layer_offset_y: 0,
                     selection_bind_group: sel_bg,
                     resource_handles,
                     blend_mode: 0,

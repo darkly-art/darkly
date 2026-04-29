@@ -143,6 +143,9 @@ fn transform_commit_translate() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -242,6 +245,9 @@ fn transform_commit_translate_undo() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -333,6 +339,9 @@ fn transform_commit_rotate_90() {
         (ox, oy),
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -423,6 +432,9 @@ fn paste_commit_identity() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -510,6 +522,9 @@ fn paste_commit_undo() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -602,6 +617,9 @@ fn commit_composites_over_existing() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -687,6 +705,9 @@ fn transform_commit_on_mask() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -751,4 +772,109 @@ fn affine_multiply_translate_chain() {
     // translate(3,4) then translate(7,6) = translate(10, 10).
     assert!((combined[2] - 10.0).abs() < 1e-6);
     assert!((combined[5] - 10.0).abs() < 1e-6);
+}
+
+/// Transform-commit onto a paste-extent layer at non-zero canvas offset:
+/// the source must land at the requested canvas position, not at
+/// canvas-pos minus offset. Regression guard for transform_commit.wgsl
+/// `target_offset` migration.
+#[test]
+fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
+    let (device, queue) = test_device();
+    let (cw, ch) = (256u32, 256u32);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    // Layer texture is 200×200 placed at canvas (-50, -50) — paste-extent
+    // configuration. Layer-local (0..200, 0..200) maps to canvas (-50..150).
+    let target_off = (-50i32, -50i32);
+    let (target_w, target_h) = (200u32, 200u32);
+    let (target_tex, target_view) = create_test_texture(
+        &device,
+        &queue,
+        target_w,
+        target_h,
+        &vec![0u8; (target_w * target_h * 4) as usize],
+    );
+
+    let (mut pass, accum_views, cache_view, sampler) =
+        setup_transform_pass(&device, &queue, cw, ch);
+
+    // Source: 4×4 green block at canvas (10, 10). Identity transform — the
+    // block should appear unchanged at canvas (10, 10), which is layer-local
+    // (60, 60) on the offset target.
+    let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [0, 255, 0, 255]);
+
+    pass.set_floating_content(
+        &device,
+        &queue,
+        &sampler,
+        &accum_views,
+        &cache_view,
+        &source_data,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+        1,
+        false,
+    );
+
+    let mut enc = encoder(&device);
+    pass.commit_to_texture(
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        fmt,
+        &IDENTITY,
+        origin,
+        sw,
+        sh,
+        target_off,
+        target_w,
+        target_h,
+        cw,
+        ch,
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &target_tex, fmt, target_w, target_h);
+
+    // Canvas (10, 10) → layer-local (60, 60). Block is 4×4 → covers (60..64, 60..64).
+    for dy in 0..4u32 {
+        for dx in 0..4u32 {
+            let p = pixel_at(&pixels, target_w, 60 + dx, 60 + dy, 4);
+            assert!(
+                p[1] > 200,
+                "layer-local ({},{}) should be green, got G={}",
+                60 + dx,
+                60 + dy,
+                p[1]
+            );
+            assert_eq!(
+                p[3],
+                255,
+                "layer-local ({},{}) alpha should be 255",
+                60 + dx,
+                60 + dy
+            );
+        }
+    }
+
+    // The OLD buggy mapping would have placed the block at layer-local
+    // (10, 10) — that position must be untouched.
+    for dy in 0..4u32 {
+        for dx in 0..4u32 {
+            let p = pixel_at(&pixels, target_w, 10 + dx, 10 + dy, 4);
+            assert_eq!(
+                p[3],
+                0,
+                "layer-local ({},{}) should still be transparent (would be wrong-place commit)",
+                10 + dx,
+                10 + dy
+            );
+        }
+    }
 }

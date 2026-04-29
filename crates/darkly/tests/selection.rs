@@ -335,7 +335,7 @@ fn gpu_flood_fill_respects_selection() {
         &mut enc,
         &pipelines,
         &queue,
-        [0, 0, w, h],
+        [0, 0, w as i32, h as i32],
         [0, 0, 255, 255],
         &mask_bg,
     );

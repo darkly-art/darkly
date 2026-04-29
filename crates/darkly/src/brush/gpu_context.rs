@@ -36,6 +36,15 @@ pub struct BrushGpuContext<'a> {
     pub stroke_scratch_texture: &'a wgpu::Texture,
     pub canvas_width: u32,
     pub canvas_height: u32,
+    /// Layer texture pixel dimensions (== stroke_scratch dims). For
+    /// canvas-aligned layers this equals canvas_{width,height}; for paste-
+    /// extent layers it is the layer texture's actual size.
+    pub layer_width: u32,
+    pub layer_height: u32,
+    /// Canvas-space offset of the layer texture's (0,0) pixel. Zero for
+    /// canvas-aligned layers.
+    pub layer_offset_x: i32,
+    pub layer_offset_y: i32,
     /// Selection mask bind group (or default 1x1 white when no selection).
     pub selection_bind_group: &'a wgpu::BindGroup,
     /// Resource name → TextureHandle for images uploaded by the brush loader.

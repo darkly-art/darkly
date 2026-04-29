@@ -12,7 +12,9 @@
 struct CompositeUniforms {
     origin: vec2f,       // quad top-left in canvas pixels
     size: vec2f,         // quad size in canvas pixels (= dab diameter)
-    canvas_size: vec2f,  // canvas dimensions
+    target_offset: vec2f, // canvas-space offset of render target's (0,0) pixel
+    target_size: vec2f,   // render target pixel dimensions (vertex NDC)
+    canvas_size: vec2f,   // document canvas dimensions (fragment selection UV)
     uv_min: vec2f,       // min UV in dab texture (nonzero when clipped at top/left)
     uv_max: vec2f,       // max UV in dab texture
     blend_mode: u32,     // 0 = source-over, 1 = erase (destination-out)
@@ -47,10 +49,11 @@ struct VertexOutput {
     let unit = corner[idx];
     let canvas_pos = u.origin + unit * u.size;
 
-    // Canvas pixels -> NDC, Y flipped.
+    // Translate canvas-space → target-local, then to NDC against target size.
+    let target_local = canvas_pos - u.target_offset;
     let ndc = vec2f(
-        canvas_pos.x / u.canvas_size.x * 2.0 - 1.0,
-        1.0 - canvas_pos.y / u.canvas_size.y * 2.0,
+        target_local.x / u.target_size.x * 2.0 - 1.0,
+        1.0 - target_local.y / u.target_size.y * 2.0,
     );
 
     var out: VertexOutput;

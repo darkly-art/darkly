@@ -694,3 +694,100 @@ fn pen_input_spacing_port_controls_dab_density() {
         sparse_alpha as f64 / dense_alpha as f64
     );
 }
+
+/// Brush stroke on a paste-extent layer (offset, larger than canvas) +
+/// undo: the layer texture must be byte-identical to its pre-stroke state
+/// after undo, including off-canvas pixels that were unaffected.
+/// Regression for P1d (StrokeBuffer sized to layer bounds, not canvas).
+#[test]
+fn brush_stroke_on_paste_extent_layer_undo_preserves_off_canvas_pixels() {
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+
+    // Paste a 200×200 image at (-50, -50). Layer canvas extent is
+    // (-50..150, -50..150) — mostly off-canvas in both directions.
+    let pw: u32 = 200;
+    let ph: u32 = 200;
+    // Distinct off-canvas marker: solid blue with high alpha.
+    let rgba: Vec<u8> = (0..pw * ph).flat_map(|_| [10u8, 20, 200, 255]).collect();
+    let pasted_id = engine.paste_image(pw, ph, &rgba, -50, -50, None);
+
+    let pre_stroke = engine.test_readback_layer(pasted_id);
+    assert_eq!(pre_stroke.len(), (pw * ph * 4) as usize);
+
+    // Paint a stroke at canvas (10, 10) — that's layer-local (60, 60).
+    paint_at(&mut engine, pasted_id, 10.0, 10.0, 1.0, 0.0, 0.0);
+
+    let after_stroke = engine.test_readback_layer(pasted_id);
+    assert_ne!(
+        pre_stroke, after_stroke,
+        "stroke should have changed at least one pixel"
+    );
+
+    engine.undo();
+    engine.render(0.0);
+
+    let after_undo = engine.test_readback_layer(pasted_id);
+    assert_eq!(
+        pre_stroke, after_undo,
+        "undo on paste-extent layer must restore byte-identical pre-stroke pixels (including off-canvas)"
+    );
+}
+
+/// Brush stroke at a canvas position on a paste-extent layer with negative
+/// offset must land at the corresponding layer-local position, not at
+/// canvas-pos interpreted as layer-local. Regression for P1b.4 brush
+/// composite shader migration.
+#[test]
+fn brush_stroke_on_paste_extent_layer_lands_at_canvas_coords() {
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+
+    let pw: u32 = 200;
+    let ph: u32 = 200;
+    let rgba = vec![0u8; (pw * ph * 4) as usize]; // transparent
+    let off_x = -50;
+    let off_y = -50;
+    let pasted_id = engine.paste_image(pw, ph, &rgba, off_x, off_y, None);
+
+    // Paint at canvas (10, 10) — layer-local (60, 60).
+    paint_at(&mut engine, pasted_id, 10.0, 10.0, 1.0, 0.0, 0.0);
+
+    let pixels = engine.test_readback_layer(pasted_id);
+    let lx = (10 - off_x) as u32;
+    let ly = (10 - off_y) as u32;
+
+    // The stroke center must have non-zero alpha at the expected layer-local
+    // coords (60, 60). Use a small search box because brush dabs may not
+    // hit the exact center pixel depending on rendering details.
+    let mut hit = false;
+    for dy in 0..6u32 {
+        for dx in 0..6u32 {
+            let px = lx.saturating_sub(3) + dx;
+            let py = ly.saturating_sub(3) + dy;
+            if alpha_at(&pixels, pw, px, py) > 0 {
+                hit = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        hit,
+        "stroke must land at layer-local ({lx}, {ly}) — canvas-space coords expected"
+    );
+
+    // The OLD bug placed strokes at layer-local (10, 10) — canvas coords
+    // interpreted as layer-local. That region must be untouched.
+    let mut wrong_hit = 0u32;
+    for dy in 0..6u32 {
+        for dx in 0..6u32 {
+            let px = (10u32).saturating_sub(3) + dx;
+            let py = (10u32).saturating_sub(3) + dy;
+            wrong_hit = wrong_hit.max(alpha_at(&pixels, pw, px, py) as u32);
+        }
+    }
+    assert_eq!(
+        wrong_hit, 0,
+        "layer-local (10, 10) area should be untouched (would be wrong-place stroke)"
+    );
+}

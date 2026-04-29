@@ -429,8 +429,16 @@ impl DarklyEngine {
                     .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
             };
             if let Some(target) = target {
+                // clear_rect is canvas-space; layer_rect is target-local —
+                // translate via the layer's canvas offset.
+                let canvas_rect = [
+                    layer_extent.origin.x + local_x as i32,
+                    layer_extent.origin.y + local_y as i32,
+                    local_w as i32,
+                    local_h as i32,
+                ];
                 self.gpu.encode("transform-clear", |encoder| {
-                    target.clear_rect(encoder, &self.paint_pipelines, &self.gpu.queue, layer_rect);
+                    target.clear_rect(encoder, &self.paint_pipelines, &self.gpu.queue, canvas_rect);
                 });
             }
         }

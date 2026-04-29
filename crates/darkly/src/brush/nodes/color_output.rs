@@ -158,6 +158,10 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         let uniforms = CompositeUniforms {
             origin: [x0, y0],
             size: [quad_w, quad_h],
+            // Per-dab composite renders into stroke_scratch, sized to layer
+            // bounds. target_offset is the layer's canvas-space offset.
+            target_offset: [gpu.layer_offset_x as f32, gpu.layer_offset_y as f32],
+            target_size: [gpu.layer_width as f32, gpu.layer_height as f32],
             canvas_size: [gpu.canvas_width as f32, gpu.canvas_height as f32],
             uv_min: [uv_min_x, uv_min_y],
             uv_max: [uv_max_x, uv_max_y],
@@ -190,11 +194,12 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
                 ..Default::default()
             });
 
+            // Viewport must match the stroke scratch (sized to layer bounds).
             pass.set_viewport(
                 0.0,
                 0.0,
-                gpu.canvas_width as f32,
-                gpu.canvas_height as f32,
+                gpu.layer_width as f32,
+                gpu.layer_height as f32,
                 0.0,
                 1.0,
             );
@@ -250,13 +255,20 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         };
 
         let opacity = ctx.input_f32("opacity").clamp(0.0, 1.0);
-        let w = gpu.canvas_width as f32;
-        let h = gpu.canvas_height as f32;
+        // Commit composites the layer-sized scratch onto the layer-sized
+        // pre-stroke snapshot, writing to the layer texture. All three are
+        // sized to the layer's bounds; use canvas-space coords throughout.
+        let layer_w = gpu.layer_width as f32;
+        let layer_h = gpu.layer_height as f32;
+        let layer_off_x = gpu.layer_offset_x as f32;
+        let layer_off_y = gpu.layer_offset_y as f32;
 
         let uniforms = CompositeUniforms {
-            origin: [0.0, 0.0],
-            size: [w, h],
-            canvas_size: [w, h],
+            origin: [layer_off_x, layer_off_y],
+            size: [layer_w, layer_h],
+            target_offset: [layer_off_x, layer_off_y],
+            target_size: [layer_w, layer_h],
+            canvas_size: [gpu.canvas_width as f32, gpu.canvas_height as f32],
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
             blend_mode: gpu.blend_mode, // paint = 0, erase = 1
@@ -281,7 +293,9 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             })],
             ..Default::default()
         });
-        pass.set_viewport(0.0, 0.0, w, h, 0.0, 1.0);
+        // Viewport must match the render target (the layer texture) so NDC
+        // [-1,1] maps to [0, layer_w] × [0, layer_h].
+        pass.set_viewport(0.0, 0.0, layer_w, layer_h, 0.0, 1.0);
         pass.set_pipeline(gpu.pipelines.composite_pipeline());
         pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[offset]);
         pass.set_bind_group(1, scratch_bg, &[]);

@@ -27,7 +27,11 @@ struct Uniforms {
     source_origin: vec2f,
     // Source texture dimensions in pixels
     source_size: vec2f,
-    // Full canvas dimensions in pixels
+    // Canvas-space offset of the render target's (0,0) pixel.
+    target_offset: vec2f,
+    // Render target pixel dimensions.
+    target_size: vec2f,
+    // Full document canvas dimensions in pixels.
     canvas_size: vec2f,
     opacity: f32,
     _pad: f32,
@@ -37,8 +41,10 @@ struct Uniforms {
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let bg = textureSample(t_bg, t_sampler, in.uv);
 
-    // Convert UV to canvas pixel position
-    let canvas_pos = in.uv * u.canvas_size;
+    // Convert target UV to canvas pixel position via the target's canvas-space
+    // origin and size. For canvas-aligned targets (target_offset=0,
+    // target_size=canvas_size) this collapses to `uv * canvas_size`.
+    let canvas_pos = u.target_offset + in.uv * u.target_size;
 
     // Transform canvas position to source-local coordinates
     let local = canvas_pos - u.source_origin;

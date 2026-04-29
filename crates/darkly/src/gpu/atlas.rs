@@ -52,6 +52,20 @@ impl LayerTexture {
         )
     }
 
+    /// R8Unorm mask texture sized + positioned to match the given canvas
+    /// extent. The mask shares the parent layer's bounds so per-pixel
+    /// sampling can use the same layer UV as the layer texture.
+    pub fn new_mask_with_extent(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        extent: CanvasRect,
+    ) -> Self {
+        let mut t = Self::new_mask(device, queue, extent.width, extent.height);
+        t.offset_x = extent.origin.x;
+        t.offset_y = extent.origin.y;
+        t
+    }
+
     fn with_format(
         device: &wgpu::Device,
         queue: Option<&wgpu::Queue>,

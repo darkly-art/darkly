@@ -857,9 +857,21 @@ impl Compositor {
     ) {
         if has_mask {
             if !self.mask_textures.contains_key(&layer_id) {
-                // new_mask() initializes the texture to white (255 = reveal all).
-                let mask_tex =
-                    LayerTexture::new_mask(device, queue, self.canvas_width, self.canvas_height);
+                // Mask shares the parent layer's canvas extent — for canvas-
+                // aligned layers this is canvas-sized, for paste-extent
+                // layers it matches the layer texture bounds.
+                let extent = self
+                    .layer_textures
+                    .get(&layer_id)
+                    .map(|t| t.canvas_extent())
+                    .unwrap_or(crate::coord::CanvasRect::from_xywh(
+                        0,
+                        0,
+                        self.canvas_width,
+                        self.canvas_height,
+                    ));
+                // new_mask_with_extent() initializes the texture to white (255 = reveal all).
+                let mask_tex = LayerTexture::new_mask_with_extent(device, queue, extent);
                 let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some(&format!("mask-bg-{layer_id}")),
                     layout: &self.blend_pipelines.mask_bind_group_layout,
@@ -1181,16 +1193,6 @@ impl Compositor {
             }
         };
 
-        // The commit shader walks pixels of the *target* texture and maps
-        // each to a sample in the source. It expresses positions in
-        // "canvas_size" units; pass the target size and rebase
-        // source_origin into target-local pixel coords by subtracting the
-        // target's canvas-space offset.
-        let local_source_origin = (
-            source_origin.0 - target_off_x,
-            source_origin.1 - target_off_y,
-        );
-
         self.transform_pass.commit_to_texture(
             device,
             encoder,
@@ -1199,11 +1201,14 @@ impl Compositor {
             view,
             format,
             matrix,
-            local_source_origin,
+            source_origin,
             source_width,
             source_height,
+            (target_off_x, target_off_y),
             target_w,
             target_h,
+            self.canvas_width,
+            self.canvas_height,
         );
     }
 

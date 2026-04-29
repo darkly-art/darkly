@@ -153,7 +153,7 @@ impl FloatingContent {
 // TransformPass — GPU pipeline and active state, owned by compositor
 // ---------------------------------------------------------------------------
 
-/// Uniforms for the transform-blend shader (64 bytes, std140-aligned).
+/// Uniforms for the transform-blend shader (80 bytes, std140-aligned).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TransformBlendUniforms {
@@ -165,7 +165,11 @@ pub struct TransformBlendUniforms {
     pub source_origin: [f32; 2],
     /// Source texture dimensions in pixels.
     pub source_size: [f32; 2],
-    /// Full canvas dimensions in pixels.
+    /// Canvas-space offset of the render target's (0,0) pixel.
+    pub target_offset: [f32; 2],
+    /// Render target pixel dimensions.
+    pub target_size: [f32; 2],
+    /// Full document canvas dimensions in pixels.
     pub canvas_size: [f32; 2],
     /// Opacity (0.0–1.0).
     pub opacity: f32,
@@ -566,12 +570,15 @@ impl TransformPass {
             queue.submit(std::iter::once(encoder.finish()));
         }
 
-        // Uniform buffer (identity matrix initially)
+        // Uniform buffer (identity matrix initially). Preview pass renders to
+        // canvas-sized accumulator: target_offset=0, target_size=canvas_size.
         let uniforms = TransformBlendUniforms {
             inv_row0: [1.0, 0.0, 0.0, 0.0],
             inv_row1: [0.0, 1.0, 0.0, 0.0],
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
+            target_offset: [0.0, 0.0],
+            target_size: [canvas_width as f32, canvas_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: 0.0,
@@ -813,12 +820,15 @@ impl TransformPass {
 
         let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Uniform buffer (identity matrix initially)
+        // Uniform buffer (identity matrix initially). Preview pass renders to
+        // canvas-sized accumulator: target_offset=0, target_size=canvas_size.
         let uniforms = TransformBlendUniforms {
             inv_row0: [1.0, 0.0, 0.0, 0.0],
             inv_row1: [0.0, 1.0, 0.0, 0.0],
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
+            target_offset: [0.0, 0.0],
+            target_size: [canvas_width as f32, canvas_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: 0.0,
@@ -911,11 +921,14 @@ impl TransformPass {
 
         let inv = affine_inverse(matrix).unwrap_or(IDENTITY);
 
+        // Preview pass renders to canvas-sized accumulator.
         let uniforms = TransformBlendUniforms {
             inv_row0: [inv[0], inv[1], inv[2], 0.0],
             inv_row1: [inv[3], inv[4], inv[5], 0.0],
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
+            target_offset: [0.0, 0.0],
+            target_size: [canvas_width as f32, canvas_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: 0.0,
@@ -930,6 +943,11 @@ impl TransformPass {
     /// The destination is copied to a temp texture and the shader computes
     /// Porter-Duff source-over manually, outputting with REPLACE blend. This
     /// avoids the premultiplied-stored-as-straight bug from hardware blending.
+    ///
+    /// `source_origin` is canvas-space; the target's `(target_offset,
+    /// target_width, target_height)` describe its canvas-space placement so
+    /// the shader can map UV → canvas coords on offset paste-extent layers.
+    #[allow(clippy::too_many_arguments)]
     pub fn commit_to_texture(
         &self,
         device: &wgpu::Device,
@@ -942,6 +960,9 @@ impl TransformPass {
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
+        target_offset: (i32, i32),
+        target_width: u32,
+        target_height: u32,
         canvas_width: u32,
         canvas_height: u32,
     ) {
@@ -963,6 +984,8 @@ impl TransformPass {
             inv_row1: [inv[3], inv[4], inv[5], 0.0],
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
+            target_offset: [target_offset.0 as f32, target_offset.1 as f32],
+            target_size: [target_width as f32, target_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: is_mask,

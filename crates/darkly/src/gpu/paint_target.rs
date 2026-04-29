@@ -132,26 +132,29 @@ impl<'a> GpuPaintTarget<'a> {
         );
     }
 
-    /// Fill a rect with a solid color via alpha-over blending.
+    /// Fill a canvas-space rect with a solid color via alpha-over blending.
+    /// `rect` is `[x, y, w, h]` in canvas pixel coordinates — origin may be
+    /// negative on paste-extent layers; size must be non-negative.
     pub fn fill_rect(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
-        rect: [u32; 4],
+        rect: [i32; 4],
         color: [u8; 4],
     ) {
         self.fill_rect_inner(encoder, pipelines, queue, rect, color, None);
     }
 
-    /// Fill a rect with a solid color, masked by a selection bind group.
-    /// Used by flood fill: the fill mask texture is bound as the "selection".
+    /// Fill a canvas-space rect with a solid color, masked by a selection
+    /// bind group. Used by flood fill: the fill mask texture is bound as the
+    /// "selection".
     pub fn fill_rect_with_selection(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
-        rect: [u32; 4],
+        rect: [i32; 4],
         color: [u8; 4],
         selection_bind_group: &wgpu::BindGroup,
     ) {
@@ -357,16 +360,15 @@ impl<'a> GpuPaintTarget<'a> {
         );
     }
 
-    /// Clear a rect to transparent (RGBA) or full reveal (R8).
-    ///
-    /// Rect is in target-local pixel coordinates. (P1c will flip this contract
-    /// to canvas-space.)
+    /// Clear a canvas-space rect to transparent (RGBA) or full reveal (R8).
+    /// `rect` is `[x, y, w, h]` in canvas pixel coordinates — origin may be
+    /// negative on paste-extent layers; size must be non-negative.
     pub fn clear_rect(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
-        rect: [u32; 4],
+        rect: [i32; 4],
     ) {
         let [x, y, w, h] = rect;
         let pipeline = pipelines.clear_pipeline(self.format);
@@ -376,13 +378,9 @@ impl<'a> GpuPaintTarget<'a> {
             _ => [0.0, 0.0, 0.0, 0.0],                            // transparent
         };
 
-        // Translate target-local rect to canvas space for the new shader contract.
         let uniforms = PaintUniforms {
-            origin: [
-                x as f32 + self.offset_x as f32,
-                y as f32 + self.offset_y as f32,
-            ],
-            size: [w as f32, h as f32],
+            origin: [x as f32, y as f32],
+            size: [w.max(0) as f32, h.max(0) as f32],
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
@@ -460,20 +458,16 @@ impl<'a> GpuPaintTarget<'a> {
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
-        rect: [u32; 4],
+        rect: [i32; 4],
         color: [u8; 4],
         selection: Option<&wgpu::BindGroup>,
     ) {
         let [x, y, w, h] = rect;
         let pipeline = pipelines.composite_pipeline(self.format);
 
-        // Translate target-local rect to canvas space for the new shader contract.
         let uniforms = PaintUniforms {
-            origin: [
-                x as f32 + self.offset_x as f32,
-                y as f32 + self.offset_y as f32,
-            ],
-            size: [w as f32, h as f32],
+            origin: [x as f32, y as f32],
+            size: [w.max(0) as f32, h.max(0) as f32],
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],

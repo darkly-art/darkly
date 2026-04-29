@@ -191,24 +191,33 @@ impl DarklyEngine {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
 
-        // Lazy init: save the canvas to scratch for undo on first stroke_to.
+        // Lazy init: save the layer to scratch for undo on first stroke_to.
+        // Use the layer's actual texture dimensions (not canvas) so paste-
+        // extent layers preserve off-canvas pixels through undo.
         if !self.scratch_saved {
             self.flush_pending_undo_commit();
-            let (texture, format) = if mask_editing {
+            let (texture, format, layer_w, layer_h) = if mask_editing {
                 match self.compositor.mask_texture(layer_id) {
-                    Some(t) => (&t.texture, wgpu::TextureFormat::R8Unorm),
+                    Some(t) => (&t.texture, wgpu::TextureFormat::R8Unorm, t.width, t.height),
                     None => return,
                 }
             } else {
                 match self.compositor.layer_texture(layer_id) {
-                    Some(t) => (&t.texture, wgpu::TextureFormat::Rgba8Unorm),
+                    Some(t) => (
+                        &t.texture,
+                        wgpu::TextureFormat::Rgba8Unorm,
+                        t.width,
+                        t.height,
+                    ),
                     None => return,
                 }
             };
 
+            self.region_store
+                .ensure_scratch_capacity(&self.gpu.device, layer_w, layer_h);
             self.gpu.encode("stroke-begin", |encoder| {
                 self.region_store
-                    .save_region(encoder, texture, format, [0, 0, canvas_w, canvas_h]);
+                    .save_region(encoder, texture, format, [0, 0, layer_w, layer_h]);
             });
 
             self.scratch_saved = true;
@@ -384,10 +393,14 @@ impl DarklyEngine {
                 self.compositor.layer_texture(layer_id)
             };
             if let Some(layer_tex) = layer_tex {
+                // Size the stroke scratch and pre-stroke snapshot to the
+                // layer's bounds. For paste-extent layers larger than the
+                // canvas this means dabs landing on off-canvas pixels are
+                // saved/restored correctly on undo.
                 let stroke_buffer = StrokeBuffer::new(
                     &self.gpu.device,
-                    canvas_w,
-                    canvas_h,
+                    layer_tex.width,
+                    layer_tex.height,
                     self.dab_pool.bind_group_layout(),
                     self.brush_pipelines.canvas_copy_bind_group_layout(),
                 );
@@ -480,6 +493,10 @@ impl DarklyEngine {
                         stroke_scratch_texture: stroke_buffer.stroke_texture(),
                         canvas_width: canvas_w,
                         canvas_height: canvas_h,
+                        layer_width: layer_tex.width,
+                        layer_height: layer_tex.height,
+                        layer_offset_x: layer_tex.offset_x,
+                        layer_offset_y: layer_tex.offset_y,
                         selection_bind_group: sel_bg,
                         resource_handles: &self.resource_handles,
                         // blend_mode applies at commit (paint vs. erase). The
@@ -649,6 +666,10 @@ impl DarklyEngine {
                     stroke_scratch_texture: canvas_texture,
                     canvas_width: canvas_w,
                     canvas_height: canvas_h,
+                    layer_width: layer_tex.width,
+                    layer_height: layer_tex.height,
+                    layer_offset_x: layer_tex.offset_x,
+                    layer_offset_y: layer_tex.offset_y,
                     selection_bind_group: sel_bg,
                     resource_handles: &self.resource_handles,
                     blend_mode: self.brush_blend_mode,
@@ -782,7 +803,7 @@ impl DarklyEngine {
                 encoder,
                 &self.paint_pipelines,
                 &self.gpu.queue,
-                [0, 0, canvas_w, canvas_h],
+                [0, 0, canvas_w as i32, canvas_h as i32],
                 color,
                 &mask_bind_group,
             );
@@ -931,7 +952,7 @@ impl DarklyEngine {
                 encoder,
                 &self.paint_pipelines,
                 &self.gpu.queue,
-                [0, 0, canvas_w, canvas_h],
+                [0, 0, canvas_w as i32, canvas_h as i32],
             );
         });
 
