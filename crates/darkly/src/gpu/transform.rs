@@ -77,8 +77,11 @@ pub fn affine_rotate(angle: f32) -> Affine2D {
 
 /// How the floating content was created — determines commit/cancel behavior.
 pub enum FloatingMode {
-    /// Clipboard paste — commit composites INTO target. Cancel = no-op.
-    Paste,
+    /// Clipboard paste — commit composites INTO target.
+    /// `created_layer_id = Some(id)` means the target layer was auto-created
+    /// for this paste and should be removed on cancel. `None` means paste
+    /// targets a pre-existing layer; cancel is a no-op.
+    Paste { created_layer_id: Option<LayerId> },
     /// Extracted from layer — commit writes transformed pixels.
     /// Cancel restores the pre-clear state from RegionStore scratch.
     Transform {

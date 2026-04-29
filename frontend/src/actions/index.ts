@@ -7,6 +7,19 @@ import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { registerBrushParamActions } from './brush_params';
 
+function enterTransformTool() {
+    if (!app.handle) return;
+    const prevTool = toolRegistry.get(app.activeToolId);
+    app.activeToolId = 'transform';
+    const ctx = {
+        handle: app.handle,
+        canvasEl: document.createElement('canvas'),
+        screenToCanvas: (_x: number, _y: number) => ({ x: 0, y: 0 }),
+    };
+    prevTool?.onDeactivate?.(ctx);
+    toolRegistry.get('transform')?.onActivate?.(ctx);
+}
+
 export function registerActions() {
     // -- Binding sites --
     sites.register({ name: 'keyboard',     provides: ['layerId'] });
@@ -156,10 +169,19 @@ export function registerActions() {
                 const ox = Math.round((docW - clip.width) / 2);
                 const oy = Math.round((docH - clip.height) / 2);
                 const activeId = app.activeLayerId ?? -1;
-                const layerId = app.handle.paste_image(
-                    clip.width, clip.height, clip.rgba, ox, oy, activeId,
-                );
-                app.activeLayerId = layerId;
+                const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
+                if (activateTransform) {
+                    const layerId = app.handle.paste_image_floating(
+                        clip.width, clip.height, clip.rgba, ox, oy, activeId,
+                    );
+                    app.activeLayerId = layerId;
+                    enterTransformTool();
+                } else {
+                    const layerId = app.handle.paste_image(
+                        clip.width, clip.height, clip.rgba, ox, oy, activeId,
+                    );
+                    app.activeLayerId = layerId;
+                }
                 app.refreshLayerTree();
                 app.requestFrame();
             });
@@ -172,15 +194,20 @@ export function registerActions() {
         defaultHotkey: '$mod+Shift+KeyV',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
-            const ok = app.handle.paste_in_place_floating(app.activeLayerId);
-            console.log('[pasteInPlace] floating created:', ok, 'layerId:', app.activeLayerId);
-            if (ok) {
-                const prevTool = toolRegistry.get(app.activeToolId);
-                app.activeToolId = 'transform';
-                const ctx = { handle: app.handle, canvasEl: document.createElement('canvas'), screenToCanvas: (_x: number, _y: number) => ({ x: 0, y: 0 }) };
-                prevTool?.onDeactivate?.(ctx);
-                toolRegistry.get('transform')?.onActivate?.(ctx);
-                app.requestFrame();
+            const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
+            if (activateTransform) {
+                const ok = app.handle.paste_in_place_floating(app.activeLayerId);
+                if (ok) {
+                    enterTransformTool();
+                    app.requestFrame();
+                }
+            } else {
+                const layerId = app.handle.paste_in_place(app.activeLayerId);
+                if (layerId >= 0) {
+                    app.activeLayerId = layerId;
+                    app.refreshLayerTree();
+                    app.requestFrame();
+                }
             }
         },
     });

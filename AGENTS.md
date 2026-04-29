@@ -40,6 +40,10 @@ This applies to any open source project, not just the editors listed above. Web 
 
 Our implementation will differ in specifics (GPU pipelines, tile formats, Rust idioms), but core algorithms and architectural decisions should be informed by prior art, not invented from scratch.
 
+## Credit Principle
+
+When an idea, algorithm, shader, or implementation comes from an external source — open source code, Shadertoy, papers, blog posts, video tutorials, etc. — credit the source and author at the top of the file (or inline next to the borrowed fragment, if it's smaller than file-scope). Include the author's name or handle and a link to the original.
+
 ## Performance Principle
 
 Performance is king. If a feature can't be fast, it doesn't ship. There is almost always a fast way to do something — find it before writing the naive version. Think about data access patterns, per-frame costs, and batch granularity up front, not after the profiler screams.
@@ -56,7 +60,7 @@ See `gpu-lessons-learned.md` for full details. The specifics vary but the theme 
 
 **Every feature must have a test.** Verify the feature works. The test exists; it passes. That's it.
 
-**Every bug must have a _regression_ test — one that defends against that specific bug being reintroduced.** "Regression" means "the bug we just fixed must not come back"; a test for a new feature is not a regression test, even if it follows the same pattern. Write it FIRST, confirm it FAILS against the unfixed code, then fix the bug and confirm it passes; if it doesn't fail without the fix, it doesn't count. Performance regressions need concrete timing bounds (e.g., `assert!(ms < 50.0)`) to catch algorithmic, not just logical, breakage.
+**Every bug must have a _regression_ test — one that defends against that specific bug being reintroduced.** "Regression" means "the bug we just fixed must not come back"; a test for a new feature is not a regression test, even if it follows the same pattern. Write it FIRST, confirm it FAILS against the unfixed code, then fix the bug and confirm it passes; if it doesn't fail without the fix, it doesn't count.
 
 **Every bug is a signal that something nearby is awkward or overcomplicated.** Before patching, ask: "is this an elegant solution?" If the answer is no, the bug is telling you the code wants to be restructured — propose a refactor instead of layering a fix on top. The cleanest fix is often the one that makes the bug impossible to express, not the one that handles it.
 

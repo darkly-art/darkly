@@ -1,10 +1,11 @@
 //! Floating content — paste-in-place and interactive transforms.
 
 use super::{DarklyEngine, PendingTransform};
+use crate::document::MoveTarget;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{Affine2D, FloatingContent, FloatingMode, IDENTITY};
 use crate::layer::Layer;
-use crate::undo::GpuRegionAction;
+use crate::undo::{GpuRegionAction, LayerAddAction};
 
 impl DarklyEngine {
     /// Auto-commit any active floating content before performing other edits.
@@ -72,10 +73,70 @@ impl DarklyEngine {
             matrix: IDENTITY,
             target_layer: layer_id,
             target_is_mask,
-            mode: FloatingMode::Paste,
+            mode: FloatingMode::Paste {
+                created_layer_id: None,
+            },
         });
 
         true
+    }
+
+    /// Paste raw RGBA bytes as floating content on a NEW raster layer.
+    /// The caller is expected to switch to the transform tool. On commit, the
+    /// pixel data is rendered into the new layer and a single LayerAddAction
+    /// is pushed to undo. On cancel, the new layer is removed silently.
+    ///
+    /// Returns the new layer id.
+    pub fn paste_image_floating(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        offset_x: i32,
+        offset_y: i32,
+        active_layer_id: Option<u64>,
+    ) -> u64 {
+        // Auto-commit any existing floating content first.
+        self.auto_commit_floating();
+
+        // Create the target layer (no undo entry yet — pushed at commit).
+        let new_id = self.doc.add_raster_layer();
+        if let Some(Layer::Raster(r)) = self.doc.layer_mut(new_id) {
+            r.name = "Pasted Layer".to_string();
+        }
+        self.compositor
+            .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, new_id);
+
+        if let Some(active_id) = active_layer_id {
+            self.doc.move_layer(new_id, MoveTarget::After(active_id));
+        }
+
+        // Upload RGBA to floating source texture; the compositor renders it
+        // as a preview overlay until commit.
+        self.compositor.set_floating_content(
+            &self.gpu.device,
+            &self.gpu.queue,
+            rgba,
+            (offset_x, offset_y),
+            width,
+            height,
+            new_id,
+            false,
+        );
+
+        self.floating = Some(FloatingContent {
+            source_origin: (offset_x, offset_y),
+            source_width: width,
+            source_height: height,
+            matrix: IDENTITY,
+            target_layer: new_id,
+            target_is_mask: false,
+            mode: FloatingMode::Paste {
+                created_layer_id: Some(new_id),
+            },
+        });
+
+        new_id
     }
 
     /// Begin an interactive transform on the current layer/mask content.
@@ -367,9 +428,38 @@ impl DarklyEngine {
         let affected_h = union_max_y.saturating_sub(union_min_y);
         let affected_rect = [union_min_x, union_min_y, affected_w, affected_h];
 
-        // For paste mode, the scratch doesn't have a pre-operation snapshot yet
-        // (begin_transform wasn't called). Save the current state now.
-        if matches!(fc.mode, FloatingMode::Paste) {
+        // Path A — paste onto a layer auto-created for this paste.
+        // The layer is empty by construction, so a single LayerAddAction
+        // captures the whole paste as one undo step (no GpuRegionAction).
+        if let FloatingMode::Paste {
+            created_layer_id: Some(_),
+        } = fc.mode
+        {
+            self.gpu.encode("paste-commit", |encoder| {
+                self.compositor.commit_floating_to_texture(
+                    &self.gpu.device,
+                    encoder,
+                    &self.gpu.queue,
+                    &fc.matrix,
+                    fc.source_origin,
+                    fc.source_width,
+                    fc.source_height,
+                );
+            });
+
+            let parent = self.doc.parent_of(layer_id);
+            let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
+            self.undo_stack
+                .push(Box::new(LayerAddAction::new(layer_id, parent, pos)));
+
+            self.compositor.clear_floating_content();
+            return;
+        }
+
+        // Path B — paste-in-place onto an existing layer, or transform commit.
+        // Paste-in-place hasn't called begin_transform, so save the pre-paste
+        // canvas state now. Transform mode has already saved during setup.
+        if matches!(fc.mode, FloatingMode::Paste { .. }) {
             let texture = if is_mask {
                 self.compositor.mask_texture(layer_id).map(|t| &t.texture)
             } else {
@@ -421,8 +511,17 @@ impl DarklyEngine {
         };
 
         match fc.mode {
-            FloatingMode::Paste => {
-                // No-op — target layer was never modified.
+            FloatingMode::Paste { created_layer_id } => {
+                // If the paste auto-created a target layer, drop it silently —
+                // cancel restores the pre-paste document state. The layer's
+                // pixels were never written (commit_floating_to_texture only
+                // runs on commit), so just detach the node from the doc.
+                // No undo entry: the LayerAddAction is only pushed on commit.
+                if let Some(id) = created_layer_id {
+                    self.doc.detach_for_undo(id);
+                    self.compositor.mark_dirty();
+                }
+                // Otherwise: target layer was never modified — no-op.
             }
             FloatingMode::Transform { format, clear_rect } => {
                 // Restore the pre-clear state from the RegionStore scratch

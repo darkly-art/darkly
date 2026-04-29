@@ -954,6 +954,26 @@ impl DarklyHandle {
             .paste_image(width, height, rgba, offset_x, offset_y, active) as f64
     }
 
+    pub fn paste_image_floating(
+        &self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        offset_x: i32,
+        offset_y: i32,
+        active_layer_id: f64,
+    ) -> f64 {
+        self.flush_if_needed();
+        let active = if active_layer_id >= 0.0 {
+            Some(active_layer_id as u64)
+        } else {
+            None
+        };
+        self.engine
+            .borrow_mut()
+            .paste_image_floating(width, height, rgba, offset_x, offset_y, active) as f64
+    }
+
     pub fn paste_in_place(&self, active_layer_id: f64) -> f64 {
         self.flush_if_needed();
         let active = if active_layer_id >= 0.0 {

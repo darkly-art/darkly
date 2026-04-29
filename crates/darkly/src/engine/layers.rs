@@ -48,6 +48,10 @@ impl DarklyEngine {
         id
     }
 
+    pub fn has_layer(&self, layer_id: u64) -> bool {
+        self.doc.layer(layer_id).is_some()
+    }
+
     pub fn remove_layer(&mut self, layer_id: u64) -> Result<(), String> {
         if self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());

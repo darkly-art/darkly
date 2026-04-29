@@ -164,6 +164,81 @@ fn engine_transform_bounds_are_tight() {
 }
 
 // ============================================================================
+// Paste-as-floating: cancel removes the auto-created layer
+// ============================================================================
+
+/// Regression test for the paste → transform-tool flow. `paste_image_floating`
+/// auto-creates a target layer and enters floating Paste mode; cancelling
+/// must remove that layer without leaving a stray undo entry.
+#[test]
+fn paste_floating_cancel_removes_layer() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let base_layer = engine.add_raster_layer();
+
+    let pw: u32 = 8;
+    let ph: u32 = 8;
+    let rgba = vec![0xFFu8; (pw * ph * 4) as usize];
+
+    let pasted_id = engine.paste_image_floating(pw, ph, &rgba, 10, 10, Some(base_layer));
+
+    assert!(
+        engine.has_layer(pasted_id),
+        "auto-created paste layer should exist after paste_image_floating"
+    );
+    assert!(
+        engine.has_floating(),
+        "should be in floating mode after paste_image_floating"
+    );
+
+    engine.cancel_floating();
+
+    assert!(
+        !engine.has_floating(),
+        "floating should be cleared after cancel"
+    );
+    assert!(
+        !engine.has_layer(pasted_id),
+        "auto-created paste layer should be removed after cancel"
+    );
+    assert!(
+        engine.has_layer(base_layer),
+        "pre-existing layer must remain after cancel"
+    );
+
+    engine.undo();
+    assert!(
+        !engine.has_layer(pasted_id),
+        "undo after cancel must not resurrect the pasted layer"
+    );
+}
+
+/// Companion: committing a floating paste keeps the layer and registers
+/// exactly one undoable LayerAddAction (so a single undo removes the paste).
+#[test]
+fn paste_floating_commit_is_one_undo() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let base_layer = engine.add_raster_layer();
+
+    let pw: u32 = 8;
+    let ph: u32 = 8;
+    let rgba = vec![0xFFu8; (pw * ph * 4) as usize];
+
+    let pasted_id = engine.paste_image_floating(pw, ph, &rgba, 10, 10, Some(base_layer));
+    engine.commit_floating();
+
+    assert!(engine.has_layer(pasted_id), "pasted layer should remain");
+    assert!(!engine.has_floating(), "floating cleared after commit");
+
+    engine.undo();
+    assert!(
+        !engine.has_layer(pasted_id),
+        "single undo must remove the pasted layer entirely"
+    );
+}
+
+// ============================================================================
 // Lasso selection performance (regression test for scanline fill)
 // ============================================================================
 

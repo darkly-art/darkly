@@ -232,7 +232,7 @@ impl Document {
     /// Add a new raster layer at the root top.
     pub fn add_raster_layer(&mut self) -> LayerId {
         let id = self.alloc_id();
-        let layer = RasterLayer::new(id);
+        let layer = RasterLayer::new(id, LayerBounds::canvas(self.width, self.height));
         self.root
             .children
             .push(LayerNode::Layer(Layer::Raster(layer)));
@@ -242,7 +242,7 @@ impl Document {
     /// Add a new raster layer inside a group (or at root if parent is None).
     pub fn add_raster_layer_in(&mut self, parent: Option<LayerId>) -> LayerId {
         let id = self.alloc_id();
-        let layer = RasterLayer::new(id);
+        let layer = RasterLayer::new(id, LayerBounds::canvas(self.width, self.height));
         let node = LayerNode::Layer(Layer::Raster(layer));
 
         match parent {

@@ -1,5 +1,54 @@
 pub type LayerId = u64;
 
+/// Pixel-space bounds of a raster layer's GPU texture, in canvas coordinates.
+///
+/// `(offset_x, offset_y)` is the canvas-space position of the layer texture's
+/// (0, 0) pixel. `(width, height)` is the texture's allocated size. Bounds
+/// may extend beyond the canvas; the compositor clips to canvas at
+/// scissor time, but the underlying pixels are preserved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayerBounds {
+    pub offset_x: i32,
+    pub offset_y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl LayerBounds {
+    pub fn canvas(width: u32, height: u32) -> Self {
+        LayerBounds {
+            offset_x: 0,
+            offset_y: 0,
+            width,
+            height,
+        }
+    }
+
+    /// Smallest LayerBounds containing both `self` and `other`, growing the
+    /// extents in canvas coordinates and keeping the result within the
+    /// passed canvas dimensions when `clamp_to_canvas` is true.
+    pub fn union(&self, other: &LayerBounds) -> LayerBounds {
+        let ax0 = self.offset_x;
+        let ay0 = self.offset_y;
+        let ax1 = self.offset_x + self.width as i32;
+        let ay1 = self.offset_y + self.height as i32;
+        let bx0 = other.offset_x;
+        let by0 = other.offset_y;
+        let bx1 = other.offset_x + other.width as i32;
+        let by1 = other.offset_y + other.height as i32;
+        let x0 = ax0.min(bx0);
+        let y0 = ay0.min(by0);
+        let x1 = ax1.max(bx1);
+        let y1 = ay1.max(by1);
+        LayerBounds {
+            offset_x: x0,
+            offset_y: y0,
+            width: (x1 - x0).max(0) as u32,
+            height: (y1 - y0).max(0) as u32,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
 pub enum BlendMode {
@@ -36,10 +85,14 @@ pub struct RasterLayer {
     pub mask_enabled: bool,
     /// Display the mask as grayscale instead of layer content.
     pub show_mask: bool,
+    /// Pixel-space bounds of the layer's GPU texture in canvas coordinates.
+    /// Initialized to canvas bounds at layer creation; grows to fit pasted
+    /// or transformed content that extends beyond the canvas.
+    pub bounds: LayerBounds,
 }
 
 impl RasterLayer {
-    pub fn new(id: LayerId) -> Self {
+    pub fn new(id: LayerId, bounds: LayerBounds) -> Self {
         RasterLayer {
             id,
             name: format!("Layer {id}"),
@@ -49,6 +102,7 @@ impl RasterLayer {
             has_mask: false,
             mask_enabled: true,
             show_mask: false,
+            bounds,
         }
     }
 }
