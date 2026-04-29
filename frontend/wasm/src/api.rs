@@ -1241,6 +1241,15 @@ impl DarklyHandle {
             })
     }
 
+    pub fn floating_target_layer(&self) -> f64 {
+        self.flush_if_needed();
+        self.engine
+            .borrow()
+            .floating_target_layer()
+            .map(|id| id as f64)
+            .unwrap_or(-1.0)
+    }
+
     pub fn brush_node_types(&self) -> String {
         self.flush_if_needed();
         serde_json::to_string(&self.engine.borrow().brush_node_types())

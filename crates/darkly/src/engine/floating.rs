@@ -37,6 +37,15 @@ impl DarklyEngine {
         })
     }
 
+    /// Return the layer the active floating content will commit to.
+    /// Used by the frontend to distinguish "user switched away from the
+    /// floating's layer" (dismiss) from "user activated the floating's
+    /// own target layer" (keep — paste-as-floating sets active to its
+    /// auto-created target).
+    pub fn floating_target_layer(&self) -> Option<u64> {
+        self.floating.as_ref().map(|fc| fc.target_layer)
+    }
+
     /// Paste from the internal clipboard as floating content on the current
     /// layer/mask. Returns true if floating content was created.
     pub fn paste_in_place_floating(&mut self, layer_id: u64) -> bool {

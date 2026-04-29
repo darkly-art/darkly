@@ -6,18 +6,26 @@ import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { registerBrushParamActions } from './brush_params';
+import { screenToCanvas } from '../canvas/coordinates';
 
 function enterTransformTool() {
-    if (!app.handle) return;
-    const prevTool = toolRegistry.get(app.activeToolId);
+    if (!app.handle || !app.canvasEl) return;
+    const wasTransform = app.activeToolId === 'transform';
     app.activeToolId = 'transform';
-    const ctx = {
-        handle: app.handle,
-        canvasEl: document.createElement('canvas'),
-        screenToCanvas: (_x: number, _y: number) => ({ x: 0, y: 0 }),
-    };
-    prevTool?.onDeactivate?.(ctx);
-    toolRegistry.get('transform')?.onActivate?.(ctx);
+    // Tool changes are handled by the $effect in CanvasView, which calls
+    // onDeactivate/onActivate. When the tool was already transform that
+    // effect skips, so we must manually re-activate to sync state with
+    // the new floating — but never call onDeactivate, since that would
+    // commit the floating we just set up.
+    if (wasTransform) {
+        const canvasEl = app.canvasEl;
+        const ctx = {
+            handle: app.handle,
+            canvasEl,
+            screenToCanvas: (sx: number, sy: number) => screenToCanvas(sx, sy, canvasEl),
+        };
+        toolRegistry.get('transform')?.onActivate?.(ctx);
+    }
 }
 
 export function registerActions() {

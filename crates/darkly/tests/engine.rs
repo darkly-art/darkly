@@ -213,6 +213,40 @@ fn paste_floating_cancel_removes_layer() {
     );
 }
 
+/// Regression: `floating_target_layer` returns the auto-created layer for
+/// a paste-as-floating, so the frontend can distinguish "user switched away
+/// from floating's layer" from "user just activated floating's own target".
+#[test]
+fn paste_floating_target_layer_matches_created() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let base_layer = engine.add_raster_layer();
+
+    assert_eq!(
+        engine.floating_target_layer(),
+        None,
+        "no floating, no target"
+    );
+
+    let pw: u32 = 8;
+    let ph: u32 = 8;
+    let rgba = vec![0xFFu8; (pw * ph * 4) as usize];
+    let pasted_id = engine.paste_image_floating(pw, ph, &rgba, 10, 10, Some(base_layer));
+
+    assert_eq!(
+        engine.floating_target_layer(),
+        Some(pasted_id),
+        "floating_target_layer must match the pasted layer id"
+    );
+
+    engine.cancel_floating();
+    assert_eq!(
+        engine.floating_target_layer(),
+        None,
+        "no target after cancel"
+    );
+}
+
 /// Companion: committing a floating paste keeps the layer and registers
 /// exactly one undoable LayerAddAction (so a single undo removes the paste).
 #[test]
