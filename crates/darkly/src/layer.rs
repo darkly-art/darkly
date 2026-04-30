@@ -6,7 +6,8 @@ pub type LayerId = u64;
 /// (0, 0) pixel. `(width, height)` is the texture's allocated size. Bounds
 /// may extend beyond the canvas; the compositor clips to canvas at
 /// scissor time, but the underlying pixels are preserved.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LayerBounds {
     pub offset_x: i32,
     pub offset_y: i32,

@@ -1157,6 +1157,63 @@ fn mid_stroke_growth_preserves_already_saved_region() {
     );
 }
 
+/// `LayerInfo::Raster` carries the layer's canvas-space bounds so the
+/// frontend can see paste-extent storage. Regression for P4: a layer
+/// whose bounds extend past the canvas (paste of an oversized image)
+/// reports those exact bounds through the FFI-facing `LayerInfo`, and
+/// the `serde` round-trip preserves them.
+#[test]
+fn layer_info_carries_paste_extent_bounds_through_serde() {
+    use darkly::engine::types::LayerInfo;
+    use darkly::layer::LayerBounds;
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer();
+
+    // Paste 200×200 at (-50, -50) — paste-extent layer with bounds that
+    // extend in both negative-canvas directions and past the canvas.
+    let pw: u32 = 200;
+    let ph: u32 = 200;
+    let rgba = vec![0x33u8; (pw * ph * 4) as usize];
+    let pasted_id = engine.paste_image(pw, ph, &rgba, -50, -50, None);
+
+    // Walk the engine's layer tree and find the pasted layer's info.
+    let tree = engine.layer_tree();
+    let mut found_bounds: Option<LayerBounds> = None;
+    for info in &tree {
+        if let LayerInfo::Raster { id, bounds, .. } = info {
+            if *id as u64 == pasted_id {
+                found_bounds = Some(*bounds);
+                break;
+            }
+        }
+    }
+    let bounds = found_bounds.expect("pasted layer must appear in layer_tree as Raster");
+    assert_eq!(
+        bounds,
+        LayerBounds {
+            offset_x: -50,
+            offset_y: -50,
+            width: pw,
+            height: ph,
+        },
+        "LayerInfo bounds must reflect the actual paste extent"
+    );
+
+    // Round-trip the bounds field through serde to confirm the FFI
+    // serialization preserves the canvas-space offsets and dimensions.
+    let json = serde_json::to_string(&bounds).expect("bounds must serialize");
+    let decoded: LayerBounds =
+        serde_json::from_str(&json).expect("bounds must deserialize byte-identically");
+    assert_eq!(decoded, bounds);
+    // Frontend-facing camelCase contract — keys end up as offsetX/offsetY.
+    assert!(
+        json.contains("\"offsetX\":-50"),
+        "expected camelCase JSON keys, got {json}"
+    );
+}
+
 /// Repeated paste → cancel cycles must not leak GPU textures. Regression
 /// for P3: `cancel_floating` on the auto-created paste layer disposes its
 /// compositor state in addition to detaching the doc node.

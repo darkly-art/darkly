@@ -15,6 +15,11 @@ pub enum LayerInfo {
         has_mask: bool,
         mask_enabled: bool,
         show_mask: bool,
+        /// Pixel-space bounds of the layer's GPU texture in canvas coords.
+        /// Equals `(0, 0, canvas_w, canvas_h)` for canvas-aligned layers;
+        /// paste-extent or grown layers report their actual canvas extent
+        /// so the frontend can show storage size and off-canvas indicators.
+        bounds: crate::layer::LayerBounds,
     },
     #[serde(rename_all = "camelCase")]
     Group {
@@ -239,6 +244,7 @@ pub(crate) fn node_to_layer_info(node: &crate::layer::LayerNode) -> LayerInfo {
                 has_mask: r.has_mask,
                 mask_enabled: r.mask_enabled,
                 show_mask: r.show_mask,
+                bounds: r.bounds,
             },
         },
         LayerNode::Group(g) => LayerInfo::Group {
