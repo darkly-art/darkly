@@ -388,13 +388,9 @@ mod tests {
     use super::super::resource::ResourceFormat;
     use super::*;
 
-    const SOFTBRUSH_30PX: &[u8] =
-        include_bytes!("../../../../../../krita/benchmarks/data/softbrush_30px.kpp");
-    const EMBEDDED_5_0: &[u8] = include_bytes!(
-        "../../../../../../krita/libs/image/tests/data/test-embedded-resources-5.0.kpp"
-    );
-    const COLORSMUDGE_DEFAULT: &[u8] =
-        include_bytes!("../../../../../../krita/plugins/paintops/defaultpresets/colorsmudge.kpp");
+    const SOFTBRUSH_30PX: &[u8] = include_bytes!("testdata/softbrush_30px.kpp");
+    const EMBEDDED_5_0: &[u8] = include_bytes!("testdata/test-embedded-resources-5.0.kpp");
+    const COLORSMUDGE_DEFAULT: &[u8] = include_bytes!("testdata/colorsmudge.kpp");
 
     #[test]
     fn parses_softbrush_2_2() {
