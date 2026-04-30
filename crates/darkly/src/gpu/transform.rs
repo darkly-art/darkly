@@ -76,6 +76,25 @@ pub fn affine_rotate(angle: f32) -> Affine2D {
 // FloatingContent — CPU-side data owned by the engine
 // ---------------------------------------------------------------------------
 
+/// Shape of the clear that `setup_transform` applied to the source layer.
+///
+/// Stored on `FloatingMode::Transform` so that `commit_floating` can replay
+/// the same shape after the un-clear/save sequence — without it the
+/// transform shader's `discard`-outside-transformed-bounds would leave a
+/// duplicate copy of the source at its original position.
+pub enum ClearShape {
+    /// `setup_transform` did a full-rect clear (no-selection branch).
+    /// Replay with `clear_rect`.
+    Rect(crate::coord::CanvasRect),
+    /// `setup_transform` did a selection-shaped clear (selection branch).
+    /// `mask_bind_group` references a canvas-sized R8 snapshot of the
+    /// selection that was active at setup time — retained because
+    /// `gpu_selection.clear()` runs at the end of `setup_transform` (so
+    /// the marching ants disappear during the drag preview), and the
+    /// commit-side replay needs that mask shape.
+    Selection { mask_bind_group: wgpu::BindGroup },
+}
+
 /// How the floating content was created — determines commit/cancel behavior.
 pub enum FloatingMode {
     /// Clipboard paste — commit composites INTO target.
@@ -89,6 +108,10 @@ pub enum FloatingMode {
         /// Pre-clear snapshot of the source region. Used by `cancel_floating`
         /// to undo the source clear; carries the saved rect and format.
         cancel_snapshot: crate::gpu::region_store::Snapshot,
+        /// Shape of the clear setup_transform applied — replayed at commit
+        /// time before the transform render. Carrying the shape as data
+        /// keeps the selection and no-selection branches symmetric.
+        clear_shape: ClearShape,
     },
 }
 

@@ -491,6 +491,20 @@ impl DarklyEngine {
         )
     }
 
+    /// Blocking readback of a layer's R8 mask texture. For test assertions only.
+    /// Returns `None` if the layer has no mask.
+    pub fn test_readback_mask(&self, layer_id: u64) -> Option<Vec<u8>> {
+        let mask_tex = self.compositor.mask_texture(layer_id)?;
+        Some(crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mask_tex.texture,
+            wgpu::TextureFormat::R8Unorm,
+            mask_tex.width,
+            mask_tex.height,
+        ))
+    }
+
     /// Block until all pending async readbacks complete. For tests only.
     /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
     /// dispatches every completed readback through the shared handler —

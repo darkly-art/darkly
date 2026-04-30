@@ -1587,6 +1587,214 @@ fn undo_after_grow_does_not_leave_prior_stroke_artifacts() {
     );
 }
 
+/// Regression: translating a transform without a selection must not leave
+/// a duplicate copy of the source at the original position. The
+/// `commit_floating` un-clear restores source pixels to the layer at the
+/// source rect (so the undo-buffer save captures the pre-transform state)
+/// — but the transform render shader uses `discard` outside transformed
+/// bounds, so without a re-clear the un-cleared source pixels remain on
+/// the layer alongside the transformed source.
+/// Regression: painting on a layer mask after `set_editing_mask(layer, true)`
+/// must actually modify the mask texture (and leave the layer texture
+/// untouched). This had ZERO test coverage despite being a fundamental
+/// feature; this test asserts both halves of the invariant.
+#[test]
+fn brush_stroke_paints_on_mask_when_editing_mask() {
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+    // Layer pre-filled with red so we can detect any unintended writes
+    // to the layer's RGBA texture.
+    let red_rgba: Vec<u8> = (0..cw * ch).flat_map(|_| [255u8, 0, 0, 255]).collect();
+    let layer_id = engine.paste_image(cw, ch, &red_rgba, 0, 0, None);
+
+    engine.add_mask(layer_id);
+    engine.render(0.0);
+
+    let mask_before = engine
+        .test_readback_mask(layer_id)
+        .expect("mask must exist after add_mask");
+    let layer_before = engine.test_readback_layer(layer_id);
+
+    // Default mask is fully revealing (255 = white).
+    assert!(
+        mask_before.iter().all(|&v| v == 255),
+        "freshly added mask should be 255 everywhere"
+    );
+
+    // Switch to mask-editing mode and paint.
+    engine.set_editing_mask(layer_id, true);
+    paint_at(&mut engine, layer_id, 32.0, 32.0, 0.0, 0.0, 0.0); // black brush
+    engine.render(0.0);
+
+    let mask_after = engine
+        .test_readback_mask(layer_id)
+        .expect("mask still exists");
+    let layer_after = engine.test_readback_layer(layer_id);
+
+    // Mask must have changed — at minimum some pixels under the brush must
+    // be != 255.
+    let mask_changed_count = mask_before
+        .iter()
+        .zip(mask_after.iter())
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        mask_changed_count > 0,
+        "mask painting should have changed mask pixels; got 0 changed pixels — \
+         the brush stroke didn't reach the mask texture"
+    );
+
+    // Layer must NOT have changed.
+    assert_eq!(
+        layer_before, layer_after,
+        "mask painting must not modify the layer's RGBA texture"
+    );
+}
+
+#[test]
+fn transform_translate_no_selection_does_not_duplicate() {
+    use darkly::gpu::transform::affine_translate;
+
+    let (cw, ch) = (128u32, 128u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Paste a canvas-sized image with a 16×16 red square at canvas (10, 10)
+    // and the rest transparent. Layer bounds = full canvas, so the
+    // translated transform position is inside the layer texture.
+    let mut rgba = vec![0u8; (cw * ch * 4) as usize];
+    for y in 10..26 {
+        for x in 10..26 {
+            let idx = ((y * cw + x) * 4) as usize;
+            rgba[idx] = 255; // R
+            rgba[idx + 3] = 255; // A
+        }
+    }
+    let layer_id = engine.paste_image(cw, ch, &rgba, 0, 0, None);
+
+    // No selection — drives the async content_bounds compute path.
+    let started = engine.begin_transform(layer_id);
+    if !started {
+        for _ in 0..16 {
+            engine.test_flush_readbacks();
+            engine.render(0.0);
+            if engine.has_floating() {
+                break;
+            }
+        }
+    }
+    assert!(
+        engine.has_floating(),
+        "begin_transform should have set up floating"
+    );
+
+    // Translate by (50, 50): source content at canvas (10, 10) → (60, 60).
+    engine.update_floating_matrix(affine_translate(50.0, 50.0));
+    engine.commit_floating();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_layer(layer_id);
+    let bounds = engine.layer_bounds(layer_id).expect("layer exists");
+    let lw = bounds.width;
+    let ox = bounds.offset_x;
+    let oy = bounds.offset_y;
+
+    let alpha_canvas = |cx: i32, cy: i32| -> u8 {
+        let lx = cx - ox;
+        let ly = cy - oy;
+        if lx < 0 || ly < 0 || lx as u32 >= bounds.width || ly as u32 >= bounds.height {
+            return 0;
+        }
+        alpha_at(&pixels, lw, lx as u32, ly as u32)
+    };
+
+    // Translated position: alpha must be present.
+    assert!(
+        alpha_canvas(65, 65) > 0,
+        "translated source position (65, 65) must be opaque after commit; got A={}",
+        alpha_canvas(65, 65)
+    );
+
+    // Original source position: alpha must be zero. Pre-fix this would
+    // still hold the un-cleared source pixel, producing a duplicate.
+    assert_eq!(
+        alpha_canvas(15, 15),
+        0,
+        "original source position (15, 15) must be transparent after \
+         commit — non-zero here means the un-clear left a duplicate of \
+         the source at its original position"
+    );
+}
+
+/// Regression: same as the no-selection version, but with an active
+/// selection covering the source square. The selection branch of
+/// `setup_transform` does a selection-shaped clear (`erase_with_selection`)
+/// rather than a full-rect clear; commit must replay that same shape so the
+/// transform shader's `discard`-outside-transformed-bounds doesn't leave
+/// the un-cleared source pixels at the original position.
+#[test]
+fn transform_translate_with_selection_does_not_duplicate() {
+    use darkly::gpu::transform::affine_translate;
+
+    let (cw, ch) = (128u32, 128u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Same canvas-sized image as the no-selection test: a 16×16 red square
+    // at canvas (10, 10).
+    let mut rgba = vec![0u8; (cw * ch * 4) as usize];
+    for y in 10..26 {
+        for x in 10..26 {
+            let idx = ((y * cw + x) * 4) as usize;
+            rgba[idx] = 255; // R
+            rgba[idx + 3] = 255; // A
+        }
+    }
+    let layer_id = engine.paste_image(cw, ch, &rgba, 0, 0, None);
+
+    // Select exactly the red square. select_rect is synchronous and
+    // populates gpu_selection.cpu_cache eagerly via upload_replace, so
+    // begin_transform takes the synchronous selection branch.
+    engine.select_rect(10.0, 10.0, 16.0, 16.0, SelectionMode::Replace, false, 0.0);
+
+    let started = engine.begin_transform(layer_id);
+    assert!(
+        started,
+        "begin_transform should set up floating synchronously with an active selection"
+    );
+
+    engine.update_floating_matrix(affine_translate(50.0, 50.0));
+    engine.commit_floating();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_layer(layer_id);
+    let bounds = engine.layer_bounds(layer_id).expect("layer exists");
+    let lw = bounds.width;
+    let ox = bounds.offset_x;
+    let oy = bounds.offset_y;
+
+    let alpha_canvas = |cx: i32, cy: i32| -> u8 {
+        let lx = cx - ox;
+        let ly = cy - oy;
+        if lx < 0 || ly < 0 || lx as u32 >= bounds.width || ly as u32 >= bounds.height {
+            return 0;
+        }
+        alpha_at(&pixels, lw, lx as u32, ly as u32)
+    };
+
+    assert!(
+        alpha_canvas(65, 65) > 0,
+        "translated source position (65, 65) must be opaque after commit; got A={}",
+        alpha_canvas(65, 65)
+    );
+
+    assert_eq!(
+        alpha_canvas(15, 15),
+        0,
+        "original source position (15, 15) must be transparent after commit — \
+         non-zero here means the selection-shaped re-clear was skipped and the \
+         un-cleared source pixel was preserved by the transform shader's discard"
+    );
+}
+
 /// Regression for the bug class fixed by the canvas-coord storage refactor
 /// (see plan `mossy-sleeping-flame.md`): a deferred `pending_undo_commit`
 /// from stroke A must remain valid when stroke B grows the layer a second

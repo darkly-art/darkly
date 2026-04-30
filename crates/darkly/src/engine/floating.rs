@@ -3,7 +3,7 @@
 use super::{DarklyEngine, PendingTransform};
 use crate::document::MoveTarget;
 use crate::gpu::paint_target::GpuPaintTarget;
-use crate::gpu::transform::{Affine2D, FloatingContent, FloatingMode, IDENTITY};
+use crate::gpu::transform::{Affine2D, ClearShape, FloatingContent, FloatingMode, IDENTITY};
 use crate::layer::Layer;
 use crate::undo::{GpuRegionAction, LayerAddAction};
 
@@ -369,12 +369,10 @@ impl DarklyEngine {
         // If selection is active, mask the source texture so only selected pixels
         // are included in the transform. Also clear only selected pixels on the layer.
         let has_selection = self.gpu_selection.active;
-        if has_selection {
+        let clear_shape = if has_selection {
             // Upload a cropped selection mask matching the source region dimensions.
             let cropped_sel_bg =
                 self.upload_cropped_selection_r8(source_origin, source_width, source_height);
-            // Full-canvas selection bind group from GPU selection.
-            let full_sel_bg = Some(self.gpu_selection.paint_bind_group());
 
             if let Some(sel_bg) = &cropped_sel_bg {
                 // Multiply source texture by selection mask — zeroes out unselected pixels.
@@ -401,27 +399,38 @@ impl DarklyEngine {
                 }
             }
 
-            if let Some(sel_bg) = full_sel_bg {
-                // Clear selected pixels on the layer using erase_with_selection.
-                let layer_target = if target_is_mask {
-                    self.compositor
-                        .mask_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
-                } else {
-                    self.compositor
-                        .layer_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
-                };
-                if let Some(target) = layer_target {
-                    self.gpu.encode("transform-clear-sel", |encoder| {
-                        target.erase_with_selection(
-                            encoder,
-                            &self.paint_pipelines,
-                            &self.gpu.queue,
-                            sel_bg,
-                        );
-                    });
-                }
+            // Snapshot the live selection texture into a dedicated R8 so
+            // commit can replay the exact selection shape for the layer
+            // re-clear, even after `gpu_selection.clear()` (below) zeroes
+            // the live selection at the end of setup. The snapshot owns
+            // its texture for the lifetime of the floating session.
+            let snap_bg = self.snapshot_selection_for_clear();
+
+            // Clear selected pixels on the layer using erase_with_selection
+            // — same bind group we just snapshotted from, applied to the
+            // layer/mask target.
+            let layer_target = if target_is_mask {
+                self.compositor
+                    .mask_texture(layer_id)
+                    .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
+            } else {
+                self.compositor
+                    .layer_texture(layer_id)
+                    .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
+            };
+            if let Some(target) = layer_target {
+                self.gpu.encode("transform-clear-sel", |encoder| {
+                    target.erase_with_selection(
+                        encoder,
+                        &self.paint_pipelines,
+                        &self.gpu.queue,
+                        &snap_bg,
+                    );
+                });
+            }
+
+            ClearShape::Selection {
+                mask_bind_group: snap_bg,
             }
         } else {
             // No selection — clear the layer-local source region on the layer.
@@ -447,7 +456,8 @@ impl DarklyEngine {
                     target.clear_rect(encoder, &self.paint_pipelines, &self.gpu.queue, canvas_rect);
                 });
             }
-        }
+            ClearShape::Rect(canvas_save_rect)
+        };
 
         self.floating = Some(FloatingContent {
             source_origin,
@@ -457,9 +467,16 @@ impl DarklyEngine {
             target_layer: layer_id,
             target_is_mask,
             // `cancel_snapshot` carries the pre-clear pixels at the
-            // source rect; `cancel_floating` uses it via
-            // `restore_from_scratch`.
-            mode: FloatingMode::Transform { cancel_snapshot },
+            // source rect (used by `cancel_floating` via
+            // `restore_from_scratch`). `clear_shape` describes the shape
+            // of the layer clear setup_transform just applied — replayed
+            // by `commit_floating` after its un-clear/save sequence so
+            // the transform render doesn't leave duplicate source pixels
+            // at the original position.
+            mode: FloatingMode::Transform {
+                cancel_snapshot,
+                clear_shape,
+            },
         });
 
         // Selection was used to define what gets picked up — clear it now so
@@ -470,6 +487,62 @@ impl DarklyEngine {
             self.selection_overlay.clear();
             self.push_merged_overlay();
         }
+    }
+
+    /// Snapshot the live GPU selection into a fresh canvas-sized R8 texture
+    /// and return a paint-pipeline bind group sampling it. The returned
+    /// bind group keeps the underlying texture alive for its lifetime, so
+    /// it remains valid after `gpu_selection.clear()` zeroes the live
+    /// selection at the end of `setup_transform`.
+    fn snapshot_selection_for_clear(&self) -> wgpu::BindGroup {
+        let canvas_w = self.gpu_selection.width;
+        let canvas_h = self.gpu_selection.height;
+        let snap_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("transform-clear-sel-snap"),
+            size: wgpu::Extent3d {
+                width: canvas_w,
+                height: canvas_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.gpu.encode("transform-clear-sel-snap", |encoder| {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.gpu_selection.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &snap_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: canvas_w,
+                    height: canvas_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        });
+        let view = snap_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("transform-clear-sel-snap-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        self.paint_pipelines
+            .create_selection_bind_group(&self.gpu.device, &view, &sampler)
     }
 
     /// Update the floating content's transform matrix.
@@ -628,6 +701,7 @@ impl DarklyEngine {
         }
         if let FloatingMode::Transform {
             ref cancel_snapshot,
+            ..
         } = fc.mode
         {
             self.gpu.encode("transform-uncleared", |encoder| {
@@ -662,6 +736,52 @@ impl DarklyEngine {
                 &commit_snap,
                 affected_canvas_rect,
             );
+
+            // The un-clear above restored source pixels to the layer at
+            // the source rect (so the undo-buffer save captured the
+            // pre-transform state). Replay the same clear shape that
+            // `setup_transform` applied, before the transform render —
+            // otherwise the transform shader's
+            // `discard`-outside-transformed-bounds would leave a
+            // duplicate copy of the source at its original position.
+            // The shape is stored as data so selection and no-selection
+            // branches share this single replay path.
+            if let FloatingMode::Transform {
+                ref clear_shape, ..
+            } = fc.mode
+            {
+                let target = if is_mask {
+                    self.compositor
+                        .mask_texture(layer_id)
+                        .map(|t| GpuPaintTarget::from_mask(t, self.doc.width, self.doc.height))
+                } else {
+                    self.compositor
+                        .layer_texture(layer_id)
+                        .map(|t| GpuPaintTarget::from_layer(t, self.doc.width, self.doc.height))
+                };
+                if let Some(target) = target {
+                    match clear_shape {
+                        ClearShape::Rect(rect) => {
+                            let canvas_rect =
+                                [rect.x0(), rect.y0(), rect.width as i32, rect.height as i32];
+                            target.clear_rect(
+                                encoder,
+                                &self.paint_pipelines,
+                                &self.gpu.queue,
+                                canvas_rect,
+                            );
+                        }
+                        ClearShape::Selection { mask_bind_group } => {
+                            target.erase_with_selection(
+                                encoder,
+                                &self.paint_pipelines,
+                                &self.gpu.queue,
+                                mask_bind_group,
+                            );
+                        }
+                    }
+                }
+            }
 
             // GPU render pass: write transformed source pixels to layer/mask texture.
             self.compositor.commit_floating_to_texture(
@@ -705,7 +825,9 @@ impl DarklyEngine {
                 }
                 // Otherwise: target layer was never modified — no-op.
             }
-            FloatingMode::Transform { cancel_snapshot } => {
+            FloatingMode::Transform {
+                cancel_snapshot, ..
+            } => {
                 // Restore the pre-clear state from the RegionStore scratch
                 // texture (saved during begin_transform).
                 //
