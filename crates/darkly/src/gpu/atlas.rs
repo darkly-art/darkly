@@ -183,6 +183,37 @@ impl LayerTexture {
     pub fn clamp_canvas_rect(&self, r: CanvasRect) -> Option<CanvasRect> {
         self.canvas_extent().intersect(r)
     }
+
+    /// Borrow this texture as a `CanvasFrame` — a thin (texture, canvas
+    /// extent) value passed to the GPU adapter boundary helpers.
+    pub fn canvas_frame(&self) -> CanvasFrame<'_> {
+        CanvasFrame {
+            texture: &self.texture,
+            canvas_extent: self.canvas_extent(),
+        }
+    }
+}
+
+/// A texture paired with the canvas-space rect it occupies. Used as the
+/// argument type at the GPU adapter boundary so callers don't have to know
+/// whether the underlying texture is a `LayerTexture` (layer-aligned) or a
+/// canvas-aligned texture like the selection mask. The frame owns nothing;
+/// borrows are elided at call sites.
+#[derive(Copy, Clone)]
+pub struct CanvasFrame<'a> {
+    pub texture: &'a wgpu::Texture,
+    pub canvas_extent: CanvasRect,
+}
+
+impl<'a> CanvasFrame<'a> {
+    /// Intersect a canvas-space rect with this frame's extent and translate
+    /// the result into texture-local coordinates. Returns `None` if disjoint.
+    pub fn canvas_to_layer_rect(&self, r: CanvasRect) -> Option<LayerRect> {
+        let clipped = self.canvas_extent.intersect(r)?;
+        let lx = (clipped.origin.x - self.canvas_extent.origin.x) as u32;
+        let ly = (clipped.origin.y - self.canvas_extent.origin.y) as u32;
+        Some(LayerRect::from_xywh(lx, ly, clipped.width, clipped.height))
+    }
 }
 
 #[cfg(test)]

@@ -148,7 +148,6 @@ impl DarklyEngine {
         let rect = self
             .gpu_selection
             .pixel_bounds
-            .map(|[x, y, w, h]| crate::coord::LayerRect::from_xywh(x, y, w, h))
             .unwrap_or_else(|| self.selection_full_canvas_rect());
         self.save_selection_for_undo(rect);
         let was_active = self.gpu_selection.active;
@@ -367,24 +366,24 @@ impl DarklyEngine {
 
     // --- Undo helpers ---
 
-    pub(crate) fn save_selection_for_undo(&mut self, rect: crate::coord::LayerRect) {
-        let texture = self.gpu_selection.texture();
+    pub(crate) fn save_selection_for_undo(&mut self, rect: crate::coord::CanvasRect) {
+        let frame = self.gpu_selection.canvas_frame();
         let snap = self.gpu.encode_ret("sel-undo-save", |encoder| {
             self.region_store
-                .save_region(encoder, texture, wgpu::TextureFormat::R8Unorm, rect)
+                .save_region(encoder, &frame, wgpu::TextureFormat::R8Unorm, rect)
         });
-        // The selection texture is canvas-sized at offset 0, so its
-        // texture-local frame coincides with canvas; `LayerRect` here means
-        // "selection-texture-local rect" despite the name. Stashing on the
-        // engine lets `commit_selection_undo` recover the snapshot across
-        // async readback boundaries (magic wand, mask-to-selection).
+        // The selection texture is canvas-sized at offset 0, so the
+        // canvas frame is exactly the selection-texture-local frame.
+        // Stashing on the engine lets `commit_selection_undo` recover the
+        // snapshot across async readback boundaries (magic wand,
+        // mask-to-selection).
         self.pending_selection_snapshot = Some(snap);
     }
 
     pub(crate) fn commit_selection_undo(
         &mut self,
         was_active: bool,
-        rect: crate::coord::LayerRect,
+        rect: crate::coord::CanvasRect,
     ) {
         let Some(snap) = self.pending_selection_snapshot.take() else {
             // No paired save — nothing to commit. Indicates a logic bug at
@@ -394,8 +393,11 @@ impl DarklyEngine {
             debug_assert!(false, "commit_selection_undo without a paired save");
             return;
         };
+        let frame = self.gpu_selection.canvas_frame();
         self.gpu.encode("sel-undo-commit", |encoder| {
-            let entry = self.region_store.commit_region(encoder, 0, &snap, rect);
+            let entry = self
+                .region_store
+                .commit_region(encoder, 0, &frame, &snap, rect);
             self.undo_stack
                 .push(Box::new(SelectionAction::new(was_active, entry)));
         });
@@ -403,15 +405,18 @@ impl DarklyEngine {
 
     /// Full-canvas undo rect — used when the post-op selection extent isn't
     /// known ahead of time (invert, select-all, magic wand, combine into unknown bounds).
-    pub(crate) fn selection_full_canvas_rect(&self) -> crate::coord::LayerRect {
-        crate::coord::LayerRect::from_xywh(0, 0, self.doc.width, self.doc.height)
+    pub(crate) fn selection_full_canvas_rect(&self) -> crate::coord::CanvasRect {
+        crate::coord::CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height)
     }
 
     /// Undo rect that covers both the current (pre-op) selection and a new shape
     /// that will be applied. Save and commit must use the same rect, otherwise
     /// the R8 scratch's stale contents outside the save rect would leak into the
     /// commit buffer and corrupt the selection on undo.
-    pub(crate) fn selection_undo_rect_for_shape(&self, shape: [u32; 4]) -> crate::coord::LayerRect {
+    pub(crate) fn selection_undo_rect_for_shape(
+        &self,
+        shape: [u32; 4],
+    ) -> crate::coord::CanvasRect {
         let cw = self.doc.width;
         let ch = self.doc.height;
         let [sx, sy, sw, sh] = shape;
@@ -421,18 +426,12 @@ impl DarklyEngine {
             sw.min(cw - sx.min(cw)),
             sh.min(ch - sy.min(ch)),
         ];
-        let [x, y, w, h] = match self.gpu_selection.pixel_bounds {
-            Some([ox, oy, ow, oh]) if sw > 0 && sh > 0 => {
-                let x = ox.min(sx);
-                let y = oy.min(sy);
-                let x_end = (ox + ow).max(sx + sw);
-                let y_end = (oy + oh).max(sy + sh);
-                [x, y, x_end - x, y_end - y]
-            }
+        let shape_rect = crate::coord::CanvasRect::from_xywh(sx as i32, sy as i32, sw, sh);
+        match self.gpu_selection.pixel_bounds {
+            Some(old) if sw > 0 && sh > 0 => old.union(shape_rect),
             Some(old) => old,
-            None => [0, 0, cw, ch],
-        };
-        crate::coord::LayerRect::from_xywh(x, y, w, h)
+            None => crate::coord::CanvasRect::from_xywh(0, 0, cw, ch),
+        }
     }
 
     /// Kick an async readback for contour extraction (marching ants).
@@ -470,7 +469,8 @@ impl DarklyEngine {
                 &pixels,
                 self.gpu_selection.width,
                 self.gpu_selection.height,
-            );
+            )
+            .map(|[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h));
         }
 
         // Populate the CPU cache from the readback data.

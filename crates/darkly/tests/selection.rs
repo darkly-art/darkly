@@ -4,17 +4,26 @@
 //! Combines low-level GpuPaintTarget selection tests and engine-level selection tests.
 //! Run with: `cargo test -p darkly --test selection`
 
-use darkly::coord::LayerRect;
+use darkly::coord::CanvasRect;
 use darkly::document::SelectionMode;
 use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
+use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use darkly::gpu::test_utils::*;
 use darkly::mask;
 
-fn lr(x: u32, y: u32, w: u32, h: u32) -> LayerRect {
-    LayerRect::from_xywh(x, y, w, h)
+fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
+    CanvasRect::from_xywh(x, y, w, h)
+}
+
+/// Build a CanvasFrame for a test texture sized `(w, h)` at canvas origin (0, 0).
+fn frame<'a>(tex: &'a wgpu::Texture, w: u32, h: u32) -> CanvasFrame<'a> {
+    CanvasFrame {
+        texture: tex,
+        canvas_extent: cr(0, 0, w, h),
+    }
 }
 
 /// Create a headless DarklyEngine with the given canvas dimensions.
@@ -246,7 +255,7 @@ fn gpu_clear_selection_undo() {
 
     // Save for undo.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Erase within selection.
@@ -266,7 +275,7 @@ fn gpu_clear_selection_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Verify cleared.
@@ -275,7 +284,7 @@ fn gpu_clear_selection_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);

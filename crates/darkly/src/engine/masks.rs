@@ -37,19 +37,16 @@ impl DarklyEngine {
         }
 
         // Save mask texture pixels to RegionStore for undo before removing.
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
         let format = wgpu::TextureFormat::R8Unorm;
-        let rect = crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h);
         let gpu_region_entry = if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
+            let frame = mask_tex.canvas_frame();
+            let rect = frame.canvas_extent;
             let mut entry = None;
             self.gpu.encode("remove-mask-save", |encoder| {
-                let snap = self
-                    .region_store
-                    .save_region(encoder, &mask_tex.texture, format, rect);
+                let snap = self.region_store.save_region(encoder, &frame, format, rect);
                 entry = Some(
                     self.region_store
-                        .commit_region(encoder, layer_id, &snap, rect),
+                        .commit_region(encoder, layer_id, &frame, &snap, rect),
                 );
             });
             entry
@@ -96,13 +93,16 @@ impl DarklyEngine {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
         let format = wgpu::TextureFormat::Rgba8Unorm;
-        let rect = crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h);
 
         // Save layer texture to region store for undo.
-        let snap = if let Some(layer_tex) = self.compositor.layer_texture(layer_id) {
+        let layer_frame = self
+            .compositor
+            .layer_texture(layer_id)
+            .map(|t| t.canvas_frame());
+        let snap = if let Some(frame) = layer_frame {
+            let rect = frame.canvas_extent;
             Some(self.gpu.encode_ret("apply-mask-save", |encoder| {
-                self.region_store
-                    .save_region(encoder, &layer_tex.texture, format, rect)
+                self.region_store.save_region(encoder, &frame, format, rect)
             }))
         } else {
             None
@@ -140,11 +140,12 @@ impl DarklyEngine {
         }
 
         // Commit undo region.
-        if let Some(snap) = snap {
+        if let (Some(snap), Some(frame)) = (snap, layer_frame) {
+            let rect = frame.canvas_extent;
             self.gpu.encode("apply-mask-undo", |encoder| {
                 let entry = self
                     .region_store
-                    .commit_region(encoder, layer_id, &snap, rect);
+                    .commit_region(encoder, layer_id, &frame, &snap, rect);
                 self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
             });
         }

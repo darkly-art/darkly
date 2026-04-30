@@ -132,18 +132,23 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             return vec![];
         }
 
-        // canvas_copy and save-point bboxes both index the stroke scratch,
-        // which is layer-sized — translate the canvas-space rect to the
-        // layer's local coord frame for both consumers.
+        // Publish the dab's *canvas-space* footprint so the stroke engine
+        // can record a save-point bbox that matches what was actually
+        // drawn. Canvas coords are stable across mid-stroke layer growth.
+        // Authoritative — `info.pos ± dab_radius` isn't, because the graph
+        // may offset position (scatter etc.).
+        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
+            copy_canvas_x,
+            copy_canvas_y,
+            copy_w,
+            copy_h,
+        ));
+
+        // canvas_copy indexes the stroke scratch, which is layer-sized —
+        // translate the canvas-space rect to the layer's local coord frame
+        // for the per-dab GPU dispatch.
         let copy_local_x = (copy_canvas_x - gpu.layer_offset_x) as u32;
         let copy_local_y = (copy_canvas_y - gpu.layer_offset_y) as u32;
-
-        // Publish the dab's layer-local footprint so the stroke engine
-        // can record a save-point bbox that matches what was actually
-        // drawn. Layer-local matches the scratch coord frame the
-        // save_points reference. Authoritative — `info.pos ± dab_radius`
-        // isn't, because the graph may offset position (scatter etc.).
-        gpu.push_dab_write_bbox([copy_local_x, copy_local_y, copy_w, copy_h]);
 
         // Ensure the scratch region under the dab is in canvas_copy for the
         // shader's straight-alpha Porter-Duff read. The bg here is the

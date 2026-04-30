@@ -3,7 +3,8 @@
 //! Works for both RGBA8 layer textures and R8 mask textures.
 //! Each operation is a self-contained render pass — no persistent state between calls.
 
-use crate::gpu::atlas::LayerTexture;
+use crate::coord::CanvasRect;
+use crate::gpu::atlas::{CanvasFrame, LayerTexture};
 
 /// A GPU texture you can paint on. Lightweight handle — no owned GPU state.
 ///
@@ -56,6 +57,19 @@ impl<'a> GpuPaintTarget<'a> {
             offset_y: tex.offset_y,
             canvas_width,
             canvas_height,
+        }
+    }
+
+    /// Borrow this target as a `CanvasFrame` for region-store APIs.
+    pub fn canvas_frame(&self) -> CanvasFrame<'a> {
+        CanvasFrame {
+            texture: self.texture,
+            canvas_extent: CanvasRect::from_xywh(
+                self.offset_x,
+                self.offset_y,
+                self.width,
+                self.height,
+            ),
         }
     }
 

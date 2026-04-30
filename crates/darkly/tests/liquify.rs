@@ -205,7 +205,7 @@ macro_rules! make_ctx {
             pre_stroke_texture: Some($h.stroke_buffer.pre_stroke_texture()),
             pre_stroke_bind_group: Some($h.stroke_buffer.pre_stroke_bind_group()),
             scratch_bind_group: Some($h.stroke_buffer.stroke_bind_group()),
-            dab_write_bbox: None,
+            dab_write_canvas_bbox: None,
         }
     };
 }

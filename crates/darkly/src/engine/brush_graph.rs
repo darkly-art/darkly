@@ -233,7 +233,7 @@ impl DarklyEngine {
             pre_stroke_texture: None,
             pre_stroke_bind_group: None,
             scratch_bind_group: None,
-            dab_write_bbox: None,
+            dab_write_canvas_bbox: None,
         };
 
         self.brush_pipelines.reset_uniform_rings();

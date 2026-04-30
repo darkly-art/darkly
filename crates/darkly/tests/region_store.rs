@@ -2,12 +2,23 @@
 //!
 //! Run with: `cargo test -p darkly --test region_store`
 
-use darkly::coord::LayerRect;
+use darkly::coord::CanvasRect;
+use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::test_utils::*;
 
-fn lr(x: u32, y: u32, w: u32, h: u32) -> LayerRect {
-    LayerRect::from_xywh(x, y, w, h)
+fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
+    CanvasRect::from_xywh(x, y, w, h)
+}
+
+/// Build a CanvasFrame for a test texture sized `(w, h)` at canvas origin (0, 0).
+/// Tests treat the bare `wgpu::Texture` as if it were a layer-aligned canvas
+/// texture starting at the origin.
+fn frame<'a>(tex: &'a wgpu::Texture, w: u32, h: u32) -> CanvasFrame<'a> {
+    CanvasFrame {
+        texture: tex,
+        canvas_extent: cr(0, 0, w, h),
+    }
 }
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
@@ -51,13 +62,14 @@ fn region_store_save_restore_round_trip() {
 
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, _view) = create_test_texture(&device, &queue, w, h, &red);
+    let frame = frame(&tex, w, h);
 
     let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
 
     // Save region.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
-    let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
+    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
+    let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Overwrite with blue.
@@ -73,7 +85,7 @@ fn region_store_save_restore_round_trip() {
 
     // Restore.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -93,13 +105,14 @@ fn region_store_partial_rect() {
 
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, _view) = create_test_texture(&device, &queue, w, h, &red);
+    let frame = frame(&tex, w, h);
 
     let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
 
     // Save only inner 64×64 rect at (32, 32).
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &tex, fmt, lr(32, 32, 64, 64));
-    let entry = store.commit_region(&mut enc, 1, &snap, lr(32, 32, 64, 64));
+    let snap = store.save_region(&mut enc, &frame, fmt, cr(32, 32, 64, 64));
+    let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(32, 32, 64, 64));
     submit(&queue, enc);
 
     // Overwrite entire texture with blue.
@@ -108,7 +121,7 @@ fn region_store_partial_rect() {
 
     // Restore only the inner rect.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -144,13 +157,14 @@ fn region_store_redo_round_trip() {
 
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, _view) = create_test_texture(&device, &queue, w, h, &red);
+    let frame = frame(&tex, w, h);
 
     let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
 
     // Save red state.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
-    let entry_a = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
+    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
+    let entry_a = store.commit_region(&mut enc, 1, &frame, &snap, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Overwrite with blue.
@@ -159,7 +173,7 @@ fn region_store_redo_round_trip() {
 
     // Undo: restore red, get forward entry (blue).
     let mut enc = encoder(&device);
-    let entry_b = store.restore_region(&mut enc, &entry_a, &tex);
+    let entry_b = store.restore_region(&mut enc, &entry_a, &frame);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -167,7 +181,7 @@ fn region_store_redo_round_trip() {
 
     // Redo: restore blue.
     let mut enc = encoder(&device);
-    let _entry_c = store.restore_region(&mut enc, &entry_b, &tex);
+    let _entry_c = store.restore_region(&mut enc, &entry_b, &frame);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -187,6 +201,7 @@ fn region_store_ring_buffer_eviction() {
     let capacity = entry_size * 3;
 
     let (tex, _view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
+    let frame = frame(&tex, w, h);
     let mut store = RegionStore::with_capacity(&device, w, h, capacity);
 
     // Push 4 entries — the first should be evicted.
@@ -196,8 +211,8 @@ fn region_store_ring_buffer_eviction() {
         write_texture(&queue, &tex, w, h, 4, &color);
 
         let mut enc = encoder(&device);
-        let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
-        let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
+        let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
+        let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(0, 0, w, h));
         submit(&queue, enc);
         entries.push(entry);
     }
@@ -207,7 +222,7 @@ fn region_store_ring_buffer_eviction() {
     write_texture(&queue, &tex, w, h, 4, &green);
 
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entries[3], &tex);
+    let _forward = store.restore_region(&mut enc, &entries[3], &frame);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -228,13 +243,14 @@ fn region_store_r8_format() {
 
     let white: Vec<u8> = vec![255u8; (w * h) as usize];
     let (tex, _view) = create_test_texture_with_format(&device, &queue, w, h, &white, fmt);
+    let frame = frame(&tex, w, h);
 
     let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
 
     // Save.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
-    let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
+    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
+    let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Overwrite with 0.
@@ -246,7 +262,7 @@ fn region_store_r8_format() {
 
     // Restore.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame);
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -287,12 +303,13 @@ fn region_store_save_full_commit_subrect() {
         }
     }
     let (tex, _view) = create_test_texture(&device, &queue, w, h, &data);
+    let frame = frame(&tex, w, h);
 
     let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
 
     // Stroke begin — save the full layer.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
+    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Simulate dabs landing on the green center, turning it white.
@@ -309,12 +326,12 @@ fn region_store_save_full_commit_subrect() {
 
     // Stroke end — diff_rect would return the painted center; commit that sub-rect.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &snap, lr(48, 48, 32, 32));
+    let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(48, 48, 32, 32));
     submit(&queue, enc);
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame);
     submit(&queue, enc);
 
     // Center must be green (pre-stroke state at that location), not red
@@ -343,14 +360,15 @@ fn region_store_commit_outside_saved_panics() {
 
     let blank = vec![0u8; (w * h * 4) as usize];
     let (tex, _view) = create_test_texture(&device, &queue, w, h, &blank);
+    let frame = frame(&tex, w, h);
 
     let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
 
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, 32, 32));
+    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, 32, 32));
     submit(&queue, enc);
 
     // Commit at a rect that is NOT contained in the saved (0,0,32,32) area.
     let mut enc = encoder(&device);
-    let _ = store.commit_region(&mut enc, 1, &snap, lr(100, 100, 32, 32));
+    let _ = store.commit_region(&mut enc, 1, &frame, &snap, cr(100, 100, 32, 32));
 }

@@ -254,18 +254,6 @@ impl LayerRect {
             None
         }
     }
-
-    /// Shift the origin by `(dx, dy)` in layer-local pixels. Used when a
-    /// layer texture grows mid-stroke and previously-saved snapshots need
-    /// to be re-anchored to the new layer-local frame.
-    pub fn translate(self, dx: u32, dy: u32) -> LayerRect {
-        LayerRect::from_xywh(
-            self.origin.x + dx,
-            self.origin.y + dy,
-            self.width,
-            self.height,
-        )
-    }
 }
 
 #[cfg(test)]
@@ -475,12 +463,5 @@ mod tests {
     fn layer_rect_intersect_overlap() {
         let i = lr(0, 0, 10, 10).intersect(lr(5, 5, 10, 10)).unwrap();
         assert_eq!(i, lr(5, 5, 5, 5));
-    }
-
-    #[test]
-    fn layer_rect_translate_shifts_origin() {
-        let a = lr(10, 20, 30, 40);
-        let t = a.translate(5, 6);
-        assert_eq!(t, lr(15, 26, 30, 40));
     }
 }

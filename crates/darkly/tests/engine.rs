@@ -1586,3 +1586,53 @@ fn undo_after_grow_does_not_leave_prior_stroke_artifacts() {
          got {painted_count} painted pixels (artifacts from pre-grow stroke)"
     );
 }
+
+/// Regression for the bug class fixed by the canvas-coord storage refactor
+/// (see plan `mossy-sleeping-flame.md`): a deferred `pending_undo_commit`
+/// from stroke A must remain valid when stroke B grows the layer a second
+/// time before A's diff has been polled. Pre-fix, the diff rect was in
+/// scratch-local coords captured at A's request time; B's second grow
+/// rebased the scratch and shifted the layer-local frame, so when the
+/// diff finally landed it pointed at the wrong layer-space pixels.
+/// Canvas coords are stable across grows, so this round-trips cleanly now.
+#[test]
+fn pending_undo_commit_survives_two_grows() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    // Stroke A: off-canvas in -X direction. Triggers grow #1.
+    paint_at(&mut engine, layer_id, -50.0, 50.0, 1.0, 0.0, 0.0);
+    // Stroke B: off-canvas in -Y direction. Triggers grow #2 before A's
+    // diff has been polled (the deferred commit holds the canvas-coord
+    // snapshot from before grow #1).
+    paint_at(&mut engine, layer_id, 50.0, -50.0, 0.0, 1.0, 0.0);
+
+    // Undo both strokes. After both undos the layer must be fully
+    // transparent — if A's deferred commit captured the wrong pixels,
+    // some red would remain visible.
+    engine.undo();
+    engine.render(0.0);
+    engine.undo();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_layer(layer_id);
+    let bounds = engine.layer_bounds(layer_id).expect("layer exists");
+    let (lw, lh) = (bounds.width, bounds.height);
+
+    let mut painted_count = 0u32;
+    for y in 0..lh {
+        for x in 0..lw {
+            if alpha_at(&pixels, lw, x, y) > 0 {
+                painted_count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        painted_count, 0,
+        "after undoing two strokes that each grew the layer, the layer \
+         should be fully transparent; got {painted_count} painted pixels — \
+         the deferred undo commit from stroke A held a stale layer-local \
+         rect that survived past the second grow"
+    );
+}

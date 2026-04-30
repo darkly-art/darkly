@@ -10,13 +10,14 @@
 //! resume rendering from any save point.
 
 use super::stroke_engine::RenderCheckpoint;
+use crate::coord::CanvasRect;
 
 /// A single save point recorded when a dab is placed.
 #[derive(Clone)]
 pub struct DabSavePoint {
-    /// Union of all dab bounding boxes from dab 0..=this one.
-    /// `[x, y, width, height]` in canvas pixels.
-    pub cumulative_bbox: [u32; 4],
+    /// Union of all dab bounding boxes from dab 0..=this one, in canvas
+    /// pixel coords. Stable across mid-stroke layer growth.
+    pub cumulative_canvas_bbox: CanvasRect,
     /// Index into the stabilized polyline that this dab was placed on.
     pub vector_index: usize,
     /// Checkpoint: render state at this dab.
@@ -41,28 +42,29 @@ impl SavePointStore {
         }
     }
 
-    /// Record a new dab.  `dab_bbox` is `[x, y, w, h]` in canvas pixels.
+    /// Record a new dab. `dab_bbox` is in canvas pixels.
     pub fn push(
         &mut self,
-        dab_bbox: [u32; 4],
+        dab_bbox: CanvasRect,
         vector_index: usize,
         render_state: RenderCheckpoint,
     ) {
         let cumulative = if let Some(prev) = self.points.last() {
-            union_bbox(prev.cumulative_bbox, dab_bbox)
+            prev.cumulative_canvas_bbox.union(dab_bbox)
         } else {
             dab_bbox
         };
         self.points.push(DabSavePoint {
-            cumulative_bbox: cumulative,
+            cumulative_canvas_bbox: cumulative,
             vector_index,
             render_state,
         });
     }
 
-    /// Cumulative bounding box of all dabs (= last save point's bbox).
-    pub fn full_bbox(&self) -> Option<[u32; 4]> {
-        self.points.last().map(|sp| sp.cumulative_bbox)
+    /// Cumulative bounding box of all dabs (= last save point's bbox), in
+    /// canvas pixels.
+    pub fn full_bbox(&self) -> Option<CanvasRect> {
+        self.points.last().map(|sp| sp.cumulative_canvas_bbox)
     }
 
     /// Keep only the first `n` save points.
@@ -101,35 +103,6 @@ impl SavePointStore {
             }
         }
     }
-
-    /// Shift every save point's cumulative bbox by `(dx, dy)`. Call when
-    /// the underlying layer texture grows mid-stroke and its local-coord
-    /// origin shifts — the bboxes are stored in layer-local coords, so
-    /// they must be re-anchored to the new frame to remain valid for
-    /// downstream consumers (checkpoint save/restore).
-    pub fn translate(&mut self, dx: u32, dy: u32) {
-        if dx == 0 && dy == 0 {
-            return;
-        }
-        for sp in self.points.iter_mut() {
-            let [x, y, w, h] = sp.cumulative_bbox;
-            sp.cumulative_bbox = [x + dx, y + dy, w, h];
-        }
-    }
-}
-
-/// Compute the union of two `[x, y, w, h]` bounding boxes.
-pub fn union_bbox(a: [u32; 4], b: [u32; 4]) -> [u32; 4] {
-    let ax2 = a[0] + a[2];
-    let ay2 = a[1] + a[3];
-    let bx2 = b[0] + b[2];
-    let by2 = b[1] + b[3];
-
-    let x = a[0].min(b[0]);
-    let y = a[1].min(b[1]);
-    let x2 = ax2.max(bx2);
-    let y2 = ay2.max(by2);
-    [x, y, x2 - x, y2 - y]
 }
 
 #[cfg(test)]
@@ -146,27 +119,31 @@ mod tests {
         }
     }
 
+    fn r(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
+        CanvasRect::from_xywh(x, y, w, h)
+    }
+
     #[test]
     fn single_dab() {
         let mut store = SavePointStore::new();
-        store.push([10, 20, 30, 40], 0, dummy_checkpoint());
+        store.push(r(10, 20, 30, 40), 0, dummy_checkpoint());
         assert_eq!(store.len(), 1);
-        assert_eq!(store.full_bbox(), Some([10, 20, 30, 40]));
+        assert_eq!(store.full_bbox(), Some(r(10, 20, 30, 40)));
     }
 
     #[test]
     fn cumulative_bbox_grows() {
         let mut store = SavePointStore::new();
-        store.push([10, 10, 5, 5], 0, dummy_checkpoint());
-        store.push([20, 20, 5, 5], 1, dummy_checkpoint());
-        assert_eq!(store.full_bbox(), Some([10, 10, 15, 15]));
+        store.push(r(10, 10, 5, 5), 0, dummy_checkpoint());
+        store.push(r(20, 20, 5, 5), 1, dummy_checkpoint());
+        assert_eq!(store.full_bbox(), Some(r(10, 10, 15, 15)));
     }
 
     #[test]
     fn truncate_removes_tail() {
         let mut store = SavePointStore::new();
         for i in 0..5 {
-            store.push([i * 10, 0, 5, 5], i as usize, dummy_checkpoint());
+            store.push(r(i * 10, 0, 5, 5), i as usize, dummy_checkpoint());
         }
         assert_eq!(store.len(), 5);
         store.truncate(3);
@@ -176,24 +153,17 @@ mod tests {
     #[test]
     fn clear_empties() {
         let mut store = SavePointStore::new();
-        store.push([0, 0, 10, 10], 0, dummy_checkpoint());
+        store.push(r(0, 0, 10, 10), 0, dummy_checkpoint());
         store.clear();
         assert!(store.is_empty());
         assert!(store.full_bbox().is_none());
     }
 
     #[test]
-    fn union_bbox_correctness() {
-        assert_eq!(union_bbox([0, 0, 10, 10], [5, 5, 10, 10]), [0, 0, 15, 15]);
-        assert_eq!(union_bbox([10, 10, 5, 5], [0, 0, 5, 5]), [0, 0, 15, 15]);
-        assert_eq!(union_bbox([0, 0, 10, 10], [0, 0, 10, 10]), [0, 0, 10, 10]);
-    }
-
-    #[test]
     fn vector_index_preserved() {
         let mut store = SavePointStore::new();
-        store.push([0, 0, 5, 5], 42, dummy_checkpoint());
-        store.push([10, 10, 5, 5], 99, dummy_checkpoint());
+        store.push(r(0, 0, 5, 5), 42, dummy_checkpoint());
+        store.push(r(10, 10, 5, 5), 99, dummy_checkpoint());
         let pts = store.points();
         assert_eq!(pts[0].vector_index, 42);
         assert_eq!(pts[1].vector_index, 99);

@@ -156,15 +156,22 @@ impl DarklyEngine {
             if let Some(result) = self.diff_rect.poll(&self.gpu.device) {
                 if let Some(commit) = self.pending_undo_commit.take() {
                     if let Some(rect) = result {
-                        self.gpu.encode("brush-stroke-end", |encoder| {
-                            let entry = self.region_store.commit_region(
-                                encoder,
-                                commit.layer_id,
-                                &commit.snapshot,
-                                rect,
-                            );
-                            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
-                        });
+                        if let Some(layer_frame) = self
+                            .compositor
+                            .layer_texture(commit.layer_id)
+                            .map(|t| t.canvas_frame())
+                        {
+                            self.gpu.encode("brush-stroke-end", |encoder| {
+                                let entry = self.region_store.commit_region(
+                                    encoder,
+                                    commit.layer_id,
+                                    &layer_frame,
+                                    &commit.snapshot,
+                                    rect,
+                                );
+                                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                            });
+                        }
                     }
                     // else: textures identical, no undo entry needed.
                 }
@@ -469,23 +476,23 @@ impl DarklyEngine {
 
         // If this is a GPU region action, execute the texture restore.
         if let Some(entry) = action.gpu_region_entry_mut() {
-            let texture = if entry.format == wgpu::TextureFormat::R8Unorm {
+            let frame = if entry.format == wgpu::TextureFormat::R8Unorm {
                 self.compositor
                     .mask_texture(entry.layer_id)
-                    .map(|t| &t.texture)
+                    .map(|t| t.canvas_frame())
             } else {
                 self.compositor
                     .layer_texture(entry.layer_id)
-                    .map(|t| &t.texture)
+                    .map(|t| t.canvas_frame())
             };
-            if let Some(texture) = texture {
+            if let Some(frame) = frame {
                 self.gpu.encode(
                     match direction {
                         UndoDirection::Undo => "undo-restore",
                         UndoDirection::Redo => "redo-restore",
                     },
                     |encoder| {
-                        let swapped = self.region_store.restore_region(encoder, entry, texture);
+                        let swapped = self.region_store.restore_region(encoder, entry, &frame);
                         *entry = swapped;
                     },
                 );
@@ -498,14 +505,14 @@ impl DarklyEngine {
             self.gpu_selection.active = restored_active;
 
             if let Some(entry) = action.selection_region_entry_mut() {
-                let texture = self.gpu_selection.texture();
+                let frame = self.gpu_selection.canvas_frame();
                 self.gpu.encode(
                     match direction {
                         UndoDirection::Undo => "undo-sel-restore",
                         UndoDirection::Redo => "redo-sel-restore",
                     },
                     |encoder| {
-                        let swapped = self.region_store.restore_region(encoder, entry, texture);
+                        let swapped = self.region_store.restore_region(encoder, entry, &frame);
                         *entry = swapped;
                     },
                 );

@@ -79,21 +79,31 @@ impl DarklyEngine {
 
         let has_selection = self.gpu_selection.active;
 
-        let undo_rect = crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h);
+        // Resolve the layer-or-mask CanvasFrame once for both the cut undo
+        // save below and the matching commit further down.
+        let target_frame = if is_mask {
+            self.compositor
+                .mask_texture(layer_id)
+                .map(|t| t.canvas_frame())
+        } else {
+            self.compositor
+                .layer_texture(layer_id)
+                .map(|t| t.canvas_frame())
+        };
+        let undo_rect = target_frame
+            .map(|f| f.canvas_extent)
+            .unwrap_or_else(|| crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h));
 
         if has_selection {
             // --- GPU extraction path ---
             // Save undo state for cut before any modification.
             let cut_snapshot = if is_cut {
-                let texture = if is_mask {
-                    &self.compositor.mask_texture(layer_id).unwrap().texture
-                } else {
-                    &self.compositor.layer_texture(layer_id).unwrap().texture
-                };
-                Some(self.gpu.encode_ret("cut-save", |encoder| {
-                    self.region_store
-                        .save_region(encoder, texture, format, undo_rect)
-                }))
+                target_frame.map(|frame| {
+                    self.gpu.encode_ret("cut-save", |encoder| {
+                        self.region_store
+                            .save_region(encoder, &frame, format, undo_rect)
+                    })
+                })
             } else {
                 None
             };
@@ -262,11 +272,11 @@ impl DarklyEngine {
             });
 
             // Commit undo for cut.
-            if let Some(snap) = cut_snapshot {
+            if let (Some(snap), Some(frame)) = (cut_snapshot, target_frame) {
                 self.gpu.encode("cut-commit", |encoder| {
                     let entry = self
                         .region_store
-                        .commit_region(encoder, layer_id, &snap, undo_rect);
+                        .commit_region(encoder, layer_id, &frame, &snap, undo_rect);
                     self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
                 });
                 self.compositor.mark_dirty();
@@ -313,11 +323,14 @@ impl DarklyEngine {
                 data,
                 self.gpu_selection.width,
                 self.gpu_selection.height,
-            );
+            )
+            .map(|[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h));
         }
-        if let Some([x, y, w, h]) = self.gpu_selection.pixel_bounds {
-            let w = w.min(canvas_w.saturating_sub(x));
-            let h = h.min(canvas_h.saturating_sub(y));
+        if let Some(bounds) = self.gpu_selection.pixel_bounds {
+            let x = bounds.x0().max(0) as u32;
+            let y = bounds.y0().max(0) as u32;
+            let w = bounds.width.min(canvas_w.saturating_sub(x));
+            let h = bounds.height.min(canvas_h.saturating_sub(y));
             Some([x, y, w, h])
         } else {
             Some([0, 0, canvas_w, canvas_h])

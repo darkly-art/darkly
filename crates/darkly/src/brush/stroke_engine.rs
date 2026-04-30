@@ -316,7 +316,7 @@ impl StrokeEngine {
         gpu.canvas_copy_origin = None;
         // Reset the write-bbox accumulator so each terminal's passes can
         // publish their footprint fresh. Read back after execute_gpu below.
-        gpu.dab_write_bbox = None;
+        gpu.dab_write_canvas_bbox = None;
         self.runner.execute_gpu(gpu);
 
         gpu.dab_pool.release_all();
@@ -336,25 +336,30 @@ impl StrokeEngine {
             }
         }
 
-        // Dab bounding box for save points. Prefer the footprint the
-        // terminal actually wrote (post-scatter, post-anything else the
-        // graph did). Fall back to the `info.pos ± radius` envelope for
-        // graphs without a scratch-writing terminal, so they still get
-        // sensible checkpoint bounds.
-        let [x, y, w, h] = gpu.dab_write_bbox.unwrap_or_else(|| {
+        // Dab bounding box for save points, in canvas coords. Prefer the
+        // footprint the terminal actually wrote (post-scatter, post-anything
+        // else the graph did). Fall back to the `info.pos ± radius`
+        // envelope for graphs without a scratch-writing terminal, so they
+        // still get sensible checkpoint bounds.
+        let canvas_bbox = gpu.dab_write_canvas_bbox.unwrap_or_else(|| {
             let diameter = self.effective_diameter();
             let half = diameter * 0.5;
-            let x = (info.pos[0] - half).max(0.0) as u32;
-            let y = (info.pos[1] - half).max(0.0) as u32;
-            let x2 = (info.pos[0] + half).ceil() as u32;
-            let y2 = (info.pos[1] + half).ceil() as u32;
-            [x, y, x2.saturating_sub(x), y2.saturating_sub(y)]
+            let x = (info.pos[0] - half).floor() as i32;
+            let y = (info.pos[1] - half).floor() as i32;
+            let x2 = (info.pos[0] + half).ceil() as i32;
+            let y2 = (info.pos[1] + half).ceil() as i32;
+            crate::coord::CanvasRect::from_xywh(
+                x,
+                y,
+                (x2 - x).max(0) as u32,
+                (y2 - y).max(0) as u32,
+            )
         });
         // Render state is captured at end-of-segment, not per-dab.
         // Push a placeholder; the loop in render_from_stabilized_range
         // overwrites the last save point's render_state after each segment.
         self.save_points.push(
-            [x, y, w, h],
+            canvas_bbox,
             vector_index,
             RenderCheckpoint {
                 last_point: None,

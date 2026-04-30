@@ -173,8 +173,14 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         }
 
         // Publish the footprint so save_points / checkpoints cover the real
-        // damage region.
-        gpu.push_dab_write_bbox([copy_x, copy_y, copy_w, copy_h]);
+        // damage region. Canvas coords are stable across mid-stroke layer
+        // growth.
+        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
+            copy_x as i32,
+            copy_y as i32,
+            copy_w,
+            copy_h,
+        ));
 
         // Snapshot the scratch under the disc into canvas_copy. Subsequent
         // dabs in the same place see the prior dab's warp.

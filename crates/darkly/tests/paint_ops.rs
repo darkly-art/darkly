@@ -3,13 +3,22 @@
 //! Tests the GPU paint operations that don't involve selection masking.
 //! Run with: `cargo test -p darkly --test paint_ops`
 
-use darkly::coord::LayerRect;
+use darkly::coord::CanvasRect;
+use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::test_utils::*;
 
-fn lr(x: u32, y: u32, w: u32, h: u32) -> LayerRect {
-    LayerRect::from_xywh(x, y, w, h)
+fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
+    CanvasRect::from_xywh(x, y, w, h)
+}
+
+/// Build a CanvasFrame for a test texture sized `(w, h)` at canvas origin (0, 0).
+fn frame<'a>(tex: &'a wgpu::Texture, w: u32, h: u32) -> CanvasFrame<'a> {
+    CanvasFrame {
+        texture: tex,
+        canvas_extent: cr(0, 0, w, h),
+    }
 }
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
@@ -103,7 +112,7 @@ fn gpu_gradient_undo() {
 
     // Save pre-gradient state.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Render gradient.
@@ -135,7 +144,7 @@ fn gpu_gradient_undo() {
 
     // Commit for undo.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Verify gradient was painted.
@@ -148,7 +157,7 @@ fn gpu_gradient_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -317,7 +326,7 @@ fn gpu_flood_fill_undo() {
 
     // Save region for undo.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Flood fill entire canvas (all transparent → seed matches everywhere).
@@ -389,7 +398,7 @@ fn gpu_flood_fill_undo() {
 
     // Commit undo entry.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Verify fill landed.
@@ -401,7 +410,7 @@ fn gpu_flood_fill_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);

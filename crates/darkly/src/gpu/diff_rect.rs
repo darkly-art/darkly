@@ -18,6 +18,11 @@ pub struct DiffRectPass {
 struct PendingDiff {
     staging: wgpu::Buffer,
     rx: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    /// Canvas-space extent of the layer at the time of `request`. Used to
+    /// translate the shader's layer-local bounding rect back to canvas
+    /// coords on `poll` — must be captured at request time so the result
+    /// remains correct even if the layer grows between request and poll.
+    layer_canvas_extent: crate::coord::CanvasRect,
 }
 
 /// Uniform buffer layout matching the shader's `Params` struct.
@@ -112,16 +117,22 @@ impl DiffRectPass {
     /// Dispatch the diff compute shader comparing two textures.
     ///
     /// `scratch_view` is the pre-stroke snapshot, `current_view` is the
-    /// post-stroke canvas. Results arrive asynchronously via [`poll`].
+    /// post-stroke canvas. `layer_canvas_extent` is the canvas-space rect
+    /// occupied by the layer at request time — used to translate the
+    /// layer-local result back to canvas coords when [`poll`] resolves.
+    /// Capturing it at request time keeps the result correct even if the
+    /// layer grows before the result is read. Results arrive asynchronously
+    /// via [`poll`].
     pub fn request(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         scratch_view: &wgpu::TextureView,
         current_view: &wgpu::TextureView,
-        width: u32,
-        height: u32,
+        layer_canvas_extent: crate::coord::CanvasRect,
     ) {
+        let width = layer_canvas_extent.width;
+        let height = layer_canvas_extent.height;
         // Storage buffer for atomic results (16 bytes).
         let storage_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("diff-rect-storage"),
@@ -203,6 +214,7 @@ impl DiffRectPass {
         self.pending = Some(PendingDiff {
             staging: staging_buf,
             rx: None,
+            layer_canvas_extent,
         });
     }
 
@@ -214,10 +226,11 @@ impl DiffRectPass {
     /// Poll for the diff result. Returns `Some(Some(rect))` when ready,
     /// `Some(None)` if the textures are identical, or `None` if still pending.
     ///
-    /// The rect is returned in the texture-local frame of the views passed
-    /// to [`request`](Self::request) — for the brush/undo flow these are
-    /// layer-aligned scratch and current views, so the rect is layer-local.
-    pub fn poll(&mut self, device: &wgpu::Device) -> Option<Option<crate::coord::LayerRect>> {
+    /// The rect is returned in canvas coords: the shader produces
+    /// layer-local bounds, which are translated using the layer's canvas
+    /// extent captured at [`request`](Self::request) time. The result
+    /// therefore remains valid through layer growth between request and poll.
+    pub fn poll(&mut self, device: &wgpu::Device) -> Option<Option<crate::coord::CanvasRect>> {
         let pending = self.pending.as_mut()?;
 
         // Begin mapping if not started.
@@ -245,9 +258,13 @@ impl DiffRectPass {
                 let [min_x, min_y, max_x, max_y] = raw;
                 if min_x <= max_x && min_y <= max_y {
                     // +1 because max is inclusive pixel coordinate.
-                    Some(Some(crate::coord::LayerRect::from_xywh(
-                        min_x,
-                        min_y,
+                    // Translate layer-local bounds to canvas coords using the
+                    // extent captured at request time.
+                    let canvas_x = p.layer_canvas_extent.origin.x + min_x as i32;
+                    let canvas_y = p.layer_canvas_extent.origin.y + min_y as i32;
+                    Some(Some(crate::coord::CanvasRect::from_xywh(
+                        canvas_x,
+                        canvas_y,
                         max_x - min_x + 1,
                         max_y - min_y + 1,
                     )))
