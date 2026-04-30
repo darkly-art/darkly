@@ -27,19 +27,15 @@ use std::collections::VecDeque;
 ///
 /// `Copy` because it's just a pair of u32s and a small enum tag, and several
 /// flows hold it as a struct field across deferred GPU work.
+///
+/// When the underlying scratch is rebased mid-stroke (see
+/// [`RegionStore::grow_scratch_preserving`]), holders of a live `Snapshot`
+/// are responsible for updating `saved` to reflect the new layer frame —
+/// see `engine::painting::ensure_layer_covers_dab` for the canonical update.
 #[derive(Copy, Clone, Debug)]
 pub struct Snapshot {
     pub saved: LayerRect,
     pub format: wgpu::TextureFormat,
-}
-
-impl Snapshot {
-    /// Re-anchor a snapshot's saved rect when the underlying scratch is
-    /// rebased (mid-stroke layer growth shifts every layer-local rect by
-    /// `(dx, dy)` — see [`RegionStore::grow_scratch_preserving`]).
-    pub fn translate(&mut self, dx: u32, dy: u32) {
-        self.saved = self.saved.translate(dx, dy);
-    }
 }
 
 /// Alignment required by wgpu for bytes_per_row in buffer↔texture copies.

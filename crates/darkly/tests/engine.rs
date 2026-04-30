@@ -1390,3 +1390,60 @@ fn floating_transform_undo_with_rotation() {
         "undo of rotation transform must restore byte-identical pixels"
     );
 }
+
+/// Regression: a brush stroke that paints past the canvas edge triggers a
+/// mid-stroke layer grow. After the grow, the diff_rect at end_stroke can
+/// land in the newly-grown area — a region that was just allocated and
+/// (correctly) holds zero/transparent pixels as its pre-stroke state. The
+/// commit/restore path must accept this as a contained sub-rect of the
+/// snapshot. Pre-fix, the snapshot's saved rect was translated to the old
+/// layer's footprint within the new layer, so a diff covering newly-grown
+/// pixels would (a) panic the new debug_assert, locking the engine RefCell
+/// in WASM and (b) read the correct zero-init pixels in release.
+#[test]
+fn brush_stroke_off_canvas_undo_after_grow() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    let before = engine.test_readback_layer(layer_id);
+
+    // Paint well past the right edge — forces a grow, then the dab
+    // lands in the newly-grown region.
+    paint_at(
+        &mut engine,
+        layer_id,
+        cw as f32 + 80.0,
+        ch as f32 / 2.0,
+        1.0,
+        0.0,
+        0.0,
+    );
+
+    let after_paint = engine.test_readback_layer(layer_id);
+    assert_ne!(
+        before.len(),
+        after_paint.len(),
+        "stroke past edge should have grown the layer texture"
+    );
+
+    // Undo: must succeed without panic, and the layer should match its
+    // pre-stroke state where it overlaps the original bounds. (The grown
+    // texture is larger; we only assert that the undo didn't crash and
+    // that pixels in the original region are restored to transparent —
+    // there was no pre-stroke layer content past `before.len()`.)
+    engine.undo();
+    engine.render(0.0);
+
+    let after_undo = engine.test_readback_layer(layer_id);
+    // The original-bounds region must be transparent (= pre-stroke state).
+    let n = (cw * ch * 4) as usize;
+    let original_region_post_undo = &after_undo[..n.min(after_undo.len())];
+    let any_opaque = original_region_post_undo
+        .chunks_exact(4)
+        .any(|px| px[3] > 0);
+    assert!(
+        !any_opaque,
+        "after undo, original-bounds region should be fully transparent"
+    );
+}

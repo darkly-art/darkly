@@ -447,9 +447,16 @@ impl DarklyEngine {
                     dy,
                 );
             });
-            // Translate the live snapshot's saved rect into the new layer
-            // frame so subsequent commits/asserts target the correct pixels.
-            snap.translate(dx, dy);
+            // After grow_scratch_preserving, the new scratch holds:
+            //   - old layer contents at (dx, dy) (translated from old origin)
+            //   - zero-init in the newly-grown areas
+            // Both are correct pre-stroke state — the newly-grown pixels
+            // didn't exist before the grow, so "zero / transparent" IS
+            // their pre-stroke value. Widen the snapshot to cover the full
+            // new layer so a diff_rect that spills into the newly-grown
+            // area is still contained.
+            snap.saved =
+                crate::coord::LayerRect::from_xywh(0, 0, new_extent.width, new_extent.height);
         } else {
             // Lazy init will allocate the scratch at the new dimensions
             // when it next saves; just bump capacity now so the save
