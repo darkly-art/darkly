@@ -2,7 +2,7 @@ node_modules
 target
 .venv
 Graphite
-krita
+/krita
 .claude
 frontend/wasm/pkg
 frontend/dist
