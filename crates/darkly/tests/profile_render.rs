@@ -101,7 +101,7 @@ fn profile_render_pipeline() {
         &device,
         &queue,
         paint_id,
-        darkly::layer::LayerBounds::canvas(width, height),
+        darkly::coord::CanvasRect::from_xywh(0, 0, width, height),
     );
 
     // Warm up: first render composites everything (full canvas)

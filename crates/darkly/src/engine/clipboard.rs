@@ -415,12 +415,7 @@ impl DarklyEngine {
     ) -> u64 {
         // Size the new layer to fit the paste exactly, so out-of-canvas
         // pixels are preserved.
-        let layer_bounds = crate::layer::LayerBounds {
-            offset_x,
-            offset_y,
-            width,
-            height,
-        };
+        let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
 
         // Create a new layer and insert above the active layer.
         let id = self.doc.add_raster_layer();

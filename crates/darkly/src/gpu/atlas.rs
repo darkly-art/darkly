@@ -33,10 +33,10 @@ impl LayerTexture {
 
     /// RGBA layer texture sized + positioned to match the given bounds.
     /// Equivalent to `new` followed by setting `offset_x`/`offset_y`.
-    pub fn with_bounds(device: &wgpu::Device, bounds: crate::layer::LayerBounds) -> Self {
+    pub fn with_bounds(device: &wgpu::Device, bounds: CanvasRect) -> Self {
         let mut t = Self::new(device, bounds.width, bounds.height);
-        t.offset_x = bounds.offset_x;
-        t.offset_y = bounds.offset_y;
+        t.offset_x = bounds.origin.x;
+        t.offset_y = bounds.origin.y;
         t
     }
 
@@ -220,19 +220,10 @@ impl<'a> CanvasFrame<'a> {
 mod tests {
     use super::*;
     use crate::gpu::test_utils::test_device;
-    use crate::layer::LayerBounds;
 
     fn make_layer(off_x: i32, off_y: i32, w: u32, h: u32) -> LayerTexture {
         let (device, _queue) = test_device();
-        LayerTexture::with_bounds(
-            &device,
-            LayerBounds {
-                offset_x: off_x,
-                offset_y: off_y,
-                width: w,
-                height: h,
-            },
-        )
+        LayerTexture::with_bounds(&device, CanvasRect::from_xywh(off_x, off_y, w, h))
     }
 
     #[test]

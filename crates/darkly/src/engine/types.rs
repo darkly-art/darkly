@@ -19,7 +19,7 @@ pub enum LayerInfo {
         /// Equals `(0, 0, canvas_w, canvas_h)` for canvas-aligned layers;
         /// paste-extent or grown layers report their actual canvas extent
         /// so the frontend can show storage size and off-canvas indicators.
-        bounds: crate::layer::LayerBounds,
+        bounds: crate::coord::CanvasRect,
     },
     #[serde(rename_all = "camelCase")]
     Group {

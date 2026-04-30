@@ -492,14 +492,8 @@ impl DarklyEngine {
         // Update the document's authoritative bounds and refresh the
         // layer's blend uniforms so the composite pass sees the new
         // offset/size on the next render.
-        let bounds = crate::layer::LayerBounds {
-            offset_x: new_extent.origin.x,
-            offset_y: new_extent.origin.y,
-            width: new_extent.width,
-            height: new_extent.height,
-        };
         if let Some(crate::layer::Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-            r.bounds = bounds;
+            r.bounds = new_extent;
             let opacity = r.opacity;
             let blend_mode = r.blend_mode;
             let show_mask = r.show_mask;

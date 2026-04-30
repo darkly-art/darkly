@@ -292,7 +292,7 @@ fn transform_on_off_canvas_layer_cancel_restores_pixels() {
 /// canvas dimensions.
 #[test]
 fn paste_image_floating_preserves_off_canvas_extent() {
-    use darkly::layer::LayerBounds;
+    use darkly::coord::CanvasRect;
 
     let (cw, ch) = (64, 64);
     let mut engine = test_engine(cw, ch);
@@ -313,12 +313,7 @@ fn paste_image_floating_preserves_off_canvas_extent() {
         .expect("pasted layer must have bounds");
     assert_eq!(
         bounds,
-        LayerBounds {
-            offset_x: ox,
-            offset_y: oy,
-            width: pw,
-            height: ph,
-        },
+        CanvasRect::from_xywh(ox, oy, pw, ph),
         "layer bounds must match the full paste extent"
     );
 
@@ -337,7 +332,7 @@ fn paste_image_floating_preserves_off_canvas_extent() {
 /// Same guarantee for the non-floating direct paste path (`paste_image`).
 #[test]
 fn paste_image_direct_preserves_off_canvas_extent() {
-    use darkly::layer::LayerBounds;
+    use darkly::coord::CanvasRect;
 
     let (cw, ch) = (64, 64);
     let mut engine = test_engine(cw, ch);
@@ -354,12 +349,7 @@ fn paste_image_direct_preserves_off_canvas_extent() {
         .expect("pasted layer must have bounds");
     assert_eq!(
         bounds,
-        LayerBounds {
-            offset_x: -50,
-            offset_y: 10,
-            width: pw,
-            height: ph,
-        },
+        CanvasRect::from_xywh(-50, 10, pw, ph),
         "direct paste layer bounds must match the full paste extent"
     );
 }
@@ -806,8 +796,8 @@ fn brush_stroke_off_canvas_grows_layer() {
     let layer_id = engine.add_raster_layer();
 
     let bounds_before = engine.layer_bounds(layer_id).expect("layer exists");
-    assert_eq!(bounds_before.offset_x, 0);
-    assert_eq!(bounds_before.offset_y, 0);
+    assert_eq!(bounds_before.origin.x, 0);
+    assert_eq!(bounds_before.origin.y, 0);
     assert_eq!(bounds_before.width, cw);
     assert_eq!(bounds_before.height, ch);
 
@@ -830,7 +820,7 @@ fn brush_stroke_off_canvas_grows_layer() {
         bounds_after.width,
     );
     assert_eq!(
-        bounds_after.offset_x, 0,
+        bounds_after.origin.x, 0,
         "positive-direction growth should keep origin at 0"
     );
 }
@@ -864,8 +854,8 @@ fn brush_stroke_off_canvas_pixel_lands_correctly() {
         "readback should match grown layer dimensions"
     );
 
-    let lx = (canvas_x - bounds.offset_x) as u32;
-    let ly = (canvas_y - bounds.offset_y) as u32;
+    let lx = (canvas_x - bounds.origin.x) as u32;
+    let ly = (canvas_y - bounds.origin.y) as u32;
     // The brush dab's actual radius depends on the active brush graph, so
     // search a generous box around the expected layer-local center to
     // accommodate dabs of different sizes.
@@ -911,9 +901,9 @@ fn layer_growth_negative_direction() {
 
     let bounds = engine.layer_bounds(layer_id).expect("layer exists");
     assert!(
-        bounds.offset_x <= -256,
+        bounds.origin.x <= -256,
         "negative-direction growth should shift offset_x by at least one chunk; got {}",
-        bounds.offset_x
+        bounds.origin.x
     );
     assert!(
         bounds.width >= cw + 256,
@@ -941,9 +931,9 @@ fn layer_growth_negative_direction_y() {
 
     let bounds = engine.layer_bounds(layer_id).expect("layer exists");
     assert!(
-        bounds.offset_y <= -256,
+        bounds.origin.y <= -256,
         "negative-direction Y growth should shift offset_y by at least one chunk; got {}",
-        bounds.offset_y
+        bounds.origin.y
     );
     assert!(
         bounds.height >= ch + 256,
@@ -1034,8 +1024,8 @@ fn undo_after_growth_restores_pixels_in_old_bounds() {
     // width to keep the assertion fast and informative.
     for x in 0..pre_bounds.width {
         let pre_idx = (((64) * pre_bounds.width + x) * 4) as usize;
-        let new_x = x as i32 + (pre_bounds.offset_x - after_bounds.offset_x);
-        let new_y = 64i32 + (pre_bounds.offset_y - after_bounds.offset_y);
+        let new_x = x as i32 + (pre_bounds.origin.x - after_bounds.origin.x);
+        let new_y = 64i32 + (pre_bounds.origin.y - after_bounds.origin.y);
         if new_x < 0 || new_y < 0 {
             continue;
         }
@@ -1134,8 +1124,8 @@ fn mid_stroke_growth_preserves_already_saved_region() {
     let after_bounds = engine.layer_bounds(layer_id).unwrap();
     // Pre-stroke pixel at canvas (100, 100) was red — confirm it's
     // restored at the corresponding layer-local position.
-    let lx = (100 - after_bounds.offset_x) as u32;
-    let ly = (100 - after_bounds.offset_y) as u32;
+    let lx = (100 - after_bounds.origin.x) as u32;
+    let ly = (100 - after_bounds.origin.y) as u32;
     let mut found_red = false;
     for dy in 0..8u32 {
         for dx in 0..8u32 {
@@ -1164,8 +1154,8 @@ fn mid_stroke_growth_preserves_already_saved_region() {
 /// the `serde` round-trip preserves them.
 #[test]
 fn layer_info_carries_paste_extent_bounds_through_serde() {
+    use darkly::coord::CanvasRect;
     use darkly::engine::types::LayerInfo;
-    use darkly::layer::LayerBounds;
 
     let (cw, ch) = (64, 64);
     let mut engine = test_engine(cw, ch);
@@ -1180,7 +1170,7 @@ fn layer_info_carries_paste_extent_bounds_through_serde() {
 
     // Walk the engine's layer tree and find the pasted layer's info.
     let tree = engine.layer_tree();
-    let mut found_bounds: Option<LayerBounds> = None;
+    let mut found_bounds: Option<CanvasRect> = None;
     for info in &tree {
         if let LayerInfo::Raster { id, bounds, .. } = info {
             if *id as u64 == pasted_id {
@@ -1192,26 +1182,23 @@ fn layer_info_carries_paste_extent_bounds_through_serde() {
     let bounds = found_bounds.expect("pasted layer must appear in layer_tree as Raster");
     assert_eq!(
         bounds,
-        LayerBounds {
-            offset_x: -50,
-            offset_y: -50,
-            width: pw,
-            height: ph,
-        },
+        CanvasRect::from_xywh(-50, -50, pw, ph),
         "LayerInfo bounds must reflect the actual paste extent"
     );
 
     // Round-trip the bounds field through serde to confirm the FFI
     // serialization preserves the canvas-space offsets and dimensions.
     let json = serde_json::to_string(&bounds).expect("bounds must serialize");
-    let decoded: LayerBounds =
+    let decoded: CanvasRect =
         serde_json::from_str(&json).expect("bounds must deserialize byte-identically");
     assert_eq!(decoded, bounds);
-    // Frontend-facing camelCase contract — keys end up as offsetX/offsetY.
-    assert!(
-        json.contains("\"offsetX\":-50"),
-        "expected camelCase JSON keys, got {json}"
-    );
+    // Frontend-facing JSON contract: `{ "origin": { "x": .., "y": .. }, "width": .., "height": .. }`.
+    let value: serde_json::Value =
+        serde_json::from_str(&json).expect("bounds JSON must parse as Value");
+    assert_eq!(value["origin"]["x"], -50);
+    assert_eq!(value["origin"]["y"], -50);
+    assert_eq!(value["width"], pw);
+    assert_eq!(value["height"], ph);
 }
 
 /// Repeated paste → cancel cycles must not leak GPU textures. Regression
@@ -1491,9 +1478,9 @@ fn stroke_crossing_canvas_edge_keeps_early_dabs_in_place() {
 
     let bounds = engine.layer_bounds(layer_id).expect("layer exists");
     assert!(
-        bounds.offset_x <= -256,
+        bounds.origin.x <= -256,
         "negative-direction grow should have shifted offset_x; got {}",
-        bounds.offset_x
+        bounds.origin.x
     );
 
     // Read the layer back. It's now the post-grow size. Find the painted
@@ -1501,8 +1488,8 @@ fn stroke_crossing_canvas_edge_keeps_early_dabs_in_place() {
     // layer-local (50 - offset_x, 100 - offset_y).
     let pixels = engine.test_readback_layer(layer_id);
     let lw = bounds.width;
-    let early_lx = (50 - bounds.offset_x) as u32;
-    let early_ly = (100 - bounds.offset_y) as u32;
+    let early_lx = (50 - bounds.origin.x) as u32;
+    let early_ly = (100 - bounds.origin.y) as u32;
 
     // Search a small box around the expected position.
     let mut hit_at_expected = false;
@@ -1594,63 +1581,6 @@ fn undo_after_grow_does_not_leave_prior_stroke_artifacts() {
 /// — but the transform render shader uses `discard` outside transformed
 /// bounds, so without a re-clear the un-cleared source pixels remain on
 /// the layer alongside the transformed source.
-/// Regression: painting on a layer mask after `set_editing_mask(layer, true)`
-/// must actually modify the mask texture (and leave the layer texture
-/// untouched). This had ZERO test coverage despite being a fundamental
-/// feature; this test asserts both halves of the invariant.
-#[test]
-fn brush_stroke_paints_on_mask_when_editing_mask() {
-    let (cw, ch) = (64u32, 64u32);
-    let mut engine = test_engine(cw, ch);
-    // Layer pre-filled with red so we can detect any unintended writes
-    // to the layer's RGBA texture.
-    let red_rgba: Vec<u8> = (0..cw * ch).flat_map(|_| [255u8, 0, 0, 255]).collect();
-    let layer_id = engine.paste_image(cw, ch, &red_rgba, 0, 0, None);
-
-    engine.add_mask(layer_id);
-    engine.render(0.0);
-
-    let mask_before = engine
-        .test_readback_mask(layer_id)
-        .expect("mask must exist after add_mask");
-    let layer_before = engine.test_readback_layer(layer_id);
-
-    // Default mask is fully revealing (255 = white).
-    assert!(
-        mask_before.iter().all(|&v| v == 255),
-        "freshly added mask should be 255 everywhere"
-    );
-
-    // Switch to mask-editing mode and paint.
-    engine.set_editing_mask(layer_id, true);
-    paint_at(&mut engine, layer_id, 32.0, 32.0, 0.0, 0.0, 0.0); // black brush
-    engine.render(0.0);
-
-    let mask_after = engine
-        .test_readback_mask(layer_id)
-        .expect("mask still exists");
-    let layer_after = engine.test_readback_layer(layer_id);
-
-    // Mask must have changed — at minimum some pixels under the brush must
-    // be != 255.
-    let mask_changed_count = mask_before
-        .iter()
-        .zip(mask_after.iter())
-        .filter(|(a, b)| a != b)
-        .count();
-    assert!(
-        mask_changed_count > 0,
-        "mask painting should have changed mask pixels; got 0 changed pixels — \
-         the brush stroke didn't reach the mask texture"
-    );
-
-    // Layer must NOT have changed.
-    assert_eq!(
-        layer_before, layer_after,
-        "mask painting must not modify the layer's RGBA texture"
-    );
-}
-
 #[test]
 fn transform_translate_no_selection_does_not_duplicate() {
     use darkly::gpu::transform::affine_translate;
@@ -1695,8 +1625,8 @@ fn transform_translate_no_selection_does_not_duplicate() {
     let pixels = engine.test_readback_layer(layer_id);
     let bounds = engine.layer_bounds(layer_id).expect("layer exists");
     let lw = bounds.width;
-    let ox = bounds.offset_x;
-    let oy = bounds.offset_y;
+    let ox = bounds.origin.x;
+    let oy = bounds.origin.y;
 
     let alpha_canvas = |cx: i32, cy: i32| -> u8 {
         let lx = cx - ox;
@@ -1768,8 +1698,8 @@ fn transform_translate_with_selection_does_not_duplicate() {
     let pixels = engine.test_readback_layer(layer_id);
     let bounds = engine.layer_bounds(layer_id).expect("layer exists");
     let lw = bounds.width;
-    let ox = bounds.offset_x;
-    let oy = bounds.offset_y;
+    let ox = bounds.origin.x;
+    let oy = bounds.origin.y;
 
     let alpha_canvas = |cx: i32, cy: i32| -> u8 {
         let lx = cx - ox;

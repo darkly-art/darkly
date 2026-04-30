@@ -110,12 +110,7 @@ impl DarklyEngine {
 
         // Size the new layer to fit the paste, so off-canvas pixels are
         // preserved when the floating commits.
-        let layer_bounds = crate::layer::LayerBounds {
-            offset_x,
-            offset_y,
-            width,
-            height,
-        };
+        let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
 
         // Create the target layer (no undo entry yet — pushed at commit).
         let new_id = self.doc.add_raster_layer();

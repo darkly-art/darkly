@@ -8,7 +8,7 @@
 //! Conversion between the two requires a `LayerTexture` (or its bounds) — see
 //! `crate::gpu::atlas::LayerTexture`.
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CanvasPoint {
     pub x: i32,
     pub y: i32,
@@ -32,7 +32,7 @@ impl LayerPoint {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CanvasRect {
     pub origin: CanvasPoint,
     pub width: u32,

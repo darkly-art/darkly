@@ -540,7 +540,7 @@ impl DarklyEngine {
             show_mask: bool,
             mask_enabled: bool,
             has_mask: bool,
-            bounds: crate::layer::LayerBounds,
+            bounds: crate::coord::CanvasRect,
         }
         let infos: Vec<RasterInfo> = self
             .doc

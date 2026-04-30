@@ -579,7 +579,7 @@ impl Compositor {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layer_id: LayerId,
-        bounds: crate::layer::LayerBounds,
+        bounds: crate::coord::CanvasRect,
     ) {
         if self.layer_textures.contains_key(&layer_id) {
             return;
@@ -592,7 +592,7 @@ impl Compositor {
             blend_mode: BlendMode::Normal as u32,
             show_mask: 0,
             _pad1: 0.0,
-            layer_offset: [bounds.offset_x as f32, bounds.offset_y as f32],
+            layer_offset: [bounds.origin.x as f32, bounds.origin.y as f32],
             layer_size: [bounds.width as f32, bounds.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             _pad2: [0.0, 0.0],
@@ -665,17 +665,10 @@ impl Compositor {
             return GrowOutcome::AtCap;
         }
 
-        let new_bounds = crate::layer::LayerBounds {
-            offset_x: new_extent.origin.x,
-            offset_y: new_extent.origin.y,
-            width: new_extent.width,
-            height: new_extent.height,
-        };
-
         // Allocate the new layer texture. New pixels start at GPU's default
         // (0 = transparent) — exactly the pre-stroke value, so undo restoring
         // them via the same restore_region path is correct.
-        let new_layer_tex = LayerTexture::with_bounds(device, new_bounds);
+        let new_layer_tex = LayerTexture::with_bounds(device, new_extent);
 
         // Copy old contents into new at the offset that preserves canvas
         // anchoring. For positive-direction growth this is (0,0); for
@@ -723,7 +716,7 @@ impl Compositor {
         // caller must refresh it via `update_raster_uniforms_full` (the
         // engine layer owns the doc-side layer state). Likewise, callers
         // are expected to update `RasterLayer.bounds` on the doc.
-        let _ = (queue, new_bounds);
+        let _ = queue;
         self.mark_dirty();
         GrowOutcome::Grown { new_extent }
     }

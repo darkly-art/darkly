@@ -13,7 +13,7 @@ impl DarklyEngine {
         let id = self.doc.add_raster_layer();
         let bounds = match self.doc.layer(id) {
             Some(Layer::Raster(r)) => r.bounds,
-            _ => crate::layer::LayerBounds::canvas(self.doc.width, self.doc.height),
+            _ => crate::coord::CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height),
         };
         self.compositor
             .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, bounds);
@@ -31,7 +31,7 @@ impl DarklyEngine {
         let id = self.doc.add_raster_layer_in(Some(group_id));
         let bounds = match self.doc.layer(id) {
             Some(Layer::Raster(r)) => r.bounds,
-            _ => crate::layer::LayerBounds::canvas(self.doc.width, self.doc.height),
+            _ => crate::coord::CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height),
         };
         self.compositor
             .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, bounds);
@@ -62,7 +62,7 @@ impl DarklyEngine {
 
     /// Returns the layer's pixel-space bounds in canvas coordinates.
     /// Used by tests and the WASM bridge to report storage extent.
-    pub fn layer_bounds(&self, layer_id: u64) -> Option<crate::layer::LayerBounds> {
+    pub fn layer_bounds(&self, layer_id: u64) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.bounds),
         }
