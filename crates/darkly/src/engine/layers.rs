@@ -77,6 +77,11 @@ impl DarklyEngine {
         let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
 
         if let Some(node) = self.doc.detach_for_undo(layer_id) {
+            // Drop per-layer GPU state to avoid leaking textures across
+            // delete-then-add cycles. The detached `LayerNode` keeps the
+            // layer's metadata for undo; pixel data does not survive
+            // (see Compositor::dispose_layer).
+            self.compositor.dispose_layer(layer_id);
             self.undo_stack
                 .push(Box::new(LayerRemoveAction::new(node, parent, pos)));
         }

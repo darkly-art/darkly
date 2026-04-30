@@ -453,6 +453,17 @@ impl DarklyEngine {
         self.gpu_selection.cpu_cache.as_deref()
     }
 
+    /// Number of per-layer GPU textures the compositor currently holds.
+    /// Test-only metric for leak-cycle regression tests (P3).
+    pub fn test_layer_texture_count(&self) -> usize {
+        self.compositor.test_layer_texture_count()
+    }
+
+    /// Number of per-mask GPU textures the compositor currently holds.
+    pub fn test_mask_texture_count(&self) -> usize {
+        self.compositor.test_mask_texture_count()
+    }
+
     /// Blocking readback of a layer's RGBA texture. For test assertions only.
     /// Reads the layer texture's full extent — for canvas-aligned layers
     /// this is canvas-sized, but paste-extent layers may exceed canvas.

@@ -600,10 +600,13 @@ impl DarklyEngine {
                 // If the paste auto-created a target layer, drop it silently —
                 // cancel restores the pre-paste document state. The layer's
                 // pixels were never written (commit_floating_to_texture only
-                // runs on commit), so just detach the node from the doc.
-                // No undo entry: the LayerAddAction is only pushed on commit.
+                // runs on commit), so just detach the node from the doc and
+                // dispose its freshly-allocated GPU resources. No undo
+                // entry: the LayerAddAction is only pushed on commit, so
+                // there's no future undo path that would need this state.
                 if let Some(id) = created_layer_id {
                     self.doc.detach_for_undo(id);
+                    self.compositor.dispose_layer(id);
                     self.compositor.mark_dirty();
                 }
                 // Otherwise: target layer was never modified — no-op.

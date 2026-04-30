@@ -1157,6 +1157,65 @@ fn mid_stroke_growth_preserves_already_saved_region() {
     );
 }
 
+/// Repeated paste → cancel cycles must not leak GPU textures. Regression
+/// for P3: `cancel_floating` on the auto-created paste layer disposes its
+/// compositor state in addition to detaching the doc node.
+#[test]
+fn paste_cancel_cycles_dont_leak_layer_textures() {
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer();
+
+    let baseline = engine.test_layer_texture_count();
+
+    // Use a 4×-canvas paste so each leaked texture would be observable —
+    // matches the plan's "paste 4K image" intent at test scale.
+    let pw: u32 = cw * 4;
+    let ph: u32 = ch * 4;
+    let rgba = vec![0xAAu8; (pw * ph * 4) as usize];
+
+    for _ in 0..5 {
+        let id = engine.paste_image_floating(pw, ph, &rgba, 0, 0, None);
+        assert!(engine.has_layer(id), "paste should create the target layer");
+        engine.cancel_floating();
+        assert!(!engine.has_layer(id), "cancel should detach the layer");
+    }
+
+    let after_cycles = engine.test_layer_texture_count();
+    assert_eq!(
+        after_cycles, baseline,
+        "5 paste→cancel cycles should leave layer_textures count unchanged \
+         (baseline {baseline}, got {after_cycles})"
+    );
+}
+
+/// `Engine::remove_layer` must dispose the layer's compositor state so
+/// repeated add → remove cycles don't leak textures. The undo entry
+/// preserves the doc-side metadata; pixel data is intentionally lost on
+/// remove (re-inserting on undo gives back an empty raster).
+#[test]
+fn add_remove_cycles_dont_leak_layer_textures() {
+    let (cw, ch) = (128, 128);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer();
+
+    let baseline = engine.test_layer_texture_count();
+
+    for _ in 0..5 {
+        let id = engine.add_raster_layer();
+        assert!(engine.has_layer(id));
+        engine.remove_layer(id).expect("remove should succeed");
+        assert!(!engine.has_layer(id));
+    }
+
+    let after_cycles = engine.test_layer_texture_count();
+    assert_eq!(
+        after_cycles, baseline,
+        "5 add→remove cycles should leave layer_textures count unchanged \
+         (baseline {baseline}, got {after_cycles})"
+    );
+}
+
 /// Growing a layer that has an active mask must rebuild the mask bind
 /// group against the new mask texture; otherwise the next render would
 /// trip wgpu validation (stale view inside live bind group).

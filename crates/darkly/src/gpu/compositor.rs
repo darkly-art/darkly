@@ -929,6 +929,39 @@ impl Compositor {
         self.mask_textures.get(&layer_id)
     }
 
+    /// Drop all per-layer GPU state: layer texture, mask texture (if any),
+    /// raster blend uniform buffer, mask bind group, passthrough mask state.
+    /// Used when a layer is permanently removed (`Engine::remove_layer`) or
+    /// when an auto-created paste-target is canceled before any undo entry
+    /// references it (`cancel_floating`).
+    ///
+    /// The detached `LayerNode` carried by `LayerRemoveAction` retains the
+    /// layer's metadata for undo purposes; pixel data does not survive
+    /// disposal. Re-inserting a removed layer on undo gives back an empty
+    /// raster — accepted trade-off vs. unbounded GPU memory growth from
+    /// repeated layer removals (paste-extent layers can be tens of MB).
+    pub fn dispose_layer(&mut self, layer_id: LayerId) {
+        self.layer_textures.remove(&layer_id);
+        self.mask_textures.remove(&layer_id);
+        self.mask_bind_groups.remove(&layer_id);
+        self.raster_cache.remove(&layer_id);
+        self.passthrough_mask_state.remove(&layer_id);
+        self.mark_dirty();
+    }
+
+    /// Number of per-layer GPU textures currently allocated. Test-only —
+    /// used by leak-cycle regression tests to confirm `dispose_layer`
+    /// reclaims state. Exposed unconditionally because integration tests
+    /// don't see `#[cfg(test)]` items.
+    pub fn test_layer_texture_count(&self) -> usize {
+        self.layer_textures.len()
+    }
+
+    /// Like `test_layer_texture_count` but for masks.
+    pub fn test_mask_texture_count(&self) -> usize {
+        self.mask_textures.len()
+    }
+
     /// Canvas width in pixels (unpadded).
     pub fn canvas_width(&self) -> u32 {
         self.canvas_width
