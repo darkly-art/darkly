@@ -432,6 +432,18 @@ impl DarklyEngine {
             });
         }
 
+        // Re-anchor the brush engine's bbox metadata. `save_points` and
+        // `checkpoint_ring` both store layer-local rects whose textures
+        // were just rebased by (dx, dy) above — the metadata must be
+        // translated to match, otherwise `restore_before` would copy
+        // checkpoint contents back at the OLD origin in the NEW frame,
+        // shifting the in-progress stroke outward toward the growth
+        // direction on the next event's re-render.
+        if let Some(engine) = self.brush_stroke_engine.as_mut() {
+            engine.save_points.translate(dx, dy);
+        }
+        self.checkpoint_ring.translate(dx, dy);
+
         // Re-anchor the region_store scratch so the diff_rect at
         // end_stroke compares matching coordinate frames. If the scratch
         // hasn't been saved yet (this is the first dab and lazy init

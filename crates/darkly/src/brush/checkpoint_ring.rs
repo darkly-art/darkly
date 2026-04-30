@@ -302,6 +302,24 @@ impl CheckpointRing {
         }
     }
 
+    /// Shift every valid checkpoint's bbox by `(dx, dy)`. Call when the
+    /// stroke buffer texture is rebased (mid-stroke layer growth shifts
+    /// layer-local origin); the checkpoint *texture contents* were already
+    /// rebased by `StrokeBuffer::grow_preserving`, but the bbox metadata
+    /// here still names the OLD origin and must be translated to point
+    /// `restore_before` at the right place in the new frame.
+    pub fn translate(&mut self, dx: u32, dy: u32) {
+        if dx == 0 && dy == 0 {
+            return;
+        }
+        for slot in &mut self.slots {
+            if slot.valid {
+                let [x, y, w, h] = slot.bbox;
+                slot.bbox = [x + dx, y + dy, w, h];
+            }
+        }
+    }
+
     /// Compute the ideal checkpoint spacing for the given divergence window.
     pub fn spacing(max_divergence_window: usize) -> usize {
         if max_divergence_window == 0 {

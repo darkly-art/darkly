@@ -1447,3 +1447,142 @@ fn brush_stroke_off_canvas_undo_after_grow() {
         "after undo, original-bounds region should be fully transparent"
     );
 }
+
+/// Regression: a multi-dab stroke that crosses the canvas edge mid-stroke
+/// must keep its EARLY (pre-grow) dabs at their original canvas positions.
+/// Pre-fix, the brush engine's per-dab `save_points` and the
+/// `checkpoint_ring` cached layer-local bboxes that became stale after
+/// `grow_layer_texture` shifted the layer's local origin. On the next
+/// stroke event, `restore_before` blitted the checkpoint back at the
+/// stale (old-frame) layer-local position — corresponding to a canvas
+/// position offset by `(dx, dy)` toward the growth direction. Visible
+/// symptom: the entire stroke shifted outward toward the chunk being
+/// added.
+#[test]
+fn stroke_crossing_canvas_edge_keeps_early_dabs_in_place() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    // Stroke from canvas (50, 100) to (-100, 100). The dab center crosses
+    // x=0 partway through, triggering a negative-direction grow that
+    // shifts `offset_x` to ≤ -256.
+    engine.begin_stroke(layer_id);
+    for step in 0..20 {
+        let t = step as f32 / 19.0;
+        let x = 50.0 - t * 150.0;
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y: 100.0,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: step as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+
+    let bounds = engine.layer_bounds(layer_id).expect("layer exists");
+    assert!(
+        bounds.offset_x <= -256,
+        "negative-direction grow should have shifted offset_x; got {}",
+        bounds.offset_x
+    );
+
+    // Read the layer back. It's now the post-grow size. Find the painted
+    // pixel for the FIRST dab (canvas (50, 100)) — should appear at
+    // layer-local (50 - offset_x, 100 - offset_y).
+    let pixels = engine.test_readback_layer(layer_id);
+    let lw = bounds.width;
+    let early_lx = (50 - bounds.offset_x) as u32;
+    let early_ly = (100 - bounds.offset_y) as u32;
+
+    // Search a small box around the expected position.
+    let mut hit_at_expected = false;
+    for dy in 0..8u32 {
+        for dx in 0..8u32 {
+            let px = early_lx.saturating_sub(4) + dx;
+            let py = early_ly.saturating_sub(4) + dy;
+            if alpha_at(&pixels, lw, px, py) > 0 {
+                hit_at_expected = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        hit_at_expected,
+        "early-stroke dab at canvas (50, 100) must land at layer-local ({early_lx}, {early_ly}) after grow"
+    );
+
+    // Sanity: also check that paint did NOT land at the SHIFTED position
+    // (where the bug would put it). The bug shifts by (dx, dy) =
+    // (offset_x_old - offset_x_new, ...) = (256, 0). So the early dab
+    // would erroneously appear at layer-local (50, 100) (no offset).
+    let mut wrong_hit = 0u8;
+    for dy in 0..8u32 {
+        for dx in 0..8u32 {
+            let px = (50u32).saturating_sub(4) + dx;
+            let py = (100u32).saturating_sub(4) + dy;
+            wrong_hit = wrong_hit.max(alpha_at(&pixels, lw, px, py));
+        }
+    }
+    assert_eq!(
+        wrong_hit, 0,
+        "no paint should land at the un-translated (50, 100) position; that area is canvas (50 + offset_x, 100) and should be empty"
+    );
+}
+
+/// Regression: after stroke A (inside canvas) and stroke B (off-canvas,
+/// triggers grow), undoing both must leave a clean layer. Pre-fix, the
+/// pending diff for stroke A was computed in stroke A's frame, but its
+/// commit ran AFTER stroke B's grow rebased the scratch — so the saved
+/// undo buffer held wrong pixels and `restore_region` wrote them at the
+/// stale layer-local coords, missing where stroke A actually landed in
+/// the post-grow layer. Symptom: stroke A's pixels persist after both
+/// undos.
+#[test]
+fn undo_after_grow_does_not_leave_prior_stroke_artifacts() {
+    let (cw, ch) = (256u32, 256u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    // Stroke A: canvas (50, 50), inside the 256×256 canvas. No grow.
+    paint_at(&mut engine, layer_id, 50.0, 50.0, 1.0, 0.0, 0.0);
+
+    // Stroke B: canvas (-100, -100), triggers a negative-direction grow.
+    // This is the event that processes stroke A's pending diff against
+    // the post-grow scratch, corrupting its undo entry.
+    paint_at(&mut engine, layer_id, -100.0, -100.0, 0.0, 1.0, 0.0);
+
+    // Undo B, then A.
+    engine.undo();
+    engine.render(0.0);
+    engine.undo();
+    engine.render(0.0);
+
+    // Layer should be fully transparent — both strokes undone.
+    let pixels = engine.test_readback_layer(layer_id);
+    let bounds = engine.layer_bounds(layer_id).expect("layer exists");
+    let (lw, lh) = (bounds.width, bounds.height);
+
+    let mut painted_count = 0u32;
+    for y in 0..lh {
+        for x in 0..lw {
+            if alpha_at(&pixels, lw, x, y) > 0 {
+                painted_count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        painted_count, 0,
+        "after undoing both strokes, layer should be fully transparent; \
+         got {painted_count} painted pixels (artifacts from pre-grow stroke)"
+    );
+}

@@ -101,6 +101,21 @@ impl SavePointStore {
             }
         }
     }
+
+    /// Shift every save point's cumulative bbox by `(dx, dy)`. Call when
+    /// the underlying layer texture grows mid-stroke and its local-coord
+    /// origin shifts — the bboxes are stored in layer-local coords, so
+    /// they must be re-anchored to the new frame to remain valid for
+    /// downstream consumers (checkpoint save/restore).
+    pub fn translate(&mut self, dx: u32, dy: u32) {
+        if dx == 0 && dy == 0 {
+            return;
+        }
+        for sp in self.points.iter_mut() {
+            let [x, y, w, h] = sp.cumulative_bbox;
+            sp.cumulative_bbox = [x + dx, y + dy, w, h];
+        }
+    }
 }
 
 /// Compute the union of two `[x, y, w, h]` bounding boxes.
