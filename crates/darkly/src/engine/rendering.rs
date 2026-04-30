@@ -160,7 +160,7 @@ impl DarklyEngine {
                             let entry = self.region_store.commit_region(
                                 encoder,
                                 commit.layer_id,
-                                commit.format,
+                                &commit.snapshot,
                                 rect,
                             );
                             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));

@@ -211,9 +211,13 @@ impl DiffRectPass {
         self.pending.is_some()
     }
 
-    /// Poll for the diff result. Returns `Some([x, y, w, h])` when ready,
-    /// `Some([0,0,0,0])` if the textures are identical, or `None` if still pending.
-    pub fn poll(&mut self, device: &wgpu::Device) -> Option<Option<[u32; 4]>> {
+    /// Poll for the diff result. Returns `Some(Some(rect))` when ready,
+    /// `Some(None)` if the textures are identical, or `None` if still pending.
+    ///
+    /// The rect is returned in the texture-local frame of the views passed
+    /// to [`request`](Self::request) — for the brush/undo flow these are
+    /// layer-aligned scratch and current views, so the rect is layer-local.
+    pub fn poll(&mut self, device: &wgpu::Device) -> Option<Option<crate::coord::LayerRect>> {
         let pending = self.pending.as_mut()?;
 
         // Begin mapping if not started.
@@ -241,7 +245,12 @@ impl DiffRectPass {
                 let [min_x, min_y, max_x, max_y] = raw;
                 if min_x <= max_x && min_y <= max_y {
                     // +1 because max is inclusive pixel coordinate.
-                    Some(Some([min_x, min_y, max_x - min_x + 1, max_y - min_y + 1]))
+                    Some(Some(crate::coord::LayerRect::from_xywh(
+                        min_x,
+                        min_y,
+                        max_x - min_x + 1,
+                        max_y - min_y + 1,
+                    )))
                 } else {
                     // Textures are identical — no diff.
                     Some(None)

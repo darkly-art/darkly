@@ -86,10 +86,9 @@ pub enum FloatingMode {
     /// Extracted from layer — commit writes transformed pixels.
     /// Cancel restores the pre-clear state from RegionStore scratch.
     Transform {
-        /// Texture format of the target (Rgba8Unorm or R8Unorm).
-        format: wgpu::TextureFormat,
-        /// Bounding rect of the source region that was cleared [x, y, w, h].
-        clear_rect: [u32; 4],
+        /// Pre-clear snapshot of the source region. Used by `cancel_floating`
+        /// to undo the source clear; carries the saved rect and format.
+        cancel_snapshot: crate::gpu::region_store::Snapshot,
     },
 }
 

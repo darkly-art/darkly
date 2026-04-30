@@ -211,8 +211,60 @@ impl LayerRect {
         }
     }
 
+    pub fn x0(&self) -> u32 {
+        self.origin.x
+    }
+    pub fn y0(&self) -> u32 {
+        self.origin.y
+    }
+    pub fn x1(&self) -> u32 {
+        self.origin.x + self.width
+    }
+    pub fn y1(&self) -> u32 {
+        self.origin.y + self.height
+    }
+
     pub fn is_empty(&self) -> bool {
         self.width == 0 || self.height == 0
+    }
+
+    /// True when `other`'s pixels are all inside `self`. An empty `other` is
+    /// vacuously contained; an empty `self` contains only an empty `other`.
+    pub fn contains(&self, other: LayerRect) -> bool {
+        if other.is_empty() {
+            return true;
+        }
+        if self.is_empty() {
+            return false;
+        }
+        other.x0() >= self.x0()
+            && other.y0() >= self.y0()
+            && other.x1() <= self.x1()
+            && other.y1() <= self.y1()
+    }
+
+    pub fn intersect(self, other: LayerRect) -> Option<LayerRect> {
+        let x0 = self.x0().max(other.x0());
+        let y0 = self.y0().max(other.y0());
+        let x1 = self.x1().min(other.x1());
+        let y1 = self.y1().min(other.y1());
+        if x1 > x0 && y1 > y0 {
+            Some(LayerRect::from_xywh(x0, y0, x1 - x0, y1 - y0))
+        } else {
+            None
+        }
+    }
+
+    /// Shift the origin by `(dx, dy)` in layer-local pixels. Used when a
+    /// layer texture grows mid-stroke and previously-saved snapshots need
+    /// to be re-anchored to the new layer-local frame.
+    pub fn translate(self, dx: u32, dy: u32) -> LayerRect {
+        LayerRect::from_xywh(
+            self.origin.x + dx,
+            self.origin.y + dy,
+            self.width,
+            self.height,
+        )
     }
 }
 
@@ -368,5 +420,67 @@ mod tests {
     fn round_outward_preserves_empty() {
         let a = r(10, 10, 0, 5);
         assert_eq!(a.round_outward(256), a);
+    }
+
+    // ------------------------------------------------------------------
+    // LayerRect — texture-local rect helpers
+    // ------------------------------------------------------------------
+
+    fn lr(x: u32, y: u32, w: u32, h: u32) -> LayerRect {
+        LayerRect::from_xywh(x, y, w, h)
+    }
+
+    #[test]
+    fn layer_rect_edges() {
+        let a = lr(10, 20, 30, 40);
+        assert_eq!(a.x0(), 10);
+        assert_eq!(a.y0(), 20);
+        assert_eq!(a.x1(), 40);
+        assert_eq!(a.y1(), 60);
+    }
+
+    #[test]
+    fn layer_rect_contains_self_and_empty() {
+        let a = lr(0, 0, 10, 10);
+        assert!(a.contains(a));
+        assert!(a.contains(lr(0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn layer_rect_contains_subrect() {
+        assert!(lr(0, 0, 100, 100).contains(lr(40, 40, 20, 20)));
+    }
+
+    #[test]
+    fn layer_rect_contains_rejects_partial_overlap() {
+        assert!(!lr(0, 0, 10, 10).contains(lr(5, 5, 10, 10)));
+    }
+
+    #[test]
+    fn layer_rect_contains_rejects_disjoint() {
+        assert!(!lr(0, 0, 10, 10).contains(lr(20, 20, 5, 5)));
+    }
+
+    #[test]
+    fn layer_rect_intersect_disjoint_is_none() {
+        assert_eq!(lr(0, 0, 10, 10).intersect(lr(20, 20, 5, 5)), None);
+    }
+
+    #[test]
+    fn layer_rect_intersect_touching_is_none() {
+        assert_eq!(lr(0, 0, 10, 10).intersect(lr(10, 0, 10, 10)), None);
+    }
+
+    #[test]
+    fn layer_rect_intersect_overlap() {
+        let i = lr(0, 0, 10, 10).intersect(lr(5, 5, 10, 10)).unwrap();
+        assert_eq!(i, lr(5, 5, 5, 5));
+    }
+
+    #[test]
+    fn layer_rect_translate_shifts_origin() {
+        let a = lr(10, 20, 30, 40);
+        let t = a.translate(5, 6);
+        assert_eq!(t, lr(15, 26, 30, 40));
     }
 }

@@ -3,6 +3,7 @@
 //! Tests TransformPass::commit_to_texture() with various transforms and undo.
 //! Run with: `cargo test -p darkly --test transform`
 
+use darkly::coord::LayerRect;
 use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::test_utils::*;
 use darkly::gpu::transform::{
@@ -228,7 +229,12 @@ fn transform_commit_translate_undo() {
 
     // Save pre-commit state.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &target_tex, fmt, [0, 0, cw, ch]);
+    let snap = store.save_region(
+        &mut enc,
+        &target_tex,
+        fmt,
+        LayerRect::from_xywh(0, 0, cw, ch),
+    );
     submit(&queue, enc);
 
     // Commit with translation (15, 15).
@@ -255,7 +261,7 @@ fn transform_commit_translate_undo() {
 
     // Commit undo entry.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, cw, ch]);
+    let entry = store.commit_region(&mut enc, 1, &snap, LayerRect::from_xywh(0, 0, cw, ch));
     submit(&queue, enc);
 
     // Verify green at new position.
@@ -506,7 +512,12 @@ fn paste_commit_undo() {
 
     // Save pre-paste state.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &target_tex, fmt, [0, 0, cw, ch]);
+    let snap = store.save_region(
+        &mut enc,
+        &target_tex,
+        fmt,
+        LayerRect::from_xywh(0, 0, cw, ch),
+    );
     submit(&queue, enc);
 
     // Commit paste.
@@ -531,7 +542,7 @@ fn paste_commit_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, cw, ch]);
+    let entry = store.commit_region(&mut enc, 1, &snap, LayerRect::from_xywh(0, 0, cw, ch));
     submit(&queue, enc);
 
     // Verify yellow pixels.

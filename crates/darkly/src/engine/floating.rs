@@ -321,30 +321,37 @@ impl DarklyEngine {
             ),
             None => (0, 0, 0, 0),
         };
-        let layer_rect = [local_x, local_y, local_w, local_h];
+        let layer_rect = crate::coord::LayerRect::from_xywh(local_x, local_y, local_w, local_h);
 
         // Save the layer-local source region to scratch (pre-clear snapshot
         // for undo and cancel). Must happen before the clear.
-        {
+        let cancel_snapshot = {
             let texture = if target_is_mask {
                 self.compositor.mask_texture(layer_id).map(|t| &t.texture)
             } else {
                 self.compositor.layer_texture(layer_id).map(|t| &t.texture)
             };
-            if let Some(texture) = texture {
-                // Source rect may exceed canvas bounds (paste-extent layer
-                // transform). Pre-grow the scratch.
-                self.region_store.ensure_scratch_capacity(
-                    &self.gpu.device,
-                    layer_extent.width,
-                    layer_extent.height,
-                );
-                self.gpu.encode("transform-save", |encoder| {
-                    self.region_store
-                        .save_region(encoder, texture, format, layer_rect);
-                });
+            match texture {
+                Some(texture) => {
+                    // Source rect may exceed canvas bounds (paste-extent layer
+                    // transform). Pre-grow the scratch.
+                    self.region_store.ensure_scratch_capacity(
+                        &self.gpu.device,
+                        layer_extent.width,
+                        layer_extent.height,
+                    );
+                    Some(self.gpu.encode_ret("transform-save", |encoder| {
+                        self.region_store
+                            .save_region(encoder, texture, format, layer_rect)
+                    }))
+                }
+                None => None,
             }
-        }
+        };
+        let cancel_snapshot = match cancel_snapshot {
+            Some(s) => s,
+            None => return,
+        };
 
         // Copy source region from GPU texture to transform source texture.
         self.gpu.encode("transform-copy-source", |encoder| {
@@ -450,13 +457,10 @@ impl DarklyEngine {
             matrix: IDENTITY,
             target_layer: layer_id,
             target_is_mask,
-            // `clear_rect` is layer-local — `cancel_floating` uses it with
-            // `restore_from_scratch` which copies scratch[rect] back to
-            // texture[rect] in the layer texture's coord space.
-            mode: FloatingMode::Transform {
-                format,
-                clear_rect: layer_rect,
-            },
+            // `cancel_snapshot` carries the pre-clear pixels at the
+            // source rect; `cancel_floating` uses it via
+            // `restore_from_scratch`.
+            mode: FloatingMode::Transform { cancel_snapshot },
         });
 
         // Selection was used to define what gets picked up — clear it now so
@@ -500,18 +504,22 @@ impl DarklyEngine {
         };
 
         // Compute tight affected rect = union(source bounds, transformed bounds),
-        // clamped to canvas.
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
+        // clamped to canvas. This is in CANVAS coordinates.
+        let canvas_w = self.doc.width as i32;
+        let canvas_h = self.doc.height as i32;
         let (min_x, min_y, max_x, max_y) = fc.transformed_bounds();
         let (sox, soy) = fc.source_origin;
-        let union_min_x = min_x.min(sox).max(0) as u32;
-        let union_min_y = min_y.min(soy).max(0) as u32;
-        let union_max_x = (max_x.max(sox + fc.source_width as i32) as u32).min(canvas_w);
-        let union_max_y = (max_y.max(soy + fc.source_height as i32) as u32).min(canvas_h);
-        let affected_w = union_max_x.saturating_sub(union_min_x);
-        let affected_h = union_max_y.saturating_sub(union_min_y);
-        let affected_rect = [union_min_x, union_min_y, affected_w, affected_h];
+        let src_max_x = sox + fc.source_width as i32;
+        let src_max_y = soy + fc.source_height as i32;
+        let canvas_clip =
+            crate::coord::CanvasRect::from_xywh(0, 0, canvas_w as u32, canvas_h as u32);
+        let affected_canvas = crate::coord::CanvasRect::from_xywh(
+            min_x.min(sox),
+            min_y.min(soy),
+            (max_x.max(src_max_x) - min_x.min(sox)).max(0) as u32,
+            (max_y.max(src_max_y) - min_y.min(soy)).max(0) as u32,
+        )
+        .intersect(canvas_clip);
 
         // Path A — paste onto a layer auto-created for this paste.
         // The layer is empty by construction, so a single LayerAddAction
@@ -541,33 +549,100 @@ impl DarklyEngine {
             return;
         }
 
-        // Path B — paste-in-place onto an existing layer, or transform commit.
-        // Paste-in-place hasn't called begin_transform, so save the pre-paste
-        // canvas state now. Transform mode has already saved during setup.
-        if matches!(fc.mode, FloatingMode::Paste { .. }) {
-            let texture = if is_mask {
-                self.compositor.mask_texture(layer_id).map(|t| &t.texture)
-            } else {
-                self.compositor.layer_texture(layer_id).map(|t| &t.texture)
-            };
-            if let Some(texture) = texture {
-                self.gpu.encode("paste-save", |encoder| {
-                    self.region_store.save_region(
-                        encoder,
-                        texture,
-                        format,
-                        [0, 0, canvas_w, canvas_h],
-                    );
-                });
+        // Translate the canvas-space affected rect into the target's
+        // layer-local frame. This is the boundary that *would have* been
+        // silently wrong before — the typed API forces the conversion.
+        let target_canvas_extent = if is_mask {
+            self.compositor
+                .mask_texture(layer_id)
+                .map(|t| t.canvas_extent())
+        } else {
+            self.compositor
+                .layer_texture(layer_id)
+                .map(|t| t.canvas_extent())
+        };
+        let (affected_layer, layer_offset) = match (affected_canvas, target_canvas_extent) {
+            (Some(rect), Some(extent)) => {
+                let clipped = match rect.intersect(extent) {
+                    Some(c) => c,
+                    None => {
+                        self.compositor.clear_floating_content();
+                        return;
+                    }
+                };
+                let lr = crate::coord::LayerRect::from_xywh(
+                    (clipped.origin.x - extent.origin.x) as u32,
+                    (clipped.origin.y - extent.origin.y) as u32,
+                    clipped.width,
+                    clipped.height,
+                );
+                (lr, (extent.origin.x, extent.origin.y))
             }
-        }
+            _ => {
+                self.compositor.clear_floating_content();
+                return;
+            }
+        };
+        let _ = layer_offset; // Currently unused; kept for clarity / future debug.
 
-        // Commit the pre-operation state (from scratch) to the undo ring buffer,
-        // then render the transform.
+        // Save the pre-transform layer state at the affected rect.
+        //
+        // Transform mode's `setup_transform` already cleared the source
+        // pixels on the layer — so reading the layer right now would
+        // capture the post-clear state, and undoing later would leave
+        // those pixels transparent instead of restoring originals. Fix:
+        // un-clear via `cancel_snapshot` first, then save. This composes
+        // cleanly because:
+        //   - the cancel snapshot is already in scratch
+        //   - after the un-clear, the live layer matches its pre-clear
+        //     state — exactly what undo wants
+        //   - the path-B save then overwrites scratch with affected_rect,
+        //     invalidating the cancel snapshot, which is fine because
+        //     `commit_floating` consumes the FloatingContent (cancel can
+        //     no longer run on this content).
+        //
+        // Paste mode never clears the layer, so the un-clear is skipped.
+        let texture = if is_mask {
+            self.compositor.mask_texture(layer_id).map(|t| &t.texture)
+        } else {
+            self.compositor.layer_texture(layer_id).map(|t| &t.texture)
+        };
+        let texture = match texture {
+            Some(t) => t,
+            None => {
+                self.compositor.clear_floating_content();
+                return;
+            }
+        };
+        if let FloatingMode::Transform {
+            ref cancel_snapshot,
+        } = fc.mode
+        {
+            self.gpu.encode("transform-uncleared", |encoder| {
+                self.region_store.restore_from_scratch(
+                    encoder,
+                    cancel_snapshot,
+                    cancel_snapshot.saved,
+                    texture,
+                );
+            });
+        }
+        self.region_store.ensure_scratch_capacity(
+            &self.gpu.device,
+            affected_layer.x1(),
+            affected_layer.y1(),
+        );
+        let commit_snap = self.gpu.encode_ret("transform-commit-save", |encoder| {
+            self.region_store
+                .save_region(encoder, texture, format, affected_layer)
+        });
+
+        // Commit the pre-operation state to the undo ring buffer, then
+        // render the transform.
         self.gpu.encode("transform-commit", |encoder| {
-            let entry = self
-                .region_store
-                .commit_region(encoder, layer_id, format, affected_rect);
+            let entry =
+                self.region_store
+                    .commit_region(encoder, layer_id, &commit_snap, affected_layer);
 
             // GPU render pass: write transformed source pixels to layer/mask texture.
             self.compositor.commit_floating_to_texture(
@@ -611,9 +686,16 @@ impl DarklyEngine {
                 }
                 // Otherwise: target layer was never modified — no-op.
             }
-            FloatingMode::Transform { format, clear_rect } => {
+            FloatingMode::Transform { cancel_snapshot } => {
                 // Restore the pre-clear state from the RegionStore scratch
                 // texture (saved during begin_transform).
+                //
+                // NB: commit_floating's path-B re-save would overwrite this
+                // scratch region — but commit_floating consumes the
+                // FloatingContent by takes-self pattern, so cancel and
+                // commit are mutually exclusive on a given FloatingContent.
+                // The cancel path always sees the original setup_transform
+                // snapshot intact.
                 let texture = if fc.target_is_mask {
                     self.compositor
                         .mask_texture(fc.target_layer)
@@ -625,8 +707,12 @@ impl DarklyEngine {
                 };
                 if let Some(texture) = texture {
                     self.gpu.encode("cancel-restore", |encoder| {
-                        self.region_store
-                            .restore_from_scratch(encoder, format, clear_rect, texture);
+                        self.region_store.restore_from_scratch(
+                            encoder,
+                            &cancel_snapshot,
+                            cancel_snapshot.saved,
+                            texture,
+                        );
                     });
                 }
             }

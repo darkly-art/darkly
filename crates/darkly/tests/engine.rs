@@ -1303,3 +1303,90 @@ fn mid_stroke_growth_invalidates_mask_bind_group() {
     let bounds = engine.layer_bounds(layer_id).unwrap();
     assert!(bounds.width > cw, "layer should have grown");
 }
+
+// ============================================================================
+// Floating undo on offset / paste-extent layers (typed-coord refactor)
+// ============================================================================
+
+/// Transform-commit with rotation: a 90° rotation moves pixels OUTSIDE the
+/// source rect saved at `setup_transform`. The new commit-time path-B save
+/// covers the affected rect (post-rotation bounds), so the
+/// `commit_rect ⊆ saved_rect` invariant holds and undo restores correctly.
+/// Without path B, the new debug_assert would fire here.
+#[test]
+fn floating_transform_undo_with_rotation() {
+    use darkly::gpu::transform::{affine_multiply, affine_rotate, affine_translate};
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+
+    // Layer with a horizontal red bar across the top half; rotating a
+    // selected 16×16 chunk of it will visibly change pixels in the
+    // selected region (the post-rotation content differs from the
+    // pre-rotation content), so we can detect a real change after commit.
+    let pw: u32 = cw;
+    let ph: u32 = ch;
+    let mut layer_rgba = vec![0u8; (pw * ph * 4) as usize];
+    for y in 0..ph {
+        for x in 0..pw {
+            let idx = ((y * pw + x) * 4) as usize;
+            if y < ph / 2 {
+                layer_rgba[idx] = 255; // red top half
+            } else {
+                layer_rgba[idx + 2] = 255; // blue bottom half
+            }
+            layer_rgba[idx + 3] = 255;
+        }
+    }
+    let layer_id = engine.paste_image(pw, ph, &layer_rgba, 0, 0, None);
+
+    // Select the central 16×16 region — straddles the red/blue boundary
+    // so a rotation visibly changes pixel values.
+    let cx = cw / 2;
+    let cy = ch / 2;
+    let half = 8u32;
+    engine.select_rect(
+        (cx - half) as f32,
+        (cy - half) as f32,
+        (2 * half) as f32,
+        (2 * half) as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+
+    let before = engine.test_readback_layer(layer_id);
+
+    let started = engine.begin_transform(layer_id);
+    assert!(started, "begin_transform with selection should succeed");
+
+    // Rotate the floating content 90° about the source-local center (8,8).
+    // After rotation the bounds are still 16×16 (90° on a square), so
+    // affected_rect == source_rect — the path-B path is exercised, and
+    // the un-clear step ensures the cleared source pixels are restored
+    // before the affected-rect save captures the pre-render state.
+    let theta = std::f32::consts::FRAC_PI_2;
+    let matrix = affine_multiply(
+        &affine_translate(8.0, 8.0),
+        &affine_multiply(&affine_rotate(theta), &affine_translate(-8.0, -8.0)),
+    );
+    engine.update_floating_matrix(matrix);
+
+    engine.commit_floating();
+    engine.render(0.0);
+
+    let after_commit = engine.test_readback_layer(layer_id);
+    assert_ne!(
+        before, after_commit,
+        "transform commit should have modified the layer"
+    );
+
+    engine.undo();
+    engine.render(0.0);
+
+    let after_undo = engine.test_readback_layer(layer_id);
+    assert_eq!(
+        before, after_undo,
+        "undo of rotation transform must restore byte-identical pixels"
+    );
+}

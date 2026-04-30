@@ -63,17 +63,16 @@ impl DarklyEngine {
         let rect = match self.diff_rect.poll(&self.gpu.device) {
             Some(Some(rect)) => rect,
             Some(None) => return, // Textures identical — no commit needed.
-            None => {
-                // Diff not ready — fall back to full canvas.
-                let (w, h) = self.region_store.scratch_dimensions();
-                [0, 0, w, h]
-            }
+            // Diff not ready — fall back to the full saved area. (NOT
+            // `scratch_dimensions()` — those diverge from `snapshot.saved`
+            // after a mid-stroke `grow_scratch_preserving`.)
+            None => commit.snapshot.saved,
         };
 
         self.gpu.encode("brush-stroke-end-flush", |encoder| {
             let entry =
                 self.region_store
-                    .commit_region(encoder, commit.layer_id, commit.format, rect);
+                    .commit_region(encoder, commit.layer_id, &commit.snapshot, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
     }
@@ -87,7 +86,7 @@ impl DarklyEngine {
 
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
-        let rect = [0, 0, canvas_w, canvas_h];
+        let rect = crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h);
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
         let layer_tex = match self.compositor.layer_texture(layer_id) {
@@ -97,11 +96,12 @@ impl DarklyEngine {
 
         // Save current state to scratch for undo.
         self.gpu.encode("fill-background-save", |encoder| {
-            self.region_store
+            let snap = self
+                .region_store
                 .save_region(encoder, &layer_tex.texture, format, rect);
             let entry = self
                 .region_store
-                .commit_region(encoder, layer_id, format, rect);
+                .commit_region(encoder, layer_id, &snap, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
 
@@ -204,7 +204,7 @@ impl DarklyEngine {
         // Lazy init: save the layer to scratch for undo on first stroke_to.
         // Use the layer's actual texture dimensions (not canvas) so paste-
         // extent layers preserve off-canvas pixels through undo.
-        if !self.scratch_saved {
+        if self.scratch_snapshot.is_none() {
             self.flush_pending_undo_commit();
             let (texture, format, layer_w, layer_h) = if mask_editing {
                 match self.compositor.mask_texture(layer_id) {
@@ -225,12 +225,12 @@ impl DarklyEngine {
 
             self.region_store
                 .ensure_scratch_capacity(&self.gpu.device, layer_w, layer_h);
-            self.gpu.encode("stroke-begin", |encoder| {
+            let saved_rect = crate::coord::LayerRect::from_xywh(0, 0, layer_w, layer_h);
+            let snap = self.gpu.encode_ret("stroke-begin", |encoder| {
                 self.region_store
-                    .save_region(encoder, texture, format, [0, 0, layer_w, layer_h]);
+                    .save_region(encoder, texture, format, saved_rect)
             });
-
-            self.scratch_saved = true;
+            self.scratch_snapshot = Some(snap);
         }
 
         macro_rules! paint_target {
@@ -436,7 +436,7 @@ impl DarklyEngine {
         // end_stroke compares matching coordinate frames. If the scratch
         // hasn't been saved yet (this is the first dab and lazy init
         // hasn't run), the rebase is a no-op on still-empty contents.
-        if self.scratch_saved {
+        if let Some(snap) = self.scratch_snapshot.as_mut() {
             self.gpu.encode("region-scratch-grow", |encoder| {
                 self.region_store.grow_scratch_preserving(
                     &self.gpu.device,
@@ -447,6 +447,9 @@ impl DarklyEngine {
                     dy,
                 );
             });
+            // Translate the live snapshot's saved rect into the new layer
+            // frame so subsequent commits/asserts target the correct pixels.
+            snap.translate(dx, dy);
         } else {
             // Lazy init will allocate the scratch at the new dimensions
             // when it next saves; just bump capacity now so the save
@@ -965,20 +968,27 @@ impl DarklyEngine {
             );
         });
 
-        // 4. Commit undo — use full canvas rect (flood fill can change any pixel).
-        let format = if mask_editing {
-            wgpu::TextureFormat::R8Unorm
-        } else {
-            wgpu::TextureFormat::Rgba8Unorm
+        // 4. Commit undo. The lazy save in `gpu_stroke_to` populated
+        //    `scratch_snapshot` with the full layer; flood fill can change
+        //    any pixel inside the canvas, so commit the canvas-sized
+        //    sub-rect of that snapshot.
+        let snap = match self.scratch_snapshot.take() {
+            Some(s) => s,
+            // No snapshot means the lazy save never ran (stroke_to was
+            // never called for this op) — extremely unusual; bail rather
+            // than fabricate an empty snapshot.
+            None => {
+                self.compositor.mark_dirty();
+                return;
+            }
         };
-        let rect = [0u32, 0, canvas_w, canvas_h];
+        let rect = crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h);
         self.gpu.encode("flood-fill-undo", |encoder| {
             let entry = self
                 .region_store
-                .commit_region(encoder, layer_id, format, rect);
+                .commit_region(encoder, layer_id, &snap, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
-        self.scratch_saved = false;
 
         self.compositor.mark_dirty();
     }
@@ -1003,19 +1013,17 @@ impl DarklyEngine {
             self.checkpoint_ring.clear();
 
             // Dispatch GPU diff to find the exact changed region for undo.
-            if self.scratch_saved && self.pending_undo_commit.is_none() {
-                let format = if self.editing_mask_layer == Some(layer_id) {
-                    wgpu::TextureFormat::R8Unorm
-                } else {
-                    wgpu::TextureFormat::Rgba8Unorm
-                };
+            if let (Some(snap), true) = (
+                self.scratch_snapshot.take(),
+                self.pending_undo_commit.is_none(),
+            ) {
                 let current_view = if self.editing_mask_layer == Some(layer_id) {
                     self.compositor.mask_texture(layer_id).map(|t| &t.view)
                 } else {
                     self.compositor.layer_texture(layer_id).map(|t| &t.view)
                 };
                 if let Some(current_view) = current_view {
-                    let scratch_view = self.region_store.scratch_view(format);
+                    let scratch_view = self.region_store.scratch_view(snap.format);
                     let (w, h) = self.region_store.scratch_dimensions();
                     self.diff_rect.request(
                         &self.gpu.device,
@@ -1025,10 +1033,12 @@ impl DarklyEngine {
                         w,
                         h,
                     );
-                    self.pending_undo_commit = Some(PendingUndoCommit { layer_id, format });
+                    self.pending_undo_commit = Some(PendingUndoCommit {
+                        layer_id,
+                        snapshot: snap,
+                    });
                 }
             }
-            self.scratch_saved = false;
             self.doc.set_mask_editing(None);
         }
     }
@@ -1049,15 +1059,12 @@ impl DarklyEngine {
             Some(t) => t,
             None => return,
         };
+        let rect = crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h);
 
         // Save region for undo.
-        self.gpu.encode("clear-sel-save", |encoder| {
-            self.region_store.save_region(
-                encoder,
-                target.texture,
-                format,
-                [0, 0, canvas_w, canvas_h],
-            );
+        let snap = self.gpu.encode_ret("clear-sel-save", |encoder| {
+            self.region_store
+                .save_region(encoder, target.texture, format, rect)
         });
 
         // Erase within selection using the cached GPU selection bind group.
@@ -1069,12 +1076,9 @@ impl DarklyEngine {
 
         // Commit for undo.
         self.gpu.encode("clear-sel-commit", |encoder| {
-            let entry = self.region_store.commit_region(
-                encoder,
-                layer_id,
-                format,
-                [0, 0, canvas_w, canvas_h],
-            );
+            let entry = self
+                .region_store
+                .commit_region(encoder, layer_id, &snap, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
         self.compositor.mark_dirty();
@@ -1090,15 +1094,12 @@ impl DarklyEngine {
             Some(t) => t,
             None => return,
         };
+        let rect = crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h);
 
         // Save region for undo.
-        self.gpu.encode("clear-layer-save", |encoder| {
-            self.region_store.save_region(
-                encoder,
-                target.texture,
-                format,
-                [0, 0, canvas_w, canvas_h],
-            );
+        let snap = self.gpu.encode_ret("clear-layer-save", |encoder| {
+            self.region_store
+                .save_region(encoder, target.texture, format, rect)
         });
 
         // Clear the full canvas.
@@ -1114,12 +1115,9 @@ impl DarklyEngine {
 
         // Commit for undo.
         self.gpu.encode("clear-layer-commit", |encoder| {
-            let entry = self.region_store.commit_region(
-                encoder,
-                layer_id,
-                format,
-                [0, 0, canvas_w, canvas_h],
-            );
+            let entry = self
+                .region_store
+                .commit_region(encoder, layer_id, &snap, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
         self.compositor.mark_dirty();

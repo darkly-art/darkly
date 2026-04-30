@@ -148,6 +148,7 @@ impl DarklyEngine {
         let rect = self
             .gpu_selection
             .pixel_bounds
+            .map(|[x, y, w, h]| crate::coord::LayerRect::from_xywh(x, y, w, h))
             .unwrap_or_else(|| self.selection_full_canvas_rect());
         self.save_selection_for_undo(rect);
         let was_active = self.gpu_selection.active;
@@ -366,19 +367,35 @@ impl DarklyEngine {
 
     // --- Undo helpers ---
 
-    pub(crate) fn save_selection_for_undo(&mut self, rect: [u32; 4]) {
+    pub(crate) fn save_selection_for_undo(&mut self, rect: crate::coord::LayerRect) {
         let texture = self.gpu_selection.texture();
-        self.gpu.encode("sel-undo-save", |encoder| {
+        let snap = self.gpu.encode_ret("sel-undo-save", |encoder| {
             self.region_store
-                .save_region(encoder, texture, wgpu::TextureFormat::R8Unorm, rect);
+                .save_region(encoder, texture, wgpu::TextureFormat::R8Unorm, rect)
         });
+        // The selection texture is canvas-sized at offset 0, so its
+        // texture-local frame coincides with canvas; `LayerRect` here means
+        // "selection-texture-local rect" despite the name. Stashing on the
+        // engine lets `commit_selection_undo` recover the snapshot across
+        // async readback boundaries (magic wand, mask-to-selection).
+        self.pending_selection_snapshot = Some(snap);
     }
 
-    pub(crate) fn commit_selection_undo(&mut self, was_active: bool, rect: [u32; 4]) {
+    pub(crate) fn commit_selection_undo(
+        &mut self,
+        was_active: bool,
+        rect: crate::coord::LayerRect,
+    ) {
+        let Some(snap) = self.pending_selection_snapshot.take() else {
+            // No paired save — nothing to commit. Indicates a logic bug at
+            // the call site, but the historical behavior was to silently
+            // fail by reading uninitialised scratch; leaving as a debug
+            // assert to surface it without breaking release builds.
+            debug_assert!(false, "commit_selection_undo without a paired save");
+            return;
+        };
         self.gpu.encode("sel-undo-commit", |encoder| {
-            let entry =
-                self.region_store
-                    .commit_region(encoder, 0, wgpu::TextureFormat::R8Unorm, rect);
+            let entry = self.region_store.commit_region(encoder, 0, &snap, rect);
             self.undo_stack
                 .push(Box::new(SelectionAction::new(was_active, entry)));
         });
@@ -386,15 +403,15 @@ impl DarklyEngine {
 
     /// Full-canvas undo rect — used when the post-op selection extent isn't
     /// known ahead of time (invert, select-all, magic wand, combine into unknown bounds).
-    pub(crate) fn selection_full_canvas_rect(&self) -> [u32; 4] {
-        [0, 0, self.doc.width, self.doc.height]
+    pub(crate) fn selection_full_canvas_rect(&self) -> crate::coord::LayerRect {
+        crate::coord::LayerRect::from_xywh(0, 0, self.doc.width, self.doc.height)
     }
 
     /// Undo rect that covers both the current (pre-op) selection and a new shape
     /// that will be applied. Save and commit must use the same rect, otherwise
     /// the R8 scratch's stale contents outside the save rect would leak into the
     /// commit buffer and corrupt the selection on undo.
-    pub(crate) fn selection_undo_rect_for_shape(&self, shape: [u32; 4]) -> [u32; 4] {
+    pub(crate) fn selection_undo_rect_for_shape(&self, shape: [u32; 4]) -> crate::coord::LayerRect {
         let cw = self.doc.width;
         let ch = self.doc.height;
         let [sx, sy, sw, sh] = shape;
@@ -404,7 +421,7 @@ impl DarklyEngine {
             sw.min(cw - sx.min(cw)),
             sh.min(ch - sy.min(ch)),
         ];
-        match self.gpu_selection.pixel_bounds {
+        let [x, y, w, h] = match self.gpu_selection.pixel_bounds {
             Some([ox, oy, ow, oh]) if sw > 0 && sh > 0 => {
                 let x = ox.min(sx);
                 let y = oy.min(sy);
@@ -414,7 +431,8 @@ impl DarklyEngine {
             }
             Some(old) => old,
             None => [0, 0, cw, ch],
-        }
+        };
+        crate::coord::LayerRect::from_xywh(x, y, w, h)
     }
 
     /// Kick an async readback for contour extraction (marching ants).

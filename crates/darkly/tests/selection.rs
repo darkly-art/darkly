@@ -4,6 +4,7 @@
 //! Combines low-level GpuPaintTarget selection tests and engine-level selection tests.
 //! Run with: `cargo test -p darkly --test selection`
 
+use darkly::coord::LayerRect;
 use darkly::document::SelectionMode;
 use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
@@ -11,6 +12,10 @@ use darkly::gpu::context::GpuContext;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use darkly::gpu::test_utils::*;
 use darkly::mask;
+
+fn lr(x: u32, y: u32, w: u32, h: u32) -> LayerRect {
+    LayerRect::from_xywh(x, y, w, h)
+}
 
 /// Create a headless DarklyEngine with the given canvas dimensions.
 fn test_engine(width: u32, height: u32) -> DarklyEngine {
@@ -241,7 +246,7 @@ fn gpu_clear_selection_undo() {
 
     // Save for undo.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
     submit(&queue, enc);
 
     // Erase within selection.
@@ -261,7 +266,7 @@ fn gpu_clear_selection_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, w, h]);
+    let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
     submit(&queue, enc);
 
     // Verify cleared.

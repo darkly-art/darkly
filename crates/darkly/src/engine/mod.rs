@@ -56,7 +56,7 @@ pub(crate) struct PendingCopy {
 /// Deferred undo commit — waiting for async GPU diff rect result.
 pub(crate) struct PendingUndoCommit {
     pub layer_id: u64,
-    pub format: wgpu::TextureFormat,
+    pub snapshot: crate::gpu::region_store::Snapshot,
 }
 
 /// Context for a pending async GPU readback — travels with the request and
@@ -192,8 +192,16 @@ pub struct DarklyEngine {
     // --- GPU Paint Infrastructure (Phase 2) ---
     pub(crate) region_store: RegionStore,
     pub(crate) paint_pipelines: PaintPipelines,
-    /// True when the scratch texture has been saved for the current stroke.
-    pub(crate) scratch_saved: bool,
+    /// Pre-stroke scratch snapshot for the current stroke. Lazily populated
+    /// on the first stroke_to of a stroke; consumed at end_stroke (moved into
+    /// `pending_undo_commit`) or by a sync commit path (flood fill, clear,
+    /// fill_background — those take their own snapshots inline).
+    pub(crate) scratch_snapshot: Option<crate::gpu::region_store::Snapshot>,
+    /// Selection-texture snapshot held between `save_selection_for_undo` and
+    /// the matching `commit_selection_undo`. Some selection ops (magic wand,
+    /// mask-to-selection) save before an async readback and commit on
+    /// completion — the snapshot lives across that boundary.
+    pub(crate) pending_selection_snapshot: Option<crate::gpu::region_store::Snapshot>,
 
     // --- Brush Engine (Phase 4-5) ---
     pub(crate) dab_pool: DabTexturePool,
@@ -363,7 +371,8 @@ impl DarklyEngine {
             floating: None,
             region_store,
             paint_pipelines,
-            scratch_saved: false,
+            scratch_snapshot: None,
+            pending_selection_snapshot: None,
             dab_pool,
             brush_pipelines,
             brush_stroke_engine: None,

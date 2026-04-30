@@ -2,8 +2,13 @@
 //!
 //! Run with: `cargo test -p darkly --test region_store`
 
+use darkly::coord::LayerRect;
 use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::test_utils::*;
+
+fn lr(x: u32, y: u32, w: u32, h: u32) -> LayerRect {
+    LayerRect::from_xywh(x, y, w, h)
+}
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
     device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -51,8 +56,8 @@ fn region_store_save_restore_round_trip() {
 
     // Save region.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
+    let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
     submit(&queue, enc);
 
     // Overwrite with blue.
@@ -93,8 +98,8 @@ fn region_store_partial_rect() {
 
     // Save only inner 64×64 rect at (32, 32).
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [32, 32, 64, 64]);
-    let entry = store.commit_region(&mut enc, 1, fmt, [32, 32, 64, 64]);
+    let snap = store.save_region(&mut enc, &tex, fmt, lr(32, 32, 64, 64));
+    let entry = store.commit_region(&mut enc, 1, &snap, lr(32, 32, 64, 64));
     submit(&queue, enc);
 
     // Overwrite entire texture with blue.
@@ -144,8 +149,8 @@ fn region_store_redo_round_trip() {
 
     // Save red state.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
-    let entry_a = store.commit_region(&mut enc, 1, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
+    let entry_a = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
     submit(&queue, enc);
 
     // Overwrite with blue.
@@ -191,8 +196,8 @@ fn region_store_ring_buffer_eviction() {
         write_texture(&queue, &tex, w, h, 4, &color);
 
         let mut enc = encoder(&device);
-        store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
-        let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, w, h]);
+        let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
+        let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
         submit(&queue, enc);
         entries.push(entry);
     }
@@ -228,8 +233,8 @@ fn region_store_r8_format() {
 
     // Save.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
+    let entry = store.commit_region(&mut enc, 1, &snap, lr(0, 0, w, h));
     submit(&queue, enc);
 
     // Overwrite with 0.
@@ -246,4 +251,106 @@ fn region_store_r8_format() {
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     assert_eq!(pixels[0], 255, "should be 255 after restore");
+}
+
+/// Regression: brush stroke undo flow saves the FULL layer at stroke start,
+/// then commits only the diff sub-rect at stroke end. On undo, the buffer
+/// must hold the pre-stroke pixels at the sub-rect's *layer-space* location
+/// — not whatever pixels happened to live at scratch's top-left.
+///
+/// Was broken when scratch was switched to "always indexed at (0,0)":
+/// commit_region read scratch[0..w, 0..h] regardless of the rect's xy, so
+/// undo blitted the layer's top-left pixels onto the changed region.
+#[test]
+fn region_store_save_full_commit_subrect() {
+    let (device, queue) = test_device();
+    let (w, h) = (128, 128);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    // Top-left 32×32 = red, center 32×32 at (48,48) = green, rest = blue.
+    // Distinct colors per region so we can tell if undo restored the wrong slice.
+    let mut data = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = ((y * w + x) * 4) as usize;
+            let (r, g, b) = if x < 32 && y < 32 {
+                (255u8, 0, 0)
+            } else if (48..80).contains(&x) && (48..80).contains(&y) {
+                (0, 255, 0)
+            } else {
+                (0, 0, 255)
+            };
+            data[idx] = r;
+            data[idx + 1] = g;
+            data[idx + 2] = b;
+            data[idx + 3] = 255;
+        }
+    }
+    let (tex, _view) = create_test_texture(&device, &queue, w, h, &data);
+
+    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+
+    // Stroke begin — save the full layer.
+    let mut enc = encoder(&device);
+    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, w, h));
+    submit(&queue, enc);
+
+    // Simulate dabs landing on the green center, turning it white.
+    let mut painted = data.clone();
+    for y in 48..80 {
+        for x in 48..80 {
+            let idx = ((y * w + x) * 4) as usize;
+            painted[idx] = 255;
+            painted[idx + 1] = 255;
+            painted[idx + 2] = 255;
+        }
+    }
+    write_texture(&queue, &tex, w, h, 4, &painted);
+
+    // Stroke end — diff_rect would return the painted center; commit that sub-rect.
+    let mut enc = encoder(&device);
+    let entry = store.commit_region(&mut enc, 1, &snap, lr(48, 48, 32, 32));
+    submit(&queue, enc);
+
+    // Undo.
+    let mut enc = encoder(&device);
+    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    submit(&queue, enc);
+
+    // Center must be green (pre-stroke state at that location), not red
+    // (the top-left color that the bug would copy).
+    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
+    let center_idx = ((50 * w + 50) * 4) as usize;
+    assert_eq!(
+        &pixels[center_idx..center_idx + 4],
+        &[0, 255, 0, 255],
+        "center pixel after undo must be the pre-stroke green, got {:?}",
+        &pixels[center_idx..center_idx + 4]
+    );
+}
+
+/// Lock in the new debug-mode contract: `commit_region` must reject a rect
+/// that escapes the saved snapshot. Caller bug, not RegionStore bug — but
+/// the assert turns "silent corruption from reading uninitialised scratch"
+/// into "loud panic during dev/test."
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "not contained")]
+fn region_store_commit_outside_saved_panics() {
+    let (device, queue) = test_device();
+    let (w, h) = (128, 128);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    let blank = vec![0u8; (w * h * 4) as usize];
+    let (tex, _view) = create_test_texture(&device, &queue, w, h, &blank);
+
+    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+
+    let mut enc = encoder(&device);
+    let snap = store.save_region(&mut enc, &tex, fmt, lr(0, 0, 32, 32));
+    submit(&queue, enc);
+
+    // Commit at a rect that is NOT contained in the saved (0,0,32,32) area.
+    let mut enc = encoder(&device);
+    let _ = store.commit_region(&mut enc, 1, &snap, lr(100, 100, 32, 32));
 }

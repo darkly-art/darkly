@@ -79,24 +79,24 @@ impl DarklyEngine {
 
         let has_selection = self.gpu_selection.active;
 
+        let undo_rect = crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h);
+
         if has_selection {
             // --- GPU extraction path ---
             // Save undo state for cut before any modification.
-            if is_cut {
+            let cut_snapshot = if is_cut {
                 let texture = if is_mask {
                     &self.compositor.mask_texture(layer_id).unwrap().texture
                 } else {
                     &self.compositor.layer_texture(layer_id).unwrap().texture
                 };
-                self.gpu.encode("cut-save", |encoder| {
-                    self.region_store.save_region(
-                        encoder,
-                        texture,
-                        format,
-                        [0, 0, canvas_w, canvas_h],
-                    );
-                });
-            }
+                Some(self.gpu.encode_ret("cut-save", |encoder| {
+                    self.region_store
+                        .save_region(encoder, texture, format, undo_rect)
+                }))
+            } else {
+                None
+            };
 
             // Create staging texture for the masked copy.
             let staging_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -262,14 +262,11 @@ impl DarklyEngine {
             });
 
             // Commit undo for cut.
-            if is_cut {
+            if let Some(snap) = cut_snapshot {
                 self.gpu.encode("cut-commit", |encoder| {
-                    let entry = self.region_store.commit_region(
-                        encoder,
-                        layer_id,
-                        format,
-                        [0, 0, canvas_w, canvas_h],
-                    );
+                    let entry = self
+                        .region_store
+                        .commit_region(encoder, layer_id, &snap, undo_rect);
                     self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
                 });
                 self.compositor.mark_dirty();
