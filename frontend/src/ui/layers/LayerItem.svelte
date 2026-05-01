@@ -149,19 +149,10 @@
     }
 
     let draggable = $state(true);
-    /** Track pointer type so dragstart can reject pen input.
-     *  Chromium's Wayland backend misroutes pen-initiated drags through
-     *  kMouse, putting the drag controller into an invalid state that
-     *  freezes the browser's input pipeline. Mouse and touch (touchpad)
-     *  are fine. */
-    let lastPointerType = '';
 
     function onDragStart(e: DragEvent) {
-        if (lastPointerType === 'pen') {
-            e.preventDefault();
-            return;
-        }
         e.dataTransfer?.setData('text/plain', String(layer.id));
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
     }
 
     function onDragOver(e: DragEvent) {
@@ -212,7 +203,6 @@
     onclick={setActive}
     ondblclick={startRename}
     onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActive(); }}}
-    onpointerdown={(e: PointerEvent) => { lastPointerType = e.pointerType; }}
     role="button"
     tabindex="0"
     draggable={draggable ? 'true' : 'false'}
@@ -244,6 +234,7 @@
             alt="layer"
             width={THUMB_SIZE}
             height={THUMB_SIZE}
+            draggable="false"
             onclick={clickLayerThumb}
         />
     {/if}
@@ -258,6 +249,7 @@
             alt="mask"
             width={THUMB_SIZE}
             height={THUMB_SIZE}
+            draggable="false"
             onclick={clickMaskThumb}
             oncontextmenu={onMaskContextMenu}
         />

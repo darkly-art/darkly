@@ -17,7 +17,13 @@
 export function suppressButtonKeyboardFocus() {
     document.addEventListener('mousedown', (e) => {
         const t = e.target as HTMLElement | null;
-        if (t?.closest('button, [role="button"]')) e.preventDefault();
+        const btn = t?.closest('button, [role="button"]');
+        if (!btn) return;
+        // Draggable rows (e.g. layer/group rows with role="button") rely on
+        // the default mousedown action to initiate native HTML5 drag —
+        // preventDefault here would silently cancel the drag.
+        if (btn.getAttribute('draggable') === 'true') return;
+        e.preventDefault();
     }, true);
 
     const stamp = (el: Element) => {

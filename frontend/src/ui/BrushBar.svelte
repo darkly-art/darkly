@@ -3,9 +3,8 @@
     import { brushGraph, exposedDragSpeed } from '../state/brush_graph.svelte';
     import type { BrushInfo } from '../state/brush_graph.svelte';
     import BrushBuilder from './brush_builder/BrushBuilder.svelte';
-    import BrushDabView from './brush_picker/BrushDabView.svelte';
     import BrushPicker from './brush_picker/BrushPicker.svelte';
-    import BrushPreviewStrip from './brush_picker/BrushPreviewStrip.svelte';
+    import LiveBrushPreviewStrip from './brush_picker/LiveBrushPreviewStrip.svelte';
 
     let brushPickerOpen = $state(false);
 
@@ -89,17 +88,13 @@
                 onclick={(e) => { e.stopPropagation(); ensureInit(); brushPickerOpen = !brushPickerOpen; }}
                 title="Select brush"
             >
-                {#if brushGraph.activeBrush}
-                    <!-- Reuses the picker tile's cached library
-                         thumbnails (dab + stroke) at trigger size; no
-                         extra renders, just a different aspect on the
-                         outer wrapper. -->
-                    <span class="trigger-preview">
-                        <BrushPreviewStrip brushName={brushGraph.activeBrush} />
-                    </span>
-                {:else}
-                    <BrushDabView width={20} height={20} />
-                {/if}
+                <!-- Live preview of the active graph — same component the
+                     picker's active strip uses, so preset and custom states
+                     render identically. The label below is the only thing
+                     that switches between the preset name and "Custom". -->
+                <span class="trigger-preview">
+                    <LiveBrushPreviewStrip width={80} />
+                </span>
                 <span class="brush-name">{brushGraph.activeBrush ?? 'Custom'}</span>
                 <svg class="chevron" width="10" height="6" viewBox="0 0 10 6">
                     <path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/>

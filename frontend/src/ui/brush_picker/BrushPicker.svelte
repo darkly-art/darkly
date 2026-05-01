@@ -2,7 +2,6 @@
     import { tick } from 'svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import type { BrushInfo } from '../../state/brush_graph.svelte';
-    import BrushPreviewStrip from './BrushPreviewStrip.svelte';
     import LiveBrushPreviewStrip from './LiveBrushPreviewStrip.svelte';
     import BrushTile from './BrushTile.svelte';
 
@@ -114,13 +113,11 @@
 
         <div class="active-strip">
             <span class="active-preview">
-                {#if activeBrush}
-                    <BrushPreviewStrip brushName={activeBrush.name} />
-                {:else}
-                    <!-- Custom (unnamed) graph: same visual layout as a preset
-                         preview, but the bytes come from the live engine. -->
-                    <LiveBrushPreviewStrip width={176} />
-                {/if}
+                <!-- One preview path for both preset and custom states.
+                     The live engine preview is keyed on the graph itself,
+                     so a loaded preset renders identically to its baked
+                     thumbnail and a modified graph stays in sync. -->
+                <LiveBrushPreviewStrip width={176} />
             </span>
             <div class="active-meta">
                 <span class="active-label">Active</span>

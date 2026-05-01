@@ -323,6 +323,13 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     // dynamics) — scrubbing the brush bar's user-facing size should leave
     // the icon visually unchanged. Verified end-to-end: render, scrub
     // size, render again, compare bytes.
+    //
+    // Also locks in the topology-version contract the brush-bar UI relies
+    // on: a scrub must not advance `brush_topology_version`. The frontend
+    // uses that counter to decide whether the active preset name still
+    // applies — a false bump would flip "Soft Round" → "Custom" on every
+    // size drag. Regression for that bug lives here, against the same
+    // engine, to avoid creating an extra wgpu device in parallel.
     let mut engine = fresh_engine();
     let (w, h) = (32u32, 32u32);
 
@@ -338,9 +345,16 @@ fn size_scrub_does_not_change_active_dab_pixels() {
         .into_iter()
         .find(|p| p.port_name == "size")
         .expect("default brush exposes a `size` port");
+    let topo_before_scrub = engine.brush_topology_version();
     engine
         .brush_set_exposed_port(size.node_id, "size", 250.0)
         .expect("scrub set");
+    assert_eq!(
+        engine.brush_topology_version(),
+        topo_before_scrub,
+        "exposed-port scrub must not advance the topology version — \
+         the frontend uses this to keep the active preset name across scrubs"
+    );
 
     // Drain any in-flight readback queued by the scrub. If the cache
     // were keyed off graph_version it would have invalidated and a
@@ -350,6 +364,20 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     assert_eq!(
         after, before,
         "scrubbing the user-facing size port must not change the dab thumbnail bytes"
+    );
+
+    // Conversely, a structural change MUST advance the topology version,
+    // so the frontend correctly clears the preset name. Toggle a port's
+    // exposed flag — cheaper than brush_load and avoids extra GPU work
+    // (no compile_active call), but still classified as topology.
+    let topo_before_toggle = engine.brush_topology_version();
+    engine
+        .brush_graph_set_port_exposed(size.node_id, "size", false)
+        .expect("toggle exposed");
+    assert_ne!(
+        engine.brush_topology_version(),
+        topo_before_toggle,
+        "set_port_exposed is a structural change and must advance the topology version"
     );
 }
 

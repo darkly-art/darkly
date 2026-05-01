@@ -1268,6 +1268,18 @@ impl DarklyHandle {
             .unwrap_or_else(|_| "null".into())
     }
 
+    /// Topology version of the active brush graph. Bumps only on
+    /// structural changes; exposed-port scrubs do not advance it. The
+    /// frontend uses this to keep the active preset name across scrubs
+    /// and clear it only when the graph actually changes shape.
+    ///
+    /// Returned as `f64` so JS receives a plain `number` (the engine
+    /// counter is `u64`, but values up to 2^53 are exact and a wrapping
+    /// counter cannot realistically reach that).
+    pub fn brush_topology_version(&self) -> f64 {
+        self.engine.borrow().brush_topology_version() as f64
+    }
+
     pub fn brush_graph_validate(&self, json: &str) -> JsValue {
         self.flush_if_needed();
         match self.engine.borrow().validate_brush_graph(json) {

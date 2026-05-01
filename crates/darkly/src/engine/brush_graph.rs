@@ -42,6 +42,15 @@ impl DarklyEngine {
         &self.active_brush_graph
     }
 
+    /// Topology version counter — bumped only by structural mutations
+    /// (nodes, wires, params, exposed flags, brush load/reset/clear), not
+    /// by exposed-port scrubs. The frontend snapshots this to distinguish
+    /// "preset still selected, just scrubbing" from "graph actually
+    /// changed → drop the preset name".
+    pub fn brush_topology_version(&self) -> u64 {
+        self.brush_topology_version
+    }
+
     /// Validate a brush graph from JSON without setting it as active.
     ///
     /// Returns `Ok(())` or an error string describing what's wrong.
@@ -949,7 +958,11 @@ impl DarklyEngine {
     }
 
     /// Toggle whether a port is exposed in the brush properties panel.
-    /// Metadata-only — no compile needed, but returns updated graph JSON.
+    /// Metadata-only — no compile needed (exposed flag doesn't affect
+    /// rendered output) — but bump the topology version so the frontend
+    /// treats this as a structural change and clears the active preset
+    /// name. Bumping the graph version too keeps the editor preview
+    /// consistent with other graph mutations.
     pub fn brush_graph_set_port_exposed(
         &mut self,
         node_id: u64,
@@ -959,6 +972,8 @@ impl DarklyEngine {
         self.active_brush_graph
             .set_port_exposed(NodeId(node_id), port_name, exposed)
             .map_err(|e| format!("{e}"))?;
+        self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+        self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
         Ok(self.active_graph_json())
     }
 }
