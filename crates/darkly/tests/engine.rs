@@ -1891,6 +1891,98 @@ fn engine_mask_brush_undo_restores_mask() {
     );
 }
 
+/// Brush stroke onto a mask must respect an active selection: pixels
+/// inside the selection get painted, pixels outside are preserved.
+#[test]
+fn engine_mask_brush_respects_selection() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+    engine.add_mask(layer_id);
+    engine.set_editing_mask(layer_id, true);
+
+    // add_mask ran with no selection, so the mask starts all-white (255);
+    // selection-seeding is bypassed. Then select the left half.
+    engine.select_rect(
+        0.0,
+        0.0,
+        (w / 2) as f32,
+        h as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+
+    paint_mask_dab(&mut engine, layer_id, (w / 4) as f32, (h / 2) as f32, 0.0);
+    paint_mask_dab(&mut engine, layer_id, (3 * w / 4) as f32, (h / 2) as f32, 0.0);
+
+    let pixels = engine.test_readback_mask(layer_id);
+    let inside = mask_byte_at(&pixels, w, w / 4, h / 2);
+    let outside = mask_byte_at(&pixels, w, 3 * w / 4, h / 2);
+    assert!(
+        inside < 250,
+        "mask byte inside the selection should be painted (< 250); got {inside}"
+    );
+    assert_eq!(
+        outside, 255,
+        "mask byte outside the selection must remain all-reveal (255) — \
+         brush stroke on a mask must respect the active selection; got {outside}"
+    );
+}
+
+/// Adding a mask while a selection is active seeds the new mask from
+/// the selection. This gives users a one-click "selection → mask"
+/// gesture: pixels inside the selection reveal (255), pixels outside
+/// hide (0).
+#[test]
+fn engine_add_mask_seeds_from_active_selection() {
+    let (w, h) = (64, 64);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+
+    engine.select_rect(
+        0.0,
+        0.0,
+        (w / 2) as f32,
+        h as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+
+    engine.add_mask(layer_id);
+
+    let pixels = engine.test_readback_mask(layer_id);
+    let inside = mask_byte_at(&pixels, w, w / 4, h / 2);
+    let outside = mask_byte_at(&pixels, w, 3 * w / 4, h / 2);
+    assert!(
+        inside > 200,
+        "mask byte inside the selection should reveal (~255); got {inside}"
+    );
+    assert!(
+        outside < 50,
+        "mask byte outside the selection should hide (~0); got {outside}"
+    );
+}
+
+/// Adding a mask without an active selection produces an all-reveal
+/// mask (255 everywhere) — the selection-seeding path must not affect
+/// the no-selection case.
+#[test]
+fn engine_add_mask_without_selection_is_all_white() {
+    let (w, h) = (64, 64);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+
+    engine.add_mask(layer_id);
+
+    let pixels = engine.test_readback_mask(layer_id);
+    assert!(
+        pixels.iter().all(|&b| b == 255),
+        "with no active selection, a freshly-added mask must be all-white (255)"
+    );
+}
+
 /// `set_editing_mask(id, true)` followed by a brush stroke when no mask
 /// has been added must not panic. Defends against the secondary issue
 /// where `compositor.mask_texture()` returns `None` and downstream code
@@ -1941,5 +2033,54 @@ fn engine_mask_flood_fill() {
     assert!(
         center < 10,
         "flood fill with black should drive mask center near 0; got {center}"
+    );
+}
+
+/// Regression: magic wand with mask editing active must read from the mask
+/// (R8) texture, not the layer (RGBA8) texture. Pre-fix it always read the
+/// layer — on a freshly-added raster layer the layer is fully transparent,
+/// so flood-fill from any seed produced a full-canvas selection regardless
+/// of what was painted on the mask.
+#[test]
+fn engine_magic_wand_on_mask_reads_mask_not_layer() {
+    let (w, h) = (64, 64);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+
+    // Seed the mask: select the left half, then add_mask copies the
+    // selection into the new mask (left = 255, right = 0).
+    engine.select_rect(
+        0.0,
+        0.0,
+        (w / 2) as f32,
+        h as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    engine.add_mask(layer_id);
+    engine.set_editing_mask(layer_id, true);
+
+    // Magic wand seeded inside the left (revealed) half with tolerance 0.
+    // On the mask this picks up only the connected 255 region (left half).
+    // On the layer (the bug) every pixel is transparent, so flood fill
+    // expands across the full canvas.
+    engine.select_magic_wand(layer_id, 4, (h / 2) as i32, 0, SelectionMode::Replace);
+    engine.test_flush_readbacks();
+
+    let cache = engine
+        .test_selection_cpu_cache()
+        .expect("magic wand must populate the selection cpu cache");
+    let inside = cache[((h / 2) * w + 4) as usize];
+    let outside = cache[((h / 2) * w + (3 * w / 4)) as usize];
+    assert!(
+        inside > 200,
+        "seed inside left (mask=255) half must be selected; got {inside}"
+    );
+    assert_eq!(
+        outside, 0,
+        "right (mask=0) half must NOT be selected — pre-fix the magic wand \
+         flood-filled the empty RGBA layer instead of the mask, producing a \
+         full-canvas selection; got {outside}"
     );
 }

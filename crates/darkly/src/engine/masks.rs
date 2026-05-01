@@ -16,6 +16,15 @@ impl DarklyEngine {
         self.doc.add_mask(layer_id);
         self.compositor
             .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
+
+        // When a freshly-created mask coincides with an active selection,
+        // seed the mask from the selection so the user gets a one-click
+        // "selection → mask" gesture. Skipped if the layer already had a
+        // mask (caller's intent is unclear there — see selection_to_mask).
+        if !snap.has_mask {
+            self.copy_selection_into_mask(layer_id);
+        }
+
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
@@ -25,6 +34,41 @@ impl DarklyEngine {
             snap.mask_enabled,
             snap.show_mask,
         )));
+    }
+
+    /// GPU-to-GPU copy of the active selection texture into a layer's mask
+    /// texture (R8 → R8, full canvas). No-op if no selection is active or
+    /// the layer has no mask texture.
+    fn copy_selection_into_mask(&mut self, layer_id: u64) {
+        if !self.gpu_selection.active {
+            return;
+        }
+        let Some(mask_tex) = self.compositor.mask_texture(layer_id) else {
+            return;
+        };
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+        self.gpu.encode("sel-to-mask-copy", |encoder| {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.gpu_selection.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &mask_tex.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: canvas_w,
+                    height: canvas_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        });
     }
 
     pub fn remove_mask(&mut self, layer_id: u64) {
@@ -222,35 +266,7 @@ impl DarklyEngine {
         self.compositor
             .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
-        // Copy selection texture → mask texture on GPU. Both are R8, same
-        // canvas dimensions. No CPU round-trip needed.
-        if self.gpu_selection.active {
-            if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
-                let canvas_w = self.doc.width;
-                let canvas_h = self.doc.height;
-                self.gpu.encode("sel-to-mask-copy", |encoder| {
-                    encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: self.gpu_selection.texture(),
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &mask_tex.texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: canvas_w,
-                            height: canvas_h,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                });
-            }
-        }
+        self.copy_selection_into_mask(layer_id);
 
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();

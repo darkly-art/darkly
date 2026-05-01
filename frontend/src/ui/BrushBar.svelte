@@ -264,7 +264,7 @@
         display: flex;
         align-items: center;
         gap: 4px;
-        background: var(--accent);
+        background: linear-gradient(to right, var(--accent), #000000);
         border: none;
         border-radius: 6px;
         color: #ffffff;
@@ -273,7 +273,7 @@
         font-weight: 600;
         padding: 4px 8px;
         min-width: 100px;
-        transition: background 0.1s, filter 0.1s;
+        transition: filter 0.1s;
     }
     .brush-picker-button:hover {
         filter: brightness(1.15);

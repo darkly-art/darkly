@@ -81,6 +81,7 @@ pub(crate) enum ReadbackContext {
     },
     MagicWand {
         was_active: bool,
+        mask_editing: bool,
         seed_x: i32,
         seed_y: i32,
         tolerance: u8,

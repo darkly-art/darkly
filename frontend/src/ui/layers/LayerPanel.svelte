@@ -51,6 +51,8 @@
         if (!layer || layer.hasMask) return;
         if (layer.type !== 'raster' && layer.type !== 'group') return;
         app.handle.add_mask(app.activeLayerId);
+        app.editingMaskLayerId = app.activeLayerId;
+        app.handle.set_editing_mask(app.activeLayerId, true);
         refresh();
     }
 

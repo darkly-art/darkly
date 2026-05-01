@@ -262,12 +262,21 @@ impl DarklyEngine {
             }
             ReadbackContext::MagicWand {
                 was_active,
+                mask_editing,
                 seed_x,
                 seed_y,
                 tolerance,
                 mode,
             } => {
-                self.complete_magic_wand(was_active, seed_x, seed_y, tolerance, mode, pixels);
+                self.complete_magic_wand(
+                    was_active,
+                    mask_editing,
+                    seed_x,
+                    seed_y,
+                    tolerance,
+                    mode,
+                    pixels,
+                );
             }
             ReadbackContext::MaskToSelection { was_active } => {
                 self.complete_mask_to_selection(was_active, pixels);

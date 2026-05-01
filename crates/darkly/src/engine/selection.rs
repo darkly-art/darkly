@@ -89,42 +89,52 @@ impl DarklyEngine {
         tolerance: u8,
         mode: SelectionMode,
     ) {
-        if self.compositor.layer_texture(layer_id).is_none() {
+        if self.paint_target(layer_id).is_none() {
             return;
         }
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
+        let mask_editing = self.is_editing_mask(layer_id);
 
         let was_active = self.gpu_selection.active;
         // Magic wand operates on full-canvas data — reserve full-canvas undo rect.
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
 
-        let layer_tex = self.compositor.layer_texture(layer_id).unwrap();
-        self.gpu.encode("magic-wand-readback", |encoder| {
-            let request = readback::request_readback(
-                &self.gpu.device,
-                encoder,
-                &layer_tex.texture,
-                wgpu::TextureFormat::Rgba8Unorm,
-                [0, 0, canvas_w, canvas_h],
-            );
-            self.readbacks.submit(
-                request,
-                ReadbackContext::MagicWand {
-                    was_active,
-                    seed_x,
-                    seed_y,
-                    tolerance,
-                    mode,
-                },
-            );
-        });
+        let pt = self.paint_target(layer_id).unwrap();
+        let texture = pt.texture;
+        let format = pt.format;
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("magic-wand-readback"),
+            });
+        let request = readback::request_readback(
+            &self.gpu.device,
+            &mut encoder,
+            texture,
+            format,
+            [0, 0, canvas_w, canvas_h],
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        self.readbacks.submit(
+            request,
+            ReadbackContext::MagicWand {
+                was_active,
+                mask_editing,
+                seed_x,
+                seed_y,
+                tolerance,
+                mode,
+            },
+        );
     }
 
     pub(crate) fn complete_magic_wand(
         &mut self,
         was_active: bool,
+        mask_editing: bool,
         seed_x: i32,
         seed_y: i32,
         tolerance: u8,
@@ -134,8 +144,11 @@ impl DarklyEngine {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        let fill_mask =
-            flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance);
+        let fill_mask = if mask_editing {
+            flood_fill::flood_fill_r8(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
+        } else {
+            flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
+        };
 
         self.apply_selection_full(fill_mask, mode, was_active);
     }
