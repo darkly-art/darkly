@@ -1914,7 +1914,13 @@ fn engine_mask_brush_respects_selection() {
     );
 
     paint_mask_dab(&mut engine, layer_id, (w / 4) as f32, (h / 2) as f32, 0.0);
-    paint_mask_dab(&mut engine, layer_id, (3 * w / 4) as f32, (h / 2) as f32, 0.0);
+    paint_mask_dab(
+        &mut engine,
+        layer_id,
+        (3 * w / 4) as f32,
+        (h / 2) as f32,
+        0.0,
+    );
 
     let pixels = engine.test_readback_mask(layer_id);
     let inside = mask_byte_at(&pixels, w, w / 4, h / 2);
