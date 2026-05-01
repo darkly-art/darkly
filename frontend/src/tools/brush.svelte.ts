@@ -34,15 +34,44 @@ function previewStrength(halfExtent: [number, number]): number {
     return MAX_STRENGTH + (BASE_STRENGTH - MAX_STRENGTH) * smooth;
 }
 
-function pushHoverOverlay(handle: any, e: PointerEvent, cx: number, cy: number) {
+/** Pen pose passed to `refresh_brush_preview` — drives any pressure /
+ *  tilt / twist dynamics wired into the brush graph. Components are in
+ *  the normalised ranges WASM expects (pressure 0–1, tilt ±1, twist 0–1). */
+export interface PenPose {
+    pressure: number;
+    tiltX: number;
+    tiltY: number;
+    twist: number;
+    tangentialPressure: number;
+}
+
+/** Pose for the on-canvas cursor preview. Tracks the live PointerEvent
+ *  verbatim so the cursor circle reflects what a dab at this pose would
+ *  actually look like — pressure-driven dynamics included. The resize
+ *  scrub uses the same pose, keeping cursor and stroke in lockstep. */
+export function cursorPose(e: PointerEvent): PenPose {
+    return {
+        pressure: e.pressure,
+        tiltX: (e.tiltX ?? 0) / 90,
+        tiltY: (e.tiltY ?? 0) / 90,
+        twist: (e.twist ?? 0) / 360,
+        tangentialPressure: (e as any).tangentialPressure ?? 0,
+    };
+}
+
+/** Refresh the on-canvas brush cursor preview at `(cx, cy)` using the
+ *  given pose. Exported so non-brush callers (e.g. the shift+drag size
+ *  scrub, which uses `FULL_PRESS_POSE` so the circle shows the brush's
+ *  max extent) can keep the preview in sync after mutating the graph. */
+export function pushHoverOverlay(handle: any, pose: PenPose, cx: number, cy: number) {
     const info = handle.refresh_brush_preview(
         cx,
         cy,
-        e.pressure,
-        (e.tiltX ?? 0) / 90,
-        (e.tiltY ?? 0) / 90,
-        (e.twist ?? 0) / 360,
-        (e as any).tangentialPressure ?? 0,
+        pose.pressure,
+        pose.tiltX,
+        pose.tiltY,
+        pose.twist,
+        pose.tangentialPressure,
     ) as BrushPreviewInfo | null;
     if (!info) {
         handle.clear_overlay();
@@ -129,7 +158,7 @@ export const brushTool: Tool = {
             return;
         }
         // Hover: re-render the preview with live pen data + draw it.
-        pushHoverOverlay(ctx.handle, e, cx, cy);
+        pushHoverOverlay(ctx.handle, cursorPose(e), cx, cy);
     },
 
     onPointerUp(ctx) {

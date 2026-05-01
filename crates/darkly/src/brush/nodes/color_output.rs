@@ -26,7 +26,6 @@
 //! physical sense (erasing a dab against an empty scratch is a no-op).
 //! Engine-level paint-vs-erase is a *stroke* decision, applied at commit.
 
-use crate::brush::dab_pool::MAX_DAB_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, BrushPreviewInfo, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::pipelines::{BlitUniforms, CompositeUniforms};
@@ -138,12 +137,15 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         // accumulation.
         gpu.ensure_canvas_copy(copy_x, copy_y, copy_w, copy_h);
 
-        // UV mapping: the dab content occupies [0..dab_w] x [0..dab_h] in the
-        // MAX_DAB_SIZE pool texture.  The composite quad maps to the scaled
-        // canvas footprint.  When clipped at the canvas edge, offset the UV
-        // start to skip the clipped portion.
-        let tex_w = MAX_DAB_SIZE as f32;
-        let tex_h = MAX_DAB_SIZE as f32;
+        // UV mapping: the dab content occupies [0..dab_w] x [0..dab_h] within
+        // a (tex_w x tex_h) texture allocated by the dab pool. Most stamps
+        // size the texture to match the dab exactly (content_uv = 1.0); a
+        // mismatch only happens if a node deliberately renders into a
+        // larger pool texture. Query the actual size — don't assume
+        // MAX_DAB_SIZE.
+        let (pool_w, pool_h) = gpu.dab_pool.texture_size(dab_handle);
+        let tex_w = pool_w as f32;
+        let tex_h = pool_h as f32;
         let content_uv_w = dab_w / tex_w;
         let content_uv_h = dab_h / tex_h;
 

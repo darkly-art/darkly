@@ -3,6 +3,7 @@
     import { brushGraph } from '../../state/brush_graph.svelte';
     import type { BrushInfo } from '../../state/brush_graph.svelte';
     import BrushPreviewStrip from './BrushPreviewStrip.svelte';
+    import LiveBrushPreviewStrip from './LiveBrushPreviewStrip.svelte';
     import BrushTile from './BrushTile.svelte';
 
     interface Props {
@@ -111,20 +112,24 @@
             placeholder="Search brushes…"
         />
 
-        {#if activeBrush}
-            <div class="active-strip">
-                <span class="active-preview">
+        <div class="active-strip">
+            <span class="active-preview">
+                {#if activeBrush}
                     <BrushPreviewStrip brushName={activeBrush.name} />
-                </span>
-                <div class="active-meta">
-                    <span class="active-label">Active</span>
-                    <span class="active-name">{activeBrush.name}</span>
-                    {#if activeBrush.category}
-                        <span class="active-category">{activeBrush.category}</span>
-                    {/if}
-                </div>
+                {:else}
+                    <!-- Custom (unnamed) graph: same visual layout as a preset
+                         preview, but the bytes come from the live engine. -->
+                    <LiveBrushPreviewStrip width={176} />
+                {/if}
+            </span>
+            <div class="active-meta">
+                <span class="active-label">Active</span>
+                <span class="active-name">{activeBrush?.name ?? 'Custom'}</span>
+                {#if activeBrush?.category}
+                    <span class="active-category">{activeBrush.category}</span>
+                {/if}
             </div>
-        {/if}
+        </div>
     </div>
 
     <div class="picker-body">

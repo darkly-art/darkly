@@ -10,6 +10,21 @@ use crate::gpu::params::ParamValue;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
 
+/// Classifies a brush-graph mutation by which preview consumers it
+/// actually invalidates.
+#[derive(Copy, Clone)]
+enum ChangeKind {
+    /// Structural or non-scrub change: nodes, wires, params, exposed
+    /// flags, non-exposed port defaults, brush load/reset/clear. Bumps
+    /// both `brush_graph_version` and `brush_topology_version`.
+    Topology,
+    /// User-facing exposed-port value change (size scrub, opacity scrub,
+    /// future hardness/rotation scrubs). Bumps only `brush_graph_version`
+    /// — the dab thumbnail render neutralises these via
+    /// `reset_exposed_scrubs`, so its cache stays valid.
+    ScrubOnly,
+}
+
 impl DarklyEngine {
     /// Return metadata for all registered brush node types.
     pub fn brush_node_types(&self) -> Vec<BrushNodeRegistration> {
@@ -48,7 +63,7 @@ impl DarklyEngine {
         self.snapshot_brush_defaults();
         // Run the post-mutation pipeline so the brush preview mask (and any
         // other graph-dependent state) refreshes from the new graph.
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(())
     }
 
@@ -56,7 +71,7 @@ impl DarklyEngine {
     pub fn reset_brush_graph(&mut self) {
         self.active_brush_graph = crate::brush::default_graph();
         self.snapshot_brush_defaults();
-        let _ = self.compile_active();
+        let _ = self.compile_active(ChangeKind::Topology);
     }
 
     /// Capture every input port's current default into `brush_defaults`.
@@ -244,8 +259,16 @@ impl DarklyEngine {
     /// Compile the active graph in-place, then release any static GPU
     /// textures that are no longer referenced by an Image node.
     ///
+    /// `kind` selects which version counters to bump:
+    /// - [`ChangeKind::Topology`] bumps both the graph version (editor /
+    ///   hover preview) and the topology version (dab thumbnail).
+    /// - [`ChangeKind::ScrubOnly`] bumps only the graph version. The dab
+    ///   thumbnail render neutralises exposed-port scrubs via
+    ///   [`crate::brush::reset_exposed_scrubs`], so a scrub change can't
+    ///   change its rendered output — no point invalidating its cache.
+    ///
     /// Returns Ok on success or an error string.
-    fn compile_active(&mut self) -> Result<(), String> {
+    fn compile_active(&mut self, kind: ChangeKind) -> Result<(), String> {
         crate::brush::compile_graph(&self.active_brush_graph).map_err(|e| format!("{e}"))?;
 
         // Collect resource names still referenced by Image nodes.
@@ -273,9 +296,13 @@ impl DarklyEngine {
             }
         }
 
-        // Every compile bumps the version so the editor preview knows to
-        // re-render and stale in-flight readbacks can be discarded on arrival.
+        // Every compile bumps the graph version (editor preview re-renders,
+        // stale in-flight readbacks get discarded). Topology version bumps
+        // only when the change actually affects the dab-thumbnail render.
         self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+        if matches!(kind, ChangeKind::Topology) {
+            self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
+        }
 
         // Refresh the brush preview overlay now that the graph is compiled —
         // size, rotation, and tip changes all land here.
@@ -317,7 +344,12 @@ impl DarklyEngine {
         // uniform rings.
         let in_stroke = self.brush_stroke_engine.is_some();
 
-        let zero_buffer = || vec![0u8; (width * height * 4) as usize];
+        // Caller's frontend treats an empty Vec as "no fresh bytes
+        // available" and skips the data-URL update — preserving whatever
+        // was last shown. A zero-filled buffer of the requested size
+        // would *also* parse cleanly and render as a transparent image,
+        // wiping the visible preview. So: return whatever cached bytes
+        // we have for *this exact size*, or empty if none.
         let cached = self
             .brush_editor_preview_cache
             .clone()
@@ -331,7 +363,7 @@ impl DarklyEngine {
             || (self.last_rendered_preview_version == self.brush_graph_version
                 && self.brush_editor_preview_cache_size == Some((width, height)));
         if nothing_to_do {
-            return cached.unwrap_or_else(zero_buffer);
+            return cached.unwrap_or_default();
         }
 
         // Don't queue a second readback on top of an in-flight one — it
@@ -341,36 +373,44 @@ impl DarklyEngine {
             .readbacks
             .any(|c| matches!(c, ReadbackContext::BrushEditorPreview { .. }));
         if already_pending {
-            return cached.unwrap_or_else(zero_buffer);
+            return cached.unwrap_or_default();
         }
 
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
 
-        // Clone the active graph so we can pass it through the shared
-        // helper without holding a borrow on `self` across the call.
-        let graph = self.active_brush_graph.clone();
+        // Clone the active graph and neutralize any ports flagged with
+        // `preview_max` so the rendered stroke fits the fixed render
+        // canvas regardless of the user's working brush parameters.
+        // Per-node knowledge about what to neutralize lives on the port
+        // registrations; this pipeline doesn't introspect node types.
+        let mut graph = self.active_brush_graph.clone();
+        graph.apply_preview_overrides();
+        let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_preview_stroke(
-            width as f32,
-            height as f32,
+            rw as f32,
+            rh as f32,
             30,
+            super::brush_library::BRUSH_STROKE_PATH_INSET,
         );
         self.render_preview_and_request_readback(
             &graph,
             &path,
-            width,
-            height,
+            rw,
+            rh,
             fg,
             bg,
             ReadbackContext::BrushEditorPreview {
-                width,
-                height,
+                width: rw,
+                height: rh,
+                target_width: width,
+                target_height: height,
                 graph_version: self.brush_graph_version,
             },
         );
         self.last_rendered_preview_version = self.brush_graph_version;
 
-        cached.unwrap_or_else(zero_buffer)
+        cached.unwrap_or_default()
     }
 
     /// Invalidate any cached editor preview — call when the theme colors
@@ -384,10 +424,11 @@ impl DarklyEngine {
         self.brush_editor_preview_cache_size = None;
         self.active_dab_preview_cache = None;
         self.active_dab_preview_cache_size = None;
-        // Bumping the version forces the skip-check in
-        // `brush_editor_preview` to trigger a fresh render; also drops
-        // any in-flight readback as stale when it lands.
+        // Theme changes alter rendered colors → both editor preview and
+        // dab thumbnail need to re-render and discard any in-flight
+        // readbacks. Bump both versions.
         self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+        self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
     }
 
     /// Render a single-dab preview of the active brush and return the
@@ -402,7 +443,11 @@ impl DarklyEngine {
         // uniform rings.
         let in_stroke = self.brush_stroke_engine.is_some();
 
-        let zero_buffer = || vec![0u8; (width * height * 4) as usize];
+        // See `brush_editor_preview` for why we return an empty Vec rather
+        // than a zero-filled one when no cache is available for *this*
+        // size — frontends treat empty as "no fresh bytes" and preserve
+        // the last successful render, while a zero buffer would parse as
+        // a transparent image and visibly wipe whatever was on screen.
         let cached = self
             .active_dab_preview_cache
             .clone()
@@ -413,10 +458,10 @@ impl DarklyEngine {
         // cached bytes so the UI stays responsive without clobbering the
         // stroke's GPU state.
         let nothing_to_do = in_stroke
-            || (self.last_rendered_dab_version == self.brush_graph_version
+            || (self.last_rendered_dab_topology_version == self.brush_topology_version
                 && self.active_dab_preview_cache_size == Some((width, height)));
         if nothing_to_do {
-            return cached.unwrap_or_else(zero_buffer);
+            return cached.unwrap_or_default();
         }
 
         // Don't queue a second readback on top of an in-flight one.
@@ -424,12 +469,17 @@ impl DarklyEngine {
             .readbacks
             .any(|c| matches!(c, ReadbackContext::ActiveBrushDab { .. }));
         if already_pending {
-            return cached.unwrap_or_else(zero_buffer);
+            return cached.unwrap_or_default();
         }
 
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
-        let graph = self.active_brush_graph.clone();
+        // Reset every exposed scrub (size, opacity, hardness, …) to its
+        // registration default before rendering. The dab thumbnail
+        // represents the brush's identity (shape, texture, dynamics);
+        // user-facing scrubs belong in the brush bar, not the icon.
+        let mut graph = self.active_brush_graph.clone();
+        crate::brush::reset_exposed_scrubs(&mut graph);
         let path =
             crate::brush::preview_renderer::synthesize_preview_dab(width as f32, height as f32);
         self.render_preview_and_request_readback(
@@ -442,12 +492,12 @@ impl DarklyEngine {
             ReadbackContext::ActiveBrushDab {
                 width,
                 height,
-                graph_version: self.brush_graph_version,
+                topology_version: self.brush_topology_version,
             },
         );
-        self.last_rendered_dab_version = self.brush_graph_version;
+        self.last_rendered_dab_topology_version = self.brush_topology_version;
 
-        cached.unwrap_or_else(zero_buffer)
+        cached.unwrap_or_default()
     }
 
     /// Shared helper: render a preview path into the preview renderer's
@@ -534,7 +584,7 @@ impl DarklyEngine {
         // Set position.
         let _ = self.active_brush_graph.set_node_position(id, [x, y]);
 
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -543,7 +593,7 @@ impl DarklyEngine {
         self.active_brush_graph
             .remove_node(NodeId(node_id))
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -573,7 +623,7 @@ impl DarklyEngine {
                 to_ref.clone(),
             )
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -595,7 +645,7 @@ impl DarklyEngine {
                 port: to_port.into(),
             },
         );
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -609,7 +659,7 @@ impl DarklyEngine {
         self.active_brush_graph
             .set_param(NodeId(node_id), param_index, value)
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -623,7 +673,7 @@ impl DarklyEngine {
         self.active_brush_graph
             .set_port_default(NodeId(node_id), port_name, value)
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
 
@@ -894,7 +944,7 @@ impl DarklyEngine {
         self.active_brush_graph
             .set_port_default(nid, port_name, port_value)
             .map_err(|e| format!("{e}"))?;
-        self.compile_active()?;
+        self.compile_active(ChangeKind::ScrubOnly)?;
         Ok(self.active_graph_json())
     }
 

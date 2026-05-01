@@ -80,6 +80,14 @@ export interface ExposedPortInfo {
     data: ExposedValue;
 }
 
+/** Display-pixels-per-unit for dragging an exposed port through its full
+ *  range. ~400px of horizontal drag covers `[min, max]`. Shared by the
+ *  brush bar's scrub controls and the canvas Shift+drag size adjustment so
+ *  both react to drag motion at the same speed. */
+export function exposedDragSpeed(min: number, max: number): number {
+    return (max - min) / 400;
+}
+
 export const WIRE_COLORS: Record<string, string> = {
     Scalar: '#a0a0a0',
     Int: '#4a9eff',

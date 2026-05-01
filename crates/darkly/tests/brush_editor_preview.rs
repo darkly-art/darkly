@@ -26,7 +26,7 @@ fn renders_s_curve_over_black_background() {
 
     let width: u32 = 320;
     let height: u32 = 120;
-    let path = synthesize_preview_stroke(width as f32, height as f32, 30);
+    let path = synthesize_preview_stroke(width as f32, height as f32, 30, 0.0);
 
     let fg = [1.0, 1.0, 1.0, 1.0]; // white stroke
     let bg = [0.0, 0.0, 0.0, 1.0]; // black background
@@ -111,7 +111,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
     let resources: HashMap<_, _> = HashMap::new();
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();
-    let path = synthesize_preview_stroke(320.0, 120.0, 20);
+    let path = synthesize_preview_stroke(320.0, 120.0, 20, 0.0);
 
     assert!(renderer.current_size().is_none());
 
@@ -162,11 +162,15 @@ fn engine_brush_editor_preview_caches_after_readback() {
     let width: u32 = 320;
     let height: u32 = 120;
 
-    // First call: cache empty, kicks off a readback, returns a zero-filled
-    // placeholder. The buffer length should match the requested size.
+    // First call: cache empty, kicks off a readback, returns an empty Vec
+    // — the frontend uses that as a "no fresh bytes" signal so it
+    // preserves whatever was last shown rather than flashing transparent.
     let first = engine.brush_editor_preview(width, height);
-    assert_eq!(first.len(), (width * height * 4) as usize);
-    assert!(first.iter().all(|&b| b == 0));
+    assert!(
+        first.is_empty(),
+        "cache miss should return empty Vec, got {} bytes",
+        first.len()
+    );
 
     // Flush the in-flight readback (native-only helper; wasm relies on the
     // event loop polling the ReadbackScheduler via the render loop).
@@ -285,6 +289,67 @@ fn brush_save_bakes_thumbnail_asynchronously() {
         &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
         "library entry now carries a PNG-encoded thumbnail"
     );
+}
+
+/// Regression: Hard Round (no `pressure → size_input` wire) paints every
+/// dab at full size, including the endpoints. The endpoint dabs must not
+/// be clipped against the cache border — the leftmost and rightmost
+/// columns of the framed preview must contain only background pixels.
+///
+/// This is the user-visible bug: with the previous size-aware inset
+/// hack, the path was shrunk so endpoints landed inside the canvas,
+/// but the inset clamped to half the canvas at any non-trivial size and
+/// the path degenerated. Without an inset, endpoints sit on the canvas
+/// edge and the framer can't recover the clipped half of the dab.
+#[test]
+fn hard_round_endpoint_dabs_not_clipped_against_cache_border() {
+    use darkly::engine::DarklyEngine;
+    use darkly::gpu::context::GpuContext;
+
+    let (device, queue) = test_device();
+    let gpu = GpuContext::new_headless(device, queue);
+    let mut engine = DarklyEngine::new(gpu, 1024, 768);
+
+    // Pin the theme so the bg pixel value is deterministic for the test
+    // — black bg, white stroke.
+    engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
+
+    // Hard Round is a built-in: circle tip, no pressure→size_input wire.
+    engine
+        .brush_load("Hard Round")
+        .expect("Hard Round built-in");
+
+    let width: u32 = 320;
+    let height: u32 = 120;
+
+    // Prime + flush + read.
+    let _ = engine.brush_editor_preview(width, height);
+    engine.test_flush_readbacks();
+    let pixels = engine.brush_editor_preview(width, height);
+    assert_eq!(pixels.len(), (width * height * 4) as usize);
+
+    // bg is black; mark anything noticeably brighter as stroke.
+    const TOLERANCE: u8 = 16;
+    let is_stroke = |i: usize| -> bool {
+        pixels[i] > TOLERANCE || pixels[i + 1] > TOLERANCE || pixels[i + 2] > TOLERANCE
+    };
+
+    // The leftmost and rightmost columns must be entirely background —
+    // any stroke pixel there means an endpoint dab was clipped.
+    let edge_band = 1u32;
+    for x_band in [0..edge_band, (width - edge_band)..width] {
+        for x in x_band {
+            for y in 0..height {
+                let i = ((y * width + x) * 4) as usize;
+                assert!(
+                    !is_stroke(i),
+                    "Hard Round preview cuts off at the edge — column {x} y={y} \
+                     has stroke pixel rgba={:?}",
+                    [pixels[i], pixels[i + 1], pixels[i + 2]],
+                );
+            }
+        }
+    }
 }
 
 #[test]

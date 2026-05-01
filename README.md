@@ -91,3 +91,21 @@ Adding a doc page: drop a `.md` file under `website/src/content/docs/guides/` �
 Darkly uses auto-discovery: drop a `.rs` file in `crates/darkly/src/gpu/filters/` or `crates/darkly/src/gpu/veils/` and export a `pub fn register()`. The build script generates `mod.rs` automatically. No other files need to be touched.
 
 See `filters/noise.rs` or `veils/pixelate.rs` for the pattern.
+
+## Acknowledgments
+
+Darkly stands on the shoulders of giants. Two programs in particular have influenced this project, and we love them dearly.
+
+**[GIMP](https://www.gimp.org/)** ([source](https://github.com/GNOME/gimp)) — originally written by **Spencer Kimball** and **Peter Mattis** in 1995, and maintained today by **Michael Natterer** and **Jehan Pagès**, with decades of contributions from a community far too large to list here (see the upstream [`AUTHORS`](https://github.com/GNOME/gimp/blob/master/AUTHORS) file).
+
+**[Krita](https://krita.org/)** ([source](https://github.com/KDE/krita)) — led by **Halla Rempt** (formerly Boudewijn Rempt), with core contributions over the years from **Dmitry Kazakov**, **Cyrille Berger**, **Sven Langkamp**, **Wolthera van Hövell tot Westerflier**, **L. E. Segovia**, **Scott Petrovic**, and many more (see the upstream [`developers.txt`](https://github.com/KDE/krita/blob/master/krita/data/aboutdata/developers.txt)).
+
+### Veils
+
+Several of Darkly's veil shaders are ports or adaptations of work originally published on [Shadertoy](https://www.shadertoy.com/). The originals are exquisite; please go see them in their native habitat!
+
+- **Bokeh** — based on [ldG3W3](https://www.shadertoy.com/view/ldG3W3) by [Dave Hoskins](https://www.shadertoy.com/user/Dave_Hoskins).
+- **Kuwahara** — based on [mlffWf](https://www.shadertoy.com/view/mlffWf) by [p4vv37](https://www.shadertoy.com/user/p4vv37), with technique notes from [Acerola / Garrett Gunnell](https://github.com/GarrettGunnell/Post-Processing/tree/main/Assets/Kuwahara%20Filter).
+- **Rainy glass** — ported from "Heartfelt" ([ltffzl](https://www.shadertoy.com/view/ltffzl)) by [Martijn Steinrucken / BigWIngs](https://www.shadertoy.com/user/BigWIngs). Licensed CC BY-NC-SA 3.0.
+- **VHS** — ported from [XtBXDt](https://www.shadertoy.com/view/XtBXDt) by [FMS_Cat](https://www.shadertoy.com/user/FMS_Cat).
+- **Watercolor** — based on [mdlXW2](https://www.shadertoy.com/view/mdlXW2) by [aeva](https://www.shadertoy.com/user/aeva).

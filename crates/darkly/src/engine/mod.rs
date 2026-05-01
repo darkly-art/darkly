@@ -100,9 +100,18 @@ pub(crate) enum ReadbackContext {
     /// Async readback of a freshly-rendered brush editor preview. Completion
     /// caches the bytes on the engine so the next `brush_editor_preview()`
     /// call returns them synchronously.
+    ///
+    /// `width`/`height` are the source render dimensions (the layout of
+    /// the readback bytes, always `BRUSH_STROKE_RENDER_SIZE`).
+    /// `target_width`/`target_height` are the caller-requested cache
+    /// dimensions; the framer crops the painted region from the source
+    /// and resizes to the target, so the cache always matches what the
+    /// frontend asked for.
     BrushEditorPreview {
         width: u32,
         height: u32,
+        target_width: u32,
+        target_height: u32,
         /// Graph version at the time the render was issued — used to skip
         /// caching stale results if another render has superseded this one.
         graph_version: u64,
@@ -129,11 +138,14 @@ pub(crate) enum ReadbackContext {
     /// Async readback of a single-dab preview rendered from the active
     /// graph. Completion caches the RGBA bytes on the engine so the next
     /// `brush_active_dab_preview` call returns them synchronously. The
-    /// graph version travels with the request so stale renders are dropped.
+    /// topology version (not graph version) travels with the request:
+    /// scrub-only changes don't affect the rendered output thanks to
+    /// [`crate::brush::reset_exposed_scrubs`], so they shouldn't discard
+    /// in-flight readbacks either.
     ActiveBrushDab {
         width: u32,
         height: u32,
-        graph_version: u64,
+        topology_version: u64,
     },
 }
 
@@ -225,13 +237,23 @@ pub struct DarklyEngine {
     /// alongside the cache on invalidation.
     pub(crate) brush_editor_preview_cache_size: Option<(u32, u32)>,
     /// Bumped on every brush-graph mutation (`compile_active`). Used both
-    /// as the key the preview render is identified by (so stale readbacks
-    /// can be discarded) and as a skip predicate — if the last-rendered
-    /// version matches the current version, there's nothing to re-render.
+    /// as the key the editor preview render is identified by (so stale
+    /// readbacks can be discarded) and as a skip predicate — if the
+    /// last-rendered version matches, there's nothing to re-render.
+    ///
+    /// Reflects ALL changes including user-facing scrubs (size, opacity,
+    /// …) so the editor and hover previews update as the user adjusts.
     pub(crate) brush_graph_version: u64,
     /// Graph version at the last time we issued a preview render. Compared
     /// against `brush_graph_version` to skip redundant work.
     pub(crate) last_rendered_preview_version: u64,
+    /// Bumped only on changes that affect the brush's *identity* — graph
+    /// topology (nodes, wires, exposed flags), node params, and unwired
+    /// non-exposed port defaults. User-facing exposed-port scrubs do NOT
+    /// bump this version because [`crate::brush::reset_exposed_scrubs`]
+    /// neutralises them in the dab-thumbnail render path. The dab cache
+    /// keys off this version so resizing the brush leaves the icon alone.
+    pub(crate) brush_topology_version: u64,
 
     // --- Active brush dab preview ---
     /// Cached RGBA bytes of the most recently-completed active-dab
@@ -241,9 +263,9 @@ pub struct DarklyEngine {
     /// Dimensions of the bytes in `active_dab_preview_cache`. Cleared
     /// alongside the cache on invalidation.
     pub(crate) active_dab_preview_cache_size: Option<(u32, u32)>,
-    /// Graph version at the last time we issued a dab render. Compared
-    /// against `brush_graph_version` to skip redundant dab renders.
-    pub(crate) last_rendered_dab_version: u64,
+    /// Topology version at the last time we issued a dab render. Compared
+    /// against `brush_topology_version` to skip redundant dab renders.
+    pub(crate) last_rendered_dab_topology_version: u64,
     /// Theme colors for brush thumbnails (not the live editor preview —
     /// that uses the caller-supplied fg and auto-picked contrast bg). The
     /// frontend sets these via `set_preview_theme()` when the UI theme
@@ -354,9 +376,10 @@ impl DarklyEngine {
             brush_editor_preview_cache_size: None,
             brush_graph_version: 0,
             last_rendered_preview_version: 0,
+            brush_topology_version: 0,
             active_dab_preview_cache: None,
             active_dab_preview_cache_size: None,
-            last_rendered_dab_version: 0,
+            last_rendered_dab_topology_version: 0,
             // Default theme: dark (white on dark). Frontend overrides via
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],

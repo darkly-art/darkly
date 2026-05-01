@@ -54,11 +54,11 @@ See `gpu-lessons-learned.md` for full details. The specifics vary but the theme 
 
 ## Testing Principle
 
-Every feature must have a test. Every bug must have a regression test.
+**Every feature must have a test.** Verify the feature works. The test exists; it passes. That's it.
 
-**Bug fix workflow: write the failing test FIRST. Do not edit any non-test file until the regression test exists and fails. Then fix the bug and confirm the test passes.** Regression tests must be verified against the unfixed code — if the test doesn't fail without the fix, it doesn't count. The workflow is: write the test, run it, confirm it fails, then fix the bug, run the test again, confirm it passes. No exceptions.
+**Every bug must have a _regression_ test — one that defends against that specific bug being reintroduced.** "Regression" means "the bug we just fixed must not come back"; a test for a new feature is not a regression test, even if it follows the same pattern. Write it FIRST, confirm it FAILS against the unfixed code, then fix the bug and confirm it passes; if it doesn't fail without the fix, it doesn't count. Performance regressions need concrete timing bounds (e.g., `assert!(ms < 50.0)`) to catch algorithmic, not just logical, breakage.
 
-Performance regression tests should assert concrete timing bounds (e.g., `assert!(ms < 50.0)`) so they catch algorithmic regressions, not just logical ones.
+**Every bug is a signal that something nearby is awkward or overcomplicated.** Before patching, ask: "is this an elegant solution?" If the answer is no, the bug is telling you the code wants to be restructured — propose a refactor instead of layering a fix on top. The cleanest fix is often the one that makes the bug impossible to express, not the one that handles it.
 
 ## No Blocking GPU Readbacks
 

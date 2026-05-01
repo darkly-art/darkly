@@ -5,6 +5,7 @@ import { settings } from '../state/settings.svelte';
 import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
+import { registerBrushParamActions } from './brush_params';
 
 export function registerActions() {
     // -- Binding sites --
@@ -290,6 +291,9 @@ export function registerActions() {
         defaultHotkey: '$mod+Comma',
         handler: () => { settings.open = true; },
     });
+
+    // -- Brush parameters (size hotkeys + shift+drag scrub) --
+    registerBrushParamActions();
 }
 
 // -- Layer isolation state --

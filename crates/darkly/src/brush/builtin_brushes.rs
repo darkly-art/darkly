@@ -358,7 +358,7 @@ fn ink_pen() -> Brush {
         [1.0, 1.0],
     ]);
     b.wire(b.pen, "pressure", curve, "input");
-    b.wire(curve, "output", b.stamp, "size");
+    b.wire(curve, "output", b.stamp, "size_input");
     b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.set_stabilize(0.6);
@@ -368,7 +368,7 @@ fn ink_pen() -> Brush {
 fn airbrush() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_circle(1.0);
-    b.set_port(b.stamp, "size", 0.15);
+    b.set_port(b.stamp, "size_input", 0.15);
     b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.build("Airbrush", "basic")
@@ -377,7 +377,7 @@ fn airbrush() -> Brush {
 fn scatter_brush() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_circle(0.3);
-    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.pen, "pressure", b.stamp, "size_input");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.wire_scatter(1.0, 1.0);
     b.build("Scatter Brush", "effects")
@@ -386,7 +386,7 @@ fn scatter_brush() -> Brush {
 fn calligraphy() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_image("calligraphy.png");
-    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.pen, "pressure", b.stamp, "size_input");
     b.wire(b.pen, "tilt_direction", b.stamp, "rotation");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.set_stabilize(0.6);
@@ -405,7 +405,7 @@ fn calligraphy() -> Brush {
 fn textured_ink() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_image("ink_dry.png");
-    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.pen, "pressure", b.stamp, "size_input");
     b.wire(b.pen, "pressure", b.stamp, "flow");
     // random.value is in -1..1; stamp.rotation wants radians. Scale by π
     // so rotation jitters across a full turn (-π..π).
@@ -427,7 +427,7 @@ fn textured_ink() -> Brush {
 fn pencil() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_circle(0.15);
-    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.pen, "pressure", b.stamp, "size_input");
     b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
@@ -450,7 +450,7 @@ fn pencil() -> Brush {
 fn charcoal() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_circle(0.6);
-    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.pen, "pressure", b.stamp, "size_input");
     b.wire(b.pen, "pressure", b.stamp, "flow");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
@@ -472,7 +472,7 @@ fn charcoal() -> Brush {
 fn canvas_brush() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_circle(0.4);
-    b.wire(b.pen, "pressure", b.stamp, "size");
+    b.wire(b.pen, "pressure", b.stamp, "size_input");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
     // Texture overlay with Multiply blend and user-adjustable strength.
