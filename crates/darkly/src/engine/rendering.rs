@@ -362,18 +362,17 @@ impl DarklyEngine {
                     self.brush_library.set_dab_thumbnail(&name, png_bytes);
                 }
             }
-            ReadbackContext::ActiveBrushDab {
-                width,
-                height,
-                topology_version,
-            } => {
+            ReadbackContext::ActiveBrushDab { topology_version } => {
                 // Drop stale results — but key off topology, not graph
                 // version: scrub-only changes don't affect the rendered
                 // dab thanks to `reset_exposed_scrubs`, so a readback
                 // queued before a scrub change is still valid.
                 if topology_version == self.brush_topology_version {
-                    self.active_dab_preview_cache = Some(pixels);
-                    self.active_dab_preview_cache_size = Some((width, height));
+                    let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
+                    if !png_bytes.is_empty() {
+                        self.active_dab_preview_cache = Some(png_bytes);
+                    }
                 }
             }
         }

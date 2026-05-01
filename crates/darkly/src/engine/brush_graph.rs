@@ -432,7 +432,6 @@ impl DarklyEngine {
         self.brush_editor_preview_cache = None;
         self.brush_editor_preview_cache_size = None;
         self.active_dab_preview_cache = None;
-        self.active_dab_preview_cache_size = None;
         // Theme changes alter rendered colors → both editor preview and
         // dab thumbnail need to re-render and discard any in-flight
         // readbacks. Bump both versions.
@@ -441,11 +440,18 @@ impl DarklyEngine {
     }
 
     /// Render a single-dab preview of the active brush and return the
-    /// most recent cached bytes synchronously. Pixels update on a later
-    /// frame once the async readback completes — same shape as
+    /// most recent cached PNG bytes synchronously. Pixels update on a
+    /// later frame once the async readback completes — same shape as
     /// `brush_editor_preview` and `layer_thumbnail`. Used by the
     /// BrushBar trigger button and the picker's active-brush strip.
-    pub fn brush_active_dab_preview(&mut self, width: u32, height: u32) -> Vec<u8> {
+    ///
+    /// Renders at the same fixed `BRUSH_DAB_RENDER_SIZE` the baked
+    /// thumbnail path uses, and runs the result through the same
+    /// `frame_dab_thumbnail` framer — so the bytes returned here are
+    /// byte-identical to a `brush_dab_thumbnail(active_name)` call.
+    /// The frontend scales the resulting PNG via CSS to whatever
+    /// display size it needs.
+    pub fn brush_active_dab_preview(&mut self) -> Vec<u8> {
         // Guard against painting while a real stroke is in flight — the
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
@@ -453,14 +459,11 @@ impl DarklyEngine {
         let in_stroke = self.brush_stroke_engine.is_some();
 
         // See `brush_editor_preview` for why we return an empty Vec rather
-        // than a zero-filled one when no cache is available for *this*
-        // size — frontends treat empty as "no fresh bytes" and preserve
-        // the last successful render, while a zero buffer would parse as
-        // a transparent image and visibly wipe whatever was on screen.
-        let cached = self
-            .active_dab_preview_cache
-            .clone()
-            .filter(|_| self.active_dab_preview_cache_size == Some((width, height)));
+        // than a zero-filled one when no cache is available — frontends
+        // treat empty as "no fresh bytes" and preserve the last successful
+        // render, while a zero buffer would parse as a transparent image
+        // and visibly wipe whatever was on screen.
+        let cached = self.active_dab_preview_cache.clone();
 
         // Skip work when nothing has changed and the cache is good. Also
         // skip while a real stroke is in progress — return the most recent
@@ -468,7 +471,7 @@ impl DarklyEngine {
         // stroke's GPU state.
         let nothing_to_do = in_stroke
             || (self.last_rendered_dab_topology_version == self.brush_topology_version
-                && self.active_dab_preview_cache_size == Some((width, height)));
+                && self.active_dab_preview_cache.is_some());
         if nothing_to_do {
             return cached.unwrap_or_default();
         }
@@ -489,18 +492,16 @@ impl DarklyEngine {
         // user-facing scrubs belong in the brush bar, not the icon.
         let mut graph = self.active_brush_graph.clone();
         crate::brush::reset_exposed_scrubs(&mut graph);
-        let path =
-            crate::brush::preview_renderer::synthesize_preview_dab(width as f32, height as f32);
+        let (rw, rh) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_preview_dab(rw as f32, rh as f32);
         self.render_preview_and_request_readback(
             &graph,
             &path,
-            width,
-            height,
+            rw,
+            rh,
             fg,
             bg,
             ReadbackContext::ActiveBrushDab {
-                width,
-                height,
                 topology_version: self.brush_topology_version,
             },
         );

@@ -137,15 +137,16 @@ pub(crate) enum ReadbackContext {
         height: u32,
     },
     /// Async readback of a single-dab preview rendered from the active
-    /// graph. Completion caches the RGBA bytes on the engine so the next
-    /// `brush_active_dab_preview` call returns them synchronously. The
-    /// topology version (not graph version) travels with the request:
-    /// scrub-only changes don't affect the rendered output thanks to
-    /// [`crate::brush::reset_exposed_scrubs`], so they shouldn't discard
-    /// in-flight readbacks either.
+    /// graph. Completion runs the pixels through the same
+    /// `frame_dab_thumbnail` framer the baked dab thumbnails use, so the
+    /// active preview is byte-for-byte identical to the picker tiles'
+    /// thumbnail when the active brush matches a preset. The PNG bytes
+    /// land in `active_dab_preview_cache`. The topology version (not
+    /// graph version) travels with the request: scrub-only changes
+    /// don't affect the rendered output thanks to
+    /// [`crate::brush::reset_exposed_scrubs`], so they shouldn't
+    /// discard in-flight readbacks either.
     ActiveBrushDab {
-        width: u32,
-        height: u32,
         topology_version: u64,
     },
 }
@@ -265,13 +266,14 @@ pub struct DarklyEngine {
     pub(crate) brush_topology_version: u64,
 
     // --- Active brush dab preview ---
-    /// Cached RGBA bytes of the most recently-completed active-dab
-    /// preview. `brush_active_dab_preview()` returns this synchronously;
-    /// it's refreshed asynchronously via `ReadbackContext::ActiveBrushDab`.
+    /// Cached PNG bytes of the most recently-completed active-dab
+    /// preview, framed through the same `frame_dab_thumbnail` path used
+    /// for baked thumbnails — so this is byte-identical to a
+    /// `brush_dab_thumbnail(active_name)` call when the active brush
+    /// matches a preset. `brush_active_dab_preview()` returns this
+    /// synchronously; it's refreshed asynchronously via
+    /// `ReadbackContext::ActiveBrushDab`.
     pub(crate) active_dab_preview_cache: Option<Vec<u8>>,
-    /// Dimensions of the bytes in `active_dab_preview_cache`. Cleared
-    /// alongside the cache on invalidation.
-    pub(crate) active_dab_preview_cache_size: Option<(u32, u32)>,
     /// Topology version at the last time we issued a dab render. Compared
     /// against `brush_topology_version` to skip redundant dab renders.
     pub(crate) last_rendered_dab_topology_version: u64,
@@ -388,7 +390,6 @@ impl DarklyEngine {
             last_rendered_preview_version: 0,
             brush_topology_version: 0,
             active_dab_preview_cache: None,
-            active_dab_preview_cache_size: None,
             last_rendered_dab_topology_version: 0,
             // Default theme: dark (white on dark). Frontend overrides via
             // `set_preview_theme()` as soon as the UI loads.

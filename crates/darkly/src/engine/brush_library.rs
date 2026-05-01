@@ -184,9 +184,20 @@ impl DarklyEngine {
         let (w, h) = BRUSH_DAB_RENDER_SIZE;
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
+        // Reset every exposed scrub (size, opacity, hardness, …) to its
+        // registration default before rendering — same treatment the
+        // active-dab preview applies. The dab thumbnail represents the
+        // brush's identity (shape, texture, dynamics), so user-facing
+        // scrubs that vary across instances of the same brush type
+        // shouldn't bias the picker icon. Keeping the two paths
+        // identical here also means `brush_dab_thumbnail(active_name)`
+        // and `brush_active_dab_preview()` produce byte-identical PNGs,
+        // so the picker tile and the BrushBar trigger always agree.
+        let mut graph = brush.metadata.graph.clone();
+        crate::brush::reset_exposed_scrubs(&mut graph);
         let path = crate::brush::preview_renderer::synthesize_preview_dab(w as f32, h as f32);
         self.render_preview_and_request_readback(
-            &brush.metadata.graph,
+            &graph,
             &path,
             w,
             h,

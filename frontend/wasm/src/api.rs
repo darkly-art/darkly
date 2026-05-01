@@ -784,13 +784,14 @@ impl DarklyHandle {
 
     /// Render a single-dab preview of the active brush — the small
     /// tip-shape thumbnail used by the BrushBar trigger and the picker's
-    /// active-brush strip. Returns the most recent cached bytes
+    /// active-brush strip. Returns the most recent cached PNG bytes
     /// synchronously; the async readback updates them on a later frame.
-    pub fn brush_active_dab_preview(&self, width: u32, height: u32) -> Vec<u8> {
+    /// Output is byte-identical to `brush_dab_thumbnail(active_name)`
+    /// when the active brush matches a preset, so the frontend can
+    /// scale the PNG to any display size via CSS.
+    pub fn brush_active_dab_preview(&self) -> Vec<u8> {
         self.flush_if_needed();
-        self.engine
-            .borrow_mut()
-            .brush_active_dab_preview(width, height)
+        self.engine.borrow_mut().brush_active_dab_preview()
     }
 
     /// Return the cached PNG thumbnail bytes for a library brush, kicking

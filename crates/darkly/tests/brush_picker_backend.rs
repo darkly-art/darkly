@@ -240,12 +240,33 @@ fn brush_thumbnail_unknown_name_returns_empty() {
     assert!(bytes.is_empty(), "still empty after flush");
 }
 
+/// Ensures the active-dab preview observes its async-readback contract
+/// (first call empty, post-flush bytes present, PNG wire format) and
+/// also locks in the byte-equality invariant against
+/// `brush_dab_thumbnail` for the same brush.
+///
+/// Regression for a bug where the live preview rendered at the
+/// caller's display CSS pixel size (e.g. 22×22 for the BrushBar
+/// trigger), causing the brush footprint — fixed at hundreds of pixels —
+/// to overflow the canvas. Visible symptom: 100% white blob in the
+/// dropdown trigger and a clipped, oversized preview in the picker's
+/// active-brush strip, while the picker tile thumbnails for the same
+/// brush rendered correctly. Both paths now render at
+/// `BRUSH_DAB_RENDER_SIZE`, apply `reset_exposed_scrubs`, and frame
+/// through `frame_dab_thumbnail` — so they must produce byte-identical
+/// PNGs for the same brush. Combined with the basic readback-shape
+/// asserts here to share one engine (and one wgpu device) across the
+/// two checks; otherwise parallel tests run into device resource
+/// limits — see `size_scrub_does_not_change_active_dab_pixels` for the
+/// same concern.
 #[test]
 fn active_dab_preview_first_call_empty_then_present_after_flush() {
     let mut engine = fresh_engine();
+    engine
+        .brush_load("Soft Round")
+        .expect("Soft Round is a built-in brush");
 
-    let (w, h) = (40u32, 40u32);
-    let first = engine.brush_active_dab_preview(w, h);
+    let first = engine.brush_active_dab_preview();
     assert!(
         first.is_empty(),
         "cache miss returns an empty Vec — frontends use that as 'no fresh \
@@ -255,15 +276,25 @@ fn active_dab_preview_first_call_empty_then_present_after_flush() {
     );
 
     engine.test_flush_readbacks();
-    let second = engine.brush_active_dab_preview(w, h);
+    let live = engine.brush_active_dab_preview();
+    assert!(!live.is_empty(), "post-flush bytes carry the framed PNG");
     assert_eq!(
-        second.len(),
-        (w * h * 4) as usize,
-        "post-flush bytes match the requested dimensions"
+        &live[..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        "bytes start with the PNG signature — same wire format as `brush_dab_thumbnail`"
     );
-    assert!(
-        second.iter().any(|&b| b != 0),
-        "rendered dab should produce some non-zero pixels"
+
+    // Byte-equality invariant: bake the picker-tile thumbnail and
+    // confirm it matches the live preview byte-for-byte.
+    let _ = engine.brush_dab_thumbnail("Soft Round");
+    engine.test_flush_readbacks();
+    let baked = engine.brush_dab_thumbnail("Soft Round");
+    assert!(!baked.is_empty(), "baked thumbnail produced bytes");
+    assert_eq!(
+        live, baked,
+        "active-brush preview must be byte-identical to the baked thumbnail \
+         for the same brush — divergence means the BrushBar trigger / \
+         picker active strip will visually disagree with the picker tile."
     );
 }
 
@@ -271,14 +302,13 @@ fn active_dab_preview_first_call_empty_then_present_after_flush() {
 fn active_dab_preview_cached_across_calls() {
     let mut engine = fresh_engine();
 
-    let (w, h) = (40u32, 40u32);
-    let _ = engine.brush_active_dab_preview(w, h);
+    let _ = engine.brush_active_dab_preview();
     engine.test_flush_readbacks();
-    let cached_a = engine.brush_active_dab_preview(w, h);
-    let cached_b = engine.brush_active_dab_preview(w, h);
+    let cached_a = engine.brush_active_dab_preview();
+    let cached_b = engine.brush_active_dab_preview();
     assert_eq!(
         cached_a, cached_b,
-        "back-to-back calls without invalidation return the same cached pixels"
+        "back-to-back calls without invalidation return the same cached PNG"
     );
 }
 
@@ -286,18 +316,17 @@ fn active_dab_preview_cached_across_calls() {
 fn theme_change_invalidates_active_dab_preview() {
     let mut engine = fresh_engine();
 
-    let (w, h) = (40u32, 40u32);
-    let _ = engine.brush_active_dab_preview(w, h);
+    let _ = engine.brush_active_dab_preview();
     engine.test_flush_readbacks();
-    let before = engine.brush_active_dab_preview(w, h);
-    assert!(before.iter().any(|&b| b != 0), "baseline has rendered dab");
+    let before = engine.brush_active_dab_preview();
+    assert!(!before.is_empty(), "baseline has framed PNG");
 
     // Swap to a contrasting palette — invalidation drops the cache so
     // the next call has to re-bake. The shape of the buffer doesn't
     // change, but the bg pixels (everywhere outside the dab) shift to
     // the new background colour, so byte-equality must fail.
     engine.set_preview_theme([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
-    let after_invalidate_first = engine.brush_active_dab_preview(w, h);
+    let after_invalidate_first = engine.brush_active_dab_preview();
     assert!(
         after_invalidate_first.is_empty(),
         "theme change drops the cache; next call returns empty until the \
@@ -306,14 +335,11 @@ fn theme_change_invalidates_active_dab_preview() {
     );
 
     engine.test_flush_readbacks();
-    let after = engine.brush_active_dab_preview(w, h);
-    assert!(
-        after.iter().any(|&b| b != 0),
-        "rebake produces fresh pixels"
-    );
+    let after = engine.brush_active_dab_preview();
+    assert!(!after.is_empty(), "rebake produces fresh PNG");
     assert_ne!(
         after, before,
-        "different theme should yield different pixels"
+        "different theme should yield different bytes"
     );
 }
 
@@ -331,12 +357,11 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     // size drag. Regression for that bug lives here, against the same
     // engine, to avoid creating an extra wgpu device in parallel.
     let mut engine = fresh_engine();
-    let (w, h) = (32u32, 32u32);
 
-    let _ = engine.brush_active_dab_preview(w, h);
+    let _ = engine.brush_active_dab_preview();
     engine.test_flush_readbacks();
-    let before = engine.brush_active_dab_preview(w, h);
-    assert!(before.iter().any(|&b| b != 0));
+    let before = engine.brush_active_dab_preview();
+    assert!(!before.is_empty());
 
     // Find the stamp's exposed `size` port and adjust it via the same
     // entry point the brush bar / shift+drag scrub uses.
@@ -360,7 +385,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     // were keyed off graph_version it would have invalidated and a
     // rebake would run; under the topology-version split it doesn't.
     engine.test_flush_readbacks();
-    let after = engine.brush_active_dab_preview(w, h);
+    let after = engine.brush_active_dab_preview();
     assert_eq!(
         after, before,
         "scrubbing the user-facing size port must not change the dab thumbnail bytes"
@@ -385,11 +410,10 @@ fn size_scrub_does_not_change_active_dab_pixels() {
 fn graph_change_triggers_active_dab_rebake() {
     let mut engine = fresh_engine();
 
-    let (w, h) = (40u32, 40u32);
-    let _ = engine.brush_active_dab_preview(w, h);
+    let _ = engine.brush_active_dab_preview();
     engine.test_flush_readbacks();
-    let before = engine.brush_active_dab_preview(w, h);
-    assert!(before.iter().any(|&b| b != 0));
+    let before = engine.brush_active_dab_preview();
+    assert!(!before.is_empty());
 
     // Loading a different brush replaces the active graph, which bumps
     // the graph version through `compile_active`. The version mismatch
@@ -398,12 +422,12 @@ fn graph_change_triggers_active_dab_rebake() {
     engine
         .brush_load("Hard Round")
         .expect("Hard Round is a built-in brush");
-    let _stale_fallback = engine.brush_active_dab_preview(w, h);
+    let _stale_fallback = engine.brush_active_dab_preview();
 
     engine.test_flush_readbacks();
-    let after = engine.brush_active_dab_preview(w, h);
+    let after = engine.brush_active_dab_preview();
     assert!(
-        after.iter().any(|&b| b != 0),
+        !after.is_empty(),
         "rebake under the new brush produces fresh pixels"
     );
     assert_ne!(
