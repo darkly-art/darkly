@@ -20,7 +20,7 @@ The project uses a `build.rs` script that scans module directories and auto-gene
 - `FilterRegistry::new()` calls the generated `registrations()` to populate itself
 - The compositor calls trait methods on `dyn Filter` — it never branches on filter type
 
-This same pattern applies to all modular systems in the project.
+**Type-owned dispatch:** This same pattern applies to all modular systems in the project, including types and interfaces, which should own their own dispatch logic. Any time a type has variant-specific behavior — a format-specific GPU pipeline, a color-space-specific blend, a tool-specific cursor — the dispatch lives in the type, behind a uniform interface. Consumers call the interface; they never branch on which variant they got. *Anti-pattern: `if mask { ... } else { ... }` sprinkled across code that consumes a paint surface; the format-specific dispatch is conceptually a paint-surface concern, so it belongs in the paint-surface interface, not at every call site.*
 
 ## DRY Principle
 

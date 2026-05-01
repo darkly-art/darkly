@@ -23,7 +23,6 @@ pub struct StrokeBuffer {
 
     /// Snapshot of the layer before the stroke started.
     pre_stroke_texture: wgpu::Texture,
-    #[allow(dead_code)] // Kept alive for bind group references.
     pre_stroke_view: wgpu::TextureView,
 
     /// Bind group for the stroke texture, compatible with the dab texture BGL
@@ -80,7 +79,11 @@ impl StrokeBuffer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::COPY_SRC
+            // RENDER_ATTACHMENT is required when the source layer is an R8
+            // mask: `GpuPaintTarget::save_pre_stroke_snapshot` runs a
+            // broadcast render pass instead of `copy_texture_to_texture`.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
@@ -158,36 +161,38 @@ impl StrokeBuffer {
         &self.pre_stroke_texture
     }
 
+    /// The pre-stroke snapshot view — the destination of `save_pre_stroke_snapshot`
+    /// when the source is an R8 mask (which goes through a render pass instead
+    /// of `copy_texture_to_texture`).
+    pub fn pre_stroke_view(&self) -> &wgpu::TextureView {
+        &self.pre_stroke_view
+    }
+
     /// Bind group over the pre-stroke snapshot using the canvas-copy BGL —
     /// the composite pipeline binds this as the background at commit time.
     pub fn pre_stroke_bind_group(&self) -> &wgpu::BindGroup {
         &self.pre_stroke_bind_group
     }
 
-    /// Save a snapshot of the layer texture before the stroke starts.
+    /// Save a snapshot of the paint target's pixels into the pre-stroke
+    /// snapshot texture. Format-aware via `GpuPaintTarget`'s extension trait:
+    /// RGBA8 sources use `copy_texture_to_texture` (hardware-fast); R8 mask
+    /// sources go through a broadcast render pass that turns each `r` into
+    /// `(r, r, r, 1)` in the RGBA8 snapshot.
     pub fn save_pre_stroke(
         &self,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        layer_texture: &wgpu::Texture,
+        brush_pipelines: &crate::brush::pipelines::BrushPipelines,
+        paint_target: &crate::gpu::paint_target::GpuPaintTarget<'_>,
     ) {
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: layer_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &self.pre_stroke_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: self.width,
-                height: self.height,
-                depth_or_array_layers: 1,
-            },
+        use crate::brush::paint_target_ext::BrushPaintTargetExt;
+        paint_target.save_pre_stroke_snapshot(
+            device,
+            encoder,
+            brush_pipelines,
+            &self.pre_stroke_view,
+            &self.pre_stroke_texture,
         );
     }
 

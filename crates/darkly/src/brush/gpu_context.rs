@@ -13,6 +13,7 @@ use super::dab_pool::DabTexturePool;
 use super::eval::BrushPreviewInfo;
 use super::pipelines::BrushPipelines;
 use super::wire::TextureHandle;
+use crate::gpu::paint_target::GpuPaintTarget;
 
 /// Everything a GPU brush node needs to record render passes.
 ///
@@ -36,15 +37,16 @@ pub struct BrushGpuContext<'a> {
     pub stroke_scratch_texture: &'a wgpu::Texture,
     pub canvas_width: u32,
     pub canvas_height: u32,
-    /// Layer texture pixel dimensions (== stroke_scratch dims). For
-    /// canvas-aligned layers this equals canvas_{width,height}; for paste-
-    /// extent layers it is the layer texture's actual size.
-    pub layer_width: u32,
-    pub layer_height: u32,
-    /// Canvas-space offset of the layer texture's (0,0) pixel. Zero for
-    /// canvas-aligned layers.
-    pub layer_offset_x: i32,
-    pub layer_offset_y: i32,
+    /// The paint target the terminal is committing to: a layer (RGBA8) or
+    /// mask (R8). `None` in preview mode (no commit happens).
+    ///
+    /// Replaces the loose `layer_view` / `layer_texture` / `layer_width` /
+    /// `layer_height` / `layer_offset_x` / `layer_offset_y` fields. All those
+    /// values are now `gpu.paint_target.X`. Format awareness lives in
+    /// `GpuPaintTarget`'s brush extension (`commit_brush_dab`,
+    /// `save_pre_stroke_snapshot`, `commit_scratch_blit`) — terminals call
+    /// uniform methods on the paint target and never branch on R8 vs RGBA8.
+    pub paint_target: Option<GpuPaintTarget<'a>>,
     /// Selection mask bind group (or default 1x1 white when no selection).
     pub selection_bind_group: &'a wgpu::BindGroup,
     /// Resource name → TextureHandle for images uploaded by the brush loader.
@@ -74,11 +76,6 @@ pub struct BrushGpuContext<'a> {
     /// preview path; first-write-wins if multiple terminals try to publish
     /// (unusual — typically one terminal owns the preview).
     pub brush_preview_info: Option<BrushPreviewInfo>,
-    /// The actual layer texture view — write target for the terminal's
-    /// `commit` hook. `None` in preview mode (no layer to commit to).
-    pub layer_view: Option<&'a wgpu::TextureView>,
-    /// The actual layer texture (for copy_texture_to_texture at commit).
-    pub layer_texture: Option<&'a wgpu::Texture>,
     /// Pre-stroke layer snapshot. Supplied by `StrokeBuffer::save_pre_stroke`
     /// at the start of a stroke. `Some` during a stroke, `None` in preview.
     pub pre_stroke_texture: Option<&'a wgpu::Texture>,

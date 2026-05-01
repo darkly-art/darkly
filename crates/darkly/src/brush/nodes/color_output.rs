@@ -28,6 +28,7 @@
 
 use crate::brush::eval::{BrushNodeEvaluator, BrushPreviewInfo, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipelines::{BlitUniforms, CompositeUniforms};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -96,6 +97,17 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         let foot_w = dab_w;
         let foot_h = dab_h;
 
+        // The paint target carries the layer/mask dimensions and offset.
+        // Stroke-time evaluate_gpu always has a paint target.
+        let pt = gpu
+            .paint_target
+            .as_ref()
+            .expect("color_output::evaluate_gpu requires a paint target");
+        let pt_offset_x = pt.offset_x;
+        let pt_offset_y = pt.offset_y;
+        let pt_width = pt.width;
+        let pt_height = pt.height;
+
         // Position the composite quad centered on the dab position,
         // clamped to the LAYER's canvas extent. Paste-extent / grown
         // layers may extend past the canvas bounds in either direction —
@@ -104,10 +116,10 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         let half_h = foot_h * 0.5;
         let unclipped_x0 = position[0] - half_w;
         let unclipped_y0 = position[1] - half_h;
-        let layer_x0 = gpu.layer_offset_x as f32;
-        let layer_y0 = gpu.layer_offset_y as f32;
-        let layer_x1 = layer_x0 + gpu.layer_width as f32;
-        let layer_y1 = layer_y0 + gpu.layer_height as f32;
+        let layer_x0 = pt_offset_x as f32;
+        let layer_y0 = pt_offset_y as f32;
+        let layer_x1 = layer_x0 + pt_width as f32;
+        let layer_y1 = layer_y0 + pt_height as f32;
         let x0 = unclipped_x0.max(layer_x0);
         let y0 = unclipped_y0.max(layer_y0);
         let x1 = (position[0] + half_w).min(layer_x1);
@@ -147,8 +159,8 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         // canvas_copy indexes the stroke scratch, which is layer-sized —
         // translate the canvas-space rect to the layer's local coord frame
         // for the per-dab GPU dispatch.
-        let copy_local_x = (copy_canvas_x - gpu.layer_offset_x) as u32;
-        let copy_local_y = (copy_canvas_y - gpu.layer_offset_y) as u32;
+        let copy_local_x = (copy_canvas_x - pt_offset_x) as u32;
+        let copy_local_y = (copy_canvas_y - pt_offset_y) as u32;
 
         // Ensure the scratch region under the dab is in canvas_copy for the
         // shader's straight-alpha Porter-Duff read. The bg here is the
@@ -179,8 +191,8 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             size: [quad_w, quad_h],
             // Per-dab composite renders into stroke_scratch, sized to layer
             // bounds. target_offset is the layer's canvas-space offset.
-            target_offset: [gpu.layer_offset_x as f32, gpu.layer_offset_y as f32],
-            target_size: [gpu.layer_width as f32, gpu.layer_height as f32],
+            target_offset: [pt_offset_x as f32, pt_offset_y as f32],
+            target_size: [pt_width as f32, pt_height as f32],
             canvas_size: [gpu.canvas_width as f32, gpu.canvas_height as f32],
             uv_min: [uv_min_x, uv_min_y],
             uv_max: [uv_max_x, uv_max_y],
@@ -214,15 +226,15 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             });
 
             // Viewport must match the stroke scratch (sized to layer bounds).
-            pass.set_viewport(
-                0.0,
-                0.0,
-                gpu.layer_width as f32,
-                gpu.layer_height as f32,
-                0.0,
-                1.0,
+            pass.set_viewport(0.0, 0.0, pt_width as f32, pt_height as f32, 0.0, 1.0);
+            // Per-dab composite always writes to the RGBA8 stroke scratch —
+            // format-fixed, regardless of the destination layer's format.
+            // (The R8 path appears at stroke commit time via
+            // `GpuPaintTarget::commit_brush_dab`.)
+            pass.set_pipeline(
+                gpu.pipelines
+                    .composite_pipeline(wgpu::TextureFormat::Rgba8Unorm),
             );
-            pass.set_pipeline(gpu.pipelines.composite_pipeline());
             pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[offset]);
             pass.set_bind_group(1, dab_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
@@ -259,68 +271,30 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
 
     /// Composite the scratch (= this stroke's accumulated contribution,
     /// already selection-masked) onto the pre-stroke layer snapshot, and
-    /// write the result to the layer. Applies the stroke-level `opacity`
+    /// write the result to the layer or mask. The `commit_brush_dab` method
+    /// on `GpuPaintTarget` handles the format-aware pipeline lookup so this
+    /// terminal stays format-agnostic. Applies the stroke-level `opacity`
     /// port and honours the engine's `blend_mode` (paint vs erase).
     fn commit(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        // Everything we need must be present; if any piece is missing we're
-        // in a pre-refactor fallback path that composites directly to the
-        // layer — nothing for commit to do.
-        let (Some(layer_view), Some(scratch_bg), Some(pre_stroke_bg)) = (
-            gpu.layer_view,
-            gpu.scratch_bind_group,
-            gpu.pre_stroke_bind_group,
-        ) else {
+        let (Some(scratch_bg), Some(pre_stroke_bg)) =
+            (gpu.scratch_bind_group, gpu.pre_stroke_bind_group)
+        else {
             return;
         };
-
-        let opacity = ctx.input_f32("opacity").clamp(0.0, 1.0);
-        // Commit composites the layer-sized scratch onto the layer-sized
-        // pre-stroke snapshot, writing to the layer texture. All three are
-        // sized to the layer's bounds; use canvas-space coords throughout.
-        let layer_w = gpu.layer_width as f32;
-        let layer_h = gpu.layer_height as f32;
-        let layer_off_x = gpu.layer_offset_x as f32;
-        let layer_off_y = gpu.layer_offset_y as f32;
-
-        let uniforms = CompositeUniforms {
-            origin: [layer_off_x, layer_off_y],
-            size: [layer_w, layer_h],
-            target_offset: [layer_off_x, layer_off_y],
-            target_size: [layer_w, layer_h],
-            canvas_size: [gpu.canvas_width as f32, gpu.canvas_height as f32],
-            uv_min: [0.0, 0.0],
-            uv_max: [1.0, 1.0],
-            blend_mode: gpu.blend_mode, // paint = 0, erase = 1
-            fg_premultiplied: 0,        // scratch is straight alpha
-            stroke_opacity: opacity,
-            // Selection is already baked into the scratch via per-dab
-            // composites — applying again would give sel².
-            apply_selection: 0,
+        let Some(paint_target) = gpu.paint_target.as_ref() else {
+            return;
         };
-        let offset = gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
-
-        let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("color_output-commit"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: layer_view,
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        // Viewport must match the render target (the layer texture) so NDC
-        // [-1,1] maps to [0, layer_w] × [0, layer_h].
-        pass.set_viewport(0.0, 0.0, layer_w, layer_h, 0.0, 1.0);
-        pass.set_pipeline(gpu.pipelines.composite_pipeline());
-        pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[offset]);
-        pass.set_bind_group(1, scratch_bg, &[]);
-        pass.set_bind_group(2, gpu.selection_bind_group, &[]);
-        pass.set_bind_group(3, pre_stroke_bg, &[]);
-        pass.draw(0..6, 0..1);
+        let opacity = ctx.input_f32("opacity").clamp(0.0, 1.0);
+        paint_target.commit_brush_dab(
+            &mut gpu.encoder,
+            gpu.pipelines,
+            gpu.queue,
+            scratch_bg,
+            gpu.selection_bind_group,
+            pre_stroke_bg,
+            opacity,
+            gpu.blend_mode,
+        );
     }
 
     /// Render the hover preview into the overlay's preview mask.

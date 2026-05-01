@@ -215,11 +215,9 @@ impl DarklyEngine {
             stroke_scratch_texture: preview_tex,
             canvas_width: target_size.0,
             canvas_height: target_size.1,
-            // Brush-graph preview path: target is canvas-aligned.
-            layer_width: target_size.0,
-            layer_height: target_size.1,
-            layer_offset_x: 0,
-            layer_offset_y: 0,
+            // No layer / pre-stroke state in preview — commit isn't called,
+            // and `render_preview` writes to `preview_mask_view`.
+            paint_target: None,
             selection_bind_group: sel_bg,
             resource_handles: &self.resource_handles,
             blend_mode: 0,
@@ -227,9 +225,6 @@ impl DarklyEngine {
             preview_mask_view: Some(&target_view),
             preview_mask_size: target_size,
             brush_preview_info: None,
-            // No layer / pre-stroke state in preview — commit isn't called.
-            layer_view: None,
-            layer_texture: None,
             pre_stroke_texture: None,
             pre_stroke_bind_group: None,
             scratch_bind_group: None,

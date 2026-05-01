@@ -264,18 +264,23 @@
         display: flex;
         align-items: center;
         gap: 4px;
-        background: var(--bg-hover);
+        background: var(--accent);
         border: none;
         border-radius: 6px;
-        color: var(--text);
+        color: #ffffff;
         cursor: pointer;
-        font-size: 11px;
+        font-size: 13px;
+        font-weight: 600;
         padding: 4px 8px;
         min-width: 100px;
-        transition: background 0.1s;
+        transition: background 0.1s, filter 0.1s;
     }
     .brush-picker-button:hover {
-        background: var(--bg-active);
+        filter: brightness(1.15);
+    }
+
+    .brush-picker-button .chevron {
+        color: rgba(255, 255, 255, 0.85);
     }
 
     .brush-name {

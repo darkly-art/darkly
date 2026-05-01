@@ -148,10 +148,21 @@ fn harness(initial: &[u8], size: f32, strength: f32, softness: f32) -> Harness {
     // Snapshot the (untouched) layer into pre_stroke, same as the real engine
     // does at the start of a stroke. begin_stroke will copy this into the
     // scratch.
+    let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget {
+        texture: &layer_texture,
+        view: &layer_view,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        width: CANVAS,
+        height: CANVAS,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: CANVAS,
+        canvas_height: CANVAS,
+    };
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("test-pre-stroke-init"),
     });
-    stroke_buffer.save_pre_stroke(&mut enc, &layer_texture);
+    stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke_paint_target);
     queue.submit([enc.finish()]);
 
     let graph = liquify_graph(size, strength, softness);
@@ -189,10 +200,17 @@ macro_rules! make_ctx {
             stroke_scratch_texture: $h.stroke_buffer.stroke_texture(),
             canvas_width: CANVAS,
             canvas_height: CANVAS,
-            layer_width: CANVAS,
-            layer_height: CANVAS,
-            layer_offset_x: 0,
-            layer_offset_y: 0,
+            paint_target: Some(darkly::gpu::paint_target::GpuPaintTarget {
+                texture: &$h.layer_texture,
+                view: &$h.layer_view,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                width: CANVAS,
+                height: CANVAS,
+                offset_x: 0,
+                offset_y: 0,
+                canvas_width: CANVAS,
+                canvas_height: CANVAS,
+            }),
             selection_bind_group: $h.pipelines.default_selection_bind_group(),
             resource_handles: $resources,
             blend_mode: 0,
@@ -200,8 +218,6 @@ macro_rules! make_ctx {
             preview_mask_view: None,
             preview_mask_size: (0, 0),
             brush_preview_info: None,
-            layer_view: Some(&$h.layer_view),
-            layer_texture: Some(&$h.layer_texture),
             pre_stroke_texture: Some($h.stroke_buffer.pre_stroke_texture()),
             pre_stroke_bind_group: Some($h.stroke_buffer.pre_stroke_bind_group()),
             scratch_bind_group: Some($h.stroke_buffer.stroke_bind_group()),

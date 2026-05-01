@@ -13,6 +13,7 @@ use crate::gpu::atlas::{CanvasFrame, LayerTexture};
 /// offset (`offset_x`, `offset_y`). Fragment-stage selection sampling uses the
 /// document `canvas_size` so off-canvas pixels sample outside the selection
 /// texture and clamp/wrap correctly.
+#[derive(Copy, Clone)]
 pub struct GpuPaintTarget<'a> {
     pub texture: &'a wgpu::Texture,
     pub view: &'a wgpu::TextureView,

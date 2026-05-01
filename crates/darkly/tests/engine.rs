@@ -1774,3 +1774,172 @@ fn pending_undo_commit_survives_two_grows() {
          rect that survived past the second grow"
     );
 }
+
+// ============================================================================
+// Mask painting — regression tests for brush-stroke-on-mask
+//
+// Tests defend against the bug introduced in `a4443ab stabilization wip` /
+// `2345766 delete legacy paint paths`, where the brush stack was hardcoded
+// to RGBA8 and painting on R8 mask textures silently failed.
+// ============================================================================
+
+/// Paint a single black brush dab at (x, y) on a mask. Brush color is
+/// grayscale (R=G=B=0); the R channel is what lands in the R8 mask.
+fn paint_mask_dab(engine: &mut DarklyEngine, layer_id: u64, x: f32, y: f32, value: f32) {
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::BrushStroke {
+        x,
+        y,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: value,
+        cg: value,
+        cb: value,
+        ca: 1.0,
+    });
+    engine.end_stroke();
+    engine.render(0.0);
+}
+
+/// Sample the R channel from an R8 (one byte per pixel) mask buffer.
+fn mask_byte_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
+    pixels[(y * w + x) as usize]
+}
+
+/// Brush stroke onto a layer mask must update the mask texture.
+///
+/// Pre-fix (with brush pipeline hardcoded to RGBA8) this fails: the
+/// commit-side format mismatch means painting silently no-ops, and the
+/// mask remains all-white at value 255.
+#[test]
+fn engine_brush_stroke_paints_on_mask() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+    engine.add_mask(layer_id);
+    engine.set_editing_mask(layer_id, true);
+
+    paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
+
+    let pixels = engine.test_readback_mask(layer_id);
+    assert_eq!(
+        pixels.len(),
+        (w * h) as usize,
+        "mask is R8 — one byte/pixel"
+    );
+    let center = mask_byte_at(&pixels, w, w / 2, h / 2);
+    assert!(
+        center < 250,
+        "mask center should be painted (byte < 250 after a black brush dab); \
+         got {center} — brush stroke did not modify the mask"
+    );
+}
+
+/// Pixels untouched by the brush dab must remain at their pre-stroke value
+/// byte-exactly. Validates that the format-aware commit + R8→RGBA8 read
+/// blit round-trip preserves bytes for unmodified regions.
+#[test]
+fn engine_mask_brush_unstroked_pixels_unchanged() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+    engine.add_mask(layer_id);
+    engine.set_editing_mask(layer_id, true);
+
+    paint_mask_dab(&mut engine, layer_id, 10.0, 10.0, 0.0);
+
+    let pixels = engine.test_readback_mask(layer_id);
+    let far = mask_byte_at(&pixels, w, 100, 100);
+    assert_eq!(
+        far, 255,
+        "pixel at (100,100) — well outside the dab footprint at (10,10) — \
+         must remain at the initial reveal-all value (255); got {far} — \
+         the read-side R8→RGBA8 expand or write-side RGBA8→R8 reduce \
+         shifted bytes"
+    );
+}
+
+/// Undo of a mask brush stroke must restore the mask to its pre-stroke
+/// (all-white) state.
+#[test]
+fn engine_mask_brush_undo_restores_mask() {
+    let (w, h) = (64, 64);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+    engine.add_mask(layer_id);
+    engine.set_editing_mask(layer_id, true);
+
+    paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
+    engine.undo();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_mask(layer_id);
+    let mut all_white = true;
+    for byte in &pixels {
+        if *byte != 255 {
+            all_white = false;
+            break;
+        }
+    }
+    assert!(
+        all_white,
+        "after undo of mask brush stroke, mask should return to all-white"
+    );
+}
+
+/// `set_editing_mask(id, true)` followed by a brush stroke when no mask
+/// has been added must not panic. Defends against the secondary issue
+/// where `compositor.mask_texture()` returns `None` and downstream code
+/// could panic on `unwrap()`.
+#[test]
+fn engine_set_editing_mask_without_add_mask_is_safe() {
+    let (w, h) = (64, 64);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+    engine.set_editing_mask(layer_id, true);
+
+    // No add_mask call — mask_texture returns None.
+    paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
+
+    engine.set_editing_mask(layer_id, false);
+}
+
+/// FloodFill on a mask paints every pixel reachable from the seed. The
+/// `GpuPaintTarget` flood-fill path is already format-aware via
+/// `composite_pipeline(self.format)`, so this test should pass even
+/// pre-fix; it locks the behavior down so a future refactor can't break
+/// it without warning.
+#[test]
+fn engine_mask_flood_fill() {
+    let (w, h) = (64, 64);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+    engine.add_mask(layer_id);
+    engine.set_editing_mask(layer_id, true);
+
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: (w / 2) as f32,
+        y: (h / 2) as f32,
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    // Flood fill is async — drive the readback completion.
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_mask(layer_id);
+    let center = mask_byte_at(&pixels, w, w / 2, h / 2);
+    assert!(
+        center < 10,
+        "flood fill with black should drive mask center near 0; got {center}"
+    );
+}
