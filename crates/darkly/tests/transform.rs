@@ -49,7 +49,24 @@ fn setup_transform_pass(
     wgpu::Sampler,
 ) {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
-    let pass = TransformPass::new(device, fmt);
+    // Mock the compositor's mask BGL — single texture entry, fragment stage.
+    // Must match the layout the live BlendPipelines uses, since TransformPass
+    // links it into the preview pipeline. Only the layout matters here; the
+    // commit-only tests in this file don't actually run the preview pass.
+    let mask_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("test-mask-bgl"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }],
+    });
+    let pass = TransformPass::new(device, fmt, &mask_bgl);
 
     // Dummy accumulator textures (needed by set_floating_content for preview bind groups).
     let make_dummy = || {
@@ -135,6 +152,8 @@ fn transform_commit_translate() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -233,6 +252,8 @@ fn transform_commit_translate_undo() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -342,6 +363,8 @@ fn transform_commit_rotate_90() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -437,6 +460,8 @@ fn paste_commit_identity() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -522,6 +547,8 @@ fn paste_commit_undo() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -634,6 +661,8 @@ fn commit_composites_over_existing() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -719,6 +748,8 @@ fn transform_commit_on_mask() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         true, // target_is_mask = true
     );
@@ -849,6 +880,8 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );

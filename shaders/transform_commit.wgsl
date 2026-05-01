@@ -40,6 +40,10 @@ struct Uniforms {
     opacity: f32,
     // 0.0 = RGBA mode, 1.0 = mask mode (luminance conversion)
     is_mask: f32,
+    // Unused by commit — preview uses these for mask UV mapping. Kept here
+    // so the uniform struct layout matches between preview and commit paths.
+    _layer_offset: vec2f,
+    _layer_size: vec2f,
 }
 @group(0) @binding(2) var<uniform> u: Uniforms;
 

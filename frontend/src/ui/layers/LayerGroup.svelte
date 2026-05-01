@@ -107,14 +107,15 @@
         }
     }
 
-    /** Track pointer type so dragstart can reject non-mouse input.
+    /** Track pointer type so dragstart can reject pen input.
      *  Chromium's Wayland backend misroutes pen-initiated drags through
      *  kMouse, putting the drag controller into an invalid state that
-     *  freezes the browser's input pipeline. */
+     *  freezes the browser's input pipeline. Mouse and touch (touchpad)
+     *  are fine. */
     let lastPointerType = '';
 
     function onDragStart(e: DragEvent) {
-        if (lastPointerType !== 'mouse') {
+        if (lastPointerType === 'pen') {
             e.preventDefault();
             return;
         }

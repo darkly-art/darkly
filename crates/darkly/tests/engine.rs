@@ -2090,3 +2090,90 @@ fn engine_magic_wand_on_mask_reads_mask_not_layer() {
          full-canvas selection; got {outside}"
     );
 }
+
+/// Regression: the interactive transform preview must apply the target
+/// layer's mask. Pre-fix the transform-blend shader sampled the floating
+/// source unconditionally and never sampled the mask, so masked-off regions
+/// of the layer "lit back up" as soon as the user began a transform — even
+/// though the committed pixels would re-mask on the next blend pass. This
+/// produced a flicker-on-grab visual bug.
+#[test]
+fn floating_preview_respects_layer_mask() {
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer();
+
+    // Paint a horizontal red stroke across the full canvas width.
+    paint_full_stroke(&mut engine, layer_id, w, h);
+    engine.render(0.0);
+
+    // Select the left half, then add a mask. With an active selection,
+    // `add_mask` seeds from the selection: left = 255 (reveal), right = 0
+    // (hide).
+    engine.select_rect(
+        0.0,
+        0.0,
+        (w / 2) as f32,
+        h as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    engine.add_mask(layer_id);
+    engine.clear_selection();
+    engine.render(0.0);
+
+    // Sanity: before the transform begins, the regular blend pass already
+    // hides the right half. If this fails the test setup is wrong, not the
+    // transform-preview code.
+    let pre = engine.test_readback_canvas();
+    let pre_left = alpha_at(&pre, w, w / 4, h / 2);
+    let pre_right = alpha_at(&pre, w, 3 * w / 4, h / 2);
+    assert!(
+        pre_left > 0,
+        "test setup: left half should be revealed (mask=255); got alpha={pre_left}"
+    );
+    assert_eq!(
+        pre_right, 0,
+        "test setup: right half should be hidden (mask=0); got alpha={pre_right}"
+    );
+
+    // Begin a transform with no active selection — content bounds are
+    // resolved asynchronously via the compositor's GPU compute, so spin
+    // a few frames until floating content is live.
+    engine.begin_transform(layer_id);
+    let mut floating_ready = false;
+    for _ in 0..16 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+        if engine.has_floating() {
+            floating_ready = true;
+            break;
+        }
+    }
+    assert!(
+        floating_ready,
+        "begin_transform did not produce floating content within 16 frames"
+    );
+    // Render once more so the floating preview pass runs on the current frame.
+    engine.render(0.0);
+
+    // The transform starts at identity, so the floating preview shows the
+    // extracted content at the same canvas position the layer occupied.
+    // The mask must still hide the right half, exactly as the regular
+    // blend pass did before the transform began.
+    let post = engine.test_readback_canvas();
+    let post_left = alpha_at(&post, w, w / 4, h / 2);
+    let post_right = alpha_at(&post, w, 3 * w / 4, h / 2);
+    assert!(
+        post_left > 0,
+        "left half should still be visible during transform preview; got alpha={post_left}"
+    );
+    assert_eq!(
+        post_right, 0,
+        "right half is masked out — the floating preview must apply the \
+         target layer's mask. Pre-fix the transform-blend shader skipped \
+         the mask entirely, so this read came back fully opaque; got \
+         alpha={post_right}"
+    );
+}

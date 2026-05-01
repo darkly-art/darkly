@@ -492,6 +492,26 @@ impl DarklyEngine {
         )
     }
 
+    /// Blocking readback of the root composited canvas. For test assertions
+    /// only. Returns canvas-sized RGBA8 pixels (padding excluded). Forces an
+    /// offscreen composite first because headless `render()` skips the
+    /// compositor (no surface to present to).
+    pub fn test_readback_canvas(&mut self) -> Vec<u8> {
+        self.compositor
+            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+        let texture = self.compositor.composited_texture();
+        let w = self.compositor.canvas_width();
+        let h = self.compositor.canvas_height();
+        crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            texture,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
+        )
+    }
+
     /// Blocking readback of a layer's R8 mask texture. For test assertions only.
     /// Returns one byte per pixel (the R8 value, 0 = hide, 255 = reveal).
     pub fn test_readback_mask(&self, layer_id: u64) -> Vec<u8> {

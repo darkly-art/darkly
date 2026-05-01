@@ -175,7 +175,7 @@ impl FloatingContent {
 // TransformPass — GPU pipeline and active state, owned by compositor
 // ---------------------------------------------------------------------------
 
-/// Uniforms for the transform-blend shader (80 bytes, std140-aligned).
+/// Uniforms for the transform-blend shader (96 bytes, std140-aligned).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TransformBlendUniforms {
@@ -195,7 +195,15 @@ pub struct TransformBlendUniforms {
     pub canvas_size: [f32; 2],
     /// Opacity (0.0–1.0).
     pub opacity: f32,
+    /// Repurposed as `is_mask` flag by the commit shader (0.0 = RGBA, 1.0 = mask).
+    /// Unused by the preview shader.
     pub _pad: f32,
+    /// Target layer pixel offset in canvas coords. Used by the preview shader
+    /// to sample the target layer's mask at the correct UV. Ignored by the
+    /// commit shader.
+    pub layer_offset: [f32; 2],
+    /// Target layer texture dimensions in pixels. Same role as layer_offset.
+    pub layer_size: [f32; 2],
 }
 
 /// GPU resources for an active floating content.
@@ -228,7 +236,15 @@ pub struct TransformPass {
 }
 
 impl TransformPass {
-    pub fn new(device: &wgpu::Device, accum_format: wgpu::TextureFormat) -> Self {
+    /// `mask_bind_group_layout` must match the layout used by the compositor's
+    /// existing per-layer mask bind groups (single texture binding, fragment
+    /// stage). Reused so the preview pass can bind the same mask BG that the
+    /// blend pass uses for the target layer.
+    pub fn new(
+        device: &wgpu::Device,
+        accum_format: wgpu::TextureFormat,
+        mask_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("transform-bgl"),
             entries: &[
@@ -277,7 +293,7 @@ impl TransformPass {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("transform-pipeline-layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[&bind_group_layout, mask_bind_group_layout],
             immediate_size: 0,
         });
 
@@ -479,6 +495,7 @@ impl TransformPass {
     /// `rgba_data` must be `source_width * source_height * 4` bytes, row-major,
     /// in straight alpha. This method converts to premultiplied alpha for
     /// correct hardware bilinear interpolation.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_floating_content(
         &mut self,
         device: &wgpu::Device,
@@ -492,6 +509,8 @@ impl TransformPass {
         source_height: u32,
         canvas_width: u32,
         canvas_height: u32,
+        layer_offset: (i32, i32),
+        layer_size: (u32, u32),
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
@@ -604,6 +623,8 @@ impl TransformPass {
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: 0.0,
+            layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
+            layer_size: [layer_size.0 as f32, layer_size.1 as f32],
         };
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -844,6 +865,8 @@ impl TransformPass {
 
         // Uniform buffer (identity matrix initially). Preview pass renders to
         // canvas-sized accumulator: target_offset=0, target_size=canvas_size.
+        // The mask shares the layer's bounds, so layer_offset/layer_size also
+        // double as the mask's UV mapping for the preview shader.
         let uniforms = TransformBlendUniforms {
             inv_row0: [1.0, 0.0, 0.0, 0.0],
             inv_row1: [0.0, 1.0, 0.0, 0.0],
@@ -854,6 +877,8 @@ impl TransformPass {
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: 0.0,
+            layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
+            layer_size: [layer_dims.0 as f32, layer_dims.1 as f32],
         };
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -926,6 +951,7 @@ impl TransformPass {
     }
 
     /// Update the affine matrix uniform for real-time preview.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_matrix(
         &self,
         queue: &wgpu::Queue,
@@ -935,6 +961,8 @@ impl TransformPass {
         source_height: u32,
         canvas_width: u32,
         canvas_height: u32,
+        layer_offset: (i32, i32),
+        layer_size: (u32, u32),
     ) {
         let state = match &self.active {
             Some(s) => s,
@@ -954,6 +982,8 @@ impl TransformPass {
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: 0.0,
+            layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
+            layer_size: [layer_size.0 as f32, layer_size.1 as f32],
         };
 
         queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
@@ -1001,6 +1031,7 @@ impl TransformPass {
         };
 
         // Reuse the preview uniform struct — _pad becomes is_mask for commit.
+        // layer_offset/layer_size are unused by the commit shader.
         let uniforms = TransformBlendUniforms {
             inv_row0: [inv[0], inv[1], inv[2], 0.0],
             inv_row1: [inv[3], inv[4], inv[5], 0.0],
@@ -1011,6 +1042,8 @@ impl TransformPass {
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: is_mask,
+            layer_offset: [0.0, 0.0],
+            layer_size: [0.0, 0.0],
         };
 
         queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));

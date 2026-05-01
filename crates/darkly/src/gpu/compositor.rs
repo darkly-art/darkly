@@ -532,7 +532,11 @@ impl Compositor {
 
         let tool_overlay = ToolOverlay::new(device, queue, surface_format);
 
-        let transform_pass = crate::gpu::transform::TransformPass::new(device, accum_format);
+        let transform_pass = crate::gpu::transform::TransformPass::new(
+            device,
+            accum_format,
+            &blend_pipelines.mask_bind_group_layout,
+        );
         let content_bounds = ContentBoundsPass::new(device);
 
         Compositor {
@@ -1296,6 +1300,7 @@ impl Compositor {
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
+        let (layer_offset, layer_size) = self.target_layer_bounds(target_layer, target_is_mask);
         let root = self
             .group_state
             .get(&ROOT_ID)
@@ -1312,10 +1317,32 @@ impl Compositor {
             source_height,
             self.padded_width,
             self.padded_height,
+            layer_offset,
+            layer_size,
             target_layer,
             target_is_mask,
         );
         self.mark_dirty();
+    }
+
+    /// Look up the target layer's canvas-space offset and texture dimensions.
+    /// Used to pin the floating preview shader's mask UV mapping to the
+    /// target layer's bounds. Falls back to (0,0) / canvas-size if the layer
+    /// texture isn't found, which keeps the preview sane during edge cases.
+    fn target_layer_bounds(
+        &self,
+        target_layer: LayerId,
+        target_is_mask: bool,
+    ) -> ((i32, i32), (u32, u32)) {
+        let lookup = if target_is_mask {
+            self.mask_textures.get(&target_layer)
+        } else {
+            self.layer_textures.get(&target_layer)
+        };
+        match lookup {
+            Some(t) => ((t.offset_x, t.offset_y), (t.width, t.height)),
+            None => ((0, 0), (self.canvas_width, self.canvas_height)),
+        }
     }
 
     /// Set floating content by copying directly from a layer's GPU texture.
@@ -1366,6 +1393,14 @@ impl Compositor {
         self.mark_dirty();
     }
 
+    /// Public read of the target layer's bounds. Used by the engine wrapper
+    /// for `update_floating_matrix` so the preview's mask UV stays correct
+    /// per frame in case the layer is resized mid-transform.
+    pub fn floating_target_bounds(&self) -> Option<((i32, i32), (u32, u32))> {
+        let active = self.transform_pass.active.as_ref()?;
+        Some(self.target_layer_bounds(active.target_layer, active.target_is_mask))
+    }
+
     /// Update the floating content's affine transform matrix for real-time preview.
     pub fn update_floating_matrix(
         &mut self,
@@ -1375,6 +1410,9 @@ impl Compositor {
         source_width: u32,
         source_height: u32,
     ) {
+        let (layer_offset, layer_size) = self
+            .floating_target_bounds()
+            .unwrap_or(((0, 0), (self.canvas_width, self.canvas_height)));
         self.transform_pass.update_matrix(
             queue,
             matrix,
@@ -1383,6 +1421,8 @@ impl Compositor {
             source_height,
             self.padded_width,
             self.padded_height,
+            layer_offset,
+            layer_size,
         );
         self.mark_dirty();
     }
@@ -1707,33 +1747,51 @@ impl Compositor {
 
                     // Floating content pass: composite transformed source on
                     // top of the layer we just blended.
-                    if let Some(ts) = &self.transform_pass.active {
-                        if ts.target_layer == raster.id {
-                            let gs = self.group_state.get_mut(&parent_group).unwrap();
-                            let src = gs.current_accum;
-                            let dst = 1 - src;
-                            gs.current_accum = dst;
+                    if self
+                        .transform_pass
+                        .active
+                        .as_ref()
+                        .is_some_and(|ts| ts.target_layer == raster.id)
+                    {
+                        // Advance the ping-pong index up front so the
+                        // mut-borrow of group_state ends before we acquire
+                        // the immutable mask + transform_pass borrows.
+                        let gs = self.group_state.get_mut(&parent_group).unwrap();
+                        let src = gs.current_accum;
+                        let dst = 1 - src;
+                        gs.current_accum = dst;
 
-                            let gs = &self.group_state[&parent_group];
-                            let mut rpass =
-                                encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                                    label: Some("transform-blend"),
-                                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                        view: &gs.accum.views[dst],
-                                        resolve_target: None,
-                                        depth_slice: None,
-                                        ops: wgpu::Operations {
-                                            load: wgpu::LoadOp::Load,
-                                            store: wgpu::StoreOp::Store,
-                                        },
-                                    })],
-                                    ..Default::default()
-                                });
-                            rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-                            rpass.set_pipeline(&self.transform_pass.pipeline);
-                            rpass.set_bind_group(0, &ts.bind_groups[src], &[]);
-                            rpass.draw(0..3, 0..1);
-                        }
+                        let ts = self.transform_pass.active.as_ref().unwrap();
+                        // When transforming a mask itself there is no outer
+                        // "mask of the mask" to apply — bind the 1×1 white
+                        // default so the preview shows the raw mask content.
+                        // Otherwise apply the target layer's mask, matching
+                        // the regular blend pass.
+                        let preview_mask_bg = if ts.target_is_mask {
+                            &self.default_mask_bind_group
+                        } else {
+                            self.mask_bind_group(raster.id)
+                        };
+
+                        let gs = &self.group_state[&parent_group];
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("transform-blend"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &gs.accum.views[dst],
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            ..Default::default()
+                        });
+                        rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
+                        rpass.set_pipeline(&self.transform_pass.pipeline);
+                        rpass.set_bind_group(0, &ts.bind_groups[src], &[]);
+                        rpass.set_bind_group(1, preview_mask_bg, &[]);
+                        rpass.draw(0..3, 0..1);
                     }
                 }
 
