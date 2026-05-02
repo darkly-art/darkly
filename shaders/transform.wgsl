@@ -27,18 +27,32 @@ struct Uniforms {
     source_origin: vec2f,
     // Source texture dimensions in pixels
     source_size: vec2f,
-    // Full canvas dimensions in pixels
+    // Canvas-space offset of the render target's (0,0) pixel.
+    target_offset: vec2f,
+    // Render target pixel dimensions.
+    target_size: vec2f,
+    // Full document canvas dimensions in pixels.
     canvas_size: vec2f,
     opacity: f32,
     _pad: f32,
+    // Target layer offset & size in canvas pixels — used for sampling the
+    // target layer's mask. The mask shares the layer's bounds.
+    layer_offset: vec2f,
+    layer_size: vec2f,
 }
 @group(0) @binding(3) var<uniform> u: Uniforms;
+
+// Target layer mask — same bind group layout as the blend pass uses.
+// When the target has no mask, a 1x1 white fallback is bound.
+@group(1) @binding(0) var t_mask: texture_2d<f32>;
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let bg = textureSample(t_bg, t_sampler, in.uv);
 
-    // Convert UV to canvas pixel position
-    let canvas_pos = in.uv * u.canvas_size;
+    // Convert target UV to canvas pixel position via the target's canvas-space
+    // origin and size. For canvas-aligned targets (target_offset=0,
+    // target_size=canvas_size) this collapses to `uv * canvas_size`.
+    let canvas_pos = u.target_offset + in.uv * u.target_size;
 
     // Transform canvas position to source-local coordinates
     let local = canvas_pos - u.source_origin;
@@ -58,13 +72,28 @@ struct Uniforms {
     // Source texture is stored premultiplied so hardware bilinear
     // interpolation doesn't produce dark halos at content edges.
     let fg_pm = textureSampleLevel(t_source, t_sampler, src_uv, 0.0);
-    let a = fg_pm.a * u.opacity;
+
+    // Sample the target layer's mask at the canvas position. The mask shares
+    // the layer's bounds; outside those bounds the mask reveals nothing
+    // (matches composite.wgsl's clamp-to-zero behavior). Apply the mask alpha
+    // as a coverage multiplier so the floating preview matches what the
+    // committed pixels will look like once the regular blend pass re-applies
+    // the same mask at compositing time.
+    let layer_uv = (canvas_pos - u.layer_offset) / u.layer_size;
+    let in_layer = all(layer_uv >= vec2f(0.0)) && all(layer_uv <= vec2f(1.0));
+    // textureSampleLevel (explicit LOD) is required here because we sit
+    // after the early-return at the top of the function — implicit-derivative
+    // textureSample is illegal in non-uniform control flow.
+    let mask_raw = textureSampleLevel(t_mask, t_sampler, layer_uv, 0.0).r;
+    let mask_alpha = select(0.0, mask_raw, in_layer);
+
+    let a = fg_pm.a * u.opacity * mask_alpha;
 
     if (a <= 0.0) {
         return bg;
     }
 
     // Porter-Duff source-over (premultiplied fg, straight bg → straight output).
-    let fg_pre = fg_pm.rgb * u.opacity;
+    let fg_pre = fg_pm.rgb * u.opacity * mask_alpha;
     return source_over(fg_pre, a, bg);
 }

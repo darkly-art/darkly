@@ -6,6 +6,27 @@ import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { registerBrushParamActions } from './brush_params';
+import { screenToCanvas } from '../canvas/coordinates';
+
+function enterTransformTool() {
+    if (!app.handle || !app.canvasEl) return;
+    const wasTransform = app.activeToolId === 'transform';
+    app.activeToolId = 'transform';
+    // Tool changes are handled by the $effect in CanvasView, which calls
+    // onDeactivate/onActivate. When the tool was already transform that
+    // effect skips, so we must manually re-activate to sync state with
+    // the new floating — but never call onDeactivate, since that would
+    // commit the floating we just set up.
+    if (wasTransform) {
+        const canvasEl = app.canvasEl;
+        const ctx = {
+            handle: app.handle,
+            canvasEl,
+            screenToCanvas: (sx: number, sy: number) => screenToCanvas(sx, sy, canvasEl),
+        };
+        toolRegistry.get('transform')?.onActivate?.(ctx);
+    }
+}
 
 export function registerActions() {
     // -- Binding sites --
@@ -156,10 +177,19 @@ export function registerActions() {
                 const ox = Math.round((docW - clip.width) / 2);
                 const oy = Math.round((docH - clip.height) / 2);
                 const activeId = app.activeLayerId ?? -1;
-                const layerId = app.handle.paste_image(
-                    clip.width, clip.height, clip.rgba, ox, oy, activeId,
-                );
-                app.activeLayerId = layerId;
+                const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
+                if (activateTransform) {
+                    const layerId = app.handle.paste_image_floating(
+                        clip.width, clip.height, clip.rgba, ox, oy, activeId,
+                    );
+                    app.activeLayerId = layerId;
+                    enterTransformTool();
+                } else {
+                    const layerId = app.handle.paste_image(
+                        clip.width, clip.height, clip.rgba, ox, oy, activeId,
+                    );
+                    app.activeLayerId = layerId;
+                }
                 app.refreshLayerTree();
                 app.requestFrame();
             });
@@ -172,15 +202,20 @@ export function registerActions() {
         defaultHotkey: '$mod+Shift+KeyV',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
-            const ok = app.handle.paste_in_place_floating(app.activeLayerId);
-            console.log('[pasteInPlace] floating created:', ok, 'layerId:', app.activeLayerId);
-            if (ok) {
-                const prevTool = toolRegistry.get(app.activeToolId);
-                app.activeToolId = 'transform';
-                const ctx = { handle: app.handle, canvasEl: document.createElement('canvas'), screenToCanvas: (_x: number, _y: number) => ({ x: 0, y: 0 }) };
-                prevTool?.onDeactivate?.(ctx);
-                toolRegistry.get('transform')?.onActivate?.(ctx);
-                app.requestFrame();
+            const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
+            if (activateTransform) {
+                const ok = app.handle.paste_in_place_floating(app.activeLayerId);
+                if (ok) {
+                    enterTransformTool();
+                    app.requestFrame();
+                }
+            } else {
+                const layerId = app.handle.paste_in_place(app.activeLayerId);
+                if (layerId >= 0) {
+                    app.activeLayerId = layerId;
+                    app.refreshLayerTree();
+                    app.requestFrame();
+                }
             }
         },
     });

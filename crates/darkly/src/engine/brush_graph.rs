@@ -42,6 +42,15 @@ impl DarklyEngine {
         &self.active_brush_graph
     }
 
+    /// Topology version counter — bumped only by structural mutations
+    /// (nodes, wires, params, exposed flags, brush load/reset/clear), not
+    /// by exposed-port scrubs. The frontend snapshots this to distinguish
+    /// "preset still selected, just scrubbing" from "graph actually
+    /// changed → drop the preset name".
+    pub fn brush_topology_version(&self) -> u64 {
+        self.brush_topology_version
+    }
+
     /// Validate a brush graph from JSON without setting it as active.
     ///
     /// Returns `Ok(())` or an error string describing what's wrong.
@@ -215,6 +224,9 @@ impl DarklyEngine {
             stroke_scratch_texture: preview_tex,
             canvas_width: target_size.0,
             canvas_height: target_size.1,
+            // No layer / pre-stroke state in preview — commit isn't called,
+            // and `render_preview` writes to `preview_mask_view`.
+            paint_target: None,
             selection_bind_group: sel_bg,
             resource_handles: &self.resource_handles,
             blend_mode: 0,
@@ -222,13 +234,10 @@ impl DarklyEngine {
             preview_mask_view: Some(&target_view),
             preview_mask_size: target_size,
             brush_preview_info: None,
-            // No layer / pre-stroke state in preview — commit isn't called.
-            layer_view: None,
-            layer_texture: None,
             pre_stroke_texture: None,
             pre_stroke_bind_group: None,
             scratch_bind_group: None,
-            dab_write_bbox: None,
+            dab_write_canvas_bbox: None,
         };
 
         self.brush_pipelines.reset_uniform_rings();
@@ -423,7 +432,6 @@ impl DarklyEngine {
         self.brush_editor_preview_cache = None;
         self.brush_editor_preview_cache_size = None;
         self.active_dab_preview_cache = None;
-        self.active_dab_preview_cache_size = None;
         // Theme changes alter rendered colors → both editor preview and
         // dab thumbnail need to re-render and discard any in-flight
         // readbacks. Bump both versions.
@@ -432,11 +440,18 @@ impl DarklyEngine {
     }
 
     /// Render a single-dab preview of the active brush and return the
-    /// most recent cached bytes synchronously. Pixels update on a later
-    /// frame once the async readback completes — same shape as
+    /// most recent cached PNG bytes synchronously. Pixels update on a
+    /// later frame once the async readback completes — same shape as
     /// `brush_editor_preview` and `layer_thumbnail`. Used by the
     /// BrushBar trigger button and the picker's active-brush strip.
-    pub fn brush_active_dab_preview(&mut self, width: u32, height: u32) -> Vec<u8> {
+    ///
+    /// Renders at the same fixed `BRUSH_DAB_RENDER_SIZE` the baked
+    /// thumbnail path uses, and runs the result through the same
+    /// `frame_dab_thumbnail` framer — so the bytes returned here are
+    /// byte-identical to a `brush_dab_thumbnail(active_name)` call.
+    /// The frontend scales the resulting PNG via CSS to whatever
+    /// display size it needs.
+    pub fn brush_active_dab_preview(&mut self) -> Vec<u8> {
         // Guard against painting while a real stroke is in flight — the
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
@@ -444,14 +459,11 @@ impl DarklyEngine {
         let in_stroke = self.brush_stroke_engine.is_some();
 
         // See `brush_editor_preview` for why we return an empty Vec rather
-        // than a zero-filled one when no cache is available for *this*
-        // size — frontends treat empty as "no fresh bytes" and preserve
-        // the last successful render, while a zero buffer would parse as
-        // a transparent image and visibly wipe whatever was on screen.
-        let cached = self
-            .active_dab_preview_cache
-            .clone()
-            .filter(|_| self.active_dab_preview_cache_size == Some((width, height)));
+        // than a zero-filled one when no cache is available — frontends
+        // treat empty as "no fresh bytes" and preserve the last successful
+        // render, while a zero buffer would parse as a transparent image
+        // and visibly wipe whatever was on screen.
+        let cached = self.active_dab_preview_cache.clone();
 
         // Skip work when nothing has changed and the cache is good. Also
         // skip while a real stroke is in progress — return the most recent
@@ -459,7 +471,7 @@ impl DarklyEngine {
         // stroke's GPU state.
         let nothing_to_do = in_stroke
             || (self.last_rendered_dab_topology_version == self.brush_topology_version
-                && self.active_dab_preview_cache_size == Some((width, height)));
+                && self.active_dab_preview_cache.is_some());
         if nothing_to_do {
             return cached.unwrap_or_default();
         }
@@ -480,18 +492,16 @@ impl DarklyEngine {
         // user-facing scrubs belong in the brush bar, not the icon.
         let mut graph = self.active_brush_graph.clone();
         crate::brush::reset_exposed_scrubs(&mut graph);
-        let path =
-            crate::brush::preview_renderer::synthesize_preview_dab(width as f32, height as f32);
+        let (rw, rh) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_preview_dab(rw as f32, rh as f32);
         self.render_preview_and_request_readback(
             &graph,
             &path,
-            width,
-            height,
+            rw,
+            rh,
             fg,
             bg,
             ReadbackContext::ActiveBrushDab {
-                width,
-                height,
                 topology_version: self.brush_topology_version,
             },
         );
@@ -949,7 +959,11 @@ impl DarklyEngine {
     }
 
     /// Toggle whether a port is exposed in the brush properties panel.
-    /// Metadata-only — no compile needed, but returns updated graph JSON.
+    /// Metadata-only — no compile needed (exposed flag doesn't affect
+    /// rendered output) — but bump the topology version so the frontend
+    /// treats this as a structural change and clears the active preset
+    /// name. Bumping the graph version too keeps the editor preview
+    /// consistent with other graph mutations.
     pub fn brush_graph_set_port_exposed(
         &mut self,
         node_id: u64,
@@ -959,6 +973,8 @@ impl DarklyEngine {
         self.active_brush_graph
             .set_port_exposed(NodeId(node_id), port_name, exposed)
             .map_err(|e| format!("{e}"))?;
+        self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+        self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
         Ok(self.active_graph_json())
     }
 }

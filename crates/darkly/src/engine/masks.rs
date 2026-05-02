@@ -9,13 +9,22 @@ use crate::undo::{CompoundAction, GpuRegionAction, MaskPropertyAction};
 impl DarklyEngine {
     pub fn add_mask(&mut self, layer_id: u64) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
 
         self.doc.add_mask(layer_id);
         self.compositor
             .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
+
+        // When a freshly-created mask coincides with an active selection,
+        // seed the mask from the selection so the user gets a one-click
+        // "selection → mask" gesture. Skipped if the layer already had a
+        // mask (caller's intent is unclear there — see selection_to_mask).
+        if !snap.has_mask {
+            self.copy_selection_into_mask(layer_id);
+        }
+
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
 
@@ -27,9 +36,44 @@ impl DarklyEngine {
         )));
     }
 
+    /// GPU-to-GPU copy of the active selection texture into a layer's mask
+    /// texture (R8 → R8, full canvas). No-op if no selection is active or
+    /// the layer has no mask texture.
+    fn copy_selection_into_mask(&mut self, layer_id: u64) {
+        if !self.gpu_selection.active {
+            return;
+        }
+        let Some(mask_tex) = self.compositor.mask_texture(layer_id) else {
+            return;
+        };
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+        self.gpu.encode("sel-to-mask-copy", |encoder| {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.gpu_selection.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &mask_tex.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: canvas_w,
+                    height: canvas_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        });
+    }
+
     pub fn remove_mask(&mut self, layer_id: u64) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
         if !snap.has_mask {
@@ -37,24 +81,17 @@ impl DarklyEngine {
         }
 
         // Save mask texture pixels to RegionStore for undo before removing.
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
         let format = wgpu::TextureFormat::R8Unorm;
         let gpu_region_entry = if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
+            let frame = mask_tex.canvas_frame();
+            let rect = frame.canvas_extent;
             let mut entry = None;
             self.gpu.encode("remove-mask-save", |encoder| {
-                self.region_store.save_region(
-                    encoder,
-                    &mask_tex.texture,
-                    format,
-                    [0, 0, canvas_w, canvas_h],
+                let snap = self.region_store.save_region(encoder, &frame, format, rect);
+                entry = Some(
+                    self.region_store
+                        .commit_region(encoder, layer_id, &frame, &snap, rect),
                 );
-                entry = Some(self.region_store.commit_region(
-                    encoder,
-                    layer_id,
-                    format,
-                    [0, 0, canvas_w, canvas_h],
-                ));
             });
             entry
         } else {
@@ -90,7 +127,9 @@ impl DarklyEngine {
     pub fn apply_mask(&mut self, layer_id: u64) {
         // apply_mask is raster-only — groups have no pixel data to bake into
         let (old_has, old_enabled, old_show) = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => (r.has_mask, r.mask_enabled, r.show_mask),
+            Some(Layer::Raster(r)) => {
+                (r.common.has_mask, r.common.mask_enabled, r.common.show_mask)
+            }
             _ => return,
         };
         if !old_has {
@@ -102,16 +141,18 @@ impl DarklyEngine {
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
         // Save layer texture to region store for undo.
-        if let Some(layer_tex) = self.compositor.layer_texture(layer_id) {
-            self.gpu.encode("apply-mask-save", |encoder| {
-                self.region_store.save_region(
-                    encoder,
-                    &layer_tex.texture,
-                    format,
-                    [0, 0, canvas_w, canvas_h],
-                );
-            });
-        }
+        let layer_frame = self
+            .compositor
+            .layer_texture(layer_id)
+            .map(|t| t.canvas_frame());
+        let snap = if let Some(frame) = layer_frame {
+            let rect = frame.canvas_extent;
+            Some(self.gpu.encode_ret("apply-mask-save", |encoder| {
+                self.region_store.save_region(encoder, &frame, format, rect)
+            }))
+        } else {
+            None
+        };
 
         // Create a bind group from the mask GPU texture for the multiply pass.
         let mask_bind_group = self.compositor.mask_texture(layer_id).map(|mask_tex| {
@@ -145,15 +186,15 @@ impl DarklyEngine {
         }
 
         // Commit undo region.
-        self.gpu.encode("apply-mask-undo", |encoder| {
-            let entry = self.region_store.commit_region(
-                encoder,
-                layer_id,
-                format,
-                [0, 0, canvas_w, canvas_h],
-            );
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
-        });
+        if let (Some(snap), Some(frame)) = (snap, layer_frame) {
+            let rect = frame.canvas_extent;
+            self.gpu.encode("apply-mask-undo", |encoder| {
+                let entry = self
+                    .region_store
+                    .commit_region(encoder, layer_id, &frame, &snap, rect);
+                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            });
+        }
 
         self.editing_mask_layer = self.editing_mask_layer.filter(|&id| id != layer_id);
         self.compositor
@@ -174,7 +215,7 @@ impl DarklyEngine {
 
     pub fn set_mask_enabled(&mut self, layer_id: u64, enabled: bool) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
         self.doc.set_mask_enabled(layer_id, enabled);
@@ -191,7 +232,7 @@ impl DarklyEngine {
 
     pub fn set_show_mask(&mut self, layer_id: u64, show: bool) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
         self.doc.set_show_mask(layer_id, show);
@@ -216,7 +257,7 @@ impl DarklyEngine {
 
     pub fn selection_to_mask(&mut self, layer_id: u64) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
 
@@ -227,35 +268,7 @@ impl DarklyEngine {
         self.compositor
             .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, true);
 
-        // Copy selection texture → mask texture on GPU. Both are R8, same
-        // canvas dimensions. No CPU round-trip needed.
-        if self.gpu_selection.active {
-            if let Some(mask_tex) = self.compositor.mask_texture(layer_id) {
-                let canvas_w = self.doc.width;
-                let canvas_h = self.doc.height;
-                self.gpu.encode("sel-to-mask-copy", |encoder| {
-                    encoder.copy_texture_to_texture(
-                        wgpu::TexelCopyTextureInfo {
-                            texture: self.gpu_selection.texture(),
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::TexelCopyTextureInfo {
-                            texture: &mask_tex.texture,
-                            mip_level: 0,
-                            origin: wgpu::Origin3d::ZERO,
-                            aspect: wgpu::TextureAspect::All,
-                        },
-                        wgpu::Extent3d {
-                            width: canvas_w,
-                            height: canvas_h,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                });
-            }
-        }
+        self.copy_selection_into_mask(layer_id);
 
         self.sync_mask_state(layer_id);
         self.compositor.mark_dirty();
@@ -319,36 +332,35 @@ impl DarklyEngine {
             Some(n) => n,
             None => return,
         };
-        let m = node.as_masked();
-        let has_mask = m.has_mask();
-        let mask_enabled = m.mask_enabled();
-        let show_mask = m.show_mask();
+        let c = node.common();
+        let has_mask = c.has_mask;
+        let mask_enabled = c.mask_enabled;
+        let show_mask = c.show_mask;
+        let opacity = c.opacity;
+        let blend_mode = c.blend_mode;
+        let is_raster = matches!(node, LayerNode::Layer(Layer::Raster(_)));
 
         self.compositor
             .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, has_mask);
         self.compositor
             .update_mask_binding(&self.gpu.device, layer_id, mask_enabled, show_mask);
 
-        // Update uniforms for the appropriate cache type
-        match node {
-            LayerNode::Layer(Layer::Raster(r)) => {
-                self.compositor.update_raster_uniforms_full(
-                    &self.gpu.queue,
-                    layer_id,
-                    r.opacity,
-                    r.blend_mode,
-                    show_mask,
-                );
-            }
-            LayerNode::Group(g) => {
-                self.compositor.update_group_uniforms(
-                    &self.gpu.queue,
-                    layer_id,
-                    g.opacity,
-                    g.blend_mode,
-                    show_mask,
-                );
-            }
+        if is_raster {
+            self.compositor.update_raster_uniforms_full(
+                &self.gpu.queue,
+                layer_id,
+                opacity,
+                blend_mode,
+                show_mask,
+            );
+        } else {
+            self.compositor.update_group_uniforms(
+                &self.gpu.queue,
+                layer_id,
+                opacity,
+                blend_mode,
+                show_mask,
+            );
         }
     }
 }

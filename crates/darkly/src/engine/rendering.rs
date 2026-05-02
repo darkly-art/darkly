@@ -84,7 +84,7 @@ impl DarklyEngine {
     /// Return the cached mask thumbnail, kicking off an async readback if needed.
     pub fn mask_thumbnail(&mut self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
         let has_mask = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().has_mask(),
+            Some(n) => n.common().has_mask,
             None => false,
         };
         if !has_mask {
@@ -156,15 +156,22 @@ impl DarklyEngine {
             if let Some(result) = self.diff_rect.poll(&self.gpu.device) {
                 if let Some(commit) = self.pending_undo_commit.take() {
                     if let Some(rect) = result {
-                        self.gpu.encode("brush-stroke-end", |encoder| {
-                            let entry = self.region_store.commit_region(
-                                encoder,
-                                commit.layer_id,
-                                commit.format,
-                                rect,
-                            );
-                            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
-                        });
+                        if let Some(layer_frame) = self
+                            .compositor
+                            .layer_texture(commit.layer_id)
+                            .map(|t| t.canvas_frame())
+                        {
+                            self.gpu.encode("brush-stroke-end", |encoder| {
+                                let entry = self.region_store.commit_region(
+                                    encoder,
+                                    commit.layer_id,
+                                    &layer_frame,
+                                    &commit.snapshot,
+                                    rect,
+                                );
+                                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                            });
+                        }
                     }
                     // else: textures identical, no undo entry needed.
                 }
@@ -184,11 +191,17 @@ impl DarklyEngine {
 
                 if self.floating.is_none() {
                     if let Some(bounds) = self.compositor.content_bounds(layer_id) {
+                        // content_bounds are layer-local; translate to canvas.
                         let [bx, by, bw, bh] = bounds;
+                        let canvas_origin = self
+                            .compositor
+                            .layer_texture(layer_id)
+                            .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
+                            .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
                         self.setup_transform(
                             layer_id,
                             target_is_mask,
-                            (bx as i32, by as i32),
+                            (canvas_origin.x, canvas_origin.y),
                             bw,
                             bh,
                         );
@@ -249,12 +262,21 @@ impl DarklyEngine {
             }
             ReadbackContext::MagicWand {
                 was_active,
+                mask_editing,
                 seed_x,
                 seed_y,
                 tolerance,
                 mode,
             } => {
-                self.complete_magic_wand(was_active, seed_x, seed_y, tolerance, mode, pixels);
+                self.complete_magic_wand(
+                    was_active,
+                    mask_editing,
+                    seed_x,
+                    seed_y,
+                    tolerance,
+                    mode,
+                    pixels,
+                );
             }
             ReadbackContext::MaskToSelection { was_active } => {
                 self.complete_mask_to_selection(was_active, pixels);
@@ -340,18 +362,17 @@ impl DarklyEngine {
                     self.brush_library.set_dab_thumbnail(&name, png_bytes);
                 }
             }
-            ReadbackContext::ActiveBrushDab {
-                width,
-                height,
-                topology_version,
-            } => {
+            ReadbackContext::ActiveBrushDab { topology_version } => {
                 // Drop stale results — but key off topology, not graph
                 // version: scrub-only changes don't affect the rendered
                 // dab thanks to `reset_exposed_scrubs`, so a readback
                 // queued before a scrub change is still valid.
                 if topology_version == self.brush_topology_version {
-                    self.active_dab_preview_cache = Some(pixels);
-                    self.active_dab_preview_cache_size = Some((width, height));
+                    let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
+                    if !png_bytes.is_empty() {
+                        self.active_dab_preview_cache = Some(png_bytes);
+                    }
                 }
             }
         }
@@ -463,23 +484,23 @@ impl DarklyEngine {
 
         // If this is a GPU region action, execute the texture restore.
         if let Some(entry) = action.gpu_region_entry_mut() {
-            let texture = if entry.format == wgpu::TextureFormat::R8Unorm {
+            let frame = if entry.format == wgpu::TextureFormat::R8Unorm {
                 self.compositor
                     .mask_texture(entry.layer_id)
-                    .map(|t| &t.texture)
+                    .map(|t| t.canvas_frame())
             } else {
                 self.compositor
                     .layer_texture(entry.layer_id)
-                    .map(|t| &t.texture)
+                    .map(|t| t.canvas_frame())
             };
-            if let Some(texture) = texture {
+            if let Some(frame) = frame {
                 self.gpu.encode(
                     match direction {
                         UndoDirection::Undo => "undo-restore",
                         UndoDirection::Redo => "redo-restore",
                     },
                     |encoder| {
-                        let swapped = self.region_store.restore_region(encoder, entry, texture);
+                        let swapped = self.region_store.restore_region(encoder, entry, &frame);
                         *entry = swapped;
                     },
                 );
@@ -492,14 +513,14 @@ impl DarklyEngine {
             self.gpu_selection.active = restored_active;
 
             if let Some(entry) = action.selection_region_entry_mut() {
-                let texture = self.gpu_selection.texture();
+                let frame = self.gpu_selection.canvas_frame();
                 self.gpu.encode(
                     match direction {
                         UndoDirection::Undo => "undo-sel-restore",
                         UndoDirection::Redo => "redo-sel-restore",
                     },
                     |encoder| {
-                        let swapped = self.region_store.restore_region(encoder, entry, texture);
+                        let swapped = self.region_store.restore_region(encoder, entry, &frame);
                         *entry = swapped;
                     },
                 );
@@ -527,6 +548,7 @@ impl DarklyEngine {
             show_mask: bool,
             mask_enabled: bool,
             has_mask: bool,
+            bounds: crate::coord::CanvasRect,
         }
         let infos: Vec<RasterInfo> = self
             .doc
@@ -534,17 +556,22 @@ impl DarklyEngine {
             .into_iter()
             .map(|r| RasterInfo {
                 id: r.id,
-                opacity: r.opacity,
-                blend_mode: r.blend_mode,
-                show_mask: r.show_mask,
-                mask_enabled: r.mask_enabled,
-                has_mask: r.has_mask,
+                opacity: r.common.opacity,
+                blend_mode: r.common.blend_mode,
+                show_mask: r.common.show_mask,
+                mask_enabled: r.common.mask_enabled,
+                has_mask: r.common.has_mask,
+                bounds: r.bounds,
             })
             .collect();
 
         for info in &infos {
-            self.compositor
-                .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, info.id);
+            self.compositor.ensure_raster_layer(
+                &self.gpu.device,
+                &self.gpu.queue,
+                info.id,
+                info.bounds,
+            );
             self.compositor.update_raster_uniforms_full(
                 &self.gpu.queue,
                 info.id,
@@ -572,7 +599,14 @@ impl DarklyEngine {
             .all_groups()
             .iter()
             .filter(|g| !g.passthrough)
-            .map(|g| (g.id, g.opacity, g.blend_mode, g.show_mask))
+            .map(|g| {
+                (
+                    g.id,
+                    g.common.opacity,
+                    g.common.blend_mode,
+                    g.common.show_mask,
+                )
+            })
             .collect();
         for (id, opacity, blend_mode, show_mask) in groups {
             self.compositor

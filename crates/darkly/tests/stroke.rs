@@ -4,10 +4,24 @@
 //! GpuPaintTarget, GpuRegionAction) without a full DarklyEngine.
 //! Run with: `cargo test -p darkly --test stroke`
 
+use darkly::coord::CanvasRect;
+use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::diff_rect::DiffRectPass;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::test_utils::*;
+
+fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
+    CanvasRect::from_xywh(x, y, w, h)
+}
+
+/// Build a CanvasFrame for a test texture sized `(w, h)` at canvas origin (0, 0).
+fn frame<'a>(tex: &'a wgpu::Texture, w: u32, h: u32) -> CanvasFrame<'a> {
+    CanvasFrame {
+        texture: tex,
+        canvas_extent: cr(0, 0, w, h),
+    }
+}
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
     device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -42,7 +56,7 @@ fn gpu_stroke_paint_undo_redo() {
 
     // --- begin_stroke: save full canvas ---
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // --- stroke_to: two circles ---
@@ -52,6 +66,10 @@ fn gpu_stroke_paint_undo_redo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     let mut enc = encoder(&device);
@@ -82,9 +100,9 @@ fn gpu_stroke_paint_undo_redo() {
 
     // --- end_stroke: commit the stroke rect ---
     // Bounding rect: x=45..65, y=45..55 (approx) — use conservative rect.
-    let stroke_rect = [43, 43, 24, 14];
+    let stroke_rect = cr(43, 43, 24, 14);
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, stroke_rect);
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, stroke_rect);
     submit(&queue, enc);
 
     // Verify paint landed.
@@ -112,7 +130,7 @@ fn gpu_stroke_paint_undo_redo() {
 
     // --- undo ---
     let mut enc = encoder(&device);
-    let forward_entry = store.restore_region(&mut enc, &entry, &tex);
+    let forward_entry = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -128,12 +146,17 @@ fn gpu_stroke_paint_undo_redo() {
 
     // --- redo ---
     let mut enc = encoder(&device);
-    let _backward_entry = store.restore_region(&mut enc, &forward_entry, &tex);
+    let _backward_entry = store.restore_region(&mut enc, &forward_entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
     // The stroke rect area should be pixel-identical to the painted snapshot.
-    let [sx, sy, sw, sh] = stroke_rect;
+    let (sx, sy, sw, sh) = (
+        stroke_rect.x0() as u32,
+        stroke_rect.y0() as u32,
+        stroke_rect.width,
+        stroke_rect.height,
+    );
     for y in sy..sy + sh {
         for x in sx..sx + sw {
             let p = pixel_at(&pixels, w, x, y, 4);
@@ -248,7 +271,7 @@ fn gpu_stroke_on_mask_undo() {
 
     // begin_stroke: save full canvas.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // stroke_to: paint black circles → mask toward 0.
@@ -258,6 +281,10 @@ fn gpu_stroke_on_mask_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     let mut enc = encoder(&device);
@@ -275,7 +302,7 @@ fn gpu_stroke_on_mask_undo() {
 
     // end_stroke: commit.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [52, 52, 24, 24]);
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(52, 52, 24, 24));
     submit(&queue, enc);
 
     // Verify mask is painted.
@@ -290,7 +317,7 @@ fn gpu_stroke_on_mask_undo() {
 
     // Undo: restore mask to 255.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -318,7 +345,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Stroke 1: red circle at (30, 30) ---
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap1 = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     let target = GpuPaintTarget {
@@ -327,6 +354,10 @@ fn gpu_two_strokes_sequential_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -342,14 +373,14 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry1 = store.commit_region(&mut enc, 1, fmt, [23, 23, 14, 14]);
+    let entry1 = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap1, cr(23, 23, 14, 14));
     submit(&queue, enc);
 
     let after_stroke1 = readback_texture(&device, &queue, &tex, fmt, w, h);
 
     // --- Stroke 2: blue circle at (90, 90) ---
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap2 = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     let target = GpuPaintTarget {
@@ -358,6 +389,10 @@ fn gpu_two_strokes_sequential_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -373,7 +408,7 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry2 = store.commit_region(&mut enc, 1, fmt, [83, 83, 14, 14]);
+    let entry2 = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap2, cr(83, 83, 14, 14));
     submit(&queue, enc);
 
     // Verify both painted.
@@ -391,7 +426,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Undo stroke 2 → blue gone, red remains ---
     let mut enc = encoder(&device);
-    let forward2 = store.restore_region(&mut enc, &entry2, &tex);
+    let forward2 = store.restore_region(&mut enc, &entry2, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -420,7 +455,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Undo stroke 1 → both gone ---
     let mut enc = encoder(&device);
-    let forward1 = store.restore_region(&mut enc, &entry1, &tex);
+    let forward1 = store.restore_region(&mut enc, &entry1, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -433,7 +468,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Redo stroke 1 → red back ---
     let mut enc = encoder(&device);
-    let _backward1 = store.restore_region(&mut enc, &forward1, &tex);
+    let _backward1 = store.restore_region(&mut enc, &forward1, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -450,7 +485,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Redo stroke 2 → blue back ---
     let mut enc = encoder(&device);
-    let _backward2 = store.restore_region(&mut enc, &forward2, &tex);
+    let _backward2 = store.restore_region(&mut enc, &forward2, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -489,7 +524,7 @@ fn gpu_region_action_undo_stack() {
 
     // save → paint → commit → push.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     let target = GpuPaintTarget {
@@ -498,6 +533,10 @@ fn gpu_region_action_undo_stack() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -513,7 +552,7 @@ fn gpu_region_action_undo_stack() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [22, 22, 20, 20]);
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(22, 22, 20, 20));
     submit(&queue, enc);
     undo_stack.push(Box::new(GpuRegionAction::new(entry)));
 
@@ -527,7 +566,7 @@ fn gpu_region_action_undo_stack() {
 
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
-        let forward = store.restore_region(&mut enc, entry, &tex);
+        let forward = store.restore_region(&mut enc, entry, &frame(&tex, w, h));
         submit(&queue, enc);
         *entry = forward;
     }
@@ -552,7 +591,7 @@ fn gpu_region_action_undo_stack() {
 
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
-        let backward = store.restore_region(&mut enc, entry, &tex);
+        let backward = store.restore_region(&mut enc, entry, &frame(&tex, w, h));
         submit(&queue, enc);
         *entry = backward;
     }
@@ -595,7 +634,7 @@ fn gpu_cpu_undo_interleaved() {
 
     // Step 1: GPU paint stroke.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     let target = GpuPaintTarget {
@@ -604,6 +643,10 @@ fn gpu_cpu_undo_interleaved() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -619,7 +662,13 @@ fn gpu_cpu_undo_interleaved() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, layer_id, fmt, [25, 25, 14, 14]);
+    let entry = store.commit_region(
+        &mut enc,
+        layer_id,
+        &frame(&tex, w, h),
+        &snap,
+        cr(25, 25, 14, 14),
+    );
     submit(&queue, enc);
     undo_stack.push(Box::new(GpuRegionAction::new(entry)));
 
@@ -630,7 +679,7 @@ fn gpu_cpu_undo_interleaved() {
         Property::Opacity(0.5),
     )));
     if let Some(Layer::Raster(r)) = doc.layer_mut(layer_id) {
-        r.opacity = 0.5;
+        r.common.opacity = 0.5;
     }
 
     // Undo #1: property change (CPU — no GPU work).
@@ -644,7 +693,7 @@ fn gpu_cpu_undo_interleaved() {
 
     if let Some(Layer::Raster(r)) = doc.layer(layer_id) {
         assert!(
-            (r.opacity - 1.0).abs() < f32::EPSILON,
+            (r.common.opacity - 1.0).abs() < f32::EPSILON,
             "opacity should be restored to 1.0"
         );
     }
@@ -654,7 +703,7 @@ fn gpu_cpu_undo_interleaved() {
     let _affected = action.undo(&mut doc);
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
-        let forward = store.restore_region(&mut enc, entry, &tex);
+        let forward = store.restore_region(&mut enc, entry, &frame(&tex, w, h));
         submit(&queue, enc);
         *entry = forward;
     }
@@ -672,7 +721,7 @@ fn gpu_cpu_undo_interleaved() {
     let _affected = action.redo(&mut doc);
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
-        let backward = store.restore_region(&mut enc, entry, &tex);
+        let backward = store.restore_region(&mut enc, entry, &frame(&tex, w, h));
         submit(&queue, enc);
         *entry = backward;
     }
@@ -690,7 +739,7 @@ fn gpu_cpu_undo_interleaved() {
 
     if let Some(Layer::Raster(r)) = doc.layer(layer_id) {
         assert!(
-            (r.opacity - 0.5).abs() < f32::EPSILON,
+            (r.common.opacity - 0.5).abs() < f32::EPSILON,
             "opacity should be 0.5 after redo"
         );
     }
@@ -714,7 +763,7 @@ fn gpu_erase_stroke_undo() {
 
     // begin_stroke: save.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // stroke_to: erase circle at center.
@@ -724,6 +773,10 @@ fn gpu_erase_stroke_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.erase_circle(&mut enc, &pipelines, &queue, 64.0, 64.0, 10.0);
@@ -731,7 +784,7 @@ fn gpu_erase_stroke_undo() {
 
     // end_stroke: commit.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [52, 52, 24, 24]);
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(52, 52, 24, 24));
     submit(&queue, enc);
 
     // Verify erased.
@@ -749,7 +802,7 @@ fn gpu_erase_stroke_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -788,6 +841,10 @@ fn diff_rect_finds_painted_region() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -804,7 +861,7 @@ fn diff_rect_finds_painted_region() {
 
     // Dispatch the diff.
     let mut diff = DiffRectPass::new(&device);
-    diff.request(&device, &queue, &scratch_view, &canvas_view, w, h);
+    diff.request(&device, &queue, &scratch_view, &canvas_view, cr(0, 0, w, h));
 
     // Poll until ready (native/test — blocking poll is fine).
     let rect = loop {
@@ -818,21 +875,21 @@ fn diff_rect_finds_painted_region() {
     };
 
     let rect = rect.expect("diff should find changed pixels");
-    let [rx, ry, rw, rh] = rect;
+    let (rx, ry, rw, rh) = (rect.x0(), rect.y0(), rect.width, rect.height);
 
     // The circle is at (100, 100) with radius 8. The diff rect should
     // contain the circle — center must be inside the rect.
     assert!(
-        rx <= 100 && 100 < rx + rw,
+        rx <= 100 && 100 < rx + rw as i32,
         "diff rect x range [{}, {}) should contain 100",
         rx,
-        rx + rw
+        rx + rw as i32
     );
     assert!(
-        ry <= 100 && 100 < ry + rh,
+        ry <= 100 && 100 < ry + rh as i32,
         "diff rect y range [{}, {}) should contain 100",
         ry,
-        ry + rh
+        ry + rh as i32
     );
 
     // Rect should be reasonably tight (not the full canvas).
@@ -856,7 +913,7 @@ fn diff_rect_undo_restores_offset_paint() {
 
     // begin_stroke: save full canvas to scratch.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Paint a circle at (100, 100) — far from origin, simulating scatter.
@@ -866,6 +923,10 @@ fn diff_rect_undo_restores_offset_paint() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.composite_circle(
@@ -890,7 +951,7 @@ fn diff_rect_undo_restores_offset_paint() {
     // Compute diff rect via GPU (instead of hand-tracking).
     let scratch_view = store.scratch_view(fmt);
     let mut diff = DiffRectPass::new(&device);
-    diff.request(&device, &queue, &scratch_view, &view, w, h);
+    diff.request(&device, &queue, &scratch_view, &view, cr(0, 0, w, h));
 
     let rect = loop {
         if let Some(result) = diff.poll(&device) {
@@ -905,12 +966,12 @@ fn diff_rect_undo_restores_offset_paint() {
 
     // Commit with the diff-derived rect.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, rect);
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, rect);
     submit(&queue, enc);
 
     // Undo: restore the pre-stroke state.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     // The entire canvas should be back to transparent.
@@ -931,4 +992,160 @@ fn diff_rect_undo_restores_offset_paint() {
             );
         }
     }
+}
+
+/// Regression for the canvas-coord storage refactor (see plan
+/// `mossy-sleeping-flame.md`): a `Snapshot` saved on a 256×256 layer at
+/// canvas (0, 0) survives a negative-direction grow that shifts the
+/// layer's local-coord origin by (256, 256). Commit at canvas (-100, -100)
+/// must round-trip via `canvas_to_layer_rect` to layer-local (156, 156)
+/// in the new frame, and undo must restore the correct pre-stroke pixels
+/// at the original canvas position.
+#[test]
+fn negative_direction_grow_crosses_zero() {
+    use wgpu::TextureUsages;
+    let (device, queue) = test_device();
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    // Initial layer: 256×256 at canvas (0, 0), filled red.
+    let (init_w, init_h) = (256u32, 256u32);
+    let red: Vec<u8> = (0..init_w * init_h)
+        .flat_map(|_| [255u8, 0, 0, 255])
+        .collect();
+    let (initial_tex, _v) = create_test_texture(&device, &queue, init_w, init_h, &red);
+    let initial_frame = CanvasFrame {
+        texture: &initial_tex,
+        canvas_extent: cr(0, 0, init_w, init_h),
+    };
+
+    let mut store = RegionStore::with_capacity(&device, init_w, init_h, 4 * 1024 * 1024);
+
+    // Save the full 256×256 layer (canvas (0, 0) → (256, 256)) as the
+    // pre-stroke snapshot.
+    let mut enc = encoder(&device);
+    let mut snap = store.save_region(&mut enc, &initial_frame, fmt, cr(0, 0, init_w, init_h));
+    submit(&queue, enc);
+
+    // Simulate a negative-direction grow: new 512×512 layer at canvas
+    // (-256, -256). Old contents land at layer-local (256, 256).
+    let (new_w, new_h) = (512u32, 512u32);
+    let new_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("grown-layer"),
+        size: wgpu::Extent3d {
+            width: new_w,
+            height: new_h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: fmt,
+        usage: TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST
+            | TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let mut enc = encoder(&device);
+    enc.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &initial_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: &new_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: 256,
+                y: 256,
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+            width: init_w,
+            height: init_h,
+            depth_or_array_layers: 1,
+        },
+    );
+    // Rebase the region_store scratch alongside the layer.
+    store.grow_scratch_preserving(&device, &mut enc, new_w, new_h, 256, 256);
+    submit(&queue, enc);
+
+    // After grow the engine widens snap.saved to the new canvas extent so
+    // commits that spill into the newly-grown area are still contained.
+    snap.saved = cr(-256, -256, new_w, new_h);
+
+    // Frame describing the post-grow layer at canvas (-256, -256).
+    let new_frame = CanvasFrame {
+        texture: &new_tex,
+        canvas_extent: cr(-256, -256, new_w, new_h),
+    };
+
+    // Paint blue on top of the (previously red) pre-grow pixels at canvas
+    // (50, 50) — translated to new layer-local (306, 306). Then commit a
+    // sub-rect that *crosses zero*: canvas (-100, -100, 200, 200) covers
+    // both new (transparent) area and the original canvas region.
+    let pipelines = PaintPipelines::new(&device, &queue);
+    let new_view = new_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let target = GpuPaintTarget {
+        texture: &new_tex,
+        view: &new_view,
+        format: fmt,
+        width: new_w,
+        height: new_h,
+        offset_x: -256,
+        offset_y: -256,
+        canvas_width: new_w,
+        canvas_height: new_h,
+    };
+    let mut enc = encoder(&device);
+    target.composite_circle(
+        &mut enc,
+        &pipelines,
+        &queue,
+        50.0,
+        50.0,
+        20.0,
+        [0, 0, 255, 255],
+        1.0,
+    );
+    submit(&queue, enc);
+
+    // Commit a canvas rect that spans (-100, -100) → (100, 100). This is
+    // the regression: pre-fix, this rect would not be representable in the
+    // pre-grow saved frame and would either panic or write garbage; post-
+    // fix, the canvas-coord rect translates cleanly to the new layer's
+    // local frame at (156, 156, 200, 200).
+    let mut enc = encoder(&device);
+    let commit_rect = cr(-100, -100, 200, 200);
+    let entry = store.commit_region(&mut enc, 1, &new_frame, &snap, commit_rect);
+    submit(&queue, enc);
+
+    // Undo: restore the pre-stroke pixels at canvas (-100, -100, 200, 200).
+    let mut enc = encoder(&device);
+    let _forward = store.restore_region(&mut enc, &entry, &new_frame);
+    submit(&queue, enc);
+
+    // After undo, canvas (50, 50) should be back to red (the pre-stroke
+    // state), and canvas (-100, -100) (which was zeroed pre-grow) should
+    // be transparent — both correctly restored.
+    let pixels = readback_texture(&device, &queue, &new_tex, fmt, new_w, new_h);
+    // canvas (50, 50) → layer-local (306, 306).
+    let p = pixel_at(&pixels, new_w, 306, 306, 4);
+    assert_eq!(
+        p,
+        &[255, 0, 0, 255],
+        "canvas (50, 50) should be the pre-stroke red after undo, got {:?}",
+        p
+    );
+    // canvas (-100, -100) → layer-local (156, 156). Should be transparent.
+    let q = pixel_at(&pixels, new_w, 156, 156, 4);
+    assert_eq!(
+        q[3], 0,
+        "canvas (-100, -100) should be transparent after undo, got A={}",
+        q[3]
+    );
 }

@@ -784,13 +784,14 @@ impl DarklyHandle {
 
     /// Render a single-dab preview of the active brush — the small
     /// tip-shape thumbnail used by the BrushBar trigger and the picker's
-    /// active-brush strip. Returns the most recent cached bytes
+    /// active-brush strip. Returns the most recent cached PNG bytes
     /// synchronously; the async readback updates them on a later frame.
-    pub fn brush_active_dab_preview(&self, width: u32, height: u32) -> Vec<u8> {
+    /// Output is byte-identical to `brush_dab_thumbnail(active_name)`
+    /// when the active brush matches a preset, so the frontend can
+    /// scale the PNG to any display size via CSS.
+    pub fn brush_active_dab_preview(&self) -> Vec<u8> {
         self.flush_if_needed();
-        self.engine
-            .borrow_mut()
-            .brush_active_dab_preview(width, height)
+        self.engine.borrow_mut().brush_active_dab_preview()
     }
 
     /// Return the cached PNG thumbnail bytes for a library brush, kicking
@@ -952,6 +953,26 @@ impl DarklyHandle {
         self.engine
             .borrow_mut()
             .paste_image(width, height, rgba, offset_x, offset_y, active) as f64
+    }
+
+    pub fn paste_image_floating(
+        &self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        offset_x: i32,
+        offset_y: i32,
+        active_layer_id: f64,
+    ) -> f64 {
+        self.flush_if_needed();
+        let active = if active_layer_id >= 0.0 {
+            Some(active_layer_id as u64)
+        } else {
+            None
+        };
+        self.engine
+            .borrow_mut()
+            .paste_image_floating(width, height, rgba, offset_x, offset_y, active) as f64
     }
 
     pub fn paste_in_place(&self, active_layer_id: f64) -> f64 {
@@ -1221,6 +1242,15 @@ impl DarklyHandle {
             })
     }
 
+    pub fn floating_target_layer(&self) -> f64 {
+        self.flush_if_needed();
+        self.engine
+            .borrow()
+            .floating_target_layer()
+            .map(|id| id as f64)
+            .unwrap_or(-1.0)
+    }
+
     pub fn brush_node_types(&self) -> String {
         self.flush_if_needed();
         serde_json::to_string(&self.engine.borrow().brush_node_types())
@@ -1237,6 +1267,18 @@ impl DarklyHandle {
         self.flush_if_needed();
         serde_json::to_string(self.engine.borrow().active_brush_graph_ref())
             .unwrap_or_else(|_| "null".into())
+    }
+
+    /// Topology version of the active brush graph. Bumps only on
+    /// structural changes; exposed-port scrubs do not advance it. The
+    /// frontend uses this to keep the active preset name across scrubs
+    /// and clear it only when the graph actually changes shape.
+    ///
+    /// Returned as `f64` so JS receives a plain `number` (the engine
+    /// counter is `u64`, but values up to 2^53 are exact and a wrapping
+    /// counter cannot realistically reach that).
+    pub fn brush_topology_version(&self) -> f64 {
+        self.engine.borrow().brush_topology_version() as f64
     }
 
     pub fn brush_graph_validate(&self, json: &str) -> JsValue {

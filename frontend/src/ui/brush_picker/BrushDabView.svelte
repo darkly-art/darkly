@@ -3,11 +3,12 @@
     import { app } from '../../state/app.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import { theme } from '../../state/theme.svelte';
-    import { rgbaToDataUrl } from '../layers/thumbnails';
     import { SignalCompressor } from '../../lib/signal_compressor';
 
     interface Props {
-        /** Target render / display dimensions, in CSS pixels. */
+        /** Display dimensions in CSS pixels. The PNG itself is rendered
+         *  at a fixed engine-side size (matching the baked thumbnail
+         *  path) and scaled by the browser to fit. */
         width?: number;
         height?: number;
     }
@@ -17,21 +18,10 @@
      *  `BrushPreview.svelte` uses for its full-stroke editor preview. */
     const REFRESH_MS = 100;
 
-    let dataUrl = $state('');
-    let imgW = $state(0);
-    let imgH = $state(0);
-    /** Cheap hash to skip redundant data-URL encodes when WASM hands
-     *  back the same pixels (cache hit). */
-    let lastHash = 0;
-
-    function hashRgba(bytes: Uint8Array): number {
-        let h = 2166136261 >>> 0;
-        const step = Math.max(1, Math.floor(bytes.length / 256));
-        for (let i = 0; i < bytes.length; i += step) {
-            h = ((h ^ bytes[i]) * 16777619) >>> 0;
-        }
-        return h;
-    }
+    let dabUrl = $state('');
+    /** Byte length that produced `dabUrl` — skips redundant Blob/URL
+     *  churn when WASM hands back the same PNG (cache hit). */
+    let lastLen = 0;
 
     /** Active polling budget. 30 frames ≈ 500ms at 60Hz — well past the
      *  ~10-30ms we measure for a single-dab render, so the pixels always
@@ -42,18 +32,14 @@
 
     function refresh() {
         if (!app.handle) return;
-        const w = width;
-        const h = height;
-        const rgba = app.handle.brush_active_dab_preview(w, h);
-        if (!rgba || rgba.length === 0) return;
-        if (rgba.length !== w * h * 4) return;
-        const hh = hashRgba(rgba);
-        if (hh !== lastHash || dataUrl === '' || imgW !== w || imgH !== h) {
-            lastHash = hh;
-            imgW = w;
-            imgH = h;
-            dataUrl = rgbaToDataUrl(rgba, w, h);
-        }
+        const bytes = app.handle.brush_active_dab_preview();
+        if (!bytes || bytes.length === 0) return;
+        if (bytes.length === lastLen && dabUrl) return;
+        const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
+        const next = URL.createObjectURL(blob);
+        if (dabUrl) URL.revokeObjectURL(dabUrl);
+        dabUrl = next;
+        lastLen = bytes.length;
     }
 
     const compressor = new SignalCompressor(REFRESH_MS, () => {
@@ -78,27 +64,27 @@
         scheduleFrame();
     }
 
-    // Reactive trigger: graph snapshot, active brush, theme, or size
-    // changes all invalidate the active-dab preview cache.
+    // Reactive trigger: graph snapshot, active brush, or theme changes
+    // invalidate the active-dab preview cache. Display size is CSS-only
+    // and doesn't require a re-render.
     $effect(() => {
         void brushGraph.graph;
         void brushGraph.activeBrush;
         void theme.current;
         void app.handle;
-        void width;
-        void height;
         untrack(() => compressor.request());
     });
 
     onDestroy(() => {
         compressor.cancel();
         if (rafHandle) cancelAnimationFrame(rafHandle);
+        if (dabUrl) URL.revokeObjectURL(dabUrl);
     });
 </script>
 
 <div class="brush-dab-view" style="--dab-w: {width}px; --dab-h: {height}px">
-    {#if dataUrl}
-        <img class="dab-img" src={dataUrl} alt="" width={imgW} height={imgH} />
+    {#if dabUrl}
+        <img class="dab-img" src={dabUrl} alt="" />
     {:else}
         <div class="dab-placeholder"></div>
     {/if}
@@ -110,6 +96,7 @@
         width: var(--dab-w);
         height: var(--dab-h);
         flex-shrink: 0;
+        overflow: hidden;
     }
     .dab-img {
         width: 100%;

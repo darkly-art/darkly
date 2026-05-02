@@ -51,6 +51,10 @@
         canvas.width = Math.round(rect.width * dpr);
         canvas.height = Math.round(rect.height * dpr);
 
+        // Expose the canvas to actions that activate tools outside the
+        // pointer-event flow (e.g. paste → auto-enter transform).
+        app.canvasEl = canvas;
+
         try {
             const handle = await initEditor(canvas);
             handle.resize(canvas.width, canvas.height);

@@ -79,24 +79,34 @@ impl DarklyEngine {
 
         let has_selection = self.gpu_selection.active;
 
+        // Resolve the layer-or-mask CanvasFrame once for both the cut undo
+        // save below and the matching commit further down.
+        let target_frame = if is_mask {
+            self.compositor
+                .mask_texture(layer_id)
+                .map(|t| t.canvas_frame())
+        } else {
+            self.compositor
+                .layer_texture(layer_id)
+                .map(|t| t.canvas_frame())
+        };
+        let undo_rect = target_frame
+            .map(|f| f.canvas_extent)
+            .unwrap_or_else(|| crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h));
+
         if has_selection {
             // --- GPU extraction path ---
             // Save undo state for cut before any modification.
-            if is_cut {
-                let texture = if is_mask {
-                    &self.compositor.mask_texture(layer_id).unwrap().texture
-                } else {
-                    &self.compositor.layer_texture(layer_id).unwrap().texture
-                };
-                self.gpu.encode("cut-save", |encoder| {
-                    self.region_store.save_region(
-                        encoder,
-                        texture,
-                        format,
-                        [0, 0, canvas_w, canvas_h],
-                    );
-                });
-            }
+            let cut_snapshot = if is_cut {
+                target_frame.map(|frame| {
+                    self.gpu.encode_ret("cut-save", |encoder| {
+                        self.region_store
+                            .save_region(encoder, &frame, format, undo_rect)
+                    })
+                })
+            } else {
+                None
+            };
 
             // Create staging texture for the masked copy.
             let staging_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -212,6 +222,10 @@ impl DarklyEngine {
                     format,
                     width: rw,
                     height: rh,
+                    offset_x: 0,
+                    offset_y: 0,
+                    canvas_width: rw,
+                    canvas_height: rh,
                 };
                 staging_target.multiply_alpha_by_mask(
                     encoder,
@@ -258,14 +272,11 @@ impl DarklyEngine {
             });
 
             // Commit undo for cut.
-            if is_cut {
+            if let (Some(snap), Some(frame)) = (cut_snapshot, target_frame) {
                 self.gpu.encode("cut-commit", |encoder| {
-                    let entry = self.region_store.commit_region(
-                        encoder,
-                        layer_id,
-                        format,
-                        [0, 0, canvas_w, canvas_h],
-                    );
+                    let entry = self
+                        .region_store
+                        .commit_region(encoder, layer_id, &frame, &snap, undo_rect);
                     self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
                 });
                 self.compositor.mark_dirty();
@@ -312,11 +323,14 @@ impl DarklyEngine {
                 data,
                 self.gpu_selection.width,
                 self.gpu_selection.height,
-            );
+            )
+            .map(|[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h));
         }
-        if let Some([x, y, w, h]) = self.gpu_selection.pixel_bounds {
-            let w = w.min(canvas_w.saturating_sub(x));
-            let h = h.min(canvas_h.saturating_sub(y));
+        if let Some(bounds) = self.gpu_selection.pixel_bounds {
+            let x = bounds.x0().max(0) as u32;
+            let y = bounds.y0().max(0) as u32;
+            let w = bounds.width.min(canvas_w.saturating_sub(x));
+            let h = bounds.height.min(canvas_h.saturating_sub(y));
             Some([x, y, w, h])
         } else {
             Some([0, 0, canvas_w, canvas_h])
@@ -399,63 +413,43 @@ impl DarklyEngine {
         offset_y: i32,
         active_layer_id: Option<u64>,
     ) -> u64 {
+        // Size the new layer to fit the paste exactly, so out-of-canvas
+        // pixels are preserved.
+        let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
+
         // Create a new layer and insert above the active layer.
         let id = self.doc.add_raster_layer();
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
-            r.name = "Pasted Layer".to_string();
+            r.common.name = "Pasted Layer".to_string();
+            r.bounds = layer_bounds;
         }
 
         self.compositor
-            .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id);
+            .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, layer_bounds);
 
-        // Write RGBA data directly to the GPU layer texture.
-        let canvas_w = self.compositor.canvas_width();
-        let canvas_h = self.compositor.canvas_height();
-
-        // Clip the paste region to the canvas bounds.
-        let src_x = (-offset_x).max(0) as u32;
-        let src_y = (-offset_y).max(0) as u32;
-        let dst_x = offset_x.max(0) as u32;
-        let dst_y = offset_y.max(0) as u32;
-        let copy_w = (width - src_x).min(canvas_w - dst_x);
-        let copy_h = (height - src_y).min(canvas_h - dst_y);
-
-        if copy_w > 0 && copy_h > 0 {
-            if let Some(layer_tex) = self.compositor.layer_texture(id) {
-                // Build a contiguous buffer for the clipped region.
-                let row_bytes = copy_w as usize * 4;
-                let mut buf = vec![0u8; row_bytes * copy_h as usize];
-                for row in 0..copy_h as usize {
-                    let src_row = (src_y as usize + row) * width as usize * 4 + src_x as usize * 4;
-                    let dst_row = row * row_bytes;
-                    buf[dst_row..dst_row + row_bytes]
-                        .copy_from_slice(&rgba[src_row..src_row + row_bytes]);
-                }
-
-                self.gpu.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &layer_tex.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d {
-                            x: dst_x,
-                            y: dst_y,
-                            z: 0,
-                        },
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &buf,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(row_bytes as u32),
-                        rows_per_image: None,
-                    },
-                    wgpu::Extent3d {
-                        width: copy_w,
-                        height: copy_h,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
+        // Upload the entire RGBA buffer to the layer texture — its bounds
+        // exactly match the paste extent so no per-row copy or clipping is
+        // needed.
+        if let Some(layer_tex) = self.compositor.layer_texture(id) {
+            self.gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &layer_tex.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
         }
 
         self.compositor.mark_dirty();

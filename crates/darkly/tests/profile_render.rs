@@ -97,7 +97,12 @@ fn profile_render_pipeline() {
     let _bg_id = doc.add_raster_layer();
 
     let paint_id = doc.add_raster_layer();
-    compositor.ensure_raster_layer(&device, &queue, paint_id);
+    compositor.ensure_raster_layer(
+        &device,
+        &queue,
+        paint_id,
+        darkly::coord::CanvasRect::from_xywh(0, 0, width, height),
+    );
 
     // Warm up: first render composites everything (full canvas)
     let t_warmup = Instant::now();

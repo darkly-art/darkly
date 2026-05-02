@@ -110,15 +110,17 @@ pub struct LiquifyUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CompositeUniforms {
-    pub origin: [f32; 2],      // quad top-left in canvas pixels
-    pub size: [f32; 2],        // quad size in canvas pixels
-    pub canvas_size: [f32; 2], // canvas dimensions
-    pub uv_min: [f32; 2],      // min UV in dab texture (nonzero when clipped at top/left)
-    pub uv_max: [f32; 2],      // max UV in dab texture
-    pub blend_mode: u32,       // 0 = source-over, 1 = erase (destination-out)
-    pub fg_premultiplied: u32, // 1 = dab input is premultiplied, 0 = straight alpha
-    pub stroke_opacity: f32,   // stroke-level opacity cap (1.0 = no cap)
-    pub apply_selection: u32,  // 1 = modulate by selection, 0 = ignore (commit pass)
+    pub origin: [f32; 2],        // quad top-left in canvas pixels
+    pub size: [f32; 2],          // quad size in canvas pixels
+    pub target_offset: [f32; 2], // canvas-space offset of render target's (0,0) pixel
+    pub target_size: [f32; 2],   // render target pixel dimensions (vertex NDC)
+    pub canvas_size: [f32; 2],   // document canvas dimensions (fragment selection UV)
+    pub uv_min: [f32; 2],        // min UV in dab texture (nonzero when clipped at top/left)
+    pub uv_max: [f32; 2],        // max UV in dab texture
+    pub blend_mode: u32,         // 0 = source-over, 1 = erase (destination-out)
+    pub fg_premultiplied: u32,   // 1 = dab input is premultiplied, 0 = straight alpha
+    pub stroke_opacity: f32,     // stroke-level opacity cap (1.0 = no cap)
+    pub apply_selection: u32,    // 1 = modulate by selection, 0 = ignore (commit pass)
 }
 
 /// Ring buffer for dynamic uniform offsets.
@@ -193,7 +195,27 @@ pub struct BrushPipelines {
     circle_pipeline: wgpu::RenderPipeline,
     stamp_pipeline: wgpu::RenderPipeline,
     tex_overlay_pipeline: wgpu::RenderPipeline,
-    composite_pipeline: wgpu::RenderPipeline,
+    /// Composite pipeline targeting `Rgba8Unorm` (per-dab into stroke scratch,
+    /// and stroke→layer commit when the destination layer is RGBA8).
+    composite_pipeline_rgba: wgpu::RenderPipeline,
+    /// Composite pipeline targeting `R8Unorm` — used for stroke→mask commits.
+    /// Same WGSL as the RGBA variant; the GPU writes only the `.r` channel
+    /// of the fragment output to the R8 target. This keeps brush logic format-
+    /// agnostic — terminals look up the pipeline by destination format and
+    /// never branch on R8 vs RGBA8.
+    composite_pipeline_r8: wgpu::RenderPipeline,
+    /// "Mask blit" pipeline: samples a single-channel R8 source and broadcasts
+    /// `(r, r, r, 1)` into an RGBA8 destination. Used by
+    /// `GpuPaintTarget::save_pre_stroke_snapshot` to bridge R8 mask sources
+    /// into the brush stack's RGBA8 pre-stroke snapshot. Replaces the
+    /// `copy_texture_to_texture(R8 → RGBA8)` that wgpu rejects as a format
+    /// mismatch.
+    mask_blit_pipeline: wgpu::RenderPipeline,
+    /// "Scratch blit" pipeline: passes RGBA8 scratch through to an R8 mask
+    /// destination. Used by `GpuPaintTarget::commit_scratch_blit` to bridge
+    /// liquify-style direct scratch→layer commits when the destination is a
+    /// mask. The fragment writes `vec4<f32>` and the GPU drops G/B/A.
+    scratch_blit_r8_pipeline: wgpu::RenderPipeline,
 
     circle_uniform_ring: DynamicUniformRing,
     pub(crate) circle_uniform_bind_group: wgpu::BindGroup,
@@ -227,6 +249,10 @@ pub struct BrushPipelines {
     _canvas_copy_view: wgpu::TextureView,
     pub(crate) canvas_copy_bind_group: wgpu::BindGroup,
     canvas_copy_bgl: wgpu::BindGroupLayout,
+    /// Linear sampler reused by ad-hoc bind groups built for the format-
+    /// bridging blits (`mask_blit` and `scratch_blit_r8`). Same sampler the
+    /// canvas-copy bind group uses internally.
+    canvas_copy_sampler: wgpu::Sampler,
 }
 
 impl BrushPipelines {
@@ -288,6 +314,13 @@ impl BrushPipelines {
             label: Some("brush-liquify"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../../../shaders/brush/liquify.wgsl").into(),
+            ),
+        });
+
+        let mask_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("brush-mask-blit"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/brush/mask_blit.wgsl").into(),
             ),
         });
 
@@ -397,6 +430,15 @@ impl BrushPipelines {
         let liquify_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-liquify-layout"),
             bind_group_layouts: &[&uniform_bgl, &selection_bgl, &canvas_copy_bgl],
+            immediate_size: 0,
+        });
+
+        // Mask blit: group(0) = source texture+sampler. No uniforms — the
+        // shader is a fullscreen triangle that always covers the whole
+        // destination viewport.
+        let mask_blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("brush-mask-blit-layout"),
+            bind_group_layouts: &[&canvas_copy_bgl],
             immediate_size: 0,
         });
 
@@ -709,34 +751,42 @@ impl BrushPipelines {
 
         // Composite: REPLACE blend — the shader does Porter-Duff source-over
         // manually by reading the canvas copy, producing correct straight-alpha output.
-        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("brush-composite"),
-            layout: Some(&composite_layout),
-            vertex: wgpu::VertexState {
-                module: &composite_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &composite_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        // Built once per supported destination format (Rgba8Unorm and R8Unorm).
+        // Identical WGSL; the GPU silently writes only `.r` to R8 targets.
+        let make_composite_pipeline = |format: wgpu::TextureFormat, label: &'static str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&composite_layout),
+                vertex: wgpu::VertexState {
+                    module: &composite_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &composite_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let composite_pipeline_rgba =
+            make_composite_pipeline(wgpu::TextureFormat::Rgba8Unorm, "brush-composite-rgba");
+        let composite_pipeline_r8 =
+            make_composite_pipeline(wgpu::TextureFormat::R8Unorm, "brush-composite-r8");
 
         // Blit: stretch a UV sub-rect of the source across the target viewport.
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -767,6 +817,74 @@ impl BrushPipelines {
             multiview_mask: None,
             cache: None,
         });
+
+        // Mask blit: R8 source → RGBA8 destination, broadcasting `.r` to all
+        // channels. Used by `GpuPaintTarget::save_pre_stroke_snapshot` when the
+        // paint target is an R8 mask, replacing the format-mismatched
+        // `copy_texture_to_texture` call in `StrokeBuffer::save_pre_stroke`.
+        let mask_blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("brush-mask-blit"),
+            layout: Some(&mask_blit_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_blit_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_blit_shader,
+                entry_point: Some("fs_broadcast_r"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        // Scratch-blit-R8: RGBA8 source (the brush stack's stroke scratch) →
+        // R8 destination (a mask). Used by `GpuPaintTarget::commit_scratch_blit`
+        // for liquify-style direct scratch→layer commits when the destination
+        // is a mask. The shader returns `vec4<f32>`; the GPU writes only `.r`
+        // to the R8 target.
+        let scratch_blit_r8_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("brush-scratch-blit-r8"),
+                layout: Some(&mask_blit_layout),
+                vertex: wgpu::VertexState {
+                    module: &mask_blit_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &mask_blit_shader,
+                    entry_point: Some("fs_passthrough"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::R8Unorm,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
 
         // Liquify: REPLACE blend — the shader reads canvas_copy at a displaced
         // UV and writes the result straight into the scratch render target.
@@ -806,7 +924,10 @@ impl BrushPipelines {
             circle_pipeline,
             stamp_pipeline,
             tex_overlay_pipeline,
-            composite_pipeline,
+            composite_pipeline_rgba,
+            composite_pipeline_r8,
+            mask_blit_pipeline,
+            scratch_blit_r8_pipeline,
             circle_uniform_ring,
             circle_uniform_bind_group,
             stamp_uniform_ring,
@@ -827,7 +948,33 @@ impl BrushPipelines {
             _canvas_copy_view: canvas_copy_view,
             canvas_copy_bind_group,
             canvas_copy_bgl,
+            canvas_copy_sampler,
         }
+    }
+
+    /// Build a one-shot bind group over a single source texture view, using
+    /// the canvas-copy BGL (texture + linear sampler). For format-bridging
+    /// blits invoked from `GpuPaintTarget` (`mask_blit`, `scratch_blit_r8`).
+    /// One bind group allocation per stroke — not per dab.
+    pub fn create_blit_source_bind_group(
+        &self,
+        device: &wgpu::Device,
+        source_view: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("brush-blit-source-bg"),
+            layout: &self.canvas_copy_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.canvas_copy_sampler),
+                },
+            ],
+        })
     }
 
     pub fn circle_pipeline(&self) -> &wgpu::RenderPipeline {
@@ -842,8 +989,37 @@ impl BrushPipelines {
         &self.tex_overlay_pipeline
     }
 
-    pub fn composite_pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.composite_pipeline
+    /// Look up the brush composite pipeline for a destination format.
+    ///
+    /// Stroke scratch composites (per-dab into the RGBA8 stroke scratch) hit
+    /// the RGBA variant. Stroke→layer commits hit the variant matching the
+    /// layer's storage format — RGBA8 for raster layers, R8 for masks. Both
+    /// pipelines are built from the same WGSL; the GPU silently writes only
+    /// `.r` to R8 targets, so the brush stack stays format-agnostic.
+    ///
+    /// Used by `GpuPaintTarget::commit_brush_dab` (the format-aware brush
+    /// commit). Not for direct call by terminals.
+    pub fn composite_pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        match format {
+            wgpu::TextureFormat::R8Unorm => &self.composite_pipeline_r8,
+            _ => &self.composite_pipeline_rgba,
+        }
+    }
+
+    /// R8 → RGBA8 broadcast pipeline. Source bind group: single texture+sampler
+    /// using `canvas_copy_bind_group_layout`. Used by
+    /// `GpuPaintTarget::save_pre_stroke_snapshot` to populate the brush's
+    /// RGBA8 pre-stroke snapshot from an R8 mask source.
+    pub fn mask_blit_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.mask_blit_pipeline
+    }
+
+    /// RGBA8 → R8 passthrough pipeline. Source bind group: single
+    /// texture+sampler using `canvas_copy_bind_group_layout`. Used by
+    /// `GpuPaintTarget::commit_scratch_blit` for direct scratch→mask commits
+    /// (liquify-style terminals that don't go through the composite path).
+    pub fn scratch_blit_r8_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.scratch_blit_r8_pipeline
     }
 
     pub fn blit_pipeline(&self) -> &wgpu::RenderPipeline {

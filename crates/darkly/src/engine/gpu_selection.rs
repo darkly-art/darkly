@@ -361,9 +361,11 @@ pub(crate) struct GpuSelection {
     /// Bind group for `PaintPipelines::selection_bind_group_layout`.
     paint_bind_group: wgpu::BindGroup,
 
-    /// Cached tight pixel bounds. Set from rasterization params on Replace,
-    /// cleared on boolean ops / invert (recomputed from readback when needed).
-    pub pixel_bounds: Option<[u32; 4]>,
+    /// Cached tight pixel bounds, in canvas coords (the selection texture is
+    /// canvas-sized at offset (0, 0)). Set from rasterization params on
+    /// Replace, cleared on boolean ops / invert (recomputed from readback
+    /// when needed).
+    pub pixel_bounds: Option<crate::coord::CanvasRect>,
     /// True when a selection is logically active.
     pub active: bool,
 
@@ -440,6 +442,16 @@ impl GpuSelection {
         &self.textures[self.current]
     }
 
+    /// Borrow the current selection texture as a `CanvasFrame`. The selection
+    /// mask is canvas-sized at offset (0, 0), so the canvas extent is just
+    /// `(0, 0, width, height)`.
+    pub fn canvas_frame(&self) -> crate::gpu::atlas::CanvasFrame<'_> {
+        crate::gpu::atlas::CanvasFrame {
+            texture: self.texture(),
+            canvas_extent: crate::coord::CanvasRect::from_xywh(0, 0, self.width, self.height),
+        }
+    }
+
     pub fn brush_bind_group(&self) -> &wgpu::BindGroup {
         &self.brush_bind_group
     }
@@ -459,13 +471,19 @@ impl GpuSelection {
         paint_bgl: &wgpu::BindGroupLayout,
     ) {
         // Clear the old selection region on GPU (if any).
-        if let Some([ox, oy, ow, oh]) = self.pixel_bounds {
+        if let Some(bounds) = self.pixel_bounds {
+            let ow = bounds.width;
+            let oh = bounds.height;
             let zeros = vec![0u8; (ow * oh) as usize];
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.textures[self.current],
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: ox, y: oy, z: 0 },
+                    origin: wgpu::Origin3d {
+                        x: bounds.x0() as u32,
+                        y: bounds.y0() as u32,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 &zeros,
@@ -519,7 +537,12 @@ impl GpuSelection {
         });
         self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
 
-        self.pixel_bounds = Some([mask.x, mask.y, mask.width, mask.height]);
+        self.pixel_bounds = Some(crate::coord::CanvasRect::from_xywh(
+            mask.x as i32,
+            mask.y as i32,
+            mask.width,
+            mask.height,
+        ));
         self.active = true;
 
         // Build full-canvas CPU cache from the tight-bounds mask.
@@ -572,20 +595,27 @@ impl GpuSelection {
         });
         self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
 
-        self.pixel_bounds = crate::mask::pixel_bounds_r8(data, self.width, self.height);
+        self.pixel_bounds = crate::mask::pixel_bounds_r8(data, self.width, self.height)
+            .map(|[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h));
         self.active = true;
         self.cpu_cache = Some(data.to_vec());
     }
 
     /// Clear the selection: zero the active region, mark inactive.
     pub fn clear(&mut self, queue: &wgpu::Queue) {
-        if let Some([ox, oy, ow, oh]) = self.pixel_bounds {
+        if let Some(bounds) = self.pixel_bounds {
+            let ow = bounds.width;
+            let oh = bounds.height;
             let zeros = vec![0u8; (ow * oh) as usize];
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.textures[self.current],
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x: ox, y: oy, z: 0 },
+                    origin: wgpu::Origin3d {
+                        x: bounds.x0() as u32,
+                        y: bounds.y0() as u32,
+                        z: 0,
+                    },
                     aspect: wgpu::TextureAspect::All,
                 },
                 &zeros,

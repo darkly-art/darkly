@@ -3,9 +3,23 @@
 //! Tests the GPU paint operations that don't involve selection masking.
 //! Run with: `cargo test -p darkly --test paint_ops`
 
+use darkly::coord::CanvasRect;
+use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::test_utils::*;
+
+fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
+    CanvasRect::from_xywh(x, y, w, h)
+}
+
+/// Build a CanvasFrame for a test texture sized `(w, h)` at canvas origin (0, 0).
+fn frame<'a>(tex: &'a wgpu::Texture, w: u32, h: u32) -> CanvasFrame<'a> {
+    CanvasFrame {
+        texture: tex,
+        canvas_extent: cr(0, 0, w, h),
+    }
+}
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
     device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -43,6 +57,10 @@ fn gpu_gradient_linear_interpolation() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     let mut enc = encoder(&device);
@@ -94,7 +112,7 @@ fn gpu_gradient_undo() {
 
     // Save pre-gradient state.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Render gradient.
@@ -104,6 +122,10 @@ fn gpu_gradient_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.linear_gradient(
@@ -122,7 +144,7 @@ fn gpu_gradient_undo() {
 
     // Commit for undo.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, w, h]);
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Verify gradient was painted.
@@ -135,7 +157,7 @@ fn gpu_gradient_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -173,6 +195,10 @@ fn gpu_flood_fill_interior() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     // Use fill_rect to paint 4 border strips.
@@ -257,7 +283,7 @@ fn gpu_flood_fill_interior() {
         &mut enc,
         &pipelines,
         &queue,
-        [0, 0, w, h],
+        [0, 0, w as i32, h as i32],
         [0, 0, 255, 255],
         &mask_bg,
     );
@@ -300,7 +326,7 @@ fn gpu_flood_fill_undo() {
 
     // Save region for undo.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &tex, fmt, [0, 0, w, h]);
+    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Flood fill entire canvas (all transparent → seed matches everywhere).
@@ -354,13 +380,17 @@ fn gpu_flood_fill_undo() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
         &mut enc,
         &pipelines,
         &queue,
-        [0, 0, w, h],
+        [0, 0, w as i32, h as i32],
         [0, 255, 0, 255],
         &mask_bg,
     );
@@ -368,7 +398,7 @@ fn gpu_flood_fill_undo() {
 
     // Commit undo entry.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, w, h]);
+    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Verify fill landed.
@@ -380,7 +410,7 @@ fn gpu_flood_fill_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -412,6 +442,10 @@ fn gpu_color_pick_readback() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     let mut enc = encoder(&device);
@@ -491,6 +525,10 @@ fn gpu_gradient_on_mask() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
 
     // Gradient from white to black (left to right).
@@ -569,13 +607,17 @@ fn gpu_fill_rect_with_mask() {
         format: fmt,
         width: w,
         height: h,
+        offset_x: 0,
+        offset_y: 0,
+        canvas_width: w,
+        canvas_height: h,
     };
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
         &mut enc,
         &pipelines,
         &queue,
-        [0, 0, w, h],
+        [0, 0, w as i32, h as i32],
         [0, 255, 0, 255],
         &mask_bg,
     );
@@ -598,5 +640,79 @@ fn gpu_fill_rect_with_mask() {
         outside[3], 0,
         "outside mask should be transparent, A={}",
         outside[3]
+    );
+}
+
+/// Linear gradient on an offset paste-extent layer: gradient endpoints are
+/// canvas-space; the white→black transition must follow canvas coordinates,
+/// not target-local. Regression guard for the gradient.wgsl `target_offset`
+/// migration.
+#[test]
+fn gpu_gradient_on_offset_layer_uses_canvas_endpoints() {
+    let (device, queue) = test_device();
+    let canvas_w: u32 = 256;
+    let canvas_h: u32 = 256;
+    // Layer texture is 200×200, positioned at canvas (-50, -50).
+    // So layer-local (0..200, 0..200) maps to canvas (-50..150, -50..150).
+    let off_x: i32 = -50;
+    let off_y: i32 = -50;
+    let (lw, lh) = (200u32, 200u32);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    let (tex, view) =
+        create_test_texture(&device, &queue, lw, lh, &vec![0u8; (lw * lh * 4) as usize]);
+    let pipelines = PaintPipelines::new(&device, &queue);
+
+    let target = GpuPaintTarget {
+        texture: &tex,
+        view: &view,
+        format: fmt,
+        width: lw,
+        height: lh,
+        offset_x: off_x,
+        offset_y: off_y,
+        canvas_width: canvas_w,
+        canvas_height: canvas_h,
+    };
+
+    // Gradient from canvas (0, 0) → canvas (100, 0): white to black along x.
+    // No selection so the full layer renders.
+    let mut enc = encoder(&device);
+    target.linear_gradient(
+        &mut enc,
+        &pipelines,
+        &queue,
+        0.0,
+        0.0,
+        100.0,
+        0.0,
+        [255, 255, 255, 255],
+        [0, 0, 0, 255],
+        None,
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &tex, fmt, lw, lh);
+
+    // Canvas (0, 0) is at layer-local (50, 50) — gradient start, should be white.
+    let start = pixel_at(&pixels, lw, 50, 50, 4);
+    assert!(
+        start[0] > 200,
+        "canvas (0,0) should be near-white (gradient start), got R={}",
+        start[0]
+    );
+    // Canvas (100, 0) is at layer-local (150, 50) — gradient end, should be black.
+    let end = pixel_at(&pixels, lw, 150, 50, 4);
+    assert!(
+        end[0] < 55,
+        "canvas (100,0) should be near-black (gradient end), got R={}",
+        end[0]
+    );
+    // Canvas (50, 0) is at layer-local (100, 50) — midpoint, ~127.
+    let mid = pixel_at(&pixels, lw, 100, 50, 4);
+    assert!(
+        mid[0] > 80 && mid[0] < 175,
+        "canvas (50,0) should be midpoint gradient, got R={}",
+        mid[0]
     );
 }

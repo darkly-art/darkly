@@ -43,6 +43,7 @@
 use crate::brush::dab_pool::MAX_DAB_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, BrushPreviewInfo, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipelines::{BlitUniforms, CircleUniforms, LiquifyUniforms};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -173,8 +174,14 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         }
 
         // Publish the footprint so save_points / checkpoints cover the real
-        // damage region.
-        gpu.push_dab_write_bbox([copy_x, copy_y, copy_w, copy_h]);
+        // damage region. Canvas coords are stable across mid-stroke layer
+        // growth.
+        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
+            copy_x as i32,
+            copy_y as i32,
+            copy_w,
+            copy_h,
+        ));
 
         // Snapshot the scratch under the disc into canvas_copy. Subsequent
         // dabs in the same place see the prior dab's warp.
@@ -268,30 +275,19 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
     /// Replace the layer with the warped scratch. Straight copy, no blend —
     /// the scratch already holds the finished image because warp dabs
     /// produced the full canvas state (pre-stroke + displacement) in place.
+    /// `commit_scratch_blit` on the paint target does the format-aware path:
+    /// hardware copy for RGBA8 layer destinations, render pass for R8 mask
+    /// destinations.
     fn commit(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let Some(layer) = gpu.layer_texture else {
+        let Some(paint_target) = gpu.paint_target.as_ref() else {
             return;
         };
-        let w = gpu.canvas_width;
-        let h = gpu.canvas_height;
-        gpu.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: gpu.stroke_scratch_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: layer,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
+        paint_target.commit_scratch_blit(
+            gpu.device,
+            &mut gpu.encoder,
+            gpu.pipelines,
+            gpu.stroke_scratch_view,
+            gpu.stroke_scratch_texture,
         );
     }
 

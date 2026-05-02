@@ -21,28 +21,23 @@ impl BlendMode {
     }
 }
 
-/// A raster (pixel) layer. Pixel data lives exclusively on GPU textures;
-/// this struct holds only metadata and compositing properties.
-pub struct RasterLayer {
-    pub id: LayerId,
+/// Properties shared by every layer node (raster layers and groups).
+/// Mask pixel data is GPU-authoritative — `has_mask` is just the doc-side
+/// flag the compositor reflects.
+pub struct LayerCommon {
     pub name: String,
     pub opacity: f32,
     pub blend_mode: BlendMode,
     pub visible: bool,
-    /// Whether this layer has an associated mask texture on the GPU.
-    /// The mask pixel data is GPU-authoritative — this is just a flag.
     pub has_mask: bool,
-    /// Whether the mask affects compositing (GIMP's `apply_mask`).
     pub mask_enabled: bool,
-    /// Display the mask as grayscale instead of layer content.
     pub show_mask: bool,
 }
 
-impl RasterLayer {
-    pub fn new(id: LayerId) -> Self {
-        RasterLayer {
-            id,
-            name: format!("Layer {id}"),
+impl LayerCommon {
+    pub fn new(name: String) -> Self {
+        LayerCommon {
+            name,
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
             visible: true,
@@ -51,42 +46,18 @@ impl RasterLayer {
             show_mask: false,
         }
     }
-}
 
-pub struct LayerGroup {
-    pub id: LayerId,
-    pub name: String,
-    pub children: Vec<LayerNode>,
-    pub opacity: f32,
-    pub blend_mode: BlendMode,
-    pub visible: bool,
-    pub passthrough: bool, // true = passthrough (default), false = normal group
-    pub collapsed: bool,   // UI state: whether the group is visually collapsed
-    /// Whether this group has an associated mask texture on the GPU.
-    pub has_mask: bool,
-    pub mask_enabled: bool,
-    pub show_mask: bool,
-}
-
-impl LayerGroup {
-    pub fn new(id: LayerId) -> Self {
-        LayerGroup {
-            id,
-            name: format!("Group {id}"),
-            children: Vec::new(),
-            opacity: 1.0,
-            blend_mode: BlendMode::Normal,
-            visible: true,
-            passthrough: true,
-            collapsed: false,
-            has_mask: false,
-            mask_enabled: true,
-            show_mask: false,
+    pub fn mask_snapshot(&self) -> MaskSnapshot {
+        MaskSnapshot {
+            has_mask: self.has_mask,
+            mask_enabled: self.mask_enabled,
+            show_mask: self.show_mask,
         }
     }
 }
 
-/// Snapshot of mask boolean state — used for undo actions.
+/// Snapshot of mask boolean state — used when capturing pre-mutation
+/// state for undo actions.
 #[derive(Clone, Copy)]
 pub struct MaskSnapshot {
     pub has_mask: bool,
@@ -94,53 +65,46 @@ pub struct MaskSnapshot {
     pub show_mask: bool,
 }
 
-/// Common mask interface shared by RasterLayer and LayerGroup.
-/// Mask pixel data is GPU-authoritative — these methods only track
-/// the boolean flag and compositing toggles.
-pub trait Masked {
-    fn has_mask(&self) -> bool;
-    fn set_has_mask(&mut self, has: bool);
-    fn mask_enabled(&self) -> bool;
-    fn set_mask_enabled(&mut self, enabled: bool);
-    fn show_mask(&self) -> bool;
-    fn set_show_mask(&mut self, show: bool);
+/// A raster (pixel) layer. Pixel data lives exclusively on GPU textures;
+/// this struct holds only metadata and compositing properties.
+pub struct RasterLayer {
+    pub id: LayerId,
+    pub common: LayerCommon,
+    /// Pixel-space bounds of the layer's GPU texture in canvas coordinates.
+    /// Initialized to canvas bounds at layer creation; grows to fit pasted
+    /// or transformed content that extends beyond the canvas.
+    pub bounds: crate::coord::CanvasRect,
+}
 
-    fn mask_snapshot(&self) -> MaskSnapshot {
-        MaskSnapshot {
-            has_mask: self.has_mask(),
-            mask_enabled: self.mask_enabled(),
-            show_mask: self.show_mask(),
+impl RasterLayer {
+    pub fn new(id: LayerId, bounds: crate::coord::CanvasRect) -> Self {
+        RasterLayer {
+            id,
+            common: LayerCommon::new(format!("Layer {id}")),
+            bounds,
         }
     }
 }
 
-macro_rules! impl_masked {
-    ($t:ty) => {
-        impl Masked for $t {
-            fn has_mask(&self) -> bool {
-                self.has_mask
-            }
-            fn set_has_mask(&mut self, has: bool) {
-                self.has_mask = has;
-            }
-            fn mask_enabled(&self) -> bool {
-                self.mask_enabled
-            }
-            fn set_mask_enabled(&mut self, enabled: bool) {
-                self.mask_enabled = enabled;
-            }
-            fn show_mask(&self) -> bool {
-                self.show_mask
-            }
-            fn set_show_mask(&mut self, show: bool) {
-                self.show_mask = show;
-            }
-        }
-    };
+pub struct LayerGroup {
+    pub id: LayerId,
+    pub common: LayerCommon,
+    pub children: Vec<LayerNode>,
+    pub passthrough: bool, // true = passthrough (default), false = normal group
+    pub collapsed: bool,   // UI state: whether the group is visually collapsed
 }
 
-impl_masked!(RasterLayer);
-impl_masked!(LayerGroup);
+impl LayerGroup {
+    pub fn new(id: LayerId) -> Self {
+        LayerGroup {
+            id,
+            common: LayerCommon::new(format!("Group {id}")),
+            children: Vec::new(),
+            passthrough: true,
+            collapsed: false,
+        }
+    }
+}
 
 /// A node in the layer tree. Either a leaf layer or a group containing children.
 pub enum LayerNode {
@@ -156,25 +120,22 @@ impl LayerNode {
         }
     }
 
+    pub fn common(&self) -> &LayerCommon {
+        match self {
+            LayerNode::Layer(Layer::Raster(r)) => &r.common,
+            LayerNode::Group(g) => &g.common,
+        }
+    }
+
+    pub fn common_mut(&mut self) -> &mut LayerCommon {
+        match self {
+            LayerNode::Layer(Layer::Raster(r)) => &mut r.common,
+            LayerNode::Group(g) => &mut g.common,
+        }
+    }
+
     pub fn visible(&self) -> bool {
-        match self {
-            LayerNode::Layer(l) => l.visible(),
-            LayerNode::Group(g) => g.visible,
-        }
-    }
-
-    pub fn as_masked(&self) -> &dyn Masked {
-        match self {
-            LayerNode::Layer(Layer::Raster(r)) => r,
-            LayerNode::Group(g) => g,
-        }
-    }
-
-    pub fn as_masked_mut(&mut self) -> &mut dyn Masked {
-        match self {
-            LayerNode::Layer(Layer::Raster(r)) => r,
-            LayerNode::Group(g) => g,
-        }
+        self.common().visible
     }
 }
 
@@ -189,9 +150,19 @@ impl Layer {
         }
     }
 
-    pub fn visible(&self) -> bool {
+    pub fn common(&self) -> &LayerCommon {
         match self {
-            Layer::Raster(r) => r.visible,
+            Layer::Raster(r) => &r.common,
         }
+    }
+
+    pub fn common_mut(&mut self) -> &mut LayerCommon {
+        match self {
+            Layer::Raster(r) => &mut r.common,
+        }
+    }
+
+    pub fn visible(&self) -> bool {
+        self.common().visible
     }
 }

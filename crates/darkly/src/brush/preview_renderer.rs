@@ -154,9 +154,20 @@ impl BrushPreviewRenderer {
                 ..Default::default()
             });
         }
+        let paint_target = crate::gpu::paint_target::GpuPaintTarget {
+            texture: &target.layer_texture,
+            view: &target.layer_view,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            width,
+            height,
+            offset_x: 0,
+            offset_y: 0,
+            canvas_width: width,
+            canvas_height: height,
+        };
         target
             .stroke_buffer
-            .save_pre_stroke(&mut encoder, &target.layer_texture);
+            .save_pre_stroke(device, &mut encoder, pipelines, &paint_target);
         queue.submit([encoder.finish()]);
 
         // Fresh uniform rings for the dab passes that follow.
@@ -194,6 +205,8 @@ impl BrushPreviewRenderer {
                     stroke_scratch_texture: target.stroke_buffer.stroke_texture(),
                     canvas_width: width,
                     canvas_height: height,
+                    // Preview render target is canvas-aligned RGBA8.
+                    paint_target: Some(paint_target),
                     selection_bind_group: sel_bg,
                     resource_handles,
                     blend_mode: 0,
@@ -201,12 +214,10 @@ impl BrushPreviewRenderer {
                     preview_mask_view: None,
                     preview_mask_size: (0, 0),
                     brush_preview_info: None,
-                    layer_view: Some(&target.layer_view),
-                    layer_texture: Some(&target.layer_texture),
                     pre_stroke_texture: Some(target.stroke_buffer.pre_stroke_texture()),
                     pre_stroke_bind_group: Some(target.stroke_buffer.pre_stroke_bind_group()),
                     scratch_bind_group: Some(target.stroke_buffer.stroke_bind_group()),
-                    dab_write_bbox: None,
+                    dab_write_canvas_bbox: None,
                 }
             };
         }

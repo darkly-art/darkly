@@ -1,6 +1,7 @@
 pub mod brush;
 pub mod clipboard;
 pub mod config;
+pub mod coord;
 pub mod document;
 pub mod engine;
 pub mod gpu;

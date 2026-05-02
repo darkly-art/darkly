@@ -41,6 +41,12 @@ class AppState {
     // Tool cursor — when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);
 
+    // Canvas element reference, set by CanvasView on mount. Tools that
+    // are activated outside the canvas's pointer event flow (e.g. paste
+    // actions that auto-enter transform mode) read this to build a
+    // proper ToolContext.
+    canvasEl = $state<HTMLCanvasElement | null>(null);
+
     swapColors() {
         const tmp = { ...this.foreground };
         this.foreground = { ...this.background };

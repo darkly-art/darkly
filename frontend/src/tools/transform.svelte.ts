@@ -453,10 +453,17 @@ export const transformTool: Tool = {
     },
 
     onFrame() {
-        // Sync when floating content arrives from an async GPU readback
-        // (begin_transform without selection computes content bounds async).
-        if (!active && app.handle?.has_floating()) {
-            syncFromRust();
+        const hasFloating = app.handle?.has_floating() ?? false;
+        // Resync when engine and tool disagree — the engine can clear
+        // floating without notifying us (undo, auto_commit_floating from
+        // an unrelated edit, etc.), and async content-bounds readbacks
+        // can deliver floating mid-frame.
+        if (active !== hasFloating) {
+            if (hasFloating) {
+                syncFromRust();
+            } else {
+                clearState();
+            }
         }
         if (active) {
             overlay = buildOverlay();
@@ -465,6 +472,13 @@ export const transformTool: Tool = {
 
     dismissOverlay() {
         if (app.handle?.has_floating()) {
+            // Activating the floating's own target layer (e.g. paste-as-
+            // floating creates a new layer and selects it) is part of the
+            // floating workflow, not a user-switched-away signal.
+            const target = app.handle.floating_target_layer();
+            if (target >= 0 && target === app.activeLayerId) {
+                return;
+            }
             app.handle.commit_floating();
             app.requestFrame();
         }

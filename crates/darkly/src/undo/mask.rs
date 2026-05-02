@@ -41,16 +41,10 @@ impl UndoAction for MaskPropertyAction {
 impl MaskPropertyAction {
     fn swap(&mut self, doc: &mut Document) {
         if let Some(node) = doc.find_node_mut(self.layer_id) {
-            let m = node.as_masked_mut();
-            let mut has = m.has_mask();
-            std::mem::swap(&mut has, &mut self.had_mask);
-            m.set_has_mask(has);
-            let mut enabled = m.mask_enabled();
-            std::mem::swap(&mut enabled, &mut self.mask_enabled);
-            m.set_mask_enabled(enabled);
-            let mut show = m.show_mask();
-            std::mem::swap(&mut show, &mut self.show_mask);
-            m.set_show_mask(show);
+            let c = node.common_mut();
+            std::mem::swap(&mut c.has_mask, &mut self.had_mask);
+            std::mem::swap(&mut c.mask_enabled, &mut self.mask_enabled);
+            std::mem::swap(&mut c.show_mask, &mut self.show_mask);
         }
     }
 }

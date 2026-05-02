@@ -1,10 +1,11 @@
 //! Floating content — paste-in-place and interactive transforms.
 
 use super::{DarklyEngine, PendingTransform};
+use crate::document::MoveTarget;
 use crate::gpu::paint_target::GpuPaintTarget;
-use crate::gpu::transform::{Affine2D, FloatingContent, FloatingMode, IDENTITY};
+use crate::gpu::transform::{Affine2D, ClearShape, FloatingContent, FloatingMode, IDENTITY};
 use crate::layer::Layer;
-use crate::undo::GpuRegionAction;
+use crate::undo::{GpuRegionAction, LayerAddAction};
 
 impl DarklyEngine {
     /// Auto-commit any active floating content before performing other edits.
@@ -34,6 +35,15 @@ impl DarklyEngine {
                 fc.matrix,
             )
         })
+    }
+
+    /// Return the layer the active floating content will commit to.
+    /// Used by the frontend to distinguish "user switched away from the
+    /// floating's layer" (dismiss) from "user activated the floating's
+    /// own target layer" (keep — paste-as-floating sets active to its
+    /// auto-created target).
+    pub fn floating_target_layer(&self) -> Option<u64> {
+        self.floating.as_ref().map(|fc| fc.target_layer)
     }
 
     /// Paste from the internal clipboard as floating content on the current
@@ -72,10 +82,79 @@ impl DarklyEngine {
             matrix: IDENTITY,
             target_layer: layer_id,
             target_is_mask,
-            mode: FloatingMode::Paste,
+            mode: FloatingMode::Paste {
+                created_layer_id: None,
+            },
         });
 
         true
+    }
+
+    /// Paste raw RGBA bytes as floating content on a NEW raster layer.
+    /// The caller is expected to switch to the transform tool. On commit, the
+    /// pixel data is rendered into the new layer and a single LayerAddAction
+    /// is pushed to undo. On cancel, the new layer is removed silently.
+    ///
+    /// Returns the new layer id.
+    pub fn paste_image_floating(
+        &mut self,
+        width: u32,
+        height: u32,
+        rgba: &[u8],
+        offset_x: i32,
+        offset_y: i32,
+        active_layer_id: Option<u64>,
+    ) -> u64 {
+        // Auto-commit any existing floating content first.
+        self.auto_commit_floating();
+
+        // Size the new layer to fit the paste, so off-canvas pixels are
+        // preserved when the floating commits.
+        let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
+
+        // Create the target layer (no undo entry yet — pushed at commit).
+        let new_id = self.doc.add_raster_layer();
+        if let Some(Layer::Raster(r)) = self.doc.layer_mut(new_id) {
+            r.common.name = "Pasted Layer".to_string();
+            r.bounds = layer_bounds;
+        }
+        self.compositor.ensure_raster_layer(
+            &self.gpu.device,
+            &self.gpu.queue,
+            new_id,
+            layer_bounds,
+        );
+
+        if let Some(active_id) = active_layer_id {
+            self.doc.move_layer(new_id, MoveTarget::After(active_id));
+        }
+
+        // Upload RGBA to floating source texture; the compositor renders it
+        // as a preview overlay until commit.
+        self.compositor.set_floating_content(
+            &self.gpu.device,
+            &self.gpu.queue,
+            rgba,
+            (offset_x, offset_y),
+            width,
+            height,
+            new_id,
+            false,
+        );
+
+        self.floating = Some(FloatingContent {
+            source_origin: (offset_x, offset_y),
+            source_width: width,
+            source_height: height,
+            matrix: IDENTITY,
+            target_layer: new_id,
+            target_is_mask: false,
+            mode: FloatingMode::Paste {
+                created_layer_id: Some(new_id),
+            },
+        });
+
+        new_id
     }
 
     /// Begin an interactive transform on the current layer/mask content.
@@ -96,7 +175,8 @@ impl DarklyEngine {
             return false;
         }
         if target_is_mask {
-            let has_mask = matches!(self.doc.layer(layer_id), Some(Layer::Raster(r)) if r.has_mask);
+            let has_mask =
+                matches!(self.doc.layer(layer_id), Some(Layer::Raster(r)) if r.common.has_mask);
             if !has_mask {
                 return false;
             }
@@ -115,7 +195,10 @@ impl DarklyEngine {
                         data,
                         self.gpu_selection.width,
                         self.gpu_selection.height,
-                    );
+                    )
+                    .map(|[x, y, w, h]| {
+                        crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h)
+                    });
                 } else {
                     // Cache not ready — defer until SelectionReadback completes.
                     self.pending_transform = Some(PendingTransform {
@@ -125,15 +208,15 @@ impl DarklyEngine {
                     return false;
                 }
             }
-            let [bx, by, bw, bh] = match self.gpu_selection.pixel_bounds {
+            let bounds = match self.gpu_selection.pixel_bounds {
                 Some(b) => b,
                 None => return false,
             };
 
-            let x = (bx as i32).max(0);
-            let y = (by as i32).max(0);
-            let w = bw.min(canvas_w.saturating_sub(x as u32));
-            let h = bh.min(canvas_h.saturating_sub(y as u32));
+            let x = bounds.x0().max(0);
+            let y = bounds.y0().max(0);
+            let w = bounds.width.min(canvas_w.saturating_sub(x as u32));
+            let h = bounds.height.min(canvas_h.saturating_sub(y as u32));
 
             if w == 0 || h == 0 {
                 return false;
@@ -144,12 +227,25 @@ impl DarklyEngine {
         } else {
             // No selection — use compositor content bounds.
             if let Some(bounds) = self.compositor.content_bounds(layer_id) {
-                // Bounds are cached — set up synchronously.
+                // content_bounds are in layer-local coords; translate to
+                // canvas-space via the layer texture so callers (and floating
+                // preview/uniforms) see canvas coords.
                 let [bx, by, bw, bh] = bounds;
                 if bw == 0 || bh == 0 {
                     return false;
                 }
-                self.setup_transform(layer_id, target_is_mask, (bx as i32, by as i32), bw, bh);
+                let canvas_origin = self
+                    .compositor
+                    .layer_texture(layer_id)
+                    .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
+                    .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
+                self.setup_transform(
+                    layer_id,
+                    target_is_mask,
+                    (canvas_origin.x, canvas_origin.y),
+                    bw,
+                    bh,
+                );
                 true
             } else {
                 // Bounds not yet computed — request async GPU compute.
@@ -186,25 +282,71 @@ impl DarklyEngine {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        // Save the full canvas GPU texture to scratch (pre-clear snapshot for
-        // undo and cancel). Must happen before the clear.
-        {
-            let texture = if target_is_mask {
-                self.compositor.mask_texture(layer_id).map(|t| &t.texture)
-            } else {
-                self.compositor.layer_texture(layer_id).map(|t| &t.texture)
-            };
-            if let Some(texture) = texture {
-                self.gpu.encode("transform-save", |encoder| {
-                    self.region_store.save_region(
-                        encoder,
-                        texture,
-                        format,
-                        [0, 0, canvas_w, canvas_h],
-                    );
-                });
+        // Look up the target layer's bounds so we can translate the
+        // canvas-space `source_origin` into layer-local coords for any
+        // operation that touches the layer texture directly (save_region,
+        // restore_from_scratch, clear_rect on the layer).
+        let layer_extent = if target_is_mask {
+            self.compositor
+                .mask_texture(layer_id)
+                .map(|t| t.canvas_extent())
+                .unwrap_or(crate::coord::CanvasRect::from_xywh(
+                    0, 0, canvas_w, canvas_h,
+                ))
+        } else {
+            self.compositor
+                .layer_texture(layer_id)
+                .map(|t| t.canvas_extent())
+                .unwrap_or(crate::coord::CanvasRect::from_xywh(
+                    0, 0, canvas_w, canvas_h,
+                ))
+        };
+
+        // Canvas-space rect of the source region, clipped to the layer's
+        // current extent. This is the slice of the layer texture that the
+        // transform will modify, and the slice we need to snapshot so
+        // cancel/undo can restore it.
+        let canvas_source = crate::coord::CanvasRect::from_xywh(
+            source_origin.0,
+            source_origin.1,
+            source_width,
+            source_height,
+        );
+        let canvas_save_rect = layer_extent
+            .intersect(canvas_source)
+            .unwrap_or_else(|| crate::coord::CanvasRect::from_xywh(0, 0, 0, 0));
+
+        // Save the source region to scratch (pre-clear snapshot for undo
+        // and cancel). Must happen before the clear.
+        let layer_frame = if target_is_mask {
+            self.compositor
+                .mask_texture(layer_id)
+                .map(|t| t.canvas_frame())
+        } else {
+            self.compositor
+                .layer_texture(layer_id)
+                .map(|t| t.canvas_frame())
+        };
+        let cancel_snapshot = match layer_frame {
+            Some(frame) => {
+                // Source rect may exceed canvas bounds (paste-extent layer
+                // transform). Pre-grow the scratch.
+                self.region_store.ensure_scratch_capacity(
+                    &self.gpu.device,
+                    layer_extent.width,
+                    layer_extent.height,
+                );
+                Some(self.gpu.encode_ret("transform-save", |encoder| {
+                    self.region_store
+                        .save_region(encoder, &frame, format, canvas_save_rect)
+                }))
             }
-        }
+            None => None,
+        };
+        let cancel_snapshot = match cancel_snapshot {
+            Some(s) => s,
+            None => return,
+        };
 
         // Copy source region from GPU texture to transform source texture.
         self.gpu.encode("transform-copy-source", |encoder| {
@@ -223,12 +365,10 @@ impl DarklyEngine {
         // If selection is active, mask the source texture so only selected pixels
         // are included in the transform. Also clear only selected pixels on the layer.
         let has_selection = self.gpu_selection.active;
-        if has_selection {
+        let clear_shape = if has_selection {
             // Upload a cropped selection mask matching the source region dimensions.
             let cropped_sel_bg =
                 self.upload_cropped_selection_r8(source_origin, source_width, source_height);
-            // Full-canvas selection bind group from GPU selection.
-            let full_sel_bg = Some(self.gpu_selection.paint_bind_group());
 
             if let Some(sel_bg) = &cropped_sel_bg {
                 // Multiply source texture by selection mask — zeroes out unselected pixels.
@@ -239,6 +379,10 @@ impl DarklyEngine {
                         format,
                         width: source_width,
                         height: source_height,
+                        offset_x: 0,
+                        offset_y: 0,
+                        canvas_width: source_width,
+                        canvas_height: source_height,
                     };
                     self.gpu.encode("transform-sel-mask", |encoder| {
                         target.multiply_by_mask(
@@ -251,36 +395,41 @@ impl DarklyEngine {
                 }
             }
 
-            if let Some(sel_bg) = full_sel_bg {
-                // Clear selected pixels on the layer using erase_with_selection.
-                let layer_target = if target_is_mask {
-                    self.compositor
-                        .mask_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
-                } else {
-                    self.compositor
-                        .layer_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
-                };
-                if let Some(target) = layer_target {
-                    self.gpu.encode("transform-clear-sel", |encoder| {
-                        target.erase_with_selection(
-                            encoder,
-                            &self.paint_pipelines,
-                            &self.gpu.queue,
-                            sel_bg,
-                        );
-                    });
-                }
+            // Snapshot the live selection texture into a dedicated R8 so
+            // commit can replay the exact selection shape for the layer
+            // re-clear, even after `gpu_selection.clear()` (below) zeroes
+            // the live selection at the end of setup. The snapshot owns
+            // its texture for the lifetime of the floating session.
+            let snap_bg = self.snapshot_selection_for_clear();
+
+            // Clear selected pixels on the layer using erase_with_selection
+            // — same bind group we just snapshotted from, applied to the
+            // layer/mask target.
+            let layer_target = if target_is_mask {
+                self.compositor
+                    .mask_texture(layer_id)
+                    .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
+            } else {
+                self.compositor
+                    .layer_texture(layer_id)
+                    .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
+            };
+            if let Some(target) = layer_target {
+                self.gpu.encode("transform-clear-sel", |encoder| {
+                    target.erase_with_selection(
+                        encoder,
+                        &self.paint_pipelines,
+                        &self.gpu.queue,
+                        &snap_bg,
+                    );
+                });
+            }
+
+            ClearShape::Selection {
+                mask_bind_group: snap_bg,
             }
         } else {
-            // No selection — clear the full source region on the layer.
-            let clear_x = source_origin.0.max(0) as u32;
-            let clear_y = source_origin.1.max(0) as u32;
-            let clear_w = source_width.min(canvas_w.saturating_sub(clear_x));
-            let clear_h = source_height.min(canvas_h.saturating_sub(clear_y));
-            let clear_rect = [clear_x, clear_y, clear_w, clear_h];
-
+            // No selection — clear the layer-local source region on the layer.
             let target = if target_is_mask {
                 self.compositor
                     .mask_texture(layer_id)
@@ -291,17 +440,20 @@ impl DarklyEngine {
                     .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
             };
             if let Some(target) = target {
+                // clear_rect is canvas-space; the saved canvas rect is
+                // already canvas-aligned.
+                let canvas_rect = [
+                    canvas_save_rect.x0(),
+                    canvas_save_rect.y0(),
+                    canvas_save_rect.width as i32,
+                    canvas_save_rect.height as i32,
+                ];
                 self.gpu.encode("transform-clear", |encoder| {
-                    target.clear_rect(encoder, &self.paint_pipelines, &self.gpu.queue, clear_rect);
+                    target.clear_rect(encoder, &self.paint_pipelines, &self.gpu.queue, canvas_rect);
                 });
             }
-        }
-
-        let clear_x = source_origin.0.max(0) as u32;
-        let clear_y = source_origin.1.max(0) as u32;
-        let clear_w = source_width.min(canvas_w.saturating_sub(clear_x));
-        let clear_h = source_height.min(canvas_h.saturating_sub(clear_y));
-        let clear_rect = [clear_x, clear_y, clear_w, clear_h];
+            ClearShape::Rect(canvas_save_rect)
+        };
 
         self.floating = Some(FloatingContent {
             source_origin,
@@ -310,7 +462,17 @@ impl DarklyEngine {
             matrix: IDENTITY,
             target_layer: layer_id,
             target_is_mask,
-            mode: FloatingMode::Transform { format, clear_rect },
+            // `cancel_snapshot` carries the pre-clear pixels at the
+            // source rect (used by `cancel_floating` via
+            // `restore_from_scratch`). `clear_shape` describes the shape
+            // of the layer clear setup_transform just applied — replayed
+            // by `commit_floating` after its un-clear/save sequence so
+            // the transform render doesn't leave duplicate source pixels
+            // at the original position.
+            mode: FloatingMode::Transform {
+                cancel_snapshot,
+                clear_shape,
+            },
         });
 
         // Selection was used to define what gets picked up — clear it now so
@@ -321,6 +483,62 @@ impl DarklyEngine {
             self.selection_overlay.clear();
             self.push_merged_overlay();
         }
+    }
+
+    /// Snapshot the live GPU selection into a fresh canvas-sized R8 texture
+    /// and return a paint-pipeline bind group sampling it. The returned
+    /// bind group keeps the underlying texture alive for its lifetime, so
+    /// it remains valid after `gpu_selection.clear()` zeroes the live
+    /// selection at the end of `setup_transform`.
+    fn snapshot_selection_for_clear(&self) -> wgpu::BindGroup {
+        let canvas_w = self.gpu_selection.width;
+        let canvas_h = self.gpu_selection.height;
+        let snap_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("transform-clear-sel-snap"),
+            size: wgpu::Extent3d {
+                width: canvas_w,
+                height: canvas_h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.gpu.encode("transform-clear-sel-snap", |encoder| {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: self.gpu_selection.texture(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &snap_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: canvas_w,
+                    height: canvas_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        });
+        let view = snap_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("transform-clear-sel-snap-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        self.paint_pipelines
+            .create_selection_bind_group(&self.gpu.device, &view, &sampler)
     }
 
     /// Update the floating content's transform matrix.
@@ -354,45 +572,212 @@ impl DarklyEngine {
         };
 
         // Compute tight affected rect = union(source bounds, transformed bounds),
-        // clamped to canvas.
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
+        // clamped to canvas. This is in CANVAS coordinates.
+        let canvas_w = self.doc.width as i32;
+        let canvas_h = self.doc.height as i32;
         let (min_x, min_y, max_x, max_y) = fc.transformed_bounds();
         let (sox, soy) = fc.source_origin;
-        let union_min_x = min_x.min(sox).max(0) as u32;
-        let union_min_y = min_y.min(soy).max(0) as u32;
-        let union_max_x = (max_x.max(sox + fc.source_width as i32) as u32).min(canvas_w);
-        let union_max_y = (max_y.max(soy + fc.source_height as i32) as u32).min(canvas_h);
-        let affected_w = union_max_x.saturating_sub(union_min_x);
-        let affected_h = union_max_y.saturating_sub(union_min_y);
-        let affected_rect = [union_min_x, union_min_y, affected_w, affected_h];
+        let src_max_x = sox + fc.source_width as i32;
+        let src_max_y = soy + fc.source_height as i32;
+        let canvas_clip =
+            crate::coord::CanvasRect::from_xywh(0, 0, canvas_w as u32, canvas_h as u32);
+        let affected_canvas = crate::coord::CanvasRect::from_xywh(
+            min_x.min(sox),
+            min_y.min(soy),
+            (max_x.max(src_max_x) - min_x.min(sox)).max(0) as u32,
+            (max_y.max(src_max_y) - min_y.min(soy)).max(0) as u32,
+        )
+        .intersect(canvas_clip);
 
-        // For paste mode, the scratch doesn't have a pre-operation snapshot yet
-        // (begin_transform wasn't called). Save the current state now.
-        if matches!(fc.mode, FloatingMode::Paste) {
-            let texture = if is_mask {
-                self.compositor.mask_texture(layer_id).map(|t| &t.texture)
-            } else {
-                self.compositor.layer_texture(layer_id).map(|t| &t.texture)
-            };
-            if let Some(texture) = texture {
-                self.gpu.encode("paste-save", |encoder| {
-                    self.region_store.save_region(
-                        encoder,
-                        texture,
-                        format,
-                        [0, 0, canvas_w, canvas_h],
-                    );
-                });
-            }
+        // Path A — paste onto a layer auto-created for this paste.
+        // The layer is empty by construction, so a single LayerAddAction
+        // captures the whole paste as one undo step (no GpuRegionAction).
+        if let FloatingMode::Paste {
+            created_layer_id: Some(_),
+        } = fc.mode
+        {
+            self.gpu.encode("paste-commit", |encoder| {
+                self.compositor.commit_floating_to_texture(
+                    &self.gpu.device,
+                    encoder,
+                    &self.gpu.queue,
+                    &fc.matrix,
+                    fc.source_origin,
+                    fc.source_width,
+                    fc.source_height,
+                );
+            });
+
+            let parent = self.doc.parent_of(layer_id);
+            let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
+            self.undo_stack
+                .push(Box::new(LayerAddAction::new(layer_id, parent, pos)));
+
+            self.compositor.clear_floating_content();
+            return;
         }
 
-        // Commit the pre-operation state (from scratch) to the undo ring buffer,
-        // then render the transform.
+        // Translate the canvas-space affected rect into the target's
+        // layer-local frame. This is the boundary that *would have* been
+        // silently wrong before — the typed API forces the conversion.
+        let target_canvas_extent = if is_mask {
+            self.compositor
+                .mask_texture(layer_id)
+                .map(|t| t.canvas_extent())
+        } else {
+            self.compositor
+                .layer_texture(layer_id)
+                .map(|t| t.canvas_extent())
+        };
+        let affected_canvas_rect = match (affected_canvas, target_canvas_extent) {
+            (Some(rect), Some(extent)) => match rect.intersect(extent) {
+                Some(c) => c,
+                None => {
+                    self.compositor.clear_floating_content();
+                    return;
+                }
+            },
+            _ => {
+                self.compositor.clear_floating_content();
+                return;
+            }
+        };
+
+        // Save the pre-transform layer state at the affected rect.
+        //
+        // Transform mode's `setup_transform` already cleared the source
+        // pixels on the layer — so reading the layer right now would
+        // capture the post-clear state, and undoing later would leave
+        // those pixels transparent instead of restoring originals. Fix:
+        // un-clear via `cancel_snapshot` first, then save. This composes
+        // cleanly because:
+        //   - the cancel snapshot is already in scratch
+        //   - after the un-clear, the live layer matches its pre-clear
+        //     state — exactly what undo wants
+        //   - the path-B save then overwrites scratch with affected_rect,
+        //     invalidating the cancel snapshot, which is fine because
+        //     `commit_floating` consumes the FloatingContent by takes-self
+        //     pattern (cancel can no longer run on this content).
+        //
+        // Paste mode never clears the layer, so the un-clear is skipped.
+        // Pre-resolve the canvas extent (Copy) so we don't carry a borrow
+        // of self.compositor across the closures below.
+        let layer_canvas_extent = if is_mask {
+            self.compositor
+                .mask_texture(layer_id)
+                .map(|t| t.canvas_extent())
+        } else {
+            self.compositor
+                .layer_texture(layer_id)
+                .map(|t| t.canvas_extent())
+        };
+        let layer_canvas_extent = match layer_canvas_extent {
+            Some(e) => e,
+            None => {
+                self.compositor.clear_floating_content();
+                return;
+            }
+        };
+        // Helper to materialise a CanvasFrame inside a closure without
+        // extending an outer borrow.
+        macro_rules! layer_frame {
+            () => {
+                if is_mask {
+                    self.compositor
+                        .mask_texture(layer_id)
+                        .unwrap()
+                        .canvas_frame()
+                } else {
+                    self.compositor
+                        .layer_texture(layer_id)
+                        .unwrap()
+                        .canvas_frame()
+                }
+            };
+        }
+        if let FloatingMode::Transform {
+            ref cancel_snapshot,
+            ..
+        } = fc.mode
+        {
+            self.gpu.encode("transform-uncleared", |encoder| {
+                let frame = layer_frame!();
+                self.region_store.restore_from_scratch(
+                    encoder,
+                    cancel_snapshot,
+                    &frame,
+                    cancel_snapshot.saved,
+                );
+            });
+        }
+        self.region_store.ensure_scratch_capacity(
+            &self.gpu.device,
+            layer_canvas_extent.width,
+            layer_canvas_extent.height,
+        );
+        let commit_snap = self.gpu.encode_ret("transform-commit-save", |encoder| {
+            let frame = layer_frame!();
+            self.region_store
+                .save_region(encoder, &frame, format, affected_canvas_rect)
+        });
+
+        // Commit the pre-operation state to the undo ring buffer, then
+        // render the transform.
         self.gpu.encode("transform-commit", |encoder| {
-            let entry = self
-                .region_store
-                .commit_region(encoder, layer_id, format, affected_rect);
+            let frame = layer_frame!();
+            let entry = self.region_store.commit_region(
+                encoder,
+                layer_id,
+                &frame,
+                &commit_snap,
+                affected_canvas_rect,
+            );
+
+            // The un-clear above restored source pixels to the layer at
+            // the source rect (so the undo-buffer save captured the
+            // pre-transform state). Replay the same clear shape that
+            // `setup_transform` applied, before the transform render —
+            // otherwise the transform shader's
+            // `discard`-outside-transformed-bounds would leave a
+            // duplicate copy of the source at its original position.
+            // The shape is stored as data so selection and no-selection
+            // branches share this single replay path.
+            if let FloatingMode::Transform {
+                ref clear_shape, ..
+            } = fc.mode
+            {
+                let target = if is_mask {
+                    self.compositor
+                        .mask_texture(layer_id)
+                        .map(|t| GpuPaintTarget::from_mask(t, self.doc.width, self.doc.height))
+                } else {
+                    self.compositor
+                        .layer_texture(layer_id)
+                        .map(|t| GpuPaintTarget::from_layer(t, self.doc.width, self.doc.height))
+                };
+                if let Some(target) = target {
+                    match clear_shape {
+                        ClearShape::Rect(rect) => {
+                            let canvas_rect =
+                                [rect.x0(), rect.y0(), rect.width as i32, rect.height as i32];
+                            target.clear_rect(
+                                encoder,
+                                &self.paint_pipelines,
+                                &self.gpu.queue,
+                                canvas_rect,
+                            );
+                        }
+                        ClearShape::Selection { mask_bind_group } => {
+                            target.erase_with_selection(
+                                encoder,
+                                &self.paint_pipelines,
+                                &self.gpu.queue,
+                                mask_bind_group,
+                            );
+                        }
+                    }
+                }
+            }
 
             // GPU render pass: write transformed source pixels to layer/mask texture.
             self.compositor.commit_floating_to_texture(
@@ -421,25 +806,50 @@ impl DarklyEngine {
         };
 
         match fc.mode {
-            FloatingMode::Paste => {
-                // No-op — target layer was never modified.
+            FloatingMode::Paste { created_layer_id } => {
+                // If the paste auto-created a target layer, drop it silently —
+                // cancel restores the pre-paste document state. The layer's
+                // pixels were never written (commit_floating_to_texture only
+                // runs on commit), so just detach the node from the doc and
+                // dispose its freshly-allocated GPU resources. No undo
+                // entry: the LayerAddAction is only pushed on commit, so
+                // there's no future undo path that would need this state.
+                if let Some(id) = created_layer_id {
+                    self.doc.detach_for_undo(id);
+                    self.compositor.dispose_layer(id);
+                    self.compositor.mark_dirty();
+                }
+                // Otherwise: target layer was never modified — no-op.
             }
-            FloatingMode::Transform { format, clear_rect } => {
+            FloatingMode::Transform {
+                cancel_snapshot, ..
+            } => {
                 // Restore the pre-clear state from the RegionStore scratch
                 // texture (saved during begin_transform).
-                let texture = if fc.target_is_mask {
+                //
+                // NB: commit_floating's path-B re-save would overwrite this
+                // scratch region — but commit_floating consumes the
+                // FloatingContent by takes-self pattern, so cancel and
+                // commit are mutually exclusive on a given FloatingContent.
+                // The cancel path always sees the original setup_transform
+                // snapshot intact.
+                let layer_frame = if fc.target_is_mask {
                     self.compositor
                         .mask_texture(fc.target_layer)
-                        .map(|t| &t.texture)
+                        .map(|t| t.canvas_frame())
                 } else {
                     self.compositor
                         .layer_texture(fc.target_layer)
-                        .map(|t| &t.texture)
+                        .map(|t| t.canvas_frame())
                 };
-                if let Some(texture) = texture {
+                if let Some(layer_frame) = layer_frame {
                     self.gpu.encode("cancel-restore", |encoder| {
-                        self.region_store
-                            .restore_from_scratch(encoder, format, clear_rect, texture);
+                        self.region_store.restore_from_scratch(
+                            encoder,
+                            &cancel_snapshot,
+                            &layer_frame,
+                            cancel_snapshot.saved,
+                        );
                     });
                 }
             }

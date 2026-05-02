@@ -5,6 +5,7 @@
 //! texture provides real-time preview during interaction, and the commit
 //! render pass writes transformed pixels directly to the layer texture.
 
+use crate::gpu::atlas::LayerTexture;
 use crate::layer::LayerId;
 
 // ---------------------------------------------------------------------------
@@ -75,17 +76,42 @@ pub fn affine_rotate(angle: f32) -> Affine2D {
 // FloatingContent — CPU-side data owned by the engine
 // ---------------------------------------------------------------------------
 
+/// Shape of the clear that `setup_transform` applied to the source layer.
+///
+/// Stored on `FloatingMode::Transform` so that `commit_floating` can replay
+/// the same shape after the un-clear/save sequence — without it the
+/// transform shader's `discard`-outside-transformed-bounds would leave a
+/// duplicate copy of the source at its original position.
+pub enum ClearShape {
+    /// `setup_transform` did a full-rect clear (no-selection branch).
+    /// Replay with `clear_rect`.
+    Rect(crate::coord::CanvasRect),
+    /// `setup_transform` did a selection-shaped clear (selection branch).
+    /// `mask_bind_group` references a canvas-sized R8 snapshot of the
+    /// selection that was active at setup time — retained because
+    /// `gpu_selection.clear()` runs at the end of `setup_transform` (so
+    /// the marching ants disappear during the drag preview), and the
+    /// commit-side replay needs that mask shape.
+    Selection { mask_bind_group: wgpu::BindGroup },
+}
+
 /// How the floating content was created — determines commit/cancel behavior.
 pub enum FloatingMode {
-    /// Clipboard paste — commit composites INTO target. Cancel = no-op.
-    Paste,
+    /// Clipboard paste — commit composites INTO target.
+    /// `created_layer_id = Some(id)` means the target layer was auto-created
+    /// for this paste and should be removed on cancel. `None` means paste
+    /// targets a pre-existing layer; cancel is a no-op.
+    Paste { created_layer_id: Option<LayerId> },
     /// Extracted from layer — commit writes transformed pixels.
     /// Cancel restores the pre-clear state from RegionStore scratch.
     Transform {
-        /// Texture format of the target (Rgba8Unorm or R8Unorm).
-        format: wgpu::TextureFormat,
-        /// Bounding rect of the source region that was cleared [x, y, w, h].
-        clear_rect: [u32; 4],
+        /// Pre-clear snapshot of the source region. Used by `cancel_floating`
+        /// to undo the source clear; carries the saved rect and format.
+        cancel_snapshot: crate::gpu::region_store::Snapshot,
+        /// Shape of the clear setup_transform applied — replayed at commit
+        /// time before the transform render. Carrying the shape as data
+        /// keeps the selection and no-selection branches symmetric.
+        clear_shape: ClearShape,
     },
 }
 
@@ -149,7 +175,7 @@ impl FloatingContent {
 // TransformPass — GPU pipeline and active state, owned by compositor
 // ---------------------------------------------------------------------------
 
-/// Uniforms for the transform-blend shader (64 bytes, std140-aligned).
+/// Uniforms for the transform-blend shader (96 bytes, std140-aligned).
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TransformBlendUniforms {
@@ -161,11 +187,23 @@ pub struct TransformBlendUniforms {
     pub source_origin: [f32; 2],
     /// Source texture dimensions in pixels.
     pub source_size: [f32; 2],
-    /// Full canvas dimensions in pixels.
+    /// Canvas-space offset of the render target's (0,0) pixel.
+    pub target_offset: [f32; 2],
+    /// Render target pixel dimensions.
+    pub target_size: [f32; 2],
+    /// Full document canvas dimensions in pixels.
     pub canvas_size: [f32; 2],
     /// Opacity (0.0–1.0).
     pub opacity: f32,
+    /// Repurposed as `is_mask` flag by the commit shader (0.0 = RGBA, 1.0 = mask).
+    /// Unused by the preview shader.
     pub _pad: f32,
+    /// Target layer pixel offset in canvas coords. Used by the preview shader
+    /// to sample the target layer's mask at the correct UV. Ignored by the
+    /// commit shader.
+    pub layer_offset: [f32; 2],
+    /// Target layer texture dimensions in pixels. Same role as layer_offset.
+    pub layer_size: [f32; 2],
 }
 
 /// GPU resources for an active floating content.
@@ -198,7 +236,15 @@ pub struct TransformPass {
 }
 
 impl TransformPass {
-    pub fn new(device: &wgpu::Device, accum_format: wgpu::TextureFormat) -> Self {
+    /// `mask_bind_group_layout` must match the layout used by the compositor's
+    /// existing per-layer mask bind groups (single texture binding, fragment
+    /// stage). Reused so the preview pass can bind the same mask BG that the
+    /// blend pass uses for the target layer.
+    pub fn new(
+        device: &wgpu::Device,
+        accum_format: wgpu::TextureFormat,
+        mask_bind_group_layout: &wgpu::BindGroupLayout,
+    ) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("transform-bgl"),
             entries: &[
@@ -247,7 +293,7 @@ impl TransformPass {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("transform-pipeline-layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[&bind_group_layout, mask_bind_group_layout],
             immediate_size: 0,
         });
 
@@ -449,6 +495,7 @@ impl TransformPass {
     /// `rgba_data` must be `source_width * source_height * 4` bytes, row-major,
     /// in straight alpha. This method converts to premultiplied alpha for
     /// correct hardware bilinear interpolation.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_floating_content(
         &mut self,
         device: &wgpu::Device,
@@ -462,11 +509,36 @@ impl TransformPass {
         source_height: u32,
         canvas_width: u32,
         canvas_height: u32,
+        layer_offset: (i32, i32),
+        layer_size: (u32, u32),
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
+        // Source texture is the premultiplied destination for the floating
+        // shaders. We upload the caller's straight-alpha RGBA into a temp
+        // texture and run the existing premultiply pipeline GPU-side — this
+        // avoids a 9M-iteration scalar loop in WASM for a 3K paste.
         let source_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transform-source"),
+            size: wgpu::Extent3d {
+                width: source_width.max(1),
+                height: source_height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+
+        // Staging texture for straight-alpha upload — sampled by the
+        // premultiply shader.
+        let temp_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("transform-source-staging"),
             size: wgpu::Extent3d {
                 width: source_width.max(1),
                 height: source_height.max(1),
@@ -480,26 +552,14 @@ impl TransformPass {
             view_formats: &[],
         });
 
-        // Convert straight alpha → premultiplied alpha for correct bilinear interpolation.
-        let pixel_count = (source_width * source_height) as usize;
-        let mut premul = vec![0u8; pixel_count * 4];
-        for i in 0..pixel_count {
-            let off = i * 4;
-            let a = rgba_data[off + 3] as f32 / 255.0;
-            premul[off] = (rgba_data[off] as f32 * a).round() as u8;
-            premul[off + 1] = (rgba_data[off + 1] as f32 * a).round() as u8;
-            premul[off + 2] = (rgba_data[off + 2] as f32 * a).round() as u8;
-            premul[off + 3] = rgba_data[off + 3];
-        }
-
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &source_texture,
+                texture: &temp_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &premul,
+            rgba_data,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(source_width * 4),
@@ -514,15 +574,57 @@ impl TransformPass {
 
         let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Uniform buffer (identity matrix initially)
+        // Render the staging texture through the premultiply pipeline into
+        // source_texture.
+        {
+            let temp_view = temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let premul_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("transform-source-premul-bg"),
+                layout: &self.single_tex_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&temp_view),
+                }],
+            });
+
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("transform-source-premul"),
+            });
+            {
+                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("transform-source-premul-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &source_view,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                rpass.set_pipeline(&self.premultiply_pipeline);
+                rpass.set_bind_group(0, &premul_bg, &[]);
+                rpass.draw(0..3, 0..1);
+            }
+            queue.submit(std::iter::once(encoder.finish()));
+        }
+
+        // Uniform buffer (identity matrix initially). Preview pass renders to
+        // canvas-sized accumulator: target_offset=0, target_size=canvas_size.
         let uniforms = TransformBlendUniforms {
             inv_row0: [1.0, 0.0, 0.0, 0.0],
             inv_row1: [0.0, 1.0, 0.0, 0.0],
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
+            target_offset: [0.0, 0.0],
+            target_size: [canvas_width as f32, canvas_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: 0.0,
+            layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
+            layer_size: [layer_size.0 as f32, layer_size.1 as f32],
         };
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -599,6 +701,7 @@ impl TransformPass {
     ///
     /// GPU→GPU copy via `copy_texture_to_texture` — no CPU round-trip.
     /// Used by `begin_transform` when extracting content from a GPU-authoritative layer.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_floating_content_from_gpu(
         &mut self,
         device: &wgpu::Device,
@@ -607,7 +710,7 @@ impl TransformPass {
         sampler: &wgpu::Sampler,
         accum_views: &[wgpu::TextureView; 2],
         cache_view: &wgpu::TextureView,
-        layer_texture: &wgpu::Texture,
+        layer: &LayerTexture,
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
@@ -616,6 +719,9 @@ impl TransformPass {
         target_layer: LayerId,
         target_is_mask: bool,
     ) {
+        let layer_texture = &layer.texture;
+        let layer_offset = (layer.offset_x, layer.offset_y);
+        let layer_dims = (layer.width, layer.height);
         let src_format = if target_is_mask {
             wgpu::TextureFormat::R8Unorm
         } else {
@@ -643,12 +749,18 @@ impl TransformPass {
         });
 
         // GPU→GPU copy from layer texture to source texture.
-        let src_x = source_origin.0.max(0) as u32;
-        let src_y = source_origin.1.max(0) as u32;
-        let copy_w = source_width.min(canvas_width.saturating_sub(src_x));
-        let copy_h = source_height.min(canvas_height.saturating_sub(src_y));
-        let dst_x = (-source_origin.0).max(0) as u32;
-        let dst_y = (-source_origin.1).max(0) as u32;
+        // `source_origin` is canvas-space; convert to layer-local pixel
+        // coords by subtracting the layer's offset, then clip the read to
+        // the layer texture's actual extent (which may differ from canvas).
+        let local_src_x_signed = source_origin.0 - layer_offset.0;
+        let local_src_y_signed = source_origin.1 - layer_offset.1;
+        let src_x = local_src_x_signed.max(0) as u32;
+        let src_y = local_src_y_signed.max(0) as u32;
+        let copy_w = source_width.min(layer_dims.0.saturating_sub(src_x));
+        let copy_h = source_height.min(layer_dims.1.saturating_sub(src_y));
+        let dst_x = (-local_src_x_signed).max(0) as u32;
+        let dst_y = (-local_src_y_signed).max(0) as u32;
+        let _ = (canvas_width, canvas_height); // kept on the signature for the uniform write below.
 
         let copy_src = wgpu::TexelCopyTextureInfo {
             texture: layer_texture,
@@ -751,15 +863,22 @@ impl TransformPass {
 
         let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Uniform buffer (identity matrix initially)
+        // Uniform buffer (identity matrix initially). Preview pass renders to
+        // canvas-sized accumulator: target_offset=0, target_size=canvas_size.
+        // The mask shares the layer's bounds, so layer_offset/layer_size also
+        // double as the mask's UV mapping for the preview shader.
         let uniforms = TransformBlendUniforms {
             inv_row0: [1.0, 0.0, 0.0, 0.0],
             inv_row1: [0.0, 1.0, 0.0, 0.0],
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
+            target_offset: [0.0, 0.0],
+            target_size: [canvas_width as f32, canvas_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: 0.0,
+            layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
+            layer_size: [layer_dims.0 as f32, layer_dims.1 as f32],
         };
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
@@ -832,6 +951,7 @@ impl TransformPass {
     }
 
     /// Update the affine matrix uniform for real-time preview.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_matrix(
         &self,
         queue: &wgpu::Queue,
@@ -841,6 +961,8 @@ impl TransformPass {
         source_height: u32,
         canvas_width: u32,
         canvas_height: u32,
+        layer_offset: (i32, i32),
+        layer_size: (u32, u32),
     ) {
         let state = match &self.active {
             Some(s) => s,
@@ -849,14 +971,19 @@ impl TransformPass {
 
         let inv = affine_inverse(matrix).unwrap_or(IDENTITY);
 
+        // Preview pass renders to canvas-sized accumulator.
         let uniforms = TransformBlendUniforms {
             inv_row0: [inv[0], inv[1], inv[2], 0.0],
             inv_row1: [inv[3], inv[4], inv[5], 0.0],
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
+            target_offset: [0.0, 0.0],
+            target_size: [canvas_width as f32, canvas_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: 0.0,
+            layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
+            layer_size: [layer_size.0 as f32, layer_size.1 as f32],
         };
 
         queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
@@ -868,6 +995,11 @@ impl TransformPass {
     /// The destination is copied to a temp texture and the shader computes
     /// Porter-Duff source-over manually, outputting with REPLACE blend. This
     /// avoids the premultiplied-stored-as-straight bug from hardware blending.
+    ///
+    /// `source_origin` is canvas-space; the target's `(target_offset,
+    /// target_width, target_height)` describe its canvas-space placement so
+    /// the shader can map UV → canvas coords on offset paste-extent layers.
+    #[allow(clippy::too_many_arguments)]
     pub fn commit_to_texture(
         &self,
         device: &wgpu::Device,
@@ -880,6 +1012,9 @@ impl TransformPass {
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
+        target_offset: (i32, i32),
+        target_width: u32,
+        target_height: u32,
         canvas_width: u32,
         canvas_height: u32,
     ) {
@@ -896,14 +1031,19 @@ impl TransformPass {
         };
 
         // Reuse the preview uniform struct — _pad becomes is_mask for commit.
+        // layer_offset/layer_size are unused by the commit shader.
         let uniforms = TransformBlendUniforms {
             inv_row0: [inv[0], inv[1], inv[2], 0.0],
             inv_row1: [inv[3], inv[4], inv[5], 0.0],
             source_origin: [source_origin.0 as f32, source_origin.1 as f32],
             source_size: [source_width as f32, source_height as f32],
+            target_offset: [target_offset.0 as f32, target_offset.1 as f32],
+            target_size: [target_width as f32, target_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
             _pad: is_mask,
+            layer_offset: [0.0, 0.0],
+            layer_size: [0.0, 0.0],
         };
 
         queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));

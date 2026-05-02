@@ -23,6 +23,13 @@ struct Uniforms {
     blend_mode: u32,
     show_mask: u32,
     _pad1: f32,
+    // Layer pixel offset in canvas coords (top-left).
+    layer_offset: vec2f,
+    // Layer texture dimensions in pixels.
+    layer_size: vec2f,
+    // Canvas dimensions in pixels.
+    canvas_size: vec2f,
+    _pad2: vec2f,
 }
 @group(0) @binding(3) var<uniform> uniforms: Uniforms;
 
@@ -56,14 +63,27 @@ fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     let bg = textureSample(t_bg, t_sampler, in.uv);
 
-    let mask_alpha = textureSample(t_mask, t_sampler, in.uv).r;
+    // Translate canvas UV → layer UV via the layer's offset+size in canvas
+    // coords. When the layer's bounds match the canvas (the default), this
+    // collapses to layer_uv == in.uv. The mask shares the layer's bounds,
+    // so the same UV samples both textures.
+    let canvas_pos = in.uv * uniforms.canvas_size;
+    let layer_pos = canvas_pos - uniforms.layer_offset;
+    let layer_uv = layer_pos / uniforms.layer_size;
+    let in_bounds = all(layer_uv >= vec2f(0.0)) && all(layer_uv <= vec2f(1.0));
+
+    // textureSample requires uniform control flow, so sample unconditionally
+    // and clamp the result outside the layer bounds. Outside the mask's
+    // bounds we treat coverage as 0 (no contribution), matching the layer.
+    let mask_raw = textureSample(t_mask, t_sampler, layer_uv).r;
+    let mask_alpha = select(0.0, mask_raw, in_bounds);
 
     // Show mask as grayscale (GIMP's show_mask mode)
     if (uniforms.show_mask != 0u) {
         return vec4f(mask_alpha, mask_alpha, mask_alpha, 1.0);
     }
 
-    var fg = textureSample(t_layer, t_sampler, in.uv);
+    var fg = select(vec4f(0.0), textureSample(t_layer, t_sampler, layer_uv), in_bounds);
     fg = vec4f(fg.rgb, fg.a * uniforms.opacity * mask_alpha);
     return blend(fg, bg, uniforms.blend_mode);
 }

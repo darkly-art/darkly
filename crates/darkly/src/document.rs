@@ -29,9 +29,6 @@ pub struct Document {
     /// feathering, SDF rasterization) are infrequent, irregular-shaped, and
     /// need random-access CPU reads that don't justify a GPU round-trip.
     pub selection: Option<AlphaMask>,
-    /// Which layer (if any) is having its mask edited instead of its pixels.
-    /// Set by the engine before beginning a stroke, cleared after committing.
-    mask_editing: Option<LayerId>,
     next_id: LayerId,
 }
 
@@ -148,7 +145,7 @@ fn flatten_nodes<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a Layer>) {
         match node {
             LayerNode::Layer(l) => out.push(l),
             LayerNode::Group(g) => {
-                if !g.visible {
+                if !g.common.visible {
                     continue;
                 }
                 // Passthrough groups: children composited directly into parent.
@@ -218,7 +215,6 @@ impl Document {
             width,
             height,
             selection: None,
-            mask_editing: None,
             next_id: 1,
         }
     }
@@ -232,7 +228,10 @@ impl Document {
     /// Add a new raster layer at the root top.
     pub fn add_raster_layer(&mut self) -> LayerId {
         let id = self.alloc_id();
-        let layer = RasterLayer::new(id);
+        let layer = RasterLayer::new(
+            id,
+            crate::coord::CanvasRect::from_xywh(0, 0, self.width, self.height),
+        );
         self.root
             .children
             .push(LayerNode::Layer(Layer::Raster(layer)));
@@ -242,7 +241,10 @@ impl Document {
     /// Add a new raster layer inside a group (or at root if parent is None).
     pub fn add_raster_layer_in(&mut self, parent: Option<LayerId>) -> LayerId {
         let id = self.alloc_id();
-        let layer = RasterLayer::new(id);
+        let layer = RasterLayer::new(
+            id,
+            crate::coord::CanvasRect::from_xywh(0, 0, self.width, self.height),
+        );
         let node = LayerNode::Layer(Layer::Raster(layer));
 
         match parent {
@@ -439,15 +441,6 @@ impl Document {
         }
     }
 
-    /// Tell the document which layer (if any) should route operations to its mask.
-    pub fn set_mask_editing(&mut self, layer_id: Option<LayerId>) {
-        self.mask_editing = layer_id;
-    }
-
-    pub fn mask_editing(&self) -> Option<LayerId> {
-        self.mask_editing
-    }
-
     // --- Layer Mask Operations ---
     // Mask pixel data is GPU-authoritative. These methods only toggle the
     // boolean flag; the engine is responsible for creating/destroying GPU
@@ -459,11 +452,11 @@ impl Document {
             Some(n) => n,
             None => return false,
         };
-        let m = node.as_masked_mut();
-        let old = m.has_mask();
-        m.set_has_mask(true);
-        m.set_mask_enabled(true);
-        m.set_show_mask(false);
+        let c = node.common_mut();
+        let old = c.has_mask;
+        c.has_mask = true;
+        c.mask_enabled = true;
+        c.show_mask = false;
         old
     }
 
@@ -473,23 +466,23 @@ impl Document {
             Some(n) => n,
             None => return false,
         };
-        let m = node.as_masked_mut();
-        let old = m.has_mask();
-        m.set_has_mask(false);
-        m.set_mask_enabled(true);
-        m.set_show_mask(false);
+        let c = node.common_mut();
+        let old = c.has_mask;
+        c.has_mask = false;
+        c.mask_enabled = true;
+        c.show_mask = false;
         old
     }
 
     pub fn set_mask_enabled(&mut self, layer_id: LayerId, enabled: bool) {
         if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
-            node.as_masked_mut().set_mask_enabled(enabled);
+            node.common_mut().mask_enabled = enabled;
         }
     }
 
     pub fn set_show_mask(&mut self, layer_id: LayerId, show: bool) {
         if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
-            node.as_masked_mut().set_show_mask(show);
+            node.common_mut().show_mask = show;
         }
     }
 
@@ -500,10 +493,10 @@ impl Document {
             return;
         }
         if let Some(node) = find_node_in_mut(&mut self.root.children, layer_id) {
-            let m = node.as_masked_mut();
-            m.set_has_mask(true);
-            m.set_mask_enabled(true);
-            m.set_show_mask(false);
+            let c = node.common_mut();
+            c.has_mask = true;
+            c.mask_enabled = true;
+            c.show_mask = false;
         }
     }
 
@@ -543,7 +536,7 @@ mod tests {
 
         // Hide the group — its children should be excluded
         if let Some(LayerNode::Group(g)) = doc.find_node_mut(g1) {
-            g.visible = false;
+            g.common.visible = false;
         }
         let flat = doc.flat_layers();
         assert_eq!(flat.len(), 1);
@@ -609,22 +602,22 @@ mod tests {
 
         // Initially no mask
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            assert!(!r.has_mask);
+            assert!(!r.common.has_mask);
         }
 
         // Add mask
         let old = doc.add_mask(id);
         assert!(!old); // was false
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            assert!(r.has_mask);
-            assert!(r.mask_enabled);
+            assert!(r.common.has_mask);
+            assert!(r.common.mask_enabled);
         }
 
         // Remove mask
         let old = doc.remove_mask(id);
         assert!(old); // was true
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            assert!(!r.has_mask);
+            assert!(!r.common.has_mask);
         }
     }
 }

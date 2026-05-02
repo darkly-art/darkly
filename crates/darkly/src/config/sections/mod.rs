@@ -5,6 +5,7 @@
 pub mod animation;
 pub mod canvas;
 pub mod colors;
+pub mod edit;
 pub mod input;
 pub mod nav;
 pub mod rendering;
@@ -18,6 +19,7 @@ pub fn registrations() -> Vec<SchemaSection> {
         animation::register(),
         canvas::register(),
         colors::register(),
+        edit::register(),
         input::register(),
         nav::register(),
         rendering::register(),

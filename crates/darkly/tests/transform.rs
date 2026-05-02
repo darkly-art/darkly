@@ -3,11 +3,22 @@
 //! Tests TransformPass::commit_to_texture() with various transforms and undo.
 //! Run with: `cargo test -p darkly --test transform`
 
+use darkly::coord::CanvasRect;
+use darkly::gpu::atlas::CanvasFrame;
+use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use darkly::gpu::region_store::RegionStore;
 use darkly::gpu::test_utils::*;
 use darkly::gpu::transform::{
     affine_inverse, affine_multiply, affine_translate, Affine2D, TransformPass, IDENTITY,
 };
+
+/// Build a CanvasFrame for a test texture sized `(w, h)` at canvas origin (0, 0).
+fn frame<'a>(tex: &'a wgpu::Texture, w: u32, h: u32) -> CanvasFrame<'a> {
+    CanvasFrame {
+        texture: tex,
+        canvas_extent: CanvasRect::from_xywh(0, 0, w, h),
+    }
+}
 
 fn encoder(device: &wgpu::Device) -> wgpu::CommandEncoder {
     device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -38,7 +49,24 @@ fn setup_transform_pass(
     wgpu::Sampler,
 ) {
     let fmt = wgpu::TextureFormat::Rgba8Unorm;
-    let pass = TransformPass::new(device, fmt);
+    // Mock the compositor's mask BGL — single texture entry, fragment stage.
+    // Must match the layout the live BlendPipelines uses, since TransformPass
+    // links it into the preview pipeline. Only the layout matters here; the
+    // commit-only tests in this file don't actually run the preview pass.
+    let mask_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("test-mask-bgl"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        }],
+    });
+    let pass = TransformPass::new(device, fmt, &mask_bgl);
 
     // Dummy accumulator textures (needed by set_floating_content for preview bind groups).
     let make_dummy = || {
@@ -124,6 +152,8 @@ fn transform_commit_translate() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -143,6 +173,9 @@ fn transform_commit_translate() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -219,13 +252,20 @@ fn transform_commit_translate_undo() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
 
     // Save pre-commit state.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &target_tex, fmt, [0, 0, cw, ch]);
+    let snap = store.save_region(
+        &mut enc,
+        &frame(&target_tex, cw, ch),
+        fmt,
+        CanvasRect::from_xywh(0, 0, cw, ch),
+    );
     submit(&queue, enc);
 
     // Commit with translation (15, 15).
@@ -242,6 +282,9 @@ fn transform_commit_translate_undo() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -249,7 +292,13 @@ fn transform_commit_translate_undo() {
 
     // Commit undo entry.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, cw, ch]);
+    let entry = store.commit_region(
+        &mut enc,
+        1,
+        &frame(&target_tex, cw, ch),
+        &snap,
+        CanvasRect::from_xywh(0, 0, cw, ch),
+    );
     submit(&queue, enc);
 
     // Verify green at new position.
@@ -259,7 +308,7 @@ fn transform_commit_translate_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &target_tex);
+    let _forward = store.restore_region(&mut enc, &entry, &frame(&target_tex, cw, ch));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -314,6 +363,8 @@ fn transform_commit_rotate_90() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -333,6 +384,9 @@ fn transform_commit_rotate_90() {
         (ox, oy),
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -406,6 +460,8 @@ fn paste_commit_identity() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -423,6 +479,9 @@ fn paste_commit_identity() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -488,13 +547,20 @@ fn paste_commit_undo() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
 
     // Save pre-paste state.
     let mut enc = encoder(&device);
-    store.save_region(&mut enc, &target_tex, fmt, [0, 0, cw, ch]);
+    let snap = store.save_region(
+        &mut enc,
+        &frame(&target_tex, cw, ch),
+        fmt,
+        CanvasRect::from_xywh(0, 0, cw, ch),
+    );
     submit(&queue, enc);
 
     // Commit paste.
@@ -510,13 +576,22 @@ fn paste_commit_undo() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, fmt, [0, 0, cw, ch]);
+    let entry = store.commit_region(
+        &mut enc,
+        1,
+        &frame(&target_tex, cw, ch),
+        &snap,
+        CanvasRect::from_xywh(0, 0, cw, ch),
+    );
     submit(&queue, enc);
 
     // Verify yellow pixels.
@@ -533,7 +608,7 @@ fn paste_commit_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let forward = store.restore_region(&mut enc, &entry, &target_tex);
+    let forward = store.restore_region(&mut enc, &entry, &frame(&target_tex, cw, ch));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -545,7 +620,7 @@ fn paste_commit_undo() {
 
     // Redo.
     let mut enc = encoder(&device);
-    let _backward = store.restore_region(&mut enc, &forward, &target_tex);
+    let _backward = store.restore_region(&mut enc, &forward, &frame(&target_tex, cw, ch));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -586,6 +661,8 @@ fn commit_composites_over_existing() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         false,
     );
@@ -602,6 +679,9 @@ fn commit_composites_over_existing() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -668,6 +748,8 @@ fn transform_commit_on_mask() {
         sh,
         cw,
         ch,
+        (0, 0),
+        (cw, ch),
         1,
         true, // target_is_mask = true
     );
@@ -687,6 +769,9 @@ fn transform_commit_on_mask() {
         origin,
         sw,
         sh,
+        (0, 0),
+        cw,
+        ch,
         cw,
         ch,
     );
@@ -751,4 +836,270 @@ fn affine_multiply_translate_chain() {
     // translate(3,4) then translate(7,6) = translate(10, 10).
     assert!((combined[2] - 10.0).abs() < 1e-6);
     assert!((combined[5] - 10.0).abs() < 1e-6);
+}
+
+/// Transform-commit onto a paste-extent layer at non-zero canvas offset:
+/// the source must land at the requested canvas position, not at
+/// canvas-pos minus offset. Regression guard for transform_commit.wgsl
+/// `target_offset` migration.
+#[test]
+fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
+    let (device, queue) = test_device();
+    let (cw, ch) = (256u32, 256u32);
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+
+    // Layer texture is 200×200 placed at canvas (-50, -50) — paste-extent
+    // configuration. Layer-local (0..200, 0..200) maps to canvas (-50..150).
+    let target_off = (-50i32, -50i32);
+    let (target_w, target_h) = (200u32, 200u32);
+    let (target_tex, target_view) = create_test_texture(
+        &device,
+        &queue,
+        target_w,
+        target_h,
+        &vec![0u8; (target_w * target_h * 4) as usize],
+    );
+
+    let (mut pass, accum_views, cache_view, sampler) =
+        setup_transform_pass(&device, &queue, cw, ch);
+
+    // Source: 4×4 green block at canvas (10, 10). Identity transform — the
+    // block should appear unchanged at canvas (10, 10), which is layer-local
+    // (60, 60) on the offset target.
+    let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [0, 255, 0, 255]);
+
+    pass.set_floating_content(
+        &device,
+        &queue,
+        &sampler,
+        &accum_views,
+        &cache_view,
+        &source_data,
+        origin,
+        sw,
+        sh,
+        cw,
+        ch,
+        (0, 0),
+        (cw, ch),
+        1,
+        false,
+    );
+
+    let mut enc = encoder(&device);
+    pass.commit_to_texture(
+        &device,
+        &mut enc,
+        &queue,
+        &target_tex,
+        &target_view,
+        fmt,
+        &IDENTITY,
+        origin,
+        sw,
+        sh,
+        target_off,
+        target_w,
+        target_h,
+        cw,
+        ch,
+    );
+    submit(&queue, enc);
+
+    let pixels = readback_texture(&device, &queue, &target_tex, fmt, target_w, target_h);
+
+    // Canvas (10, 10) → layer-local (60, 60). Block is 4×4 → covers (60..64, 60..64).
+    for dy in 0..4u32 {
+        for dx in 0..4u32 {
+            let p = pixel_at(&pixels, target_w, 60 + dx, 60 + dy, 4);
+            assert!(
+                p[1] > 200,
+                "layer-local ({},{}) should be green, got G={}",
+                60 + dx,
+                60 + dy,
+                p[1]
+            );
+            assert_eq!(
+                p[3],
+                255,
+                "layer-local ({},{}) alpha should be 255",
+                60 + dx,
+                60 + dy
+            );
+        }
+    }
+
+    // The OLD buggy mapping would have placed the block at layer-local
+    // (10, 10) — that position must be untouched.
+    for dy in 0..4u32 {
+        for dx in 0..4u32 {
+            let p = pixel_at(&pixels, target_w, 10 + dx, 10 + dy, 4);
+            assert_eq!(
+                p[3],
+                0,
+                "layer-local ({},{}) should still be transparent (would be wrong-place commit)",
+                10 + dx,
+                10 + dy
+            );
+        }
+    }
+}
+
+/// Regression for the canvas-coord storage refactor (see plan
+/// `mossy-sleeping-flame.md`): a floating transform's `cancel_snapshot`
+/// must restore at the correct canvas position even if the layer's
+/// canvas extent changes between setup and cancel. This simulates that
+/// scenario directly with `RegionStore`: save into a 256×256 layer at
+/// canvas (0, 0), simulate a negative-direction grow that shifts the
+/// layer's local-coord origin to (256, 256) in a 512×512 texture, then
+/// `restore_from_scratch` using the canvas-coord snapshot. Pre-fix
+/// (`Snapshot.saved: LayerRect`) the saved rect would still name the
+/// pre-grow layer-local frame and write to the wrong texels in the new
+/// frame; canvas-coord storage round-trips cleanly via
+/// `canvas_to_layer_rect`.
+#[test]
+fn cancel_floating_after_layer_grow() {
+    use wgpu::TextureUsages;
+    let (device, queue) = test_device();
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let (init_w, init_h) = (256u32, 256u32);
+
+    // Initial 256×256 layer filled red — represents the pre-floating layer
+    // pixels at canvas (0, 0)..(256, 256).
+    let red: Vec<u8> = (0..init_w * init_h)
+        .flat_map(|_| [255u8, 0, 0, 255])
+        .collect();
+    let (initial_tex, _) = create_test_texture(&device, &queue, init_w, init_h, &red);
+    let initial_frame = CanvasFrame {
+        texture: &initial_tex,
+        canvas_extent: CanvasRect::from_xywh(0, 0, init_w, init_h),
+    };
+
+    let mut store = RegionStore::with_capacity(&device, init_w, init_h, 4 * 1024 * 1024);
+
+    // Floating transform setup snapshots a 100×100 region at canvas (50, 50).
+    let saved_canvas_rect = CanvasRect::from_xywh(50, 50, 100, 100);
+    let mut enc = encoder(&device);
+    let mut cancel_snapshot = store.save_region(&mut enc, &initial_frame, fmt, saved_canvas_rect);
+    submit(&queue, enc);
+
+    // Simulate a grow that shifts the layer's local frame: new 512×512
+    // texture at canvas (-256, -256), old contents land at layer-local
+    // (256, 256).
+    let (new_w, new_h) = (512u32, 512u32);
+    let new_tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("grown-layer"),
+        size: wgpu::Extent3d {
+            width: new_w,
+            height: new_h,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: fmt,
+        usage: TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC
+            | TextureUsages::COPY_DST
+            | TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let mut enc = encoder(&device);
+    enc.copy_texture_to_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &initial_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyTextureInfo {
+            texture: &new_tex,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: 256,
+                y: 256,
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::Extent3d {
+            width: init_w,
+            height: init_h,
+            depth_or_array_layers: 1,
+        },
+    );
+    store.grow_scratch_preserving(&device, &mut enc, new_w, new_h, 256, 256);
+    submit(&queue, enc);
+
+    // After grow, the engine widens snap.saved to the full new canvas
+    // extent so commits/restores that touch newly-grown areas are still
+    // contained. The original saved canvas region is untouched.
+    cancel_snapshot.saved = CanvasRect::from_xywh(-256, -256, new_w, new_h);
+
+    let new_frame = CanvasFrame {
+        texture: &new_tex,
+        canvas_extent: CanvasRect::from_xywh(-256, -256, new_w, new_h),
+    };
+
+    // Stomp the layer at the saved canvas region with green to prove that
+    // restore_from_scratch puts the saved red pixels back at the right
+    // canvas position (not the wrong layer-local origin).
+    let pipelines = PaintPipelines::new(&device, &queue);
+    let new_view = new_tex.create_view(&wgpu::TextureViewDescriptor::default());
+    let target = GpuPaintTarget {
+        texture: &new_tex,
+        view: &new_view,
+        format: fmt,
+        width: new_w,
+        height: new_h,
+        offset_x: -256,
+        offset_y: -256,
+        canvas_width: new_w,
+        canvas_height: new_h,
+    };
+    let mut enc = encoder(&device);
+    target.fill_rect(
+        &mut enc,
+        &pipelines,
+        &queue,
+        [50, 50, 100, 100],
+        [0, 255, 0, 255],
+    );
+    submit(&queue, enc);
+
+    // Cancel: restore_from_scratch using the canvas-coord saved rect.
+    let mut enc = encoder(&device);
+    store.restore_from_scratch(&mut enc, &cancel_snapshot, &new_frame, saved_canvas_rect);
+    submit(&queue, enc);
+
+    // The saved canvas region (50..150, 50..150) must be red again.
+    // canvas (50, 50) → layer-local (306, 306) in the new frame.
+    let pixels = readback_texture(&device, &queue, &new_tex, fmt, new_w, new_h);
+    let p = pixel_at(&pixels, new_w, 306, 306, 4);
+    assert_eq!(
+        p,
+        &[255, 0, 0, 255],
+        "after cancel, canvas (50, 50) (= layer-local (306, 306)) must be \
+         restored to the pre-floating red, got {:?}",
+        p,
+    );
+    let q = pixel_at(&pixels, new_w, 405, 405, 4); // canvas (149, 149)
+    assert_eq!(
+        q,
+        &[255, 0, 0, 255],
+        "near far edge of saved canvas region should also be red, got {:?}",
+        q,
+    );
+
+    // The OLD buggy mapping would have placed the restore at layer-local
+    // (50, 50) — that position must remain untouched (zero in the
+    // newly-grown area of the layer).
+    let buggy = pixel_at(&pixels, new_w, 50, 50, 4);
+    assert_eq!(
+        buggy[3], 0,
+        "layer-local (50, 50) (canvas (-206, -206)) is in the grown area \
+         and must be transparent — non-zero alpha here would mean the \
+         restore landed at the stale pre-grow layer origin, A={}",
+        buggy[3],
+    );
 }

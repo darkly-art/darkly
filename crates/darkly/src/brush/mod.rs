@@ -15,6 +15,7 @@ pub mod interpolation;
 pub mod library;
 pub mod nodes;
 pub mod paint_info;
+pub mod paint_target_ext;
 pub mod pipelines;
 pub mod preview_renderer;
 pub mod save_points;

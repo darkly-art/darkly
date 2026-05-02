@@ -13,6 +13,7 @@ use super::dab_pool::DabTexturePool;
 use super::eval::BrushPreviewInfo;
 use super::pipelines::BrushPipelines;
 use super::wire::TextureHandle;
+use crate::gpu::paint_target::GpuPaintTarget;
 
 /// Everything a GPU brush node needs to record render passes.
 ///
@@ -36,6 +37,16 @@ pub struct BrushGpuContext<'a> {
     pub stroke_scratch_texture: &'a wgpu::Texture,
     pub canvas_width: u32,
     pub canvas_height: u32,
+    /// The paint target the terminal is committing to: a layer (RGBA8) or
+    /// mask (R8). `None` in preview mode (no commit happens).
+    ///
+    /// Replaces the loose `layer_view` / `layer_texture` / `layer_width` /
+    /// `layer_height` / `layer_offset_x` / `layer_offset_y` fields. All those
+    /// values are now `gpu.paint_target.X`. Format awareness lives in
+    /// `GpuPaintTarget`'s brush extension (`commit_brush_dab`,
+    /// `save_pre_stroke_snapshot`, `commit_scratch_blit`) — terminals call
+    /// uniform methods on the paint target and never branch on R8 vs RGBA8.
+    pub paint_target: Option<GpuPaintTarget<'a>>,
     /// Selection mask bind group (or default 1x1 white when no selection).
     pub selection_bind_group: &'a wgpu::BindGroup,
     /// Resource name → TextureHandle for images uploaded by the brush loader.
@@ -65,11 +76,6 @@ pub struct BrushGpuContext<'a> {
     /// preview path; first-write-wins if multiple terminals try to publish
     /// (unusual — typically one terminal owns the preview).
     pub brush_preview_info: Option<BrushPreviewInfo>,
-    /// The actual layer texture view — write target for the terminal's
-    /// `commit` hook. `None` in preview mode (no layer to commit to).
-    pub layer_view: Option<&'a wgpu::TextureView>,
-    /// The actual layer texture (for copy_texture_to_texture at commit).
-    pub layer_texture: Option<&'a wgpu::Texture>,
     /// Pre-stroke layer snapshot. Supplied by `StrokeBuffer::save_pre_stroke`
     /// at the start of a stroke. `Some` during a stroke, `None` in preview.
     pub pre_stroke_texture: Option<&'a wgpu::Texture>,
@@ -81,15 +87,15 @@ pub struct BrushGpuContext<'a> {
     /// `StrokeBuffer` so `color_output::commit` can bind it as the
     /// composite foreground (the per-dab accumulation).
     pub scratch_bind_group: Option<&'a wgpu::BindGroup>,
-    /// Union of canvas-pixel rects the current dab's passes write to, in
-    /// `[x, y, w, h]`. The node that issues the write is the only thing
-    /// that knows the real footprint — stroke_engine can't derive it from
-    /// `info.pos` because the graph may offset the dab (scatter, wobble,
-    /// future position-modulating nodes). Each pass unions its rect into
-    /// this via `push_dab_write_bbox`, stroke_engine reads it after
-    /// `execute_gpu` for the save-point bbox and resets it before the
-    /// next dab. `None` outside stroke evaluation.
-    pub dab_write_bbox: Option<[u32; 4]>,
+    /// Union of canvas-pixel rects the current dab's passes write to. The
+    /// node that issues the write is the only thing that knows the real
+    /// footprint — stroke_engine can't derive it from `info.pos` because
+    /// the graph may offset the dab (scatter, wobble, future
+    /// position-modulating nodes). Each pass unions its rect into this via
+    /// `push_dab_write_bbox`; stroke_engine reads it after `execute_gpu`
+    /// for the save-point bbox and resets it before the next dab. `None`
+    /// outside stroke evaluation.
+    pub dab_write_canvas_bbox: Option<crate::coord::CanvasRect>,
 }
 
 impl<'a> BrushGpuContext<'a> {
@@ -120,15 +126,16 @@ impl<'a> BrushGpuContext<'a> {
         }
     }
 
-    /// Union a write-pass footprint into `dab_write_bbox`. Called by any
-    /// GPU node whose pass writes to the stroke scratch, so stroke_engine
-    /// can record a save-point bbox that matches what was actually drawn.
-    pub fn push_dab_write_bbox(&mut self, bbox: [u32; 4]) {
-        if bbox[2] == 0 || bbox[3] == 0 {
+    /// Union a write-pass footprint into `dab_write_canvas_bbox`. Called by
+    /// any GPU node whose pass writes to the stroke scratch, so
+    /// stroke_engine can record a save-point bbox that matches what was
+    /// actually drawn.
+    pub fn push_dab_write_bbox(&mut self, bbox: crate::coord::CanvasRect) {
+        if bbox.is_empty() {
             return;
         }
-        self.dab_write_bbox = Some(match self.dab_write_bbox {
-            Some(prev) => crate::brush::save_points::union_bbox(prev, bbox),
+        self.dab_write_canvas_bbox = Some(match self.dab_write_canvas_bbox {
+            Some(prev) => prev.union(bbox),
             None => bbox,
         });
     }

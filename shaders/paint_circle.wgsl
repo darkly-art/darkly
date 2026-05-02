@@ -7,7 +7,11 @@ struct Uniforms {
     origin: vec2f,
     // Quad size in canvas pixels.
     size: vec2f,
-    // Padded canvas dimensions.
+    // Canvas-space offset of the target's (0,0) pixel.
+    target_offset: vec2f,
+    // Target texture pixel dimensions (used for vertex NDC mapping).
+    target_size: vec2f,
+    // Document canvas size (used for fragment-stage selection UV).
     canvas_size: vec2f,
     // Circle center in canvas pixels.
     center: vec2f,
@@ -36,10 +40,11 @@ struct VertexOutput {
     // Map unit quad to the paint region's canvas-space rectangle.
     let canvas_pos = uniforms.origin + unit * uniforms.size;
 
-    // Canvas pixels → NDC: [0, canvas_size] → [-1, 1], Y flipped.
+    // Translate canvas-space → target-local, then to NDC against target size.
+    let target_local = canvas_pos - uniforms.target_offset;
     let ndc = vec2f(
-        canvas_pos.x / uniforms.canvas_size.x * 2.0 - 1.0,
-        1.0 - canvas_pos.y / uniforms.canvas_size.y * 2.0,
+        target_local.x / uniforms.target_size.x * 2.0 - 1.0,
+        1.0 - target_local.y / uniforms.target_size.y * 2.0,
     );
 
     var out: VertexOutput;

@@ -11,6 +11,8 @@
 //! the remaining slots are densely packed in the volatile zone.
 
 use super::stroke_engine::RenderCheckpoint;
+use crate::coord::CanvasRect;
+use crate::gpu::atlas::CanvasFrame;
 
 const RING_CAPACITY: usize = 8;
 
@@ -29,8 +31,9 @@ struct CheckpointSlot {
     /// Dimensions of the allocated texture (may be larger than bbox).
     tex_w: u32,
     tex_h: u32,
-    /// The bbox region this checkpoint covers `[x, y, w, h]`.
-    bbox: [u32; 4],
+    /// The bbox region this checkpoint covers, in canvas pixel coords.
+    /// Stable across mid-stroke layer growth.
+    canvas_bbox: CanvasRect,
     /// Which save point this checkpoint was captured at.
     save_point_index: usize,
     /// The polyline vector index at that save point.
@@ -47,7 +50,7 @@ impl CheckpointSlot {
             texture: None,
             tex_w: 0,
             tex_h: 0,
-            bbox: [0, 0, 0, 0],
+            canvas_bbox: CanvasRect::from_xywh(0, 0, 0, 0),
             save_point_index: 0,
             vector_index: 0,
             render_state: RenderCheckpoint {
@@ -152,35 +155,36 @@ impl CheckpointRing {
             .unwrap_or(0)
     }
 
-    /// Save a checkpoint: copy the bbox region from the stroke texture
-    /// into the next ring slot.
+    /// Save a checkpoint: copy the bbox region from the stroke texture into
+    /// the next ring slot. `stroke` is the stroke buffer paired with the
+    /// active layer's canvas extent (the stroke buffer is texture-aligned
+    /// to the layer texture). `canvas_bbox` is the canvas-space rect to
+    /// snapshot.
     pub fn save(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        stroke_texture: &wgpu::Texture,
+        stroke: &CanvasFrame<'_>,
         save_point_index: usize,
         vector_index: usize,
-        bbox: [u32; 4],
+        canvas_bbox: CanvasRect,
         render_state: RenderCheckpoint,
     ) {
-        let [x, y, w, h] = bbox;
-        if w == 0 || h == 0 {
-            return;
-        }
-        // Clamp bbox to texture bounds.
-        let tex_size = stroke_texture.size();
-        let w = w.min(tex_size.width.saturating_sub(x));
-        let h = h.min(tex_size.height.saturating_sub(y));
-        if w == 0 || h == 0 {
-            return;
-        }
-        let bbox = [x, y, w, h];
+        let layer_rect = match stroke.canvas_to_layer_rect(canvas_bbox) {
+            Some(r) if !r.is_empty() => r,
+            _ => return,
+        };
+        // Use the clipped canvas rect (post-intersection) so the stored
+        // bbox matches the texels actually copied.
+        let clipped_canvas = match stroke.canvas_extent.intersect(canvas_bbox) {
+            Some(r) => r,
+            None => return,
+        };
 
         let slot_idx = self.pick_slot();
         let slot = &mut self.slots[slot_idx];
-        slot.ensure_texture(device, w, h);
-        slot.bbox = bbox;
+        slot.ensure_texture(device, layer_rect.width, layer_rect.height);
+        slot.canvas_bbox = clipped_canvas;
         slot.save_point_index = save_point_index;
         slot.vector_index = vector_index;
         slot.render_state = render_state;
@@ -189,9 +193,13 @@ impl CheckpointRing {
         // Copy bbox region from stroke texture to slot texture.
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: stroke_texture,
+                texture: stroke.texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
+                origin: wgpu::Origin3d {
+                    x: layer_rect.x0(),
+                    y: layer_rect.y0(),
+                    z: 0,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {
@@ -201,8 +209,8 @@ impl CheckpointRing {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
-                width: w,
-                height: h,
+                width: layer_rect.width,
+                height: layer_rect.height,
                 depth_or_array_layers: 1,
             },
         );
@@ -239,25 +247,28 @@ impl CheckpointRing {
     ///
     /// Returns the checkpoint metadata for the caller to restore engine
     /// state.
+    ///
+    /// `stroke` pairs the stroke buffer with the active layer's *current*
+    /// canvas extent — used to translate the slot's canvas-coord bbox to
+    /// texture-local coords (which may differ from save time if the layer
+    /// has grown in the meantime; the stroke buffer's contents are rebased
+    /// by `StrokeBuffer::grow_preserving` to track the new frame, so this
+    /// translation produces the matching texture origin).
     pub fn restore_before(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        stroke_texture: &wgpu::Texture,
+        stroke: &CanvasFrame<'_>,
         div_vector_index: usize,
     ) -> Option<CheckpointRestore> {
         let slot_idx = self.best_slot_before(div_vector_index)?;
         let slot = &self.slots[slot_idx];
-        let [x, y, mut w, mut h] = slot.bbox;
-        // Clamp to texture bounds.
-        let tex_size = stroke_texture.size();
-        w = w.min(tex_size.width.saturating_sub(x));
-        h = h.min(tex_size.height.saturating_sub(y));
-        if w == 0 || h == 0 {
+        let layer_rect = stroke.canvas_to_layer_rect(slot.canvas_bbox)?;
+        if layer_rect.is_empty() {
             return None;
         }
 
-        // Copy checkpoint bbox region back to stroke buffer. The caller
-        // has already reset outside-bbox pixels to the terminal's starting
+        // Copy checkpoint bbox region back to stroke buffer. The caller has
+        // already reset outside-bbox pixels to the terminal's starting
         // state, so only the mutated region needs restoring here.
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
@@ -267,14 +278,18 @@ impl CheckpointRing {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {
-                texture: stroke_texture,
+                texture: stroke.texture,
                 mip_level: 0,
-                origin: wgpu::Origin3d { x, y, z: 0 },
+                origin: wgpu::Origin3d {
+                    x: layer_rect.x0(),
+                    y: layer_rect.y0(),
+                    z: 0,
+                },
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::Extent3d {
-                width: w,
-                height: h,
+                width: layer_rect.width,
+                height: layer_rect.height,
                 depth_or_array_layers: 1,
             },
         );

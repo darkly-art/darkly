@@ -89,42 +89,52 @@ impl DarklyEngine {
         tolerance: u8,
         mode: SelectionMode,
     ) {
-        if self.compositor.layer_texture(layer_id).is_none() {
+        if self.paint_target(layer_id).is_none() {
             return;
         }
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
+        let mask_editing = self.is_editing_mask(layer_id);
 
         let was_active = self.gpu_selection.active;
         // Magic wand operates on full-canvas data — reserve full-canvas undo rect.
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
 
-        let layer_tex = self.compositor.layer_texture(layer_id).unwrap();
-        self.gpu.encode("magic-wand-readback", |encoder| {
-            let request = readback::request_readback(
-                &self.gpu.device,
-                encoder,
-                &layer_tex.texture,
-                wgpu::TextureFormat::Rgba8Unorm,
-                [0, 0, canvas_w, canvas_h],
-            );
-            self.readbacks.submit(
-                request,
-                ReadbackContext::MagicWand {
-                    was_active,
-                    seed_x,
-                    seed_y,
-                    tolerance,
-                    mode,
-                },
-            );
-        });
+        let pt = self.paint_target(layer_id).unwrap();
+        let texture = pt.texture;
+        let format = pt.format;
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("magic-wand-readback"),
+            });
+        let request = readback::request_readback(
+            &self.gpu.device,
+            &mut encoder,
+            texture,
+            format,
+            [0, 0, canvas_w, canvas_h],
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        self.readbacks.submit(
+            request,
+            ReadbackContext::MagicWand {
+                was_active,
+                mask_editing,
+                seed_x,
+                seed_y,
+                tolerance,
+                mode,
+            },
+        );
     }
 
     pub(crate) fn complete_magic_wand(
         &mut self,
         was_active: bool,
+        mask_editing: bool,
         seed_x: i32,
         seed_y: i32,
         tolerance: u8,
@@ -134,8 +144,11 @@ impl DarklyEngine {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        let fill_mask =
-            flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance);
+        let fill_mask = if mask_editing {
+            flood_fill::flood_fill_r8(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
+        } else {
+            flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
+        };
 
         self.apply_selection_full(fill_mask, mode, was_active);
     }
@@ -366,19 +379,38 @@ impl DarklyEngine {
 
     // --- Undo helpers ---
 
-    pub(crate) fn save_selection_for_undo(&mut self, rect: [u32; 4]) {
-        let texture = self.gpu_selection.texture();
-        self.gpu.encode("sel-undo-save", |encoder| {
+    pub(crate) fn save_selection_for_undo(&mut self, rect: crate::coord::CanvasRect) {
+        let frame = self.gpu_selection.canvas_frame();
+        let snap = self.gpu.encode_ret("sel-undo-save", |encoder| {
             self.region_store
-                .save_region(encoder, texture, wgpu::TextureFormat::R8Unorm, rect);
+                .save_region(encoder, &frame, wgpu::TextureFormat::R8Unorm, rect)
         });
+        // The selection texture is canvas-sized at offset 0, so the
+        // canvas frame is exactly the selection-texture-local frame.
+        // Stashing on the engine lets `commit_selection_undo` recover the
+        // snapshot across async readback boundaries (magic wand,
+        // mask-to-selection).
+        self.pending_selection_snapshot = Some(snap);
     }
 
-    pub(crate) fn commit_selection_undo(&mut self, was_active: bool, rect: [u32; 4]) {
+    pub(crate) fn commit_selection_undo(
+        &mut self,
+        was_active: bool,
+        rect: crate::coord::CanvasRect,
+    ) {
+        let Some(snap) = self.pending_selection_snapshot.take() else {
+            // No paired save — nothing to commit. Indicates a logic bug at
+            // the call site, but the historical behavior was to silently
+            // fail by reading uninitialised scratch; leaving as a debug
+            // assert to surface it without breaking release builds.
+            debug_assert!(false, "commit_selection_undo without a paired save");
+            return;
+        };
+        let frame = self.gpu_selection.canvas_frame();
         self.gpu.encode("sel-undo-commit", |encoder| {
-            let entry =
-                self.region_store
-                    .commit_region(encoder, 0, wgpu::TextureFormat::R8Unorm, rect);
+            let entry = self
+                .region_store
+                .commit_region(encoder, 0, &frame, &snap, rect);
             self.undo_stack
                 .push(Box::new(SelectionAction::new(was_active, entry)));
         });
@@ -386,15 +418,18 @@ impl DarklyEngine {
 
     /// Full-canvas undo rect — used when the post-op selection extent isn't
     /// known ahead of time (invert, select-all, magic wand, combine into unknown bounds).
-    pub(crate) fn selection_full_canvas_rect(&self) -> [u32; 4] {
-        [0, 0, self.doc.width, self.doc.height]
+    pub(crate) fn selection_full_canvas_rect(&self) -> crate::coord::CanvasRect {
+        crate::coord::CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height)
     }
 
     /// Undo rect that covers both the current (pre-op) selection and a new shape
     /// that will be applied. Save and commit must use the same rect, otherwise
     /// the R8 scratch's stale contents outside the save rect would leak into the
     /// commit buffer and corrupt the selection on undo.
-    pub(crate) fn selection_undo_rect_for_shape(&self, shape: [u32; 4]) -> [u32; 4] {
+    pub(crate) fn selection_undo_rect_for_shape(
+        &self,
+        shape: [u32; 4],
+    ) -> crate::coord::CanvasRect {
         let cw = self.doc.width;
         let ch = self.doc.height;
         let [sx, sy, sw, sh] = shape;
@@ -404,16 +439,11 @@ impl DarklyEngine {
             sw.min(cw - sx.min(cw)),
             sh.min(ch - sy.min(ch)),
         ];
+        let shape_rect = crate::coord::CanvasRect::from_xywh(sx as i32, sy as i32, sw, sh);
         match self.gpu_selection.pixel_bounds {
-            Some([ox, oy, ow, oh]) if sw > 0 && sh > 0 => {
-                let x = ox.min(sx);
-                let y = oy.min(sy);
-                let x_end = (ox + ow).max(sx + sw);
-                let y_end = (oy + oh).max(sy + sh);
-                [x, y, x_end - x, y_end - y]
-            }
+            Some(old) if sw > 0 && sh > 0 => old.union(shape_rect),
             Some(old) => old,
-            None => [0, 0, cw, ch],
+            None => crate::coord::CanvasRect::from_xywh(0, 0, cw, ch),
         }
     }
 
@@ -452,7 +482,8 @@ impl DarklyEngine {
                 &pixels,
                 self.gpu_selection.width,
                 self.gpu_selection.height,
-            );
+            )
+            .map(|[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h));
         }
 
         // Populate the CPU cache from the readback data.

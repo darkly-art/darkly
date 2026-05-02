@@ -141,6 +141,15 @@ class BrushGraphState {
     /** Ports exposed in the brush properties panel. */
     exposedPorts = $state<ExposedPortInfo[]>([]);
 
+    /**
+     * Last topology version we observed from the engine. The engine bumps
+     * this only on structural changes — exposed-port scrubs don't advance
+     * it. We compare on each mutation result to decide whether the active
+     * preset name still applies (scrub: keep) or the graph genuinely
+     * changed shape (clear → "Custom").
+     */
+    private lastTopologyVersion = 0;
+
 
     // --- WASM command helpers ---
 
@@ -156,13 +165,30 @@ class BrushGraphState {
                 if (graph && graph.nodes) {
                     this.graph = graph as BrushGraph;
                     this.error = null;
-                    this.activeBrush = null; // graph was modified
+                    if (app.handle) {
+                        const topo = app.handle.brush_topology_version();
+                        if (topo !== this.lastTopologyVersion) {
+                            this.activeBrush = null;
+                            this.lastTopologyVersion = topo;
+                        }
+                    }
                     this.refreshExposedPorts();
                 }
             } catch {
                 // Parse failed — leave current state.
             }
         }
+    }
+
+    /**
+     * Resync `lastTopologyVersion` from the engine. Call after deliberate
+     * topology changes that don't go through `applyResult` — `loadBrush`,
+     * `resetToDefault`, `init` — so subsequent scrubs see no version
+     * delta and preserve `activeBrush`.
+     */
+    private snapshotTopologyVersion() {
+        if (!app.handle) return;
+        this.lastTopologyVersion = app.handle.brush_topology_version();
     }
 
     /** Fetch the current graph snapshot from Rust. */
@@ -206,6 +232,7 @@ class BrushGraphState {
             // default graph as a degenerate fallback.
             this.fetchGraph();
             this.refreshExposedPorts();
+            this.snapshotTopologyVersion();
         }
     }
 
@@ -217,6 +244,7 @@ class BrushGraphState {
         this.refreshExposedPorts();
         this.error = null;
         this.activeBrush = null;
+        this.snapshotTopologyVersion();
     }
 
     /** Refresh the brush list from WASM. */
@@ -276,6 +304,9 @@ class BrushGraphState {
         this.fetchGraph();
         this.refreshExposedPorts();
         this.error = null;
+        // brush_load is a Topology change — snapshot here so the next
+        // exposed-port scrub doesn't see a delta and clear `activeBrush`.
+        this.snapshotTopologyVersion();
     }
 
     /** True when all node positions are at the origin (no layout assigned). */

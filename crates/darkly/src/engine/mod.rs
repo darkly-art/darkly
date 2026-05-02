@@ -56,7 +56,7 @@ pub(crate) struct PendingCopy {
 /// Deferred undo commit — waiting for async GPU diff rect result.
 pub(crate) struct PendingUndoCommit {
     pub layer_id: u64,
-    pub format: wgpu::TextureFormat,
+    pub snapshot: crate::gpu::region_store::Snapshot,
 }
 
 /// Context for a pending async GPU readback — travels with the request and
@@ -81,6 +81,7 @@ pub(crate) enum ReadbackContext {
     },
     MagicWand {
         was_active: bool,
+        mask_editing: bool,
         seed_x: i32,
         seed_y: i32,
         tolerance: u8,
@@ -136,15 +137,16 @@ pub(crate) enum ReadbackContext {
         height: u32,
     },
     /// Async readback of a single-dab preview rendered from the active
-    /// graph. Completion caches the RGBA bytes on the engine so the next
-    /// `brush_active_dab_preview` call returns them synchronously. The
-    /// topology version (not graph version) travels with the request:
-    /// scrub-only changes don't affect the rendered output thanks to
-    /// [`crate::brush::reset_exposed_scrubs`], so they shouldn't discard
-    /// in-flight readbacks either.
+    /// graph. Completion runs the pixels through the same
+    /// `frame_dab_thumbnail` framer the baked dab thumbnails use, so the
+    /// active preview is byte-for-byte identical to the picker tiles'
+    /// thumbnail when the active brush matches a preset. The PNG bytes
+    /// land in `active_dab_preview_cache`. The topology version (not
+    /// graph version) travels with the request: scrub-only changes
+    /// don't affect the rendered output thanks to
+    /// [`crate::brush::reset_exposed_scrubs`], so they shouldn't
+    /// discard in-flight readbacks either.
     ActiveBrushDab {
-        width: u32,
-        height: u32,
         topology_version: u64,
     },
 }
@@ -192,8 +194,16 @@ pub struct DarklyEngine {
     // --- GPU Paint Infrastructure (Phase 2) ---
     pub(crate) region_store: RegionStore,
     pub(crate) paint_pipelines: PaintPipelines,
-    /// True when the scratch texture has been saved for the current stroke.
-    pub(crate) scratch_saved: bool,
+    /// Pre-stroke scratch snapshot for the current stroke. Lazily populated
+    /// on the first stroke_to of a stroke; consumed at end_stroke (moved into
+    /// `pending_undo_commit`) or by a sync commit path (flood fill, clear,
+    /// fill_background — those take their own snapshots inline).
+    pub(crate) scratch_snapshot: Option<crate::gpu::region_store::Snapshot>,
+    /// Selection-texture snapshot held between `save_selection_for_undo` and
+    /// the matching `commit_selection_undo`. Some selection ops (magic wand,
+    /// mask-to-selection) save before an async readback and commit on
+    /// completion — the snapshot lives across that boundary.
+    pub(crate) pending_selection_snapshot: Option<crate::gpu::region_store::Snapshot>,
 
     // --- Brush Engine (Phase 4-5) ---
     pub(crate) dab_pool: DabTexturePool,
@@ -256,13 +266,14 @@ pub struct DarklyEngine {
     pub(crate) brush_topology_version: u64,
 
     // --- Active brush dab preview ---
-    /// Cached RGBA bytes of the most recently-completed active-dab
-    /// preview. `brush_active_dab_preview()` returns this synchronously;
-    /// it's refreshed asynchronously via `ReadbackContext::ActiveBrushDab`.
+    /// Cached PNG bytes of the most recently-completed active-dab
+    /// preview, framed through the same `frame_dab_thumbnail` path used
+    /// for baked thumbnails — so this is byte-identical to a
+    /// `brush_dab_thumbnail(active_name)` call when the active brush
+    /// matches a preset. `brush_active_dab_preview()` returns this
+    /// synchronously; it's refreshed asynchronously via
+    /// `ReadbackContext::ActiveBrushDab`.
     pub(crate) active_dab_preview_cache: Option<Vec<u8>>,
-    /// Dimensions of the bytes in `active_dab_preview_cache`. Cleared
-    /// alongside the cache on invalidation.
-    pub(crate) active_dab_preview_cache_size: Option<(u32, u32)>,
     /// Topology version at the last time we issued a dab render. Compared
     /// against `brush_topology_version` to skip redundant dab renders.
     pub(crate) last_rendered_dab_topology_version: u64,
@@ -316,6 +327,11 @@ pub struct DarklyEngine {
     /// Last picked color — returned immediately while async readback is in flight.
     pub(crate) last_picked_color: [u8; 4],
     pub(crate) thumbnail_cache: ThumbnailCache,
+
+    /// Set once a layer-grow request has been refused for hitting
+    /// `MAX_LAYER_DIM` — used to log the cap warning at most once per
+    /// process lifetime.
+    pub(crate) layer_growth_capped: bool,
 }
 
 impl DarklyEngine {
@@ -363,7 +379,8 @@ impl DarklyEngine {
             floating: None,
             region_store,
             paint_pipelines,
-            scratch_saved: false,
+            scratch_snapshot: None,
+            pending_selection_snapshot: None,
             dab_pool,
             brush_pipelines,
             brush_stroke_engine: None,
@@ -378,7 +395,6 @@ impl DarklyEngine {
             last_rendered_preview_version: 0,
             brush_topology_version: 0,
             active_dab_preview_cache: None,
-            active_dab_preview_cache_size: None,
             last_rendered_dab_topology_version: 0,
             // Default theme: dark (white on dark). Frontend overrides via
             // `set_preview_theme()` as soon as the UI loads.
@@ -406,6 +422,7 @@ impl DarklyEngine {
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],
             thumbnail_cache: ThumbnailCache::new(),
+            layer_growth_capped: false,
         };
 
         // Snapshot the default graph's port defaults so reset-to-default
@@ -453,21 +470,69 @@ impl DarklyEngine {
         self.gpu_selection.cpu_cache.as_deref()
     }
 
+    /// Number of per-layer GPU textures the compositor currently holds.
+    /// Test-only metric for leak-cycle regression tests (P3).
+    pub fn test_layer_texture_count(&self) -> usize {
+        self.compositor.test_layer_texture_count()
+    }
+
+    /// Number of per-mask GPU textures the compositor currently holds.
+    pub fn test_mask_texture_count(&self) -> usize {
+        self.compositor.test_mask_texture_count()
+    }
+
     /// Blocking readback of a layer's RGBA texture. For test assertions only.
+    /// Reads the layer texture's full extent — for canvas-aligned layers
+    /// this is canvas-sized, but paste-extent layers may exceed canvas.
     pub fn test_readback_layer(&self, layer_id: u64) -> Vec<u8> {
         let layer_tex = self
             .compositor
             .layer_texture(layer_id)
             .expect("layer texture not found");
-        let w = self.doc.width;
-        let h = self.doc.height;
         crate::gpu::test_utils::readback_texture(
             &self.gpu.device,
             &self.gpu.queue,
             &layer_tex.texture,
             wgpu::TextureFormat::Rgba8Unorm,
+            layer_tex.width,
+            layer_tex.height,
+        )
+    }
+
+    /// Blocking readback of the root composited canvas. For test assertions
+    /// only. Returns canvas-sized RGBA8 pixels (padding excluded). Forces an
+    /// offscreen composite first because headless `render()` skips the
+    /// compositor (no surface to present to).
+    pub fn test_readback_canvas(&mut self) -> Vec<u8> {
+        self.compositor
+            .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
+        let texture = self.compositor.composited_texture();
+        let w = self.compositor.canvas_width();
+        let h = self.compositor.canvas_height();
+        crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            texture,
+            wgpu::TextureFormat::Rgba8Unorm,
             w,
             h,
+        )
+    }
+
+    /// Blocking readback of a layer's R8 mask texture. For test assertions only.
+    /// Returns one byte per pixel (the R8 value, 0 = hide, 255 = reveal).
+    pub fn test_readback_mask(&self, layer_id: u64) -> Vec<u8> {
+        let mask_tex = self
+            .compositor
+            .mask_texture(layer_id)
+            .expect("mask texture not found");
+        crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mask_tex.texture,
+            wgpu::TextureFormat::R8Unorm,
+            mask_tex.width,
+            mask_tex.height,
         )
     }
 
