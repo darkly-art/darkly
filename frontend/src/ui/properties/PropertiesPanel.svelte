@@ -37,9 +37,9 @@
 </script>
 
 <div class="panel">
-    <div class="panel-header">
-        <span class="panel-title">{title}</span>
-    </div>
+    <!-- <div class="panel-header">
+        <span class="panel-title">{title} Properties</span>
+    </div> -->
     <div class="panel-body">
         {#if activeVeil}
             <VeilProperties veil={activeVeil} />

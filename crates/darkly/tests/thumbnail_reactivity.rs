@@ -253,7 +253,8 @@ fn brush_stroke_queues_thumbnail_readback_only_at_end() {
 
     let v_mid_stroke = engine.thumbnail_version();
     assert_eq!(
-        v_mid_stroke, v_baseline,
+        v_mid_stroke,
+        v_baseline,
         "no thumbnail readback may complete mid-stroke. Bumps observed: {} \
          (every bump is a full-doc GPU→CPU transfer; per-dab cadence at 4K = ~1.3 GB/s)",
         v_mid_stroke - v_baseline
