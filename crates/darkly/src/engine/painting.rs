@@ -534,7 +534,6 @@ impl DarklyEngine {
     /// Lazy-inits a `StrokeEngine` + `StrokeBuffer` on the first event.
     /// Each event feeds through the stabilizer, which may trigger rewind
     /// and re-rendering of the stroke from scratch.
-    #[allow(clippy::too_many_arguments)]
     fn brush_stroke_to(
         &mut self,
         layer_id: u64,

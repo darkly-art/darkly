@@ -24,3 +24,6 @@ thiserror = { workspace = true }
 pollster = "0.4"
 naga = { version = "28.0", features = ["wgsl-in"] }
 syn = { version = "2", features = ["visit", "full"] }
+
+[lints]
+workspace = true

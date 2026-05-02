@@ -516,7 +516,6 @@ impl DarklyEngine {
     /// graph is taken explicitly so callers can render thumbnails for
     /// library brushes without touching the active graph; the path lets
     /// callers choose between the S-curve stroke and a single-dab preview.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn render_preview_and_request_readback(
         &mut self,
         graph: &Graph<BrushWireType>,

@@ -495,7 +495,6 @@ impl TransformPass {
     /// `rgba_data` must be `source_width * source_height * 4` bytes, row-major,
     /// in straight alpha. This method converts to premultiplied alpha for
     /// correct hardware bilinear interpolation.
-    #[allow(clippy::too_many_arguments)]
     pub fn set_floating_content(
         &mut self,
         device: &wgpu::Device,
@@ -701,7 +700,6 @@ impl TransformPass {
     ///
     /// GPU→GPU copy via `copy_texture_to_texture` — no CPU round-trip.
     /// Used by `begin_transform` when extracting content from a GPU-authoritative layer.
-    #[allow(clippy::too_many_arguments)]
     pub fn set_floating_content_from_gpu(
         &mut self,
         device: &wgpu::Device,
@@ -951,7 +949,6 @@ impl TransformPass {
     }
 
     /// Update the affine matrix uniform for real-time preview.
-    #[allow(clippy::too_many_arguments)]
     pub fn update_matrix(
         &self,
         queue: &wgpu::Queue,
@@ -999,7 +996,6 @@ impl TransformPass {
     /// `source_origin` is canvas-space; the target's `(target_offset,
     /// target_width, target_height)` describe its canvas-space placement so
     /// the shader can map UV → canvas coords on offset paste-extent layers.
-    #[allow(clippy::too_many_arguments)]
     pub fn commit_to_texture(
         &self,
         device: &wgpu::Device,

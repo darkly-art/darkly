@@ -90,7 +90,6 @@ impl BrushPreviewRenderer {
     /// Returns the layer texture, GPU-resident — the caller issues any
     /// readback. Returns `None` if the graph fails to compile or `path` is
     /// empty.
-    #[allow(clippy::too_many_arguments)]
     pub fn render_stroke(
         &mut self,
         device: &wgpu::Device,
