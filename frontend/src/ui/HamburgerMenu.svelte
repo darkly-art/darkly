@@ -2,6 +2,7 @@
     import { theme, type ThemePreference } from '../state/theme.svelte';
     import { settings } from '../state/settings.svelte';
     import { config, formatHotkey } from '../config/store.svelte';
+    import { openCheatsheet } from './cheatsheet';
 
     let open = $state(false);
 
@@ -39,6 +40,10 @@
                 <i class="fa-solid fa-sliders"></i>
                 <span>Preferences…</span>
                 {#if settingsHotkey}<span class="kbd">{settingsHotkey}</span>{/if}
+            </button>
+            <button class="menu-item" onclick={() => { openCheatsheet(); close(); }}>
+                <i class="fa-solid fa-keyboard"></i>
+                <span>Hotkey Cheat Sheet</span>
             </button>
             <div class="sep"></div>
             <div class="menu-section">
