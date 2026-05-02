@@ -176,3 +176,99 @@ fn undo_auto_queues_thumbnail_readback() {
          — auto-queue must have re-read the restored (empty) layer texture"
     );
 }
+
+/// `layer_thumbnail` and `mask_thumbnail` must be pure reads against the
+/// cache. Auto-queueing a readback from these getters creates a feedback
+/// loop with the JS-side `thumbnailEpoch` sync: every readback completion
+/// bumps the engine version, the panel's `$derived` re-runs and calls
+/// back into here, queuing another readback — replicating per-dab
+/// updates during strokes (~1.3 GB/s GPU→CPU at 4K, observed in
+/// production before this fix).
+#[test]
+fn layer_thumbnail_does_not_auto_queue_readback() {
+    let mut engine = fresh_engine();
+    let layer_id = engine.add_raster_layer();
+    engine.fill_background(layer_id);
+
+    // Settle — let the legitimate auto-queue from `fill_background`
+    // (via `mark_layer_pixels_dirty` → drain) complete so the cache
+    // and version are in their post-init state.
+    engine.render(0.0);
+    engine.test_flush_readbacks();
+    let v_settled = engine.thumbnail_version();
+
+    // Hammer the getter the way the production loop does once an epoch
+    // sync re-fires the `$derived` (which in turn calls
+    // `getLayerThumbnail`). With the bug, each call queued a fresh
+    // readback; the next render+flush would complete it and bump the
+    // version, retriggering the JS-side sync, retriggering the call.
+    for _ in 0..50 {
+        let _ = engine.layer_thumbnail(layer_id, 36, 36);
+        engine.render(0.016);
+        engine.test_flush_readbacks();
+    }
+
+    assert_eq!(
+        engine.thumbnail_version(),
+        v_settled,
+        "layer_thumbnail must not auto-queue readbacks; calling it 50× \
+         followed by render+flush each time should not bump the version. \
+         Bug repro: legacy auto-queue + epoch sync = per-dab readback storm."
+    );
+}
+
+/// Cumulative regression: simulate a multi-dab stroke with a render cycle
+/// between each dab (mirroring the production frame loop where each
+/// `onPointerMove` calls `app.requestFrame()`). The thumbnail readback
+/// must fire **once** per stroke (at `end_stroke`), not per-dab.
+#[test]
+fn brush_stroke_queues_thumbnail_readback_only_at_end() {
+    let mut engine = fresh_engine();
+    let layer_id = engine.add_raster_layer();
+
+    // Settle baseline — empty layer, no marks fired.
+    engine.render(0.0);
+    engine.test_flush_readbacks();
+    let v_baseline = engine.thumbnail_version();
+
+    engine.begin_stroke(layer_id);
+    for step in 0..20 {
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x: step as f32 * 10.0 + 10.0,
+            y: 128.0,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: step as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+        engine.render(step as f32 * 0.016);
+        engine.test_flush_readbacks();
+    }
+
+    let v_mid_stroke = engine.thumbnail_version();
+    assert_eq!(
+        v_mid_stroke, v_baseline,
+        "no thumbnail readback may complete mid-stroke. Bumps observed: {} \
+         (every bump is a full-doc GPU→CPU transfer; per-dab cadence at 4K = ~1.3 GB/s)",
+        v_mid_stroke - v_baseline
+    );
+
+    engine.end_stroke();
+    // Drain happens at the next render(); flush completes the readback.
+    engine.render(0.5);
+    engine.test_flush_readbacks();
+
+    assert_eq!(
+        engine.thumbnail_version() - v_baseline,
+        1,
+        "exactly one thumbnail readback per stroke (queued by end_stroke, \
+         completed on the post-end frame). Bumps observed: {}",
+        engine.thumbnail_version() - v_baseline
+    );
+}

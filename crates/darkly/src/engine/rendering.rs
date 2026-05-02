@@ -80,15 +80,24 @@ impl DarklyEngine {
 
     // --- Thumbnails ---
 
-    /// Return the cached layer thumbnail, kicking off an async readback if needed.
-    pub fn layer_thumbnail(&mut self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
-        let cached = self.thumbnail_cache.layer.get(&layer_id).cloned();
-        self.request_thumbnail_readback(layer_id, false, thumb_w, thumb_h);
-        cached.unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
+    /// Return the cached layer thumbnail. Pure read — readback queueing
+    /// is owned by `drain_dirty_thumbnail_readbacks` (driven by
+    /// `mark_layer_pixels_dirty` at every pixel-write site). Auto-queueing
+    /// from this getter would create a feedback loop with the JS-side
+    /// `thumbnailEpoch` sync: each readback completion bumps the version,
+    /// the panel's `$derived` re-runs, calls back into here, which queues
+    /// another readback — replicating per-dab updates during strokes.
+    pub fn layer_thumbnail(&self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+        self.thumbnail_cache
+            .layer
+            .get(&layer_id)
+            .cloned()
+            .unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
     }
 
-    /// Return the cached mask thumbnail, kicking off an async readback if needed.
-    pub fn mask_thumbnail(&mut self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+    /// Return the cached mask thumbnail. Same contract as
+    /// `layer_thumbnail` — pure read; queueing happens via dirty-set drain.
+    pub fn mask_thumbnail(&self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
         let has_mask = match self.doc.find_node(layer_id) {
             Some(n) => n.common().has_mask,
             None => false,
@@ -96,10 +105,11 @@ impl DarklyEngine {
         if !has_mask {
             return Vec::new();
         }
-
-        let cached = self.thumbnail_cache.mask.get(&layer_id).cloned();
-        self.request_thumbnail_readback(layer_id, true, thumb_w, thumb_h);
-        cached.unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
+        self.thumbnail_cache
+            .mask
+            .get(&layer_id)
+            .cloned()
+            .unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
     }
 
     /// Kick off an async GPU readback for a thumbnail if one isn't already pending.
