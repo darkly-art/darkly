@@ -83,7 +83,7 @@
         let to = ratio < 0.5 ? veil.index + 1 : veil.index;
         if (from < to) to--;
 
-        app.handle.move_veil(from, to);
+        app.moveVeil(from, to);
         onupdate();
     }
 </script>

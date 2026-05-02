@@ -19,8 +19,14 @@
         app.activeLayerId !== null ? findNode(app.layerTree, app.activeLayerId) : null,
     );
 
+    // `activeVeilIndex` is a chain position (the engine's `index` field on
+    // each VeilInfo), not a position in `veilList` — the list is returned in
+    // reverse chain order for display. Look up by `index` so the two stay
+    // aligned regardless of length.
     let activeVeil = $derived(
-        app.activeVeilIndex !== null ? app.veilList[app.activeVeilIndex] ?? null : null,
+        app.activeVeilIndex !== null
+            ? app.veilList.find((v: { index: number }) => v.index === app.activeVeilIndex) ?? null
+            : null,
     );
 
     let title = $derived(

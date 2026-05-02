@@ -85,6 +85,24 @@ class AppState {
         this.requestFrame();
     }
 
+    /** Reorder a veil and adjust `activeVeilIndex` so the selection follows the move. */
+    moveVeil(from: number, to: number) {
+        if (!this.handle || from === to) return;
+        this.handle.move_veil(from, to);
+        const a = this.activeVeilIndex;
+        if (a !== null) {
+            if (a === from) {
+                this.activeVeilIndex = to;
+            } else if (from < to && a > from && a <= to) {
+                this.activeVeilIndex = a - 1;
+            } else if (from > to && a >= to && a < from) {
+                this.activeVeilIndex = a + 1;
+            }
+        }
+        this.refreshVeilList();
+        this.requestFrame();
+    }
+
     swapColors() {
         const tmp = { ...this.foreground };
         this.foreground = { ...this.background };
