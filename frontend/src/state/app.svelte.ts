@@ -18,6 +18,10 @@ class AppState {
     // Active layer
     activeLayerId = $state<number | null>(null);
 
+    // Active veil. Mutually exclusive with activeLayerId — the right
+    // sidebar's properties pane shows the props of whichever is non-null.
+    activeVeilIndex = $state<number | null>(null);
+
     // Mask editing — which layer's mask is the current paint target (null = editing layer content)
     editingMaskLayerId = $state<number | null>(null);
 
@@ -46,6 +50,34 @@ class AppState {
     // actions that auto-enter transform mode) read this to build a
     // proper ToolContext.
     canvasEl = $state<HTMLCanvasElement | null>(null);
+
+    selectLayer(id: number | null) {
+        this.activeLayerId = id;
+        this.activeVeilIndex = null;
+    }
+
+    selectVeil(index: number | null) {
+        this.activeVeilIndex = index;
+        this.activeLayerId = null;
+    }
+
+    clearSelection() {
+        this.activeLayerId = null;
+        this.activeVeilIndex = null;
+    }
+
+    /** Remove a veil and keep `activeVeilIndex` consistent with the new list. */
+    removeVeil(index: number) {
+        if (!this.handle) return;
+        this.handle.remove_veil(index);
+        if (this.activeVeilIndex === index) {
+            this.activeVeilIndex = null;
+        } else if (this.activeVeilIndex !== null && this.activeVeilIndex > index) {
+            this.activeVeilIndex--;
+        }
+        this.refreshVeilList();
+        this.requestFrame();
+    }
 
     swapColors() {
         const tmp = { ...this.foreground };

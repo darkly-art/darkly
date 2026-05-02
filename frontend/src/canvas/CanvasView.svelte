@@ -70,7 +70,7 @@
 
             const groupId = handle.add_group();
             const paintLayerId = handle.add_raster_layer_in(groupId);
-            app.activeLayerId = paintLayerId;
+            app.selectLayer(paintLayerId);
 
             // Observe element resizes to keep GPU surface in sync
             const ro = new ResizeObserver(() => syncCanvasSize());

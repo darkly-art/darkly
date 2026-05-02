@@ -43,7 +43,7 @@
     }
 
     function setActive() {
-        app.activeLayerId = group.id;
+        app.selectLayer(group.id);
     }
 
     function startRename() {
@@ -61,7 +61,7 @@
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
-        app.activeLayerId = group.id;
+        app.selectLayer(group.id);
         if (!isEditingMask) {
             app.editingMaskLayerId = group.id;
             app.handle?.set_editing_mask(group.id, true);
@@ -192,21 +192,6 @@
             <i class={group.collapsed ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'}></i>
         </button>
 
-        <button
-            class="passthrough-btn"
-            class:normal={!group.passthrough}
-            onclick={(e: MouseEvent) => {
-                e.stopPropagation();
-                if (app.handle) {
-                    app.handle.set_group_passthrough(group.id, !group.passthrough);
-                    onupdate();
-                }
-            }}
-            title={group.passthrough ? 'Passthrough (click for Normal)' : 'Normal (click for Passthrough)'}
-        >
-            {group.passthrough ? 'P' : 'N'}
-        </button>
-
         {#if editing}
             <input
                 class="name-input"
@@ -322,22 +307,6 @@
         font-size: 9px;
         flex-shrink: 0;
         transition: transform 0.15s;
-    }
-
-    .passthrough-btn {
-        background: none;
-        border: 1px solid var(--text-dim);
-        border-radius: 2px;
-        color: var(--text-muted);
-        cursor: pointer;
-        padding: 0 3px;
-        font-size: 9px;
-        font-weight: 600;
-        line-height: 14px;
-    }
-    .passthrough-btn.normal {
-        color: var(--accent);
-        border-color: var(--accent);
     }
 
     .vis-btn {
