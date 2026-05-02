@@ -171,13 +171,13 @@
     }
 
     .split-btn .footer-btn {
-        background: var(--accent);
-        color: #fff;
+        background: var(--text-muted);
+        color: var(--bg);
     }
 
     .split-btn .footer-btn:hover:not(:disabled) {
-        background: color-mix(in srgb, var(--accent) 80%, white);
-        color: #fff;
+        background: var(--text);
+        color: var(--bg);
     }
 
     .split-main {
@@ -192,7 +192,7 @@
         border-top-left-radius: 0;
         border-bottom-left-radius: 0;
         padding-left: 0;
-        border-left: 1px solid color-mix(in srgb, var(--accent) 60%, black);
+        border-left: 1px solid var(--bg);
     }
 
     .split-main + .split-chevron {

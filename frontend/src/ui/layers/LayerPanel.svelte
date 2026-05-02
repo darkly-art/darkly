@@ -26,7 +26,6 @@
 
 <div class="panel">
     <div class="panel-header">
-        <span class="panel-title">Layers</span>
         <LayerFooter onupdate={refresh} />
     </div>
 
@@ -63,17 +62,9 @@
         align-items: center;
         justify-content: space-between;
         gap: 8px;
-        padding: 6px 8px 6px 12px;
+        padding: 6px 12px 6px 8px;
         background: var(--bg-hover);
         flex-shrink: 0;
-    }
-
-    .panel-title {
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        color: var(--text);
     }
 
     .layer-list {

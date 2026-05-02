@@ -259,23 +259,24 @@
         display: flex;
         align-items: center;
         gap: 4px;
-        background: linear-gradient(to right, var(--accent), #000000);
-        border: none;
+        /* Gradient lives on the border, not the fill — two-layer
+         * background with `padding-box`/`border-box` clips so the
+         * border-radius is preserved (border-image flattens corners). */
+        background:
+            linear-gradient(var(--bg), var(--bg)) padding-box,
+            linear-gradient(to right, var(--accent), #000000) border-box;
+        border: 3px solid transparent;
         border-radius: 6px;
-        color: #ffffff;
+        color: var(--text);
         cursor: pointer;
         font-size: 13px;
         font-weight: 600;
-        padding: 4px 8px;
+        padding: 2px 6px;
         min-width: 100px;
         transition: filter 0.1s;
     }
     .brush-picker-button:hover {
         filter: brightness(1.15);
-    }
-
-    .brush-picker-button .chevron {
-        color: rgba(255, 255, 255, 0.85);
     }
 
     .brush-name {
