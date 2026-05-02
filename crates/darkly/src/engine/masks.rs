@@ -9,7 +9,7 @@ use crate::undo::{CompoundAction, GpuRegionAction, MaskPropertyAction};
 impl DarklyEngine {
     pub fn add_mask(&mut self, layer_id: u64) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
 
@@ -73,7 +73,7 @@ impl DarklyEngine {
 
     pub fn remove_mask(&mut self, layer_id: u64) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
         if !snap.has_mask {
@@ -127,7 +127,9 @@ impl DarklyEngine {
     pub fn apply_mask(&mut self, layer_id: u64) {
         // apply_mask is raster-only — groups have no pixel data to bake into
         let (old_has, old_enabled, old_show) = match self.doc.layer(layer_id) {
-            Some(Layer::Raster(r)) => (r.has_mask, r.mask_enabled, r.show_mask),
+            Some(Layer::Raster(r)) => {
+                (r.common.has_mask, r.common.mask_enabled, r.common.show_mask)
+            }
             _ => return,
         };
         if !old_has {
@@ -213,7 +215,7 @@ impl DarklyEngine {
 
     pub fn set_mask_enabled(&mut self, layer_id: u64, enabled: bool) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
         self.doc.set_mask_enabled(layer_id, enabled);
@@ -230,7 +232,7 @@ impl DarklyEngine {
 
     pub fn set_show_mask(&mut self, layer_id: u64, show: bool) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
         self.doc.set_show_mask(layer_id, show);
@@ -255,7 +257,7 @@ impl DarklyEngine {
 
     pub fn selection_to_mask(&mut self, layer_id: u64) {
         let snap = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().mask_snapshot(),
+            Some(n) => n.common().mask_snapshot(),
             None => return,
         };
 
@@ -330,36 +332,35 @@ impl DarklyEngine {
             Some(n) => n,
             None => return,
         };
-        let m = node.as_masked();
-        let has_mask = m.has_mask();
-        let mask_enabled = m.mask_enabled();
-        let show_mask = m.show_mask();
+        let c = node.common();
+        let has_mask = c.has_mask;
+        let mask_enabled = c.mask_enabled;
+        let show_mask = c.show_mask;
+        let opacity = c.opacity;
+        let blend_mode = c.blend_mode;
+        let is_raster = matches!(node, LayerNode::Layer(Layer::Raster(_)));
 
         self.compositor
             .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, has_mask);
         self.compositor
             .update_mask_binding(&self.gpu.device, layer_id, mask_enabled, show_mask);
 
-        // Update uniforms for the appropriate cache type
-        match node {
-            LayerNode::Layer(Layer::Raster(r)) => {
-                self.compositor.update_raster_uniforms_full(
-                    &self.gpu.queue,
-                    layer_id,
-                    r.opacity,
-                    r.blend_mode,
-                    show_mask,
-                );
-            }
-            LayerNode::Group(g) => {
-                self.compositor.update_group_uniforms(
-                    &self.gpu.queue,
-                    layer_id,
-                    g.opacity,
-                    g.blend_mode,
-                    show_mask,
-                );
-            }
+        if is_raster {
+            self.compositor.update_raster_uniforms_full(
+                &self.gpu.queue,
+                layer_id,
+                opacity,
+                blend_mode,
+                show_mask,
+            );
+        } else {
+            self.compositor.update_group_uniforms(
+                &self.gpu.queue,
+                layer_id,
+                opacity,
+                blend_mode,
+                show_mask,
+            );
         }
     }
 }

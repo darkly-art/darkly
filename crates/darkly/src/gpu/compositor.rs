@@ -18,7 +18,8 @@ pub const MAX_LAYER_DIM: u32 = 16384;
 /// reallocations regardless of dab count.
 pub const LAYER_GROWTH_CHUNK: u32 = 256;
 
-/// Outcome of a `grow_layer_texture` request.
+/// Outcome of a layer-grow request — distinguishes a genuine reallocation
+/// (callers must rebase stroke scratch / region store) from a no-op.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum GrowOutcome {
     /// New extent already contained — no reallocation performed.
@@ -185,11 +186,6 @@ pub struct Compositor {
     frame_count: u64,
     /// Last wall-clock time for dt computation.
     last_wall_time: f32,
-
-    /// Set once a `grow_layer_texture` call has been refused for hitting
-    /// `MAX_LAYER_DIM` — used to log the cap warning at most once per
-    /// process lifetime.
-    layer_growth_capped: bool,
 }
 
 impl Compositor {
@@ -569,7 +565,6 @@ impl Compositor {
             viewport_bg: DEFAULT_WORKSPACE_BG,
             frame_count: 0,
             last_wall_time: 0.0,
-            layer_growth_capped: false,
         }
     }
 
@@ -615,58 +610,38 @@ impl Compositor {
         self.layer_textures.insert(layer_id, layer_tex);
     }
 
-    /// Grow a layer's GPU texture so it covers `needed` (canvas-space).
+    /// Resize a layer's GPU texture to the given canvas-space extent.
     ///
-    /// If the layer's existing extent already contains `needed`, this is a
-    /// no-op (`GrowOutcome::NoChange`). Otherwise the texture is reallocated
-    /// to `(current ∪ needed).round_outward(LAYER_GROWTH_CHUNK)` — origin
-    /// floors to a chunk boundary, far edge ceils. Old contents are
+    /// **Pure realization.** This method is a faithful reflection of the
+    /// requested extent — it does not compute unions or chunk-align. The
+    /// caller (engine-level `grow_layer`) is responsible for choosing
+    /// `new_extent` and updating `RasterLayer.bounds` on the doc *first*.
+    ///
+    /// If the texture is missing or already at `new_extent`, this is a
+    /// no-op. Otherwise the texture is reallocated; old contents are
     /// `copy_texture_to_texture`'d into the new texture at the offset that
     /// preserves their canvas-space anchor; new pixels start zeroed
     /// (transparent).
-    ///
-    /// If the new extent would exceed `MAX_LAYER_DIM` in either axis, the
-    /// caller is told to clip via `GrowOutcome::AtCap` and a one-time
-    /// warning is logged.
     ///
     /// **Bind-group invalidation.** When the layer has a mask, the
     /// `mask_bind_groups[layer_id]` entry is removed and rebuilt against
     /// the freshly-allocated mask texture. The mask is grown in lockstep
     /// with the layer so the composite shader's shared layer-UV sampling
     /// stays correct.
-    pub fn grow_layer_texture(
+    pub fn resize_layer_texture(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         layer_id: LayerId,
-        needed: CanvasRect,
-    ) -> GrowOutcome {
+        new_extent: CanvasRect,
+    ) {
         let current = match self.layer_textures.get(&layer_id) {
             Some(t) => t.canvas_extent(),
-            None => return GrowOutcome::NoChange,
+            None => return,
         };
-        if current.contains(needed) {
-            return GrowOutcome::NoChange;
-        }
-
-        let unioned = current.union(needed);
-        let new_extent = unioned.round_outward(LAYER_GROWTH_CHUNK);
-
-        if new_extent.width > MAX_LAYER_DIM || new_extent.height > MAX_LAYER_DIM {
-            // Once-per-process warning. Subsequent at-cap requests are
-            // silent — the dab-clip path does the right thing.
-            if !self.layer_growth_capped {
-                self.layer_growth_capped = true;
-                log::warn!(
-                    "Layer {} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
-                    layer_id,
-                    new_extent.width,
-                    new_extent.height,
-                    MAX_LAYER_DIM,
-                );
-            }
-            return GrowOutcome::AtCap;
+        if current == new_extent {
+            return;
         }
 
         // Allocate the new layer texture. New pixels start at GPU's default
@@ -716,18 +691,13 @@ impl Compositor {
             self.grow_mask_texture(device, queue, encoder, layer_id, new_extent);
         }
 
-        // The blend-uniform buffer still has the OLD offset/size — the
-        // caller must refresh it via `update_raster_uniforms_full` (the
-        // engine layer owns the doc-side layer state). Likewise, callers
-        // are expected to update `RasterLayer.bounds` on the doc.
         let _ = queue;
         self.mark_dirty();
-        GrowOutcome::Grown { new_extent }
     }
 
     /// Reallocate a mask texture to a new canvas extent, copying the old
     /// contents into the corresponding region. Rebuilds the mask bind group.
-    /// Internal helper — `grow_layer_texture` is the public entry point.
+    /// Internal helper — `resize_layer_texture` is the public entry point.
     fn grow_mask_texture(
         &mut self,
         device: &wgpu::Device,
@@ -1797,10 +1767,9 @@ impl Compositor {
 
                 LayerNode::Group(g) => {
                     if g.passthrough {
-                        let has_active_mask =
-                            g.has_mask && g.mask_enabled && self.mask_textures.contains_key(&g.id);
+                        let has_active_mask = g.common.has_mask && g.common.mask_enabled;
 
-                        if has_active_mask || g.show_mask {
+                        if has_active_mask || g.common.show_mask {
                             // Photoshop-style passthrough + mask:
                             // 1. Snapshot parent accum before children.
                             // 2. Composite children (passthrough into parent).

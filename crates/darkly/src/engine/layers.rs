@@ -113,33 +113,16 @@ impl DarklyEngine {
 
     pub fn set_opacity(&mut self, layer_id: u64, opacity: f32) {
         let old_opacity = match self.doc.find_node(layer_id) {
-            Some(LayerNode::Layer(Layer::Raster(r))) => r.opacity,
-            Some(LayerNode::Group(g)) => g.opacity,
-            _ => return,
+            Some(n) => n.common().opacity,
+            None => return,
         };
-
-        match self.doc.find_node_mut(layer_id) {
-            Some(LayerNode::Layer(Layer::Raster(r))) => r.opacity = opacity,
-            Some(LayerNode::Group(g)) => g.opacity = opacity,
-            _ => return,
+        if let Some(node) = self.doc.find_node_mut(layer_id) {
+            node.common_mut().opacity = opacity;
+        } else {
+            return;
         }
 
-        if let Some(Layer::Raster(r)) = self.doc.layer(layer_id) {
-            self.compositor.update_raster_uniforms(
-                &self.gpu.queue,
-                layer_id,
-                r.opacity,
-                r.blend_mode,
-            );
-        } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
-            self.compositor.update_group_uniforms(
-                &self.gpu.queue,
-                layer_id,
-                g.opacity,
-                g.blend_mode,
-                g.show_mask,
-            );
-        }
+        self.refresh_blend_uniforms(layer_id);
         self.compositor.mark_dirty();
 
         self.undo_stack.coalesce_property(PropertyAction::new(
@@ -151,35 +134,17 @@ impl DarklyEngine {
 
     pub fn set_blend_mode(&mut self, layer_id: u64, mode: u32) {
         let blend_mode = BlendMode::from_u32(mode);
-
         let old_mode = match self.doc.find_node(layer_id) {
-            Some(LayerNode::Layer(Layer::Raster(r))) => r.blend_mode,
-            Some(LayerNode::Group(g)) => g.blend_mode,
-            _ => return,
+            Some(n) => n.common().blend_mode,
+            None => return,
         };
-
-        match self.doc.find_node_mut(layer_id) {
-            Some(LayerNode::Layer(Layer::Raster(r))) => r.blend_mode = blend_mode,
-            Some(LayerNode::Group(g)) => g.blend_mode = blend_mode,
-            _ => return,
+        if let Some(node) = self.doc.find_node_mut(layer_id) {
+            node.common_mut().blend_mode = blend_mode;
+        } else {
+            return;
         }
 
-        if let Some(Layer::Raster(r)) = self.doc.layer(layer_id) {
-            self.compositor.update_raster_uniforms(
-                &self.gpu.queue,
-                layer_id,
-                r.opacity,
-                r.blend_mode,
-            );
-        } else if let Some(LayerNode::Group(g)) = self.doc.find_node(layer_id) {
-            self.compositor.update_group_uniforms(
-                &self.gpu.queue,
-                layer_id,
-                g.opacity,
-                g.blend_mode,
-                g.show_mask,
-            );
-        }
+        self.refresh_blend_uniforms(layer_id);
         self.compositor.mark_dirty();
 
         self.undo_stack.push(Box::new(PropertyAction::new(
@@ -191,14 +156,13 @@ impl DarklyEngine {
 
     pub fn set_layer_visible(&mut self, layer_id: u64, visible: bool) {
         let old_visible = match self.doc.find_node(layer_id) {
-            Some(n) => n.visible(),
+            Some(n) => n.common().visible,
             None => return,
         };
-
-        match self.doc.find_node_mut(layer_id) {
-            Some(LayerNode::Layer(Layer::Raster(r))) => r.visible = visible,
-            Some(LayerNode::Group(g)) => g.visible = visible,
-            _ => return,
+        if let Some(node) = self.doc.find_node_mut(layer_id) {
+            node.common_mut().visible = visible;
+        } else {
+            return;
         }
         self.compositor.mark_dirty();
 
@@ -211,15 +175,13 @@ impl DarklyEngine {
 
     pub fn set_layer_name(&mut self, layer_id: u64, name: &str) {
         let old_name = match self.doc.find_node(layer_id) {
-            Some(LayerNode::Layer(Layer::Raster(r))) => r.name.clone(),
-            Some(LayerNode::Group(g)) => g.name.clone(),
-            _ => return,
+            Some(n) => n.common().name.clone(),
+            None => return,
         };
-
-        match self.doc.find_node_mut(layer_id) {
-            Some(LayerNode::Layer(Layer::Raster(r))) => r.name = name.to_string(),
-            Some(LayerNode::Group(g)) => g.name = name.to_string(),
-            _ => return,
+        if let Some(node) = self.doc.find_node_mut(layer_id) {
+            node.common_mut().name = name.to_string();
+        } else {
+            return;
         }
 
         self.undo_stack.push(Box::new(PropertyAction::new(
@@ -227,6 +189,31 @@ impl DarklyEngine {
             Property::Name(old_name),
             Property::Name(name.to_string()),
         )));
+    }
+
+    /// Push the current opacity/blend_mode/show_mask of a layer or group
+    /// into the compositor's uniform buffer for that node.
+    fn refresh_blend_uniforms(&mut self, layer_id: u64) {
+        match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Raster(r))) => {
+                self.compositor.update_raster_uniforms(
+                    &self.gpu.queue,
+                    layer_id,
+                    r.common.opacity,
+                    r.common.blend_mode,
+                );
+            }
+            Some(LayerNode::Group(g)) => {
+                self.compositor.update_group_uniforms(
+                    &self.gpu.queue,
+                    layer_id,
+                    g.common.opacity,
+                    g.common.blend_mode,
+                    g.common.show_mask,
+                );
+            }
+            None => {}
+        }
     }
 
     pub fn set_group_collapsed(&mut self, group_id: u64, collapsed: bool) {
@@ -250,9 +237,9 @@ impl DarklyEngine {
                 self.compositor.update_group_uniforms(
                     &self.gpu.queue,
                     group_id,
-                    g.opacity,
-                    g.blend_mode,
-                    g.show_mask,
+                    g.common.opacity,
+                    g.common.blend_mode,
+                    g.common.show_mask,
                 );
             }
         }

@@ -1,6 +1,6 @@
 use super::UndoAction;
 use crate::document::Document;
-use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
+use crate::layer::{BlendMode, LayerId, LayerNode};
 use std::collections::{HashMap, HashSet};
 
 /// A layer property value that can be saved and restored.
@@ -22,34 +22,22 @@ impl Property {
 
     /// Apply this property value to the layer/group in the document.
     fn apply(&self, doc: &mut Document, layer_id: LayerId) {
+        let node = match doc.find_node_mut(layer_id) {
+            Some(n) => n,
+            None => return,
+        };
         match self {
-            Property::Opacity(v) => match doc.find_node_mut(layer_id) {
-                Some(LayerNode::Layer(Layer::Raster(r))) => r.opacity = *v,
-                Some(LayerNode::Group(g)) => g.opacity = *v,
-                _ => {}
-            },
-            Property::BlendMode(v) => match doc.find_node_mut(layer_id) {
-                Some(LayerNode::Layer(Layer::Raster(r))) => r.blend_mode = *v,
-                Some(LayerNode::Group(g)) => g.blend_mode = *v,
-                _ => {}
-            },
-            Property::Visible(v) => match doc.find_node_mut(layer_id) {
-                Some(LayerNode::Layer(Layer::Raster(r))) => r.visible = *v,
-                Some(LayerNode::Group(g)) => g.visible = *v,
-                _ => {}
-            },
-            Property::Name(v) => match doc.find_node_mut(layer_id) {
-                Some(LayerNode::Layer(Layer::Raster(r))) => r.name = v.clone(),
-                Some(LayerNode::Group(g)) => g.name = v.clone(),
-                _ => {}
-            },
+            Property::Opacity(v) => node.common_mut().opacity = *v,
+            Property::BlendMode(v) => node.common_mut().blend_mode = *v,
+            Property::Visible(v) => node.common_mut().visible = *v,
+            Property::Name(v) => node.common_mut().name = v.clone(),
             Property::Passthrough(v) => {
-                if let Some(LayerNode::Group(g)) = doc.find_node_mut(layer_id) {
+                if let LayerNode::Group(g) = node {
                     g.passthrough = *v;
                 }
             }
             Property::Collapsed(v) => {
-                if let Some(LayerNode::Group(g)) = doc.find_node_mut(layer_id) {
+                if let LayerNode::Group(g) = node {
                     g.collapsed = *v;
                 }
             }

@@ -84,7 +84,7 @@ impl DarklyEngine {
     /// Return the cached mask thumbnail, kicking off an async readback if needed.
     pub fn mask_thumbnail(&mut self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
         let has_mask = match self.doc.find_node(layer_id) {
-            Some(n) => n.as_masked().has_mask(),
+            Some(n) => n.common().has_mask,
             None => false,
         };
         if !has_mask {
@@ -556,11 +556,11 @@ impl DarklyEngine {
             .into_iter()
             .map(|r| RasterInfo {
                 id: r.id,
-                opacity: r.opacity,
-                blend_mode: r.blend_mode,
-                show_mask: r.show_mask,
-                mask_enabled: r.mask_enabled,
-                has_mask: r.has_mask,
+                opacity: r.common.opacity,
+                blend_mode: r.common.blend_mode,
+                show_mask: r.common.show_mask,
+                mask_enabled: r.common.mask_enabled,
+                has_mask: r.common.has_mask,
                 bounds: r.bounds,
             })
             .collect();
@@ -599,7 +599,14 @@ impl DarklyEngine {
             .all_groups()
             .iter()
             .filter(|g| !g.passthrough)
-            .map(|g| (g.id, g.opacity, g.blend_mode, g.show_mask))
+            .map(|g| {
+                (
+                    g.id,
+                    g.common.opacity,
+                    g.common.blend_mode,
+                    g.common.show_mask,
+                )
+            })
             .collect();
         for (id, opacity, blend_mode, show_mask) in groups {
             self.compositor

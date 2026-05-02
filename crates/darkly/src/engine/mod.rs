@@ -327,6 +327,11 @@ pub struct DarklyEngine {
     /// Last picked color — returned immediately while async readback is in flight.
     pub(crate) last_picked_color: [u8; 4],
     pub(crate) thumbnail_cache: ThumbnailCache,
+
+    /// Set once a layer-grow request has been refused for hitting
+    /// `MAX_LAYER_DIM` — used to log the cap warning at most once per
+    /// process lifetime.
+    pub(crate) layer_growth_capped: bool,
 }
 
 impl DarklyEngine {
@@ -417,6 +422,7 @@ impl DarklyEngine {
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],
             thumbnail_cache: ThumbnailCache::new(),
+            layer_growth_capped: false,
         };
 
         // Snapshot the default graph's port defaults so reset-to-default

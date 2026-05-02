@@ -420,7 +420,7 @@ impl DarklyEngine {
         // Create a new layer and insert above the active layer.
         let id = self.doc.add_raster_layer();
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
-            r.name = "Pasted Layer".to_string();
+            r.common.name = "Pasted Layer".to_string();
             r.bounds = layer_bounds;
         }
 

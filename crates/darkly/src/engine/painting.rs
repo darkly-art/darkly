@@ -177,12 +177,6 @@ impl DarklyEngine {
 
     pub fn begin_stroke(&mut self, layer_id: u64) {
         self.auto_commit_floating();
-        self.doc
-            .set_mask_editing(if self.editing_mask_layer == Some(layer_id) {
-                Some(layer_id)
-            } else {
-                None
-            });
         self.active_stroke_layer = Some(layer_id);
         // GPU setup is deferred to first stroke_to (lazy init).
     }
@@ -391,24 +385,9 @@ impl DarklyEngine {
             (HALF as u32) * 2,
         );
 
-        // Encoder discipline: the grow + scratch rebase must run in their
-        // own encoder, submitted before any subsequent dab dispatch can
-        // start a new encoder against the new texture. `gpu.encode` already
-        // does one-encoder-per-call.
-        let outcome = self.gpu.encode_ret("layer-grow", |encoder| {
-            self.compositor.grow_layer_texture(
-                &self.gpu.device,
-                &self.gpu.queue,
-                encoder,
-                layer_id,
-                needed,
-            )
-        });
-
-        let new_extent = match outcome {
-            crate::gpu::compositor::GrowOutcome::Grown { new_extent } => new_extent,
-            crate::gpu::compositor::GrowOutcome::NoChange => return,
-            crate::gpu::compositor::GrowOutcome::AtCap => return,
+        let new_extent = match self.grow_layer(layer_id, needed) {
+            Some(e) => e,
+            None => return,
         };
 
         let dx = (current_extent.origin.x - new_extent.origin.x) as u32;
@@ -473,23 +452,81 @@ impl DarklyEngine {
                 new_extent.height,
             );
         }
+    }
 
-        // Update the document's authoritative bounds and refresh the
-        // layer's blend uniforms so the composite pass sees the new
-        // offset/size on the next render.
-        if let Some(crate::layer::Layer::Raster(r)) = self.doc.layer_mut(layer_id) {
-            r.bounds = new_extent;
-            let opacity = r.opacity;
-            let blend_mode = r.blend_mode;
-            let show_mask = r.show_mask;
-            self.compositor.update_raster_uniforms_full(
-                &self.gpu.queue,
-                layer_id,
-                opacity,
-                blend_mode,
-                show_mask,
-            );
+    /// Grow a raster layer's bounds to cover `needed` (canvas-space).
+    ///
+    /// Document-led: writes `RasterLayer.bounds` first, then resizes the
+    /// compositor's GPU texture to match and refreshes blend uniforms.
+    /// Returns `Some(new_extent)` if the layer was actually grown,
+    /// `None` if no growth was needed or the cap was hit.
+    pub(crate) fn grow_layer(
+        &mut self,
+        layer_id: u64,
+        needed: crate::coord::CanvasRect,
+    ) -> Option<crate::coord::CanvasRect> {
+        use crate::gpu::compositor::{LAYER_GROWTH_CHUNK, MAX_LAYER_DIM};
+
+        let current = match self.doc.layer(layer_id) {
+            Some(crate::layer::Layer::Raster(r)) => r.bounds,
+            _ => return None,
+        };
+        if current.contains(needed) {
+            return None;
         }
+
+        let new_extent = current.union(needed).round_outward(LAYER_GROWTH_CHUNK);
+
+        if new_extent.width > MAX_LAYER_DIM || new_extent.height > MAX_LAYER_DIM {
+            // Once-per-process warning. Subsequent at-cap requests are
+            // silent — the dab-clip path does the right thing.
+            if !self.layer_growth_capped {
+                self.layer_growth_capped = true;
+                log::warn!(
+                    "Layer {} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
+                    layer_id,
+                    new_extent.width,
+                    new_extent.height,
+                    MAX_LAYER_DIM,
+                );
+            }
+            return None;
+        }
+
+        // Doc first — `RasterLayer.bounds` is the source of truth.
+        let (opacity, blend_mode, show_mask) = match self.doc.layer_mut(layer_id) {
+            Some(crate::layer::Layer::Raster(r)) => {
+                r.bounds = new_extent;
+                (r.common.opacity, r.common.blend_mode, r.common.show_mask)
+            }
+            _ => return None,
+        };
+
+        // Encoder discipline: the resize must run in its own encoder,
+        // submitted before any subsequent dab dispatch can start a new
+        // encoder against the new texture. `gpu.encode` already does
+        // one-encoder-per-call.
+        self.gpu.encode("layer-grow", |encoder| {
+            self.compositor.resize_layer_texture(
+                &self.gpu.device,
+                &self.gpu.queue,
+                encoder,
+                layer_id,
+                new_extent,
+            );
+        });
+
+        // Refresh the blend-uniform buffer so the composite pass sees the
+        // new offset/size on the next render.
+        self.compositor.update_raster_uniforms_full(
+            &self.gpu.queue,
+            layer_id,
+            opacity,
+            blend_mode,
+            show_mask,
+        );
+
+        Some(new_extent)
     }
 
     /// Handle a BrushStroke event through the node-graph brush engine.
@@ -1038,7 +1075,6 @@ impl DarklyEngine {
                 .readbacks
                 .any(|c| matches!(c, ReadbackContext::FloodFill { .. }))
             {
-                self.doc.set_mask_editing(None);
                 return;
             }
 
@@ -1078,7 +1114,6 @@ impl DarklyEngine {
                     });
                 }
             }
-            self.doc.set_mask_editing(None);
         }
     }
 

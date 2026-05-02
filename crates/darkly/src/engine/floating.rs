@@ -115,7 +115,7 @@ impl DarklyEngine {
         // Create the target layer (no undo entry yet — pushed at commit).
         let new_id = self.doc.add_raster_layer();
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(new_id) {
-            r.name = "Pasted Layer".to_string();
+            r.common.name = "Pasted Layer".to_string();
             r.bounds = layer_bounds;
         }
         self.compositor.ensure_raster_layer(
@@ -175,7 +175,8 @@ impl DarklyEngine {
             return false;
         }
         if target_is_mask {
-            let has_mask = matches!(self.doc.layer(layer_id), Some(Layer::Raster(r)) if r.has_mask);
+            let has_mask =
+                matches!(self.doc.layer(layer_id), Some(Layer::Raster(r)) if r.common.has_mask);
             if !has_mask {
                 return false;
             }

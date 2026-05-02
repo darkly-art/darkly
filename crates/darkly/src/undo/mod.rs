@@ -250,19 +250,19 @@ mod tests {
             Property::Opacity(0.5),
         )));
         if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
-            r.opacity = 0.5;
+            r.common.opacity = 0.5;
         }
 
         // Undo — opacity back to 1.0.
         undo.undo(&mut doc);
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            assert!((r.opacity - 1.0).abs() < f32::EPSILON);
+            assert!((r.common.opacity - 1.0).abs() < f32::EPSILON);
         }
 
         // Redo — opacity back to 0.5.
         undo.redo(&mut doc);
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            assert!((r.opacity - 0.5).abs() < f32::EPSILON);
+            assert!((r.common.opacity - 0.5).abs() < f32::EPSILON);
         }
     }
 
@@ -279,11 +279,11 @@ mod tests {
         let steps = [0.9_f32, 0.7, 0.5, 0.3];
         for &new_val in &steps {
             let old_val = match doc.layer(id) {
-                Some(Layer::Raster(r)) => r.opacity,
+                Some(Layer::Raster(r)) => r.common.opacity,
                 _ => unreachable!(),
             };
             if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
-                r.opacity = new_val;
+                r.common.opacity = new_val;
             }
             undo.coalesce_property(PropertyAction::new(
                 id,
@@ -296,7 +296,7 @@ mod tests {
         assert!(undo.can_undo());
         assert_eq!(
             doc.layer(id).map(|l| match l {
-                Layer::Raster(r) => r.opacity,
+                Layer::Raster(r) => r.common.opacity,
             }),
             Some(0.3),
         );
@@ -304,7 +304,7 @@ mod tests {
         // Single undo should restore original opacity (1.0), not 0.5.
         undo.undo(&mut doc);
         let after_undo = match doc.layer(id) {
-            Some(Layer::Raster(r)) => r.opacity,
+            Some(Layer::Raster(r)) => r.common.opacity,
             _ => unreachable!(),
         };
         assert!(
@@ -318,7 +318,7 @@ mod tests {
         // Redo should go back to 0.3.
         undo.redo(&mut doc);
         let after_redo = match doc.layer(id) {
-            Some(Layer::Raster(r)) => r.opacity,
+            Some(Layer::Raster(r)) => r.common.opacity,
             _ => unreachable!(),
         };
         assert!(
