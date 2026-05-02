@@ -6,8 +6,20 @@
 
     let collapsed = $state(false);
 
+    let anyVisible = $derived(app.veilList.some((v: { visible: boolean }) => v.visible));
+
     function toggleCollapsed() {
         collapsed = !collapsed;
+    }
+
+    function toggleAllVisibility(e: MouseEvent) {
+        e.stopPropagation();
+        if (!app.handle) return;
+        const target = !anyVisible;
+        for (const v of app.veilList) {
+            app.handle.set_veil_visible(v.index, target);
+        }
+        onupdate();
     }
 </script>
 
@@ -16,13 +28,25 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <div class="folder-header" onclick={toggleCollapsed}>
         <button
+            class="vis-btn"
+            class:hidden={!anyVisible}
+            onclick={toggleAllVisibility}
+            onpointerdown={(e: PointerEvent) => { e.stopPropagation(); }}
+            title="Toggle all veils"
+        >
+            <i class={anyVisible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
+        </button>
+
+        <button
             class="chevron-btn"
             onclick={(e) => { e.stopPropagation(); toggleCollapsed(); }}
             title={collapsed ? 'Expand' : 'Collapse'}
         >
             <i class={collapsed ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'}></i>
         </button>
-        <i class="folder-icon fa-solid fa-wand-magic-sparkles"></i>
+
+        <i class="folder-icon fa-solid {collapsed ? 'fa-folder' : 'fa-folder-open'}"></i>
+
         <span class="folder-name">Veils</span>
         <span class="count">{app.veilList.length}</span>
     </div>
@@ -46,7 +70,7 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        padding: 6px 12px 6px 9px;
+        padding: 6px 12px 6px 8px;
         min-height: 28px;
         cursor: pointer;
         transition: background var(--transition-fast);
@@ -56,9 +80,9 @@
         background: color-mix(in srgb, var(--accent) 14%, transparent);
     }
 
-    .chevron-btn {
-        width: 18px;
-        height: 18px;
+    .vis-btn {
+        width: 24px;
+        height: 24px;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -66,7 +90,26 @@
         border: none;
         color: var(--text-muted);
         cursor: pointer;
-        font-size: 10px;
+        font-size: 12px;
+        flex-shrink: 0;
+        border-radius: 4px;
+        padding: 0;
+        transition: color 0.1s;
+    }
+    .vis-btn:hover { color: var(--text); }
+    .vis-btn.hidden { color: var(--text-dim); }
+
+    .chevron-btn {
+        width: 16px;
+        height: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 9px;
         flex-shrink: 0;
         padding: 0;
     }
@@ -78,6 +121,8 @@
     .folder-icon {
         color: var(--accent);
         font-size: 12px;
+        width: 14px;
+        text-align: center;
         flex-shrink: 0;
     }
 
@@ -86,8 +131,6 @@
         font-size: 12px;
         font-weight: 600;
         color: var(--text);
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;

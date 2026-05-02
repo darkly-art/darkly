@@ -192,6 +192,8 @@
             <i class={group.collapsed ? 'fa-solid fa-chevron-right' : 'fa-solid fa-chevron-down'}></i>
         </button>
 
+        <i class="folder-icon fa-solid {group.collapsed ? 'fa-folder' : 'fa-folder-open'}"></i>
+
         {#if editing}
             <input
                 class="name-input"
@@ -326,6 +328,14 @@
     }
     .vis-btn:hover { color: var(--text); }
     .vis-btn.hidden { color: var(--text-dim); }
+
+    .folder-icon {
+        color: var(--text-muted);
+        font-size: 12px;
+        width: 14px;
+        text-align: center;
+        flex-shrink: 0;
+    }
 
     .group-name {
         flex: 1;

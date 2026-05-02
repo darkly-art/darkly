@@ -18,11 +18,18 @@ enum ChangeKind {
     /// flags, non-exposed port defaults, brush load/reset/clear. Bumps
     /// both `brush_graph_version` and `brush_topology_version`.
     Topology,
-    /// User-facing exposed-port value change (size scrub, opacity scrub,
-    /// future hardness/rotation scrubs). Bumps only `brush_graph_version`
-    /// — the dab thumbnail render neutralises these via
-    /// `reset_exposed_scrubs`, so its cache stays valid.
+    /// User-facing exposed-port scrub on a port the editor preview
+    /// pipeline actually reads (size, opacity, hardness, …). Bumps only
+    /// `brush_graph_version` — the dab thumbnail render neutralises
+    /// scrubs via `reset_exposed_scrubs`, so its cache stays valid.
     ScrubOnly,
+    /// Exposed-port scrub on a port the editor preview pipeline
+    /// ignores — declared via `PortDef::preview_value`, applied by
+    /// `Graph::apply_preview_overrides` before the preview renders. The
+    /// rendered output cannot change, so neither cache needs to bump.
+    /// Used for `pen_input.stabilize`, `pen_input.spacing`, and
+    /// `stamp.size` (preview overrides them all to fixed values).
+    PreviewIrrelevantScrub,
 }
 
 impl DarklyEngine {
@@ -49,6 +56,17 @@ impl DarklyEngine {
     /// changed → drop the preset name".
     pub fn brush_topology_version(&self) -> u64 {
         self.brush_topology_version
+    }
+
+    /// Editor-preview version counter — bumped on changes that can alter
+    /// the full-stroke editor preview's rendered output. Topology bumps
+    /// it; scrubs on preview-affecting ports bump it; scrubs on ports
+    /// declared `preview_value` (neutralised by `apply_preview_overrides`
+    /// before render) do *not* bump it. Used by `brush_editor_preview`
+    /// as its cache key, and by tests asserting that preview-irrelevant
+    /// scrubs don't trigger a wasted re-render.
+    pub fn brush_graph_version(&self) -> u64 {
+        self.brush_graph_version
     }
 
     /// Validate a brush graph from JSON without setting it as active.
@@ -275,6 +293,12 @@ impl DarklyEngine {
     ///   thumbnail render neutralises exposed-port scrubs via
     ///   [`crate::brush::reset_exposed_scrubs`], so a scrub change can't
     ///   change its rendered output — no point invalidating its cache.
+    /// - [`ChangeKind::PreviewIrrelevantScrub`] bumps neither. The
+    ///   scrubbed port is overridden by
+    ///   [`crate::nodegraph::Graph::apply_preview_overrides`] before
+    ///   every editor-preview render, so its rendered output is
+    ///   independent of the user's port value — invalidating the cache
+    ///   would just cause a wasted full-stroke re-render.
     ///
     /// Returns Ok on success or an error string.
     fn compile_active(&mut self, kind: ChangeKind) -> Result<(), String> {
@@ -305,12 +329,18 @@ impl DarklyEngine {
             }
         }
 
-        // Every compile bumps the graph version (editor preview re-renders,
-        // stale in-flight readbacks get discarded). Topology version bumps
-        // only when the change actually affects the dab-thumbnail render.
-        self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
-        if matches!(kind, ChangeKind::Topology) {
-            self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
+        // Bump version counters per the change classification — see the
+        // `ChangeKind` doc above for the full rule. PreviewIrrelevantScrub
+        // bumps nothing: the rendered preview output can't have changed.
+        match kind {
+            ChangeKind::Topology => {
+                self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+                self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
+            }
+            ChangeKind::ScrubOnly => {
+                self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
+            }
+            ChangeKind::PreviewIrrelevantScrub => {}
         }
 
         // Refresh the brush preview overlay now that the graph is compiled —
@@ -933,28 +963,35 @@ impl DarklyEngine {
             }
         }
 
-        // Look up UnitType from the registration (canonical source).
+        // Look up UnitType + preview_value from the registration. Both
+        // come from the same port lookup so we don't pay for it twice;
+        // `preview_value` decides whether this scrub can affect the
+        // editor preview's rendered output (see `ChangeKind` docs).
         let node = self
             .active_brush_graph
             .nodes
             .get(&nid)
             .ok_or_else(|| format!("node {node_id} not found"))?;
         let registry = BrushNodeRegistry::new();
-        let unit_type = registry
-            .get(&node.type_id)
-            .and_then(|r| {
-                r.ports
-                    .iter()
-                    .find(|rp| rp.name == port_name && rp.dir == PortDir::Input)
-            })
-            .map_or(UnitType::default(), |rp| rp.unit_type);
+        let port_meta = registry.get(&node.type_id).and_then(|r| {
+            r.ports
+                .iter()
+                .find(|rp| rp.name == port_name && rp.dir == PortDir::Input)
+        });
+        let unit_type = port_meta.map_or(UnitType::default(), |rp| rp.unit_type);
+        let preview_irrelevant = port_meta.is_some_and(|rp| rp.preview_value.is_some());
 
         let port_value = unit_type.from_display(display_value);
 
         self.active_brush_graph
             .set_port_default(nid, port_name, port_value)
             .map_err(|e| format!("{e}"))?;
-        self.compile_active(ChangeKind::ScrubOnly)?;
+        let kind = if preview_irrelevant {
+            ChangeKind::PreviewIrrelevantScrub
+        } else {
+            ChangeKind::ScrubOnly
+        };
+        self.compile_active(kind)?;
         Ok(self.active_graph_json())
     }
 
