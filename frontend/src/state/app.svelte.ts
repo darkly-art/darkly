@@ -33,6 +33,12 @@ class AppState {
     // Layer tree (read from WASM, refreshed after mutations/undo/redo).
     layerTree = $state<any[]>([]);
 
+    // Mirrors the engine's `thumbnail_version` counter. Bumped from
+    // `requestFrame` after each render so any `$derived` that reads
+    // a thumbnail (via getLayerThumbnail / getMaskThumbnail) re-runs
+    // when an async readback lands and the wasm cache is updated.
+    thumbnailEpoch = $state(0);
+
     // Veil list (read from WASM, refreshed after mutations).
     veilList = $state<any[]>([]);
 
@@ -96,6 +102,13 @@ class AppState {
                 const tree = JSON.parse(this.handle.layer_tree());
                 this.layerTree = Array.isArray(tree) ? tree : [];
             } catch { this.layerTree = []; }
+            // Schedule a render frame: callers invoke this after layer
+            // mutations (undo/redo, add/remove, drag/drop, etc.), and
+            // the engine may have async work pending — dirty-pixel
+            // readbacks, content-bounds compute, animation. Without a
+            // frame, drain_dirty_thumbnail_readbacks never runs and the
+            // layer panel ends up showing pre-mutation thumbnails.
+            this.requestFrame();
         }
     }
 
@@ -149,6 +162,13 @@ class AppState {
             this._framePending = false;
             if (!this.handle) return;
             const needsMore = this.handle.render(ts / 1000.0);
+
+            // Sync thumbnail-readback completions into a Svelte-reactive
+            // epoch so `$derived` consumers re-run. `!==` (not `>`) so a
+            // handle swap that resets the wasm counter to 0 still triggers
+            // a re-derivation against the new engine.
+            const v = this.handle.thumbnail_version();
+            if (v !== this.thumbnailEpoch) this.thumbnailEpoch = v;
 
             // Per-frame tool hook — async state sync (e.g. GPU readback completion).
             toolRegistry.get(this.activeToolId)?.onFrame?.();

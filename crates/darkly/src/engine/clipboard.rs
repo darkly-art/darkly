@@ -279,7 +279,7 @@ impl DarklyEngine {
                         .commit_region(encoder, layer_id, &frame, &snap, undo_rect);
                     self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
                 });
-                self.compositor.mark_dirty();
+                self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
             }
         } else {
             // --- No selection: direct readback ---
@@ -452,7 +452,7 @@ impl DarklyEngine {
             );
         }
 
-        self.compositor.mark_dirty();
+        self.compositor.mark_layer_pixels_dirty(id, false);
 
         // Position above active layer if specified.
         if let Some(active_id) = active_layer_id {

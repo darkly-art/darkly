@@ -613,6 +613,7 @@ impl DarklyEngine {
             self.undo_stack
                 .push(Box::new(LayerAddAction::new(layer_id, parent, pos)));
 
+            self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
             self.compositor.clear_floating_content();
             return;
         }
@@ -795,6 +796,7 @@ impl DarklyEngine {
         });
 
         // Clean up GPU state
+        self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
         self.compositor.clear_floating_content();
     }
 
@@ -851,6 +853,8 @@ impl DarklyEngine {
                             cancel_snapshot.saved,
                         );
                     });
+                    self.compositor
+                        .mark_layer_pixels_dirty(fc.target_layer, fc.target_is_mask);
                 }
             }
         }
