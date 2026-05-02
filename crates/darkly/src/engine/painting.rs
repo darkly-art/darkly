@@ -166,7 +166,7 @@ impl DarklyEngine {
             );
         }
 
-        self.compositor.mark_dirty();
+        self.compositor.mark_layer_pixels_dirty(layer_id, false);
     }
 
     // --- Stroke lifecycle ---
@@ -332,6 +332,10 @@ impl DarklyEngine {
             }
         }
 
+        // The compositor needs to recomposite the layer's pixels on
+        // the next render; thumbnail invalidation lives at the stroke
+        // boundary (end_stroke) rather than per-segment so the panel
+        // updates once per stroke instead of mid-flight.
         self.compositor.mark_dirty();
     }
 
@@ -1044,14 +1048,16 @@ impl DarklyEngine {
             // never called for this op) — extremely unusual; bail rather
             // than fabricate an empty snapshot.
             None => {
-                self.compositor.mark_dirty();
+                self.compositor
+                    .mark_layer_pixels_dirty(layer_id, mask_editing);
                 return;
             }
         };
         let layer_frame = match self.compositor.layer_texture(layer_id) {
             Some(t) => t.canvas_frame(),
             None => {
-                self.compositor.mark_dirty();
+                self.compositor
+                    .mark_layer_pixels_dirty(layer_id, mask_editing);
                 return;
             }
         };
@@ -1063,11 +1069,19 @@ impl DarklyEngine {
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
 
-        self.compositor.mark_dirty();
+        self.compositor
+            .mark_layer_pixels_dirty(layer_id, mask_editing);
     }
 
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
+            // Per-stroke thumbnail refresh — the layer (or its mask) now
+            // holds the cumulative pixels of every dab/op since
+            // begin_stroke. Live mid-stroke updates are intentionally
+            // skipped.
+            let is_mask = self.editing_mask_layer == Some(layer_id);
+            self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
+
             // If a flood fill is pending, defer undo commit — complete_flood_fill
             // will handle it when the readback arrives.
             if self
@@ -1175,7 +1189,8 @@ impl DarklyEngine {
                 .commit_region(encoder, layer_id, &frame, &snap, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
-        self.compositor.mark_dirty();
+        let is_mask = self.editing_mask_layer == Some(layer_id);
+        self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
     }
 
     /// Clear entire layer to transparent via GPU.
@@ -1232,7 +1247,8 @@ impl DarklyEngine {
                 .commit_region(encoder, layer_id, &frame, &snap, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
-        self.compositor.mark_dirty();
+        let is_mask = self.editing_mask_layer == Some(layer_id);
+        self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
     }
 
     /// Resolve the active paint target for a layer.

@@ -10,6 +10,7 @@
     import { toast } from '../state/toast.svelte';
     import { theme } from '../state/theme.svelte';
     import { dispatchDrag } from '../actions/triggers';
+    import { THUMB_SIZE } from '../ui/layers/thumbnails';
 
     let canvas = $state<HTMLCanvasElement>(undefined!);
 
@@ -60,6 +61,17 @@
             handle.resize(canvas.width, canvas.height);
             app.handle = handle;
 
+            // Drift guard: the engine auto-queues thumbnail readbacks
+            // at `DEFAULT_THUMB_SIZE`; the panel renders <img> at the
+            // TS-side `THUMB_SIZE`. If they fall out of sync, cached
+            // bytes won't fit the displayed dimensions. Fail loudly.
+            const engineThumb = handle.engine_default_thumb_size();
+            if (engineThumb !== THUMB_SIZE) {
+                console.error(
+                    `Thumbnail size drift: engine=${engineThumb} ts=${THUMB_SIZE}`,
+                );
+            }
+
             // Push the initial UI theme colors so preset-thumbnail bakes
             // match the user's current theme from frame one.
             theme.pushToWasm();
@@ -70,7 +82,7 @@
 
             const groupId = handle.add_group();
             const paintLayerId = handle.add_raster_layer_in(groupId);
-            app.activeLayerId = paintLayerId;
+            app.selectLayer(paintLayerId);
 
             // Observe element resizes to keep GPU surface in sync
             const ro = new ResizeObserver(() => syncCanvasSize());

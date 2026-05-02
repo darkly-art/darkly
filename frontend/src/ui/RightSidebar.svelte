@@ -1,5 +1,5 @@
 <script lang="ts">
-    import VeilPanel from './veils/VeilPanel.svelte';
+    import PropertiesPanel from './properties/PropertiesPanel.svelte';
     import LayerPanel from './layers/LayerPanel.svelte';
 
     let sidebarEl: HTMLDivElement;
@@ -36,8 +36,8 @@
         onpointermove={onResizeMove}
         onpointerup={onResizeUp}
     ></div>
-    <VeilPanel />
     <LayerPanel />
+    <PropertiesPanel />
 </div>
 
 <style>
@@ -50,7 +50,7 @@
         flex-direction: column;
         flex-shrink: 0;
         position: relative;
-        overflow-y: auto;
+        overflow: hidden;
     }
 
     .sidebar-resize {

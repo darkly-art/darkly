@@ -51,11 +51,19 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Stroke fade-out (0 at start, 1 at stroke end)"),
             // Stabilization strength — input port read at stroke start,
             // not per-dab.  Exposed via the eye toggle like any other port.
+            //
+            // `preview_value(0.0)` opts this port out of the editor-preview
+            // pipeline: the synthetic stroke is a pre-cooked Bezier and is
+            // rendered through `PassThrough` regardless. Marking it here
+            // makes that fact declarative — and keeps the editor preview's
+            // cache valid when the user scrubs stabilize, instead of
+            // re-rendering a full stroke for an output-irrelevant change.
             PortDef::input("stabilize", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-wave-square")
                 .with_label("Stabilize")
+                .with_preview_value(0.0)
                 .with_description(
                     "Stroke stabilization strength (0 = off, 100% = maximum smoothing)",
                 ),
@@ -64,6 +72,10 @@ pub fn register() -> BrushNodeRegistration {
             // currently lives here because the engine reads pen_input port
             // defaults out-of-band; both move together when the brush
             // settings bar gets redesigned.
+            //
+            // No `preview_value` — spacing visibly affects the rendered
+            // stroke (dab density along the path) and a spacing scrub
+            // *should* re-render the preview.
             PortDef::input("spacing", BrushWireType::Scalar)
                 .with_range(0.04, 1.0, 0.10)
                 .with_unit(UnitType::Percent)

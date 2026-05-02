@@ -28,7 +28,7 @@ State is split three ways: the **document** is authoritative and undoable (layer
 **Runtime stack** — how a pointer event becomes a pixel:
 
 ```mermaid
-flowchart LR
+flowchart TB
     User[Pointer / keyboard]
     Svelte[Svelte UI<br/>frontend/src/]
     Bridge[DarklyHandle<br/>frontend/wasm/<br/>command queue + queries]

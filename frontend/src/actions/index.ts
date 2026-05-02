@@ -182,13 +182,13 @@ export function registerActions() {
                     const layerId = app.handle.paste_image_floating(
                         clip.width, clip.height, clip.rgba, ox, oy, activeId,
                     );
-                    app.activeLayerId = layerId;
+                    app.selectLayer(layerId);
                     enterTransformTool();
                 } else {
                     const layerId = app.handle.paste_image(
                         clip.width, clip.height, clip.rgba, ox, oy, activeId,
                     );
-                    app.activeLayerId = layerId;
+                    app.selectLayer(layerId);
                 }
                 app.refreshLayerTree();
                 app.requestFrame();
@@ -212,7 +212,7 @@ export function registerActions() {
             } else {
                 const layerId = app.handle.paste_in_place(app.activeLayerId);
                 if (layerId >= 0) {
-                    app.activeLayerId = layerId;
+                    app.selectLayer(layerId);
                     app.refreshLayerTree();
                     app.requestFrame();
                 }

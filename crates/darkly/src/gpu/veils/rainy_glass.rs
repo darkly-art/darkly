@@ -7,13 +7,13 @@ const PARAMS: &[ParamDef] = &[
         name: "speed",
         min: 0.0,
         max: 3.0,
-        default: 1.0,
+        default: 0.5,
     },
     ParamDef::Float {
         name: "rain_amount",
         min: 0.0,
         max: 1.0,
-        default: 0.7,
+        default: 0.5,
     },
     ParamDef::Float {
         name: "direction",
@@ -43,11 +43,11 @@ pub fn register() -> VeilRegistration {
         from_params: |params, shared| {
             let speed = match params.first() {
                 Some(ParamValue::Float(v)) => *v,
-                _ => 1.0,
+                _ => 0.5,
             };
             let rain_amount = match params.get(1) {
                 Some(ParamValue::Float(v)) => *v,
-                _ => 0.7,
+                _ => 0.5,
             };
             let direction = match params.get(2) {
                 Some(ParamValue::Float(v)) => *v,
