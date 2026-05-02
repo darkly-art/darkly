@@ -49,3 +49,6 @@ opt-level = 1
 
 [profile.release]
 lto = "thin"
+
+[workspace.lints.clippy]
+too_many_arguments = "allow"

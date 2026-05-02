@@ -41,7 +41,6 @@ pub trait BrushPaintTargetExt {
     ///
     /// Selection has already been baked into the scratch via per-dab
     /// composites, so this commit passes `apply_selection: 0` to the shader.
-    #[allow(clippy::too_many_arguments)]
     fn commit_brush_dab(
         &self,
         encoder: &mut wgpu::CommandEncoder,

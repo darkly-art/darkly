@@ -79,6 +79,7 @@ fn run_paint_benchmark(
 }
 
 #[test]
+#[ignore = "10k-frame benchmark; run explicitly via `cargo test --test profile_render -- --ignored --nocapture`"]
 fn profile_render_pipeline() {
     let (device, queue) = headless_device();
 
