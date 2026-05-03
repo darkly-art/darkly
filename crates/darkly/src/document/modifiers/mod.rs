@@ -3,6 +3,7 @@
 // that exports `pub fn register() -> crate::document::modifier::ModifierRegistration`.
 
 pub mod mask;
+pub mod selection;
 
 use crate::document::modifier::ModifierRegistration;
 
@@ -10,5 +11,6 @@ use crate::document::modifier::ModifierRegistration;
 pub fn registrations() -> Vec<ModifierRegistration> {
     vec![
         mask::register(),
+        selection::register(),
     ]
 }

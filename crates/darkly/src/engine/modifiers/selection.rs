@@ -1,18 +1,120 @@
-//! Selection operations — rect, ellipse, lasso, magic wand, clear, invert.
+//! Engine-level selection ops (shape fills, booleans, active toggle, undo).
 //!
-//! GPU-authoritative. No persistent CPU cache — the GPU texture is truth.
-//! Contour extraction (marching ants) runs on async readback data.
+//! Replaces the old `engine/selection.rs` after the Phase 2 refactor that made
+//! the global selection a typed [`crate::document::Modifier`] attached at the
+//! document root. The `gpu_selection: GpuSelection` field is gone; selection
+//! state now splits cleanly across:
+//!
+//! - **Document model**: `doc.selection: Option<Modifier>` carries name,
+//!   visibility (active toggle), lock, [`crate::layer::PixelBuffer`] bounds,
+//!   tight pixel bounds, and the CPU readback cache via [`SelectionModifier`].
+//! - **Compositor**: `compositor.selection_state` carries the ping-pong R8
+//!   textures, the brush+paint pipeline bind groups, and the modifier id used
+//!   for region-store / undo keying.
+//! - **Engine**: this file. The high-level ops the user invokes (select_rect,
+//!   apply_selection_mask, invert, clear, magic wand, …) plus the bridge
+//!   helpers consumers reach for (`selection_active`, `selection_cpu_cache`,
+//!   `selection_pixel_bounds`, …).
 
-use super::{DarklyEngine, ReadbackContext};
+use super::super::{DarklyEngine, ReadbackContext};
+use crate::coord::CanvasRect;
 use crate::document::SelectionMode;
-use crate::engine::gpu_selection::CombineMode;
 use crate::gpu::flood_fill;
 use crate::gpu::overlay::{OverlayPrimitive, FLAG_CANVAS_SPACE, KIND_DASHED_LINE};
 use crate::gpu::readback;
+use crate::gpu::selection::CombineMode;
+use crate::layer::LayerId;
 use crate::mask::RasterizedMask;
 use crate::undo::SelectionAction;
 
 impl DarklyEngine {
+    // ========================================================================
+    // Bridge helpers — read/write the selection's split state through one
+    // facade so consumers don't have to know whether a fact lives on the
+    // document modifier or the compositor's GPU state.
+    // ========================================================================
+
+    /// True when the selection modifier is allocated AND its visibility flag
+    /// is set. Equivalent to the old `gpu_selection.active`.
+    pub fn has_selection(&self) -> bool {
+        self.doc.selection_active()
+    }
+
+    /// CPU mirror of the selection's R8 texture, if present. Populated by the
+    /// async `SelectionReadback` and by the `Replace` upload paths (which have
+    /// the data in hand). Cleared after combine/invert until the next
+    /// readback lands. Read-only access — engine helpers above mutate.
+    pub fn selection_cpu_cache(&self) -> Option<&[u8]> {
+        self.doc
+            .selection
+            .as_ref()
+            .and_then(|m| m.as_selection())
+            .and_then(|s| s.cpu_cache.data.as_deref())
+    }
+
+    /// Cached tight bounds of the non-zero selection region, in canvas coords.
+    pub(crate) fn selection_pixel_bounds(&self) -> Option<CanvasRect> {
+        self.doc
+            .selection
+            .as_ref()
+            .and_then(|m| m.as_selection())
+            .and_then(|s| s.pixel_bounds)
+    }
+
+    /// Selection modifier id, if allocated.
+    pub(crate) fn selection_modifier_id(&self) -> Option<LayerId> {
+        self.doc.selection_id()
+    }
+
+    /// Set / clear the selection's tight pixel bounds (called after Replace
+    /// or after an async readback recomputes them).
+    pub(crate) fn set_selection_pixel_bounds(&mut self, bounds: Option<CanvasRect>) {
+        if let Some(s) = self
+            .doc
+            .selection
+            .as_mut()
+            .and_then(|m| m.as_selection_mut())
+        {
+            s.pixel_bounds = bounds;
+        }
+    }
+
+    /// Replace the CPU mirror of the selection texture.
+    pub(crate) fn set_selection_cpu_cache(&mut self, data: Vec<u8>) {
+        if let Some(s) = self
+            .doc
+            .selection
+            .as_mut()
+            .and_then(|m| m.as_selection_mut())
+        {
+            s.cpu_cache.set(data);
+        }
+    }
+
+    /// Invalidate the CPU mirror — called after combine/invert.
+    pub(crate) fn invalidate_selection_cpu_cache(&mut self) {
+        if let Some(s) = self
+            .doc
+            .selection
+            .as_mut()
+            .and_then(|m| m.as_selection_mut())
+        {
+            s.cpu_cache.invalidate();
+        }
+    }
+
+    /// Toggle the active flag (mapped onto `common.visible`). Engine internal —
+    /// public visibility toggling is via [`Self::set_layer_visible`].
+    pub(crate) fn set_selection_active(&mut self, active: bool) {
+        if let Some(modifier) = self.doc.selection.as_mut() {
+            modifier.common.visible = active;
+        }
+    }
+
+    // ========================================================================
+    // Selection ops — the user-facing shape fills, booleans, invert, clear.
+    // ========================================================================
+
     pub fn select_rect(
         &mut self,
         x: f32,
@@ -95,7 +197,7 @@ impl DarklyEngine {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        let was_active = self.gpu_selection.active;
+        let was_active = self.has_selection();
         // Magic wand operates on full-canvas data — reserve full-canvas undo rect.
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
@@ -161,18 +263,22 @@ impl DarklyEngine {
     }
 
     pub fn clear_selection(&mut self) {
-        if !self.gpu_selection.active {
+        if !self.has_selection() {
             return;
         }
-        // Only the pre-op selection region is affected by clear.
         let rect = self
-            .gpu_selection
-            .pixel_bounds
+            .selection_pixel_bounds()
             .unwrap_or_else(|| self.selection_full_canvas_rect());
         self.save_selection_for_undo(rect);
-        let was_active = self.gpu_selection.active;
+        let was_active = self.has_selection();
 
-        self.gpu_selection.clear(&self.gpu.queue);
+        let bounds = self.selection_pixel_bounds();
+        if let Some(state) = self.compositor.selection_state_mut() {
+            state.clear_region(&self.gpu.queue, bounds);
+        }
+        self.set_selection_pixel_bounds(None);
+        self.set_selection_active(false);
+        self.invalidate_selection_cpu_cache();
 
         self.commit_selection_undo(was_active, rect);
         self.selection_overlay.clear();
@@ -180,10 +286,9 @@ impl DarklyEngine {
     }
 
     pub fn select_all(&mut self) {
-        // Post-op selection fills the canvas; use full-canvas undo rect.
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
-        let was_active = self.gpu_selection.active;
+        let was_active = self.has_selection();
 
         let w = self.doc.width;
         let h = self.doc.height;
@@ -194,78 +299,59 @@ impl DarklyEngine {
             width: w,
             height: h,
         };
-        self.gpu_selection.upload_replace(
-            &self.gpu.device,
-            &self.gpu.queue,
-            &mask,
-            self.brush_pipelines.selection_bind_group_layout(),
-            &self.paint_pipelines.selection_bind_group_layout,
-        );
+        self.upload_selection_replace(&mask);
 
         self.commit_selection_undo(was_active, rect);
         self.generate_contours_from_mask(&mask);
     }
 
     pub fn invert_selection(&mut self) {
-        if !self.gpu_selection.active {
+        if !self.has_selection() {
             return;
         }
-        // Invert can produce a selection anywhere on the canvas.
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
-        let was_active = self.gpu_selection.active;
+        let was_active = self.has_selection();
 
-        self.gpu.encode("invert-sel", |encoder| {
-            self.selection_pipelines.invert(
-                encoder,
-                &self.gpu.device,
-                &self.gpu.queue,
-                &mut self.gpu_selection,
-                self.brush_pipelines.selection_bind_group_layout(),
-                &self.paint_pipelines.selection_bind_group_layout,
-            );
-        });
-        // Bounds unknown after invert — readback will recompute.
-        self.gpu_selection.pixel_bounds = None;
+        let brush_bgl = self.brush_pipelines.selection_bind_group_layout();
+        let paint_bgl = &self.paint_pipelines.selection_bind_group_layout;
+        if let Some(state) = self.compositor.selection_state_mut() {
+            self.gpu.encode("invert-sel", |encoder| {
+                self.selection_pipelines.invert(
+                    encoder,
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    state,
+                    brush_bgl,
+                    paint_bgl,
+                );
+            });
+        }
+        self.set_selection_pixel_bounds(None);
+        self.invalidate_selection_cpu_cache();
         self.commit_selection_undo(was_active, rect);
         self.kick_selection_readback();
     }
 
     pub fn clear_selection_contents(&mut self, layer_id: u64) {
         self.auto_commit_floating();
-        if !self.gpu_selection.active {
+        if !self.has_selection() {
             return;
         }
         self.gpu_clear_selection(layer_id);
     }
 
-    pub fn has_selection(&self) -> bool {
-        self.gpu_selection.active
-    }
-
     // --- Core selection application ---
 
     /// Apply a tight-bounds rasterized mask (from SDF tools).
-    ///
-    /// Hot path: rasterize (already done) → upload subregion → done.
-    /// Undo save, undo commit, and marching-ants readback are batched into
-    /// a single GPU submission so they don't add latency.
-    fn apply_selection_mask(&mut self, mask: RasterizedMask, mode: SelectionMode) {
-        let was_active = self.gpu_selection.active;
-        // Undo rect must cover both the pre-op selection and the new shape —
-        // any pixel that might change sits inside this union.
+    pub(crate) fn apply_selection_mask(&mut self, mask: RasterizedMask, mode: SelectionMode) {
+        let was_active = self.has_selection();
         let rect = self.selection_undo_rect_for_shape([mask.x, mask.y, mask.width, mask.height]);
         self.save_selection_for_undo(rect);
 
         match mode {
             SelectionMode::Replace => {
-                self.gpu_selection.upload_replace(
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    &mask,
-                    self.brush_pipelines.selection_bind_group_layout(),
-                    &self.paint_pipelines.selection_bind_group_layout,
-                );
+                self.upload_selection_replace(&mask);
                 self.generate_contours_from_mask(&mask);
             }
             _ => {
@@ -295,9 +381,6 @@ impl DarklyEngine {
             return;
         }
 
-        // contour_segments_r8 expects a full-canvas buffer, but we only have
-        // the tight region. Build a minimal padded buffer — just the region
-        // plus 1px border for marching squares boundary detection.
         let pad = 1u32;
         let bw = mask.width + 2 * pad;
         let bh = mask.height + 2 * pad;
@@ -311,7 +394,6 @@ impl DarklyEngine {
 
         let segments = crate::mask::contour_segments_r8(&buf, bw, bh, 127);
 
-        // Offset segments from local coords back to canvas coords.
         let ox = mask.x as f32 - pad as f32;
         let oy = mask.y as f32 - pad as f32;
         for (a, b) in &segments {
@@ -337,7 +419,7 @@ impl DarklyEngine {
     }
 
     /// Apply a full-canvas R8 buffer (from magic wand, mask-to-selection).
-    fn apply_selection_full(
+    pub(crate) fn apply_selection_full(
         &mut self,
         shape_pixels: Vec<u8>,
         mode: SelectionMode,
@@ -345,21 +427,13 @@ impl DarklyEngine {
     ) {
         match mode {
             SelectionMode::Replace => {
-                self.gpu_selection.upload_replace_full(
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    &shape_pixels,
-                    self.brush_pipelines.selection_bind_group_layout(),
-                    &self.paint_pipelines.selection_bind_group_layout,
-                );
+                self.upload_selection_replace_full(&shape_pixels);
             }
             _ => {
                 self.apply_combine(&shape_pixels, mode);
             }
         }
 
-        // Callers (magic wand, mask-to-selection) reserved a full-canvas save
-        // before the async readback — commit must match.
         let rect = self.selection_full_canvas_rect();
         self.commit_selection_undo(was_active, rect);
         self.kick_selection_readback();
@@ -368,75 +442,130 @@ impl DarklyEngine {
     /// Run the GPU combine shader for boolean modes.
     fn apply_combine(&mut self, shape_pixels: &[u8], mode: SelectionMode) {
         let combine_mode = CombineMode::from_selection_mode(&mode);
-        self.gpu.encode("sel-combine", |encoder| {
-            self.selection_pipelines.combine(
-                encoder,
+        let brush_bgl = self.brush_pipelines.selection_bind_group_layout();
+        let paint_bgl = &self.paint_pipelines.selection_bind_group_layout;
+        if let Some(state) = self.compositor.selection_state_mut() {
+            self.gpu.encode("sel-combine", |encoder| {
+                self.selection_pipelines.combine(
+                    encoder,
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    state,
+                    shape_pixels,
+                    combine_mode,
+                    brush_bgl,
+                    paint_bgl,
+                );
+            });
+        }
+        self.set_selection_pixel_bounds(None);
+        self.invalidate_selection_cpu_cache();
+        // Combine implies a selection now exists.
+        self.set_selection_active(true);
+    }
+
+    /// Push a tight-bounds replace into the GPU + sync doc-side bounds and CPU
+    /// cache. Used by `Replace` shape ops and `select_all`.
+    fn upload_selection_replace(&mut self, mask: &RasterizedMask) {
+        let old_bounds = self.selection_pixel_bounds();
+        let brush_bgl = self.brush_pipelines.selection_bind_group_layout();
+        let paint_bgl = &self.paint_pipelines.selection_bind_group_layout;
+        if let Some(state) = self.compositor.selection_state_mut() {
+            state.upload_replace(
                 &self.gpu.device,
                 &self.gpu.queue,
-                &mut self.gpu_selection,
-                shape_pixels,
-                combine_mode,
-                self.brush_pipelines.selection_bind_group_layout(),
-                &self.paint_pipelines.selection_bind_group_layout,
+                old_bounds,
+                mask,
+                brush_bgl,
+                paint_bgl,
             );
-        });
-        // Bounds unknown after boolean op.
-        self.gpu_selection.pixel_bounds = None;
+        }
+
+        // Doc-side: tight bounds, CPU cache, active.
+        self.set_selection_pixel_bounds(Some(CanvasRect::from_xywh(
+            mask.x as i32,
+            mask.y as i32,
+            mask.width,
+            mask.height,
+        )));
+        self.set_selection_active(true);
+
+        let cw = self.doc.width;
+        let mut cache = vec![0u8; (cw * self.doc.height) as usize];
+        for y in 0..mask.height {
+            let src = (y * mask.width) as usize;
+            let dst = ((mask.y + y) * cw + mask.x) as usize;
+            cache[dst..dst + mask.width as usize]
+                .copy_from_slice(&mask.data[src..src + mask.width as usize]);
+        }
+        self.set_selection_cpu_cache(cache);
+    }
+
+    /// Full-canvas R8 replace — sets bounds from the buffer's non-zero region
+    /// and seeds the CPU cache directly.
+    pub(crate) fn upload_selection_replace_full(&mut self, data: &[u8]) {
+        let brush_bgl = self.brush_pipelines.selection_bind_group_layout();
+        let paint_bgl = &self.paint_pipelines.selection_bind_group_layout;
+        if let Some(state) = self.compositor.selection_state_mut() {
+            state.upload_replace_full(
+                &self.gpu.device,
+                &self.gpu.queue,
+                data,
+                brush_bgl,
+                paint_bgl,
+            );
+        }
+
+        let bounds = crate::mask::pixel_bounds_r8(data, self.doc.width, self.doc.height)
+            .map(|[x, y, w, h]| CanvasRect::from_xywh(x as i32, y as i32, w, h));
+        self.set_selection_pixel_bounds(bounds);
+        self.set_selection_active(true);
+        self.set_selection_cpu_cache(data.to_vec());
     }
 
     // --- Undo helpers ---
 
-    pub(crate) fn save_selection_for_undo(&mut self, rect: crate::coord::CanvasRect) {
-        let frame = self.gpu_selection.canvas_frame();
+    pub(crate) fn save_selection_for_undo(&mut self, rect: CanvasRect) {
+        let frame = match self.compositor.selection_state() {
+            Some(s) => s.canvas_frame(),
+            None => return,
+        };
         let snap = self.gpu.encode_ret("sel-undo-save", |encoder| {
             self.region_store
                 .save_region(encoder, &frame, wgpu::TextureFormat::R8Unorm, rect)
         });
-        // The selection texture is canvas-sized at offset 0, so the
-        // canvas frame is exactly the selection-texture-local frame.
-        // Stashing on the engine lets `commit_selection_undo` recover the
-        // snapshot across async readback boundaries (magic wand,
-        // mask-to-selection).
         self.pending_selection_snapshot = Some(snap);
     }
 
-    pub(crate) fn commit_selection_undo(
-        &mut self,
-        was_active: bool,
-        rect: crate::coord::CanvasRect,
-    ) {
+    pub(crate) fn commit_selection_undo(&mut self, was_active: bool, rect: CanvasRect) {
         let Some(snap) = self.pending_selection_snapshot.take() else {
-            // No paired save — nothing to commit. Indicates a logic bug at
-            // the call site, but the historical behavior was to silently
-            // fail by reading uninitialised scratch; leaving as a debug
-            // assert to surface it without breaking release builds.
             debug_assert!(false, "commit_selection_undo without a paired save");
             return;
         };
-        let frame = self.gpu_selection.canvas_frame();
+        let modifier_id = self.selection_modifier_id().unwrap_or(0);
+        let frame = match self.compositor.selection_state() {
+            Some(s) => s.canvas_frame(),
+            None => return,
+        };
         self.gpu.encode("sel-undo-commit", |encoder| {
             let entry = self
                 .region_store
-                .commit_region(encoder, 0, &frame, &snap, rect);
+                .commit_region(encoder, modifier_id, &frame, &snap, rect);
             self.undo_stack
                 .push(Box::new(SelectionAction::new(was_active, entry)));
         });
     }
 
-    /// Full-canvas undo rect — used when the post-op selection extent isn't
-    /// known ahead of time (invert, select-all, magic wand, combine into unknown bounds).
-    pub(crate) fn selection_full_canvas_rect(&self) -> crate::coord::CanvasRect {
-        crate::coord::CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height)
+    /// Full-canvas undo rect — used when post-op extent isn't known up-front.
+    pub(crate) fn selection_full_canvas_rect(&self) -> CanvasRect {
+        CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height)
     }
 
-    /// Undo rect that covers both the current (pre-op) selection and a new shape
-    /// that will be applied. Save and commit must use the same rect, otherwise
-    /// the R8 scratch's stale contents outside the save rect would leak into the
-    /// commit buffer and corrupt the selection on undo.
-    pub(crate) fn selection_undo_rect_for_shape(
-        &self,
-        shape: [u32; 4],
-    ) -> crate::coord::CanvasRect {
+    /// Undo rect that covers both the current (pre-op) selection and a new
+    /// shape that's about to be applied. Save and commit must use the same
+    /// rect — otherwise stale bytes outside the save rect leak into the
+    /// commit and corrupt the selection on undo.
+    pub(crate) fn selection_undo_rect_for_shape(&self, shape: [u32; 4]) -> CanvasRect {
         let cw = self.doc.width;
         let ch = self.doc.height;
         let [sx, sy, sw, sh] = shape;
@@ -446,19 +575,23 @@ impl DarklyEngine {
             sw.min(cw - sx.min(cw)),
             sh.min(ch - sy.min(ch)),
         ];
-        let shape_rect = crate::coord::CanvasRect::from_xywh(sx as i32, sy as i32, sw, sh);
-        match self.gpu_selection.pixel_bounds {
+        let shape_rect = CanvasRect::from_xywh(sx as i32, sy as i32, sw, sh);
+        match self.selection_pixel_bounds() {
             Some(old) if sw > 0 && sh > 0 => old.union(shape_rect),
             Some(old) => old,
-            None => crate::coord::CanvasRect::from_xywh(0, 0, cw, ch),
+            None => CanvasRect::from_xywh(0, 0, cw, ch),
         }
     }
 
-    /// Kick an async readback for contour extraction (marching ants).
+    /// Kick an async readback for contour extraction (marching ants) and CPU
+    /// cache repopulation.
     pub(crate) fn kick_selection_readback(&mut self) {
         let w = self.doc.width;
         let h = self.doc.height;
-        let texture = self.gpu_selection.texture();
+        let texture = match self.compositor.selection_state() {
+            Some(s) => s.texture(),
+            None => return,
+        };
         self.gpu.encode("sel-readback", |encoder| {
             let request = readback::request_readback(
                 &self.gpu.device,
@@ -478,30 +611,21 @@ impl DarklyEngine {
     pub(crate) fn update_selection_overlay_from_readback(&mut self, pixels: Vec<u8>) {
         self.selection_overlay.clear();
 
-        if !self.gpu_selection.active {
+        if !self.has_selection() {
             self.push_merged_overlay();
             return;
         }
 
-        // Update pixel_bounds from readback if not already known.
-        if self.gpu_selection.pixel_bounds.is_none() {
-            self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
-                &pixels,
-                self.gpu_selection.width,
-                self.gpu_selection.height,
-            )
-            .map(|[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h));
+        if self.selection_pixel_bounds().is_none() {
+            let bounds = crate::mask::pixel_bounds_r8(&pixels, self.doc.width, self.doc.height)
+                .map(|[x, y, w, h]| CanvasRect::from_xywh(x as i32, y as i32, w, h));
+            self.set_selection_pixel_bounds(bounds);
         }
 
-        // Populate the CPU cache from the readback data.
-        self.gpu_selection.cpu_cache = Some(pixels.clone());
+        self.set_selection_cpu_cache(pixels.clone());
 
-        let segments = crate::mask::contour_segments_r8(
-            &pixels,
-            self.gpu_selection.width,
-            self.gpu_selection.height,
-            127,
-        );
+        let segments =
+            crate::mask::contour_segments_r8(&pixels, self.doc.width, self.doc.height, 127);
         for (a, b) in &segments {
             let mut bg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, *a, *b);
             bg.color = [0.0, 0.0, 0.0, 1.0];

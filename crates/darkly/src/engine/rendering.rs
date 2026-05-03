@@ -241,9 +241,6 @@ impl DarklyEngine {
                     was_active, node_id, seed_x, seed_y, tolerance, mode, pixels,
                 );
             }
-            ReadbackContext::MaskToSelection { was_active } => {
-                self.complete_mask_to_selection(was_active, pixels);
-            }
             ReadbackContext::SelectionReadback => {
                 self.update_selection_overlay_from_readback(pixels);
                 // Resume deferred operations that were waiting for
@@ -251,7 +248,7 @@ impl DarklyEngine {
                 if let Some(pc) = self.pending_copy.take() {
                     self.start_copy_readback(pc.layer_id, pc.is_cut);
                 }
-                if self.gpu_selection.pixel_bounds.is_some() {
+                if self.selection_pixel_bounds().is_some() {
                     if let Some(pt) = self.pending_transform.take() {
                         if self.floating.is_none() {
                             self.begin_transform(pt.node_id);
@@ -498,24 +495,26 @@ impl DarklyEngine {
 
         // If this is a selection GPU action, restore the selection texture
         // and swap the active flag.
-        if let Some(restored_active) = action.swap_selection_active(self.gpu_selection.active) {
-            self.gpu_selection.active = restored_active;
+        if let Some(restored_active) = action.swap_selection_active(self.has_selection()) {
+            self.set_selection_active(restored_active);
 
             if let Some(entry) = action.selection_region_entry_mut() {
-                let frame = self.gpu_selection.canvas_frame();
-                self.gpu.encode(
-                    match direction {
-                        UndoDirection::Undo => "undo-sel-restore",
-                        UndoDirection::Redo => "redo-sel-restore",
-                    },
-                    |encoder| {
-                        let swapped = self.region_store.restore_region(encoder, entry, &frame);
-                        *entry = swapped;
-                    },
-                );
+                let frame = self.compositor.selection_state().map(|s| s.canvas_frame());
+                if let Some(frame) = frame {
+                    self.gpu.encode(
+                        match direction {
+                            UndoDirection::Undo => "undo-sel-restore",
+                            UndoDirection::Redo => "redo-sel-restore",
+                        },
+                        |encoder| {
+                            let swapped = self.region_store.restore_region(encoder, entry, &frame);
+                            *entry = swapped;
+                        },
+                    );
+                }
             }
 
-            self.gpu_selection.pixel_bounds = None; // will be recomputed from readback
+            self.set_selection_pixel_bounds(None); // will be recomputed from readback
             self.kick_selection_readback();
         }
 

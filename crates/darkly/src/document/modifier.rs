@@ -14,6 +14,7 @@
 
 use crate::coord::CanvasRect;
 use crate::document::modifiers::mask::MaskModifier;
+use crate::document::modifiers::selection::SelectionModifier;
 use crate::layer::{LayerId, NodeCommon, PixelBuffer};
 
 /// What each modifier module returns from its `register()` function.
@@ -37,21 +38,24 @@ pub struct Modifier {
 /// per-kind struct holds all the kind-specific state.
 pub enum ModifierKind {
     Mask(MaskModifier),
-    // Future: Selection (Phase 2), Filter, Transform, Colorize, ...
+    Selection(SelectionModifier),
+    // Future: Filter, Transform, Colorize, ...
 }
 
 impl Modifier {
-    /// Pixel storage for the modifier, if any. Mask has one (R8 alpha texture);
-    /// future pure-transform/filter kinds may not.
+    /// Pixel storage for the modifier, if any. Mask + selection both carry
+    /// an R8 alpha buffer; future pure-transform/filter kinds may not.
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match &self.kind {
             ModifierKind::Mask(m) => Some(&m.pixels),
+            ModifierKind::Selection(s) => Some(&s.pixels),
         }
     }
 
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match &mut self.kind {
             ModifierKind::Mask(m) => Some(&mut m.pixels),
+            ModifierKind::Selection(s) => Some(&mut s.pixels),
         }
     }
 
@@ -59,11 +63,26 @@ impl Modifier {
     pub fn type_id(&self) -> &'static str {
         match &self.kind {
             ModifierKind::Mask(_) => "mask",
+            ModifierKind::Selection(_) => "selection",
         }
     }
 
     pub fn is_mask(&self) -> bool {
         matches!(&self.kind, ModifierKind::Mask(_))
+    }
+
+    pub fn as_selection(&self) -> Option<&SelectionModifier> {
+        match &self.kind {
+            ModifierKind::Selection(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn as_selection_mut(&mut self) -> Option<&mut SelectionModifier> {
+        match &mut self.kind {
+            ModifierKind::Selection(s) => Some(s),
+            _ => None,
+        }
     }
 }
 
@@ -71,5 +90,11 @@ impl ModifierKind {
     /// Construct a fresh mask modifier with the given pixel bounds.
     pub fn mask_with_bounds(bounds: CanvasRect) -> Self {
         ModifierKind::Mask(MaskModifier::new(bounds))
+    }
+
+    /// Construct a fresh selection modifier covering the whole canvas at
+    /// the given bounds. The selection is canvas-sized at offset (0, 0).
+    pub fn selection_with_bounds(bounds: CanvasRect) -> Self {
+        ModifierKind::Selection(SelectionModifier::new(bounds))
     }
 }

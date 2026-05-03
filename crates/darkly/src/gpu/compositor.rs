@@ -181,6 +181,14 @@ pub struct Compositor {
     // --- Floating Content Transform ---
     transform_pass: crate::gpu::transform::TransformPass,
 
+    // --- Selection (global) ---
+    /// GPU realisation of the document's selection modifier — ping-pong R8
+    /// textures + brush/paint bind groups. `None` until the engine allocates
+    /// the selection modifier; once allocated, lives for the document's
+    /// lifetime. Pixel metadata (active toggle, tight bounds, CPU cache)
+    /// lives on `Document.selection.kind` (`SelectionModifier`).
+    selection_state: Option<crate::gpu::selection::SelectionState>,
+
     // --- Tool Overlay ---
     tool_overlay: ToolOverlay,
     /// Cached view transform for overlay forward matrix computation.
@@ -572,6 +580,7 @@ impl Compositor {
             padded_height: padded_h,
             veil_chain,
             transform_pass,
+            selection_state: None,
             content_bounds,
             tool_overlay,
             cached_view_transform: identity,
@@ -931,6 +940,44 @@ impl Compositor {
     /// [`Self::ensure_passthrough_mask_state`].
     pub fn dispose_passthrough_mask_state(&mut self, host_id: LayerId) {
         self.passthrough_mask_state.remove(&host_id);
+    }
+
+    // --- Selection (global) ---
+
+    /// Allocate the GPU realisation of the document's selection modifier.
+    /// Idempotent — returns immediately if already allocated. The selection
+    /// modifier id is stashed on the [`SelectionState`] so undo / region-store
+    /// keying can resolve back to the document modifier.
+    pub fn ensure_selection_state(
+        &mut self,
+        device: &wgpu::Device,
+        modifier_id: LayerId,
+        brush_bgl: &wgpu::BindGroupLayout,
+        paint_bgl: &wgpu::BindGroupLayout,
+    ) {
+        if self.selection_state.is_some() {
+            return;
+        }
+        self.selection_state = Some(crate::gpu::selection::SelectionState::new(
+            device,
+            modifier_id,
+            self.canvas_width,
+            self.canvas_height,
+            brush_bgl,
+            paint_bgl,
+        ));
+    }
+
+    /// Read access to the global selection's GPU state. `None` until
+    /// [`Self::ensure_selection_state`] is called.
+    pub fn selection_state(&self) -> Option<&crate::gpu::selection::SelectionState> {
+        self.selection_state.as_ref()
+    }
+
+    /// Mutable access to the global selection's GPU state — for the boolean
+    /// op + invert pipelines that mutate the ping-pong textures.
+    pub fn selection_state_mut(&mut self) -> Option<&mut crate::gpu::selection::SelectionState> {
+        self.selection_state.as_mut()
     }
 
     /// Drop all GPU state associated with a node id (texture, bind groups,

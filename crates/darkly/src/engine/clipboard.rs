@@ -16,7 +16,7 @@ impl DarklyEngine {
     pub fn copy(&mut self, layer_id: u64) -> Option<ClipboardExport> {
         self.doc.layer(layer_id)?;
 
-        if self.gpu_selection.active && self.gpu_selection.cpu_cache.is_none() {
+        if self.has_selection() && self.selection_cpu_cache().is_none() {
             // Selection cache not ready — defer until SelectionReadback completes.
             self.pending_copy = Some(PendingCopy {
                 layer_id,
@@ -71,7 +71,7 @@ impl DarklyEngine {
             return;
         }
 
-        let has_selection = self.gpu_selection.active;
+        let has_selection = self.has_selection();
 
         // Resolve the node's CanvasFrame once for both the cut undo save
         // below and the matching commit further down. Format dispatch lives
@@ -148,11 +148,16 @@ impl DarklyEngine {
 
             // Get texture references before entering the encode closure.
             let layer_tex = &self.compositor.node_texture(layer_id).unwrap().texture;
-            let sel_tex = self.gpu_selection.texture();
+            let selection_state = self
+                .compositor
+                .selection_state()
+                .expect("has_selection true → selection_state allocated");
+            let sel_tex = selection_state.texture();
+            let sel_paint_bg = selection_state.paint_bind_group();
 
             // Compute overlap for selection crop (selection and layer are same canvas size).
-            let sel_copy_w = rw.min(self.gpu_selection.width.saturating_sub(rx));
-            let sel_copy_h = rh.min(self.gpu_selection.height.saturating_sub(ry));
+            let sel_copy_w = rw.min(self.doc.width.saturating_sub(rx));
+            let sel_copy_h = rh.min(self.doc.height.saturating_sub(ry));
 
             self.gpu.encode("copy-gpu-extract", |encoder| {
                 // 1. Copy layer region → staging texture.
@@ -232,7 +237,7 @@ impl DarklyEngine {
                         encoder,
                         &self.paint_pipelines,
                         &self.gpu.queue,
-                        self.gpu_selection.paint_bind_group(),
+                        sel_paint_bg,
                     );
                 }
 
@@ -296,19 +301,21 @@ impl DarklyEngine {
     /// Returns `None` if the selection is active but bounds are unknown
     /// (cache not yet populated from async readback).
     fn copy_region_from_selection(&mut self, canvas_w: u32, canvas_h: u32) -> Option<[u32; 4]> {
-        if !self.gpu_selection.active {
+        if !self.has_selection() {
             return Some([0, 0, canvas_w, canvas_h]);
         }
-        if self.gpu_selection.pixel_bounds.is_none() {
-            let data = self.gpu_selection.cpu_cache.as_ref()?;
-            self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
-                data,
-                self.gpu_selection.width,
-                self.gpu_selection.height,
-            )
-            .map(|[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h));
+        if self.selection_pixel_bounds().is_none() {
+            // Recompute bounds from the CPU cache (populated by the async
+            // SelectionReadback after every mutating op).
+            let bounds = {
+                let data = self.selection_cpu_cache()?;
+                crate::mask::pixel_bounds_r8(data, self.doc.width, self.doc.height).map(
+                    |[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h),
+                )
+            };
+            self.set_selection_pixel_bounds(bounds);
         }
-        if let Some(bounds) = self.gpu_selection.pixel_bounds {
+        if let Some(bounds) = self.selection_pixel_bounds() {
             let x = bounds.x0().max(0) as u32;
             let y = bounds.y0().max(0) as u32;
             let w = bounds.width.min(canvas_w.saturating_sub(x));
@@ -375,7 +382,7 @@ impl DarklyEngine {
     pub fn cut(&mut self, layer_id: u64) -> Option<ClipboardExport> {
         self.doc.layer(layer_id)?;
 
-        if self.gpu_selection.active && self.gpu_selection.cpu_cache.is_none() {
+        if self.has_selection() && self.selection_cpu_cache().is_none() {
             self.pending_copy = Some(PendingCopy {
                 layer_id,
                 is_cut: true,

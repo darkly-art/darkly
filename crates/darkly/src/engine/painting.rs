@@ -672,8 +672,11 @@ impl DarklyEngine {
         let mut engine = self.brush_stroke_engine.take().unwrap();
         let stroke_buffer = self.stroke_buffer.take();
 
-        let sel_bg = if self.gpu_selection.active {
-            self.gpu_selection.brush_bind_group()
+        let sel_bg = if self.has_selection() {
+            self.compositor
+                .selection_state()
+                .map(|s| s.brush_bind_group())
+                .unwrap_or(&self.brush_pipelines.default_selection_bind_group)
         } else {
             &self.brush_pipelines.default_selection_bind_group
         };
@@ -997,13 +1000,13 @@ impl DarklyEngine {
         };
 
         // 2. Combine fill mask with active selection (if any), then upload.
-        let effective_mask = if self.gpu_selection.active {
-            if let Some(sel) = &self.gpu_selection.cpu_cache {
+        let effective_mask = if self.has_selection() {
+            if let Some(sel) = self.selection_cpu_cache() {
                 fill_mask
                     .iter()
                     .zip(sel.iter())
                     .map(|(&f, &s)| ((f as u16 * s as u16) / 255) as u8)
-                    .collect()
+                    .collect::<Vec<u8>>()
             } else {
                 fill_mask
             }
@@ -1122,7 +1125,7 @@ impl DarklyEngine {
 
     /// Clear layer pixels within the current selection via GPU erase pass.
     pub(crate) fn gpu_clear_selection(&mut self, layer_id: u64) {
-        if !self.gpu_selection.active {
+        if !self.has_selection() {
             return;
         }
 
@@ -1156,7 +1159,11 @@ impl DarklyEngine {
         });
 
         // Erase within selection using the cached GPU selection bind group.
-        let sel_bg = self.gpu_selection.paint_bind_group();
+        let sel_bg = self
+            .compositor
+            .selection_state()
+            .map(|s| s.paint_bind_group())
+            .expect("has_selection true → selection_state allocated");
         self.gpu.encode("clear-sel-erase", |encoder| {
             pt_for!().erase_with_selection(encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg);
         });
@@ -1243,14 +1250,14 @@ impl DarklyEngine {
         width: u32,
         height: u32,
     ) -> Option<wgpu::BindGroup> {
-        if !self.gpu_selection.active {
+        if !self.has_selection() {
             return None;
         }
 
-        let full = self.gpu_selection.cpu_cache.as_ref()?;
+        let full = self.selection_cpu_cache()?;
         let (ox, oy) = origin;
-        let cw = self.gpu_selection.width;
-        let ch = self.gpu_selection.height;
+        let cw = self.doc.width;
+        let ch = self.doc.height;
 
         let mut pixels = vec![0u8; (width * height) as usize];
         for py in 0..height {

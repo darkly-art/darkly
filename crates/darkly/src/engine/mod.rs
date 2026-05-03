@@ -2,12 +2,10 @@ mod brush_graph;
 mod brush_library;
 mod clipboard;
 mod floating;
-pub(crate) mod gpu_selection;
 mod layers;
 mod modifiers;
 mod painting;
 mod rendering;
-mod selection;
 pub mod types;
 mod veils;
 
@@ -34,10 +32,10 @@ use crate::gpu::overlay::OverlayPrimitive;
 use crate::gpu::paint_target::PaintPipelines;
 use crate::gpu::readback::ReadbackScheduler;
 use crate::gpu::region_store::RegionStore;
+use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::view::ViewTransform;
 use crate::undo::UndoStack;
-use gpu_selection::{GpuSelection, SelectionPipelines};
 use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
@@ -92,9 +90,6 @@ pub(crate) enum ReadbackContext {
         seed_y: i32,
         tolerance: u8,
         mode: crate::document::SelectionMode,
-    },
-    MaskToSelection {
-        was_active: bool,
     },
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,
@@ -320,11 +315,11 @@ pub struct DarklyEngine {
     pub(crate) diff_rect: DiffRectPass,
     pub(crate) pending_undo_commit: Option<PendingUndoCommit>,
 
-    // --- GPU Selection (Phase 5) ---
-    /// GPU-authoritative selection mask — owns the R8 texture and bind groups.
-    /// Always allocated; `gpu_selection.active` tracks whether a selection exists.
-    pub(crate) gpu_selection: GpuSelection,
-    /// Reusable pipelines for selection boolean operations.
+    // --- Selection ---
+    /// Reusable GPU pipelines for selection boolean / invert operations.
+    /// The selection's R8 textures + bind groups live in
+    /// `compositor.selection_state`; the active toggle, tight bounds, and
+    /// CPU readback cache live on `doc.selection.kind` (`SelectionModifier`).
     pub(crate) selection_pipelines: SelectionPipelines,
 
     // --- Deferred operations ---
@@ -377,13 +372,6 @@ impl DarklyEngine {
         );
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
         let diff_rect = DiffRectPass::new(&gpu.device);
-        let gpu_selection = GpuSelection::new(
-            &gpu.device,
-            doc_width,
-            doc_height,
-            brush_pipelines.selection_bind_group_layout(),
-            &paint_pipelines.selection_bind_group_layout,
-        );
 
         let mut engine = DarklyEngine {
             doc,
@@ -434,7 +422,6 @@ impl DarklyEngine {
             brush_blend_mode: 0,
             diff_rect,
             pending_undo_commit: None,
-            gpu_selection,
             selection_pipelines,
             pending_transform: None,
             pending_copy: None,
@@ -454,6 +441,20 @@ impl DarklyEngine {
         // graph so the hover overlay is live immediately, without needing
         // the user to trigger a `compile_active` via a param change.
         engine.regenerate_brush_preview();
+
+        // Eagerly allocate the document selection modifier + its GPU state.
+        // The selection is a typed Modifier on `doc.selection`; the R8 GPU
+        // textures + bind groups live in `compositor.selection_state`. Both
+        // are zero-cost when no selection is active (visible=false), so
+        // allocating up-front keeps the consumer code branch-free.
+        let selection_mod_id = engine.doc.ensure_selection_modifier();
+        engine.compositor.ensure_selection_state(
+            &engine.gpu.device,
+            selection_mod_id,
+            engine.brush_pipelines.selection_bind_group_layout(),
+            &engine.paint_pipelines.selection_bind_group_layout,
+        );
+
         engine
     }
 }
@@ -488,7 +489,30 @@ impl DarklyEngine {
     /// Test-only view of the selection mask's CPU cache. Returns `None`
     /// when no selection is active or when the cache hasn't been populated.
     pub fn test_selection_cpu_cache(&self) -> Option<&[u8]> {
-        self.gpu_selection.cpu_cache.as_deref()
+        self.selection_cpu_cache()
+    }
+
+    /// Test-only public accessor for the selection modifier's id.
+    pub fn selection_modifier_id_test(&self) -> Option<u64> {
+        self.doc.selection_id()
+    }
+
+    /// Test-only assertion that the document's selection slot holds a Modifier
+    /// whose kind is `Selection`. Returns `None` if the slot is empty.
+    pub fn test_selection_modifier_kind_is_selection(&self) -> Option<bool> {
+        self.doc
+            .selection
+            .as_ref()
+            .map(|m| m.as_selection().is_some())
+    }
+
+    /// Test-only access to the selection's `PixelBuffer.bounds`.
+    pub fn test_selection_pixel_buffer_bounds(&self) -> Option<crate::coord::CanvasRect> {
+        self.doc
+            .selection
+            .as_ref()
+            .and_then(|m| m.pixels())
+            .map(|p| p.bounds)
     }
 
     /// Number of GPU textures the compositor currently holds across the

@@ -2529,3 +2529,141 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
     must_destructure(&raster);
     must_destructure(&group);
 }
+
+// ============================================================================
+// Phase 2: Selection unification regression tests
+//
+// The selection is now a typed `Modifier` attached at `Document.selection`.
+// The R8 GPU texture lives in the compositor's selection sub-system; the CPU
+// cache and tight bounds live on `SelectionModifier`. Bridge ops collapse to
+// `clone_modifier_pixels(src, dst)` which is kind-uniform.
+// ============================================================================
+
+/// `selection_to_mask` then `mask_to_selection` must round-trip the selection
+/// pixels byte-identically. This exercises the §4a unification: both sides
+/// of the bridge go through the single `clone_modifier_pixels` helper, so a
+/// selection → mask → selection cycle should land identical bytes.
+#[test]
+fn selection_to_mask_round_trip_preserves_pixels() {
+    use darkly::document::SelectionMode;
+
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+    let layer_id = engine.add_raster_layer();
+
+    // Make a known selection: rectangle in the top-left quadrant.
+    engine.select_rect(4.0, 4.0, 20.0, 16.0, SelectionMode::Replace, false, 0.0);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let original_cache = engine
+        .test_selection_cpu_cache()
+        .expect("Replace path populates the CPU cache eagerly")
+        .to_vec();
+    assert!(
+        original_cache.iter().any(|&b| b > 0),
+        "test setup: selection should contain non-zero pixels"
+    );
+
+    // Selection → mask. Adds a mask modifier to the layer and seeds it from
+    // the selection via `clone_modifier_pixels`.
+    engine.add_mask(layer_id);
+    engine.selection_to_mask(layer_id);
+    engine.render(0.0);
+
+    let mask_pixels = engine.test_readback_mask(layer_id);
+    assert_eq!(
+        mask_pixels.len(),
+        original_cache.len(),
+        "mask + selection must be the same canvas size"
+    );
+    assert_eq!(
+        mask_pixels, original_cache,
+        "selection_to_mask must copy bytes through `clone_modifier_pixels` \
+         without any transformation"
+    );
+
+    // Clear the selection, then mask → selection. The selection should come
+    // back byte-identical to what we started with.
+    engine.clear_selection();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    assert!(
+        !engine.has_selection(),
+        "clear_selection must deactivate the selection"
+    );
+
+    let mask_id = engine.host_mask_id(layer_id).expect("mask still attached");
+    engine.mask_to_selection(mask_id);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    assert!(
+        engine.has_selection(),
+        "mask_to_selection must reactivate the selection modifier"
+    );
+    let restored = engine
+        .test_selection_cpu_cache()
+        .expect("readback after mask_to_selection populates the CPU cache")
+        .to_vec();
+    assert_eq!(
+        restored, original_cache,
+        "round-trip must be byte-identical: clone_modifier_pixels copies one \
+         R8 texture into another with no algorithmic change in either direction"
+    );
+}
+
+/// The document model must expose the selection as a typed [`Modifier`] —
+/// not as a parallel `Option<AlphaMask>` slot. This is the §1 invariant of
+/// Phase 2: `Document.selection` is a Modifier with `kind = Selection(...)`,
+/// addressable through the same `Modifier::pixels()` interface as a mask.
+#[test]
+fn document_selection_is_a_typed_modifier() {
+    use darkly::document::ModifierKind;
+
+    let (cw, ch) = (32u32, 32u32);
+    let engine = test_engine(cw, ch);
+
+    // `DarklyEngine::new` allocates the selection modifier eagerly (visible
+    // = false initially, since no selection is logically active yet).
+    let modifier_id = engine
+        .selection_modifier_id_test()
+        .expect("DarklyEngine::new must eagerly allocate the selection modifier");
+    assert_ne!(
+        modifier_id, 0,
+        "selection modifier id must be a real id allocated from doc.next_id"
+    );
+
+    // Initially inactive (no selection painted yet).
+    assert!(
+        !engine.has_selection(),
+        "fresh engine must report no active selection"
+    );
+
+    // The selection is reachable through the same kind-uniform paths a mask is.
+    let kind_is_selection = engine
+        .test_selection_modifier_kind_is_selection()
+        .expect("selection modifier must be present");
+    assert!(
+        kind_is_selection,
+        "Document.selection.kind must be ModifierKind::Selection — the type \
+         system unification of Phase 2"
+    );
+
+    // Pixel-bearing: same `pixels()` accessor as masks. This proves the
+    // structural sharing — a future `clone_modifier_pixels(...)` between any
+    // two pixel-bearing modifiers (mask, selection, future filter cache)
+    // works through one interface.
+    let bounds = engine
+        .test_selection_pixel_buffer_bounds()
+        .expect("SelectionModifier must hold a PixelBuffer");
+    assert_eq!(
+        (bounds.width, bounds.height),
+        (cw, ch),
+        "selection PixelBuffer must cover the full canvas"
+    );
+
+    // Suppress the unused warning about ModifierKind imports — the test
+    // exercises it through the `_kind_is_selection` helper.
+    let _ = std::any::type_name::<ModifierKind>();
+}

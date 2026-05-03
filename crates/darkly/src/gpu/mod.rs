@@ -11,6 +11,7 @@ pub mod paint_target;
 pub mod params;
 pub mod readback;
 pub mod region_store;
+pub mod selection;
 pub mod straight_composite;
 pub mod test_utils;
 pub mod transform;

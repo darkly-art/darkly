@@ -6,8 +6,7 @@
 //! target" rule means there's no `editing_mask_layer` redirect — the active
 //! node id directly identifies where strokes are routed.
 
-use super::super::{DarklyEngine, ReadbackContext};
-use crate::gpu::readback;
+use super::super::DarklyEngine;
 use crate::layer::LayerId;
 use crate::undo::{
     CompoundAction, GpuRegionAction, ModifierAddAction, ModifierRemoveAction, UndoAction,
@@ -56,8 +55,10 @@ impl DarklyEngine {
 
         // If a selection is active, seed the mask pixels from the selection
         // texture (R8 → R8 full-canvas copy).
-        if self.gpu_selection.active {
-            self.copy_selection_into_mask(mod_id);
+        if self.has_selection() {
+            if let Some(src_id) = self.selection_modifier_id() {
+                self.clone_modifier_pixels(src_id, mod_id);
+            }
         }
 
         // Fresh mask texture (and possibly a selection-seeded copy on top) —
@@ -68,41 +69,6 @@ impl DarklyEngine {
 
         self.undo_stack
             .push(Box::new(ModifierAddAction::new(mod_id, host_id)));
-    }
-
-    /// GPU-to-GPU copy of the active selection texture into a mask modifier's
-    /// texture (R8 → R8, full canvas). No-op if no selection is active or
-    /// the modifier has no GPU texture.
-    fn copy_selection_into_mask(&mut self, modifier_id: LayerId) {
-        if !self.gpu_selection.active {
-            return;
-        }
-        let Some(mask_tex) = self.compositor.node_texture(modifier_id) else {
-            return;
-        };
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
-        self.gpu.encode("sel-to-mask-copy", |encoder| {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: self.gpu_selection.texture(),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &mask_tex.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: canvas_w,
-                    height: canvas_h,
-                    depth_or_array_layers: 1,
-                },
-            );
-        });
     }
 
     /// Remove the mask modifier on a host layer or group.
@@ -316,7 +282,7 @@ impl DarklyEngine {
             return;
         }
 
-        // Mask already exists — copy selection into it.
+        // Mask already exists — clone selection pixels into it.
         let mask_id = match self
             .doc
             .find_node(host_id)
@@ -325,36 +291,37 @@ impl DarklyEngine {
             Some(id) => id,
             None => return,
         };
-        self.copy_selection_into_mask(mask_id);
+        if let Some(src_id) = self.selection_modifier_id() {
+            self.clone_modifier_pixels(src_id, mask_id);
+        }
         self.compositor.mark_node_pixels_dirty(mask_id);
         self.compositor.mark_dirty();
     }
 
-    /// Read a mask modifier's pixels back into the active selection.
+    /// Read a mask modifier's pixels into the global selection. Phase 2: a
+    /// straight GPU-to-GPU copy via [`Self::clone_modifier_pixels`]; the CPU
+    /// cache for the new selection contents is repopulated by the async
+    /// `SelectionReadback` kicked at the end.
     pub fn mask_to_selection(&mut self, modifier_id: LayerId) {
         if self.compositor.node_texture(modifier_id).is_none() {
             return;
         }
+        let dst = match self.selection_modifier_id() {
+            Some(id) => id,
+            None => return,
+        };
 
-        let was_active = self.gpu_selection.active;
+        let was_active = self.has_selection();
         let rect = self.selection_full_canvas_rect();
         self.save_selection_for_undo(rect);
 
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
+        self.clone_modifier_pixels(modifier_id, dst);
+        self.set_selection_active(true);
+        self.set_selection_pixel_bounds(None);
+        self.invalidate_selection_cpu_cache();
 
-        let mask_tex = self.compositor.node_texture(modifier_id).unwrap();
-        self.gpu.encode("mask-to-sel-readback", |encoder| {
-            let request = readback::request_readback(
-                &self.gpu.device,
-                encoder,
-                &mask_tex.texture,
-                wgpu::TextureFormat::R8Unorm,
-                [0, 0, canvas_w, canvas_h],
-            );
-            self.readbacks
-                .submit(request, ReadbackContext::MaskToSelection { was_active });
-        });
+        self.commit_selection_undo(was_active, rect);
+        self.kick_selection_readback();
     }
 
     /// Resolve the modifier id of the mask attached to a host, if any.
@@ -366,18 +333,54 @@ impl DarklyEngine {
             .and_then(|n| n.modifiers().mask().map(|m| m.id))
     }
 
-    /// Complete mask-to-selection after async readback.
-    pub(crate) fn complete_mask_to_selection(&mut self, was_active: bool, pixels: Vec<u8>) {
-        self.gpu_selection.upload_replace_full(
-            &self.gpu.device,
-            &self.gpu.queue,
-            &pixels,
-            self.brush_pipelines.selection_bind_group_layout(),
-            &self.paint_pipelines.selection_bind_group_layout,
-        );
+    /// GPU-to-GPU copy of one modifier's R8 pixel buffer into another's.
+    /// Resolves source and destination via [`Self::modifier_texture`], so it
+    /// works uniformly for any pair of pixel-bearing modifier ids — selection
+    /// or mask, in either direction. This is the §4a unification: the kind-
+    /// specific bridge ops (`selection_to_mask`, `mask_to_selection`) now
+    /// delegate to one function instead of duplicating the encode dance.
+    pub(crate) fn clone_modifier_pixels(&self, src_id: LayerId, dst_id: LayerId) {
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
+        let src_tex = match self.modifier_texture(src_id) {
+            Some(t) => t,
+            None => return,
+        };
+        let dst_tex = match self.modifier_texture(dst_id) {
+            Some(t) => t,
+            None => return,
+        };
+        self.gpu.encode("clone-modifier-pixels", |encoder| {
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: src_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: dst_tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: canvas_w,
+                    height: canvas_h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        });
+    }
 
-        let rect = self.selection_full_canvas_rect();
-        self.commit_selection_undo(was_active, rect);
-        self.kick_selection_readback();
+    /// Resolve the GPU texture for any pixel-bearing modifier id. The
+    /// selection lives in `compositor.selection_state`; per-host modifiers
+    /// (mask, future filter/transform) live in the shared node-texture pool.
+    pub(crate) fn modifier_texture(&self, id: LayerId) -> Option<&wgpu::Texture> {
+        if Some(id) == self.selection_modifier_id() {
+            self.compositor.selection_state().map(|s| s.texture())
+        } else {
+            self.compositor.node_texture(id).map(|t| &t.texture)
+        }
     }
 }

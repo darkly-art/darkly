@@ -177,26 +177,30 @@ impl DarklyEngine {
         let canvas_h = self.doc.height;
 
         // Determine source bounds.
-        if self.gpu_selection.active {
+        if self.has_selection() {
             // Selection bounds come from cpu_cache (populated eagerly on
-            // upload or lazily from async readback).  If unavailable, defer.
-            if self.gpu_selection.pixel_bounds.is_none() {
-                if let Some(ref data) = self.gpu_selection.cpu_cache {
-                    self.gpu_selection.pixel_bounds = crate::mask::pixel_bounds_r8(
-                        data,
-                        self.gpu_selection.width,
-                        self.gpu_selection.height,
-                    )
-                    .map(|[x, y, w, h]| {
-                        crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h)
-                    });
-                } else {
-                    // Cache not ready — defer until SelectionReadback completes.
-                    self.pending_transform = Some(PendingTransform { node_id: layer_id });
-                    return false;
+            // upload or lazily from async readback). If unavailable, defer.
+            if self.selection_pixel_bounds().is_none() {
+                let recomputed = {
+                    let data = self.selection_cpu_cache();
+                    data.map(|d| {
+                        crate::mask::pixel_bounds_r8(d, self.doc.width, self.doc.height).map(
+                            |[x, y, w, h]| {
+                                crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h)
+                            },
+                        )
+                    })
+                };
+                match recomputed {
+                    Some(bounds) => self.set_selection_pixel_bounds(bounds),
+                    None => {
+                        // Cache not ready — defer until SelectionReadback completes.
+                        self.pending_transform = Some(PendingTransform { node_id: layer_id });
+                        return false;
+                    }
                 }
             }
-            let bounds = match self.gpu_selection.pixel_bounds {
+            let bounds = match self.selection_pixel_bounds() {
                 Some(b) => b,
                 None => return false,
             };
@@ -324,7 +328,7 @@ impl DarklyEngine {
 
         // If selection is active, mask the source texture so only selected pixels
         // are included in the transform. Also clear only selected pixels on the layer.
-        let has_selection = self.gpu_selection.active;
+        let has_selection = self.has_selection();
         let clear_shape = if has_selection {
             // Upload a cropped selection mask matching the source region dimensions.
             let cropped_sel_bg =
@@ -357,9 +361,9 @@ impl DarklyEngine {
 
             // Snapshot the live selection texture into a dedicated R8 so
             // commit can replay the exact selection shape for the layer
-            // re-clear, even after `gpu_selection.clear()` (below) zeroes
-            // the live selection at the end of setup. The snapshot owns
-            // its texture for the lifetime of the floating session.
+            // re-clear, even after the selection clear (below) zeroes the
+            // live selection at the end of setup. The snapshot owns its
+            // texture for the lifetime of the floating session.
             let snap_bg = self.snapshot_selection_for_clear();
 
             // Clear selected pixels on the layer using erase_with_selection
@@ -427,7 +431,13 @@ impl DarklyEngine {
         // Selection was used to define what gets picked up — clear it now so
         // the marching ants disappear and the transform output isn't clipped.
         if has_selection {
-            self.gpu_selection.clear(&self.gpu.queue);
+            let bounds = self.selection_pixel_bounds();
+            if let Some(state) = self.compositor.selection_state_mut() {
+                state.clear_region(&self.gpu.queue, bounds);
+            }
+            self.set_selection_pixel_bounds(None);
+            self.set_selection_active(false);
+            self.invalidate_selection_cpu_cache();
 
             self.selection_overlay.clear();
             self.push_merged_overlay();
@@ -437,11 +447,11 @@ impl DarklyEngine {
     /// Snapshot the live GPU selection into a fresh canvas-sized R8 texture
     /// and return a paint-pipeline bind group sampling it. The returned
     /// bind group keeps the underlying texture alive for its lifetime, so
-    /// it remains valid after `gpu_selection.clear()` zeroes the live
-    /// selection at the end of `setup_transform`.
+    /// it remains valid after the selection clear zeroes the live selection
+    /// at the end of `setup_transform`.
     fn snapshot_selection_for_clear(&self) -> wgpu::BindGroup {
-        let canvas_w = self.gpu_selection.width;
-        let canvas_h = self.gpu_selection.height;
+        let canvas_w = self.doc.width;
+        let canvas_h = self.doc.height;
         let snap_tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transform-clear-sel-snap"),
             size: wgpu::Extent3d {
@@ -456,10 +466,15 @@ impl DarklyEngine {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        let live_tex = self
+            .compositor
+            .selection_state()
+            .expect("snapshot_selection_for_clear: selection_state allocated")
+            .texture();
         self.gpu.encode("transform-clear-sel-snap", |encoder| {
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: self.gpu_selection.texture(),
+                    texture: live_tex,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,

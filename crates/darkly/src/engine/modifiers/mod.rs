@@ -6,3 +6,4 @@
 //! engine helpers and don't need a per-kind file.
 
 pub mod mask;
+pub mod selection;

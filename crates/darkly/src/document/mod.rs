@@ -3,10 +3,10 @@ pub mod modifiers;
 
 pub use modifier::{Modifier, ModifierKind, ModifierRegistration};
 pub use modifiers::mask::MaskModifier;
+pub use modifiers::selection::{SelectionCpuCache, SelectionModifier};
 
 use crate::coord::CanvasRect;
 use crate::layer::*;
-use crate::tile::AlphaMask;
 
 pub enum SelectionMode {
     Replace,
@@ -31,11 +31,14 @@ pub struct Document {
     pub root: LayerGroup,
     pub width: u32,
     pub height: u32,
-    /// CPU-side selection mask. Kept on CPU because selection operations
-    /// (boolean add/subtract/intersect, contour extraction for marching ants,
-    /// feathering, SDF rasterization) are infrequent, irregular-shaped, and
-    /// need random-access CPU reads that don't justify a GPU round-trip.
-    pub selection: Option<AlphaMask>,
+    /// Global selection — a typed [`Modifier`] attached at the document root
+    /// (rather than on a host's `modifiers` list). `None` until the engine
+    /// allocates one; once allocated it stays for the document's lifetime,
+    /// with `common.visible` toggling whether ops respect the selection.
+    /// The R8 pixel data lives in the compositor's selection sub-system; the
+    /// document model owns id, name, visibility, lock, bounds, and the CPU
+    /// readback cache via [`SelectionModifier`].
+    pub selection: Option<Modifier>,
     next_id: LayerId,
 }
 
@@ -606,28 +609,39 @@ impl Document {
         }
     }
 
-    /// Apply a shape mask to the document selection using the given mode.
-    pub fn apply_selection(&mut self, shape_mask: AlphaMask, mode: SelectionMode) {
-        match mode {
-            SelectionMode::Replace => {
-                self.selection = Some(shape_mask);
-            }
-            SelectionMode::Add => match &mut self.selection {
-                Some(sel) => sel.boolean_add(&shape_mask),
-                None => self.selection = Some(shape_mask),
-            },
-            SelectionMode::Subtract => {
-                if let Some(sel) = &mut self.selection {
-                    sel.boolean_subtract(&shape_mask);
-                }
-            }
-            SelectionMode::Intersect => {
-                // intersect with nothing = nothing
-                if let Some(sel) = &mut self.selection {
-                    sel.boolean_intersect(&shape_mask);
-                }
-            }
+    /// Allocate the global selection modifier if not already present, sized
+    /// to the canvas. Idempotent — returns the modifier id either way. The
+    /// caller is responsible for matching GPU state in the compositor.
+    pub fn ensure_selection_modifier(&mut self) -> LayerId {
+        if let Some(s) = self.selection.as_ref() {
+            return s.id;
         }
+        let id = self.alloc_id();
+        let bounds = CanvasRect::from_xywh(0, 0, self.width, self.height);
+        let modifier = Modifier {
+            id,
+            common: NodeCommon::new("Selection".to_string()),
+            kind: ModifierKind::selection_with_bounds(bounds),
+        };
+        // Per the plan §4a, the selection lives "at the document root rather
+        // than on a host's `modifiers` list" — store it on the doc directly.
+        // Default `visible = false` mirrors today's "always allocated, .active
+        // toggles whether ops respect it" semantics for an empty selection.
+        let mut modifier = modifier;
+        modifier.common.visible = false;
+        self.selection = Some(modifier);
+        id
+    }
+
+    /// Selection modifier id, if allocated.
+    pub fn selection_id(&self) -> Option<LayerId> {
+        self.selection.as_ref().map(|m| m.id)
+    }
+
+    /// True when the selection modifier is allocated AND its `common.visible`
+    /// flag is set — equivalent to today's `gpu_selection.active`.
+    pub fn selection_active(&self) -> bool {
+        self.selection.as_ref().is_some_and(|m| m.common.visible)
     }
 }
 
