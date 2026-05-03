@@ -191,9 +191,8 @@ pub struct DarklyEngine {
     pub(crate) active_stroke_layer: Option<u64>,
     /// Session-level "isolate this node" flag. When set, the renderer shows
     /// only this node's contribution (e.g. an R8 mask is rendered grayscale,
-    /// a layer is rendered without siblings/parents). Replaces the previous
-    /// `show_mask` per-layer boolean — works for any node kind, including
-    /// future filter modifiers.
+    /// a layer is rendered without siblings/parents). Universal across node
+    /// kinds — works for any future filter / adjustment modifier too.
     pub(crate) isolated_node: Option<u64>,
     pub(crate) view_transform: ViewTransform,
     /// Persistent marching ants overlay (regenerated when selection changes).

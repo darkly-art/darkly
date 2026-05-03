@@ -569,8 +569,12 @@ impl DarklyEngine {
         }
 
         // --- Mask modifiers: ensure the R8 GPU texture for any host with a mask ---
+        // Also ensures the per-host passthrough snapshot+lerp resource so the
+        // group composite branch can engage on the next frame; both are
+        // idempotent and keyed against existence in the compositor's pools.
         struct MaskInfo {
             modifier_id: u64,
+            host_id: u64,
             bounds: crate::coord::CanvasRect,
         }
         let mask_infos: Vec<MaskInfo> = self
@@ -579,14 +583,15 @@ impl DarklyEngine {
             .into_iter()
             .filter_map(|m| {
                 let buf = m.pixels()?;
-                if buf.format == wgpu::TextureFormat::R8Unorm {
-                    Some(MaskInfo {
-                        modifier_id: m.id,
-                        bounds: buf.bounds,
-                    })
-                } else {
-                    None
+                if buf.format != wgpu::TextureFormat::R8Unorm {
+                    return None;
                 }
+                let host_id = self.doc.find_modifier_host(m.id).map(|h| h.id())?;
+                Some(MaskInfo {
+                    modifier_id: m.id,
+                    host_id,
+                    bounds: buf.bounds,
+                })
             })
             .collect();
         for info in mask_infos {
@@ -599,6 +604,8 @@ impl DarklyEngine {
                     info.bounds,
                 );
             }
+            self.compositor
+                .ensure_passthrough_mask_state(&self.gpu.device, info.host_id);
         }
 
         // --- Non-passthrough groups: ensure group state + uniforms ---

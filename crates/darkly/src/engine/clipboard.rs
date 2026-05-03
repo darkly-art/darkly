@@ -46,21 +46,15 @@ impl DarklyEngine {
     /// Both extraction and erase use GPU float math on the same selection
     /// texture, guaranteeing `extracted + remaining == original`.
     pub(crate) fn start_copy_readback(&mut self, layer_id: u64, is_cut: bool) {
-        let is_mask = self.is_editing_mask(layer_id);
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        // Determine format and check texture exists.
-        let format = if is_mask {
-            if self.compositor.node_texture(layer_id).is_none() {
-                return;
-            }
-            wgpu::TextureFormat::R8Unorm
-        } else {
-            if self.compositor.node_texture(layer_id).is_none() {
-                return;
-            }
-            wgpu::TextureFormat::Rgba8Unorm
+        // Determine format from the unified node-texture pool — both raster
+        // (RGBA8) and mask modifier (R8) targets resolve through the same
+        // call. Caller's id alone selects the surface; format follows.
+        let format = match self.compositor.node_texture(layer_id) {
+            Some(t) => t.format,
+            None => return,
         };
 
         // Compute copy region from selection bounds (or full canvas).
@@ -81,8 +75,7 @@ impl DarklyEngine {
 
         // Resolve the node's CanvasFrame once for both the cut undo save
         // below and the matching commit further down. Format dispatch lives
-        // behind the unified node-texture pool — `is_mask` here only drives
-        // the format the readback was built against.
+        // behind the unified node-texture pool.
         let target_frame = self
             .compositor
             .node_texture(layer_id)
@@ -154,11 +147,7 @@ impl DarklyEngine {
             );
 
             // Get texture references before entering the encode closure.
-            let layer_tex = if is_mask {
-                &self.compositor.node_texture(layer_id).unwrap().texture
-            } else {
-                &self.compositor.node_texture(layer_id).unwrap().texture
-            };
+            let layer_tex = &self.compositor.node_texture(layer_id).unwrap().texture;
             let sel_tex = self.gpu_selection.texture();
 
             // Compute overlap for selection crop (selection and layer are same canvas size).
@@ -255,7 +244,6 @@ impl DarklyEngine {
                     format,
                     [0, 0, rw, rh],
                 );
-                let _ = is_mask;
                 self.readbacks.submit(
                     request,
                     ReadbackContext::Copy {
@@ -302,7 +290,6 @@ impl DarklyEngine {
                 self.gpu_clear_layer(layer_id);
             }
         }
-        let _ = is_mask;
     }
 
     /// Determine the copy region from the selection (or full canvas).

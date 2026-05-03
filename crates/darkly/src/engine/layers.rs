@@ -68,6 +68,21 @@ impl DarklyEngine {
         }
     }
 
+    /// Returns the pixel-space bounds of any pixel-bearing node id (raster
+    /// layer or mask modifier). Generalization of [`Self::layer_bounds`] —
+    /// when callers hold a node id without knowing its kind, this resolves
+    /// against the document's unified `pixels()` accessor. Returns `None`
+    /// for groups (no pixel buffer) or unknown ids.
+    pub fn node_pixel_bounds(&self, node_id: u64) -> Option<crate::coord::CanvasRect> {
+        if let Some(rect) = self.layer_bounds(node_id) {
+            return Some(rect);
+        }
+        self.doc
+            .find_modifier(node_id)
+            .and_then(|m| m.pixels())
+            .map(|p| p.bounds)
+    }
+
     pub fn remove_layer(&mut self, layer_id: u64) -> Result<(), String> {
         if self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());
@@ -189,8 +204,8 @@ impl DarklyEngine {
     }
 
     /// Set the session-level "isolate this node" flag. When `Some(id)`, the
-    /// renderer shows only that node's contribution (e.g. a mask renders
-    /// grayscale on canvas). Replaces the previous per-layer `show_mask`.
+    /// renderer shows only that node's contribution (e.g. an R8 modifier
+    /// renders as grayscale on canvas).
     pub fn set_isolated_node(&mut self, id: Option<u64>) {
         self.isolated_node = id;
         self.compositor.mark_dirty();
@@ -220,9 +235,8 @@ impl DarklyEngine {
     }
 
     /// Push the current opacity/blend_mode of a layer or group into the
-    /// compositor's uniform buffer for that node. Group isolation (formerly
-    /// `show_mask`) is now driven by `engine.isolated_node` and reflected
-    /// uniformly across node kinds.
+    /// compositor's uniform buffer for that node. Group isolation is driven
+    /// by `engine.isolated_node` and reflected uniformly across node kinds.
     fn refresh_blend_uniforms(&mut self, layer_id: u64) {
         match self.doc.find_node(layer_id) {
             Some(LayerNode::Layer(Layer::Raster(r))) => {

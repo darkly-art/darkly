@@ -47,6 +47,13 @@ impl DarklyEngine {
             bounds,
         );
 
+        // Per-host snapshot+lerp resource for the passthrough-group-with-mask
+        // path. Idempotent across both raster and group hosts; only the
+        // group composite path consumes it, but the engine doesn't need to
+        // branch — the compositor reads it lazily.
+        self.compositor
+            .ensure_passthrough_mask_state(&self.gpu.device, host_id);
+
         // If a selection is active, seed the mask pixels from the selection
         // texture (R8 → R8 full-canvas copy).
         if self.gpu_selection.active {
@@ -133,6 +140,7 @@ impl DarklyEngine {
             self.isolated_node = None;
         }
         self.compositor.dispose_node_texture(mask_id);
+        self.compositor.dispose_passthrough_mask_state(host_id);
         self.compositor.mark_dirty();
 
         let mut actions: Vec<Box<dyn UndoAction>> = Vec::new();
@@ -190,6 +198,28 @@ impl DarklyEngine {
             None
         };
 
+        // Save the mask's R8 pixels too. The modifier is removed at the end
+        // of apply_mask; without this save, undo gets back the modifier shell
+        // with a fresh (all-white) mask texture and the user's painting on
+        // the mask is lost forever. The actual GpuRegionAction is committed
+        // and pushed AFTER `commit_region` for the host below — together
+        // with the ModifierRemoveAction — so undo replays them in the right
+        // order: re-attach modifier → restore mask pixels → restore host alpha.
+        let mask_frame = self
+            .compositor
+            .node_texture(mask_id)
+            .map(|t| t.canvas_frame());
+        let mask_format = wgpu::TextureFormat::R8Unorm;
+        let mask_snap = if let Some(frame) = mask_frame {
+            let rect = frame.canvas_extent;
+            Some(self.gpu.encode_ret("apply-mask-save-mask", |encoder| {
+                self.region_store
+                    .save_region(encoder, &frame, mask_format, rect)
+            }))
+        } else {
+            None
+        };
+
         // Create a bind group from the mask GPU texture for the multiply pass.
         let mask_bind_group = self.compositor.node_texture(mask_id).map(|mask_tex| {
             let sampler = self.gpu.device.create_sampler(&wgpu::SamplerDescriptor {
@@ -222,13 +252,28 @@ impl DarklyEngine {
             });
         }
 
-        // Commit undo region for the host's pixel changes.
+        // Commit undo region for the host's pixel changes (pushed first so
+        // it pops last — restores host alpha after the modifier and its
+        // pixels have been brought back).
         if let (Some(snap), Some(frame)) = (snap, layer_frame) {
             let rect = frame.canvas_extent;
             self.gpu.encode("apply-mask-undo", |encoder| {
                 let entry = self
                     .region_store
                     .commit_region(encoder, host_id, &frame, &snap, rect);
+                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            });
+        }
+
+        // Commit undo region for the mask pixels (pushed second so it pops
+        // after the modifier is reattached, into the freshly-recreated
+        // mask texture).
+        if let (Some(snap), Some(frame)) = (mask_snap, mask_frame) {
+            let rect = frame.canvas_extent;
+            self.gpu.encode("apply-mask-undo-mask", |encoder| {
+                let entry = self
+                    .region_store
+                    .commit_region(encoder, mask_id, &frame, &snap, rect);
                 self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
             });
         }
@@ -240,9 +285,13 @@ impl DarklyEngine {
         // Apply baked the mask into the layer's alpha — layer pixels changed.
         self.compositor.mark_node_pixels_dirty(host_id);
 
-        // Remove the modifier from the document and its GPU texture.
+        // Remove the modifier from the document and its GPU texture. The
+        // ModifierRemoveAction is pushed last so undo pops it first — the
+        // re-attach happens before sync_compositor_layers re-allocates the
+        // R8 texture, after which the pending mask-region restore can land.
         let detached = self.doc.remove_modifier(mask_id);
         self.compositor.dispose_node_texture(mask_id);
+        self.compositor.dispose_passthrough_mask_state(host_id);
         if let Some(modifier) = detached {
             self.undo_stack
                 .push(Box::new(ModifierRemoveAction::new(modifier, host_id)));

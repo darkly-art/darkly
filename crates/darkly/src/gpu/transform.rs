@@ -127,10 +127,10 @@ pub struct FloatingContent {
     pub source_height: u32,
     /// Current affine transform matrix.
     pub matrix: Affine2D,
-    /// Target layer.
+    /// Target node id. Resolves to either a raster layer or a mask modifier;
+    /// the texture's own format (looked up via `compositor.node_texture(...)`)
+    /// distinguishes the two — no sidecar boolean needed.
     pub target_layer: LayerId,
-    /// Whether the target is a mask (vs layer tiles).
-    pub target_is_mask: bool,
     /// Determines commit/cancel behavior.
     pub mode: FloatingMode,
 }
@@ -195,9 +195,10 @@ pub struct TransformBlendUniforms {
     pub canvas_size: [f32; 2],
     /// Opacity (0.0–1.0).
     pub opacity: f32,
-    /// Repurposed as `is_mask` flag by the commit shader (0.0 = RGBA, 1.0 = mask).
-    /// Unused by the preview shader.
-    pub _pad: f32,
+    /// Format flag for the commit shader (0.0 = RGBA, 1.0 = R8). The shader
+    /// uses this to pick an output channel layout, not to express any
+    /// mask-vs-layer concept. Unused by the preview shader.
+    pub is_r8: f32,
     /// Target layer pixel offset in canvas coords. Used by the preview shader
     /// to sample the target layer's mask at the correct UV. Ignored by the
     /// commit shader.
@@ -218,7 +219,6 @@ pub struct TransformState {
     /// Bind group for commit pass (source + sampler + uniforms only).
     pub commit_bind_group: wgpu::BindGroup,
     pub target_layer: LayerId,
-    pub target_is_mask: bool,
 }
 
 /// GPU pipeline + optional active floating content.
@@ -511,7 +511,6 @@ impl TransformPass {
         layer_offset: (i32, i32),
         layer_size: (u32, u32),
         target_layer: LayerId,
-        target_is_mask: bool,
     ) {
         // Source texture is the premultiplied destination for the floating
         // shaders. We upload the caller's straight-alpha RGBA into a temp
@@ -621,7 +620,7 @@ impl TransformPass {
             target_size: [canvas_width as f32, canvas_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
-            _pad: 0.0,
+            is_r8: 0.0,
             layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
             layer_size: [layer_size.0 as f32, layer_size.1 as f32],
         };
@@ -692,7 +691,6 @@ impl TransformPass {
             cache_source_bind_group: cache_bg,
             commit_bind_group,
             target_layer,
-            target_is_mask,
         });
     }
 
@@ -715,20 +713,17 @@ impl TransformPass {
         canvas_width: u32,
         canvas_height: u32,
         target_layer: LayerId,
-        target_is_mask: bool,
+        target_format: wgpu::TextureFormat,
     ) {
         let layer_texture = &layer.texture;
         let layer_offset = (layer.offset_x, layer.offset_y);
         let layer_dims = (layer.width, layer.height);
-        let src_format = if target_is_mask {
-            wgpu::TextureFormat::R8Unorm
-        } else {
-            wgpu::TextureFormat::Rgba8Unorm
-        };
+        let is_r8 = target_format == wgpu::TextureFormat::R8Unorm;
 
-        // The source texture is always RGBA8 (the transform shader expects RGBA).
-        // For masks (R8), we create an RGBA8 texture and copy the R8 channel.
-        // The transform commit shader handles the RGBA→R8 conversion.
+        // Source texture matches the target's format. RGBA8 sources are
+        // premultiplied by an extra render pass (straight-alpha source data
+        // requires it for correct bilinear interpolation in the transform
+        // shaders). R8 sources skip premultiply — single-channel, no alpha.
         let source_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transform-source-gpu"),
             size: wgpu::Extent3d {
@@ -739,7 +734,7 @@ impl TransformPass {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: src_format,
+            format: target_format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -776,7 +771,7 @@ impl TransformPass {
             depth_or_array_layers: 1,
         };
 
-        if !target_is_mask && copy_w > 0 && copy_h > 0 {
+        if !is_r8 && copy_w > 0 && copy_h > 0 {
             // RGBA: copy layer → temp, then premultiply render to source.
             // Straight-alpha layer data must be converted to premultiplied alpha
             // for correct bilinear interpolation in the transform shaders.
@@ -874,7 +869,7 @@ impl TransformPass {
             target_size: [canvas_width as f32, canvas_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
-            _pad: 0.0,
+            is_r8: 0.0,
             layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
             layer_size: [layer_dims.0 as f32, layer_dims.1 as f32],
         };
@@ -944,7 +939,6 @@ impl TransformPass {
             cache_source_bind_group: cache_bg,
             commit_bind_group,
             target_layer,
-            target_is_mask,
         });
     }
 
@@ -978,7 +972,7 @@ impl TransformPass {
             target_size: [canvas_width as f32, canvas_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
-            _pad: 0.0,
+            is_r8: 0.0,
             layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
             layer_size: [layer_size.0 as f32, layer_size.1 as f32],
         };
@@ -1020,14 +1014,15 @@ impl TransformPass {
         };
 
         let inv = affine_inverse(matrix).unwrap_or(IDENTITY);
-        let is_mask = if target_format == wgpu::TextureFormat::R8Unorm {
+        let is_r8 = if target_format == wgpu::TextureFormat::R8Unorm {
             1.0
         } else {
             0.0
         };
 
-        // Reuse the preview uniform struct — _pad becomes is_mask for commit.
-        // layer_offset/layer_size are unused by the commit shader.
+        // Reuse the preview uniform struct — `is_r8` selects the commit
+        // shader's output channel layout. layer_offset/layer_size are unused
+        // by the commit shader.
         let uniforms = TransformBlendUniforms {
             inv_row0: [inv[0], inv[1], inv[2], 0.0],
             inv_row1: [inv[3], inv[4], inv[5], 0.0],
@@ -1037,7 +1032,7 @@ impl TransformPass {
             target_size: [target_width as f32, target_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
-            _pad: is_mask,
+            is_r8,
             layer_offset: [0.0, 0.0],
             layer_size: [0.0, 0.0],
         };

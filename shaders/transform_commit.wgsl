@@ -38,8 +38,8 @@ struct Uniforms {
     // Full document canvas dimensions in pixels.
     canvas_size: vec2f,
     opacity: f32,
-    // 0.0 = RGBA mode, 1.0 = mask mode (luminance conversion)
-    is_mask: f32,
+    // 0.0 = RGBA mode, 1.0 = R8 mode (luminance conversion to single channel)
+    is_r8: f32,
     // Unused by commit — preview uses these for mask UV mapping. Kept here
     // so the uniform struct layout matches between preview and commit paths.
     _layer_offset: vec2f,
@@ -85,9 +85,9 @@ struct Uniforms {
     // Porter-Duff source-over (premultiplied fg, straight bg → straight output).
     let blended = source_over(fg_pre, fg_a, bg);
 
-    if (u.is_mask > 0.5) {
-        // Mask mode: convert RGB to luminance, output as single-channel value.
-        // For R8 targets, only the R channel is written.
+    if (u.is_r8 > 0.5) {
+        // R8 target: convert RGB to luminance, output as single-channel value.
+        // Only the R channel is written.
         let lum = dot(blended.rgb, vec3f(0.2126, 0.7152, 0.0722));
         return vec4f(lum, lum, lum, blended.a);
     } else {

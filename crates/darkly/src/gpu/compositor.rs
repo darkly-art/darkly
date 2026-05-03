@@ -825,8 +825,9 @@ impl Compositor {
             return;
         };
         let r_channel = tex.format == wgpu::TextureFormat::R8Unorm;
-        self.content_bounds
-            .request(device, queue, &tex.view, tex.width, tex.height, r_channel, node_id);
+        self.content_bounds.request(
+            device, queue, &tex.view, tex.width, tex.height, r_channel, node_id,
+        );
     }
 
     /// Poll pending content bounds computations. Call once per frame.
@@ -879,28 +880,13 @@ impl Compositor {
                 });
                 self.node_textures.insert(node_id, mask_tex);
                 self.mask_bind_groups.insert(node_id, mask_bg);
-                if !self.passthrough_mask_state.contains_key(&node_id) {
-                    let (snapshot, snapshot_view) = Self::make_accum_texture(
-                        device,
-                        self.padded_width,
-                        self.padded_height,
-                        &format!("pt-snapshot-{node_id}"),
-                    );
-                    let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some(&format!("pt-lerp-uniforms-{node_id}")),
-                        size: 4,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                        mapped_at_creation: false,
-                    });
-                    self.passthrough_mask_state.insert(
-                        node_id,
-                        PassthroughMaskState {
-                            snapshot,
-                            snapshot_view,
-                            uniform_buf,
-                        },
-                    );
-                }
+                // PassthroughMaskState is a per-host-group resource (the
+                // snapshot is sized to the parent accumulator). It's not
+                // owned by the mask texture itself, so creation lives behind
+                // [`Self::ensure_passthrough_mask_state`] which the engine
+                // calls when attaching a mask to a host. Keep the allocation
+                // out of the texture-creation path so the keying is by host,
+                // not by mask modifier id.
             }
             wgpu::TextureFormat::Rgba8Unorm => {
                 self.ensure_raster_layer(device, queue, node_id, bounds);
@@ -909,14 +895,52 @@ impl Compositor {
         }
     }
 
+    /// Allocate the snapshot+uniform pair the passthrough-group mask path
+    /// needs, keyed by **host** id (the group whose composited output gets
+    /// snapshot-then-lerped against its mask). Idempotent. The mask texture
+    /// itself lives in the shared node-texture pool keyed by mask modifier
+    /// id; this resource is a per-host concern, not per-modifier — there's
+    /// one snapshot buffer per group regardless of how many modifiers attach.
+    pub fn ensure_passthrough_mask_state(&mut self, device: &wgpu::Device, host_id: LayerId) {
+        if self.passthrough_mask_state.contains_key(&host_id) {
+            return;
+        }
+        let (snapshot, snapshot_view) = Self::make_accum_texture(
+            device,
+            self.padded_width,
+            self.padded_height,
+            &format!("pt-snapshot-{host_id}"),
+        );
+        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("pt-lerp-uniforms-{host_id}")),
+            size: 4,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.passthrough_mask_state.insert(
+            host_id,
+            PassthroughMaskState {
+                snapshot,
+                snapshot_view,
+                uniform_buf,
+            },
+        );
+    }
+
+    /// Drop the passthrough-group mask snapshot for a host id. Mirrors
+    /// [`Self::ensure_passthrough_mask_state`].
+    pub fn dispose_passthrough_mask_state(&mut self, host_id: LayerId) {
+        self.passthrough_mask_state.remove(&host_id);
+    }
+
     /// Drop all GPU state associated with a node id (texture, bind groups,
-    /// dirty bits, passthrough state). Use when a node is permanently
-    /// removed — e.g. layer delete or modifier removal.
+    /// dirty bits). Use when a node is permanently removed — e.g. layer
+    /// delete or modifier removal. Per-host passthrough state is owned by
+    /// its host id, so it's not touched here.
     pub fn dispose_node_texture(&mut self, node_id: LayerId) {
         self.node_textures.remove(&node_id);
         self.mask_bind_groups.remove(&node_id);
         self.raster_cache.remove(&node_id);
-        self.passthrough_mask_state.remove(&node_id);
         self.dirty_node_pixels.remove(&node_id);
         self.mark_dirty();
     }
@@ -1184,9 +1208,8 @@ impl Compositor {
         source_width: u32,
         source_height: u32,
         target_layer: LayerId,
-        target_is_mask: bool,
     ) {
-        let (layer_offset, layer_size) = self.target_layer_bounds(target_layer, target_is_mask);
+        let (layer_offset, layer_size) = self.target_layer_bounds(target_layer);
         let root = self
             .group_state
             .get(&ROOT_ID)
@@ -1206,34 +1229,24 @@ impl Compositor {
             layer_offset,
             layer_size,
             target_layer,
-            target_is_mask,
         );
         self.mark_dirty();
     }
 
-    /// Look up the target layer's canvas-space offset and texture dimensions.
+    /// Look up the target node's canvas-space offset and texture dimensions.
     /// Used to pin the floating preview shader's mask UV mapping to the
-    /// target layer's bounds. Falls back to (0,0) / canvas-size if the layer
-    /// texture isn't found, which keeps the preview sane during edge cases.
-    fn target_layer_bounds(
-        &self,
-        target_layer: LayerId,
-        target_is_mask: bool,
-    ) -> ((i32, i32), (u32, u32)) {
-        let lookup = if target_is_mask {
-            self.node_textures.get(&target_layer)
-        } else {
-            self.node_textures.get(&target_layer)
-        };
-        match lookup {
+    /// target's bounds. Falls back to (0,0) / canvas-size if the node texture
+    /// isn't found, which keeps the preview sane during edge cases.
+    fn target_layer_bounds(&self, target_layer: LayerId) -> ((i32, i32), (u32, u32)) {
+        match self.node_textures.get(&target_layer) {
             Some(t) => ((t.offset_x, t.offset_y), (t.width, t.height)),
             None => ((0, 0), (self.canvas_width, self.canvas_height)),
         }
     }
 
-    /// Set floating content by copying directly from a layer's GPU texture.
-    /// GPU→GPU copy — no CPU tiles involved. Looks up the texture from
-    /// `node_textures` / `node_textures` by `target_layer` and `target_is_mask`.
+    /// Set floating content by copying directly from a node's GPU texture.
+    /// GPU→GPU copy — no CPU tiles involved. Format dispatch (R8 mask vs RGBA
+    /// layer) is driven by the texture's own format from the unified node pool.
     pub fn set_floating_content_from_gpu(
         &mut self,
         device: &wgpu::Device,
@@ -1243,19 +1256,12 @@ impl Compositor {
         source_width: u32,
         source_height: u32,
         target_layer: LayerId,
-        target_is_mask: bool,
     ) {
-        let layer = if target_is_mask {
-            match self.node_textures.get(&target_layer) {
-                Some(t) => t,
-                None => return,
-            }
-        } else {
-            match self.node_textures.get(&target_layer) {
-                Some(t) => t,
-                None => return,
-            }
+        let layer = match self.node_textures.get(&target_layer) {
+            Some(t) => t,
+            None => return,
         };
+        let target_format = layer.format;
         let root = self
             .group_state
             .get(&ROOT_ID)
@@ -1274,17 +1280,17 @@ impl Compositor {
             self.padded_width,
             self.padded_height,
             target_layer,
-            target_is_mask,
+            target_format,
         );
         self.mark_dirty();
     }
 
-    /// Public read of the target layer's bounds. Used by the engine wrapper
+    /// Public read of the target node's bounds. Used by the engine wrapper
     /// for `update_floating_matrix` so the preview's mask UV stays correct
-    /// per frame in case the layer is resized mid-transform.
+    /// per frame in case the node is resized mid-transform.
     pub fn floating_target_bounds(&self) -> Option<((i32, i32), (u32, u32))> {
         let active = self.transform_pass.active.as_ref()?;
-        Some(self.target_layer_bounds(active.target_layer, active.target_is_mask))
+        Some(self.target_layer_bounds(active.target_layer))
     }
 
     /// Update the floating content's affine transform matrix for real-time preview.
@@ -1325,38 +1331,18 @@ impl Compositor {
         source_width: u32,
         source_height: u32,
     ) {
-        let (layer_id, is_mask) = match &self.transform_pass.active {
-            Some(s) => (s.target_layer, s.target_is_mask),
+        let layer_id = match &self.transform_pass.active {
+            Some(s) => s.target_layer,
             None => return,
         };
 
-        let (texture, view, format, target_w, target_h, target_off_x, target_off_y) = if is_mask {
+        let (texture, view, format, target_w, target_h, target_off_x, target_off_y) =
             match self.node_textures.get(&layer_id) {
                 Some(t) => (
-                    &t.texture,
-                    &t.view,
-                    wgpu::TextureFormat::R8Unorm,
-                    t.width,
-                    t.height,
-                    t.offset_x,
-                    t.offset_y,
+                    &t.texture, &t.view, t.format, t.width, t.height, t.offset_x, t.offset_y,
                 ),
                 None => return,
-            }
-        } else {
-            match self.node_textures.get(&layer_id) {
-                Some(t) => (
-                    &t.texture,
-                    &t.view,
-                    wgpu::TextureFormat::Rgba8Unorm,
-                    t.width,
-                    t.height,
-                    t.offset_x,
-                    t.offset_y,
-                ),
-                None => return,
-            }
-        };
+            };
 
         self.transform_pass.commit_to_texture(
             device,
@@ -1612,7 +1598,7 @@ impl Compositor {
                         let gs = &self.group_state[&parent_group];
                         // Resolve mask via the raster's modifier list. The
                         // structural detection lives at the call site — the
-                        // outer compositor never branches on `is_mask`.
+                        // outer compositor never branches on a node's kind.
                         let mask_bg = raster
                             .modifiers
                             .mask()
@@ -1656,12 +1642,19 @@ impl Compositor {
                         gs.current_accum = dst;
 
                         let ts = self.transform_pass.active.as_ref().unwrap();
-                        // When transforming a mask itself there is no outer
-                        // "mask of the mask" to apply — bind the 1×1 white
-                        // default so the preview shows the raw mask content.
-                        // Otherwise apply the target raster's mask modifier,
-                        // matching the regular blend pass.
-                        let preview_mask_bg = if ts.target_is_mask {
+                        // When transforming an R8 target (a mask itself) there
+                        // is no outer "mask of the mask" to apply — bind the
+                        // 1×1 white default so the preview shows the raw mask
+                        // content. Otherwise apply the target raster's mask
+                        // modifier, matching the regular blend pass. The
+                        // distinction is read off the target texture's format,
+                        // not a sidecar boolean.
+                        let target_is_r8 = self
+                            .node_textures
+                            .get(&ts.target_layer)
+                            .map(|t| t.format == wgpu::TextureFormat::R8Unorm)
+                            .unwrap_or(false);
+                        let preview_mask_bg = if target_is_r8 {
                             &self.default_mask_bind_group
                         } else {
                             raster

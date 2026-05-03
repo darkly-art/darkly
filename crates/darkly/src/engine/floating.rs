@@ -57,13 +57,13 @@ impl DarklyEngine {
             None => return false,
         };
 
-        let target_is_mask = self.is_editing_mask(layer_id);
-
         let source_origin = (clip.offset_x, clip.offset_y);
         let source_width = clip.width;
         let source_height = clip.height;
 
-        // Upload flat RGBA data to GPU for preview.
+        // Upload flat RGBA data to GPU for preview. The target node's format
+        // is read off `compositor.node_texture(layer_id).format` inside the
+        // compositor — the engine never speaks the word "mask" here.
         self.compositor.set_floating_content(
             &self.gpu.device,
             &self.gpu.queue,
@@ -72,7 +72,6 @@ impl DarklyEngine {
             source_width,
             source_height,
             layer_id,
-            target_is_mask,
         );
 
         self.floating = Some(FloatingContent {
@@ -81,7 +80,6 @@ impl DarklyEngine {
             source_height,
             matrix: IDENTITY,
             target_layer: layer_id,
-            target_is_mask,
             mode: FloatingMode::Paste {
                 created_layer_id: None,
             },
@@ -139,7 +137,6 @@ impl DarklyEngine {
             width,
             height,
             new_id,
-            false,
         );
 
         self.floating = Some(FloatingContent {
@@ -148,7 +145,6 @@ impl DarklyEngine {
             source_height: height,
             matrix: IDENTITY,
             target_layer: new_id,
-            target_is_mask: false,
             mode: FloatingMode::Paste {
                 created_layer_id: Some(new_id),
             },
@@ -169,15 +165,11 @@ impl DarklyEngine {
     pub fn begin_transform(&mut self, layer_id: u64) -> bool {
         self.auto_commit_floating();
 
-        let target_is_mask = self.is_editing_mask(layer_id);
-
-        if target_is_mask {
-            // The active node is a mask modifier id — verify it exists as a
-            // mask in the document (and therefore has a `PixelBuffer`).
-            if self.doc.find_modifier(layer_id).is_none() {
-                return false;
-            }
-        } else if self.doc.layer(layer_id).is_none() {
+        // Active node may be either a raster layer or a mask modifier — both
+        // own a `PixelBuffer` and a node texture. The doc lookup just verifies
+        // the id resolves to one of those two; the rest of the flow uses the
+        // node id uniformly.
+        if self.doc.layer(layer_id).is_none() && self.doc.find_modifier(layer_id).is_none() {
             return false;
         }
 
@@ -219,7 +211,6 @@ impl DarklyEngine {
             }
 
             self.setup_transform(layer_id, (x, y), w, h);
-            let _ = target_is_mask;
             true
         } else {
             // No selection — use compositor content bounds.
@@ -240,11 +231,8 @@ impl DarklyEngine {
                 true
             } else {
                 // Bounds not yet computed — request async GPU compute.
-                self.compositor.request_content_bounds(
-                    &self.gpu.device,
-                    &self.gpu.queue,
-                    layer_id,
-                );
+                self.compositor
+                    .request_content_bounds(&self.gpu.device, &self.gpu.queue, layer_id);
                 self.pending_transform = Some(super::PendingTransform { node_id: layer_id });
                 false
             }
@@ -260,7 +248,6 @@ impl DarklyEngine {
         source_width: u32,
         source_height: u32,
     ) {
-        let target_is_mask = self.is_editing_mask(node_id);
         let layer_id = node_id;
         let format = self
             .compositor
@@ -332,7 +319,6 @@ impl DarklyEngine {
                 source_width,
                 source_height,
                 layer_id,
-                target_is_mask,
             );
         });
 
@@ -378,16 +364,11 @@ impl DarklyEngine {
 
             // Clear selected pixels on the layer using erase_with_selection
             // — same bind group we just snapshotted from, applied to the
-            // layer/mask target.
-            let layer_target = if target_is_mask {
-                self.compositor
-                    .node_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
-            } else {
-                self.compositor
-                    .node_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
-            };
+            // node target. Format dispatch is internal to GpuPaintTarget.
+            let layer_target = self
+                .compositor
+                .node_texture(layer_id)
+                .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h));
             if let Some(target) = layer_target {
                 self.gpu.encode("transform-clear-sel", |encoder| {
                     target.erase_with_selection(
@@ -404,15 +385,10 @@ impl DarklyEngine {
             }
         } else {
             // No selection — clear the layer-local source region on the layer.
-            let target = if target_is_mask {
-                self.compositor
-                    .node_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
-            } else {
-                self.compositor
-                    .node_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
-            };
+            let target = self
+                .compositor
+                .node_texture(layer_id)
+                .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h));
             if let Some(target) = target {
                 // clear_rect is canvas-space; the saved canvas rect is
                 // already canvas-aligned.
@@ -435,7 +411,6 @@ impl DarklyEngine {
             source_height,
             matrix: IDENTITY,
             target_layer: layer_id,
-            target_is_mask,
             // `cancel_snapshot` carries the pre-clear pixels at the
             // source rect (used by `cancel_floating` via
             // `restore_from_scratch`). `clear_shape` describes the shape
@@ -538,12 +513,13 @@ impl DarklyEngine {
         };
 
         let layer_id = fc.target_layer;
-        let is_mask = fc.target_is_mask;
-        let format = if is_mask {
-            wgpu::TextureFormat::R8Unorm
-        } else {
-            wgpu::TextureFormat::Rgba8Unorm
-        };
+        // Format comes from the unified node-texture pool. Both raster layer
+        // (RGBA8) and mask modifier (R8) targets resolve through the same call.
+        let format = self
+            .compositor
+            .node_texture(layer_id)
+            .map(|t| t.format)
+            .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
 
         // Compute tight affected rect = union(source bounds, transformed bounds),
         // clamped to canvas. This is in CANVAS coordinates.
@@ -595,15 +571,10 @@ impl DarklyEngine {
         // Translate the canvas-space affected rect into the target's
         // layer-local frame. This is the boundary that *would have* been
         // silently wrong before — the typed API forces the conversion.
-        let target_canvas_extent = if is_mask {
-            self.compositor
-                .node_texture(layer_id)
-                .map(|t| t.canvas_extent())
-        } else {
-            self.compositor
-                .node_texture(layer_id)
-                .map(|t| t.canvas_extent())
-        };
+        let target_canvas_extent = self
+            .compositor
+            .node_texture(layer_id)
+            .map(|t| t.canvas_extent());
         let affected_canvas_rect = match (affected_canvas, target_canvas_extent) {
             (Some(rect), Some(extent)) => match rect.intersect(extent) {
                 Some(c) => c,
@@ -637,15 +608,10 @@ impl DarklyEngine {
         // Paste mode never clears the layer, so the un-clear is skipped.
         // Pre-resolve the canvas extent (Copy) so we don't carry a borrow
         // of self.compositor across the closures below.
-        let layer_canvas_extent = if is_mask {
-            self.compositor
-                .node_texture(layer_id)
-                .map(|t| t.canvas_extent())
-        } else {
-            self.compositor
-                .node_texture(layer_id)
-                .map(|t| t.canvas_extent())
-        };
+        let layer_canvas_extent = self
+            .compositor
+            .node_texture(layer_id)
+            .map(|t| t.canvas_extent());
         let layer_canvas_extent = match layer_canvas_extent {
             Some(e) => e,
             None => {
@@ -657,17 +623,10 @@ impl DarklyEngine {
         // extending an outer borrow.
         macro_rules! layer_frame {
             () => {
-                if is_mask {
-                    self.compositor
-                        .node_texture(layer_id)
-                        .unwrap()
-                        .canvas_frame()
-                } else {
-                    self.compositor
-                        .node_texture(layer_id)
-                        .unwrap()
-                        .canvas_frame()
-                }
+                self.compositor
+                    .node_texture(layer_id)
+                    .unwrap()
+                    .canvas_frame()
             };
         }
         if let FloatingMode::Transform {
@@ -721,15 +680,10 @@ impl DarklyEngine {
                 ref clear_shape, ..
             } = fc.mode
             {
-                let target = if is_mask {
-                    self.compositor
-                        .node_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_node(t, self.doc.width, self.doc.height))
-                } else {
-                    self.compositor
-                        .node_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_node(t, self.doc.width, self.doc.height))
-                };
+                let target = self
+                    .compositor
+                    .node_texture(layer_id)
+                    .map(|t| GpuPaintTarget::from_node(t, self.doc.width, self.doc.height));
                 if let Some(target) = target {
                     match clear_shape {
                         ClearShape::Rect(rect) => {
@@ -809,15 +763,10 @@ impl DarklyEngine {
                 // commit are mutually exclusive on a given FloatingContent.
                 // The cancel path always sees the original setup_transform
                 // snapshot intact.
-                let layer_frame = if fc.target_is_mask {
-                    self.compositor
-                        .node_texture(fc.target_layer)
-                        .map(|t| t.canvas_frame())
-                } else {
-                    self.compositor
-                        .node_texture(fc.target_layer)
-                        .map(|t| t.canvas_frame())
-                };
+                let layer_frame = self
+                    .compositor
+                    .node_texture(fc.target_layer)
+                    .map(|t| t.canvas_frame());
                 if let Some(layer_frame) = layer_frame {
                     self.gpu.encode("cancel-restore", |encoder| {
                         self.region_store.restore_from_scratch(

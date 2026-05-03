@@ -155,7 +155,6 @@ fn transform_commit_translate() {
         (0, 0),
         (cw, ch),
         1,
-        false,
     );
 
     // Translate by (10, 10).
@@ -255,7 +254,6 @@ fn transform_commit_translate_undo() {
         (0, 0),
         (cw, ch),
         1,
-        false,
     );
 
     // Save pre-commit state.
@@ -366,7 +364,6 @@ fn transform_commit_rotate_90() {
         (0, 0),
         (cw, ch),
         1,
-        false,
     );
 
     // Rotate 90° CW: matrix [0, 1, 0, -1, 0, 5]
@@ -463,7 +460,6 @@ fn paste_commit_identity() {
         (0, 0),
         (cw, ch),
         1,
-        false,
     );
 
     // Commit with identity — pixels land at their original position.
@@ -550,7 +546,6 @@ fn paste_commit_undo() {
         (0, 0),
         (cw, ch),
         1,
-        false,
     );
 
     // Save pre-paste state.
@@ -664,7 +659,6 @@ fn commit_composites_over_existing() {
         (0, 0),
         (cw, ch),
         1,
-        false,
     );
 
     let mut enc = encoder(&device);
@@ -751,7 +745,6 @@ fn transform_commit_on_mask() {
         (0, 0),
         (cw, ch),
         1,
-        true, // target_is_mask = true
     );
 
     // Translate by (5, 5).
@@ -883,7 +876,6 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
         (0, 0),
         (cw, ch),
         1,
-        false,
     );
 
     let mut enc = encoder(&device);

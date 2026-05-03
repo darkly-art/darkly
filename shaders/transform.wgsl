@@ -34,7 +34,8 @@ struct Uniforms {
     // Full document canvas dimensions in pixels.
     canvas_size: vec2f,
     opacity: f32,
-    _pad: f32,
+    // Used only by the commit shader; the preview shader ignores it.
+    is_r8: f32,
     // Target layer offset & size in canvas pixels — used for sampling the
     // target layer's mask. The mask shares the layer's bounds.
     layer_offset: vec2f,

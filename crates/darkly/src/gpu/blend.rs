@@ -41,7 +41,7 @@ impl BlendPipelines {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
-                // binding 3: uniforms (opacity, blend_mode, show_mask)
+                // binding 3: uniforms (opacity, blend_mode, isolated)
                 wgpu::BindGroupLayoutEntry {
                     binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
