@@ -679,7 +679,7 @@ fn gpu_cpu_undo_interleaved() {
         Property::Opacity(0.5),
     )));
     if let Some(Layer::Raster(r)) = doc.layer_mut(layer_id) {
-        r.common.opacity = 0.5;
+        r.blend.opacity = 0.5;
     }
 
     // Undo #1: property change (CPU — no GPU work).
@@ -693,7 +693,7 @@ fn gpu_cpu_undo_interleaved() {
 
     if let Some(Layer::Raster(r)) = doc.layer(layer_id) {
         assert!(
-            (r.common.opacity - 1.0).abs() < f32::EPSILON,
+            (r.blend.opacity - 1.0).abs() < f32::EPSILON,
             "opacity should be restored to 1.0"
         );
     }
@@ -739,7 +739,7 @@ fn gpu_cpu_undo_interleaved() {
 
     if let Some(Layer::Raster(r)) = doc.layer(layer_id) {
         assert!(
-            (r.common.opacity - 0.5).abs() < f32::EPSILON,
+            (r.blend.opacity - 0.5).abs() < f32::EPSILON,
             "opacity should be 0.5 after redo"
         );
     }

@@ -837,28 +837,29 @@ impl Compositor {
         self.content_bounds.invalidate_all();
     }
 
-    /// Mark that a specific layer's pixel content (or its mask, if `is_mask`)
-    /// changed. Implies `mark_dirty()` and additionally records the layer in
-    /// the per-frame dirty set the engine drains to auto-queue thumbnail
-    /// readbacks. Use this *every* time a write encoder touches a layer or
-    /// mask texture, including ambiguous cases — the cost of an extra
-    /// readback is negligible vs. silently freezing a thumbnail.
-    pub fn mark_layer_pixels_dirty(&mut self, layer_id: LayerId, is_mask: bool) {
-        if is_mask {
-            self.dirty_mask_pixels.insert(layer_id);
+    /// Mark that a node's pixels changed. Works for raster layers and mask
+    /// modifiers — the format-specific dispatch lives behind the unified
+    /// node-texture pool, so callers don't need to know which kind they
+    /// have. Implies `mark_dirty()` and records the node in the per-frame
+    /// dirty set the engine drains to auto-queue thumbnail readbacks.
+    pub fn mark_node_pixels_dirty(&mut self, node_id: LayerId) {
+        if self.mask_textures.contains_key(&node_id) {
+            self.dirty_mask_pixels.insert(node_id);
         } else {
-            self.dirty_layer_pixels.insert(layer_id);
+            self.dirty_layer_pixels.insert(node_id);
         }
         self.mark_dirty();
     }
 
-    /// Drain and return the set of layer ids whose pixels (`.0`) or masks
-    /// (`.1`) were dirtied since the last call. The engine calls this each
-    /// `render()` to auto-queue thumbnail readbacks.
-    pub fn drain_dirty_pixels(&mut self) -> (Vec<LayerId>, Vec<LayerId>) {
-        let layers = self.dirty_layer_pixels.drain().collect();
-        let masks = self.dirty_mask_pixels.drain().collect();
-        (layers, masks)
+    /// Drain and return the set of node ids whose pixels were dirtied since
+    /// the last call. The engine calls this each `render()` to auto-queue
+    /// thumbnail readbacks. Both raster-layer and mask-modifier ids show up
+    /// in the same vec — callers disambiguate via the document's
+    /// `find_node` / `find_modifier` lookups.
+    pub fn drain_dirty_pixels(&mut self) -> Vec<LayerId> {
+        let mut out: Vec<LayerId> = self.dirty_layer_pixels.drain().collect();
+        out.extend(self.dirty_mask_pixels.drain());
+        out
     }
 
     /// Mark that only the present pass needs to re-run (view transform changed).
@@ -920,14 +921,98 @@ impl Compositor {
 
     // --- Paint Target Accessors (Phase 2: GPU brush) ---
 
-    /// Get a reference to a layer's GPU texture.
+    /// Look up a node's GPU texture by id. Works uniformly for raster layers
+    /// and mask modifiers — format and extent come from the texture's own
+    /// metadata. Returns `None` for groups (no pixels) and unknown ids.
+    pub fn node_texture(&self, node_id: LayerId) -> Option<&LayerTexture> {
+        self.layer_textures
+            .get(&node_id)
+            .or_else(|| self.mask_textures.get(&node_id))
+    }
+
+    /// Get a reference to a layer's GPU texture. Prefer [`node_texture`] in
+    /// new code — it's format-agnostic and resolves modifier ids too.
     pub fn layer_texture(&self, layer_id: LayerId) -> Option<&LayerTexture> {
         self.layer_textures.get(&layer_id)
     }
 
-    /// Get a reference to a layer's mask GPU texture.
-    pub fn mask_texture(&self, layer_id: LayerId) -> Option<&LayerTexture> {
-        self.mask_textures.get(&layer_id)
+    /// Get a reference to a host's mask GPU texture by host id. The mask
+    /// modifier's own id resolves through [`node_texture`]; this helper takes
+    /// the host id and looks up "the mask attached to this host" — but the
+    /// modifier id has to be resolved from the document by the caller. Today
+    /// this is still needed by passthrough-mask render code that's keyed by
+    /// host id; new code should prefer the modifier-id path.
+    pub fn mask_texture(&self, host_id: LayerId) -> Option<&LayerTexture> {
+        self.mask_textures.get(&host_id)
+    }
+
+    /// Allocate or replace a node's GPU texture. Format-driven — `R8Unorm`
+    /// allocates a mask-style (white-fill) texture; `Rgba8Unorm` allocates a
+    /// raster-style (zero-fill) texture. Existing texture for the same id is
+    /// replaced.
+    pub fn ensure_node_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        node_id: LayerId,
+        format: wgpu::TextureFormat,
+        bounds: crate::coord::CanvasRect,
+    ) {
+        match format {
+            wgpu::TextureFormat::R8Unorm => {
+                let mask_tex = LayerTexture::new_mask_with_extent(device, queue, bounds);
+                let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("mask-bg-{node_id}")),
+                    layout: &self.blend_pipelines.mask_bind_group_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&mask_tex.view),
+                    }],
+                });
+                self.mask_textures.insert(node_id, mask_tex);
+                self.mask_bind_groups.insert(node_id, mask_bg);
+                if !self.passthrough_mask_state.contains_key(&node_id) {
+                    let (snapshot, snapshot_view) = Self::make_accum_texture(
+                        device,
+                        self.padded_width,
+                        self.padded_height,
+                        &format!("pt-snapshot-{node_id}"),
+                    );
+                    let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(&format!("pt-lerp-uniforms-{node_id}")),
+                        size: 4,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.passthrough_mask_state.insert(
+                        node_id,
+                        PassthroughMaskState {
+                            snapshot,
+                            snapshot_view,
+                            uniform_buf,
+                        },
+                    );
+                }
+            }
+            wgpu::TextureFormat::Rgba8Unorm => {
+                self.ensure_raster_layer(device, queue, node_id, bounds);
+            }
+            other => panic!("ensure_node_texture: unsupported format {other:?}"),
+        }
+    }
+
+    /// Drop all GPU state associated with a node id (raster-layer texture,
+    /// mask-modifier texture, bind groups, dirty bits, passthrough state).
+    /// Use when a node is permanently removed.
+    pub fn dispose_node_texture(&mut self, node_id: LayerId) {
+        self.layer_textures.remove(&node_id);
+        self.mask_textures.remove(&node_id);
+        self.mask_bind_groups.remove(&node_id);
+        self.raster_cache.remove(&node_id);
+        self.passthrough_mask_state.remove(&node_id);
+        self.dirty_layer_pixels.remove(&node_id);
+        self.dirty_mask_pixels.remove(&node_id);
+        self.mark_dirty();
     }
 
     /// Drop all per-layer GPU state: layer texture, mask texture (if any),
@@ -952,17 +1037,11 @@ impl Compositor {
         self.mark_dirty();
     }
 
-    /// Number of per-layer GPU textures currently allocated. Test-only —
-    /// used by leak-cycle regression tests to confirm `dispose_layer`
-    /// reclaims state. Exposed unconditionally because integration tests
-    /// don't see `#[cfg(test)]` items.
-    pub fn test_layer_texture_count(&self) -> usize {
-        self.layer_textures.len()
-    }
-
-    /// Like `test_layer_texture_count` but for masks.
-    pub fn test_mask_texture_count(&self) -> usize {
-        self.mask_textures.len()
+    /// Total number of node textures (raster layers + mask modifiers)
+    /// currently allocated. Test-only — used by leak-cycle regression tests
+    /// to confirm `dispose_node_texture` reclaims state.
+    pub fn test_node_texture_count(&self) -> usize {
+        self.layer_textures.len() + self.mask_textures.len()
     }
 
     /// Canvas width in pixels (unpadded).
@@ -1575,7 +1654,7 @@ impl Compositor {
             label: Some("composite"),
         });
 
-        self.compose_group(&mut encoder, device, ROOT_ID, &doc.root.children, scissor);
+        self.compose_group(&mut encoder, device, ROOT_ID, &doc.root.children.0, scissor);
 
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -1730,7 +1809,15 @@ impl Compositor {
 
                     {
                         let gs = &self.group_state[&parent_group];
-                        let mask_bg = self.mask_bind_group(raster.id);
+                        // Resolve mask via the raster's modifier list. The
+                        // structural detection lives at the call site — the
+                        // outer compositor never branches on `is_mask`.
+                        let mask_bg = raster
+                            .modifiers
+                            .mask()
+                            .filter(|m| m.common.visible)
+                            .map(|m| self.mask_bind_group(m.id))
+                            .unwrap_or(&self.default_mask_bind_group);
                         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("blend-raster"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1771,12 +1858,17 @@ impl Compositor {
                         // When transforming a mask itself there is no outer
                         // "mask of the mask" to apply — bind the 1×1 white
                         // default so the preview shows the raw mask content.
-                        // Otherwise apply the target layer's mask, matching
-                        // the regular blend pass.
+                        // Otherwise apply the target raster's mask modifier,
+                        // matching the regular blend pass.
                         let preview_mask_bg = if ts.target_is_mask {
                             &self.default_mask_bind_group
                         } else {
-                            self.mask_bind_group(raster.id)
+                            raster
+                                .modifiers
+                                .mask()
+                                .filter(|m| m.common.visible)
+                                .map(|m| self.mask_bind_group(m.id))
+                                .unwrap_or(&self.default_mask_bind_group)
                         };
 
                         let gs = &self.group_state[&parent_group];
@@ -1803,13 +1895,16 @@ impl Compositor {
 
                 LayerNode::Group(g) => {
                     if g.passthrough {
-                        let has_active_mask = g.common.has_mask && g.common.mask_enabled;
+                        // Structural detection: a passthrough group with a
+                        // visible mask modifier triggers Photoshop-style
+                        // snapshot+lerp; otherwise it's pure passthrough.
+                        let has_active_mask = g
+                            .modifiers
+                            .mask()
+                            .map(|m| m.common.visible)
+                            .unwrap_or(false);
 
-                        if has_active_mask || g.common.show_mask {
-                            // Photoshop-style passthrough + mask:
-                            // 1. Snapshot parent accum before children.
-                            // 2. Composite children (passthrough into parent).
-                            // 3. Lerp between snapshot and result using mask.
+                        if has_active_mask {
                             self.compose_passthrough_masked(
                                 encoder,
                                 device,
@@ -1823,18 +1918,17 @@ impl Compositor {
                                 encoder,
                                 device,
                                 parent_group,
-                                &g.children,
+                                &g.children.0,
                                 scissor,
                             );
                         }
                     } else {
                         // Normal group: composite into its own isolated buffer,
                         // then blend the result into the parent.
-                        // GroupState must be pre-created via ensure_group_state().
                         if !self.group_state.contains_key(&g.id) {
                             continue;
                         }
-                        self.compose_group(encoder, device, g.id, &g.children, scissor);
+                        self.compose_group(encoder, device, g.id, &g.children.0, scissor);
 
                         // Blend group's composite cache into parent's accumulators.
                         let gs_parent = self.group_state.get_mut(&parent_group).unwrap();
@@ -1852,7 +1946,12 @@ impl Compositor {
                         );
 
                         let gs_parent = &self.group_state[&parent_group];
-                        let child_mask_bg = self.mask_bind_group(g.id);
+                        let child_mask_bg = g
+                            .modifiers
+                            .mask()
+                            .filter(|m| m.common.visible)
+                            .map(|m| self.mask_bind_group(m.id))
+                            .unwrap_or(&self.default_mask_bind_group);
                         {
                             let mut rpass =
                                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1898,7 +1997,7 @@ impl Compositor {
         // PassthroughMaskState must exist (created when the mask was added).
         if !self.passthrough_mask_state.contains_key(&group_id) {
             // Fallback: just inline children without mask.
-            self.compose_children(encoder, device, parent_group, &group.children, scissor);
+            self.compose_children(encoder, device, parent_group, &group.children.0, scissor);
             return;
         }
 
@@ -1936,7 +2035,7 @@ impl Compositor {
         );
 
         // 2. Composite children into parent accumulators (passthrough).
-        self.compose_children(encoder, device, parent_group, &group.children, scissor);
+        self.compose_children(encoder, device, parent_group, &group.children.0, scissor);
 
         // 3. Lerp pass: mix(snapshot, current_accum, mask).
         //    Write the lerp result into the ping-pong "other" accumulator.
@@ -1975,7 +2074,12 @@ impl Compositor {
 
         {
             let gs = &self.group_state[&parent_group];
-            let group_mask_bg = self.mask_bind_group(group_id);
+            let group_mask_bg = group
+                .modifiers
+                .mask()
+                .filter(|m| m.common.visible)
+                .map(|m| self.mask_bind_group(m.id))
+                .unwrap_or(&self.default_mask_bind_group);
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("mask-lerp"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

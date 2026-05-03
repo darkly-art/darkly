@@ -79,18 +79,21 @@ enum Command {
     // Layer properties
     SetOpacity(u64, f32),
     SetBlendMode(u64, u32),
+    /// Toggle visibility on any node — layer, group, or modifier (mask).
     SetLayerVisible(u64, bool),
     SetLayerName(u64, String),
     SetGroupCollapsed(u64, bool),
     SetGroupPassthrough(u64, bool),
+    /// Lock toggle on any node — paint/transform/property change refused while locked.
+    SetNodeLocked(u64, bool),
+    /// Session "isolate this node" flag. `0` = clear; otherwise the node id.
+    /// Replaces the previous `SetShowMask` per-layer flag.
+    SetIsolatedNode(u64),
 
-    // Layer masks
+    // Modifier (mask) operations
     AddMask(u64),
     RemoveMask(u64),
     ApplyMask(u64),
-    SetMaskEnabled(u64, bool),
-    SetShowMask(u64, bool),
-    SetEditingMask(u64, bool),
     SelectionToMask(u64),
     MaskToSelection(u64),
 
@@ -193,11 +196,12 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::AddMask(id) => engine.add_mask(id),
             Command::RemoveMask(id) => engine.remove_mask(id),
             Command::ApplyMask(id) => engine.apply_mask(id),
-            Command::SetMaskEnabled(id, v) => engine.set_mask_enabled(id, v),
-            Command::SetShowMask(id, v) => engine.set_show_mask(id, v),
-            Command::SetEditingMask(id, v) => engine.set_editing_mask(id, v),
             Command::SelectionToMask(id) => engine.selection_to_mask(id),
             Command::MaskToSelection(id) => engine.mask_to_selection(id),
+            Command::SetNodeLocked(id, v) => engine.set_node_locked(id, v),
+            Command::SetIsolatedNode(id) => {
+                engine.set_isolated_node(if id == 0 { None } else { Some(id) });
+            }
 
             Command::FillBackground(id) => engine.fill_background(id),
 
@@ -464,31 +468,79 @@ impl DarklyHandle {
         self.push(Command::SetGroupPassthrough(group_id as u64, passthrough));
     }
 
-    // --- Layer masks ---
+    // --- Modifier (mask) operations ---
 
-    pub fn add_mask(&self, layer_id: f64) {
-        self.push(Command::AddMask(layer_id as u64));
+    pub fn add_mask(&self, host_id: f64) {
+        self.push(Command::AddMask(host_id as u64));
     }
-    pub fn remove_mask(&self, layer_id: f64) {
-        self.push(Command::RemoveMask(layer_id as u64));
+    pub fn remove_mask(&self, host_id: f64) {
+        self.push(Command::RemoveMask(host_id as u64));
     }
-    pub fn apply_mask(&self, layer_id: f64) {
-        self.push(Command::ApplyMask(layer_id as u64));
+    pub fn apply_mask(&self, host_id: f64) {
+        self.push(Command::ApplyMask(host_id as u64));
     }
-    pub fn set_mask_enabled(&self, layer_id: f64, enabled: bool) {
-        self.push(Command::SetMaskEnabled(layer_id as u64, enabled));
+    pub fn selection_to_mask(&self, host_id: f64) {
+        self.push(Command::SelectionToMask(host_id as u64));
     }
-    pub fn set_show_mask(&self, layer_id: f64, show: bool) {
-        self.push(Command::SetShowMask(layer_id as u64, show));
+    pub fn mask_to_selection(&self, modifier_id: f64) {
+        self.push(Command::MaskToSelection(modifier_id as u64));
     }
-    pub fn set_editing_mask(&self, layer_id: f64, editing: bool) {
-        self.push(Command::SetEditingMask(layer_id as u64, editing));
+    pub fn set_node_locked(&self, node_id: f64, locked: bool) {
+        self.push(Command::SetNodeLocked(node_id as u64, locked));
     }
-    pub fn selection_to_mask(&self, layer_id: f64) {
-        self.push(Command::SelectionToMask(layer_id as u64));
+    /// Set the session-isolated node. Pass `0` to clear.
+    pub fn set_isolated_node(&self, node_id: f64) {
+        self.push(Command::SetIsolatedNode(node_id as u64));
     }
-    pub fn mask_to_selection(&self, layer_id: f64) {
-        self.push(Command::MaskToSelection(layer_id as u64));
+
+    // --- Backwards-compat shims for the old mask API. The frontend will
+    // migrate to using the modifier id directly + `set_isolated_node` /
+    // `set_layer_visible(modifier_id)`; these shims preserve the existing
+    // call sites while that migration happens. ---
+
+    /// Toggle the mask-enabled flag — equivalent to `set_layer_visible` on
+    /// the host's mask modifier.
+    pub fn set_mask_enabled(&self, host_id: f64, enabled: bool) {
+        let host = host_id as u64;
+        if let Some(mod_id) = self.engine.borrow().host_mask_id(host) {
+            self.push(Command::SetLayerVisible(mod_id, enabled));
+        }
+    }
+
+    /// Toggle "show mask" — equivalent to `set_isolated_node` to/from the
+    /// host's mask modifier.
+    pub fn set_show_mask(&self, host_id: f64, show: bool) {
+        let host = host_id as u64;
+        let mod_id = self.engine.borrow().host_mask_id(host).unwrap_or(0);
+        if mod_id == 0 {
+            return;
+        }
+        self.push(Command::SetIsolatedNode(if show { mod_id } else { 0 }));
+    }
+
+    /// Switch the active edit target between a host layer and its mask. With
+    /// the modifier-node model the active node id is sufficient — the
+    /// `editing_mask_layer` redirect is gone — but the frontend still calls
+    /// this on layer-row click.
+    pub fn set_editing_mask(&self, _host_id: f64, _editing: bool) {
+        // No-op: paint target is identified by the active node id. The
+        // frontend should set `app.activeLayerId` to the modifier id when
+        // the user clicks the mask thumbnail; this method exists to keep
+        // legacy call sites compiling without a panic.
+    }
+
+    /// Cached mask thumbnail bytes for a host layer. Resolves the mask
+    /// modifier id and delegates to `node_thumbnail`.
+    pub fn mask_thumbnail(&self, host_id: f64, width: u32, height: u32) -> Vec<u8> {
+        self.flush_if_needed();
+        let host = host_id as u64;
+        let mod_id = match self.engine.borrow().host_mask_id(host) {
+            Some(id) => id,
+            None => return Vec::new(),
+        };
+        self.engine
+            .borrow_mut()
+            .node_thumbnail(mod_id, width, height)
     }
 
     // --- Painting ---
@@ -1186,20 +1238,21 @@ impl DarklyHandle {
         }
     }
 
-    // --- Thumbnails (direct — kick off async readback) ---
+    // --- Thumbnails ---
 
-    pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
+    /// Cached thumbnail bytes for any node id (raster layer or mask modifier).
+    /// Format dispatch happens internally — callers just pass the node id.
+    pub fn node_thumbnail(&self, node_id: f64, width: u32, height: u32) -> Vec<u8> {
         self.flush_if_needed();
         self.engine
             .borrow_mut()
-            .layer_thumbnail(layer_id as u64, width, height)
+            .node_thumbnail(node_id as u64, width, height)
     }
 
-    pub fn mask_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
-        self.flush_if_needed();
-        self.engine
-            .borrow_mut()
-            .mask_thumbnail(layer_id as u64, width, height)
+    /// Backwards-compat alias kept while the frontend transitions to
+    /// `node_thumbnail`. To be removed once the layer panel is migrated.
+    pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
+        self.node_thumbnail(layer_id, width, height)
     }
 
     /// Monotonic counter bumped by the engine each time a thumbnail

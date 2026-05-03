@@ -80,64 +80,35 @@ impl DarklyEngine {
 
     // --- Thumbnails ---
 
-    /// Return the cached layer thumbnail. Pure read — readback queueing
-    /// is owned by `drain_dirty_thumbnail_readbacks` (driven by
-    /// `mark_layer_pixels_dirty` at every pixel-write site). Auto-queueing
-    /// from this getter would create a feedback loop with the JS-side
-    /// `thumbnailEpoch` sync: each readback completion bumps the version,
-    /// the panel's `$derived` re-runs, calls back into here, which queues
-    /// another readback — replicating per-dab updates during strokes.
-    pub fn layer_thumbnail(&self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+    /// Return the cached thumbnail for any node id (raster layer or mask
+    /// modifier). Pure read — readback queueing is owned by
+    /// `drain_dirty_thumbnail_readbacks` (driven by `mark_node_pixels_dirty`
+    /// at every pixel-write site). Auto-queueing from this getter would
+    /// create a feedback loop with the JS-side `thumbnailEpoch` sync.
+    pub fn node_thumbnail(&self, node_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
         self.thumbnail_cache
-            .layer
-            .get(&layer_id)
+            .get(node_id)
             .cloned()
             .unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
     }
 
-    /// Return the cached mask thumbnail. Same contract as
-    /// `layer_thumbnail` — pure read; queueing happens via dirty-set drain.
-    pub fn mask_thumbnail(&self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
-        let has_mask = match self.doc.find_node(layer_id) {
-            Some(n) => n.common().has_mask,
-            None => false,
-        };
-        if !has_mask {
-            return Vec::new();
-        }
-        self.thumbnail_cache
-            .mask
-            .get(&layer_id)
-            .cloned()
-            .unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
-    }
-
-    /// Kick off an async GPU readback for a thumbnail if one isn't already pending.
-    fn request_thumbnail_readback(
-        &mut self,
-        layer_id: u64,
-        is_mask: bool,
-        thumb_w: u32,
-        thumb_h: u32,
-    ) {
-        // Don't queue duplicate requests.
-        if self.readbacks.any(|c| matches!(c, ReadbackContext::Thumbnail { layer_id: lid, is_mask: im, .. } if *lid == layer_id && *im == is_mask)) {
+    /// Kick off an async GPU readback for a thumbnail of any node by id,
+    /// if one isn't already pending. Format is derived from the node's
+    /// GPU texture — callers don't dispatch on layer-vs-modifier.
+    fn request_thumbnail_readback(&mut self, node_id: u64, thumb_w: u32, thumb_h: u32) {
+        if self
+            .readbacks
+            .any(|c| matches!(c, ReadbackContext::Thumbnail { node_id: id, .. } if *id == node_id))
+        {
             return;
         }
 
         let doc_w = self.doc.width;
         let doc_h = self.doc.height;
 
-        let (texture, format) = if is_mask {
-            match self.compositor.mask_texture(layer_id) {
-                Some(t) => (&t.texture, wgpu::TextureFormat::R8Unorm),
-                None => return,
-            }
-        } else {
-            match self.compositor.layer_texture(layer_id) {
-                Some(t) => (&t.texture, wgpu::TextureFormat::Rgba8Unorm),
-                None => return,
-            }
+        let (texture, format) = match self.compositor.node_texture(node_id) {
+            Some(t) => (&t.texture, t.format),
+            None => return,
         };
 
         self.gpu.encode("thumb-readback", |encoder| {
@@ -151,8 +122,7 @@ impl DarklyEngine {
             self.readbacks.submit(
                 request,
                 ReadbackContext::Thumbnail {
-                    layer_id,
-                    is_mask,
+                    node_id,
                     thumb_w,
                     thumb_h,
                 },
@@ -174,7 +144,7 @@ impl DarklyEngine {
                     if let Some(rect) = result {
                         if let Some(layer_frame) = self
                             .compositor
-                            .layer_texture(commit.layer_id)
+                            .node_texture(commit.layer_id)
                             .map(|t| t.canvas_frame())
                         {
                             self.gpu.encode("brush-stroke-end", |encoder| {
@@ -200,27 +170,20 @@ impl DarklyEngine {
 
         // Complete pending transform if content bounds just arrived.
         if let Some(pt) = &self.pending_transform {
-            if bounds_completed.contains(&pt.layer_id) {
-                let layer_id = pt.layer_id;
-                let target_is_mask = pt.target_is_mask;
+            if bounds_completed.contains(&pt.node_id) {
+                let node_id = pt.node_id;
                 self.pending_transform = None;
 
                 if self.floating.is_none() {
-                    if let Some(bounds) = self.compositor.content_bounds(layer_id) {
+                    if let Some(bounds) = self.compositor.content_bounds(node_id) {
                         // content_bounds are layer-local; translate to canvas.
                         let [bx, by, bw, bh] = bounds;
                         let canvas_origin = self
                             .compositor
-                            .layer_texture(layer_id)
+                            .node_texture(node_id)
                             .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
                             .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
-                        self.setup_transform(
-                            layer_id,
-                            target_is_mask,
-                            (canvas_origin.x, canvas_origin.y),
-                            bw,
-                            bh,
-                        );
+                        self.setup_transform(node_id, (canvas_origin.x, canvas_origin.y), bw, bh);
                         any_completed = true;
                     }
                 }
@@ -244,8 +207,7 @@ impl DarklyEngine {
     pub(crate) fn handle_completed_readback(&mut self, ctx: ReadbackContext, pixels: Vec<u8>) {
         match ctx {
             ReadbackContext::FloodFill {
-                layer_id,
-                mask_editing,
+                node_id,
                 seed_x,
                 seed_y,
                 color,
@@ -253,15 +215,7 @@ impl DarklyEngine {
                 canvas_w,
                 canvas_h,
             } => self.complete_flood_fill(
-                layer_id,
-                mask_editing,
-                seed_x,
-                seed_y,
-                color,
-                tolerance,
-                canvas_w,
-                canvas_h,
-                pixels,
+                node_id, seed_x, seed_y, color, tolerance, canvas_w, canvas_h, pixels,
             ),
             ReadbackContext::ColorPick => {
                 if pixels.len() >= 4 {
@@ -269,29 +223,22 @@ impl DarklyEngine {
                 }
             }
             ReadbackContext::Copy {
-                is_mask,
+                node_id,
                 region,
                 is_cut,
-                layer_id,
             } => {
-                self.complete_copy(is_mask, region, is_cut, layer_id, pixels);
+                self.complete_copy(node_id, region, is_cut, pixels);
             }
             ReadbackContext::MagicWand {
                 was_active,
-                mask_editing,
+                node_id,
                 seed_x,
                 seed_y,
                 tolerance,
                 mode,
             } => {
                 self.complete_magic_wand(
-                    was_active,
-                    mask_editing,
-                    seed_x,
-                    seed_y,
-                    tolerance,
-                    mode,
-                    pixels,
+                    was_active, node_id, seed_x, seed_y, tolerance, mode, pixels,
                 );
             }
             ReadbackContext::MaskToSelection { was_active } => {
@@ -307,34 +254,30 @@ impl DarklyEngine {
                 if self.gpu_selection.pixel_bounds.is_some() {
                     if let Some(pt) = self.pending_transform.take() {
                         if self.floating.is_none() {
-                            self.begin_transform(pt.layer_id);
+                            self.begin_transform(pt.node_id);
                         }
                     }
                 }
             }
             ReadbackContext::Thumbnail {
-                layer_id,
-                is_mask,
+                node_id,
                 thumb_w,
                 thumb_h,
             } => {
                 let doc_w = self.doc.width;
                 let doc_h = self.doc.height;
-                if is_mask {
-                    let thumb = generate_mask_thumbnail_from_pixels(
-                        &pixels, doc_w, doc_h, thumb_w, thumb_h,
-                    );
-                    self.thumbnail_cache.mask.insert(layer_id, thumb);
+                let is_r8 = self
+                    .compositor
+                    .node_texture(node_id)
+                    .map(|t| t.format == wgpu::TextureFormat::R8Unorm)
+                    .unwrap_or(false);
+                let thumb = if is_r8 {
+                    generate_mask_thumbnail_from_pixels(&pixels, doc_w, doc_h, thumb_w, thumb_h)
                 } else {
-                    let thumb = generate_rgba_thumbnail_from_pixels(
-                        &pixels, doc_w, doc_h, thumb_w, thumb_h,
-                    );
-                    self.thumbnail_cache.layer.insert(layer_id, thumb);
-                }
-                // Tell the frontend "fresh thumbnail bytes available" — the
-                // wasm boundary's `thumbnail_version()` getter returns this,
-                // and the JS-side `requestFrame` post-render sync turns the
-                // bump into a Svelte-reactive epoch update.
+                    generate_rgba_thumbnail_from_pixels(&pixels, doc_w, doc_h, thumb_w, thumb_h)
+                };
+                self.thumbnail_cache.insert(node_id, thumb);
+                // Tell the frontend "fresh thumbnail bytes available".
                 self.thumbnail_version = self.thumbnail_version.wrapping_add(1);
             }
             ReadbackContext::BrushEditorPreview {
@@ -423,17 +366,9 @@ impl DarklyEngine {
     /// layer panel sees fresh thumbnails after paint, fill, undo, paste
     /// — anything that calls `compositor.mark_layer_pixels_dirty`.
     fn drain_dirty_thumbnail_readbacks(&mut self) {
-        let (layers, masks) = self.compositor.drain_dirty_pixels();
-        for layer_id in layers {
-            self.request_thumbnail_readback(
-                layer_id,
-                false,
-                DEFAULT_THUMB_SIZE,
-                DEFAULT_THUMB_SIZE,
-            );
-        }
-        for layer_id in masks {
-            self.request_thumbnail_readback(layer_id, true, DEFAULT_THUMB_SIZE, DEFAULT_THUMB_SIZE);
+        let nodes = self.compositor.drain_dirty_pixels();
+        for node_id in nodes {
+            self.request_thumbnail_readback(node_id, DEFAULT_THUMB_SIZE, DEFAULT_THUMB_SIZE);
         }
     }
 
@@ -537,18 +472,14 @@ impl DarklyEngine {
         self.sync_compositor_layers();
 
         // If this is a GPU region action, execute the texture restore.
+        // Node id resolves to the right texture via the unified node-texture
+        // pool — caller no longer dispatches by format.
         if let Some(entry) = action.gpu_region_entry_mut() {
-            let is_mask = entry.format == wgpu::TextureFormat::R8Unorm;
-            let layer_id = entry.layer_id;
-            let frame = if is_mask {
-                self.compositor
-                    .mask_texture(layer_id)
-                    .map(|t| t.canvas_frame())
-            } else {
-                self.compositor
-                    .layer_texture(layer_id)
-                    .map(|t| t.canvas_frame())
-            };
+            let node_id = entry.layer_id;
+            let frame = self
+                .compositor
+                .node_texture(node_id)
+                .map(|t| t.canvas_frame());
             if let Some(frame) = frame {
                 self.gpu.encode(
                     match direction {
@@ -561,7 +492,7 @@ impl DarklyEngine {
                     },
                 );
                 // Restored pixels — refresh the panel thumbnail.
-                self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
+                self.compositor.mark_node_pixels_dirty(node_id);
             }
         }
 
@@ -598,14 +529,14 @@ impl DarklyEngine {
     // --- Internal helpers ---
 
     pub(crate) fn sync_compositor_layers(&mut self) {
-        // Collect raster layer info first to avoid borrow conflicts with mask_dirty.
+        let isolated = self.isolated_node;
+
+        // --- Raster layers: ensure the GPU texture + uniforms ---
         struct RasterInfo {
             id: u64,
             opacity: f32,
             blend_mode: BlendMode,
-            show_mask: bool,
-            mask_enabled: bool,
-            has_mask: bool,
+            isolated: bool,
             bounds: crate::coord::CanvasRect,
         }
         let infos: Vec<RasterInfo> = self
@@ -614,12 +545,10 @@ impl DarklyEngine {
             .into_iter()
             .map(|r| RasterInfo {
                 id: r.id,
-                opacity: r.common.opacity,
-                blend_mode: r.common.blend_mode,
-                show_mask: r.common.show_mask,
-                mask_enabled: r.common.mask_enabled,
-                has_mask: r.common.has_mask,
-                bounds: r.bounds,
+                opacity: r.blend.opacity,
+                blend_mode: r.blend.blend_mode,
+                isolated: isolated == Some(r.id),
+                bounds: r.pixels.bounds,
             })
             .collect();
 
@@ -635,23 +564,44 @@ impl DarklyEngine {
                 info.id,
                 info.opacity,
                 info.blend_mode,
-                info.show_mask,
-            );
-            self.compositor.set_layer_mask(
-                &self.gpu.device,
-                &self.gpu.queue,
-                info.id,
-                info.has_mask,
-            );
-            self.compositor.update_mask_binding(
-                &self.gpu.device,
-                info.id,
-                info.mask_enabled,
-                info.show_mask,
+                info.isolated,
             );
         }
 
-        // Sync non-passthrough group state
+        // --- Mask modifiers: ensure the R8 GPU texture for any host with a mask ---
+        struct MaskInfo {
+            modifier_id: u64,
+            bounds: crate::coord::CanvasRect,
+        }
+        let mask_infos: Vec<MaskInfo> = self
+            .doc
+            .all_modifiers()
+            .into_iter()
+            .filter_map(|m| {
+                let buf = m.pixels()?;
+                if buf.format == wgpu::TextureFormat::R8Unorm {
+                    Some(MaskInfo {
+                        modifier_id: m.id,
+                        bounds: buf.bounds,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for info in mask_infos {
+            if self.compositor.node_texture(info.modifier_id).is_none() {
+                self.compositor.ensure_node_texture(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    info.modifier_id,
+                    wgpu::TextureFormat::R8Unorm,
+                    info.bounds,
+                );
+            }
+        }
+
+        // --- Non-passthrough groups: ensure group state + uniforms ---
         let groups: Vec<(u64, f32, BlendMode, bool)> = self
             .doc
             .all_groups()
@@ -660,13 +610,13 @@ impl DarklyEngine {
             .map(|g| {
                 (
                     g.id,
-                    g.common.opacity,
-                    g.common.blend_mode,
-                    g.common.show_mask,
+                    g.blend.opacity,
+                    g.blend.blend_mode,
+                    isolated == Some(g.id),
                 )
             })
             .collect();
-        for (id, opacity, blend_mode, show_mask) in groups {
+        for (id, opacity, blend_mode, isolated_flag) in groups {
             self.compositor
                 .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
             self.compositor.update_group_uniforms(
@@ -674,7 +624,7 @@ impl DarklyEngine {
                 id,
                 opacity,
                 blend_mode,
-                show_mask,
+                isolated_flag,
             );
         }
     }

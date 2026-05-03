@@ -1210,7 +1210,7 @@ fn paste_cancel_cycles_dont_leak_layer_textures() {
     let mut engine = test_engine(cw, ch);
     let _base = engine.add_raster_layer();
 
-    let baseline = engine.test_layer_texture_count();
+    let baseline = engine.test_node_texture_count();
 
     // Use a 4×-canvas paste so each leaked texture would be observable —
     // matches the plan's "paste 4K image" intent at test scale.
@@ -1225,7 +1225,7 @@ fn paste_cancel_cycles_dont_leak_layer_textures() {
         assert!(!engine.has_layer(id), "cancel should detach the layer");
     }
 
-    let after_cycles = engine.test_layer_texture_count();
+    let after_cycles = engine.test_node_texture_count();
     assert_eq!(
         after_cycles, baseline,
         "5 paste→cancel cycles should leave layer_textures count unchanged \
@@ -1243,7 +1243,7 @@ fn add_remove_cycles_dont_leak_layer_textures() {
     let mut engine = test_engine(cw, ch);
     let _base = engine.add_raster_layer();
 
-    let baseline = engine.test_layer_texture_count();
+    let baseline = engine.test_node_texture_count();
 
     for _ in 0..5 {
         let id = engine.add_raster_layer();
@@ -1252,7 +1252,7 @@ fn add_remove_cycles_dont_leak_layer_textures() {
         assert!(!engine.has_layer(id));
     }
 
-    let after_cycles = engine.test_layer_texture_count();
+    let after_cycles = engine.test_node_texture_count();
     assert_eq!(
         after_cycles, baseline,
         "5 add→remove cycles should leave layer_textures count unchanged \
@@ -1785,8 +1785,13 @@ fn pending_undo_commit_survives_two_grows() {
 
 /// Paint a single black brush dab at (x, y) on a mask. Brush color is
 /// grayscale (R=G=B=0); the R channel is what lands in the R8 mask.
-fn paint_mask_dab(engine: &mut DarklyEngine, layer_id: u64, x: f32, y: f32, value: f32) {
-    engine.begin_stroke(layer_id);
+fn paint_mask_dab(engine: &mut DarklyEngine, host_id: u64, x: f32, y: f32, value: f32) {
+    // The new model paints on the mask modifier id directly, not via a
+    // session redirect from the host. Resolve the mask id and stroke on it.
+    let mask_id = engine
+        .host_mask_id(host_id)
+        .expect("paint_mask_dab requires the host to have a mask modifier");
+    engine.begin_stroke(mask_id);
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
         y,
@@ -1871,9 +1876,12 @@ fn engine_mask_brush_undo_restores_mask() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
     engine.add_mask(layer_id);
-    engine.set_editing_mask(layer_id, true);
 
     paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
+    // Brush-stroke commit is async (diff-rect compute). Flush so the
+    // GpuRegionAction is on the undo stack before we call `undo()`.
+    engine.test_flush_readbacks();
+    engine.render(0.0);
     engine.undo();
     engine.render(0.0);
 
@@ -1989,21 +1997,35 @@ fn engine_add_mask_without_selection_is_all_white() {
     );
 }
 
-/// `set_editing_mask(id, true)` followed by a brush stroke when no mask
-/// has been added must not panic. Defends against the secondary issue
-/// where `compositor.mask_texture()` returns `None` and downstream code
-/// could panic on `unwrap()`.
+/// In the new modifier-node model, paint targets are addressed by node id.
+/// Painting on a host id with no mask attached just paints on the host —
+/// there is no separate "edit mask" redirect that could go wrong. This
+/// regression test now verifies safety: `begin_stroke` on a host with no
+/// mask, plus a stroke, doesn't panic.
 #[test]
-fn engine_set_editing_mask_without_add_mask_is_safe() {
+fn engine_no_mask_brush_safe_on_layer() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
-    engine.set_editing_mask(layer_id, true);
 
-    // No add_mask call — mask_texture returns None.
-    paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
-
-    engine.set_editing_mask(layer_id, false);
+    // No mask added; stroking on the layer must just paint the layer.
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::BrushStroke {
+        x: (w / 2) as f32,
+        y: (h / 2) as f32,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: 0.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
+    });
+    engine.end_stroke();
+    engine.render(0.0);
 }
 
 /// FloodFill on a mask paints every pixel reachable from the seed. The
@@ -2017,9 +2039,9 @@ fn engine_mask_flood_fill() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
     engine.add_mask(layer_id);
-    engine.set_editing_mask(layer_id, true);
+    let mask_id = engine.host_mask_id(layer_id).unwrap();
 
-    engine.begin_stroke(layer_id);
+    engine.begin_stroke(mask_id);
     engine.stroke_to(StrokeOp::FloodFill {
         x: (w / 2) as f32,
         y: (h / 2) as f32,
@@ -2030,7 +2052,6 @@ fn engine_mask_flood_fill() {
         tolerance: 0,
     });
     engine.end_stroke();
-    // Flood fill is async — drive the readback completion.
     engine.test_flush_readbacks();
     engine.render(0.0);
 
@@ -2065,13 +2086,14 @@ fn engine_magic_wand_on_mask_reads_mask_not_layer() {
         0.0,
     );
     engine.add_mask(layer_id);
-    engine.set_editing_mask(layer_id, true);
+    let mask_id = engine.host_mask_id(layer_id).unwrap();
 
     // Magic wand seeded inside the left (revealed) half with tolerance 0.
     // On the mask this picks up only the connected 255 region (left half).
-    // On the layer (the bug) every pixel is transparent, so flood fill
-    // expands across the full canvas.
-    engine.select_magic_wand(layer_id, 4, (h / 2) as i32, 0, SelectionMode::Replace);
+    // Pre-fix the wand would read from the layer (transparent everywhere)
+    // and select the full canvas regardless of mask state — fixed by
+    // dispatching format from the active node id.
+    engine.select_magic_wand(mask_id, 4, (h / 2) as i32, 0, SelectionMode::Replace);
     engine.test_flush_readbacks();
 
     let cache = engine

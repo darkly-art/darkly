@@ -46,7 +46,7 @@ impl DarklyEngine {
     /// Both extraction and erase use GPU float math on the same selection
     /// texture, guaranteeing `extracted + remaining == original`.
     pub(crate) fn start_copy_readback(&mut self, layer_id: u64, is_cut: bool) {
-        let is_mask = self.editing_mask_layer == Some(layer_id);
+        let is_mask = self.is_editing_mask(layer_id);
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
@@ -57,7 +57,7 @@ impl DarklyEngine {
             }
             wgpu::TextureFormat::R8Unorm
         } else {
-            if self.compositor.layer_texture(layer_id).is_none() {
+            if self.compositor.node_texture(layer_id).is_none() {
                 return;
             }
             wgpu::TextureFormat::Rgba8Unorm
@@ -160,7 +160,7 @@ impl DarklyEngine {
             let layer_tex = if is_mask {
                 &self.compositor.mask_texture(layer_id).unwrap().texture
             } else {
-                &self.compositor.layer_texture(layer_id).unwrap().texture
+                &self.compositor.node_texture(layer_id).unwrap().texture
             };
             let sel_tex = self.gpu_selection.texture();
 
@@ -237,13 +237,11 @@ impl DarklyEngine {
                 // 4. If cut: reduce layer alpha by selection on selected pixels.
                 //    layer.a *= (1 - sel), layer.rgb unchanged (straight alpha).
                 if is_cut {
-                    let (layer_target, _) = if is_mask {
-                        let t = self.compositor.mask_texture(layer_id).unwrap();
-                        (GpuPaintTarget::from_mask(t, canvas_w, canvas_h), ())
-                    } else {
-                        let t = self.compositor.layer_texture(layer_id).unwrap();
-                        (GpuPaintTarget::from_layer(t, canvas_w, canvas_h), ())
-                    };
+                    let layer_target = self
+                        .compositor
+                        .node_texture(layer_id)
+                        .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
+                        .expect("node texture missing for cut target");
                     layer_target.multiply_alpha_by_inverse_mask(
                         encoder,
                         &self.paint_pipelines,
@@ -260,13 +258,13 @@ impl DarklyEngine {
                     format,
                     [0, 0, rw, rh],
                 );
+                let _ = is_mask;
                 self.readbacks.submit(
                     request,
                     ReadbackContext::Copy {
-                        is_mask,
+                        node_id: layer_id,
                         region,
                         is_cut,
-                        layer_id,
                     },
                 );
             });
@@ -279,15 +277,15 @@ impl DarklyEngine {
                         .commit_region(encoder, layer_id, &frame, &snap, undo_rect);
                     self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
                 });
-                self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
+                self.compositor.mark_node_pixels_dirty(layer_id);
             }
         } else {
             // --- No selection: direct readback ---
-            let texture = if is_mask {
-                &self.compositor.mask_texture(layer_id).unwrap().texture
-            } else {
-                &self.compositor.layer_texture(layer_id).unwrap().texture
-            };
+            let texture = self
+                .compositor
+                .node_texture(layer_id)
+                .map(|t| &t.texture)
+                .expect("node texture missing for copy");
 
             self.gpu.encode("copy-readback", |encoder| {
                 let request =
@@ -295,10 +293,9 @@ impl DarklyEngine {
                 self.readbacks.submit(
                     request,
                     ReadbackContext::Copy {
-                        is_mask,
+                        node_id: layer_id,
                         region,
                         is_cut,
-                        layer_id,
                     },
                 );
             });
@@ -308,6 +305,7 @@ impl DarklyEngine {
                 self.gpu_clear_layer(layer_id);
             }
         }
+        let _ = is_mask;
     }
 
     /// Determine the copy region from the selection (or full canvas).
@@ -342,16 +340,21 @@ impl DarklyEngine {
     /// was active) or raw from the layer (when no selection).
     pub(crate) fn complete_copy(
         &mut self,
-        is_mask: bool,
+        node_id: u64,
         region: [u32; 4],
         is_cut: bool,
-        layer_id: u64,
         pixels: Vec<u8>,
     ) {
         let [rx, ry, rw, rh] = region;
 
-        // Build RGBA bytes from the readback data.
-        let rgba = if is_mask {
+        // Build RGBA bytes from the readback data — format dispatch is now
+        // driven by the source node's texture format, not a sidecar boolean.
+        let is_r8 = self
+            .compositor
+            .node_texture(node_id)
+            .map(|t| t.format == wgpu::TextureFormat::R8Unorm)
+            .unwrap_or(false);
+        let rgba = if is_r8 {
             // R8 readback → convert to grayscale RGBA: [v, v, v, 255]
             let mut rgba = vec![0u8; (rw * rh * 4) as usize];
             for i in 0..(rw * rh) as usize {
@@ -369,7 +372,6 @@ impl DarklyEngine {
             pixels
         };
 
-        // Build ImageClip and store in clipboard.
         let clip = ImageClip::from_rgba(rw, rh, rgba, rx as i32, ry as i32);
         let (export_rgba, ew, eh, eox, eoy) = clip.to_rgba();
         self.pending_copy_result = Some(ClipboardExport {
@@ -381,8 +383,7 @@ impl DarklyEngine {
         });
         self.clipboard = Some(Clipboard::ImageData(clip));
 
-        // Cut erase was already done on GPU in start_copy_readback.
-        let _ = (is_cut, layer_id);
+        let _ = is_cut;
     }
 
     /// Cut = copy + clear. The clear happens on GPU during start_copy_readback.
@@ -421,7 +422,7 @@ impl DarklyEngine {
         let id = self.doc.add_raster_layer();
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
             r.common.name = "Pasted Layer".to_string();
-            r.bounds = layer_bounds;
+            r.pixels.bounds = layer_bounds;
         }
 
         self.compositor
@@ -430,7 +431,7 @@ impl DarklyEngine {
         // Upload the entire RGBA buffer to the layer texture — its bounds
         // exactly match the paste extent so no per-row copy or clipping is
         // needed.
-        if let Some(layer_tex) = self.compositor.layer_texture(id) {
+        if let Some(layer_tex) = self.compositor.node_texture(id) {
             self.gpu.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &layer_tex.texture,
@@ -452,7 +453,7 @@ impl DarklyEngine {
             );
         }
 
-        self.compositor.mark_layer_pixels_dirty(id, false);
+        self.compositor.mark_node_pixels_dirty(id);
 
         // Position above active layer if specified.
         if let Some(active_id) = active_layer_id {

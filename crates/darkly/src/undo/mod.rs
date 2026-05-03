@@ -1,14 +1,14 @@
 mod compound;
 mod gpu_region;
 mod layer;
-mod mask;
+mod modifier;
 pub mod property;
 mod selection;
 
 pub use compound::CompoundAction;
 pub use gpu_region::GpuRegionAction;
 pub use layer::{LayerAddAction, LayerMoveAction, LayerRemoveAction};
-pub use mask::MaskPropertyAction;
+pub use modifier::{ModifierAddAction, ModifierRemoveAction, NodeLockedAction, NodeVisibleAction};
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
 
@@ -250,19 +250,19 @@ mod tests {
             Property::Opacity(0.5),
         )));
         if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
-            r.common.opacity = 0.5;
+            r.blend.opacity = 0.5;
         }
 
         // Undo — opacity back to 1.0.
         undo.undo(&mut doc);
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            assert!((r.common.opacity - 1.0).abs() < f32::EPSILON);
+            assert!((r.blend.opacity - 1.0).abs() < f32::EPSILON);
         }
 
         // Redo — opacity back to 0.5.
         undo.redo(&mut doc);
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            assert!((r.common.opacity - 0.5).abs() < f32::EPSILON);
+            assert!((r.blend.opacity - 0.5).abs() < f32::EPSILON);
         }
     }
 
@@ -279,11 +279,11 @@ mod tests {
         let steps = [0.9_f32, 0.7, 0.5, 0.3];
         for &new_val in &steps {
             let old_val = match doc.layer(id) {
-                Some(Layer::Raster(r)) => r.common.opacity,
+                Some(Layer::Raster(r)) => r.blend.opacity,
                 _ => unreachable!(),
             };
             if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
-                r.common.opacity = new_val;
+                r.blend.opacity = new_val;
             }
             undo.coalesce_property(PropertyAction::new(
                 id,
@@ -296,7 +296,7 @@ mod tests {
         assert!(undo.can_undo());
         assert_eq!(
             doc.layer(id).map(|l| match l {
-                Layer::Raster(r) => r.common.opacity,
+                Layer::Raster(r) => r.blend.opacity,
             }),
             Some(0.3),
         );
@@ -304,7 +304,7 @@ mod tests {
         // Single undo should restore original opacity (1.0), not 0.5.
         undo.undo(&mut doc);
         let after_undo = match doc.layer(id) {
-            Some(Layer::Raster(r)) => r.common.opacity,
+            Some(Layer::Raster(r)) => r.blend.opacity,
             _ => unreachable!(),
         };
         assert!(
@@ -318,7 +318,7 @@ mod tests {
         // Redo should go back to 0.3.
         undo.redo(&mut doc);
         let after_redo = match doc.layer(id) {
-            Some(Layer::Raster(r)) => r.common.opacity,
+            Some(Layer::Raster(r)) => r.blend.opacity,
             _ => unreachable!(),
         };
         assert!(

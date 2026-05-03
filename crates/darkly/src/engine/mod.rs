@@ -4,7 +4,7 @@ mod clipboard;
 mod floating;
 pub(crate) mod gpu_selection;
 mod layers;
-mod masks;
+mod modifiers;
 mod painting;
 mod rendering;
 mod selection;
@@ -12,7 +12,9 @@ pub mod types;
 mod veils;
 
 pub use rendering::DEFAULT_THUMB_SIZE;
-pub use types::{ClipboardExport, LayerInfo, ParamInfo, StrokeOp, VeilInfo, VeilTypeInfo};
+pub use types::{
+    ClipboardExport, LayerInfo, ModifierInfo, ParamInfo, StrokeOp, VeilInfo, VeilTypeInfo,
+};
 
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
@@ -43,9 +45,10 @@ use std::collections::HashMap;
 // ---------------------------------------------------------------------------
 
 /// Deferred transform setup — waiting for async content bounds from the compositor.
+/// `node_id` may refer to a raster layer or a mask modifier; the format is
+/// derived from the node's [`PixelBuffer`].
 pub(crate) struct PendingTransform {
-    pub layer_id: u64,
-    pub target_is_mask: bool,
+    pub node_id: u64,
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
@@ -62,10 +65,13 @@ pub(crate) struct PendingUndoCommit {
 
 /// Context for a pending async GPU readback — travels with the request and
 /// is returned alongside the pixel data on completion.
+///
+/// All variants carry a `node_id` (where applicable) that may refer to either
+/// a raster layer or a mask modifier; the format is derived from the node's
+/// [`PixelBuffer`] when the readback completes.
 pub(crate) enum ReadbackContext {
     FloodFill {
-        layer_id: u64,
-        mask_editing: bool,
+        node_id: u64,
         seed_x: i32,
         seed_y: i32,
         color: [u8; 4],
@@ -75,14 +81,13 @@ pub(crate) enum ReadbackContext {
     },
     ColorPick,
     Copy {
-        is_mask: bool,
+        node_id: u64,
         region: [u32; 4],
         is_cut: bool,
-        layer_id: u64,
     },
     MagicWand {
         was_active: bool,
-        mask_editing: bool,
+        node_id: u64,
         seed_x: i32,
         seed_y: i32,
         tolerance: u8,
@@ -94,8 +99,7 @@ pub(crate) enum ReadbackContext {
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,
     Thumbnail {
-        layer_id: u64,
-        is_mask: bool,
+        node_id: u64,
         thumb_w: u32,
         thumb_h: u32,
     },
@@ -152,20 +156,26 @@ pub(crate) enum ReadbackContext {
     },
 }
 
-/// Cached thumbnail data per layer.
+/// Cached thumbnail RGBA bytes per node id. Keyed uniformly across layers,
+/// groups, and modifiers — the node id is sufficient to disambiguate, so the
+/// previous separate `layer` and `mask` maps collapse into one.
 pub(crate) struct ThumbnailCache {
-    /// Cached RGBA thumbnail bytes per layer id (layer content).
-    layer: HashMap<u64, Vec<u8>>,
-    /// Cached RGBA thumbnail bytes per layer id (mask).
-    mask: HashMap<u64, Vec<u8>>,
+    bytes: HashMap<u64, Vec<u8>>,
 }
 
 impl ThumbnailCache {
     fn new() -> Self {
         ThumbnailCache {
-            layer: HashMap::new(),
-            mask: HashMap::new(),
+            bytes: HashMap::new(),
         }
+    }
+
+    pub(crate) fn get(&self, node_id: u64) -> Option<&Vec<u8>> {
+        self.bytes.get(&node_id)
+    }
+
+    pub(crate) fn insert(&mut self, node_id: u64, bytes: Vec<u8>) {
+        self.bytes.insert(node_id, bytes);
     }
 }
 
@@ -179,9 +189,12 @@ pub struct DarklyEngine {
     pub(crate) gpu: GpuContext,
     pub(crate) undo_stack: UndoStack,
     pub(crate) active_stroke_layer: Option<u64>,
-    /// Which layer has mask editing active (GIMP's `edit_mask` flag).
-    /// When set, strokes are routed to the mask instead of the layer.
-    pub(crate) editing_mask_layer: Option<u64>,
+    /// Session-level "isolate this node" flag. When set, the renderer shows
+    /// only this node's contribution (e.g. an R8 mask is rendered grayscale,
+    /// a layer is rendered without siblings/parents). Replaces the previous
+    /// `show_mask` per-layer boolean — works for any node kind, including
+    /// future filter modifiers.
+    pub(crate) isolated_node: Option<u64>,
     pub(crate) view_transform: ViewTransform,
     /// Persistent marching ants overlay (regenerated when selection changes).
     pub(crate) selection_overlay: Vec<OverlayPrimitive>,
@@ -379,7 +392,7 @@ impl DarklyEngine {
             gpu,
             undo_stack,
             active_stroke_layer: None,
-            editing_mask_layer: None,
+            isolated_node: None,
             view_transform: ViewTransform::identity(),
             selection_overlay: Vec::new(),
             tool_overlay: Vec::new(),
@@ -479,32 +492,29 @@ impl DarklyEngine {
         self.gpu_selection.cpu_cache.as_deref()
     }
 
-    /// Number of per-layer GPU textures the compositor currently holds.
-    /// Test-only metric for leak-cycle regression tests (P3).
-    pub fn test_layer_texture_count(&self) -> usize {
-        self.compositor.test_layer_texture_count()
+    /// Number of GPU textures the compositor currently holds across the
+    /// unified node-texture pool (raster layers and pixel-bearing modifiers
+    /// like masks). Test-only metric for leak-cycle regression tests (P3).
+    pub fn test_node_texture_count(&self) -> usize {
+        self.compositor.test_node_texture_count()
     }
 
-    /// Number of per-mask GPU textures the compositor currently holds.
-    pub fn test_mask_texture_count(&self) -> usize {
-        self.compositor.test_mask_texture_count()
-    }
-
-    /// Blocking readback of a layer's RGBA texture. For test assertions only.
-    /// Reads the layer texture's full extent — for canvas-aligned layers
-    /// this is canvas-sized, but paste-extent layers may exceed canvas.
-    pub fn test_readback_layer(&self, layer_id: u64) -> Vec<u8> {
-        let layer_tex = self
+    /// Blocking readback of a node's GPU texture (raster layer or mask
+    /// modifier). For test assertions only. Format and extent come from the
+    /// texture's own metadata — callers don't need to know whether the id
+    /// refers to a layer or a modifier.
+    pub fn test_readback_layer(&self, node_id: u64) -> Vec<u8> {
+        let tex = self
             .compositor
-            .layer_texture(layer_id)
-            .expect("layer texture not found");
+            .node_texture(node_id)
+            .expect("node texture not found");
         crate::gpu::test_utils::readback_texture(
             &self.gpu.device,
             &self.gpu.queue,
-            &layer_tex.texture,
-            wgpu::TextureFormat::Rgba8Unorm,
-            layer_tex.width,
-            layer_tex.height,
+            &tex.texture,
+            tex.format,
+            tex.width,
+            tex.height,
         )
     }
 
@@ -528,36 +538,36 @@ impl DarklyEngine {
         )
     }
 
-    /// Blocking readback of a layer's R8 mask texture. For test assertions only.
-    /// Returns one byte per pixel (the R8 value, 0 = hide, 255 = reveal).
-    pub fn test_readback_mask(&self, layer_id: u64) -> Vec<u8> {
-        let mask_tex = self
+    /// Blocking readback of a mask modifier's R8 texture. For test assertions
+    /// only. Resolves the mask modifier on the host and reads its texture
+    /// from the unified node-texture pool. Returns one byte per pixel.
+    pub fn test_readback_mask(&self, host_id: u64) -> Vec<u8> {
+        let mask_id = self
+            .doc
+            .find_node(host_id)
+            .and_then(|n| n.modifiers().mask().map(|m| m.id))
+            .expect("host has no mask modifier");
+        let tex = self
             .compositor
-            .mask_texture(layer_id)
+            .node_texture(mask_id)
             .expect("mask texture not found");
         crate::gpu::test_utils::readback_texture(
             &self.gpu.device,
             &self.gpu.queue,
-            &mask_tex.texture,
-            wgpu::TextureFormat::R8Unorm,
-            mask_tex.width,
-            mask_tex.height,
+            &tex.texture,
+            tex.format,
+            tex.width,
+            tex.height,
         )
     }
 
-    /// Peek at the cached thumbnail bytes for a layer without queuing a
+    /// Peek at the cached thumbnail bytes for any node id without queuing a
     /// fresh readback. Test-only — production callers go through
-    /// [`layer_thumbnail`] / [`mask_thumbnail`] which intentionally also
-    /// queue. The regression tests in `thumbnail_reactivity.rs` need a
-    /// non-side-effecting peek so they can prove the auto-queue path
-    /// (not the legacy `layer_thumbnail`-driven queue) populated the
-    /// cache.
-    pub fn test_thumbnail_cache_peek(&self, layer_id: u64, is_mask: bool) -> Option<Vec<u8>> {
-        if is_mask {
-            self.thumbnail_cache.mask.get(&layer_id).cloned()
-        } else {
-            self.thumbnail_cache.layer.get(&layer_id).cloned()
-        }
+    /// [`node_thumbnail`] which intentionally also queues. The regression
+    /// tests in `thumbnail_reactivity.rs` need a non-side-effecting peek so
+    /// they can prove the auto-queue path populated the cache.
+    pub fn test_thumbnail_cache_peek(&self, node_id: u64) -> Option<Vec<u8>> {
+        self.thumbnail_cache.get(node_id).cloned()
     }
 
     /// Block until all pending async readbacks complete. For tests only.

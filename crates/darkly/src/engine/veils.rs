@@ -50,12 +50,13 @@ impl DarklyEngine {
     // --- Queries ---
 
     pub fn layer_tree(&self) -> Vec<LayerInfo> {
+        let isolated = self.isolated_node;
         self.doc
             .root
             .children
             .iter()
             .rev()
-            .map(node_to_layer_info)
+            .map(|n| node_to_layer_info(n, isolated))
             .collect()
     }
 

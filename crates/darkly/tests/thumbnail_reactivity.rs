@@ -95,7 +95,7 @@ fn paint_stroke_auto_queues_thumbnail_readback() {
     );
 
     let cached = engine
-        .test_thumbnail_cache_peek(layer_id, false)
+        .test_thumbnail_cache_peek(layer_id)
         .expect("auto-queue path should have populated the layer thumbnail cache");
     assert!(
         !cached.is_empty(),
@@ -127,7 +127,7 @@ fn fill_background_auto_queues_thumbnail_readback() {
     );
 
     let cached = engine
-        .test_thumbnail_cache_peek(layer_id, false)
+        .test_thumbnail_cache_peek(layer_id)
         .expect("auto-queue path should have populated the layer thumbnail cache");
     assert!(
         !cached.is_empty(),
@@ -149,7 +149,7 @@ fn undo_auto_queues_thumbnail_readback() {
 
     let v_after_paint = engine.thumbnail_version();
     let painted = engine
-        .test_thumbnail_cache_peek(layer_id, false)
+        .test_thumbnail_cache_peek(layer_id)
         .expect("paint path populated the cache");
     assert!(
         has_painted_pixels(&painted),
@@ -168,7 +168,7 @@ fn undo_auto_queues_thumbnail_readback() {
     );
 
     let post_undo = engine
-        .test_thumbnail_cache_peek(layer_id, false)
+        .test_thumbnail_cache_peek(layer_id)
         .expect("undo path repopulated the cache");
     assert!(
         !has_painted_pixels(&post_undo),
@@ -203,7 +203,7 @@ fn layer_thumbnail_does_not_auto_queue_readback() {
     // readback; the next render+flush would complete it and bump the
     // version, retriggering the JS-side sync, retriggering the call.
     for _ in 0..50 {
-        let _ = engine.layer_thumbnail(layer_id, 36, 36);
+        let _ = engine.node_thumbnail(layer_id, 36, 36);
         engine.render(0.016);
         engine.test_flush_readbacks();
     }

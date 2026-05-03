@@ -30,28 +30,15 @@ pub struct GpuPaintTarget<'a> {
 }
 
 impl<'a> GpuPaintTarget<'a> {
-    /// Wrap a layer texture as a paint target. Pass the document's canvas
-    /// size so fragment-stage selection sampling uses correct UVs.
-    pub fn from_layer(tex: &'a LayerTexture, canvas_width: u32, canvas_height: u32) -> Self {
+    /// Wrap any node texture as a paint target. The texture's own format
+    /// drives all downstream pipeline dispatch (R8 mask vs RGBA layer).
+    /// Replaces `from_layer` / `from_mask` — callers no longer dispatch on
+    /// node kind, only on the texture they hand in.
+    pub fn from_node(tex: &'a LayerTexture, canvas_width: u32, canvas_height: u32) -> Self {
         GpuPaintTarget {
             texture: &tex.texture,
             view: &tex.view,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            width: tex.width,
-            height: tex.height,
-            offset_x: tex.offset_x,
-            offset_y: tex.offset_y,
-            canvas_width,
-            canvas_height,
-        }
-    }
-
-    /// Wrap a mask texture as a paint target. See `from_layer`.
-    pub fn from_mask(tex: &'a LayerTexture, canvas_width: u32, canvas_height: u32) -> Self {
-        GpuPaintTarget {
-            texture: &tex.texture,
-            view: &tex.view,
-            format: wgpu::TextureFormat::R8Unorm,
+            format: tex.format,
             width: tex.width,
             height: tex.height,
             offset_x: tex.offset_x,

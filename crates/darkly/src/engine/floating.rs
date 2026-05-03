@@ -57,7 +57,7 @@ impl DarklyEngine {
             None => return false,
         };
 
-        let target_is_mask = self.editing_mask_layer == Some(layer_id);
+        let target_is_mask = self.is_editing_mask(layer_id);
 
         let source_origin = (clip.offset_x, clip.offset_y);
         let source_width = clip.width;
@@ -116,7 +116,7 @@ impl DarklyEngine {
         let new_id = self.doc.add_raster_layer();
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(new_id) {
             r.common.name = "Pasted Layer".to_string();
-            r.bounds = layer_bounds;
+            r.pixels.bounds = layer_bounds;
         }
         self.compositor.ensure_raster_layer(
             &self.gpu.device,
@@ -169,17 +169,16 @@ impl DarklyEngine {
     pub fn begin_transform(&mut self, layer_id: u64) -> bool {
         self.auto_commit_floating();
 
-        let target_is_mask = self.editing_mask_layer == Some(layer_id);
+        let target_is_mask = self.is_editing_mask(layer_id);
 
-        if self.doc.layer(layer_id).is_none() {
-            return false;
-        }
         if target_is_mask {
-            let has_mask =
-                matches!(self.doc.layer(layer_id), Some(Layer::Raster(r)) if r.common.has_mask);
-            if !has_mask {
+            // The active node is a mask modifier id — verify it exists as a
+            // mask in the document (and therefore has a `PixelBuffer`).
+            if self.doc.find_modifier(layer_id).is_none() {
                 return false;
             }
+        } else if self.doc.layer(layer_id).is_none() {
+            return false;
         }
 
         let canvas_w = self.doc.width;
@@ -201,10 +200,7 @@ impl DarklyEngine {
                     });
                 } else {
                     // Cache not ready — defer until SelectionReadback completes.
-                    self.pending_transform = Some(PendingTransform {
-                        layer_id,
-                        target_is_mask,
-                    });
+                    self.pending_transform = Some(PendingTransform { node_id: layer_id });
                     return false;
                 }
             }
@@ -222,7 +218,8 @@ impl DarklyEngine {
                 return false;
             }
 
-            self.setup_transform(layer_id, target_is_mask, (x, y), w, h);
+            self.setup_transform(layer_id, (x, y), w, h);
+            let _ = target_is_mask;
             true
         } else {
             // No selection — use compositor content bounds.
@@ -239,13 +236,7 @@ impl DarklyEngine {
                     .layer_texture(layer_id)
                     .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
                     .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
-                self.setup_transform(
-                    layer_id,
-                    target_is_mask,
-                    (canvas_origin.x, canvas_origin.y),
-                    bw,
-                    bh,
-                );
+                self.setup_transform(layer_id, (canvas_origin.x, canvas_origin.y), bw, bh);
                 true
             } else {
                 // Bounds not yet computed — request async GPU compute.
@@ -255,10 +246,7 @@ impl DarklyEngine {
                     layer_id,
                     target_is_mask,
                 );
-                self.pending_transform = Some(super::PendingTransform {
-                    layer_id,
-                    target_is_mask,
-                });
+                self.pending_transform = Some(super::PendingTransform { node_id: layer_id });
                 false
             }
         }
@@ -268,39 +256,31 @@ impl DarklyEngine {
     /// copies source region to floating texture, clears source on layer.
     pub(crate) fn setup_transform(
         &mut self,
-        layer_id: u64,
-        target_is_mask: bool,
+        node_id: u64,
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
     ) {
-        let format = if target_is_mask {
-            wgpu::TextureFormat::R8Unorm
-        } else {
-            wgpu::TextureFormat::Rgba8Unorm
-        };
+        let target_is_mask = self.is_editing_mask(node_id);
+        let layer_id = node_id;
+        let format = self
+            .compositor
+            .node_texture(node_id)
+            .map(|t| t.format)
+            .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
-        // Look up the target layer's bounds so we can translate the
+        // Look up the target node's bounds so we can translate the
         // canvas-space `source_origin` into layer-local coords for any
-        // operation that touches the layer texture directly (save_region,
-        // restore_from_scratch, clear_rect on the layer).
-        let layer_extent = if target_is_mask {
-            self.compositor
-                .mask_texture(layer_id)
-                .map(|t| t.canvas_extent())
-                .unwrap_or(crate::coord::CanvasRect::from_xywh(
-                    0, 0, canvas_w, canvas_h,
-                ))
-        } else {
-            self.compositor
-                .layer_texture(layer_id)
-                .map(|t| t.canvas_extent())
-                .unwrap_or(crate::coord::CanvasRect::from_xywh(
-                    0, 0, canvas_w, canvas_h,
-                ))
-        };
+        // operation that touches the texture directly.
+        let layer_extent = self
+            .compositor
+            .node_texture(node_id)
+            .map(|t| t.canvas_extent())
+            .unwrap_or(crate::coord::CanvasRect::from_xywh(
+                0, 0, canvas_w, canvas_h,
+            ));
 
         // Canvas-space rect of the source region, clipped to the layer's
         // current extent. This is the slice of the layer texture that the
@@ -318,15 +298,10 @@ impl DarklyEngine {
 
         // Save the source region to scratch (pre-clear snapshot for undo
         // and cancel). Must happen before the clear.
-        let layer_frame = if target_is_mask {
-            self.compositor
-                .mask_texture(layer_id)
-                .map(|t| t.canvas_frame())
-        } else {
-            self.compositor
-                .layer_texture(layer_id)
-                .map(|t| t.canvas_frame())
-        };
+        let layer_frame = self
+            .compositor
+            .node_texture(node_id)
+            .map(|t| t.canvas_frame());
         let cancel_snapshot = match layer_frame {
             Some(frame) => {
                 // Source rect may exceed canvas bounds (paste-extent layer
@@ -408,11 +383,11 @@ impl DarklyEngine {
             let layer_target = if target_is_mask {
                 self.compositor
                     .mask_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
+                    .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
             } else {
                 self.compositor
                     .layer_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
+                    .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
             };
             if let Some(target) = layer_target {
                 self.gpu.encode("transform-clear-sel", |encoder| {
@@ -433,11 +408,11 @@ impl DarklyEngine {
             let target = if target_is_mask {
                 self.compositor
                     .mask_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
+                    .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
             } else {
                 self.compositor
                     .layer_texture(layer_id)
-                    .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
+                    .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
             };
             if let Some(target) = target {
                 // clear_rect is canvas-space; the saved canvas rect is
@@ -613,7 +588,7 @@ impl DarklyEngine {
             self.undo_stack
                 .push(Box::new(LayerAddAction::new(layer_id, parent, pos)));
 
-            self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
+            self.compositor.mark_node_pixels_dirty(layer_id);
             self.compositor.clear_floating_content();
             return;
         }
@@ -750,11 +725,11 @@ impl DarklyEngine {
                 let target = if is_mask {
                     self.compositor
                         .mask_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_mask(t, self.doc.width, self.doc.height))
+                        .map(|t| GpuPaintTarget::from_node(t, self.doc.width, self.doc.height))
                 } else {
                     self.compositor
                         .layer_texture(layer_id)
-                        .map(|t| GpuPaintTarget::from_layer(t, self.doc.width, self.doc.height))
+                        .map(|t| GpuPaintTarget::from_node(t, self.doc.width, self.doc.height))
                 };
                 if let Some(target) = target {
                     match clear_shape {
@@ -796,7 +771,7 @@ impl DarklyEngine {
         });
 
         // Clean up GPU state
-        self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
+        self.compositor.mark_node_pixels_dirty(layer_id);
         self.compositor.clear_floating_content();
     }
 
@@ -853,8 +828,7 @@ impl DarklyEngine {
                             cancel_snapshot.saved,
                         );
                     });
-                    self.compositor
-                        .mark_layer_pixels_dirty(fc.target_layer, fc.target_is_mask);
+                    self.compositor.mark_node_pixels_dirty(fc.target_layer);
                 }
             }
         }
