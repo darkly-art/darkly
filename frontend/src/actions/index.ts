@@ -335,11 +335,18 @@ export function registerActions() {
 
 interface IsolationSnapshot {
     visibility: Map<number, boolean>;
-    /** If mask isolation was active, the layer whose show_mask was toggled on. */
-    showMaskLayerId: number | null;
+    /** Previous `isolated_node` value, restored on toggle-off. */
+    prevIsolatedId: number | null;
 }
 
 let isolationState: IsolationSnapshot | null = null;
+
+function findMaskModifierId(layer: any): number | null {
+    const mods = layer?.modifiers;
+    if (!Array.isArray(mods)) return null;
+    const mask = mods.find((m: any) => m.kind === 'mask');
+    return mask ? mask.id : null;
+}
 
 /** @param showMask - force mask view (isolateMask action or keyboard isolate while editing mask) */
 function toggleIsolation(targetId: number, showMask: boolean) {
@@ -351,10 +358,10 @@ function toggleIsolation(targetId: number, showMask: boolean) {
         for (const [id, wasVisible] of isolationState.visibility) {
             handle.set_layer_visible(id, wasVisible);
         }
-        // Restore show_mask if we toggled it on
-        if (isolationState.showMaskLayerId !== null) {
-            handle.set_show_mask(isolationState.showMaskLayerId, false);
-        }
+        // Restore previous isolation flag.
+        const prev = isolationState.prevIsolatedId ?? 0;
+        handle.set_isolated_node(prev);
+        app.isolatedNodeId = prev === 0 ? null : prev;
         isolationState = null;
     } else {
         // Save current visibility, then solo the target.
@@ -368,19 +375,19 @@ function toggleIsolation(targetId: number, showMask: boolean) {
             handle.set_layer_visible(layer.id, keepVisible.has(layer.id));
         }
 
-        // Show mask as grayscale if requested (explicit isolateMask action,
-        // or keyboard isolateLayer while editing a mask)
-        let showMaskLayerId: number | null = null;
-        const wantMask = showMask || app.editingMaskLayerId === targetId;
-        if (wantMask) {
-            const layer = findLayer(app.layerTree, targetId);
-            if (layer?.hasMask && !layer.showMask) {
-                handle.set_show_mask(targetId, true);
-                showMaskLayerId = targetId;
-            }
+        const prevIsolatedId = app.isolatedNodeId;
+
+        // Isolate the mask modifier (grayscale render) when explicitly asked
+        // for the mask view, or when the active node is itself a mask.
+        const layer = findLayer(app.layerTree, targetId);
+        const maskId = findMaskModifierId(layer);
+        const activeIsMask = maskId !== null && app.activeLayerId === maskId;
+        if ((showMask || activeIsMask) && maskId !== null) {
+            handle.set_isolated_node(maskId);
+            app.isolatedNodeId = maskId;
         }
 
-        isolationState = { visibility, showMaskLayerId };
+        isolationState = { visibility, prevIsolatedId };
     }
     app.refreshLayerTree();
     app.requestFrame();

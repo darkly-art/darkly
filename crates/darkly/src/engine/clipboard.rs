@@ -52,7 +52,7 @@ impl DarklyEngine {
 
         // Determine format and check texture exists.
         let format = if is_mask {
-            if self.compositor.mask_texture(layer_id).is_none() {
+            if self.compositor.node_texture(layer_id).is_none() {
                 return;
             }
             wgpu::TextureFormat::R8Unorm
@@ -79,17 +79,14 @@ impl DarklyEngine {
 
         let has_selection = self.gpu_selection.active;
 
-        // Resolve the layer-or-mask CanvasFrame once for both the cut undo
-        // save below and the matching commit further down.
-        let target_frame = if is_mask {
-            self.compositor
-                .mask_texture(layer_id)
-                .map(|t| t.canvas_frame())
-        } else {
-            self.compositor
-                .layer_texture(layer_id)
-                .map(|t| t.canvas_frame())
-        };
+        // Resolve the node's CanvasFrame once for both the cut undo save
+        // below and the matching commit further down. Format dispatch lives
+        // behind the unified node-texture pool — `is_mask` here only drives
+        // the format the readback was built against.
+        let target_frame = self
+            .compositor
+            .node_texture(layer_id)
+            .map(|t| t.canvas_frame());
         let undo_rect = target_frame
             .map(|f| f.canvas_extent)
             .unwrap_or_else(|| crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h));
@@ -158,7 +155,7 @@ impl DarklyEngine {
 
             // Get texture references before entering the encode closure.
             let layer_tex = if is_mask {
-                &self.compositor.mask_texture(layer_id).unwrap().texture
+                &self.compositor.node_texture(layer_id).unwrap().texture
             } else {
                 &self.compositor.node_texture(layer_id).unwrap().texture
             };

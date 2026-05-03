@@ -217,7 +217,7 @@ impl DarklyEngine {
             // `self.compositor.{mask,layer}_texture` borrows only that
             // sub-field, so split borrowing of `region_store` works.
             let (frame, format, layer_w, layer_h) = if self.is_editing_mask(layer_id) {
-                match self.compositor.mask_texture(layer_id) {
+                match self.compositor.node_texture(layer_id) {
                     Some(t) => (
                         t.canvas_frame(),
                         wgpu::TextureFormat::R8Unorm,
@@ -510,15 +510,50 @@ impl DarklyEngine {
         // submitted before any subsequent dab dispatch can start a new
         // encoder against the new texture. `gpu.encode` already does
         // one-encoder-per-call.
+        // Lockstep growth: collect mask-modifier ids of this host that
+        // share the host's UV space (i.e. non-locked) and grow them in the
+        // same encoder. Locked modifiers stay at their old extent — the
+        // shader samples each `PixelBuffer` via its own bounds, so a
+        // diverged modifier just renders at its frozen position.
+        let lockstep_ids: Vec<u64> = match self.doc.find_node(layer_id) {
+            Some(node) => node
+                .modifiers()
+                .iter()
+                .filter(|m| !m.common.locked && m.pixels().is_some())
+                .map(|m| m.id)
+                .collect(),
+            None => Vec::new(),
+        };
+
         self.gpu.encode("layer-grow", |encoder| {
-            self.compositor.resize_layer_texture(
+            self.compositor.resize_node_texture(
                 &self.gpu.device,
                 &self.gpu.queue,
                 encoder,
                 layer_id,
                 new_extent,
             );
+            for mod_id in &lockstep_ids {
+                self.compositor.resize_node_texture(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    encoder,
+                    *mod_id,
+                    new_extent,
+                );
+            }
         });
+
+        // Sync each lockstep modifier's document `PixelBuffer.bounds` to
+        // match its newly-grown GPU texture. The compositor is the realization;
+        // the document is the source of truth — both must agree post-resize.
+        for mod_id in &lockstep_ids {
+            if let Some(modifier) = self.doc.find_modifier_mut(*mod_id) {
+                if let Some(buf) = modifier.pixels_mut() {
+                    buf.bounds = new_extent;
+                }
+            }
+        }
 
         // Refresh the blend-uniform buffer so the composite pass sees the
         // new offset/size on the next render.
@@ -1084,11 +1119,11 @@ impl DarklyEngine {
             ) {
                 let layer_extent = if self.is_editing_mask(layer_id) {
                     self.compositor
-                        .mask_texture(layer_id)
+                        .node_texture(layer_id)
                         .map(|t| (&t.view, t.canvas_extent()))
                 } else {
                     self.compositor
-                        .layer_texture(layer_id)
+                        .node_texture(layer_id)
                         .map(|t| (&t.view, t.canvas_extent()))
                 };
                 if let Some((current_view, layer_canvas_extent)) = layer_extent {

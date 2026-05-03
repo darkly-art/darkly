@@ -317,18 +317,6 @@ impl DarklyEngine {
             .and_then(|n| n.modifiers().mask().map(|m| m.id))
     }
 
-    /// Test-only / migration shim. Tests written against the old
-    /// `editing_mask_layer` redirect call this to switch the paint target to
-    /// a host's mask. Production code should pass the modifier id directly as
-    /// the active node id (`begin_stroke(mask_id)` etc.). The shim is a
-    /// no-op now that paint dispatch uses the active node id directly — to be
-    /// removed once tests are migrated.
-    pub fn set_editing_mask(&mut self, _host_id: LayerId, _editing: bool) {
-        // No-op: paint target is identified by the active node id; tests
-        // calling this method need to be rewritten to use the mask
-        // modifier id directly. See Step 6 of the mask-modifier refactor.
-    }
-
     /// Complete mask-to-selection after async readback.
     pub(crate) fn complete_mask_to_selection(&mut self, was_active: bool, pixels: Vec<u8>) {
         self.gpu_selection.upload_replace_full(

@@ -1826,7 +1826,6 @@ fn engine_brush_stroke_paints_on_mask() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
     engine.add_mask(layer_id);
-    engine.set_editing_mask(layer_id, true);
 
     paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
 
@@ -1853,7 +1852,6 @@ fn engine_mask_brush_unstroked_pixels_unchanged() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
     engine.add_mask(layer_id);
-    engine.set_editing_mask(layer_id, true);
 
     paint_mask_dab(&mut engine, layer_id, 10.0, 10.0, 0.0);
 
@@ -1907,7 +1905,6 @@ fn engine_mask_brush_respects_selection() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer();
     engine.add_mask(layer_id);
-    engine.set_editing_mask(layer_id, true);
 
     // add_mask ran with no selection, so the mask starts all-white (255);
     // selection-seeding is bypassed. Then select the left half.

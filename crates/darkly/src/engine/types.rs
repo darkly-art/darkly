@@ -15,15 +15,6 @@ pub enum LayerInfo {
         blend_mode: u32,
         /// Modifiers attached to this layer (today: at most one mask).
         modifiers: Vec<ModifierInfo>,
-        /// Backwards-compat: `true` if a mask modifier is attached. Derived
-        /// from `modifiers`; the frontend will switch to walking that field
-        /// directly in a follow-up.
-        has_mask: bool,
-        /// Backwards-compat: mask modifier's visibility, or `true` if absent.
-        mask_enabled: bool,
-        /// Backwards-compat: `true` if the mask modifier is the
-        /// session-isolated node. Derived from engine session state.
-        show_mask: bool,
         /// Pixel-space bounds of the layer's GPU texture in canvas coords.
         bounds: crate::coord::CanvasRect,
     },
@@ -38,9 +29,6 @@ pub enum LayerInfo {
         opacity: f32,
         blend_mode: u32,
         modifiers: Vec<ModifierInfo>,
-        has_mask: bool,
-        mask_enabled: bool,
-        show_mask: bool,
         children: Vec<LayerInfo>,
     },
 }
@@ -252,16 +240,8 @@ pub struct ClipboardExport {
     pub offset_y: i32,
 }
 
-pub(crate) fn node_to_layer_info(
-    node: &crate::layer::LayerNode,
-    isolated: Option<u64>,
-) -> LayerInfo {
+pub(crate) fn node_to_layer_info(node: &crate::layer::LayerNode) -> LayerInfo {
     use crate::layer::{Layer, LayerNode};
-    let mask = node.modifiers().mask();
-    let has_mask = mask.is_some();
-    let mask_enabled = mask.map(|m| m.common.visible).unwrap_or(true);
-    let show_mask = mask.map(|m| isolated == Some(m.id)).unwrap_or(false);
-
     match node {
         LayerNode::Layer(layer) => match layer {
             Layer::Raster(r) => LayerInfo::Raster {
@@ -272,9 +252,6 @@ pub(crate) fn node_to_layer_info(
                 opacity: r.blend.opacity,
                 blend_mode: r.blend.blend_mode as u32,
                 modifiers: r.modifiers.iter().map(modifier_to_info).collect(),
-                has_mask,
-                mask_enabled,
-                show_mask,
                 bounds: r.pixels.bounds,
             },
         },
@@ -288,15 +265,7 @@ pub(crate) fn node_to_layer_info(
             opacity: g.blend.opacity,
             blend_mode: g.blend.blend_mode as u32,
             modifiers: g.modifiers.iter().map(modifier_to_info).collect(),
-            has_mask,
-            mask_enabled,
-            show_mask,
-            children: g
-                .children
-                .iter()
-                .rev()
-                .map(|n| node_to_layer_info(n, isolated))
-                .collect(),
+            children: g.children.iter().rev().map(node_to_layer_info).collect(),
         },
     }
 }

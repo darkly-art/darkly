@@ -32,7 +32,7 @@ struct VertexOutput {
 @group(0) @binding(2) var t_sampler: sampler;
 
 struct LerpUniforms {
-    show_mask: u32,
+    isolated: u32,
 }
 @group(0) @binding(3) var<uniform> uniforms: LerpUniforms;
 
@@ -43,7 +43,7 @@ struct LerpUniforms {
     let mask_alpha = textureSample(t_mask, t_sampler, in.uv).r;
 
     // Show mask as grayscale (same as composite.wgsl behavior).
-    if (uniforms.show_mask != 0u) {
+    if (uniforms.isolated != 0u) {
         return vec4f(mask_alpha, mask_alpha, mask_alpha, 1.0);
     }
 

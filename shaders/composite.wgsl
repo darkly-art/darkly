@@ -21,7 +21,7 @@ struct VertexOutput {
 struct Uniforms {
     opacity: f32,
     blend_mode: u32,
-    show_mask: u32,
+    isolated: u32,
     _pad1: f32,
     // Layer pixel offset in canvas coords (top-left).
     layer_offset: vec2f,
@@ -78,8 +78,8 @@ fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
     let mask_raw = textureSample(t_mask, t_sampler, layer_uv).r;
     let mask_alpha = select(0.0, mask_raw, in_bounds);
 
-    // Show mask as grayscale (GIMP's show_mask mode)
-    if (uniforms.show_mask != 0u) {
+    // Show mask as grayscale (GIMP's isolated mode)
+    if (uniforms.isolated != 0u) {
         return vec4f(mask_alpha, mask_alpha, mask_alpha, 1.0);
     }
 

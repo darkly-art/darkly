@@ -159,10 +159,12 @@ impl ContentBoundsPass {
         !self.pending.is_empty()
     }
 
-    /// Dispatch a compute shader to calculate content bounds for a layer.
+    /// Dispatch a compute shader to calculate content bounds for a node's
+    /// texture.
     ///
-    /// `is_mask` controls which channel is checked: alpha for RGBA layers,
-    /// red for R8 masks.
+    /// `r_channel` selects which texel channel is treated as coverage: alpha
+    /// for RGBA targets, red for R8 targets. Driven by the texture's format,
+    /// not by node kind.
     ///
     /// Results arrive asynchronously — call [`poll`] each frame.
     pub fn request(
@@ -172,7 +174,7 @@ impl ContentBoundsPass {
         texture_view: &wgpu::TextureView,
         width: u32,
         height: u32,
-        is_mask: bool,
+        r_channel: bool,
         layer_id: LayerId,
     ) {
         let gen = self.generation.get(&layer_id).copied().unwrap_or(0);
@@ -212,7 +214,7 @@ impl ContentBoundsPass {
         let params = Params {
             width,
             height,
-            use_r_channel: if is_mask { 1 } else { 0 },
+            use_r_channel: if r_channel { 1 } else { 0 },
             _pad: 0,
         };
         let param_buf = device.create_buffer(&wgpu::BufferDescriptor {

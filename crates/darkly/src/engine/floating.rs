@@ -233,7 +233,7 @@ impl DarklyEngine {
                 }
                 let canvas_origin = self
                     .compositor
-                    .layer_texture(layer_id)
+                    .node_texture(layer_id)
                     .map(|t| t.layer_to_canvas(crate::coord::LayerPoint::new(bx, by)))
                     .unwrap_or(crate::coord::CanvasPoint::new(bx as i32, by as i32));
                 self.setup_transform(layer_id, (canvas_origin.x, canvas_origin.y), bw, bh);
@@ -244,7 +244,6 @@ impl DarklyEngine {
                     &self.gpu.device,
                     &self.gpu.queue,
                     layer_id,
-                    target_is_mask,
                 );
                 self.pending_transform = Some(super::PendingTransform { node_id: layer_id });
                 false
@@ -382,11 +381,11 @@ impl DarklyEngine {
             // layer/mask target.
             let layer_target = if target_is_mask {
                 self.compositor
-                    .mask_texture(layer_id)
+                    .node_texture(layer_id)
                     .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
             } else {
                 self.compositor
-                    .layer_texture(layer_id)
+                    .node_texture(layer_id)
                     .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
             };
             if let Some(target) = layer_target {
@@ -407,11 +406,11 @@ impl DarklyEngine {
             // No selection — clear the layer-local source region on the layer.
             let target = if target_is_mask {
                 self.compositor
-                    .mask_texture(layer_id)
+                    .node_texture(layer_id)
                     .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
             } else {
                 self.compositor
-                    .layer_texture(layer_id)
+                    .node_texture(layer_id)
                     .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
             };
             if let Some(target) = target {
@@ -598,11 +597,11 @@ impl DarklyEngine {
         // silently wrong before — the typed API forces the conversion.
         let target_canvas_extent = if is_mask {
             self.compositor
-                .mask_texture(layer_id)
+                .node_texture(layer_id)
                 .map(|t| t.canvas_extent())
         } else {
             self.compositor
-                .layer_texture(layer_id)
+                .node_texture(layer_id)
                 .map(|t| t.canvas_extent())
         };
         let affected_canvas_rect = match (affected_canvas, target_canvas_extent) {
@@ -640,11 +639,11 @@ impl DarklyEngine {
         // of self.compositor across the closures below.
         let layer_canvas_extent = if is_mask {
             self.compositor
-                .mask_texture(layer_id)
+                .node_texture(layer_id)
                 .map(|t| t.canvas_extent())
         } else {
             self.compositor
-                .layer_texture(layer_id)
+                .node_texture(layer_id)
                 .map(|t| t.canvas_extent())
         };
         let layer_canvas_extent = match layer_canvas_extent {
@@ -660,12 +659,12 @@ impl DarklyEngine {
             () => {
                 if is_mask {
                     self.compositor
-                        .mask_texture(layer_id)
+                        .node_texture(layer_id)
                         .unwrap()
                         .canvas_frame()
                 } else {
                     self.compositor
-                        .layer_texture(layer_id)
+                        .node_texture(layer_id)
                         .unwrap()
                         .canvas_frame()
                 }
@@ -724,11 +723,11 @@ impl DarklyEngine {
             {
                 let target = if is_mask {
                     self.compositor
-                        .mask_texture(layer_id)
+                        .node_texture(layer_id)
                         .map(|t| GpuPaintTarget::from_node(t, self.doc.width, self.doc.height))
                 } else {
                     self.compositor
-                        .layer_texture(layer_id)
+                        .node_texture(layer_id)
                         .map(|t| GpuPaintTarget::from_node(t, self.doc.width, self.doc.height))
                 };
                 if let Some(target) = target {
@@ -812,11 +811,11 @@ impl DarklyEngine {
                 // snapshot intact.
                 let layer_frame = if fc.target_is_mask {
                     self.compositor
-                        .mask_texture(fc.target_layer)
+                        .node_texture(fc.target_layer)
                         .map(|t| t.canvas_frame())
                 } else {
                     self.compositor
-                        .layer_texture(fc.target_layer)
+                        .node_texture(fc.target_layer)
                         .map(|t| t.canvas_frame())
                 };
                 if let Some(layer_frame) = layer_frame {

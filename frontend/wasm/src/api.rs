@@ -493,56 +493,6 @@ impl DarklyHandle {
         self.push(Command::SetIsolatedNode(node_id as u64));
     }
 
-    // --- Backwards-compat shims for the old mask API. The frontend will
-    // migrate to using the modifier id directly + `set_isolated_node` /
-    // `set_layer_visible(modifier_id)`; these shims preserve the existing
-    // call sites while that migration happens. ---
-
-    /// Toggle the mask-enabled flag — equivalent to `set_layer_visible` on
-    /// the host's mask modifier.
-    pub fn set_mask_enabled(&self, host_id: f64, enabled: bool) {
-        let host = host_id as u64;
-        if let Some(mod_id) = self.engine.borrow().host_mask_id(host) {
-            self.push(Command::SetLayerVisible(mod_id, enabled));
-        }
-    }
-
-    /// Toggle "show mask" — equivalent to `set_isolated_node` to/from the
-    /// host's mask modifier.
-    pub fn set_show_mask(&self, host_id: f64, show: bool) {
-        let host = host_id as u64;
-        let mod_id = self.engine.borrow().host_mask_id(host).unwrap_or(0);
-        if mod_id == 0 {
-            return;
-        }
-        self.push(Command::SetIsolatedNode(if show { mod_id } else { 0 }));
-    }
-
-    /// Switch the active edit target between a host layer and its mask. With
-    /// the modifier-node model the active node id is sufficient — the
-    /// `editing_mask_layer` redirect is gone — but the frontend still calls
-    /// this on layer-row click.
-    pub fn set_editing_mask(&self, _host_id: f64, _editing: bool) {
-        // No-op: paint target is identified by the active node id. The
-        // frontend should set `app.activeLayerId` to the modifier id when
-        // the user clicks the mask thumbnail; this method exists to keep
-        // legacy call sites compiling without a panic.
-    }
-
-    /// Cached mask thumbnail bytes for a host layer. Resolves the mask
-    /// modifier id and delegates to `node_thumbnail`.
-    pub fn mask_thumbnail(&self, host_id: f64, width: u32, height: u32) -> Vec<u8> {
-        self.flush_if_needed();
-        let host = host_id as u64;
-        let mod_id = match self.engine.borrow().host_mask_id(host) {
-            Some(id) => id,
-            None => return Vec::new(),
-        };
-        self.engine
-            .borrow_mut()
-            .node_thumbnail(mod_id, width, height)
-    }
-
     // --- Painting ---
 
     pub fn fill_background(&self, layer_id: f64) {
@@ -1247,12 +1197,6 @@ impl DarklyHandle {
         self.engine
             .borrow_mut()
             .node_thumbnail(node_id as u64, width, height)
-    }
-
-    /// Backwards-compat alias kept while the frontend transitions to
-    /// `node_thumbnail`. To be removed once the layer panel is migrated.
-    pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
-        self.node_thumbnail(layer_id, width, height)
     }
 
     /// Monotonic counter bumped by the engine each time a thumbnail
