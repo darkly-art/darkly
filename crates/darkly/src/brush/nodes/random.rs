@@ -15,7 +15,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "random",
-        category: "sensor",
+        category: "input",
         display_name: "Random",
         ports: vec![PortDef::output("value", BrushWireType::Scalar)
             .with_description("Random value (-1 to 1)")],

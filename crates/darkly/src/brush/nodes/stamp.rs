@@ -30,7 +30,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "stamp",
-        category: "gpu",
+        category: "shape",
         display_name: "Stamp Tip",
         ports: vec![
             PortDef::input("tip", BrushWireType::Texture)

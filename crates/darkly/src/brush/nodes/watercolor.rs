@@ -51,7 +51,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "watercolor",
-        category: "gpu",
+        category: "output",
         display_name: "Watercolor",
         ports: vec![
             PortDef::input("dab", BrushWireType::Texture)

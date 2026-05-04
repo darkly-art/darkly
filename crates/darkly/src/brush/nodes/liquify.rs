@@ -53,7 +53,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "liquify",
-        category: "gpu",
+        category: "output",
         display_name: "Liquify",
         ports: vec![
             PortDef::input("size", BrushWireType::Scalar)

@@ -1,9 +1,24 @@
 <script lang="ts">
-    import { setContext, tick } from 'svelte';
+    import { onMount, setContext, tick } from 'svelte';
     import { brushGraph, WIRE_COLORS } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
+
+    interface Props {
+        /** Fires when the user requests "add node" from inside the canvas
+         *  (currently: Shift+A while the cursor is over the graph). The
+         *  parent owns the popup; coords let it both place the popup and
+         *  drop the resulting node at the cursor. */
+        onaddrequest?: (info: {
+            screenX: number;
+            screenY: number;
+            canvasX: number;
+            canvasY: number;
+        }) => void;
+    }
+
+    let { onaddrequest }: Props = $props();
 
     // --- Auto-layout when nodes have no positions ---
     // $effect runs after DOM is updated, so node elements can be measured.
@@ -59,6 +74,14 @@
     // --- Cursor glow for dot matrix ---
     let mouseX = $state(0);
     let mouseY = $state(0);
+
+    // --- Hover tracking for Shift+A ---
+    // We need cursor-in-canvas state and the latest screen-space cursor
+    // position so the add-node menu can open at the cursor and the new
+    // node can be dropped there too.
+    let cursorInside = false;
+    let lastClientX = 0;
+    let lastClientY = 0;
 
     function capturePointer(e: PointerEvent) {
         containerEl.setPointerCapture(e.pointerId);
@@ -195,6 +218,8 @@
         const r = containerEl.getBoundingClientRect();
         mouseX = e.clientX - r.left;
         mouseY = e.clientY - r.top;
+        lastClientX = e.clientX;
+        lastClientY = e.clientY;
 
         if (isPanning) {
             panX = panOriginX + (e.clientX - panStartX);
@@ -249,6 +274,30 @@
         }
     }
 
+    // --- 'addBrushNode' action → open menu at the cursor ---
+    // The action lives in the global registry (so it appears in the
+    // hotkey cheat sheet and respects user-overridden shortcuts). Its
+    // handler dispatches `darkly:add-node-request`; we listen here
+    // because pan/zoom and cursor tracking are local to this component.
+    function handleAddNodeRequest() {
+        if (brushGraph.draggingFrom) return;
+        if (!cursorInside || !containerEl) return;
+        const g = screenToGraph(lastClientX, lastClientY);
+        onaddrequest?.({
+            screenX: lastClientX,
+            screenY: lastClientY,
+            canvasX: g.x,
+            canvasY: g.y,
+        });
+    }
+
+    onMount(() => {
+        window.addEventListener('darkly:add-node-request', handleAddNodeRequest);
+        return () => {
+            window.removeEventListener('darkly:add-node-request', handleAddNodeRequest);
+        };
+    });
+
     // --- Image upload: drag & drop onto the container ---
 
     function onDragOver(e: DragEvent) {
@@ -287,6 +336,8 @@
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
+    onpointerenter={() => (cursorInside = true)}
+    onpointerleave={() => (cursorInside = false)}
     onlostpointercapture={onLostCapture}
     oncontextmenu={(e) => e.preventDefault()}
     ondragover={onDragOver}

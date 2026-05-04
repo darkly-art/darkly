@@ -22,7 +22,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "scatter",
-        category: "math",
+        category: "modulate",
         display_name: "Scatter",
         ports: vec![
             PortDef::input("position", BrushWireType::Vec2)

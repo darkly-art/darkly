@@ -14,7 +14,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "pen_input",
-        category: "sensor",
+        category: "input",
         display_name: "Pen Input",
         ports: vec![
             PortDef::output("pressure", BrushWireType::Scalar)

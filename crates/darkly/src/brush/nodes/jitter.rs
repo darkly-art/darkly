@@ -14,7 +14,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "jitter",
-        category: "math",
+        category: "modulate",
         display_name: "Jitter",
         ports: vec![
             PortDef::input("input", BrushWireType::Scalar)

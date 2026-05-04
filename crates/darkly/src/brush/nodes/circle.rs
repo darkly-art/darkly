@@ -17,7 +17,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "circle",
-        category: "gpu",
+        category: "shape",
         display_name: "Circle",
         ports: vec![
             PortDef::input("softness", BrushWireType::Scalar)
