@@ -18,6 +18,7 @@ pub mod paint_info;
 pub mod paint_target_ext;
 pub mod pipelines;
 pub mod preview_renderer;
+pub mod preview_subgraph;
 pub mod save_points;
 pub mod spacing;
 pub mod stabilizer;
@@ -138,6 +139,12 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert(
         "watercolor".into(),
         Box::new(nodes::watercolor::WatercolorEvaluator),
+    );
+    // Internal terminal used by per-node preview pipeline. Not exposed to the
+    // frontend palette (filtered by `category == "internal"`).
+    map.insert(
+        "preview_terminal".into(),
+        Box::new(nodes::preview_terminal::PreviewTerminalEvaluator),
     );
     map
 }

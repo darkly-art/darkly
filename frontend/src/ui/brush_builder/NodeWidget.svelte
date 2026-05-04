@@ -3,6 +3,7 @@
     import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
     import CurveEditor from '../CurveEditor.svelte';
+    import NodePreview from './NodePreview.svelte';
 
     interface Props {
         node: NodeInstance;
@@ -12,14 +13,37 @@
     let { node, zoom }: Props = $props();
 
     let isSelected = $derived(brushGraph.selectedNode === node.id);
-    let inputPorts = $derived(node.ports.filter(p => p.dir === 'Input'));
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
+<<<<<<< Updated upstream
     let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
+=======
+    /** Any GPU node that produces a texture output gets an in-node preview
+     *  thumbnail. The engine's `brush_node_preview` walks the predecessor
+     *  closure of the node and renders it through the existing async
+     *  preview path; this gate keeps us from showing previews for nodes
+     *  whose output isn't visualisable (Scalar, Vec2, etc.). */
+    let hasTextureOutput = $derived(outputPorts.some(p => p.wire_type === 'Texture'));
+>>>>>>> Stashed changes
 
     // Node type info for display name and params.
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));
     let displayName = $derived(typeInfo?.display_name ?? node.type_id);
     let paramDefs = $derived(typeInfo?.params ?? []);
+
+    /** Apply the port's `visible_when` rule against the current params.
+     *  Engine-side the port still works regardless — this is purely UI. */
+    function isPortVisible(port: PortDef): boolean {
+        if (!port.visible_when) return true;
+        const [paramName, allowed] = port.visible_when;
+        const idx = paramDefs.findIndex((d: any) => d.name === paramName);
+        if (idx < 0) return true; // misconfigured rule — fall back to visible
+        const def = paramDefs[idx] as any;
+        const raw = node.params[idx] ?? def?.default ?? 0;
+        return allowed.includes(Number(raw));
+    }
+    let inputPorts = $derived(
+        node.ports.filter(p => p.dir === 'Input' && isPortVisible(p))
+    );
 
     // --- Drag to move (from any point on the node) ---
     // Updates `brushGraph.nodePositions` directly — positions are
@@ -247,23 +271,8 @@
     </div>
 
     <div class="node-body">
-        {#if outputPorts.length > 0}
-            <div class="ports-outputs">
-                {#each outputPorts as port}
-                    <PortWidget {port} nodeId={node.id} side="right" />
-                {/each}
-            </div>
-        {/if}
-        {#if inputPorts.length > 0}
-            <div class="ports-inputs">
-                {#each inputPorts as port}
-                    <PortWidget {port} nodeId={node.id} side="left" />
-                {/each}
-            </div>
-        {/if}
-
         {#if paramDefs.length > 0}
-            <div class="params">
+            <div class="params params-top">
                 {#each paramDefs as pdef, i}
                     {#if pdef.kind === 'curve'}
                         <CurveEditor
@@ -387,6 +396,25 @@
                 {/each}
             </div>
         {/if}
+
+        {#if outputPorts.length > 0}
+            <div class="ports-outputs">
+                {#each outputPorts as port}
+                    <PortWidget {port} nodeId={node.id} side="right" />
+                {/each}
+            </div>
+        {/if}
+        {#if inputPorts.length > 0}
+            <div class="ports-inputs">
+                {#each inputPorts as port}
+                    <PortWidget {port} nodeId={node.id} side="left" />
+                {/each}
+            </div>
+        {/if}
+
+        {#if hasTextureOutput}
+            <NodePreview nodeId={node.id} width={96} height={96} />
+        {/if}
     </div>
 </div>
 
@@ -446,8 +474,13 @@
     }
     .params {
         padding: 4px 6px;
-        border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
-        margin-top: 4px;
+    }
+    /* When the params block sits at the top of the node body, draw the
+       divider below it (separating sticky config from per-dab data ports)
+       instead of the previous "params at the bottom" layout's top divider. */
+    .params-top {
+        border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+        margin-bottom: 4px;
     }
     .param-row {
         display: flex;

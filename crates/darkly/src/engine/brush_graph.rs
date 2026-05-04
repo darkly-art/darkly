@@ -540,6 +540,85 @@ impl DarklyEngine {
         cached.unwrap_or_default()
     }
 
+    /// Render a thumbnail of a single GPU node's `texture` output and return
+    /// the most recent cached PNG bytes for that node synchronously. Same
+    /// async-readback shape as `brush_active_dab_preview`, but the rendered
+    /// graph is the per-node *subgraph* built by
+    /// [`crate::brush::preview_subgraph::build_node_preview_graph`] (target
+    /// node + transitive predecessors + a synthesised `preview_terminal`).
+    ///
+    /// Returns an empty Vec for nodes that don't have a `Texture` output
+    /// port (the frontend uses empty as "preserve last good bytes / show
+    /// nothing yet" — same convention as `brush_editor_preview`).
+    ///
+    /// Cache key is `(node_id, brush_topology_version)`. Topology bumps on
+    /// any non-scrub change (param edits, port-default edits, rewires) so
+    /// changing a Circle's algorithm or amplitude properly invalidates the
+    /// preview; brush-bar exposed-scrub changes (size, opacity) don't bump
+    /// topology *and* the subgraph runs `apply_preview_overrides()`, so
+    /// scrubbing those leaves per-node previews at cache-hit cost.
+    pub fn brush_node_preview(&mut self, node_id: u64) -> Vec<u8> {
+        let in_stroke = self.brush_stroke_engine.is_some();
+
+        // Same "empty bytes mean preserve last frame" convention as
+        // `brush_active_dab_preview` — see that method's comments.
+        let cached = self
+            .node_preview_cache
+            .get(&node_id)
+            .map(|(_, bytes)| bytes.clone());
+
+        // Cache hit on the current topology version → return immediately.
+        // Mid-stroke we always return the cached bytes (if any) without
+        // queuing a render to avoid trampling the active stroke's GPU state.
+        let cache_fresh = self
+            .node_preview_cache
+            .get(&node_id)
+            .map(|(v, _)| *v == self.brush_topology_version)
+            .unwrap_or(false);
+        if cache_fresh || in_stroke {
+            return cached.unwrap_or_default();
+        }
+
+        // Skip if a render for THIS node is already in flight — avoids
+        // double-submit when the frontend polls during the readback gap.
+        let already_pending = self.readbacks.any(
+            |c| matches!(c, ReadbackContext::NodePreview { node_id: nid, .. } if *nid == node_id),
+        );
+        if already_pending {
+            return cached.unwrap_or_default();
+        }
+
+        // Build the per-node preview subgraph. Returns None if `node_id`
+        // doesn't exist or the target has no Texture output — both cases
+        // mean "no preview to render", which we surface as empty bytes.
+        let target = crate::nodegraph::NodeId(node_id);
+        let Some(graph) = crate::brush::preview_subgraph::build_node_preview_graph(
+            &self.active_brush_graph,
+            target,
+        ) else {
+            return Vec::new();
+        };
+
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        let (rw, rh) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_preview_dab(rw as f32, rh as f32);
+        self.render_preview_and_request_readback(
+            &graph,
+            &path,
+            rw,
+            rh,
+            fg,
+            bg,
+            ReadbackContext::NodePreview {
+                node_id,
+                topology_version: self.brush_topology_version,
+            },
+        );
+
+        cached.unwrap_or_default()
+    }
+
     /// Shared helper: render a preview path into the preview renderer's
     /// texture, then encode an async readback tagged with `context`. The
     /// caller decides what to do with the bytes when they arrive. The

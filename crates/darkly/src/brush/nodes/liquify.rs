@@ -325,9 +325,25 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             .dab_pool
             .acquire_sized(gpu.device, diameter_px, diameter_px);
         let circle_view = gpu.dab_pool.view(handle);
+        // Liquify's preview ring is a plain hard-edged disc — algorithm = 0
+        // (sine harmonic) with amplitude = 0 produces the unmodulated unit
+        // circle, and the centroid lands at the texture centre by construction.
         let circle_uniforms = CircleUniforms {
             softness: preview_softness,
-            _pad: [0.0; 3],
+            algorithm: 0,
+            amplitude: 0.0,
+            frequency: 1.0,
+            phase: 0.0,
+            persistence: 0.5,
+            seed: 0.0,
+            octaves: 1,
+            n1: 1.0,
+            n2: 1.0,
+            n3: 1.0,
+            base_radius: 0.498,
+            centroid_x: 0.0,
+            centroid_y: 0.0,
+            _pad: [0.0; 2],
         };
         let circle_offset = gpu
             .pipelines

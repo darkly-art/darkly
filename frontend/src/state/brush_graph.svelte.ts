@@ -23,6 +23,11 @@ export interface PortDef {
     icon: string;
     label: string;
     exposed: boolean;
+    /** When set, the port is shown only when the named param's current
+     *  integer value is in the allowed list. Tuple shape mirrors the
+     *  Rust serialization of `(String, Vec<i32>)`. UI-only — the engine
+     *  ignores this field. */
+    visible_when?: [string, number[]];
 }
 
 export interface NodeInstance {

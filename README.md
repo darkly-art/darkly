@@ -2,22 +2,27 @@
 
 # DARKLY
 
-Darkly is a digital paint program for artists. Its purpose is to empower veteran and new artists alike by accomodating their existing workflows, and introducing new elements designed to help them compete with AI.
+[Darkly](https://darkly.art) is a paint program for free-spirited artists. Fully free and open source, it has [everything you expect](#standard-paint-features) from a paint program, plus some [strange mechanisms](#unique-darkly-features) to help you rage against the machine.
 
-Darkly's characteristic feature is "veils" - a way of mutating or obfuscating the canvas to stimulate creative exploration. 
+Darkly runs on your PC or in the web browser via WebAssembly and WebGPU. Try out the demo [here](https://demo.darkly.art).
 
-Similar to how an AI leverages entropy to iteratively derive an image from noise, Darkly introduces entropy onto the canvas in a variety of clever and satisfying ways -- heat waves, rainy glass, turbulent water, retro CRT. These veil effects help to counteract inherent human tendencies which have always plagued artists:
+## Standard Paint Features
 
-- artist's block (the dreaded "white canvas")
-- premature fixation on detail (RIP composition)
-- lack of confidence / fear of exploration
-- artist blindness (losing fresh eyes after staring at a work for too long)
+### Brush Engine
 
-Basically, Darkly gives you permission to explore wildly and freely, brainstorming with entropy, trying out different compositions, and unlocking secrets latent in your own imagination. 
+- Node-based and infinitely customizable
+- Smooth and satisfying stroke stabilization
+- Lots of brush presets:
+    - Pencils, Charcoal
+    - Watercolor
+    - Oils
+    - Liquify
 
-It frees you from rulers, sharp lines, and your own inner critic, enabling you to paint freely and without judgement, behind the veil.
+## Unique Darkly Features
 
-The result is a speedier and more creative ideation process, which unearths artistic expressions unique to you. What will *YOU* see in the entropy? It may surprise you!
+### Veils
+
+### Muses
 
 ## Getting started
 

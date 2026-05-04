@@ -792,6 +792,17 @@ impl DarklyHandle {
         self.engine.borrow_mut().brush_active_dab_preview()
     }
 
+    /// Render a thumbnail of a single GPU node's `texture` output and return
+    /// the most recent cached PNG bytes synchronously. Same shape as
+    /// `brush_active_dab_preview`, but per-node — used by the brush
+    /// builder's in-node preview thumbnail. Returns empty bytes if the
+    /// node doesn't exist or has no Texture output port; the frontend
+    /// treats empty as "preserve the last good thumbnail / show nothing".
+    pub fn brush_node_preview(&self, node_id: u32) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().brush_node_preview(node_id as u64)
+    }
+
     /// Return the cached PNG thumbnail bytes for a library brush, kicking
     /// off a bake on first call. Returns an empty `Uint8Array` while the
     /// bake is in flight (or for unknown brush names); callers poll on

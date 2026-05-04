@@ -125,6 +125,21 @@ pub struct PortDef<W: WireKind> {
     /// is a working scaling factor, not part of how a brush looks).
     #[serde(default)]
     pub preview_value: Option<f32>,
+    /// Conditional visibility: the port is only shown in the UI when the
+    /// value of the named param is one of the listed integer values. The
+    /// param is referenced by its registration name (e.g. `"algorithm"`)
+    /// and is expected to be an `Int`/`Enum` param — those are the only
+    /// types where dispatch on a discrete value makes sense.
+    ///
+    /// When `None` (the default), the port is always visible. When set,
+    /// the frontend hides the port row whenever the named param's current
+    /// value is outside the allowed list. This is purely a UI affordance —
+    /// the engine still accepts and reads the port's value normally; it
+    /// just stops showing the user a control they wouldn't act on.
+    /// Used by the Circle node to hide algorithm-specific knobs (Perlin's
+    /// `seed`, Superformula's `n1`/`n2`/`n3`) under the wrong algorithm.
+    #[serde(default)]
+    pub visible_when: Option<(String, Vec<i32>)>,
 }
 
 impl<W: WireKind> PortDef<W> {
@@ -142,6 +157,7 @@ impl<W: WireKind> PortDef<W> {
             label: String::new(),
             exposed: false,
             preview_value: None,
+            visible_when: None,
         }
     }
 
@@ -159,6 +175,7 @@ impl<W: WireKind> PortDef<W> {
             label: String::new(),
             exposed: false,
             preview_value: None,
+            visible_when: None,
         }
     }
 
@@ -201,6 +218,19 @@ impl<W: WireKind> PortDef<W> {
     /// (size, position, time) rather than part of the brush's identity.
     pub fn with_preview_value(mut self, value: f32) -> Self {
         self.preview_value = Some(value);
+        self
+    }
+
+    /// Show this port in the UI only when the named param's current
+    /// integer value is one of `allowed_values`. See [`PortDef::visible_when`]
+    /// for the contract. The frontend filters; the engine ignores this
+    /// field entirely.
+    pub fn with_visible_when(
+        mut self,
+        param_name: impl Into<String>,
+        allowed_values: impl IntoIterator<Item = i32>,
+    ) -> Self {
+        self.visible_when = Some((param_name.into(), allowed_values.into_iter().collect()));
         self
     }
 }
