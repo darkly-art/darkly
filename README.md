@@ -2,7 +2,7 @@
 
 # DARKLY
 
-[Darkly](https://darkly.art) is a paint program for free-spirited artists. Fully free and open source, it has [everything you expect](#standard-paint-features) from a paint program, plus some [strange mechanisms](#unique-darkly-features) to help you rage against the machine.
+[Darkly](https://darkly.art) is a paint program for free-spirited artists. Fully free and open source, it has [everything you expect](#standard-paint-features) from a paint program, plus some **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
 Darkly runs on your PC or in the web browser via WebAssembly and WebGPU. Try out the demo [here](https://demo.darkly.art).
 
