@@ -26,7 +26,10 @@ impl DarklyEngine {
         }
 
         self.sync_mask_state(layer_id);
-        self.compositor.mark_dirty();
+        // Fresh mask texture (and possibly a selection-seeded copy on top) —
+        // queue a thumbnail readback so the panel's mask thumbnail appears
+        // immediately rather than waiting for the next paint stroke.
+        self.compositor.mark_layer_pixels_dirty(layer_id, true);
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
             layer_id,
@@ -200,7 +203,8 @@ impl DarklyEngine {
         self.compositor
             .set_layer_mask(&self.gpu.device, &self.gpu.queue, layer_id, false);
         self.sync_mask_state(layer_id);
-        self.compositor.mark_dirty();
+        // Apply baked the mask into the layer's alpha — layer pixels changed.
+        self.compositor.mark_layer_pixels_dirty(layer_id, false);
 
         // Also remove mask on document side
         self.doc.remove_mask(layer_id);
@@ -271,7 +275,8 @@ impl DarklyEngine {
         self.copy_selection_into_mask(layer_id);
 
         self.sync_mask_state(layer_id);
-        self.compositor.mark_dirty();
+        // Mask texture was just (re)allocated and seeded from the selection.
+        self.compositor.mark_layer_pixels_dirty(layer_id, true);
 
         self.undo_stack.push(Box::new(MaskPropertyAction::new(
             layer_id,

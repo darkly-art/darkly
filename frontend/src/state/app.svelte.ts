@@ -18,6 +18,10 @@ class AppState {
     // Active layer
     activeLayerId = $state<number | null>(null);
 
+    // Active veil. Mutually exclusive with activeLayerId — the right
+    // sidebar's properties pane shows the props of whichever is non-null.
+    activeVeilIndex = $state<number | null>(null);
+
     // Mask editing — which layer's mask is the current paint target (null = editing layer content)
     editingMaskLayerId = $state<number | null>(null);
 
@@ -28,6 +32,12 @@ class AppState {
 
     // Layer tree (read from WASM, refreshed after mutations/undo/redo).
     layerTree = $state<any[]>([]);
+
+    // Mirrors the engine's `thumbnail_version` counter. Bumped from
+    // `requestFrame` after each render so any `$derived` that reads
+    // a thumbnail (via getLayerThumbnail / getMaskThumbnail) re-runs
+    // when an async readback lands and the wasm cache is updated.
+    thumbnailEpoch = $state(0);
 
     // Veil list (read from WASM, refreshed after mutations).
     veilList = $state<any[]>([]);
@@ -47,6 +57,52 @@ class AppState {
     // proper ToolContext.
     canvasEl = $state<HTMLCanvasElement | null>(null);
 
+    selectLayer(id: number | null) {
+        this.activeLayerId = id;
+        this.activeVeilIndex = null;
+    }
+
+    selectVeil(index: number | null) {
+        this.activeVeilIndex = index;
+        this.activeLayerId = null;
+    }
+
+    clearSelection() {
+        this.activeLayerId = null;
+        this.activeVeilIndex = null;
+    }
+
+    /** Remove a veil and keep `activeVeilIndex` consistent with the new list. */
+    removeVeil(index: number) {
+        if (!this.handle) return;
+        this.handle.remove_veil(index);
+        if (this.activeVeilIndex === index) {
+            this.activeVeilIndex = null;
+        } else if (this.activeVeilIndex !== null && this.activeVeilIndex > index) {
+            this.activeVeilIndex--;
+        }
+        this.refreshVeilList();
+        this.requestFrame();
+    }
+
+    /** Reorder a veil and adjust `activeVeilIndex` so the selection follows the move. */
+    moveVeil(from: number, to: number) {
+        if (!this.handle || from === to) return;
+        this.handle.move_veil(from, to);
+        const a = this.activeVeilIndex;
+        if (a !== null) {
+            if (a === from) {
+                this.activeVeilIndex = to;
+            } else if (from < to && a > from && a <= to) {
+                this.activeVeilIndex = a - 1;
+            } else if (from > to && a >= to && a < from) {
+                this.activeVeilIndex = a + 1;
+            }
+        }
+        this.refreshVeilList();
+        this.requestFrame();
+    }
+
     swapColors() {
         const tmp = { ...this.foreground };
         this.foreground = { ...this.background };
@@ -64,6 +120,13 @@ class AppState {
                 const tree = JSON.parse(this.handle.layer_tree());
                 this.layerTree = Array.isArray(tree) ? tree : [];
             } catch { this.layerTree = []; }
+            // Schedule a render frame: callers invoke this after layer
+            // mutations (undo/redo, add/remove, drag/drop, etc.), and
+            // the engine may have async work pending — dirty-pixel
+            // readbacks, content-bounds compute, animation. Without a
+            // frame, drain_dirty_thumbnail_readbacks never runs and the
+            // layer panel ends up showing pre-mutation thumbnails.
+            this.requestFrame();
         }
     }
 
@@ -117,6 +180,13 @@ class AppState {
             this._framePending = false;
             if (!this.handle) return;
             const needsMore = this.handle.render(ts / 1000.0);
+
+            // Sync thumbnail-readback completions into a Svelte-reactive
+            // epoch so `$derived` consumers re-run. `!==` (not `>`) so a
+            // handle swap that resets the wasm counter to 0 still triggers
+            // a re-derivation against the new engine.
+            const v = this.handle.thumbnail_version();
+            if (v !== this.thumbnailEpoch) this.thumbnailEpoch = v;
 
             // Per-frame tool hook — async state sync (e.g. GPU readback completion).
             toolRegistry.get(this.activeToolId)?.onFrame?.();

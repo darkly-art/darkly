@@ -7,7 +7,7 @@ use crate::gpu::overlay::{OverlayPrimitive, ToolOverlay};
 use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
 use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Maximum allowed layer texture dimension in either axis. Strokes that
 /// would push the layer past this are clipped to current bounds.
@@ -154,6 +154,14 @@ pub struct Compositor {
     needs_composite: bool,
     /// When only the view transform changes, skip compositing and only re-present.
     needs_present: bool,
+
+    /// Layers whose pixel content was modified since the last drain.
+    /// Drained by the engine each frame to auto-queue thumbnail readbacks
+    /// — anything in here had its layer texture written, so the panel's
+    /// thumbnail is stale until a fresh readback lands.
+    dirty_layer_pixels: HashSet<LayerId>,
+    /// Same as `dirty_layer_pixels`, for mask textures.
+    dirty_mask_pixels: HashSet<LayerId>,
 
     canvas_width: u32,
     canvas_height: u32,
@@ -553,6 +561,8 @@ impl Compositor {
             sampler,
             needs_composite: true,
             needs_present: false,
+            dirty_layer_pixels: HashSet::new(),
+            dirty_mask_pixels: HashSet::new(),
             canvas_width: width,
             canvas_height: height,
             padded_width: padded_w,
@@ -827,6 +837,30 @@ impl Compositor {
         self.content_bounds.invalidate_all();
     }
 
+    /// Mark that a specific layer's pixel content (or its mask, if `is_mask`)
+    /// changed. Implies `mark_dirty()` and additionally records the layer in
+    /// the per-frame dirty set the engine drains to auto-queue thumbnail
+    /// readbacks. Use this *every* time a write encoder touches a layer or
+    /// mask texture, including ambiguous cases — the cost of an extra
+    /// readback is negligible vs. silently freezing a thumbnail.
+    pub fn mark_layer_pixels_dirty(&mut self, layer_id: LayerId, is_mask: bool) {
+        if is_mask {
+            self.dirty_mask_pixels.insert(layer_id);
+        } else {
+            self.dirty_layer_pixels.insert(layer_id);
+        }
+        self.mark_dirty();
+    }
+
+    /// Drain and return the set of layer ids whose pixels (`.0`) or masks
+    /// (`.1`) were dirtied since the last call. The engine calls this each
+    /// `render()` to auto-queue thumbnail readbacks.
+    pub fn drain_dirty_pixels(&mut self) -> (Vec<LayerId>, Vec<LayerId>) {
+        let layers = self.dirty_layer_pixels.drain().collect();
+        let masks = self.dirty_mask_pixels.drain().collect();
+        (layers, masks)
+    }
+
     /// Mark that only the present pass needs to re-run (view transform changed).
     /// Skips compositing when there are no dirty tiles or layer changes.
     pub fn mark_needs_present(&mut self) {
@@ -913,6 +947,8 @@ impl Compositor {
         self.mask_bind_groups.remove(&layer_id);
         self.raster_cache.remove(&layer_id);
         self.passthrough_mask_state.remove(&layer_id);
+        self.dirty_layer_pixels.remove(&layer_id);
+        self.dirty_mask_pixels.remove(&layer_id);
         self.mark_dirty();
     }
 

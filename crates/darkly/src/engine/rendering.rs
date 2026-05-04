@@ -6,6 +6,12 @@ use crate::gpu::view::ViewTransform;
 use crate::layer::BlendMode;
 use crate::undo::GpuRegionAction;
 
+/// Thumbnail size used for the layer panel previews. Single source of
+/// truth — the frontend reads it via `engine_default_thumb_size()` so
+/// the auto-queued readbacks land in the cache at the same dimensions
+/// the panel renders. Don't drift the literal in `thumbnails.ts`.
+pub const DEFAULT_THUMB_SIZE: u32 = 36;
+
 impl DarklyEngine {
     // --- View transform ---
 
@@ -74,15 +80,24 @@ impl DarklyEngine {
 
     // --- Thumbnails ---
 
-    /// Return the cached layer thumbnail, kicking off an async readback if needed.
-    pub fn layer_thumbnail(&mut self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
-        let cached = self.thumbnail_cache.layer.get(&layer_id).cloned();
-        self.request_thumbnail_readback(layer_id, false, thumb_w, thumb_h);
-        cached.unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
+    /// Return the cached layer thumbnail. Pure read — readback queueing
+    /// is owned by `drain_dirty_thumbnail_readbacks` (driven by
+    /// `mark_layer_pixels_dirty` at every pixel-write site). Auto-queueing
+    /// from this getter would create a feedback loop with the JS-side
+    /// `thumbnailEpoch` sync: each readback completion bumps the version,
+    /// the panel's `$derived` re-runs, calls back into here, which queues
+    /// another readback — replicating per-dab updates during strokes.
+    pub fn layer_thumbnail(&self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+        self.thumbnail_cache
+            .layer
+            .get(&layer_id)
+            .cloned()
+            .unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
     }
 
-    /// Return the cached mask thumbnail, kicking off an async readback if needed.
-    pub fn mask_thumbnail(&mut self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+    /// Return the cached mask thumbnail. Same contract as
+    /// `layer_thumbnail` — pure read; queueing happens via dirty-set drain.
+    pub fn mask_thumbnail(&self, layer_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
         let has_mask = match self.doc.find_node(layer_id) {
             Some(n) => n.common().has_mask,
             None => false,
@@ -90,10 +105,11 @@ impl DarklyEngine {
         if !has_mask {
             return Vec::new();
         }
-
-        let cached = self.thumbnail_cache.mask.get(&layer_id).cloned();
-        self.request_thumbnail_readback(layer_id, true, thumb_w, thumb_h);
-        cached.unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
+        self.thumbnail_cache
+            .mask
+            .get(&layer_id)
+            .cloned()
+            .unwrap_or_else(|| vec![0u8; (thumb_w * thumb_h * 4) as usize])
     }
 
     /// Kick off an async GPU readback for a thumbnail if one isn't already pending.
@@ -315,6 +331,11 @@ impl DarklyEngine {
                     );
                     self.thumbnail_cache.layer.insert(layer_id, thumb);
                 }
+                // Tell the frontend "fresh thumbnail bytes available" — the
+                // wasm boundary's `thumbnail_version()` getter returns this,
+                // and the JS-side `requestFrame` post-render sync turns the
+                // bump into a Svelte-reactive epoch update.
+                self.thumbnail_version = self.thumbnail_version.wrapping_add(1);
             }
             ReadbackContext::BrushEditorPreview {
                 width,
@@ -389,12 +410,45 @@ impl DarklyEngine {
             .any(|c| matches!(c, ReadbackContext::ColorPick))
     }
 
+    /// Monotonic counter bumped each time a thumbnail readback lands in
+    /// the cache. The frontend mirrors this into a Svelte-reactive epoch
+    /// so the layer panel's `$derived` re-runs on async cache updates.
+    pub fn thumbnail_version(&self) -> u32 {
+        self.thumbnail_version
+    }
+
+    /// Drain layers whose pixels were modified since the last call and
+    /// queue thumbnail readbacks at the engine's default panel size.
+    /// Run on every `render()` (production *and* headless tests) so the
+    /// layer panel sees fresh thumbnails after paint, fill, undo, paste
+    /// — anything that calls `compositor.mark_layer_pixels_dirty`.
+    fn drain_dirty_thumbnail_readbacks(&mut self) {
+        let (layers, masks) = self.compositor.drain_dirty_pixels();
+        for layer_id in layers {
+            self.request_thumbnail_readback(
+                layer_id,
+                false,
+                DEFAULT_THUMB_SIZE,
+                DEFAULT_THUMB_SIZE,
+            );
+        }
+        for layer_id in masks {
+            self.request_thumbnail_readback(layer_id, true, DEFAULT_THUMB_SIZE, DEFAULT_THUMB_SIZE);
+        }
+    }
+
     /// Render a frame. Returns true if animations need another frame.
     pub fn render(&mut self, time_secs: f32) -> bool {
         let pending_completed = self.poll_pending();
         if pending_completed {
             self.compositor.mark_dirty();
         }
+
+        // Auto-queue thumbnail readbacks for layers whose pixels were
+        // modified since the last frame. Must run *before* the headless
+        // early-return below so tests exercise the same code path the
+        // production frame loop does.
+        self.drain_dirty_thumbnail_readbacks();
 
         // Headless mode (tests): poll pending ops but skip presentation.
         let (surface, surface_config) = match (&self.gpu.surface, &self.gpu.surface_config) {
@@ -484,13 +538,15 @@ impl DarklyEngine {
 
         // If this is a GPU region action, execute the texture restore.
         if let Some(entry) = action.gpu_region_entry_mut() {
-            let frame = if entry.format == wgpu::TextureFormat::R8Unorm {
+            let is_mask = entry.format == wgpu::TextureFormat::R8Unorm;
+            let layer_id = entry.layer_id;
+            let frame = if is_mask {
                 self.compositor
-                    .mask_texture(entry.layer_id)
+                    .mask_texture(layer_id)
                     .map(|t| t.canvas_frame())
             } else {
                 self.compositor
-                    .layer_texture(entry.layer_id)
+                    .layer_texture(layer_id)
                     .map(|t| t.canvas_frame())
             };
             if let Some(frame) = frame {
@@ -504,6 +560,8 @@ impl DarklyEngine {
                         *entry = swapped;
                     },
                 );
+                // Restored pixels — refresh the panel thumbnail.
+                self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
             }
         }
 

@@ -352,6 +352,85 @@ fn hard_round_endpoint_dabs_not_clipped_against_cache_border() {
     }
 }
 
+/// Regression: scrubbing a `pen_input.stabilize` setting must not
+/// invalidate the editor-preview cache. The synthetic-stroke preview
+/// always renders with `PassThrough`, so the rendered pixels can't
+/// change in response to a user scrub. Bumping `brush_graph_version`
+/// on these scrubs would trigger a wasted full-stroke re-render every
+/// 100 ms while the user drags the slider (~1 GB/s of GPU work for no
+/// visible effect).
+///
+/// The fix declares stabilize via `with_preview_value(0.0)` and routes
+/// scrubs on any preview-irrelevant port through
+/// `ChangeKind::PreviewIrrelevantScrub`, which skips the version bump.
+/// Asserted against the public `brush_graph_version()` getter, with a
+/// negative-control scrub (`stamp.rotation`, no `preview_value`) to
+/// guard against the rule being over-broad.
+#[test]
+fn stabilize_scrub_does_not_bump_editor_preview_version() {
+    use darkly::engine::DarklyEngine;
+    use darkly::gpu::context::GpuContext;
+
+    let (device, queue) = test_device();
+    let gpu = GpuContext::new_headless(device, queue);
+    let mut engine = DarklyEngine::new(gpu, 1024, 768);
+
+    // Ink Pen exposes both `stabilize` (default 0.6) and `size` so we can
+    // contrast a preview-irrelevant scrub against a preview-affecting
+    // one in the same engine — avoids creating a second wgpu device.
+    engine.brush_load("Ink Pen").expect("Ink Pen built-in");
+
+    // Prime the editor preview cache and let the readback land so the
+    // version counter is at its post-init steady state.
+    let _ = engine.brush_editor_preview(320, 120);
+    engine.test_flush_readbacks();
+    let v_before_stabilize = engine.brush_graph_version();
+
+    // Find the exposed `stabilize` port and scrub it through
+    // `brush_set_exposed_port` — the same entry point the brush bar uses.
+    let stabilize = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .find(|p| p.port_name == "stabilize")
+        .expect("Ink Pen exposes a `stabilize` port");
+    engine
+        .brush_set_exposed_port(stabilize.node_id, "stabilize", 90.0)
+        .expect("scrub set");
+
+    assert_eq!(
+        engine.brush_graph_version(),
+        v_before_stabilize,
+        "stabilize is preview-irrelevant (PassThrough is hardcoded for \
+         the synthetic stroke); scrubbing it must not bump \
+         brush_graph_version — bumping invalidates the editor preview \
+         cache and triggers a wasted full-stroke re-render."
+    );
+
+    // Negative control: scrubbing a port the preview *does* read must
+    // still bump the version. `stamp.rotation` has no `preview_value`,
+    // is read by the stamp shader, and (for Ink Pen) is unwired — the
+    // perfect canary for "rule too broad". `brush_set_exposed_port`
+    // doesn't gate on the `exposed` flag (only the listing API does),
+    // so we reuse the stamp node id from the exposed `size` port.
+    let size = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .find(|p| p.port_name == "size")
+        .expect("Ink Pen exposes a `size` port on the stamp node");
+    let v_before_rotation = engine.brush_graph_version();
+    engine
+        .brush_set_exposed_port(size.node_id, "rotation", 0.5)
+        .expect("scrub set");
+    assert_ne!(
+        engine.brush_graph_version(),
+        v_before_rotation,
+        "rotation has no preview_value → it affects the preview output \
+         → its scrub must bump brush_graph_version. If this assertion \
+         fails, the preview-irrelevant rule is over-broad and real \
+         preview updates would also stall."
+    );
+}
+
 #[test]
 fn empty_path_returns_none() {
     let (device, queue) = test_device();

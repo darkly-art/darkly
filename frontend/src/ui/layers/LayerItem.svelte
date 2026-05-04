@@ -41,7 +41,7 @@
     }
 
     function setActive() {
-        app.activeLayerId = layer.id;
+        app.selectLayer(layer.id);
         // If we're clicking the layer row (not the mask thumb), switch to layer editing
         if (isEditingMask) {
             app.editingMaskLayerId = null;
@@ -52,7 +52,7 @@
 
     function clickLayerThumb(e: MouseEvent) {
         e.stopPropagation();
-        app.activeLayerId = layer.id;
+        app.selectLayer(layer.id);
         if (isEditingMask) {
             app.editingMaskLayerId = null;
             app.handle?.set_editing_mask(layer.id, false);
@@ -67,7 +67,7 @@
             return;
         }
         // Default: plain click toggles mask editing mode
-        app.activeLayerId = layer.id;
+        app.selectLayer(layer.id);
         if (!isEditingMask) {
             app.editingMaskLayerId = layer.id;
             app.handle?.set_editing_mask(layer.id, true);
@@ -136,14 +136,6 @@
         editing = false;
         if (app.handle && editInput) {
             app.handle.set_layer_name(layer.id, editInput.value);
-            onupdate();
-        }
-    }
-
-    function onOpacityChange(e: Event) {
-        const value = parseFloat((e.target as HTMLInputElement).value);
-        if (app.handle) {
-            app.handle.set_opacity(layer.id, value);
             onupdate();
         }
     }
@@ -267,22 +259,6 @@
     {:else}
         <span class="layer-name">{layer.name}</span>
     {/if}
-
-    {#if layer.type === 'raster' && layer.opacity !== undefined}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <input
-            type="range"
-            class="opacity-slider"
-            min="0" max="1" step="0.01"
-            value={layer.opacity}
-            oninput={onOpacityChange}
-            onclick={(e: MouseEvent) => e.stopPropagation()}
-            onpointerdown={() => { draggable = false; }}
-            onpointerup={() => { draggable = true; }}
-            onpointerleave={() => { draggable = true; }}
-            title="Opacity: {Math.round((layer.opacity ?? 1) * 100)}%"
-        />
-    {/if}
 </div>
 
 {#if showMaskMenu}
@@ -397,12 +373,6 @@
         padding: 1px 4px;
         outline: none;
         min-width: 0;
-    }
-
-    .opacity-slider {
-        width: 50px;
-        height: 4px;
-        flex-shrink: 0;
     }
 
     .mask-menu {

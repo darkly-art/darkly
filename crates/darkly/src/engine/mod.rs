@@ -11,6 +11,7 @@ mod selection;
 pub mod types;
 mod veils;
 
+pub use rendering::DEFAULT_THUMB_SIZE;
 pub use types::{ClipboardExport, LayerInfo, ParamInfo, StrokeOp, VeilInfo, VeilTypeInfo};
 
 use crate::brush::checkpoint_ring::CheckpointRing;
@@ -327,6 +328,13 @@ pub struct DarklyEngine {
     /// Last picked color — returned immediately while async readback is in flight.
     pub(crate) last_picked_color: [u8; 4],
     pub(crate) thumbnail_cache: ThumbnailCache,
+    /// Monotonic counter bumped each time a thumbnail readback lands in
+    /// the cache. Mirrored to a Svelte-reactive epoch in the frontend so
+    /// the layer panel's `$derived` can re-evaluate after async updates.
+    /// `u32` because exact-`f64` representation is required for the wasm
+    /// boundary; wraparound is irrelevant since the JS comparison is
+    /// `!==`, not `>`.
+    pub(crate) thumbnail_version: u32,
 
     /// Set once a layer-grow request has been refused for hitting
     /// `MAX_LAYER_DIM` — used to log the cap warning at most once per
@@ -422,6 +430,7 @@ impl DarklyEngine {
             pending_copy_result: None,
             last_picked_color: [0, 0, 0, 0],
             thumbnail_cache: ThumbnailCache::new(),
+            thumbnail_version: 0,
             layer_growth_capped: false,
         };
 
@@ -534,6 +543,21 @@ impl DarklyEngine {
             mask_tex.width,
             mask_tex.height,
         )
+    }
+
+    /// Peek at the cached thumbnail bytes for a layer without queuing a
+    /// fresh readback. Test-only — production callers go through
+    /// [`layer_thumbnail`] / [`mask_thumbnail`] which intentionally also
+    /// queue. The regression tests in `thumbnail_reactivity.rs` need a
+    /// non-side-effecting peek so they can prove the auto-queue path
+    /// (not the legacy `layer_thumbnail`-driven queue) populated the
+    /// cache.
+    pub fn test_thumbnail_cache_peek(&self, layer_id: u64, is_mask: bool) -> Option<Vec<u8>> {
+        if is_mask {
+            self.thumbnail_cache.mask.get(&layer_id).cloned()
+        } else {
+            self.thumbnail_cache.layer.get(&layer_id).cloned()
+        }
     }
 
     /// Block until all pending async readbacks complete. For tests only.

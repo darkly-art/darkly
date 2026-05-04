@@ -1202,6 +1202,24 @@ impl DarklyHandle {
             .mask_thumbnail(layer_id as u64, width, height)
     }
 
+    /// Monotonic counter bumped by the engine each time a thumbnail
+    /// readback lands in its cache. The frontend mirrors this into a
+    /// Svelte-reactive epoch so the layer panel's `$derived` re-runs
+    /// after async cache updates (which would otherwise be invisible
+    /// to Svelte).
+    pub fn thumbnail_version(&self) -> u32 {
+        self.engine.borrow().thumbnail_version()
+    }
+
+    /// Engine-side thumbnail dimension used by the auto-queue path. The
+    /// frontend's `THUMB_SIZE` literal in `thumbnails.ts` must match —
+    /// `app.svelte.ts` asserts equality at handle init so drift is
+    /// caught loudly the first time a stale frontend talks to a fresh
+    /// engine.
+    pub fn engine_default_thumb_size(&self) -> u32 {
+        darkly::engine::DEFAULT_THUMB_SIZE
+    }
+
     // =======================================================================
     // Queries — immutable borrow, always safe
     // =======================================================================
