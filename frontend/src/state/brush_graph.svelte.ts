@@ -1,10 +1,11 @@
 /**
  * Reactive brush graph state management.
  *
- * Rust owns the authoritative graph.  This module is a thin command layer
+ * Rust owns the authoritative graph. This module is a thin command layer
  * that sends mutations to WASM and replaces its local view with the
- * returned snapshot.  The only local-only mutation is `moveNode` during
- * drag (synced to Rust when the drag ends or on the next structural change).
+ * returned snapshot. Node positions are a UI-only concern — they live in
+ * `nodePositions` here, populated by `autoLayout` after every structural
+ * change, and never travel back to Rust.
  */
 import { app } from './app.svelte';
 
@@ -22,6 +23,16 @@ export interface PortDef {
     icon: string;
     label: string;
     exposed: boolean;
+    /** When set, the port is shown only when the named param's current
+     *  integer value is in the allowed list. Tuple shape mirrors the
+     *  Rust serialization of `(String, Vec<i32>)`. UI-only — the engine
+     *  ignores this field. */
+    visible_when?: [string, number[]];
+    /** Quantization step for the slider. `0` means continuous; positive
+     *  values snap drag/scrub/typed values to multiples of `step` from
+     *  `min`. Used by integer-valued ports like the circle node's
+     *  `frequency`. */
+    step: number;
 }
 
 export interface NodeInstance {
@@ -29,7 +40,6 @@ export interface NodeInstance {
     type_id: string;
     ports: PortDef[];
     params: any[];      // ParamValue array
-    position: [number, number];
 }
 
 export interface Connection {
@@ -75,7 +85,6 @@ export interface ExposedPortInfo {
     label: string;
     icon: string;
     description: string;
-    position: [number, number];
     nodeDisplayName: string;
     data: ExposedValue;
 }
@@ -110,6 +119,10 @@ interface GraphCommandResult {
 class BrushGraphState {
     /** Local view of the graph (snapshot from Rust). */
     graph = $state<BrushGraph | null>(null);
+
+    /** UI-only node positions, keyed by node id. Populated by `autoLayout`
+     *  after every structural change; never sent to Rust. */
+    nodePositions = $state<Record<number, [number, number]>>({});
 
     /** Registry of available node types (from WASM). */
     nodeTypes = $state<NodeTypeInfo[]>([]);
@@ -240,6 +253,7 @@ class BrushGraphState {
     resetToDefault() {
         if (!app.handle) return;
         app.handle.brush_graph_reset();
+        this.nodePositions = {};
         this.fetchGraph();
         this.refreshExposedPorts();
         this.error = null;
@@ -296,11 +310,13 @@ class BrushGraphState {
         if (!app.handle) return;
         const result = app.handle.brush_load(name);
         // Error string → load failed.
-        if (result !== null && result !== true) {
+        if (result !== null) {
             this.error = String(result);
             return;
         }
         this.activeBrush = name;
+        // Clear positions so the canvas effect re-runs auto-layout.
+        this.nodePositions = {};
         this.fetchGraph();
         this.refreshExposedPorts();
         this.error = null;
@@ -309,41 +325,55 @@ class BrushGraphState {
         this.snapshotTopologyVersion();
     }
 
-    /** True when all node positions are at the origin (no layout assigned). */
-    get needsLayout(): boolean {
+    /** True when at least one node lacks a UI position — i.e. the graph
+     *  was just loaded/reset and the canvas should run auto-layout. */
+    get hasUnpositionedNodes(): boolean {
         if (!this.graph) return false;
-        const nodes = Object.values(this.graph.nodes);
-        if (nodes.length === 0) return false;
-        return nodes.every(n => n.position[0] === 0 && n.position[1] === 0);
+        for (const idStr of Object.keys(this.graph.nodes)) {
+            if (!this.nodePositions[Number(idStr)]) return true;
+        }
+        return false;
     }
 
     /**
-     * Run auto-layout on the active graph.
-     * `sizes` maps node ID → `[width, height]` measured from the DOM.
-     * When omitted, Rust estimates sizes from port counts.
+     * Run auto-layout on the active graph and store the result in
+     * `nodePositions`. `sizes` maps node ID → `[width, height]` measured
+     * from the DOM; when omitted, Rust estimates sizes from port counts.
      */
     autoLayout(sizes?: Record<string, [number, number]>) {
         if (!app.handle) return;
         const sizesJson = JSON.stringify(sizes ?? {});
-        const graphStr = app.handle.brush_graph_auto_layout(sizesJson);
+        const layoutJson = app.handle.brush_graph_auto_layout(sizesJson);
         try {
-            const graph = JSON.parse(graphStr);
-            if (graph && graph.nodes) {
-                this.graph = graph as BrushGraph;
+            const layout = JSON.parse(layoutJson) as Record<string, [number, number]>;
+            if (layout && typeof layout === 'object') {
+                const next: Record<number, [number, number]> = {};
+                for (const [idStr, pos] of Object.entries(layout)) {
+                    const id = Number(idStr);
+                    if (Number.isFinite(id) && Array.isArray(pos)) {
+                        next[id] = [pos[0], pos[1]];
+                    }
+                }
+                this.nodePositions = next;
             }
         } catch {
-            // Parse failed.
+            // Parse failed — leave existing positions.
         }
     }
 
-    /** Add a node of the given type at the given position. Returns the new node's ID. */
+    /** Add a node of the given type. The new node is placed at `(x, y)` in
+     *  the local positions map. Returns the new node's ID. */
     addNode(typeId: string, x: number, y: number): number | null {
         if (!app.handle) return null;
-        this.applyResult(app.handle.brush_graph_add_node(typeId, x, y));
+        this.applyResult(app.handle.brush_graph_add_node(typeId));
         // brush_graph_add_node assigns the pre-increment value of next_id,
         // so the new node's ID is next_id - 1 after the result is applied.
         if (!this.graph) return null;
-        return this.graph.next_id - 1;
+        const id = this.graph.next_id - 1;
+        // Position assignment is local-only — auto-layout would
+        // disturb the user's current arrangement.
+        this.nodePositions[id] = [x, y];
+        return id;
     }
 
     /** Remove a node and all its connections. */
@@ -351,6 +381,13 @@ class BrushGraphState {
         if (!app.handle) return;
         if (this.selectedNode === nodeId) this.selectedNode = null;
         this.applyResult(app.handle.brush_graph_remove_node(nodeId));
+        delete this.nodePositions[nodeId];
+    }
+
+    /** Update a node's UI position (drag-to-move). Local-only — positions
+     *  are not persisted to Rust. */
+    moveNode(nodeId: number, x: number, y: number) {
+        this.nodePositions[nodeId] = [x, y];
     }
 
     /** Connect two ports. */
@@ -363,28 +400,6 @@ class BrushGraphState {
     disconnect(fromNode: number, fromPort: string, toNode: number, toPort: string) {
         if (!app.handle) return;
         this.applyResult(app.handle.brush_graph_disconnect(fromNode, fromPort, toNode, toPort));
-    }
-
-    /** Update a node's position (local-only during drag for responsiveness). */
-    moveNode(nodeId: number, x: number, y: number) {
-        if (!this.graph) return;
-        const node = this.graph.nodes[String(nodeId)];
-        if (node) {
-            // Mutate in place — Svelte 5's deep proxy tracks the change
-            // at the property level, so only consumers that read this
-            // node's position will re-evaluate (not every node/port/wire).
-            node.position[0] = x;
-            node.position[1] = y;
-        }
-    }
-
-    /** Sync a node's position to Rust (call after drag ends). */
-    syncNodePosition(nodeId: number) {
-        if (!app.handle || !this.graph) return;
-        const node = this.graph.nodes[String(nodeId)];
-        if (node) {
-            app.handle.brush_graph_move_node(nodeId, node.position[0], node.position[1]);
-        }
     }
 
     /** Update a node's parameter value locally (for responsive slider feedback). */

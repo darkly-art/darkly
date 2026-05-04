@@ -42,23 +42,23 @@ pub fn register() -> BrushNodeRegistration {
         display_name: "Color Output",
         ports: vec![
             PortDef::input("dab", BrushWireType::Texture)
-                .with_description("The rendered dab texture to composite onto the canvas"),
+                .with_description("Brush mark to apply to the canvas"),
             PortDef::input("dab_size", BrushWireType::Vec2)
-                .with_description("Width and height of the dab in pixels"),
+                .with_description("Brush mark size in pixels"),
             PortDef::input("position", BrushWireType::Vec2)
-                .with_description("Canvas position where the dab center is placed"),
+                .with_description("Where on the canvas to place the brush mark"),
             PortDef::input("blend_mode", BrushWireType::Int)
                 .with_range(0.0, 1.0, 0.0)
-                .with_description("Compositing blend mode (0 = source over, 1 = erase)"),
+                .with_description("0 = paint normally, 1 = erase"),
             PortDef::input("opacity", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
                 .with_label("Opacity")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-fill-drip")
                 .exposed()
-                .with_description("Stroke-level opacity cap (max coverage regardless of overlap)"),
+                .with_description("Maximum stroke opacity. Overlapping brush marks within a single stroke won't build past this."),
             PortDef::input("brush_preview", BrushWireType::Texture)
-                .with_description("Hover-preview texture. Its dimensions are the brush's canvas-pixel extent (rotation, ratio, mirror baked in). Typically wired from a brush tip's preview output, but accepts any texture."),
+                .with_description("Brush shape shown under the cursor on hover"),
         ],
         params: &[],
         is_gpu: true,

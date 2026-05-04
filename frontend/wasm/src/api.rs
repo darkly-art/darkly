@@ -169,7 +169,6 @@ enum Command {
     // Brush config
     SetBrushBlendMode(u32),
     ResetBrushGraph,
-    BrushGraphMoveNode(u64, f32, f32),
 
     // Color pick (pointer-frequency, starts async readback)
     PickColor(f32, f32),
@@ -276,7 +275,6 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
 
             Command::SetBrushBlendMode(m) => engine.set_brush_blend_mode(m),
             Command::ResetBrushGraph => engine.reset_brush_graph(),
-            Command::BrushGraphMoveNode(id, x, y) => engine.brush_graph_move_node(id, x, y),
 
             Command::PickColor(x, y) => {
                 engine.pick_color(x, y);
@@ -794,6 +792,17 @@ impl DarklyHandle {
         self.engine.borrow_mut().brush_active_dab_preview()
     }
 
+    /// Render a thumbnail of a single GPU node's `texture` output and return
+    /// the most recent cached PNG bytes synchronously. Same shape as
+    /// `brush_active_dab_preview`, but per-node — used by the brush
+    /// builder's in-node preview thumbnail. Returns empty bytes if the
+    /// node doesn't exist or has no Texture output port; the frontend
+    /// treats empty as "preserve the last good thumbnail / show nothing".
+    pub fn brush_node_preview(&self, node_id: u32) -> Vec<u8> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().brush_node_preview(node_id as u64)
+    }
+
     /// Return the cached PNG thumbnail bytes for a library brush, kicking
     /// off a bake on first call. Returns an empty `Uint8Array` while the
     /// bake is in flight (or for unknown brush names); callers poll on
@@ -849,9 +858,6 @@ impl DarklyHandle {
     }
     pub fn brush_graph_reset(&self) {
         self.push(Command::ResetBrushGraph);
-    }
-    pub fn brush_graph_move_node(&self, node_id: u32, x: f32, y: f32) {
-        self.push(Command::BrushGraphMoveNode(node_id as u64, x, y));
     }
 
     // --- Color pick ---
@@ -1032,9 +1038,9 @@ impl DarklyHandle {
         }
     }
 
-    pub fn brush_graph_add_node(&self, type_id: &str, x: f32, y: f32) -> JsValue {
+    pub fn brush_graph_add_node(&self, type_id: &str) -> JsValue {
         self.flush_if_needed();
-        graph_result(self.engine.borrow_mut().brush_graph_add_node(type_id, x, y))
+        graph_result(self.engine.borrow_mut().brush_graph_add_node(type_id))
     }
 
     pub fn brush_graph_remove_node(&self, node_id: u32) -> JsValue {
@@ -1120,8 +1126,10 @@ impl DarklyHandle {
         ))
     }
 
-    /// Run auto-layout.  `sizes_json` is a JSON object mapping node ID
+    /// Run auto-layout. `sizes_json` is a JSON object mapping node ID
     /// strings to `[width, height]` arrays, measured from the DOM.
+    /// Returns a JSON object mapping node ID strings to `[x, y]` —
+    /// positions are a UI-only concern, not stored on the graph.
     pub fn brush_graph_auto_layout(&self, sizes_json: &str) -> String {
         self.flush_if_needed();
         let sizes: std::collections::HashMap<u64, [f32; 2]> =
@@ -1130,7 +1138,13 @@ impl DarklyHandle {
             .into_iter()
             .map(|(id, wh)| (darkly::nodegraph::NodeId(id), wh))
             .collect();
-        self.engine.borrow_mut().brush_graph_auto_layout(&sizes)
+        let layout = self.engine.borrow().brush_graph_auto_layout(&sizes);
+        // Re-key by stringified id so JSON consumers see plain object keys.
+        let json_layout: std::collections::HashMap<String, [f32; 2]> = layout
+            .into_iter()
+            .map(|(id, pos)| (id.0.to_string(), pos))
+            .collect();
+        serde_json::to_string(&json_layout).unwrap_or_else(|_| "{}".into())
     }
 
     pub fn brush_upload_image(
@@ -1153,19 +1167,13 @@ impl DarklyHandle {
 
     // --- Brush library (direct) ---
 
-    /// Load a brush.  Returns `null` on success (no auto-layout needed),
-    /// `true` if auto-layout was applied (frontend should re-layout with
-    /// DOM sizes), or an error string.
+    /// Load a brush. Returns `null` on success or an error string.
+    /// The frontend always re-runs auto-layout after a load — positions
+    /// are UI-only and not persisted with the brush.
     pub fn brush_load(&self, name: &str) -> JsValue {
         self.flush_if_needed();
         match self.engine.borrow_mut().brush_load(name) {
-            Ok(needs_layout) => {
-                if needs_layout {
-                    JsValue::TRUE
-                } else {
-                    JsValue::NULL
-                }
-            }
+            Ok(()) => JsValue::NULL,
             Err(e) => JsValue::from_str(&e),
         }
     }

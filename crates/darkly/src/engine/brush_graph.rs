@@ -540,6 +540,85 @@ impl DarklyEngine {
         cached.unwrap_or_default()
     }
 
+    /// Render a thumbnail of a single GPU node's `texture` output and return
+    /// the most recent cached PNG bytes for that node synchronously. Same
+    /// async-readback shape as `brush_active_dab_preview`, but the rendered
+    /// graph is the per-node *subgraph* built by
+    /// [`crate::brush::preview_subgraph::build_node_preview_graph`] (target
+    /// node + transitive predecessors + a synthesised `preview_terminal`).
+    ///
+    /// Returns an empty Vec for nodes that don't have a `Texture` output
+    /// port (the frontend uses empty as "preserve last good bytes / show
+    /// nothing yet" — same convention as `brush_editor_preview`).
+    ///
+    /// Cache key is `(node_id, brush_topology_version)`. Topology bumps on
+    /// any non-scrub change (param edits, port-default edits, rewires) so
+    /// changing a Circle's algorithm or amplitude properly invalidates the
+    /// preview; brush-bar exposed-scrub changes (size, opacity) don't bump
+    /// topology *and* the subgraph runs `apply_preview_overrides()`, so
+    /// scrubbing those leaves per-node previews at cache-hit cost.
+    pub fn brush_node_preview(&mut self, node_id: u64) -> Vec<u8> {
+        let in_stroke = self.brush_stroke_engine.is_some();
+
+        // Same "empty bytes mean preserve last frame" convention as
+        // `brush_active_dab_preview` — see that method's comments.
+        let cached = self
+            .node_preview_cache
+            .get(&node_id)
+            .map(|(_, bytes)| bytes.clone());
+
+        // Cache hit on the current topology version → return immediately.
+        // Mid-stroke we always return the cached bytes (if any) without
+        // queuing a render to avoid trampling the active stroke's GPU state.
+        let cache_fresh = self
+            .node_preview_cache
+            .get(&node_id)
+            .map(|(v, _)| *v == self.brush_topology_version)
+            .unwrap_or(false);
+        if cache_fresh || in_stroke {
+            return cached.unwrap_or_default();
+        }
+
+        // Skip if a render for THIS node is already in flight — avoids
+        // double-submit when the frontend polls during the readback gap.
+        let already_pending = self.readbacks.any(
+            |c| matches!(c, ReadbackContext::NodePreview { node_id: nid, .. } if *nid == node_id),
+        );
+        if already_pending {
+            return cached.unwrap_or_default();
+        }
+
+        // Build the per-node preview subgraph. Returns None if `node_id`
+        // doesn't exist or the target has no Texture output — both cases
+        // mean "no preview to render", which we surface as empty bytes.
+        let target = crate::nodegraph::NodeId(node_id);
+        let Some(graph) = crate::brush::preview_subgraph::build_node_preview_graph(
+            &self.active_brush_graph,
+            target,
+        ) else {
+            return Vec::new();
+        };
+
+        let fg = self.preview_theme_fg;
+        let bg = self.preview_theme_bg;
+        let (rw, rh) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_preview_dab(rw as f32, rh as f32);
+        self.render_preview_and_request_readback(
+            &graph,
+            &path,
+            rw,
+            rh,
+            fg,
+            bg,
+            ReadbackContext::NodePreview {
+                node_id,
+                topology_version: self.brush_topology_version,
+            },
+        );
+
+        cached.unwrap_or_default()
+    }
+
     /// Shared helper: render a preview path into the preview renderer's
     /// texture, then encode an async readback tagged with `context`. The
     /// caller decides what to do with the bytes when they arrive. The
@@ -600,12 +679,7 @@ impl DarklyEngine {
 
     /// Add a node to the active graph and compile.
     /// Returns the updated graph JSON on success.
-    pub fn brush_graph_add_node(
-        &mut self,
-        type_id: &str,
-        x: f32,
-        y: f32,
-    ) -> Result<String, String> {
+    pub fn brush_graph_add_node(&mut self, type_id: &str) -> Result<String, String> {
         let registry = BrushNodeRegistry::new();
         let reg = registry
             .get(type_id)
@@ -616,12 +690,8 @@ impl DarklyEngine {
             .iter()
             .map(|p| p.default_value())
             .collect::<Vec<_>>();
-        let id = self
-            .active_brush_graph
+        self.active_brush_graph
             .add_node(type_id, reg.ports.clone(), params);
-
-        // Set position.
-        let _ = self.active_brush_graph.set_node_position(id, [x, y]);
 
         self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
@@ -716,21 +786,15 @@ impl DarklyEngine {
         Ok(self.active_graph_json())
     }
 
-    /// Update a node's position (UI-only, no compile).
-    pub fn brush_graph_move_node(&mut self, node_id: u64, x: f32, y: f32) {
-        let _ = self
-            .active_brush_graph
-            .set_node_position(NodeId(node_id), [x, y]);
-    }
-
-    /// Run auto-layout on the active brush graph and return updated JSON.
+    /// Compute auto-layout positions for the active brush graph.
     /// `sizes` maps `NodeId` → `[width, height]` measured from the DOM.
+    /// Returns the layout map directly — positions are a UI-only concern
+    /// and are not stored on the graph.
     pub fn brush_graph_auto_layout(
-        &mut self,
+        &self,
         sizes: &std::collections::HashMap<NodeId, [f32; 2]>,
-    ) -> String {
-        self.active_brush_graph.auto_layout_with_sizes(sizes);
-        self.active_graph_json()
+    ) -> crate::nodegraph::NodeLayout {
+        self.active_brush_graph.auto_layout_with_sizes(sizes)
     }
 
     /// Upload an RGBA8 image and associate it with a resource name.
@@ -772,10 +836,11 @@ impl DarklyEngine {
     /// Scans all nodes for input ports with `exposed == true`, and also
     /// includes legacy `user_input` nodes for backward compatibility.
     ///
-    /// The result is ordered by node position (top-to-bottom, left-to-right)
-    /// for a stable, creator-controlled layout in the properties panel.
+    /// The result is ordered by auto-layout position (top-to-bottom,
+    /// left-to-right) for a stable order in the properties panel.
     pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
         let registry = BrushNodeRegistry::new();
+        let layout = self.active_brush_graph.auto_layout();
         let mut result: Vec<ExposedPortInfo> = Vec::new();
 
         for node in self.active_brush_graph.nodes.values() {
@@ -843,7 +908,6 @@ impl DarklyEngine {
                     label,
                     icon,
                     description,
-                    position: node.position,
                     node_display_name: display_name.to_string(),
                     data: ExposedValue::Scalar {
                         value: unit_type.to_display(port.default),
@@ -856,14 +920,23 @@ impl DarklyEngine {
             }
         }
 
-        // Sort by position: top-to-bottom (y), then left-to-right (x).
+        // Sort by layout position: top-to-bottom (y), then left-to-right (x).
+        // Layout is computed above; entries for unknown nodes default to origin.
+        let key = |info: &ExposedPortInfo| -> [f32; 2] {
+            layout
+                .get(&NodeId(info.node_id))
+                .copied()
+                .unwrap_or([0.0, 0.0])
+        };
         result.sort_by(|a, b| {
-            a.position[1]
-                .partial_cmp(&b.position[1])
+            let ka = key(a);
+            let kb = key(b);
+            ka[1]
+                .partial_cmp(&kb[1])
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| {
-                    a.position[0]
-                        .partial_cmp(&b.position[0])
+                    ka[0]
+                        .partial_cmp(&kb[0])
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
         });
@@ -929,7 +1002,6 @@ impl DarklyEngine {
             label,
             icon,
             description,
-            position: node.position,
             node_display_name: "User Input".to_string(),
             data: ExposedValue::Scalar {
                 value,
@@ -1054,7 +1126,6 @@ pub struct ExposedPortInfo {
     pub label: String,
     pub icon: String,
     pub description: String,
-    pub position: [f32; 2],
     pub node_display_name: String,
     pub data: ExposedValue,
 }

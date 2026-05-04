@@ -18,11 +18,29 @@ use std::cell::Cell;
 use std::num::NonZeroU64;
 
 /// Uniform data for the circle mask generation shader.
+///
+/// Carries the algorithm choice (sine harmonic / 1D Perlin / Gielis
+/// superformula), all per-algorithm shape parameters, and the CPU-computed
+/// centroid offset that anchors the rendered shape's geometric centroid at
+/// the texture centre — see [`crate::brush::nodes::circle`].
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CircleUniforms {
-    pub softness: f32,  // 0-1 fraction of radius
-    pub _pad: [f32; 3], // padding to 16-byte alignment
+    pub softness: f32,    // 0-1 fraction of base radius
+    pub algorithm: u32,   // 0 = sine harmonic, 1 = perlin/value-noise, 2 = superformula
+    pub amplitude: f32,   // bump amplitude (sine, perlin) — fraction of base radius
+    pub frequency: f32,   // bump count (sine.n, perlin.f, superformula.m)
+    pub phase: f32,       // rotation in radians applied before r(θ) sample
+    pub persistence: f32, // perlin: per-octave amplitude falloff
+    pub seed: f32,        // perlin: rng seed
+    pub octaves: u32,     // perlin: stacked frequency count
+    pub n1: f32,          // superformula: overall sharpness
+    pub n2: f32,          // superformula: bump rise
+    pub n3: f32,          // superformula: bump fall
+    pub base_radius: f32, // shrink factor so r_max stays inside the viewport
+    pub centroid_x: f32,  // shape centroid in viewport-radius units
+    pub centroid_y: f32,
+    pub _pad: [f32; 2], // pad to 16-byte alignment
 }
 
 /// Uniform data for the stamp dab generation shader.

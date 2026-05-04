@@ -150,6 +150,17 @@ pub(crate) enum ReadbackContext {
     ActiveBrushDab {
         topology_version: u64,
     },
+    /// Async readback of a per-node preview rendered via the
+    /// `preview_subgraph` pipeline (target node + transitive predecessors +
+    /// synthesised `preview_terminal`). On completion the pixels are
+    /// PNG-encoded and stored in `node_preview_cache` keyed by `node_id`.
+    /// The `topology_version` travels with the request so stale results
+    /// from an in-flight render that's been superseded by a graph mutation
+    /// get dropped (mirrors `ActiveBrushDab`'s pattern).
+    NodePreview {
+        node_id: u64,
+        topology_version: u64,
+    },
 }
 
 /// Cached thumbnail data per layer.
@@ -278,6 +289,14 @@ pub struct DarklyEngine {
     /// Topology version at the last time we issued a dab render. Compared
     /// against `brush_topology_version` to skip redundant dab renders.
     pub(crate) last_rendered_dab_topology_version: u64,
+    /// Per-node preview cache: `node_id → (topology_version, png_bytes)`.
+    /// `brush_node_preview(node_id)` returns the bytes if the version
+    /// matches `brush_topology_version`, otherwise kicks off a fresh render
+    /// via the `preview_subgraph` pipeline. Stale entries become cache-misses
+    /// after the next topology bump and self-invalidate; we keep the old
+    /// bytes around so the UI shows the last-known thumbnail rather than a
+    /// blank gap during the readback gap.
+    pub(crate) node_preview_cache: std::collections::HashMap<u64, (u64, Vec<u8>)>,
     /// Theme colors for brush thumbnails (not the live editor preview —
     /// that uses the caller-supplied fg and auto-picked contrast bg). The
     /// frontend sets these via `set_preview_theme()` when the UI theme
@@ -404,6 +423,7 @@ impl DarklyEngine {
             brush_topology_version: 0,
             active_dab_preview_cache: None,
             last_rendered_dab_topology_version: 0,
+            node_preview_cache: std::collections::HashMap::new(),
             // Default theme: dark (white on dark). Frontend overrides via
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],

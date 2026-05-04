@@ -55,13 +55,13 @@ pub fn register() -> BrushNodeRegistration {
         display_name: "Watercolor",
         ports: vec![
             PortDef::input("dab", BrushWireType::Texture)
-                .with_description("The rendered dab texture (alpha mask used; RGB ignored)"),
+                .with_description("Brush tip shape"),
             PortDef::input("dab_size", BrushWireType::Vec2)
-                .with_description("Width and height of the dab in pixels"),
+                .with_description("Brush tip size in pixels"),
             PortDef::input("position", BrushWireType::Vec2)
-                .with_description("Canvas position where the dab center is placed"),
+                .with_description("Where to place the brush tip on the canvas"),
             PortDef::input("color", BrushWireType::Color)
-                .with_description("Paint color (wire from `paint_color.color` — the same source as `stamp.color`)"),
+                .with_description("Paint color"),
             PortDef::input("deposit", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_label("Deposit")
@@ -69,7 +69,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_icon("fa-solid fa-fill-drip")
                 .exposed()
                 .with_description(
-                    "Paint↔canvas mix in the brush load. 0% = pure smudge (canvas only), 100% = pure paint. Empty-canvas regions carry zero load alpha at deposit=0, so deposit=0 over a blank layer is a no-op.",
+                    "How much new paint to add vs. smear existing color. 0% smudges without adding paint; 100% paints normally. In between, the brush picks up the canvas color and tints it with your paint.",
                 ),
             PortDef::input("wetness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
@@ -78,7 +78,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_icon("fa-solid fa-water")
                 .exposed()
                 .with_description(
-                    "Smudge intensity. 0% = no effect (the dab passes through with zero alpha). 100% = full stamp. Per-dab; no cross-dab carry.",
+                    "How strongly each brush touch leaves a mark. 0% leaves nothing; 100% applies the brush at full strength.",
                 ),
             PortDef::input("opacity", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
@@ -87,10 +87,10 @@ pub fn register() -> BrushNodeRegistration {
                 .with_icon("fa-solid fa-droplet")
                 .exposed()
                 .with_description(
-                    "Per-dab strength multiplier (not a coverage cap — overlapping dabs still build to full coverage)",
+                    "Overall stroke strength. Lower values make the brush lighter.",
                 ),
             PortDef::input("brush_preview", BrushWireType::Texture)
-                .with_description("Hover-preview texture (typically `stamp.preview`)."),
+                .with_description("Brush shape shown under the cursor on hover"),
         ],
         params: &[],
         is_gpu: true,

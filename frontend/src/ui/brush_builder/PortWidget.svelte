@@ -113,11 +113,19 @@
         return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
     }
 
+    /** Quantize a value to multiples of `port.step` from `port.min`. Returns
+     *  the value unchanged when `step` is zero (continuous port). */
+    function snapToStep(value: number): number {
+        if (!port.step || port.step <= 0) return value;
+        const stepped = Math.round((value - port.min) / port.step) * port.step + port.min;
+        return Math.max(port.min, Math.min(port.max, stepped));
+    }
+
     function valueFromFraction(frac: number): number {
         const raw = port.min + frac * (port.max - port.min);
         if (port.wire_type === 'Int') return Math.round(raw);
         if (port.wire_type === 'Bool') return frac >= 0.5 ? 1 : 0;
-        return raw;
+        return snapToStep(raw);
     }
 
     function onSliderDown(e: PointerEvent) {
@@ -216,7 +224,7 @@
         const parsed = parseFloat(input.value);
         if (isNaN(parsed)) return;
         const clamped = Math.max(port.min, Math.min(port.max, parsed));
-        const value = port.wire_type === 'Int' ? Math.round(clamped) : clamped;
+        const value = port.wire_type === 'Int' ? Math.round(clamped) : snapToStep(clamped);
         brushGraph.setPortDefaultLocal(nodeId, port.name, value);
         brushGraph.setPortDefault(nodeId, port.name, value);
     }

@@ -96,6 +96,16 @@ pub struct PortDef<W: WireKind> {
     pub max: f32,
     /// Default value when the port is disconnected.
     pub default: f32,
+    /// Quantization step. `0.0` (the default) means continuous; any positive
+    /// value snaps the slider, scrub, and typed-value commits to multiples of
+    /// `step` from `min`. Used when the wire takes a value but only certain
+    /// quantized values produce well-defined behavior — e.g. the circle
+    /// node's `frequency`, where only integer values yield a seam-free
+    /// closed shape. Frontend honors the snap; the engine should still
+    /// defend by quantizing inputs in the node evaluator (a wired-in float
+    /// from a curve or pen-pressure modulator bypasses the slider).
+    #[serde(default)]
+    pub step: f32,
     /// Human-readable description shown as a tooltip in the node editor.
     #[serde(default)]
     pub description: String,
@@ -125,6 +135,21 @@ pub struct PortDef<W: WireKind> {
     /// is a working scaling factor, not part of how a brush looks).
     #[serde(default)]
     pub preview_value: Option<f32>,
+    /// Conditional visibility: the port is only shown in the UI when the
+    /// value of the named param is one of the listed integer values. The
+    /// param is referenced by its registration name (e.g. `"algorithm"`)
+    /// and is expected to be an `Int`/`Enum` param — those are the only
+    /// types where dispatch on a discrete value makes sense.
+    ///
+    /// When `None` (the default), the port is always visible. When set,
+    /// the frontend hides the port row whenever the named param's current
+    /// value is outside the allowed list. This is purely a UI affordance —
+    /// the engine still accepts and reads the port's value normally; it
+    /// just stops showing the user a control they wouldn't act on.
+    /// Used by the Circle node to hide algorithm-specific knobs (Perlin's
+    /// `seed`, Superformula's `n1`/`n2`/`n3`) under the wrong algorithm.
+    #[serde(default)]
+    pub visible_when: Option<(String, Vec<i32>)>,
 }
 
 impl<W: WireKind> PortDef<W> {
@@ -142,6 +167,8 @@ impl<W: WireKind> PortDef<W> {
             label: String::new(),
             exposed: false,
             preview_value: None,
+            visible_when: None,
+            step: 0.0,
         }
     }
 
@@ -159,6 +186,8 @@ impl<W: WireKind> PortDef<W> {
             label: String::new(),
             exposed: false,
             preview_value: None,
+            visible_when: None,
+            step: 0.0,
         }
     }
 
@@ -166,6 +195,15 @@ impl<W: WireKind> PortDef<W> {
         self.min = min;
         self.max = max;
         self.default = default;
+        self
+    }
+
+    /// Quantize the port's slider to multiples of `step` from `min`. Pass
+    /// `1.0` for an integer-valued port. See [`PortDef::step`] for the full
+    /// contract — the engine still needs to defend against non-snapped
+    /// values arriving via wires.
+    pub fn with_step(mut self, step: f32) -> Self {
+        self.step = step;
         self
     }
 
@@ -203,6 +241,19 @@ impl<W: WireKind> PortDef<W> {
         self.preview_value = Some(value);
         self
     }
+
+    /// Show this port in the UI only when the named param's current
+    /// integer value is one of `allowed_values`. See [`PortDef::visible_when`]
+    /// for the contract. The frontend filters; the engine ignores this
+    /// field entirely.
+    pub fn with_visible_when(
+        mut self,
+        param_name: impl Into<String>,
+        allowed_values: impl IntoIterator<Item = i32>,
+    ) -> Self {
+        self.visible_when = Some((param_name.into(), allowed_values.into_iter().collect()));
+        self
+    }
 }
 
 // ── Node instance ────────────────────────────────────────────────────
@@ -218,8 +269,6 @@ pub struct NodeInstance<W: WireKind> {
     pub ports: Vec<PortDef<W>>,
     /// Per-instance parameter overrides.
     pub params: Vec<ParamValue>,
-    /// UI position (for layout persistence).
-    pub position: [f32; 2],
 }
 
 // ── Errors ───────────────────────────────────────────────────────────
@@ -305,7 +354,6 @@ impl<W: WireKind> Graph<W> {
                 type_id: type_id.into(),
                 ports,
                 params,
-                position: [0.0, 0.0],
             },
         );
         id
@@ -371,22 +419,6 @@ impl<W: WireKind> Graph<W> {
         self.connections
             .iter()
             .filter(move |c| c.from.node == node_id)
-    }
-
-    /// Returns `true` if every node sits at the origin — i.e. no positions
-    /// have been assigned yet and auto-layout should run.
-    pub fn needs_layout(&self) -> bool {
-        self.nodes.values().all(|n| n.position == [0.0, 0.0])
-    }
-
-    /// Update a node's UI position.
-    pub fn set_node_position(&mut self, id: NodeId, pos: [f32; 2]) -> Result<(), GraphError> {
-        let node = self
-            .nodes
-            .get_mut(&id)
-            .ok_or(GraphError::NodeNotFound(id))?;
-        node.position = pos;
-        Ok(())
     }
 
     /// Neutralize ports annotated with [`PortDef::preview_value`] so
@@ -804,6 +836,17 @@ mod tests {
         assert_eq!(port.label, "");
         assert!(!port.exposed);
         assert_eq!(port.description, "");
+        assert_eq!(port.step, 0.0);
+    }
+
+    #[test]
+    fn port_def_step_round_trip() {
+        let port = PortDef::input("frequency", TestWireKind::Scalar)
+            .with_range(1.0, 16.0, 6.0)
+            .with_step(1.0);
+        let json = serde_json::to_string(&port).unwrap();
+        let back: PortDef<TestWireKind> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.step, 1.0);
     }
 
     #[test]

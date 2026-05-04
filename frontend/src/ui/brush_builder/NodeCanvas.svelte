@@ -20,10 +20,14 @@
 
     let { onaddrequest }: Props = $props();
 
-    // --- Auto-layout when nodes have no positions ---
-    // $effect runs after DOM is updated, so node elements can be measured.
+    // --- Auto-layout when nodes lack positions ---
+    // Positions are UI-only state. After a brush load/reset they're
+    // cleared, and this effect lays everything out using DOM-measured
+    // sizes for tight packing. User drags update positions in place;
+    // re-laying out then would clobber the user's arrangement, so the
+    // guard keeps this a one-shot per fresh graph.
     $effect(() => {
-        if (!brushGraph.needsLayout) return;
+        if (!brushGraph.hasUnpositionedNodes) return;
         const sizes: Record<string, [number, number]> = {};
         for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
             const id = el.dataset.nodeId;
@@ -36,7 +40,8 @@
 
     // --- Port offset registration ---
     // PortWidget measures its dot's offset relative to its node on mount
-    // and registers it here.  Wire paths use node.position + offset.
+    // and registers it here.  Wire paths use the node's auto-layout
+    // position + this port offset.
 
     export interface PortRegistration {
         register(nodeId: number, portName: string, dir: string, offset: { x: number; y: number }): void;
@@ -96,6 +101,8 @@
     function portWorldPos(nodeId: number, portName: string, dir: string) {
         const node = brushGraph.graph?.nodes[String(nodeId)];
         if (!node) return null;
+        const pos = brushGraph.nodePositions[nodeId];
+        if (!pos) return null;
         const key = `${nodeId}:${portName}:${dir}`;
         let offset = portOffsets.get(key);
         if (!offset) {
@@ -115,7 +122,7 @@
             }
         }
         if (!offset) return null;
-        return { x: node.position[0] + offset.x, y: node.position[1] + offset.y };
+        return { x: pos[0] + offset.x, y: pos[1] + offset.y };
     }
 
     function bezierPath(from: { x: number; y: number }, to: { x: number; y: number }): string {
@@ -310,8 +317,7 @@
     async function onDrop(e: DragEvent) {
         e.preventDefault();
         if (!e.dataTransfer) return;
-        // Find the Image node under the drop point, or the selected one.
-        const g = screenToGraph(e.clientX, e.clientY);
+        // Drop targets the selected Image node, if any.
         let nodeId: number | null = null;
         if (brushGraph.selectedNode != null) {
             const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];

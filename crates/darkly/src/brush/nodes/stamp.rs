@@ -41,7 +41,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-circle")
                 .with_description(
-                    "Dynamic per-dab size multiplier in [0, 1]. Wire pen pressure or a curve here for pressure sensitivity. Defaults to 1.0 (full strength) so unwired brushes paint at the user-facing size verbatim.",
+                    "Per-touch size multiplier. Connect Pen Input pressure (or a curve on top) here for pressure-sensitive size.",
                 ),
             PortDef::input("size", BrushWireType::Scalar)
                 .with_range(0.0, 4.0, 0.1)
@@ -61,9 +61,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Degrees)
                 .with_icon("fa-solid fa-rotate")
                 .with_description(
-                    "Brush rotation in radians. Wire `pen_input.drawing_angle` \
-                     here to rotate the brush along the stroke direction; \
-                     wire an `add` node for an angle offset.",
+                    "Brush rotation. Connect Pen Input's drawing angle here to rotate the brush along the stroke direction; add an offset by routing through an Add node.",
                 ),
             PortDef::input("mirror_x", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
@@ -87,11 +85,11 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::input("color", BrushWireType::Color)
                 .with_description("Brush color"),
             PortDef::output("dab", BrushWireType::Texture)
-                .with_description("The stamped dab texture ready for compositing"),
+                .with_description("The stamped brush mark"),
             PortDef::output("dab_size", BrushWireType::Vec2)
-                .with_description("Actual pixel dimensions of the generated dab"),
+                .with_description("Brush mark size in pixels"),
             PortDef::output("preview", BrushWireType::Texture)
-                .with_description("Hover-preview texture: brush tip with rotation/ratio/mirror baked in, deposition (flow/color) neutralised. Texture dimensions encode the brush's canvas-pixel extent."),
+                .with_description("Brush shape shown under the cursor on hover, with rotation, aspect ratio, and mirroring applied"),
         ],
         params: &[
             ParamDef::Int { name: "application", min: 0, max: 3, default: 0 },
