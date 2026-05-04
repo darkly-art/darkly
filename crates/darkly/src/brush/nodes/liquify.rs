@@ -62,30 +62,30 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-up-right-and-down-left-from-center")
                 .exposed()
-                .with_description("Brush radius as a multiple of the base size (1.0 = 100% = half MAX_DAB_SIZE). Uncapped above 100% for large-area warps."),
+                .with_description("Brush size. Can go above 100% for large-area warps."),
             PortDef::input("strength", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_label("Strength")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-gauge-high")
                 .exposed()
-                .with_description("How far pixels are pushed per dab (as a fraction of motion)"),
+                .with_description("How far pixels are pushed by each brush touch"),
             PortDef::input("softness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_label("Softness")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-wave-square")
                 .exposed()
-                .with_description("Falloff waveshape: 0 = spike (sharp peak), 0.4 = saw, 0.5 = sine, 1 = square"),
+                .with_description("Edge shape. Low values concentrate the warp at the brush center; high values spread it evenly across the brush."),
             PortDef::input("position", BrushWireType::Vec2)
-                .with_description("Brush center in canvas pixels"),
+                .with_description("Where to apply the warp"),
             PortDef::input("direction", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                .with_description("Warp direction in radians (typically wired from pen_input.drawing_angle). 0 = east."),
+                .with_description("Direction to push pixels"),
             PortDef::input("distance", BrushWireType::Scalar)
-                .with_description("Cumulative pen travel in pixels (typically wired from pen_input.distance). Used as a 'has the pen moved yet' gate — the first dab of a stationary click has distance=0 and is skipped so liquify doesn't warp in a default direction before the stroke actually has one."),
+                .with_description("How far the pen has traveled along the stroke"),
             PortDef::output("dab_size", BrushWireType::Vec2)
-                .with_description("Affected diameter in canvas pixels (used by stroke engine for dab spacing)"),
+                .with_description("Size of the affected area"),
         ],
         params: &[],
         is_gpu: true,
