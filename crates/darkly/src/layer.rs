@@ -1,7 +1,33 @@
 use crate::coord::CanvasRect;
-use crate::document::Modifier;
 
-pub type LayerId = u64;
+slotmap::new_key_type! {
+    /// Unique identifier for any node, group, or modifier in a [`Document`].
+    /// Backed by a slotmap key — generational, so stale ids return `None` from
+    /// [`Document`] lookups instead of aliasing onto a recycled slot.
+    ///
+    /// At the WASM/JS boundary, marshal as `u64` via [`LayerId::to_ffi`] /
+    /// [`LayerId::from_ffi`].
+    ///
+    /// [`Document`]: crate::document::Document
+    pub struct LayerId;
+}
+
+impl LayerId {
+    /// Pack into a `u64` for the WASM/JS boundary. Index in the low 32 bits,
+    /// generation in the high 32. Round-trips losslessly through
+    /// [`LayerId::from_ffi`].
+    pub fn to_ffi(self) -> u64 {
+        slotmap::Key::data(&self).as_ffi()
+    }
+
+    /// Unpack a `u64` previously produced by [`LayerId::to_ffi`]. The result
+    /// is only meaningful within the [`Document`] that minted the original key.
+    ///
+    /// [`Document`]: crate::document::Document
+    pub fn from_ffi(v: u64) -> Self {
+        slotmap::KeyData::from_ffi(v).into()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
@@ -85,113 +111,27 @@ impl PixelBuffer {
     }
 }
 
-/// Modifiers attached to a host (raster layer or group). Order is bottom-up —
-/// later entries run after earlier ones. Today: typically zero or one mask.
-pub struct ModifierList(pub Vec<Modifier>);
-
-impl ModifierList {
-    pub fn new() -> Self {
-        ModifierList(Vec::new())
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<'_, Modifier> {
-        self.0.iter()
-    }
-
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Modifier> {
-        self.0.iter_mut()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// First mask modifier on this list, if any. Today's UI exposes at most one
-    /// mask per host, so this is the canonical lookup. The model supports N.
-    pub fn mask(&self) -> Option<&Modifier> {
-        self.0
-            .iter()
-            .find(|m| matches!(&m.kind, crate::document::ModifierKind::Mask(_)))
-    }
-
-    pub fn mask_mut(&mut self) -> Option<&mut Modifier> {
-        self.0
-            .iter_mut()
-            .find(|m| matches!(&m.kind, crate::document::ModifierKind::Mask(_)))
-    }
-}
-
-impl Default for ModifierList {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Child nodes of a group — raster siblings or sub-groups. Modifiers are NOT
-/// in this list (they're attached via the host's `modifiers` field).
-pub struct ChildList(pub Vec<LayerNode>);
-
-impl ChildList {
-    pub fn new() -> Self {
-        ChildList(Vec::new())
-    }
-
-    pub fn iter(&self) -> std::slice::Iter<'_, LayerNode> {
-        self.0.iter()
-    }
-
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, LayerNode> {
-        self.0.iter_mut()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn get(&self, idx: usize) -> Option<&LayerNode> {
-        self.0.get(idx)
-    }
-
-    pub fn get_mut(&mut self, idx: usize) -> Option<&mut LayerNode> {
-        self.0.get_mut(idx)
-    }
-
-    pub fn push(&mut self, node: LayerNode) {
-        self.0.push(node)
-    }
-}
-
-impl Default for ChildList {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// A raster (pixel) layer.
 pub struct RasterLayer {
     pub id: LayerId,
     pub common: NodeCommon,
     pub blend: BlendProps,
     pub pixels: PixelBuffer,
-    pub modifiers: ModifierList,
+    /// Modifiers attached to this layer, in bottom-up order. Each entry is a
+    /// [`LayerId`] resolvable in the owning [`Document`]'s entity store.
+    ///
+    /// [`Document`]: crate::document::Document
+    pub modifiers: Vec<LayerId>,
 }
 
 impl RasterLayer {
     pub fn new(id: LayerId, bounds: CanvasRect) -> Self {
         RasterLayer {
             id,
-            common: NodeCommon::new(format!("Layer {id}")),
+            common: NodeCommon::new(format!("Layer {:?}", id.to_ffi())),
             blend: BlendProps::new(),
             pixels: PixelBuffer::new(bounds, wgpu::TextureFormat::Rgba8Unorm),
-            modifiers: ModifierList::new(),
+            modifiers: Vec::new(),
         }
     }
 }
@@ -200,8 +140,12 @@ pub struct LayerGroup {
     pub id: LayerId,
     pub common: NodeCommon,
     pub blend: BlendProps,
-    pub children: ChildList,
-    pub modifiers: ModifierList,
+    /// Child node ids in display order (bottom-to-top). Resolve via the owning
+    /// [`Document`]'s entity store.
+    ///
+    /// [`Document`]: crate::document::Document
+    pub children: Vec<LayerId>,
+    pub modifiers: Vec<LayerId>,
     /// True = passthrough (default), false = normal isolated group.
     pub passthrough: bool,
     /// UI state: whether the group is visually collapsed in the layer panel.
@@ -212,10 +156,10 @@ impl LayerGroup {
     pub fn new(id: LayerId) -> Self {
         LayerGroup {
             id,
-            common: NodeCommon::new(format!("Group {id}")),
+            common: NodeCommon::new(format!("Group {:?}", id.to_ffi())),
             blend: BlendProps::new(),
-            children: ChildList::new(),
-            modifiers: ModifierList::new(),
+            children: Vec::new(),
+            modifiers: Vec::new(),
             passthrough: true,
             collapsed: false,
         }
@@ -223,8 +167,10 @@ impl LayerGroup {
 }
 
 /// A node in the layer tree — either a leaf layer or a group containing children.
-/// Modifiers are NOT LayerNodes; they're reachable only through their host's
-/// `modifiers` field, by construction.
+/// Modifiers are NOT [`LayerNode`]s; they live on a host's `modifiers` list as
+/// [`LayerId`] references and are resolved through the owning [`Document`].
+///
+/// [`Document`]: crate::document::Document
 pub enum LayerNode {
     Layer(Layer),
     Group(LayerGroup),
@@ -266,14 +212,14 @@ impl LayerNode {
         }
     }
 
-    pub fn modifiers(&self) -> &ModifierList {
+    pub fn modifiers(&self) -> &[LayerId] {
         match self {
             LayerNode::Layer(l) => l.modifiers(),
             LayerNode::Group(g) => &g.modifiers,
         }
     }
 
-    pub fn modifiers_mut(&mut self) -> &mut ModifierList {
+    pub fn modifiers_mut(&mut self) -> &mut Vec<LayerId> {
         match self {
             LayerNode::Layer(l) => l.modifiers_mut(),
             LayerNode::Group(g) => &mut g.modifiers,
@@ -338,13 +284,13 @@ impl Layer {
         }
     }
 
-    pub fn modifiers(&self) -> &ModifierList {
+    pub fn modifiers(&self) -> &[LayerId] {
         match self {
             Layer::Raster(r) => &r.modifiers,
         }
     }
 
-    pub fn modifiers_mut(&mut self) -> &mut ModifierList {
+    pub fn modifiers_mut(&mut self) -> &mut Vec<LayerId> {
         match self {
             Layer::Raster(r) => &mut r.modifiers,
         }

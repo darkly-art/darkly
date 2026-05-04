@@ -4,7 +4,7 @@ use super::{DarklyEngine, PendingTransform};
 use crate::document::MoveTarget;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::transform::{Affine2D, ClearShape, FloatingContent, FloatingMode, IDENTITY};
-use crate::layer::Layer;
+use crate::layer::{Layer, LayerId};
 use crate::undo::{GpuRegionAction, LayerAddAction};
 
 impl DarklyEngine {
@@ -42,13 +42,13 @@ impl DarklyEngine {
     /// floating's layer" (dismiss) from "user activated the floating's
     /// own target layer" (keep — paste-as-floating sets active to its
     /// auto-created target).
-    pub fn floating_target_layer(&self) -> Option<u64> {
+    pub fn floating_target_layer(&self) -> Option<LayerId> {
         self.floating.as_ref().map(|fc| fc.target_layer)
     }
 
     /// Paste from the internal clipboard as floating content on the current
     /// layer/mask. Returns true if floating content was created.
-    pub fn paste_in_place_floating(&mut self, layer_id: u64) -> bool {
+    pub fn paste_in_place_floating(&mut self, layer_id: LayerId) -> bool {
         // Auto-commit any existing floating content first.
         self.auto_commit_floating();
 
@@ -101,8 +101,8 @@ impl DarklyEngine {
         rgba: &[u8],
         offset_x: i32,
         offset_y: i32,
-        active_layer_id: Option<u64>,
-    ) -> u64 {
+        active_layer_id: Option<LayerId>,
+    ) -> LayerId {
         // Auto-commit any existing floating content first.
         self.auto_commit_floating();
 
@@ -162,7 +162,7 @@ impl DarklyEngine {
     /// compositor's GPU compute system. If cached, setup is synchronous.
     /// Otherwise, an async compute is dispatched and the transform completes
     /// on the next frame via `poll_pending`.
-    pub fn begin_transform(&mut self, layer_id: u64) -> bool {
+    pub fn begin_transform(&mut self, layer_id: LayerId) -> bool {
         self.auto_commit_floating();
 
         // Active node may be either a raster layer or a mask modifier — both
@@ -247,7 +247,7 @@ impl DarklyEngine {
     /// copies source region to floating texture, clears source on layer.
     pub(crate) fn setup_transform(
         &mut self,
-        node_id: u64,
+        node_id: LayerId,
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,

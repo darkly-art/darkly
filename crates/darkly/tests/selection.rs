@@ -12,6 +12,7 @@ use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use darkly::gpu::test_utils::*;
+use darkly::layer::LayerId;
 use darkly::mask;
 
 fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
@@ -34,7 +35,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 /// Paint a horizontal brush stroke across the canvas at vertical center.
-fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: u64, w: u32, h: u32) {
+fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
     engine.begin_stroke(layer_id);
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
@@ -275,7 +276,13 @@ fn gpu_clear_selection_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(0, 0, w, h));
+    let entry = store.commit_region(
+        &mut enc,
+        LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap,
+        cr(0, 0, w, h),
+    );
     submit(&queue, enc);
 
     // Verify cleared.

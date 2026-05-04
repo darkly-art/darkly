@@ -1,18 +1,17 @@
 use super::UndoAction;
 use crate::document::Document;
-use crate::layer::{LayerId, LayerNode};
+use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
 
 /// Undo action for adding a layer/group.
 ///
-/// Undo removes it from the tree (storing the detached node).
+/// Undo unlinks the node from the tree (it stays in the document's slotmap
+/// orphaned, so the id is preserved).
 /// Redo reinserts it at the original position.
 pub struct LayerAddAction {
     layer_id: LayerId,
     parent: Option<LayerId>,
     position: usize,
-    /// Holds the detached node between undo and redo.
-    detached: Option<LayerNode>,
 }
 
 impl LayerAddAction {
@@ -21,75 +20,51 @@ impl LayerAddAction {
             layer_id,
             parent,
             position,
-            detached: None,
         }
     }
 }
 
 impl UndoAction for LayerAddAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        // Remove the added layer.
-        self.detached = doc.detach_for_undo(self.layer_id);
+        doc.detach_for_undo(self.layer_id);
         HashMap::new()
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        // Reinsert the layer.
-        if let Some(node) = self.detached.take() {
-            doc.reinsert_node(node, self.parent, self.position);
-        }
+        doc.reinsert_node(self.layer_id, self.parent, self.position);
         HashMap::new()
     }
 }
 
 /// Undo action for removing a layer/group.
 ///
-/// Undo reinserts the removed node at its original position.
-/// Redo removes it again.
+/// The node stays in the document's slotmap as an orphan between detach
+/// and reattach — the id (and all attached modifiers/descendants) survives
+/// across undo/redo with no copy. Undo relinks it; redo unlinks again.
 pub struct LayerRemoveAction {
+    layer_id: LayerId,
     parent: Option<LayerId>,
     position: usize,
-    /// Holds the removed node. Present after construction and after redo.
-    /// Absent after undo (node is back in the tree).
-    detached: Option<LayerNode>,
 }
 
 impl LayerRemoveAction {
-    pub fn new(node: LayerNode, parent: Option<LayerId>, position: usize) -> Self {
+    pub fn new(layer_id: LayerId, parent: Option<LayerId>, position: usize) -> Self {
         LayerRemoveAction {
+            layer_id,
             parent,
             position,
-            detached: Some(node),
         }
     }
 }
 
 impl UndoAction for LayerRemoveAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        // Reinsert the removed node.
-        if let Some(node) = self.detached.take() {
-            doc.reinsert_node(node, self.parent, self.position);
-        }
+        doc.reinsert_node(self.layer_id, self.parent, self.position);
         HashMap::new()
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        // Remove it again. We need the layer_id from the detached node.
-        // The node was reinserted by undo, so find it from parent+position.
-        let container = match self.parent {
-            Some(pid) => {
-                if let Some(LayerNode::Group(g)) = doc.find_node(pid) {
-                    g.children.get(self.position).map(|n| n.id())
-                } else {
-                    None
-                }
-            }
-            None => doc.root.children.get(self.position).map(|n| n.id()),
-        };
-
-        if let Some(layer_id) = container {
-            self.detached = doc.detach_for_undo(layer_id);
-        }
+        doc.detach_for_undo(self.layer_id);
         HashMap::new()
     }
 }
@@ -125,17 +100,15 @@ impl LayerMoveAction {
 
 impl UndoAction for LayerMoveAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        // Move back to old position.
-        if let Some(node) = doc.detach_for_undo(self.layer_id) {
-            doc.reinsert_node(node, self.old_parent, self.old_position);
+        if doc.detach_for_undo(self.layer_id).is_some() {
+            doc.reinsert_node(self.layer_id, self.old_parent, self.old_position);
         }
         HashMap::new()
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        // Move to new position.
-        if let Some(node) = doc.detach_for_undo(self.layer_id) {
-            doc.reinsert_node(node, self.new_parent, self.new_position);
+        if doc.detach_for_undo(self.layer_id).is_some() {
+            doc.reinsert_node(self.layer_id, self.new_parent, self.new_position);
         }
         HashMap::new()
     }

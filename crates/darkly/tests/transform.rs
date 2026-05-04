@@ -11,6 +11,7 @@ use darkly::gpu::test_utils::*;
 use darkly::gpu::transform::{
     affine_inverse, affine_multiply, affine_translate, Affine2D, TransformPass, IDENTITY,
 };
+use darkly::layer::LayerId;
 
 /// Build a CanvasFrame for a test texture sized `(w, h)` at canvas origin (0, 0).
 fn frame<'a>(tex: &'a wgpu::Texture, w: u32, h: u32) -> CanvasFrame<'a> {
@@ -154,7 +155,7 @@ fn transform_commit_translate() {
         ch,
         (0, 0),
         (cw, ch),
-        1,
+        LayerId::from_ffi(1),
     );
 
     // Translate by (10, 10).
@@ -253,7 +254,7 @@ fn transform_commit_translate_undo() {
         ch,
         (0, 0),
         (cw, ch),
-        1,
+        LayerId::from_ffi(1),
     );
 
     // Save pre-commit state.
@@ -292,7 +293,7 @@ fn transform_commit_translate_undo() {
     let mut enc = encoder(&device);
     let entry = store.commit_region(
         &mut enc,
-        1,
+        LayerId::from_ffi(1),
         &frame(&target_tex, cw, ch),
         &snap,
         CanvasRect::from_xywh(0, 0, cw, ch),
@@ -363,7 +364,7 @@ fn transform_commit_rotate_90() {
         ch,
         (0, 0),
         (cw, ch),
-        1,
+        LayerId::from_ffi(1),
     );
 
     // Rotate 90° CW: matrix [0, 1, 0, -1, 0, 5]
@@ -459,7 +460,7 @@ fn paste_commit_identity() {
         ch,
         (0, 0),
         (cw, ch),
-        1,
+        LayerId::from_ffi(1),
     );
 
     // Commit with identity — pixels land at their original position.
@@ -545,7 +546,7 @@ fn paste_commit_undo() {
         ch,
         (0, 0),
         (cw, ch),
-        1,
+        LayerId::from_ffi(1),
     );
 
     // Save pre-paste state.
@@ -582,7 +583,7 @@ fn paste_commit_undo() {
     let mut enc = encoder(&device);
     let entry = store.commit_region(
         &mut enc,
-        1,
+        LayerId::from_ffi(1),
         &frame(&target_tex, cw, ch),
         &snap,
         CanvasRect::from_xywh(0, 0, cw, ch),
@@ -658,7 +659,7 @@ fn commit_composites_over_existing() {
         ch,
         (0, 0),
         (cw, ch),
-        1,
+        LayerId::from_ffi(1),
     );
 
     let mut enc = encoder(&device);
@@ -744,7 +745,7 @@ fn transform_commit_on_mask() {
         ch,
         (0, 0),
         (cw, ch),
-        1,
+        LayerId::from_ffi(1),
     );
 
     // Translate by (5, 5).
@@ -875,7 +876,7 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
         ch,
         (0, 0),
         (cw, ch),
-        1,
+        LayerId::from_ffi(1),
     );
 
     let mut enc = encoder(&device);

@@ -45,18 +45,18 @@ impl DarklyEngine {
     /// the data in hand). Cleared after combine/invert until the next
     /// readback lands. Read-only access — engine helpers above mutate.
     pub fn selection_cpu_cache(&self) -> Option<&[u8]> {
+        let id = self.doc.selection?;
         self.doc
-            .selection
-            .as_ref()
+            .find_modifier(id)
             .and_then(|m| m.as_selection())
             .and_then(|s| s.cpu_cache.data.as_deref())
     }
 
     /// Cached tight bounds of the non-zero selection region, in canvas coords.
     pub(crate) fn selection_pixel_bounds(&self) -> Option<CanvasRect> {
+        let id = self.doc.selection?;
         self.doc
-            .selection
-            .as_ref()
+            .find_modifier(id)
             .and_then(|m| m.as_selection())
             .and_then(|s| s.pixel_bounds)
     }
@@ -69,10 +69,13 @@ impl DarklyEngine {
     /// Set / clear the selection's tight pixel bounds (called after Replace
     /// or after an async readback recomputes them).
     pub(crate) fn set_selection_pixel_bounds(&mut self, bounds: Option<CanvasRect>) {
+        let id = match self.doc.selection {
+            Some(id) => id,
+            None => return,
+        };
         if let Some(s) = self
             .doc
-            .selection
-            .as_mut()
+            .find_modifier_mut(id)
             .and_then(|m| m.as_selection_mut())
         {
             s.pixel_bounds = bounds;
@@ -81,10 +84,13 @@ impl DarklyEngine {
 
     /// Replace the CPU mirror of the selection texture.
     pub(crate) fn set_selection_cpu_cache(&mut self, data: Vec<u8>) {
+        let id = match self.doc.selection {
+            Some(id) => id,
+            None => return,
+        };
         if let Some(s) = self
             .doc
-            .selection
-            .as_mut()
+            .find_modifier_mut(id)
             .and_then(|m| m.as_selection_mut())
         {
             s.cpu_cache.set(data);
@@ -93,10 +99,13 @@ impl DarklyEngine {
 
     /// Invalidate the CPU mirror — called after combine/invert.
     pub(crate) fn invalidate_selection_cpu_cache(&mut self) {
+        let id = match self.doc.selection {
+            Some(id) => id,
+            None => return,
+        };
         if let Some(s) = self
             .doc
-            .selection
-            .as_mut()
+            .find_modifier_mut(id)
             .and_then(|m| m.as_selection_mut())
         {
             s.cpu_cache.invalidate();
@@ -106,7 +115,11 @@ impl DarklyEngine {
     /// Toggle the active flag (mapped onto `common.visible`). Engine internal —
     /// public visibility toggling is via [`Self::set_layer_visible`].
     pub(crate) fn set_selection_active(&mut self, active: bool) {
-        if let Some(modifier) = self.doc.selection.as_mut() {
+        let id = match self.doc.selection {
+            Some(id) => id,
+            None => return,
+        };
+        if let Some(modifier) = self.doc.find_modifier_mut(id) {
             modifier.common.visible = active;
         }
     }
@@ -185,7 +198,7 @@ impl DarklyEngine {
 
     pub fn select_magic_wand(
         &mut self,
-        layer_id: u64,
+        layer_id: LayerId,
         seed_x: i32,
         seed_y: i32,
         tolerance: u8,
@@ -235,7 +248,7 @@ impl DarklyEngine {
     pub(crate) fn complete_magic_wand(
         &mut self,
         was_active: bool,
-        node_id: u64,
+        node_id: LayerId,
         seed_x: i32,
         seed_y: i32,
         tolerance: u8,
@@ -333,7 +346,7 @@ impl DarklyEngine {
         self.kick_selection_readback();
     }
 
-    pub fn clear_selection_contents(&mut self, layer_id: u64) {
+    pub fn clear_selection_contents(&mut self, layer_id: LayerId) {
         self.auto_commit_floating();
         if !self.has_selection() {
             return;
@@ -542,7 +555,13 @@ impl DarklyEngine {
             debug_assert!(false, "commit_selection_undo without a paired save");
             return;
         };
-        let modifier_id = self.selection_modifier_id().unwrap_or(0);
+        let modifier_id = match self.selection_modifier_id() {
+            Some(id) => id,
+            None => {
+                debug_assert!(false, "commit_selection_undo without a selection modifier");
+                return;
+            }
+        };
         let frame = match self.compositor.selection_state() {
             Some(s) => s.canvas_frame(),
             None => return,

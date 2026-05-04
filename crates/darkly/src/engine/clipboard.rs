@@ -6,14 +6,14 @@ use crate::clipboard::{Clipboard, ImageClip};
 use crate::document::MoveTarget;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
-use crate::layer::Layer;
+use crate::layer::{Layer, LayerId};
 use crate::undo::{GpuRegionAction, LayerAddAction};
 
 impl DarklyEngine {
     /// Copy the active layer's content (masked by selection) into the internal
     /// clipboard. Kicks off an async GPU readback — the result is available via
     /// `poll_copy_result()` on the next frame. Returns `None` immediately.
-    pub fn copy(&mut self, layer_id: u64) -> Option<ClipboardExport> {
+    pub fn copy(&mut self, layer_id: LayerId) -> Option<ClipboardExport> {
         self.doc.layer(layer_id)?;
 
         if self.has_selection() && self.selection_cpu_cache().is_none() {
@@ -45,7 +45,7 @@ impl DarklyEngine {
     ///
     /// Both extraction and erase use GPU float math on the same selection
     /// texture, guaranteeing `extracted + remaining == original`.
-    pub(crate) fn start_copy_readback(&mut self, layer_id: u64, is_cut: bool) {
+    pub(crate) fn start_copy_readback(&mut self, layer_id: LayerId, is_cut: bool) {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
 
@@ -331,7 +331,7 @@ impl DarklyEngine {
     /// was active) or raw from the layer (when no selection).
     pub(crate) fn complete_copy(
         &mut self,
-        node_id: u64,
+        node_id: LayerId,
         region: [u32; 4],
         is_cut: bool,
         pixels: Vec<u8>,
@@ -379,7 +379,7 @@ impl DarklyEngine {
 
     /// Cut = copy + clear. The clear happens on GPU during start_copy_readback.
     /// Returns `None` immediately; result available via `poll_copy_result()`.
-    pub fn cut(&mut self, layer_id: u64) -> Option<ClipboardExport> {
+    pub fn cut(&mut self, layer_id: LayerId) -> Option<ClipboardExport> {
         self.doc.layer(layer_id)?;
 
         if self.has_selection() && self.selection_cpu_cache().is_none() {
@@ -403,8 +403,8 @@ impl DarklyEngine {
         rgba: &[u8],
         offset_x: i32,
         offset_y: i32,
-        active_layer_id: Option<u64>,
-    ) -> u64 {
+        active_layer_id: Option<LayerId>,
+    ) -> LayerId {
         // Size the new layer to fit the paste exactly, so out-of-canvas
         // pixels are preserved.
         let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
@@ -461,7 +461,7 @@ impl DarklyEngine {
 
     /// Paste from the internal clipboard at its original position.
     /// Returns the new layer ID, or None if clipboard is empty.
-    pub fn paste_in_place(&mut self, active_layer_id: Option<u64>) -> Option<u64> {
+    pub fn paste_in_place(&mut self, active_layer_id: Option<LayerId>) -> Option<LayerId> {
         let clip = self.clipboard.as_ref()?.as_image()?;
         let width = clip.width;
         let height = clip.height;

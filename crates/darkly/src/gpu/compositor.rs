@@ -1,5 +1,5 @@
 use crate::coord::CanvasRect;
-use crate::document::{Document, ROOT_ID};
+use crate::document::Document;
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
 use crate::gpu::content_bounds::ContentBoundsPass;
@@ -113,8 +113,14 @@ struct PassthroughMaskState {
 pub struct Compositor {
     /// Per-group GPU state. Every non-passthrough group (including root)
     /// owns a GroupState with its own accumulators and composite cache.
-    /// Root's state lives at group_state[ROOT_ID].
+    /// Root's state lives at group_state[self.root_id].
     group_state: HashMap<LayerId, GroupState>,
+
+    /// Implicit root group id. Mirrored from the document at construction
+    /// time so the compositor can address its own root's `GroupState` /
+    /// composite cache without re-deriving it on every call. Stays valid for
+    /// the compositor's lifetime — root id is fixed once allocated.
+    root_id: LayerId,
 
     /// One pool of per-node GPU textures, keyed by node id. Holds raster
     /// layer textures (Rgba8Unorm), mask modifier textures (R8Unorm), and
@@ -247,11 +253,11 @@ impl Compositor {
         group_id: LayerId,
     ) -> GroupState {
         let (a0, v0) =
-            Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id}-0"));
+            Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id:?}-0"));
         let (a1, v1) =
-            Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id}-1"));
+            Self::make_accum_texture(device, padded_w, padded_h, &format!("accum-{group_id:?}-1"));
         let (cache, cache_view) =
-            Self::make_accum_texture(device, padded_w, padded_h, &format!("cache-{group_id}"));
+            Self::make_accum_texture(device, padded_w, padded_h, &format!("cache-{group_id:?}"));
 
         let canvas = [padded_w as f32, padded_h as f32];
         let uniforms = BlendUniforms {
@@ -265,7 +271,7 @@ impl Compositor {
             _pad2: [0.0, 0.0],
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("group-uniforms-{group_id}")),
+            label: Some(&format!("group-uniforms-{group_id:?}")),
             size: std::mem::size_of::<BlendUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -291,6 +297,7 @@ impl Compositor {
         surface_format: wgpu::TextureFormat,
         width: u32,
         height: u32,
+        root_id: LayerId,
     ) -> Self {
         // Accumulator dimensions match layer textures exactly (no tile padding).
         let padded_w = width;
@@ -520,7 +527,7 @@ impl Compositor {
             });
 
         // Create root GroupState (root is always a non-passthrough group)
-        let root_state = Self::create_group_state(device, queue, padded_w, padded_h, ROOT_ID);
+        let root_state = Self::create_group_state(device, queue, padded_w, padded_h, root_id);
 
         // Present bind group reads from root's composite cache
         let present_cache_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -543,7 +550,7 @@ impl Compositor {
         });
 
         let mut group_state = HashMap::new();
-        group_state.insert(ROOT_ID, root_state);
+        group_state.insert(root_id, root_state);
 
         let veil_chain = VeilChain::new(device, sampler.clone(), surface_format, accum_format);
 
@@ -558,6 +565,7 @@ impl Compositor {
 
         Compositor {
             group_state,
+            root_id,
             node_textures: HashMap::new(),
             default_mask_bind_group,
             mask_bind_groups: HashMap::new(),
@@ -620,7 +628,7 @@ impl Compositor {
         };
 
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("blend-uniforms-{layer_id}")),
+            label: Some(&format!("blend-uniforms-{layer_id:?}")),
             size: std::mem::size_of::<BlendUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -709,7 +717,7 @@ impl Compositor {
         if self.mask_bind_groups.contains_key(&node_id) {
             let view = &self.node_textures[&node_id].view;
             let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("mask-bg-{node_id}")),
+                label: Some(&format!("mask-bg-{node_id:?}")),
                 layout: &self.blend_pipelines.mask_bind_group_layout,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
@@ -880,7 +888,7 @@ impl Compositor {
             wgpu::TextureFormat::R8Unorm => {
                 let mask_tex = LayerTexture::new_mask_with_extent(device, queue, bounds);
                 let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&format!("mask-bg-{node_id}")),
+                    label: Some(&format!("mask-bg-{node_id:?}")),
                     layout: &self.blend_pipelines.mask_bind_group_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
@@ -918,10 +926,10 @@ impl Compositor {
             device,
             self.padded_width,
             self.padded_height,
-            &format!("pt-snapshot-{host_id}"),
+            &format!("pt-snapshot-{host_id:?}"),
         );
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(&format!("pt-lerp-uniforms-{host_id}")),
+            label: Some(&format!("pt-lerp-uniforms-{host_id:?}")),
             size: 4,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -1150,7 +1158,7 @@ impl Compositor {
     /// Get the composited output texture (root group's composite cache).
     /// Used by the color picker for readback.
     pub fn composited_texture(&self) -> &wgpu::Texture {
-        &self.group_state[&ROOT_ID].composite_cache
+        &self.group_state[&self.root_id].composite_cache
     }
 
     pub fn accum_format(&self) -> wgpu::TextureFormat {
@@ -1259,7 +1267,7 @@ impl Compositor {
         let (layer_offset, layer_size) = self.target_layer_bounds(target_layer);
         let root = self
             .group_state
-            .get(&ROOT_ID)
+            .get(&self.root_id)
             .expect("root GroupState missing");
         self.transform_pass.set_floating_content(
             device,
@@ -1311,7 +1319,7 @@ impl Compositor {
         let target_format = layer.format;
         let root = self
             .group_state
-            .get(&ROOT_ID)
+            .get(&self.root_id)
             .expect("root GroupState missing");
         self.transform_pass.set_floating_content_from_gpu(
             device,
@@ -1488,7 +1496,8 @@ impl Compositor {
             label: Some("composite"),
         });
 
-        self.compose_group(&mut encoder, device, ROOT_ID, &doc.root.children.0, scissor);
+        let root_id = self.root_id;
+        self.compose_group(&mut encoder, device, doc, root_id, scissor);
 
         queue.submit(std::iter::once(encoder.finish()));
 
@@ -1539,8 +1548,8 @@ impl Compositor {
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
+        doc: &Document,
         group_id: LayerId,
-        children: &[LayerNode],
         scissor: (u32, u32, u32, u32),
     ) {
         let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
@@ -1568,8 +1577,11 @@ impl Compositor {
             });
         }
 
-        // Inline children into this group's accumulators.
-        self.compose_children(encoder, device, group_id, children, scissor);
+        // Inline children into this group's accumulators. Clone the child
+        // ids so the borrow on `doc` doesn't outlive the call into
+        // `compose_children`, which itself re-borrows `doc`.
+        let children: Vec<LayerId> = doc.children_of(group_id).to_vec();
+        self.compose_children(encoder, device, doc, group_id, &children, scissor);
 
         // Copy final accum to this group's composite cache.
         let gs = self.group_state.get(&group_id).expect("GroupState missing");
@@ -1606,13 +1618,18 @@ impl Compositor {
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
+        doc: &Document,
         parent_group: LayerId,
-        children: &[LayerNode],
+        children: &[LayerId],
         scissor: (u32, u32, u32, u32),
     ) {
         let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
 
-        for node in children {
+        for &child_id in children {
+            let node = match doc.find_node(child_id) {
+                Some(n) => n,
+                None => continue,
+            };
             if !node.visible() {
                 continue;
             }
@@ -1643,12 +1660,11 @@ impl Compositor {
 
                     {
                         let gs = &self.group_state[&parent_group];
-                        // Resolve mask via the raster's modifier list. The
-                        // structural detection lives at the call site — the
-                        // outer compositor never branches on a node's kind.
-                        let mask_bg = raster
-                            .modifiers
-                            .mask()
+                        // Resolve mask via `doc.mask_modifier`. The structural
+                        // detection lives here — the outer compositor never
+                        // branches on a node's kind.
+                        let mask_bg = doc
+                            .mask_modifier(raster.id)
                             .filter(|m| m.common.visible)
                             .map(|m| self.mask_bind_group(m.id))
                             .unwrap_or(&self.default_mask_bind_group);
@@ -1704,9 +1720,7 @@ impl Compositor {
                         let preview_mask_bg = if target_is_r8 {
                             &self.default_mask_bind_group
                         } else {
-                            raster
-                                .modifiers
-                                .mask()
+                            doc.mask_modifier(raster.id)
                                 .filter(|m| m.common.visible)
                                 .map(|m| self.mask_bind_group(m.id))
                                 .unwrap_or(&self.default_mask_bind_group)
@@ -1735,13 +1749,13 @@ impl Compositor {
                 }
 
                 LayerNode::Group(g) => {
+                    let group_id = g.id;
                     if g.passthrough {
                         // Structural detection: a passthrough group with a
                         // visible mask modifier triggers Photoshop-style
                         // snapshot+lerp; otherwise it's pure passthrough.
-                        let has_active_mask = g
-                            .modifiers
-                            .mask()
+                        let has_active_mask = doc
+                            .mask_modifier(group_id)
                             .map(|m| m.common.visible)
                             .unwrap_or(false);
 
@@ -1749,27 +1763,30 @@ impl Compositor {
                             self.compose_passthrough_masked(
                                 encoder,
                                 device,
+                                doc,
                                 parent_group,
-                                g,
+                                group_id,
                                 scissor,
                             );
                         } else {
                             // Pure passthrough — inline children into parent.
+                            let inner: Vec<LayerId> = doc.children_of(group_id).to_vec();
                             self.compose_children(
                                 encoder,
                                 device,
+                                doc,
                                 parent_group,
-                                &g.children.0,
+                                &inner,
                                 scissor,
                             );
                         }
                     } else {
                         // Normal group: composite into its own isolated buffer,
                         // then blend the result into the parent.
-                        if !self.group_state.contains_key(&g.id) {
+                        if !self.group_state.contains_key(&group_id) {
                             continue;
                         }
-                        self.compose_group(encoder, device, g.id, &g.children.0, scissor);
+                        self.compose_group(encoder, device, doc, group_id, scissor);
 
                         // Blend group's composite cache into parent's accumulators.
                         let gs_parent = self.group_state.get_mut(&parent_group).unwrap();
@@ -1777,7 +1794,7 @@ impl Compositor {
                         let dst = 1 - src;
                         gs_parent.current_accum = dst;
 
-                        let gs_child = &self.group_state[&g.id];
+                        let gs_child = &self.group_state[&group_id];
                         let bind_group = self.create_blend_bind_group(
                             device,
                             &self.group_state[&parent_group].accum.views[src],
@@ -1787,9 +1804,8 @@ impl Compositor {
                         );
 
                         let gs_parent = &self.group_state[&parent_group];
-                        let child_mask_bg = g
-                            .modifiers
-                            .mask()
+                        let child_mask_bg = doc
+                            .mask_modifier(group_id)
                             .filter(|m| m.common.visible)
                             .map(|m| self.mask_bind_group(m.id))
                             .unwrap_or(&self.default_mask_bind_group);
@@ -1828,17 +1844,18 @@ impl Compositor {
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
+        doc: &Document,
         parent_group: LayerId,
-        group: &crate::layer::LayerGroup,
+        group_id: LayerId,
         scissor: (u32, u32, u32, u32),
     ) {
         let (scissor_x, scissor_y, scissor_w, scissor_h) = scissor;
-        let group_id = group.id;
 
         // PassthroughMaskState must exist (created when the mask was added).
         if !self.passthrough_mask_state.contains_key(&group_id) {
             // Fallback: just inline children without mask.
-            self.compose_children(encoder, device, parent_group, &group.children.0, scissor);
+            let inner: Vec<LayerId> = doc.children_of(group_id).to_vec();
+            self.compose_children(encoder, device, doc, parent_group, &inner, scissor);
             return;
         }
 
@@ -1876,7 +1893,8 @@ impl Compositor {
         );
 
         // 2. Composite children into parent accumulators (passthrough).
-        self.compose_children(encoder, device, parent_group, &group.children.0, scissor);
+        let inner: Vec<LayerId> = doc.children_of(group_id).to_vec();
+        self.compose_children(encoder, device, doc, parent_group, &inner, scissor);
 
         // 3. Lerp pass: mix(snapshot, current_accum, mask).
         //    Write the lerp result into the ping-pong "other" accumulator.
@@ -1915,9 +1933,8 @@ impl Compositor {
 
         {
             let gs = &self.group_state[&parent_group];
-            let group_mask_bg = group
-                .modifiers
-                .mask()
+            let group_mask_bg = doc
+                .mask_modifier(group_id)
                 .filter(|m| m.common.visible)
                 .map(|m| self.mask_bind_group(m.id))
                 .unwrap_or(&self.default_mask_bind_group);

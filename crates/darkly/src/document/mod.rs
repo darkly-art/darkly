@@ -5,6 +5,8 @@ pub use modifier::{Modifier, ModifierKind, ModifierRegistration};
 pub use modifiers::mask::MaskModifier;
 pub use modifiers::selection::{SelectionCpuCache, SelectionModifier};
 
+use slotmap::{SecondaryMap, SlotMap};
+
 use crate::coord::CanvasRect;
 use crate::layer::*;
 
@@ -22,552 +24,384 @@ pub enum MoveTarget {
     IntoGroupBottom(LayerId),
 }
 
-/// Well-known ID for the implicit root group.
-pub const ROOT_ID: LayerId = 0;
+/// One slot in [`Document::entities`]. Tree nodes (layers + groups) and
+/// modifiers share a single id space and a single storage map so callers can
+/// pass any [`LayerId`] through the same lookup surface.
+pub enum Entity {
+    Node(LayerNode),
+    Modifier(Modifier),
+}
+
+impl Entity {
+    pub fn as_node(&self) -> Option<&LayerNode> {
+        match self {
+            Entity::Node(n) => Some(n),
+            Entity::Modifier(_) => None,
+        }
+    }
+
+    pub fn as_node_mut(&mut self) -> Option<&mut LayerNode> {
+        match self {
+            Entity::Node(n) => Some(n),
+            Entity::Modifier(_) => None,
+        }
+    }
+
+    pub fn as_modifier(&self) -> Option<&Modifier> {
+        match self {
+            Entity::Modifier(m) => Some(m),
+            Entity::Node(_) => None,
+        }
+    }
+
+    pub fn as_modifier_mut(&mut self) -> Option<&mut Modifier> {
+        match self {
+            Entity::Modifier(m) => Some(m),
+            Entity::Node(_) => None,
+        }
+    }
+}
 
 pub struct Document {
-    /// The root of the layer tree. All layers live inside this group.
-    /// The root group itself is never exposed to the UI — only its children are.
-    pub root: LayerGroup,
     pub width: u32,
     pub height: u32,
-    /// Global selection — a typed [`Modifier`] attached at the document root
-    /// (rather than on a host's `modifiers` list). `None` until the engine
-    /// allocates one; once allocated it stays for the document's lifetime,
-    /// with `common.visible` toggling whether ops respect the selection.
-    /// The R8 pixel data lives in the compositor's selection sub-system; the
-    /// document model owns id, name, visibility, lock, bounds, and the CPU
-    /// readback cache via [`SelectionModifier`].
-    pub selection: Option<Modifier>,
-    next_id: LayerId,
-}
 
-// --- Tree traversal helpers (free functions for borrow-splitting) ---
+    /// Single shared slot store for every layer, group, and modifier in this
+    /// document. Lookups are O(1); generational keys mean stale ids return
+    /// `None` instead of aliasing onto a recycled slot.
+    pub entities: SlotMap<LayerId, Entity>,
 
-fn find_layer_in(nodes: &[LayerNode], id: LayerId) -> Option<&Layer> {
-    for node in nodes {
-        match node {
-            LayerNode::Layer(l) if l.id() == id => return Some(l),
-            LayerNode::Group(g) => {
-                if let Some(l) = find_layer_in(&g.children.0, id) {
-                    return Some(l);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
+    /// Parent pointer for every linked entity:
+    /// - For a tree node: its tree parent (a group). Root has no entry.
+    /// - For a modifier: its host node. Selection has no entry.
+    ///
+    /// Entities present in `entities` but absent from `parent` are *orphans* —
+    /// either the root itself, the selection modifier, or a subtree that has
+    /// been detached for undo and is waiting to be reattached.
+    pub parent: SecondaryMap<LayerId, LayerId>,
 
-fn find_layer_in_mut(nodes: &mut [LayerNode], id: LayerId) -> Option<&mut Layer> {
-    for node in nodes {
-        match node {
-            LayerNode::Layer(l) if l.id() == id => return Some(l),
-            LayerNode::Group(g) => {
-                if let Some(l) = find_layer_in_mut(&mut g.children.0, id) {
-                    return Some(l);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
+    /// The implicit root group's id. Allocated in [`Document::new`]; replaces
+    /// the old well-known `ROOT_ID = 0` constant. The root group itself is
+    /// never exposed to the UI — only its children are.
+    pub root: LayerId,
 
-fn find_node_in(nodes: &[LayerNode], id: LayerId) -> Option<&LayerNode> {
-    for node in nodes {
-        if node.id() == id {
-            return Some(node);
-        }
-        if let LayerNode::Group(g) = node {
-            if let Some(n) = find_node_in(&g.children.0, id) {
-                return Some(n);
-            }
-        }
-    }
-    None
-}
-
-fn find_node_in_mut(nodes: &mut [LayerNode], id: LayerId) -> Option<&mut LayerNode> {
-    for node in nodes {
-        if node.id() == id {
-            return Some(node);
-        }
-        if let LayerNode::Group(g) = node {
-            if let Some(n) = find_node_in_mut(&mut g.children.0, id) {
-                return Some(n);
-            }
-        }
-    }
-    None
-}
-
-fn find_modifier_in(nodes: &[LayerNode], id: LayerId) -> Option<&Modifier> {
-    for node in nodes {
-        for m in node.modifiers().iter() {
-            if m.id == id {
-                return Some(m);
-            }
-        }
-        if let LayerNode::Group(g) = node {
-            if let Some(m) = find_modifier_in(&g.children.0, id) {
-                return Some(m);
-            }
-        }
-    }
-    None
-}
-
-fn find_modifier_in_mut(nodes: &mut [LayerNode], id: LayerId) -> Option<&mut Modifier> {
-    for node in nodes {
-        let pos = node.modifiers().iter().position(|m| m.id == id);
-        if let Some(pos) = pos {
-            return Some(&mut node.modifiers_mut().0[pos]);
-        }
-        if let LayerNode::Group(g) = node {
-            if let Some(m) = find_modifier_in_mut(&mut g.children.0, id) {
-                return Some(m);
-            }
-        }
-    }
-    None
-}
-
-fn find_modifier_host_in(nodes: &[LayerNode], modifier_id: LayerId) -> Option<&LayerNode> {
-    for node in nodes {
-        if node.modifiers().iter().any(|m| m.id == modifier_id) {
-            return Some(node);
-        }
-        if let LayerNode::Group(g) = node {
-            if let Some(host) = find_modifier_host_in(&g.children.0, modifier_id) {
-                return Some(host);
-            }
-        }
-    }
-    None
-}
-
-fn find_modifier_host_in_mut(
-    nodes: &mut [LayerNode],
-    modifier_id: LayerId,
-) -> Option<&mut LayerNode> {
-    for node in nodes {
-        if node.modifiers().iter().any(|m| m.id == modifier_id) {
-            return Some(node);
-        }
-        if let LayerNode::Group(g) = node {
-            if let Some(host) = find_modifier_host_in_mut(&mut g.children.0, modifier_id) {
-                return Some(host);
-            }
-        }
-    }
-    None
-}
-
-fn detach_node(nodes: &mut Vec<LayerNode>, id: LayerId) -> Option<LayerNode> {
-    if let Some(pos) = nodes.iter().position(|n| n.id() == id) {
-        return Some(nodes.remove(pos));
-    }
-    for node in nodes.iter_mut() {
-        if let LayerNode::Group(g) = node {
-            if let Some(n) = detach_node(&mut g.children.0, id) {
-                return Some(n);
-            }
-        }
-    }
-    None
-}
-
-fn detach_modifier(nodes: &mut [LayerNode], modifier_id: LayerId) -> Option<Modifier> {
-    for node in nodes.iter_mut() {
-        let pos = node.modifiers().iter().position(|m| m.id == modifier_id);
-        if let Some(pos) = pos {
-            return Some(node.modifiers_mut().0.remove(pos));
-        }
-        if let LayerNode::Group(g) = node {
-            if let Some(m) = detach_modifier(&mut g.children.0, modifier_id) {
-                return Some(m);
-            }
-        }
-    }
-    None
-}
-
-/// Find the position path of a node in the tree. Returns the path of indices.
-fn find_position(nodes: &[LayerNode], id: LayerId) -> Option<Vec<usize>> {
-    for (i, node) in nodes.iter().enumerate() {
-        if node.id() == id {
-            return Some(vec![i]);
-        }
-        if let LayerNode::Group(g) = node {
-            if let Some(mut path) = find_position(&g.children.0, id) {
-                path.insert(0, i);
-                return Some(path);
-            }
-        }
-    }
-    None
-}
-
-/// Get mutable reference to the container (Vec<LayerNode>) at a path.
-fn container_at_path<'a>(nodes: &'a mut Vec<LayerNode>, path: &[usize]) -> &'a mut Vec<LayerNode> {
-    if path.len() <= 1 {
-        return nodes;
-    }
-    let is_group = matches!(&nodes[path[0]], LayerNode::Group(_));
-    if is_group {
-        match &mut nodes[path[0]] {
-            LayerNode::Group(g) => container_at_path(&mut g.children.0, &path[1..]),
-            _ => unreachable!(),
-        }
-    } else {
-        nodes
-    }
-}
-
-fn flatten_nodes<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a Layer>) {
-    for node in nodes {
-        match node {
-            LayerNode::Layer(l) => out.push(l),
-            LayerNode::Group(g) => {
-                if !g.common.visible {
-                    continue;
-                }
-                // Passthrough groups: children composited directly into parent.
-                // Normal groups: TODO — needs isolated compositing buffer.
-                // For now, flatten children in both modes.
-                flatten_nodes(&g.children.0, out);
-            }
-        }
-    }
-}
-
-fn collect_raster_layers<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a RasterLayer>) {
-    for node in nodes {
-        match node {
-            LayerNode::Layer(Layer::Raster(r)) => out.push(r),
-            LayerNode::Group(g) => collect_raster_layers(&g.children.0, out),
-        }
-    }
-}
-
-fn collect_groups<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a LayerGroup>) {
-    for node in nodes {
-        if let LayerNode::Group(g) = node {
-            out.push(g);
-            collect_groups(&g.children.0, out);
-        }
-    }
-}
-
-fn collect_modifiers<'a>(nodes: &'a [LayerNode], out: &mut Vec<&'a Modifier>) {
-    for node in nodes {
-        for m in node.modifiers().iter() {
-            out.push(m);
-        }
-        if let LayerNode::Group(g) = node {
-            collect_modifiers(&g.children.0, out);
-        }
-    }
-}
-
-fn find_parent_of(nodes: &[LayerNode], id: LayerId) -> Option<LayerId> {
-    for node in nodes {
-        if let LayerNode::Group(g) = node {
-            for child in g.children.iter() {
-                if child.id() == id {
-                    return Some(g.id);
-                }
-            }
-            if let Some(parent) = find_parent_of(&g.children.0, id) {
-                return Some(parent);
-            }
-        }
-    }
-    None
-}
-
-fn count_nodes(nodes: &[LayerNode]) -> usize {
-    let mut count = 0;
-    for node in nodes {
-        count += 1;
-        if let LayerNode::Group(g) = node {
-            count += count_nodes(&g.children.0);
-        }
-    }
-    count
-}
-
-fn position_in(nodes: &[LayerNode], id: LayerId) -> Option<usize> {
-    nodes.iter().position(|n| n.id() == id)
+    /// Global selection modifier id, if allocated. The modifier itself lives
+    /// in [`Self::entities`]; this just remembers which entry it is. Once
+    /// allocated it stays for the document's lifetime, with `common.visible`
+    /// toggling whether ops respect the selection.
+    pub selection: Option<LayerId>,
 }
 
 impl Document {
     pub fn new(width: u32, height: u32) -> Self {
+        let mut entities: SlotMap<LayerId, Entity> = SlotMap::with_key();
+        // Allocate the root with a placeholder id, then patch the id after
+        // insertion. SlotMap::insert_with_key does this in one step.
+        let root =
+            entities.insert_with_key(|key| Entity::Node(LayerNode::Group(LayerGroup::new(key))));
         Document {
-            root: LayerGroup::new(ROOT_ID),
             width,
             height,
+            entities,
+            parent: SecondaryMap::new(),
+            root,
             selection: None,
-            next_id: 1,
         }
     }
 
-    fn alloc_id(&mut self) -> LayerId {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
-
-    /// Add a new raster layer at the root top.
-    pub fn add_raster_layer(&mut self) -> LayerId {
-        let id = self.alloc_id();
-        let layer = RasterLayer::new(id, CanvasRect::from_xywh(0, 0, self.width, self.height));
+    /// Id of the implicit root group. Replaces the old `ROOT_ID` constant.
+    pub fn root_id(&self) -> LayerId {
         self.root
-            .children
-            .0
-            .push(LayerNode::Layer(Layer::Raster(layer)));
-        id
     }
 
-    /// Add a new raster layer inside a group (or at root if parent is None).
-    pub fn add_raster_layer_in(&mut self, parent: Option<LayerId>) -> LayerId {
-        let id = self.alloc_id();
-        let layer = RasterLayer::new(id, CanvasRect::from_xywh(0, 0, self.width, self.height));
-        let node = LayerNode::Layer(Layer::Raster(layer));
+    // ---------------------------------------------------------------
+    // Lookup — every method is O(1) (tree walks happen only in the
+    // explicitly-named whole-tree queries: `flat_layers`, `all_*`,
+    // `node_count`).
+    // ---------------------------------------------------------------
 
-        match parent {
-            Some(group_id) => {
-                if let Some(LayerNode::Group(g)) =
-                    find_node_in_mut(&mut self.root.children.0, group_id)
-                {
-                    g.children.0.push(node);
-                } else {
-                    self.root.children.0.push(node);
-                }
-            }
-            None => self.root.children.0.push(node),
+    pub fn find_node(&self, id: LayerId) -> Option<&LayerNode> {
+        self.entities.get(id).and_then(Entity::as_node)
+    }
+
+    pub fn find_node_mut(&mut self, id: LayerId) -> Option<&mut LayerNode> {
+        self.entities.get_mut(id).and_then(Entity::as_node_mut)
+    }
+
+    pub fn find_modifier(&self, id: LayerId) -> Option<&Modifier> {
+        self.entities.get(id).and_then(Entity::as_modifier)
+    }
+
+    pub fn find_modifier_mut(&mut self, id: LayerId) -> Option<&mut Modifier> {
+        self.entities.get_mut(id).and_then(Entity::as_modifier_mut)
+    }
+
+    /// Find the host node a modifier is attached to (the layer or group that
+    /// owns it on its `modifiers` list).
+    pub fn find_modifier_host(&self, modifier_id: LayerId) -> Option<&LayerNode> {
+        let host_id = *self.parent.get(modifier_id)?;
+        self.find_node(host_id)
+    }
+
+    pub fn find_modifier_host_mut(&mut self, modifier_id: LayerId) -> Option<&mut LayerNode> {
+        let host_id = *self.parent.get(modifier_id)?;
+        self.find_node_mut(host_id)
+    }
+
+    pub fn layer(&self, id: LayerId) -> Option<&Layer> {
+        match self.find_node(id)? {
+            LayerNode::Layer(l) => Some(l),
+            LayerNode::Group(_) => None,
         }
-        id
     }
 
-    /// Add a new empty group at the root top.
-    pub fn add_group(&mut self) -> LayerId {
-        let id = self.alloc_id();
-        let group = LayerGroup::new(id);
-        self.root.children.0.push(LayerNode::Group(group));
-        id
+    pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
+        match self.find_node_mut(id)? {
+            LayerNode::Layer(l) => Some(l),
+            LayerNode::Group(_) => None,
+        }
     }
 
-    /// Flatten the layer tree into display order (bottom-to-top) for compositing.
-    /// Hidden groups exclude all children. Passthrough groups flatten children directly.
+    /// True if `id` refers to a modifier (rather than a layer/group). Cheap
+    /// disambiguator for callers that hold a node id and need to dispatch.
+    pub fn is_modifier(&self, id: LayerId) -> bool {
+        matches!(self.entities.get(id), Some(Entity::Modifier(_)))
+    }
+
+    /// Pixel-buffer accessor that works for any pixel-bearing entity — raster
+    /// layers and pixel-storing modifiers (today: masks, selection). Returns
+    /// `None` for groups, pure-effect modifiers, or unknown ids.
+    pub fn pixel_buffer(&self, id: LayerId) -> Option<&PixelBuffer> {
+        match self.entities.get(id)? {
+            Entity::Node(n) => n.pixels(),
+            Entity::Modifier(m) => m.pixels(),
+        }
+    }
+
+    pub fn pixel_buffer_mut(&mut self, id: LayerId) -> Option<&mut PixelBuffer> {
+        match self.entities.get_mut(id)? {
+            Entity::Node(n) => n.pixels_mut(),
+            Entity::Modifier(m) => m.pixels_mut(),
+        }
+    }
+
+    pub fn parent_of(&self, id: LayerId) -> Option<LayerId> {
+        self.parent.get(id).copied()
+    }
+
+    /// Index of an entity within its parent container.
+    /// - For a tree node: position in its parent group's `children` Vec.
+    /// - For a modifier: position in its host node's `modifiers` Vec.
+    pub fn position_in_parent(&self, id: LayerId) -> Option<usize> {
+        let parent_id = *self.parent.get(id)?;
+        let parent_node = self.find_node(parent_id)?;
+        if self.is_modifier(id) {
+            parent_node.modifiers().iter().position(|c| *c == id)
+        } else {
+            match parent_node {
+                LayerNode::Group(g) => g.children.iter().position(|c| *c == id),
+                LayerNode::Layer(_) => None,
+            }
+        }
+    }
+
+    /// First mask modifier on a host, if any. Replaces the old
+    /// `host.modifiers().mask()` pattern — that helper used to live on
+    /// `ModifierList`, but with id-references it needs the document to
+    /// resolve.
+    pub fn mask_modifier_id(&self, host_id: LayerId) -> Option<LayerId> {
+        let host = self.find_node(host_id)?;
+        host.modifiers().iter().copied().find(|mid| {
+            self.find_modifier(*mid)
+                .map(|m| matches!(m.kind, ModifierKind::Mask(_)))
+                .unwrap_or(false)
+        })
+    }
+
+    pub fn mask_modifier(&self, host_id: LayerId) -> Option<&Modifier> {
+        self.find_modifier(self.mask_modifier_id(host_id)?)
+    }
+
+    pub fn has_mask(&self, host_id: LayerId) -> bool {
+        self.mask_modifier_id(host_id).is_some()
+    }
+
+    /// Modifier-id list for a host node, in bottom-up order.
+    pub fn modifiers_of(&self, host_id: LayerId) -> &[LayerId] {
+        match self.find_node(host_id) {
+            Some(n) => n.modifiers(),
+            None => &[],
+        }
+    }
+
+    /// Children of a group, in display order.
+    pub fn children_of(&self, group_id: LayerId) -> &[LayerId] {
+        match self.find_node(group_id) {
+            Some(LayerNode::Group(g)) => &g.children,
+            _ => &[],
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Whole-tree queries — these enumerate the world by definition,
+    // so they're O(N). They walk from `root` and so naturally exclude
+    // any orphans parked in the slotmap awaiting undo reattach.
+    // ---------------------------------------------------------------
+
     pub fn flat_layers(&self) -> Vec<&Layer> {
         let mut out = Vec::new();
-        flatten_nodes(&self.root.children.0, &mut out);
+        self.flatten_into(self.root, &mut out);
         out
     }
 
-    /// Get all raster layers in the tree (regardless of visibility).
-    /// Used for GPU sync — we keep GPU textures in sync even for hidden layers.
+    fn flatten_into<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a Layer>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            match self.find_node(child_id) {
+                Some(LayerNode::Layer(l)) => out.push(l),
+                Some(LayerNode::Group(child)) if !child.common.visible => {}
+                Some(LayerNode::Group(_)) => {
+                    // Passthrough groups: children composited directly into
+                    // parent. Normal groups: TODO — needs isolated compositing
+                    // buffer. For now, flatten children in both modes.
+                    self.flatten_into(child_id, out);
+                }
+                None => {}
+            }
+        }
+    }
+
+    /// All raster layers in the tree, regardless of visibility. Used for GPU
+    /// sync — we keep GPU textures in sync even for hidden layers.
     pub fn all_raster_layers(&self) -> Vec<&RasterLayer> {
         let mut out = Vec::new();
-        collect_raster_layers(&self.root.children.0, &mut out);
+        self.collect_raster_layers(self.root, &mut out);
         out
+    }
+
+    fn collect_raster_layers<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a RasterLayer>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            match self.find_node(child_id) {
+                Some(LayerNode::Layer(Layer::Raster(r))) => out.push(r),
+                Some(LayerNode::Group(_)) => self.collect_raster_layers(child_id, out),
+                _ => {}
+            }
+        }
     }
 
     pub fn all_groups(&self) -> Vec<&LayerGroup> {
         let mut out = Vec::new();
-        collect_groups(&self.root.children.0, &mut out);
+        self.collect_groups(self.root, &mut out);
         out
     }
 
-    /// Every modifier attached to any host in the tree.
+    fn collect_groups<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a LayerGroup>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            if let Some(LayerNode::Group(child)) = self.find_node(child_id) {
+                out.push(child);
+                self.collect_groups(child_id, out);
+            }
+        }
+    }
+
+    /// Every modifier attached to any host in the tree. The global selection
+    /// modifier is *not* included (it has no host); use
+    /// [`Document::selection_id`] for that.
     pub fn all_modifiers(&self) -> Vec<&Modifier> {
         let mut out = Vec::new();
-        collect_modifiers(&self.root.children.0, &mut out);
+        self.collect_modifiers(self.root, &mut out);
         out
     }
 
-    /// Count all nodes (layers + groups) in the tree. Excludes modifiers.
+    fn collect_modifiers<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a Modifier>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        // Modifiers on the group itself.
+        for &mid in &g.modifiers {
+            if let Some(m) = self.find_modifier(mid) {
+                out.push(m);
+            }
+        }
+        // Then descend.
+        for &child_id in &g.children {
+            match self.find_node(child_id) {
+                Some(LayerNode::Layer(l)) => {
+                    for &mid in l.modifiers() {
+                        if let Some(m) = self.find_modifier(mid) {
+                            out.push(m);
+                        }
+                    }
+                }
+                Some(LayerNode::Group(_)) => self.collect_modifiers(child_id, out),
+                None => {}
+            }
+        }
+    }
+
+    /// Count of all tree nodes (layers + groups, excluding the root and
+    /// modifiers). Walks the tree; intended for tests and rare diagnostics.
     pub fn node_count(&self) -> usize {
-        count_nodes(&self.root.children.0)
+        fn walk(doc: &Document, group_id: LayerId, counter: &mut usize) {
+            let Some(LayerNode::Group(g)) = doc.find_node(group_id) else {
+                return;
+            };
+            for &child_id in &g.children {
+                *counter += 1;
+                if matches!(doc.find_node(child_id), Some(LayerNode::Group(_))) {
+                    walk(doc, child_id, counter);
+                }
+            }
+        }
+        let mut n = 0;
+        walk(self, self.root, &mut n);
+        n
     }
 
     pub fn flat_layer_index(&self, id: LayerId) -> Option<usize> {
         self.flat_layers().iter().position(|l| l.id() == id)
     }
 
-    pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        find_layer_in(&self.root.children.0, id)
+    // ---------------------------------------------------------------
+    // Mutation — every entry point that adds, removes, or reparents an
+    // entity goes through here so the slotmap, the parent map, and the
+    // children/modifier Vecs stay consistent.
+    // ---------------------------------------------------------------
+
+    /// Add a new raster layer at the root top.
+    pub fn add_raster_layer(&mut self) -> LayerId {
+        self.add_raster_layer_in(None)
     }
 
-    pub fn layer_mut(&mut self, id: LayerId) -> Option<&mut Layer> {
-        find_layer_in_mut(&mut self.root.children.0, id)
+    /// Add a new raster layer inside a group (or at root if parent is None).
+    pub fn add_raster_layer_in(&mut self, parent: Option<LayerId>) -> LayerId {
+        let bounds = CanvasRect::from_xywh(0, 0, self.width, self.height);
+        let id = self.entities.insert_with_key(|key| {
+            Entity::Node(LayerNode::Layer(Layer::Raster(RasterLayer::new(
+                key, bounds,
+            ))))
+        });
+        let parent_id = self.resolve_parent_group(parent);
+        self.link_child(id, parent_id, None);
+        id
     }
 
-    pub fn find_node(&self, id: LayerId) -> Option<&LayerNode> {
-        find_node_in(&self.root.children.0, id)
+    /// Add a new empty group at the root top.
+    pub fn add_group(&mut self) -> LayerId {
+        let id = self
+            .entities
+            .insert_with_key(|key| Entity::Node(LayerNode::Group(LayerGroup::new(key))));
+        self.link_child(id, self.root, None);
+        id
     }
-
-    pub fn find_node_mut(&mut self, id: LayerId) -> Option<&mut LayerNode> {
-        find_node_in_mut(&mut self.root.children.0, id)
-    }
-
-    /// Look up a modifier by id. Modifiers live on host `modifiers` lists, not
-    /// in the `LayerNode` tree, so they require their own finder.
-    pub fn find_modifier(&self, id: LayerId) -> Option<&Modifier> {
-        find_modifier_in(&self.root.children.0, id)
-    }
-
-    pub fn find_modifier_mut(&mut self, id: LayerId) -> Option<&mut Modifier> {
-        find_modifier_in_mut(&mut self.root.children.0, id)
-    }
-
-    /// Find the host node a modifier is attached to (the layer or group that
-    /// owns it on its `modifiers` list).
-    pub fn find_modifier_host(&self, modifier_id: LayerId) -> Option<&LayerNode> {
-        find_modifier_host_in(&self.root.children.0, modifier_id)
-    }
-
-    pub fn find_modifier_host_mut(&mut self, modifier_id: LayerId) -> Option<&mut LayerNode> {
-        find_modifier_host_in_mut(&mut self.root.children.0, modifier_id)
-    }
-
-    /// True if `id` refers to a modifier (rather than a layer/group). Cheap
-    /// disambiguator for callers that hold a node id and need to dispatch.
-    pub fn is_modifier(&self, id: LayerId) -> bool {
-        self.find_modifier(id).is_some()
-    }
-
-    /// Pixel-buffer accessor that works for any pixel-bearing node — raster
-    /// layers and pixel-storing modifiers (today: masks). Returns `None` for
-    /// groups, pure-effect modifiers, or unknown ids.
-    ///
-    /// This is the polymorphic interface the engine uses for paint, transform,
-    /// readback, and dirty-tracking — none of those need to know whether the
-    /// id refers to a layer or a modifier.
-    pub fn pixel_buffer(&self, id: LayerId) -> Option<&PixelBuffer> {
-        if let Some(node) = self.find_node(id) {
-            return node.pixels();
-        }
-        self.find_modifier(id).and_then(|m| m.pixels())
-    }
-
-    pub fn pixel_buffer_mut(&mut self, id: LayerId) -> Option<&mut PixelBuffer> {
-        if find_node_in(&self.root.children.0, id)
-            .and_then(|n| n.pixels())
-            .is_some()
-        {
-            return find_node_in_mut(&mut self.root.children.0, id).and_then(|n| n.pixels_mut());
-        }
-        find_modifier_in_mut(&mut self.root.children.0, id).and_then(|m| m.pixels_mut())
-    }
-
-    pub fn parent_of(&self, id: LayerId) -> Option<LayerId> {
-        // For a regular tree node: walk children. For a modifier: return its host.
-        if let Some(host) = self.find_modifier_host(id) {
-            return Some(host.id());
-        }
-        find_parent_of(&self.root.children.0, id)
-    }
-
-    /// Index of a node within its parent container (root list or group children).
-    pub fn position_in_parent(&self, id: LayerId) -> Option<usize> {
-        let parent = self.parent_of(id);
-        match parent {
-            Some(pid) => {
-                if let Some(LayerNode::Group(g)) = find_node_in(&self.root.children.0, pid) {
-                    position_in(&g.children.0, id)
-                } else {
-                    None
-                }
-            }
-            None => position_in(&self.root.children.0, id),
-        }
-    }
-
-    /// Detach a node from the tree for undo purposes.
-    pub fn detach_for_undo(&mut self, id: LayerId) -> Option<LayerNode> {
-        detach_node(&mut self.root.children.0, id)
-    }
-
-    /// Reinsert a previously detached node at a specific position.
-    pub fn reinsert_node(&mut self, node: LayerNode, parent: Option<LayerId>, position: usize) {
-        match parent {
-            Some(pid) => {
-                if let Some(LayerNode::Group(g)) = find_node_in_mut(&mut self.root.children.0, pid)
-                {
-                    let pos = position.min(g.children.0.len());
-                    g.children.0.insert(pos, node);
-                } else {
-                    let pos = position.min(self.root.children.0.len());
-                    self.root.children.0.insert(pos, node);
-                }
-            }
-            None => {
-                let pos = position.min(self.root.children.0.len());
-                self.root.children.0.insert(pos, node);
-            }
-        }
-    }
-
-    /// Move a node to a new position in the tree.
-    pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
-        let node = match detach_node(&mut self.root.children.0, layer_id) {
-            Some(n) => n,
-            None => return,
-        };
-        self.insert_node(node, target);
-    }
-
-    fn insert_node(&mut self, node: LayerNode, target: MoveTarget) {
-        match target {
-            MoveTarget::Before(ref_id) => {
-                if let Some(path) = find_position(&self.root.children.0, ref_id) {
-                    let idx = *path.last().unwrap();
-                    let container = container_at_path(&mut self.root.children.0, &path);
-                    container.insert(idx, node);
-                } else {
-                    self.root.children.0.push(node);
-                }
-            }
-            MoveTarget::After(ref_id) => {
-                if let Some(path) = find_position(&self.root.children.0, ref_id) {
-                    let idx = *path.last().unwrap();
-                    let container = container_at_path(&mut self.root.children.0, &path);
-                    container.insert(idx + 1, node);
-                } else {
-                    self.root.children.0.push(node);
-                }
-            }
-            MoveTarget::IntoGroupTop(group_id) => {
-                if let Some(LayerNode::Group(g)) =
-                    find_node_in_mut(&mut self.root.children.0, group_id)
-                {
-                    g.children.0.push(node);
-                } else {
-                    self.root.children.0.push(node);
-                }
-            }
-            MoveTarget::IntoGroupBottom(group_id) => {
-                if let Some(LayerNode::Group(g)) =
-                    find_node_in_mut(&mut self.root.children.0, group_id)
-                {
-                    g.children.0.insert(0, node);
-                } else {
-                    self.root.children.0.push(node);
-                }
-            }
-        }
-    }
-
-    /// Remove a node (layer or group) from the tree. To remove a modifier, use
-    /// [`Document::remove_modifier`].
-    pub fn remove_node(&mut self, id: LayerId) {
-        detach_node(&mut self.root.children.0, id);
-    }
-
-    // --- Modifier operations ---
 
     /// Add a [`MaskModifier`] to a host node, returning the new modifier's id.
     /// Bounds default to the host's pixel bounds (raster) or canvas (group).
@@ -575,30 +409,265 @@ impl Document {
     ///
     /// Note: only one mask per host is enforced at the UI layer, not here —
     /// the model supports N. Callers that want the singleton invariant should
-    /// check `host.modifiers().mask().is_some()` before adding.
+    /// check [`Document::has_mask`] before adding.
     pub fn add_mask_modifier(&mut self, host_id: LayerId) -> Option<LayerId> {
         let bounds = self.host_default_bounds(host_id)?;
-        let mod_id = self.alloc_id();
-        let modifier = Modifier {
-            id: mod_id,
-            common: NodeCommon::new(format!("Mask {mod_id}")),
-            kind: ModifierKind::mask_with_bounds(bounds),
+        let id = self.entities.insert_with_key(|key| {
+            Entity::Modifier(Modifier {
+                id: key,
+                common: NodeCommon::new(format!("Mask {:?}", key.to_ffi())),
+                kind: ModifierKind::mask_with_bounds(bounds),
+            })
+        });
+        // Patch the modifier's id field to match its slot key.
+        if let Some(Entity::Modifier(m)) = self.entities.get_mut(id) {
+            m.id = id;
+        }
+        // Link to the host.
+        if let Some(host) = self.find_node_mut(host_id) {
+            host.modifiers_mut().push(id);
+            self.parent.insert(id, host_id);
+            Some(id)
+        } else {
+            self.entities.remove(id);
+            None
+        }
+    }
+
+    /// Allocate the global selection modifier if not already present, sized
+    /// to the canvas. Idempotent — returns the modifier id either way.
+    pub fn ensure_selection_modifier(&mut self) -> LayerId {
+        if let Some(id) = self.selection {
+            return id;
+        }
+        let bounds = CanvasRect::from_xywh(0, 0, self.width, self.height);
+        let id = self.entities.insert_with_key(|key| {
+            let mut m = Modifier {
+                id: key,
+                common: NodeCommon::new("Selection".to_string()),
+                kind: ModifierKind::selection_with_bounds(bounds),
+            };
+            // Default `visible = false` mirrors today's "always allocated,
+            // .active toggles whether ops respect it" semantics.
+            m.common.visible = false;
+            Entity::Modifier(m)
+        });
+        // Patch id field to slot key.
+        if let Some(Entity::Modifier(m)) = self.entities.get_mut(id) {
+            m.id = id;
+        }
+        self.selection = Some(id);
+        // Per the plan, the selection lives "at the document root rather than
+        // on a host's `modifiers` list" — so no entry in `parent`.
+        id
+    }
+
+    /// Selection modifier id, if allocated.
+    pub fn selection_id(&self) -> Option<LayerId> {
+        self.selection
+    }
+
+    /// True when the selection modifier is allocated AND its `common.visible`
+    /// flag is set — equivalent to today's `gpu_selection.active`.
+    pub fn selection_active(&self) -> bool {
+        self.selection
+            .and_then(|id| self.find_modifier(id))
+            .is_some_and(|m| m.common.visible)
+    }
+
+    /// Move a node to a new position in the tree.
+    pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
+        if self.unlink_node(layer_id).is_none() {
+            return;
+        }
+        self.attach_at_target(layer_id, target);
+    }
+
+    /// Detach a node from the tree for undo purposes, leaving it parked in
+    /// `entities` so its id stays stable across undo/redo. Returns the id on
+    /// success. Reattach with [`Document::reinsert_node`]; if the undo entry
+    /// is later discarded, call [`Document::remove_node`] to actually free it.
+    pub fn detach_for_undo(&mut self, id: LayerId) -> Option<LayerId> {
+        self.unlink_node(id)
+    }
+
+    /// Reinsert a previously detached node at a specific position.
+    pub fn reinsert_node(&mut self, id: LayerId, parent: Option<LayerId>, position: usize) {
+        if !self.entities.contains_key(id) {
+            return;
+        }
+        let parent_id = self.resolve_parent_group(parent);
+        self.link_child(id, parent_id, Some(position));
+    }
+
+    /// Detach a modifier from its host for undo purposes. The modifier stays
+    /// in `entities`, so reattach via [`Document::reinsert_modifier`] preserves
+    /// the id.
+    pub fn detach_modifier_for_undo(&mut self, id: LayerId) -> Option<LayerId> {
+        self.unlink_modifier(id)
+    }
+
+    /// Reattach a previously detached modifier to a host. Append-only — the
+    /// model doesn't expose a position parameter today because masks use
+    /// "first mask" lookup rather than positional access.
+    pub fn reinsert_modifier(&mut self, modifier_id: LayerId, host_id: LayerId) {
+        if !self.is_modifier(modifier_id) {
+            return;
+        }
+        if let Some(host) = self.find_node_mut(host_id) {
+            host.modifiers_mut().push(modifier_id);
+            self.parent.insert(modifier_id, host_id);
+        }
+    }
+
+    /// Remove a node (layer or group) and everything beneath it (descendant
+    /// nodes, all modifiers on every node in the subtree) from `entities`.
+    /// Permanent — call [`Document::detach_for_undo`] instead if the caller
+    /// wants id-stable detach for undo.
+    pub fn remove_node(&mut self, id: LayerId) {
+        if id == self.root {
+            return;
+        }
+        // Unlink first so the parent's children Vec is consistent if anyone
+        // observes mid-purge.
+        self.unlink_node(id);
+        self.purge_subtree(id);
+    }
+
+    /// Permanently remove a modifier from `entities` (and its host's modifier
+    /// list, if still attached).
+    pub fn remove_modifier(&mut self, id: LayerId) {
+        self.unlink_modifier(id);
+        // Selection sentinel: if this was the selection, clear the field too.
+        if self.selection == Some(id) {
+            self.selection = None;
+        }
+        self.entities.remove(id);
+    }
+
+    // ---------------------------------------------------------------
+    // Internal helpers — every mutation path funnels through these so
+    // the slotmap / parent map / children Vec stay in sync.
+    // ---------------------------------------------------------------
+
+    /// Resolve an `Option<LayerId>` parent into a concrete group id, defaulting
+    /// to `self.root` on `None` or on an id that isn't a group.
+    fn resolve_parent_group(&self, parent: Option<LayerId>) -> LayerId {
+        match parent {
+            Some(id) if matches!(self.find_node(id), Some(LayerNode::Group(_))) => id,
+            _ => self.root,
+        }
+    }
+
+    /// Insert `child` into `group`'s children Vec at `position` (or at the end
+    /// if `None`), and update the parent map. Caller guarantees `child` is in
+    /// `entities` and `group` is a group.
+    fn link_child(&mut self, child: LayerId, group: LayerId, position: Option<usize>) {
+        let Some(LayerNode::Group(g)) = self.find_node_mut(group) else {
+            return;
         };
-        let host = find_node_in_mut(&mut self.root.children.0, host_id)?;
-        host.modifiers_mut().0.push(modifier);
-        Some(mod_id)
+        let pos = position
+            .map(|p| p.min(g.children.len()))
+            .unwrap_or(g.children.len());
+        g.children.insert(pos, child);
+        self.parent.insert(child, group);
     }
 
-    /// Remove a modifier from its host by id, returning the detached `Modifier`
-    /// for undo purposes. Returns `None` if no modifier with that id exists.
-    pub fn remove_modifier(&mut self, modifier_id: LayerId) -> Option<Modifier> {
-        detach_modifier(&mut self.root.children.0, modifier_id)
+    /// Unlink a node from its parent's children Vec and from the parent map.
+    /// Returns the node's id if it was linked, `None` if it was the root or
+    /// already orphaned.
+    fn unlink_node(&mut self, id: LayerId) -> Option<LayerId> {
+        if id == self.root {
+            return None;
+        }
+        let parent_id = self.parent.remove(id)?;
+        if let Some(LayerNode::Group(g)) = self.find_node_mut(parent_id) {
+            g.children.retain(|c| *c != id);
+        }
+        Some(id)
     }
 
-    /// Reattach a previously detached modifier to a host.
-    pub fn reinsert_modifier(&mut self, host_id: LayerId, modifier: Modifier) {
-        if let Some(host) = find_node_in_mut(&mut self.root.children.0, host_id) {
-            host.modifiers_mut().0.push(modifier);
+    /// Unlink a modifier from its host's modifiers Vec and from the parent
+    /// map. Returns the modifier's id if it was linked.
+    fn unlink_modifier(&mut self, id: LayerId) -> Option<LayerId> {
+        let host_id = self.parent.remove(id)?;
+        if let Some(host) = self.find_node_mut(host_id) {
+            host.modifiers_mut().retain(|m| *m != id);
+        }
+        Some(id)
+    }
+
+    /// Apply a [`MoveTarget`] to a node already unlinked from the tree.
+    fn attach_at_target(&mut self, node: LayerId, target: MoveTarget) {
+        match target {
+            MoveTarget::Before(ref_id) => {
+                if let Some(parent_id) = self.parent_of(ref_id) {
+                    let pos = self
+                        .children_of(parent_id)
+                        .iter()
+                        .position(|c| *c == ref_id)
+                        .unwrap_or(0);
+                    self.link_child(node, parent_id, Some(pos));
+                } else {
+                    self.link_child(node, self.root, None);
+                }
+            }
+            MoveTarget::After(ref_id) => {
+                if let Some(parent_id) = self.parent_of(ref_id) {
+                    let pos = self
+                        .children_of(parent_id)
+                        .iter()
+                        .position(|c| *c == ref_id)
+                        .map(|p| p + 1)
+                        .unwrap_or_else(|| self.children_of(parent_id).len());
+                    self.link_child(node, parent_id, Some(pos));
+                } else {
+                    self.link_child(node, self.root, None);
+                }
+            }
+            MoveTarget::IntoGroupTop(group_id) => {
+                let group = self.resolve_parent_group(Some(group_id));
+                self.link_child(node, group, None);
+            }
+            MoveTarget::IntoGroupBottom(group_id) => {
+                let group = self.resolve_parent_group(Some(group_id));
+                self.link_child(node, group, Some(0));
+            }
+        }
+    }
+
+    /// Recursively remove a subtree (the node, its descendants, and every
+    /// modifier on every node in the subtree) from `entities` and the parent
+    /// map. Caller is responsible for unlinking the subtree's root from its
+    /// parent first.
+    fn purge_subtree(&mut self, id: LayerId) {
+        // Collect ids depth-first so we can remove them all without holding
+        // borrows across `entities.remove` calls.
+        let mut nodes_to_purge = Vec::new();
+        self.collect_subtree_ids(id, &mut nodes_to_purge);
+        for nid in nodes_to_purge {
+            // Drop modifiers attached to this node first.
+            let mod_ids: Vec<LayerId> = match self.find_node(nid) {
+                Some(n) => n.modifiers().to_vec(),
+                None => Vec::new(),
+            };
+            for mid in mod_ids {
+                self.parent.remove(mid);
+                self.entities.remove(mid);
+            }
+            self.parent.remove(nid);
+            self.entities.remove(nid);
+        }
+    }
+
+    fn collect_subtree_ids(&self, id: LayerId, out: &mut Vec<LayerId>) {
+        out.push(id);
+        if let Some(LayerNode::Group(g)) = self.find_node(id) {
+            // Clone to avoid holding the borrow while recursing.
+            let children: Vec<LayerId> = g.children.clone();
+            for child in children {
+                self.collect_subtree_ids(child, out);
+            }
         }
     }
 
@@ -607,41 +676,6 @@ impl Document {
             LayerNode::Layer(Layer::Raster(r)) => Some(r.pixels.bounds),
             LayerNode::Group(_) => Some(CanvasRect::from_xywh(0, 0, self.width, self.height)),
         }
-    }
-
-    /// Allocate the global selection modifier if not already present, sized
-    /// to the canvas. Idempotent — returns the modifier id either way. The
-    /// caller is responsible for matching GPU state in the compositor.
-    pub fn ensure_selection_modifier(&mut self) -> LayerId {
-        if let Some(s) = self.selection.as_ref() {
-            return s.id;
-        }
-        let id = self.alloc_id();
-        let bounds = CanvasRect::from_xywh(0, 0, self.width, self.height);
-        let modifier = Modifier {
-            id,
-            common: NodeCommon::new("Selection".to_string()),
-            kind: ModifierKind::selection_with_bounds(bounds),
-        };
-        // Per the plan §4a, the selection lives "at the document root rather
-        // than on a host's `modifiers` list" — store it on the doc directly.
-        // Default `visible = false` mirrors today's "always allocated, .active
-        // toggles whether ops respect it" semantics for an empty selection.
-        let mut modifier = modifier;
-        modifier.common.visible = false;
-        self.selection = Some(modifier);
-        id
-    }
-
-    /// Selection modifier id, if allocated.
-    pub fn selection_id(&self) -> Option<LayerId> {
-        self.selection.as_ref().map(|m| m.id)
-    }
-
-    /// True when the selection modifier is allocated AND its `common.visible`
-    /// flag is set — equivalent to today's `gpu_selection.active`.
-    pub fn selection_active(&self) -> bool {
-        self.selection.as_ref().is_some_and(|m| m.common.visible)
     }
 }
 
@@ -731,12 +765,11 @@ mod tests {
     fn add_modifier_attaches_to_host() {
         let mut doc = Document::new(256, 256);
         let l = doc.add_raster_layer();
-        assert!(doc.layer(l).unwrap().modifiers().is_empty());
+        assert!(doc.modifiers_of(l).is_empty());
 
         let mod_id = doc.add_mask_modifier(l).unwrap();
-        let layer = doc.layer(l).unwrap();
-        assert_eq!(layer.modifiers().len(), 1);
-        assert_eq!(layer.modifiers().mask().unwrap().id, mod_id);
+        assert_eq!(doc.modifiers_of(l).len(), 1);
+        assert_eq!(doc.mask_modifier_id(l), Some(mod_id));
 
         assert!(doc.is_modifier(mod_id));
         assert!(!doc.is_modifier(l));
@@ -748,11 +781,11 @@ mod tests {
         let l = doc.add_raster_layer();
         let mod_id = doc.add_mask_modifier(l).unwrap();
 
-        let detached = doc.remove_modifier(mod_id);
-        assert!(detached.is_some());
-        assert_eq!(detached.unwrap().id, mod_id);
-        assert!(doc.layer(l).unwrap().modifiers().is_empty());
+        doc.remove_modifier(mod_id);
+        assert!(doc.modifiers_of(l).is_empty());
         assert!(!doc.is_modifier(mod_id));
+        // Truly purged from entities (not just unlinked).
+        assert!(doc.find_modifier(mod_id).is_none());
     }
 
     #[test]
@@ -780,5 +813,91 @@ mod tests {
         let host = doc.find_modifier_host(mod_id).unwrap();
         assert_eq!(host.id(), l);
         assert_eq!(doc.parent_of(mod_id), Some(l));
+    }
+
+    // -----------------------------------------------------------------
+    // Slotmap-invariant regression tests — locked in by the refactor.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn stale_id_returns_none() {
+        // After purging a layer, looking it up by its old id MUST return None
+        // — slotmap's generational keys make this safe even after another
+        // layer is allocated into the same slot.
+        let mut doc = Document::new(256, 256);
+        let stale = doc.add_raster_layer();
+        doc.remove_node(stale);
+        // Allocate something else; the slot may be recycled with a bumped
+        // generation. The stale key must still not resolve.
+        let _other = doc.add_raster_layer();
+        assert!(doc.find_node(stale).is_none());
+        assert!(doc.layer(stale).is_none());
+        assert!(doc.parent_of(stale).is_none());
+        assert!(!doc.is_modifier(stale));
+    }
+
+    #[test]
+    fn parent_index_consistent_after_move() {
+        let mut doc = Document::new(256, 256);
+        let g1 = doc.add_group();
+        let g2 = doc.add_group();
+        let l = doc.add_raster_layer_in(Some(g1));
+        assert_eq!(doc.parent_of(l), Some(g1));
+        doc.move_layer(l, MoveTarget::IntoGroupTop(g2));
+        assert_eq!(doc.parent_of(l), Some(g2));
+        // And g1 no longer references it.
+        assert!(!doc.children_of(g1).contains(&l));
+        assert!(doc.children_of(g2).contains(&l));
+    }
+
+    #[test]
+    fn detach_for_undo_preserves_id() {
+        // Detach is orphan-keep: id stays valid in `entities`, modifiers
+        // attached to the detached node stay attached, and reattach restores
+        // everything at the requested position.
+        let mut doc = Document::new(256, 256);
+        let l = doc.add_raster_layer();
+        let m = doc.add_mask_modifier(l).unwrap();
+
+        let parent = doc.parent_of(l);
+        let pos = doc.position_in_parent(l).unwrap();
+
+        let detached = doc.detach_for_undo(l).unwrap();
+        assert_eq!(detached, l);
+        assert!(doc.parent_of(l).is_none());
+        // Still resolvable in entities.
+        assert!(doc.find_node(l).is_some());
+        // Modifier still attached to the detached node.
+        assert_eq!(doc.parent_of(m), Some(l));
+        assert_eq!(doc.modifiers_of(l), &[m]);
+        // Not in the tree.
+        assert!(doc.flat_layers().is_empty());
+
+        doc.reinsert_node(l, parent, pos);
+        assert_eq!(doc.parent_of(l), parent.or(Some(doc.root)));
+        assert_eq!(doc.flat_layers().len(), 1);
+        assert_eq!(doc.mask_modifier_id(l), Some(m));
+    }
+
+    #[test]
+    fn purge_subtree_frees_descendants() {
+        // remove_node must actually purge from `entities` — not just unlink.
+        let mut doc = Document::new(256, 256);
+        let g = doc.add_group();
+        let l = doc.add_raster_layer_in(Some(g));
+        let m = doc.add_mask_modifier(l).unwrap();
+        let inner_g = doc.add_group();
+        // Reparent inner_g under g.
+        doc.move_layer(inner_g, MoveTarget::IntoGroupTop(g));
+        let inner_l = doc.add_raster_layer_in(Some(inner_g));
+
+        doc.remove_node(g);
+        for id in [g, l, m, inner_g, inner_l] {
+            assert!(
+                doc.entities.get(id).is_none(),
+                "{:?} should have been purged from entities",
+                id.to_ffi()
+            );
+        }
     }
 }
