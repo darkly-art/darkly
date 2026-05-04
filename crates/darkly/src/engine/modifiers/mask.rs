@@ -20,12 +20,11 @@ impl DarklyEngine {
         // UI invariant: at most one mask per host. The model supports N; we
         // refuse here so that `add_mask_modifier` doesn't silently create a
         // second one.
-        if self
-            .doc
-            .find_node(host_id)
-            .map(|n| n.modifiers().mask().is_some())
-            .unwrap_or(true)
-        {
+        // host unknown → bail (true keeps the existing semantics).
+        if self.doc.find_node(host_id).is_none() {
+            return;
+        }
+        if self.doc.has_mask(host_id) {
             return;
         }
 
@@ -73,11 +72,7 @@ impl DarklyEngine {
 
     /// Remove the mask modifier on a host layer or group.
     pub fn remove_mask(&mut self, host_id: LayerId) {
-        let mask_id = match self
-            .doc
-            .find_node(host_id)
-            .and_then(|n| n.modifiers().mask().map(|m| m.id))
-        {
+        let mask_id = match self.doc.mask_modifier_id(host_id) {
             Some(id) => id,
             None => return,
         };
@@ -100,7 +95,7 @@ impl DarklyEngine {
             None
         };
 
-        let detached = self.doc.remove_modifier(mask_id);
+        let detached = self.doc.detach_modifier_for_undo(mask_id).is_some();
         // If the removed mask was the isolated/active node, clear the session flag.
         if self.isolated_node == Some(mask_id) {
             self.isolated_node = None;
@@ -113,8 +108,8 @@ impl DarklyEngine {
         if let Some(entry) = gpu_region_entry {
             actions.push(Box::new(GpuRegionAction::new(entry)));
         }
-        if let Some(modifier) = detached {
-            actions.push(Box::new(ModifierRemoveAction::new(modifier, host_id)));
+        if detached {
+            actions.push(Box::new(ModifierRemoveAction::new(mask_id, host_id)));
         }
         if actions.len() == 1 {
             self.undo_stack.push(actions.pop().unwrap());
@@ -137,11 +132,7 @@ impl DarklyEngine {
         if !host_is_raster {
             return;
         }
-        let mask_id = match self
-            .doc
-            .find_node(host_id)
-            .and_then(|n| n.modifiers().mask().map(|m| m.id))
-        {
+        let mask_id = match self.doc.mask_modifier_id(host_id) {
             Some(id) => id,
             None => return,
         };
@@ -255,12 +246,12 @@ impl DarklyEngine {
         // ModifierRemoveAction is pushed last so undo pops it first — the
         // re-attach happens before sync_compositor_layers re-allocates the
         // R8 texture, after which the pending mask-region restore can land.
-        let detached = self.doc.remove_modifier(mask_id);
+        let detached = self.doc.detach_modifier_for_undo(mask_id).is_some();
         self.compositor.dispose_node_texture(mask_id);
         self.compositor.dispose_passthrough_mask_state(host_id);
-        if let Some(modifier) = detached {
+        if detached {
             self.undo_stack
-                .push(Box::new(ModifierRemoveAction::new(modifier, host_id)));
+                .push(Box::new(ModifierRemoveAction::new(mask_id, host_id)));
         }
     }
 
@@ -269,11 +260,7 @@ impl DarklyEngine {
     /// but kept as a separate WASM API command for UX clarity.
     pub fn selection_to_mask(&mut self, host_id: LayerId) {
         // Add mask if not already present (idempotent on the second call).
-        let already_had_mask = self
-            .doc
-            .find_node(host_id)
-            .map(|n| n.modifiers().mask().is_some())
-            .unwrap_or(false);
+        let already_had_mask = self.doc.has_mask(host_id);
 
         if !already_had_mask {
             // add_mask itself seeds from the active selection (see above), so
@@ -283,11 +270,7 @@ impl DarklyEngine {
         }
 
         // Mask already exists — clone selection pixels into it.
-        let mask_id = match self
-            .doc
-            .find_node(host_id)
-            .and_then(|n| n.modifiers().mask().map(|m| m.id))
-        {
+        let mask_id = match self.doc.mask_modifier_id(host_id) {
             Some(id) => id,
             None => return,
         };
@@ -328,9 +311,7 @@ impl DarklyEngine {
     /// Helper for callers (and tests) that hold a host id and want to operate
     /// on its mask without manually walking `doc.find_node(...).modifiers()`.
     pub fn host_mask_id(&self, host_id: LayerId) -> Option<LayerId> {
-        self.doc
-            .find_node(host_id)
-            .and_then(|n| n.modifiers().mask().map(|m| m.id))
+        self.doc.mask_modifier_id(host_id)
     }
 
     /// GPU-to-GPU copy of one modifier's R8 pixel buffer into another's.

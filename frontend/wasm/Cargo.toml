@@ -22,6 +22,7 @@ web-sys = { workspace = true }
 log = { workspace = true }
 console_error_panic_hook = { workspace = true }
 console_log = { workspace = true }
+slotmap = { workspace = true }
 
 [lints]
 workspace = true

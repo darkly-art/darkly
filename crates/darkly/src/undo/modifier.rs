@@ -8,20 +8,24 @@
 //! Pixel data for pixel-bearing modifiers (today: masks) is preserved by
 //! wrapping a `GpuRegionAction` alongside the [`ModifierRemoveAction`] in a
 //! [`CompoundAction`] at the call site (see `engine/modifiers/mask.rs`).
+//!
+//! Detach/reattach uses the document's orphan-keep semantics: the modifier
+//! stays in the slotmap with its id intact between unlink and relink. Both
+//! actions only need ids — no value handles travel through the undo stack.
 
 use super::UndoAction;
-use crate::document::{Document, Modifier};
+use crate::document::Document;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
 
 /// Undo action for adding a modifier to a host.
 ///
-/// Undo detaches the modifier and stores it.
-/// Redo reattaches it on the same host.
+/// Undo unlinks the modifier from its host (it stays in the document's
+/// slotmap orphaned).
+/// Redo relinks it on the same host.
 pub struct ModifierAddAction {
     modifier_id: LayerId,
     host_id: LayerId,
-    detached: Option<Modifier>,
 }
 
 impl ModifierAddAction {
@@ -29,57 +33,48 @@ impl ModifierAddAction {
         ModifierAddAction {
             modifier_id,
             host_id,
-            detached: None,
         }
     }
 }
 
 impl UndoAction for ModifierAddAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        self.detached = doc.remove_modifier(self.modifier_id);
+        doc.detach_modifier_for_undo(self.modifier_id);
         HashMap::new()
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        if let Some(modifier) = self.detached.take() {
-            doc.reinsert_modifier(self.host_id, modifier);
-        }
+        doc.reinsert_modifier(self.modifier_id, self.host_id);
         HashMap::new()
     }
 }
 
 /// Undo action for removing a modifier from a host.
 ///
-/// Undo reattaches the detached modifier.
-/// Redo detaches it again.
+/// Undo relinks the orphaned modifier to its original host.
+/// Redo unlinks it again.
 pub struct ModifierRemoveAction {
-    host_id: LayerId,
-    detached: Option<Modifier>,
-    /// Modifier id used to re-find it on redo (stored separately because the
-    /// `detached` modifier is taken into the doc on undo).
     modifier_id: LayerId,
+    host_id: LayerId,
 }
 
 impl ModifierRemoveAction {
-    pub fn new(modifier: Modifier, host_id: LayerId) -> Self {
+    pub fn new(modifier_id: LayerId, host_id: LayerId) -> Self {
         ModifierRemoveAction {
+            modifier_id,
             host_id,
-            modifier_id: modifier.id,
-            detached: Some(modifier),
         }
     }
 }
 
 impl UndoAction for ModifierRemoveAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        if let Some(modifier) = self.detached.take() {
-            doc.reinsert_modifier(self.host_id, modifier);
-        }
+        doc.reinsert_modifier(self.modifier_id, self.host_id);
         HashMap::new()
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
-        self.detached = doc.remove_modifier(self.modifier_id);
+        doc.detach_modifier_for_undo(self.modifier_id);
         HashMap::new()
     }
 }

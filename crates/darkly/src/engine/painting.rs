@@ -11,6 +11,7 @@ use crate::brush::stroke_engine::StrokeEngine;
 use crate::gpu::flood_fill;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
+use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
@@ -90,7 +91,7 @@ impl DarklyEngine {
 
     /// Fill the layer with the default background image, centered and clipped
     /// to the canvas. The image is baked into the binary at build time.
-    pub fn fill_background(&mut self, layer_id: u64) {
+    pub fn fill_background(&mut self, layer_id: LayerId) {
         const IMAGE_BYTES: &[u8] = include_bytes!("../../resources/backgrounds/quiet-night.jpg");
 
         let canvas_w = self.compositor.canvas_width();
@@ -176,7 +177,7 @@ impl DarklyEngine {
     //
     // All stroke ops go through GPU render passes (Phase 3).
 
-    pub fn begin_stroke(&mut self, layer_id: u64) {
+    pub fn begin_stroke(&mut self, layer_id: LayerId) {
         self.auto_commit_floating();
         self.active_stroke_layer = Some(layer_id);
         // GPU setup is deferred to first stroke_to (lazy init).
@@ -191,7 +192,7 @@ impl DarklyEngine {
     }
 
     /// GPU paint path for all stroke operations.
-    fn gpu_stroke_to(&mut self, layer_id: u64, op: StrokeOp) {
+    fn gpu_stroke_to(&mut self, layer_id: LayerId, op: StrokeOp) {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
 
@@ -340,7 +341,7 @@ impl DarklyEngine {
     /// The `needed` rect padded outward by `MAX_DAB_SIZE/2` so the new
     /// chunk-aligned extent comfortably covers the dab's worst-case
     /// footprint, not just its center pixel.
-    fn ensure_layer_covers_dab(&mut self, layer_id: u64, x: f32, y: f32) {
+    fn ensure_layer_covers_dab(&mut self, layer_id: LayerId, x: f32, y: f32) {
         // Fetch the current paint-target extent before mutating the compositor.
         // `paint_target()` resolves the node id against the unified texture
         // pool; format dispatch lives behind that interface.
@@ -450,7 +451,7 @@ impl DarklyEngine {
     /// `None` if no growth was needed or the cap was hit.
     pub(crate) fn grow_layer(
         &mut self,
-        layer_id: u64,
+        layer_id: LayerId,
         needed: crate::coord::CanvasRect,
     ) -> Option<crate::coord::CanvasRect> {
         use crate::gpu::compositor::{LAYER_GROWTH_CHUNK, MAX_LAYER_DIM};
@@ -469,7 +470,7 @@ impl DarklyEngine {
             if !self.layer_growth_capped {
                 self.layer_growth_capped = true;
                 log::warn!(
-                    "Layer {} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
+                    "Layer {:?} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
                     layer_id,
                     new_extent.width,
                     new_extent.height,
@@ -498,15 +499,18 @@ impl DarklyEngine {
         // same encoder. Locked modifiers stay at their old extent — the
         // shader samples each `PixelBuffer` via its own bounds, so a
         // diverged modifier just renders at its frozen position.
-        let lockstep_ids: Vec<u64> = match self.doc.find_node(layer_id) {
-            Some(node) => node
-                .modifiers()
-                .iter()
-                .filter(|m| !m.common.locked && m.pixels().is_some())
-                .map(|m| m.id)
-                .collect(),
-            None => Vec::new(),
-        };
+        let lockstep_ids: Vec<LayerId> = self
+            .doc
+            .modifiers_of(layer_id)
+            .iter()
+            .copied()
+            .filter(|mid| {
+                self.doc
+                    .find_modifier(*mid)
+                    .map(|m| !m.common.locked && m.pixels().is_some())
+                    .unwrap_or(false)
+            })
+            .collect();
 
         self.gpu.encode("layer-grow", |encoder| {
             self.compositor.resize_node_texture(
@@ -558,7 +562,7 @@ impl DarklyEngine {
     /// and re-rendering of the stroke from scratch.
     fn brush_stroke_to(
         &mut self,
-        layer_id: u64,
+        layer_id: LayerId,
         x: f32,
         y: f32,
         pressure: f32,
@@ -927,7 +931,7 @@ impl DarklyEngine {
     /// complete on a subsequent frame when the data arrives.
     fn gpu_flood_fill(
         &mut self,
-        layer_id: u64,
+        layer_id: LayerId,
         seed_x: i32,
         seed_y: i32,
         color: [u8; 4],
@@ -976,7 +980,7 @@ impl DarklyEngine {
     /// flood-fill variant from the texture's format.
     pub(crate) fn complete_flood_fill(
         &mut self,
-        layer_id: u64,
+        layer_id: LayerId,
         seed_x: i32,
         seed_y: i32,
         color: [u8; 4],
@@ -1124,7 +1128,7 @@ impl DarklyEngine {
     // --- GPU erase helpers ---
 
     /// Clear layer pixels within the current selection via GPU erase pass.
-    pub(crate) fn gpu_clear_selection(&mut self, layer_id: u64) {
+    pub(crate) fn gpu_clear_selection(&mut self, layer_id: LayerId) {
         if !self.has_selection() {
             return;
         }
@@ -1180,7 +1184,7 @@ impl DarklyEngine {
     }
 
     /// Clear entire layer to transparent via GPU.
-    pub(crate) fn gpu_clear_layer(&mut self, layer_id: u64) {
+    pub(crate) fn gpu_clear_layer(&mut self, layer_id: LayerId) {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         let format = match self.paint_target(layer_id) {
@@ -1234,7 +1238,7 @@ impl DarklyEngine {
     /// (R8 mask vs RGBA layer) lives behind the unified node-texture pool —
     /// callers don't branch on the kind. Returns `None` for groups, unknown
     /// ids, or any node without a `PixelBuffer`.
-    pub(crate) fn paint_target(&self, node_id: u64) -> Option<GpuPaintTarget<'_>> {
+    pub(crate) fn paint_target(&self, node_id: LayerId) -> Option<GpuPaintTarget<'_>> {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         self.compositor

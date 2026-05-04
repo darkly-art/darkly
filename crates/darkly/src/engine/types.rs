@@ -240,23 +240,31 @@ pub struct ClipboardExport {
     pub offset_y: i32,
 }
 
-pub(crate) fn node_to_layer_info(node: &crate::layer::LayerNode) -> LayerInfo {
+pub(crate) fn node_to_layer_info(
+    doc: &crate::document::Document,
+    node_id: crate::layer::LayerId,
+) -> Option<LayerInfo> {
     use crate::layer::{Layer, LayerNode};
-    match node {
+    let node = doc.find_node(node_id)?;
+    let info = match node {
         LayerNode::Layer(layer) => match layer {
             Layer::Raster(r) => LayerInfo::Raster {
-                id: r.id as f64,
+                id: r.id.to_ffi() as f64,
                 name: r.common.name.clone(),
                 visible: r.common.visible,
                 locked: r.common.locked,
                 opacity: r.blend.opacity,
                 blend_mode: r.blend.blend_mode as u32,
-                modifiers: r.modifiers.iter().map(modifier_to_info).collect(),
+                modifiers: r
+                    .modifiers
+                    .iter()
+                    .filter_map(|mid| doc.find_modifier(*mid).map(modifier_to_info))
+                    .collect(),
                 bounds: r.pixels.bounds,
             },
         },
         LayerNode::Group(g) => LayerInfo::Group {
-            id: g.id as f64,
+            id: g.id.to_ffi() as f64,
             name: g.common.name.clone(),
             visible: g.common.visible,
             locked: g.common.locked,
@@ -264,15 +272,25 @@ pub(crate) fn node_to_layer_info(node: &crate::layer::LayerNode) -> LayerInfo {
             passthrough: g.passthrough,
             opacity: g.blend.opacity,
             blend_mode: g.blend.blend_mode as u32,
-            modifiers: g.modifiers.iter().map(modifier_to_info).collect(),
-            children: g.children.iter().rev().map(node_to_layer_info).collect(),
+            modifiers: g
+                .modifiers
+                .iter()
+                .filter_map(|mid| doc.find_modifier(*mid).map(modifier_to_info))
+                .collect(),
+            children: g
+                .children
+                .iter()
+                .rev()
+                .filter_map(|cid| node_to_layer_info(doc, *cid))
+                .collect(),
         },
-    }
+    };
+    Some(info)
 }
 
 pub(crate) fn modifier_to_info(modifier: &crate::document::Modifier) -> ModifierInfo {
     ModifierInfo {
-        id: modifier.id as f64,
+        id: modifier.id.to_ffi() as f64,
         kind: modifier.type_id(),
         name: modifier.common.name.clone(),
         visible: modifier.common.visible,

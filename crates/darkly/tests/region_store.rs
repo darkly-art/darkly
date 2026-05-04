@@ -69,7 +69,13 @@ fn region_store_save_restore_round_trip() {
     // Save region.
     let mut enc = encoder(&device);
     let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
-    let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(0, 0, w, h));
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame,
+        &snap,
+        cr(0, 0, w, h),
+    );
     submit(&queue, enc);
 
     // Overwrite with blue.
@@ -112,7 +118,13 @@ fn region_store_partial_rect() {
     // Save only inner 64×64 rect at (32, 32).
     let mut enc = encoder(&device);
     let snap = store.save_region(&mut enc, &frame, fmt, cr(32, 32, 64, 64));
-    let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(32, 32, 64, 64));
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame,
+        &snap,
+        cr(32, 32, 64, 64),
+    );
     submit(&queue, enc);
 
     // Overwrite entire texture with blue.
@@ -164,7 +176,13 @@ fn region_store_redo_round_trip() {
     // Save red state.
     let mut enc = encoder(&device);
     let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
-    let entry_a = store.commit_region(&mut enc, 1, &frame, &snap, cr(0, 0, w, h));
+    let entry_a = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame,
+        &snap,
+        cr(0, 0, w, h),
+    );
     submit(&queue, enc);
 
     // Overwrite with blue.
@@ -212,7 +230,13 @@ fn region_store_ring_buffer_eviction() {
 
         let mut enc = encoder(&device);
         let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
-        let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(0, 0, w, h));
+        let entry = store.commit_region(
+            &mut enc,
+            darkly::layer::LayerId::from_ffi(1),
+            &frame,
+            &snap,
+            cr(0, 0, w, h),
+        );
         submit(&queue, enc);
         entries.push(entry);
     }
@@ -250,7 +274,13 @@ fn region_store_r8_format() {
     // Save.
     let mut enc = encoder(&device);
     let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
-    let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(0, 0, w, h));
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame,
+        &snap,
+        cr(0, 0, w, h),
+    );
     submit(&queue, enc);
 
     // Overwrite with 0.
@@ -326,7 +356,13 @@ fn region_store_save_full_commit_subrect() {
 
     // Stroke end — diff_rect would return the painted center; commit that sub-rect.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame, &snap, cr(48, 48, 32, 32));
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame,
+        &snap,
+        cr(48, 48, 32, 32),
+    );
     submit(&queue, enc);
 
     // Undo.
@@ -370,5 +406,11 @@ fn region_store_commit_outside_saved_panics() {
 
     // Commit at a rect that is NOT contained in the saved (0,0,32,32) area.
     let mut enc = encoder(&device);
-    let _ = store.commit_region(&mut enc, 1, &frame, &snap, cr(100, 100, 32, 32));
+    let _ = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame,
+        &snap,
+        cr(100, 100, 32, 32),
+    );
 }

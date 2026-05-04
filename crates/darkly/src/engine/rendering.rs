@@ -3,7 +3,7 @@
 use super::{DarklyEngine, ReadbackContext};
 use crate::gpu::readback;
 use crate::gpu::view::ViewTransform;
-use crate::layer::BlendMode;
+use crate::layer::{BlendMode, LayerId};
 use crate::undo::GpuRegionAction;
 
 /// Thumbnail size used for the layer panel previews. Single source of
@@ -85,7 +85,7 @@ impl DarklyEngine {
     /// `drain_dirty_thumbnail_readbacks` (driven by `mark_node_pixels_dirty`
     /// at every pixel-write site). Auto-queueing from this getter would
     /// create a feedback loop with the JS-side `thumbnailEpoch` sync.
-    pub fn node_thumbnail(&self, node_id: u64, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
+    pub fn node_thumbnail(&self, node_id: LayerId, thumb_w: u32, thumb_h: u32) -> Vec<u8> {
         self.thumbnail_cache
             .get(node_id)
             .cloned()
@@ -95,7 +95,7 @@ impl DarklyEngine {
     /// Kick off an async GPU readback for a thumbnail of any node by id,
     /// if one isn't already pending. Format is derived from the node's
     /// GPU texture — callers don't dispatch on layer-vs-modifier.
-    fn request_thumbnail_readback(&mut self, node_id: u64, thumb_w: u32, thumb_h: u32) {
+    fn request_thumbnail_readback(&mut self, node_id: LayerId, thumb_w: u32, thumb_h: u32) {
         if self
             .readbacks
             .any(|c| matches!(c, ReadbackContext::Thumbnail { node_id: id, .. } if *id == node_id))
@@ -532,7 +532,7 @@ impl DarklyEngine {
 
         // --- Raster layers: ensure the GPU texture + uniforms ---
         struct RasterInfo {
-            id: u64,
+            id: LayerId,
             opacity: f32,
             blend_mode: BlendMode,
             isolated: bool,
@@ -572,8 +572,8 @@ impl DarklyEngine {
         // group composite branch can engage on the next frame; both are
         // idempotent and keyed against existence in the compositor's pools.
         struct MaskInfo {
-            modifier_id: u64,
-            host_id: u64,
+            modifier_id: LayerId,
+            host_id: LayerId,
             bounds: crate::coord::CanvasRect,
         }
         let mask_infos: Vec<MaskInfo> = self
@@ -585,7 +585,7 @@ impl DarklyEngine {
                 if buf.format != wgpu::TextureFormat::R8Unorm {
                     return None;
                 }
-                let host_id = self.doc.find_modifier_host(m.id).map(|h| h.id())?;
+                let host_id = self.doc.parent_of(m.id)?;
                 Some(MaskInfo {
                     modifier_id: m.id,
                     host_id,
@@ -608,7 +608,7 @@ impl DarklyEngine {
         }
 
         // --- Non-passthrough groups: ensure group state + uniforms ---
-        let groups: Vec<(u64, f32, BlendMode, bool)> = self
+        let groups: Vec<(LayerId, f32, BlendMode, bool)> = self
             .doc
             .all_groups()
             .iter()

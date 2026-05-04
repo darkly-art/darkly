@@ -35,6 +35,7 @@ use crate::gpu::region_store::RegionStore;
 use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::view::ViewTransform;
+use crate::layer::LayerId;
 use crate::undo::UndoStack;
 use std::collections::HashMap;
 
@@ -46,18 +47,18 @@ use std::collections::HashMap;
 /// `node_id` may refer to a raster layer or a mask modifier; the format is
 /// derived from the node's [`PixelBuffer`].
 pub(crate) struct PendingTransform {
-    pub node_id: u64,
+    pub node_id: LayerId,
 }
 
 /// Deferred copy/cut — waiting for selection CPU cache to be populated.
 pub(crate) struct PendingCopy {
-    pub layer_id: u64,
+    pub layer_id: LayerId,
     pub is_cut: bool,
 }
 
 /// Deferred undo commit — waiting for async GPU diff rect result.
 pub(crate) struct PendingUndoCommit {
-    pub layer_id: u64,
+    pub layer_id: LayerId,
     pub snapshot: crate::gpu::region_store::Snapshot,
 }
 
@@ -69,7 +70,7 @@ pub(crate) struct PendingUndoCommit {
 /// [`PixelBuffer`] when the readback completes.
 pub(crate) enum ReadbackContext {
     FloodFill {
-        node_id: u64,
+        node_id: LayerId,
         seed_x: i32,
         seed_y: i32,
         color: [u8; 4],
@@ -79,13 +80,13 @@ pub(crate) enum ReadbackContext {
     },
     ColorPick,
     Copy {
-        node_id: u64,
+        node_id: LayerId,
         region: [u32; 4],
         is_cut: bool,
     },
     MagicWand {
         was_active: bool,
-        node_id: u64,
+        node_id: LayerId,
         seed_x: i32,
         seed_y: i32,
         tolerance: u8,
@@ -94,7 +95,7 @@ pub(crate) enum ReadbackContext {
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,
     Thumbnail {
-        node_id: u64,
+        node_id: LayerId,
         thumb_w: u32,
         thumb_h: u32,
     },
@@ -155,7 +156,7 @@ pub(crate) enum ReadbackContext {
 /// groups, and modifiers — the node id is sufficient to disambiguate, so the
 /// previous separate `layer` and `mask` maps collapse into one.
 pub(crate) struct ThumbnailCache {
-    bytes: HashMap<u64, Vec<u8>>,
+    bytes: HashMap<LayerId, Vec<u8>>,
 }
 
 impl ThumbnailCache {
@@ -165,11 +166,11 @@ impl ThumbnailCache {
         }
     }
 
-    pub(crate) fn get(&self, node_id: u64) -> Option<&Vec<u8>> {
+    pub(crate) fn get(&self, node_id: LayerId) -> Option<&Vec<u8>> {
         self.bytes.get(&node_id)
     }
 
-    pub(crate) fn insert(&mut self, node_id: u64, bytes: Vec<u8>) {
+    pub(crate) fn insert(&mut self, node_id: LayerId, bytes: Vec<u8>) {
         self.bytes.insert(node_id, bytes);
     }
 }
@@ -183,12 +184,12 @@ pub struct DarklyEngine {
     pub(crate) compositor: Compositor,
     pub(crate) gpu: GpuContext,
     pub(crate) undo_stack: UndoStack,
-    pub(crate) active_stroke_layer: Option<u64>,
+    pub(crate) active_stroke_layer: Option<LayerId>,
     /// Session-level "isolate this node" flag. When set, the renderer shows
     /// only this node's contribution (e.g. an R8 mask is rendered grayscale,
     /// a layer is rendered without siblings/parents). Universal across node
     /// kinds — works for any future filter / adjustment modifier too.
-    pub(crate) isolated_node: Option<u64>,
+    pub(crate) isolated_node: Option<LayerId>,
     pub(crate) view_transform: ViewTransform,
     /// Persistent marching ants overlay (regenerated when selection changes).
     pub(crate) selection_overlay: Vec<OverlayPrimitive>,
@@ -351,14 +352,17 @@ pub struct DarklyEngine {
 
 impl DarklyEngine {
     pub fn new(gpu: GpuContext, doc_width: u32, doc_height: u32) -> Self {
+        // Allocate the document first so the compositor can read its root id
+        // (which replaces the legacy `ROOT_ID = 0` constant).
+        let doc = Document::new(doc_width, doc_height);
         let compositor = Compositor::new(
             &gpu.device,
             &gpu.queue,
             gpu.surface_format(),
             doc_width,
             doc_height,
+            doc.root_id(),
         );
-        let doc = Document::new(doc_width, doc_height);
         let undo_stack = UndoStack::new(50);
         let region_store = RegionStore::new(&gpu.device, doc_width, doc_height);
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
@@ -493,24 +497,24 @@ impl DarklyEngine {
     }
 
     /// Test-only public accessor for the selection modifier's id.
-    pub fn selection_modifier_id_test(&self) -> Option<u64> {
+    pub fn selection_modifier_id_test(&self) -> Option<LayerId> {
         self.doc.selection_id()
     }
 
     /// Test-only assertion that the document's selection slot holds a Modifier
     /// whose kind is `Selection`. Returns `None` if the slot is empty.
     pub fn test_selection_modifier_kind_is_selection(&self) -> Option<bool> {
+        let id = self.doc.selection?;
         self.doc
-            .selection
-            .as_ref()
+            .find_modifier(id)
             .map(|m| m.as_selection().is_some())
     }
 
     /// Test-only access to the selection's `PixelBuffer.bounds`.
     pub fn test_selection_pixel_buffer_bounds(&self) -> Option<crate::coord::CanvasRect> {
+        let id = self.doc.selection?;
         self.doc
-            .selection
-            .as_ref()
+            .find_modifier(id)
             .and_then(|m| m.pixels())
             .map(|p| p.bounds)
     }
@@ -526,7 +530,7 @@ impl DarklyEngine {
     /// modifier). For test assertions only. Format and extent come from the
     /// texture's own metadata — callers don't need to know whether the id
     /// refers to a layer or a modifier.
-    pub fn test_readback_layer(&self, node_id: u64) -> Vec<u8> {
+    pub fn test_readback_layer(&self, node_id: LayerId) -> Vec<u8> {
         let tex = self
             .compositor
             .node_texture(node_id)
@@ -564,11 +568,10 @@ impl DarklyEngine {
     /// Blocking readback of a mask modifier's R8 texture. For test assertions
     /// only. Resolves the mask modifier on the host and reads its texture
     /// from the unified node-texture pool. Returns one byte per pixel.
-    pub fn test_readback_mask(&self, host_id: u64) -> Vec<u8> {
+    pub fn test_readback_mask(&self, host_id: LayerId) -> Vec<u8> {
         let mask_id = self
             .doc
-            .find_node(host_id)
-            .and_then(|n| n.modifiers().mask().map(|m| m.id))
+            .mask_modifier_id(host_id)
             .expect("host has no mask modifier");
         let tex = self
             .compositor
@@ -589,7 +592,7 @@ impl DarklyEngine {
     /// [`node_thumbnail`] which intentionally also queues. The regression
     /// tests in `thumbnail_reactivity.rs` need a non-side-effecting peek so
     /// they can prove the auto-queue path populated the cache.
-    pub fn test_thumbnail_cache_peek(&self, node_id: u64) -> Option<Vec<u8>> {
+    pub fn test_thumbnail_cache_peek(&self, node_id: LayerId) -> Option<Vec<u8>> {
         self.thumbnail_cache.get(node_id).cloned()
     }
 

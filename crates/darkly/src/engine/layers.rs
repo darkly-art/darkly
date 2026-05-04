@@ -2,14 +2,14 @@
 
 use super::DarklyEngine;
 use crate::document::MoveTarget;
-use crate::layer::{BlendMode, Layer, LayerNode};
+use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
 use crate::undo::{LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAction};
 
 impl DarklyEngine {
     // --- Layer CRUD ---
 
-    pub fn add_raster_layer(&mut self) -> u64 {
+    pub fn add_raster_layer(&mut self) -> LayerId {
         let id = self.doc.add_raster_layer();
         let bounds = match self.doc.layer(id) {
             Some(Layer::Raster(r)) => r.pixels.bounds,
@@ -27,7 +27,7 @@ impl DarklyEngine {
         id
     }
 
-    pub fn add_raster_layer_in(&mut self, group_id: u64) -> u64 {
+    pub fn add_raster_layer_in(&mut self, group_id: LayerId) -> LayerId {
         let id = self.doc.add_raster_layer_in(Some(group_id));
         let bounds = match self.doc.layer(id) {
             Some(Layer::Raster(r)) => r.pixels.bounds,
@@ -45,7 +45,7 @@ impl DarklyEngine {
         id
     }
 
-    pub fn add_group(&mut self) -> u64 {
+    pub fn add_group(&mut self) -> LayerId {
         let id = self.doc.add_group();
 
         let parent = self.doc.parent_of(id);
@@ -56,13 +56,17 @@ impl DarklyEngine {
         id
     }
 
-    pub fn has_layer(&self, layer_id: u64) -> bool {
-        self.doc.layer(layer_id).is_some()
+    pub fn has_layer(&self, layer_id: LayerId) -> bool {
+        // "Has" means linked into the tree — not just sitting orphaned in the
+        // document's slotmap waiting on an undo reattach. Detached-for-undo
+        // layers must report `false` so callers (and the layer panel) treat
+        // them as gone until reattach.
+        self.doc.layer(layer_id).is_some() && self.doc.parent_of(layer_id).is_some()
     }
 
     /// Returns the layer's pixel-space bounds in canvas coordinates.
     /// Used by tests and the WASM bridge to report storage extent.
-    pub fn layer_bounds(&self, layer_id: u64) -> Option<crate::coord::CanvasRect> {
+    pub fn layer_bounds(&self, layer_id: LayerId) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.pixels.bounds),
         }
@@ -73,7 +77,7 @@ impl DarklyEngine {
     /// when callers hold a node id without knowing its kind, this resolves
     /// against the document's unified `pixels()` accessor. Returns `None`
     /// for groups (no pixel buffer) or unknown ids.
-    pub fn node_pixel_bounds(&self, node_id: u64) -> Option<crate::coord::CanvasRect> {
+    pub fn node_pixel_bounds(&self, node_id: LayerId) -> Option<crate::coord::CanvasRect> {
         if let Some(rect) = self.layer_bounds(node_id) {
             return Some(rect);
         }
@@ -83,7 +87,7 @@ impl DarklyEngine {
             .map(|p| p.bounds)
     }
 
-    pub fn remove_layer(&mut self, layer_id: u64) -> Result<(), String> {
+    pub fn remove_layer(&mut self, layer_id: LayerId) -> Result<(), String> {
         if self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());
         }
@@ -91,21 +95,21 @@ impl DarklyEngine {
         let parent = self.doc.parent_of(layer_id);
         let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
 
-        if let Some(node) = self.doc.detach_for_undo(layer_id) {
+        if self.doc.detach_for_undo(layer_id).is_some() {
             // Drop per-layer GPU state to avoid leaking textures across
-            // delete-then-add cycles. The detached `LayerNode` keeps the
-            // layer's metadata for undo; pixel data does not survive
-            // (see Compositor::dispose_layer).
+            // delete-then-add cycles. The orphaned node in the slotmap
+            // keeps the layer's metadata for undo; pixel data does not
+            // survive (see Compositor::dispose_layer).
             self.compositor.dispose_layer(layer_id);
             self.undo_stack
-                .push(Box::new(LayerRemoveAction::new(node, parent, pos)));
+                .push(Box::new(LayerRemoveAction::new(layer_id, parent, pos)));
         }
 
         self.compositor.mark_dirty();
         Ok(())
     }
 
-    pub fn move_layer(&mut self, layer_id: u64, target: MoveTarget) {
+    pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
         let old_parent = self.doc.parent_of(layer_id);
         let old_pos = match self.doc.position_in_parent(layer_id) {
             Some(p) => p,
@@ -126,7 +130,7 @@ impl DarklyEngine {
 
     // --- Layer properties ---
 
-    pub fn set_opacity(&mut self, layer_id: u64, opacity: f32) {
+    pub fn set_opacity(&mut self, layer_id: LayerId, opacity: f32) {
         let old_opacity = match self.doc.find_node(layer_id) {
             Some(n) => n.blend().opacity,
             None => return,
@@ -147,7 +151,7 @@ impl DarklyEngine {
         ));
     }
 
-    pub fn set_blend_mode(&mut self, layer_id: u64, mode: u32) {
+    pub fn set_blend_mode(&mut self, layer_id: LayerId, mode: u32) {
         let blend_mode = BlendMode::from_u32(mode);
         let old_mode = match self.doc.find_node(layer_id) {
             Some(n) => n.blend().blend_mode,
@@ -171,7 +175,7 @@ impl DarklyEngine {
 
     /// Set the `visible` flag on any node — layer, group, or modifier.
     /// Works uniformly across kinds because they all carry [`NodeCommon`].
-    pub fn set_layer_visible(&mut self, node_id: u64, visible: bool) {
+    pub fn set_layer_visible(&mut self, node_id: LayerId, visible: bool) {
         // Try layers/groups first; fall through to modifiers.
         if let Some(node) = self.doc.find_node_mut(node_id) {
             let old = node.common().visible;
@@ -189,7 +193,7 @@ impl DarklyEngine {
     }
 
     /// Set the `locked` flag on any node — layer, group, or modifier.
-    pub fn set_node_locked(&mut self, node_id: u64, locked: bool) {
+    pub fn set_node_locked(&mut self, node_id: LayerId, locked: bool) {
         if let Some(node) = self.doc.find_node_mut(node_id) {
             let old = node.common().locked;
             node.common_mut().locked = locked;
@@ -206,17 +210,17 @@ impl DarklyEngine {
     /// Set the session-level "isolate this node" flag. When `Some(id)`, the
     /// renderer shows only that node's contribution (e.g. an R8 modifier
     /// renders as grayscale on canvas).
-    pub fn set_isolated_node(&mut self, id: Option<u64>) {
+    pub fn set_isolated_node(&mut self, id: Option<LayerId>) {
         self.isolated_node = id;
         self.compositor.mark_dirty();
     }
 
     /// Read the current isolated-node id, if any.
-    pub fn isolated_node(&self) -> Option<u64> {
+    pub fn isolated_node(&self) -> Option<LayerId> {
         self.isolated_node
     }
 
-    pub fn set_layer_name(&mut self, layer_id: u64, name: &str) {
+    pub fn set_layer_name(&mut self, layer_id: LayerId, name: &str) {
         let old_name = match self.doc.find_node(layer_id) {
             Some(n) => n.common().name.clone(),
             None => return,
@@ -237,7 +241,7 @@ impl DarklyEngine {
     /// Push the current opacity/blend_mode of a layer or group into the
     /// compositor's uniform buffer for that node. Group isolation is driven
     /// by `engine.isolated_node` and reflected uniformly across node kinds.
-    fn refresh_blend_uniforms(&mut self, layer_id: u64) {
+    fn refresh_blend_uniforms(&mut self, layer_id: LayerId) {
         match self.doc.find_node(layer_id) {
             Some(LayerNode::Layer(Layer::Raster(r))) => {
                 self.compositor.update_raster_uniforms(
@@ -260,13 +264,13 @@ impl DarklyEngine {
         }
     }
 
-    pub fn set_group_collapsed(&mut self, group_id: u64, collapsed: bool) {
+    pub fn set_group_collapsed(&mut self, group_id: LayerId, collapsed: bool) {
         if let Some(LayerNode::Group(g)) = self.doc.find_node_mut(group_id) {
             g.collapsed = collapsed;
         }
     }
 
-    pub fn set_group_passthrough(&mut self, group_id: u64, passthrough: bool) {
+    pub fn set_group_passthrough(&mut self, group_id: LayerId, passthrough: bool) {
         let old = match self.doc.find_node(group_id) {
             Some(LayerNode::Group(g)) => g.passthrough,
             _ => return,

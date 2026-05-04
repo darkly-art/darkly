@@ -53,7 +53,7 @@ fn run_paint_benchmark(
     queue: &wgpu::Queue,
     compositor: &mut Compositor,
     doc: &mut Document,
-    _paint_layer_id: u64,
+    _paint_layer_id: darkly::layer::LayerId,
     num_frames: usize,
 ) -> Vec<FrameTiming> {
     let mut timings = Vec::with_capacity(num_frames);
@@ -91,8 +91,15 @@ fn profile_render_pipeline() {
     // we never call render() with a surface.
     let surface_format = wgpu::TextureFormat::Rgba8Unorm;
 
-    let mut compositor = Compositor::new(&device, &queue, surface_format, width, height);
     let mut doc = Document::new(width, height);
+    let mut compositor = Compositor::new(
+        &device,
+        &queue,
+        surface_format,
+        width,
+        height,
+        doc.root_id(),
+    );
 
     // Set up layers: bg + paint layer (gradient fill removed — GPU-only now).
     let _bg_id = doc.add_raster_layer();

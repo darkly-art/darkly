@@ -11,10 +11,11 @@ use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
+use darkly::layer::LayerId;
 use darkly::nodegraph::NodeInstance;
 
 /// Paint a solid-color brush stroke at a given position (test helper replacing legacy PaintCircle).
-fn paint_at(engine: &mut DarklyEngine, layer_id: u64, x: f32, y: f32, r: f32, g: f32, b: f32) {
+fn paint_at(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, r: f32, g: f32, b: f32) {
     engine.begin_stroke(layer_id);
     engine.stroke_to(StrokeOp::BrushStroke {
         x,
@@ -43,7 +44,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 /// Paint a horizontal brush stroke across the canvas at vertical center.
-fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: u64, w: u32, h: u32) {
+fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
     engine.begin_stroke(layer_id);
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
@@ -621,7 +622,7 @@ fn alpha_sum(pixels: &[u8], w: u32, h: u32) -> u64 {
     s
 }
 
-fn paint_horizontal_stroke(engine: &mut DarklyEngine, layer_id: u64, w: u32, h: u32) {
+fn paint_horizontal_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
     engine.begin_stroke(layer_id);
     let samples = 40;
     for i in 0..samples {
@@ -1173,7 +1174,7 @@ fn layer_info_carries_paste_extent_bounds_through_serde() {
     let mut found_bounds: Option<CanvasRect> = None;
     for info in &tree {
         if let LayerInfo::Raster { id, bounds, .. } = info {
-            if *id as u64 == pasted_id {
+            if *id as u64 == pasted_id.to_ffi() {
                 found_bounds = Some(*bounds);
                 break;
             }
@@ -1785,7 +1786,7 @@ fn pending_undo_commit_survives_two_grows() {
 
 /// Paint a single black brush dab at (x, y) on a mask. Brush color is
 /// grayscale (R=G=B=0); the R channel is what lands in the R8 mask.
-fn paint_mask_dab(engine: &mut DarklyEngine, host_id: u64, x: f32, y: f32, value: f32) {
+fn paint_mask_dab(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32, value: f32) {
     // The new model paints on the mask modifier id directly, not via a
     // session redirect from the host. Resolve the mask id and stroke on it.
     let mask_id = engine
@@ -2506,7 +2507,7 @@ fn passthrough_group_with_visible_mask_applies_via_snapshot_lerp() {
 /// call site).
 #[test]
 fn layer_node_tree_admits_only_layer_and_group_variants() {
-    use darkly::layer::{Layer, LayerGroup, LayerNode, RasterLayer};
+    use darkly::layer::{Layer, LayerGroup, LayerId, LayerNode, RasterLayer};
 
     fn must_destructure(node: &LayerNode) {
         // Exhaustive match — adding any new `LayerNode::Modifier(...)` arm
@@ -2522,10 +2523,10 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
     // Construct one of each variant to be sure the destructure compiles
     // against the real types and not an accidentally-generic stub.
     let raster = LayerNode::Layer(Layer::Raster(RasterLayer::new(
-        1,
+        LayerId::from_ffi(1),
         darkly::coord::CanvasRect::from_xywh(0, 0, 1, 1),
     )));
-    let group = LayerNode::Group(LayerGroup::new(2));
+    let group = LayerNode::Group(LayerGroup::new(LayerId::from_ffi(2)));
     must_destructure(&raster);
     must_destructure(&group);
 }
@@ -2630,8 +2631,9 @@ fn document_selection_is_a_typed_modifier() {
         .selection_modifier_id_test()
         .expect("DarklyEngine::new must eagerly allocate the selection modifier");
     assert_ne!(
-        modifier_id, 0,
-        "selection modifier id must be a real id allocated from doc.next_id"
+        modifier_id.to_ffi(),
+        0,
+        "selection modifier id must be a real id allocated from the document"
     );
 
     // Initially inactive (no selection painted yet).
