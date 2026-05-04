@@ -291,12 +291,19 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     /// `canvas_copy` reads from the scratch, so seeding it with the layer's
     /// initial state lets every dab's pickup pass see real canvas pixels.
     /// Every rewind reseeds, discarding any in-stroke deposits.
+    ///
+    /// The copy spans the *full scratch texture*, not the canvas — both
+    /// `pre_stroke_texture` and `stroke_scratch_texture` are sized to the
+    /// paint target, which can exceed canvas dims for paste-extent or
+    /// off-canvas-grown layers. Copying only canvas-sized would leave the
+    /// off-canvas strip uninitialised, and `commit_scratch_blit` would
+    /// then blit that transparent-black strip back over the layer.
     fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
         let Some(pre_stroke) = gpu.pre_stroke_texture else {
             return;
         };
-        let w = gpu.canvas_width;
-        let h = gpu.canvas_height;
+        let w = gpu.stroke_scratch_texture.width();
+        let h = gpu.stroke_scratch_texture.height();
         gpu.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: pre_stroke,

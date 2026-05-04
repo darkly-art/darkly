@@ -645,6 +645,171 @@ fn deposit_full_on_transparent_canvas_paints_paint_color() {
     );
 }
 
+/// Regression: watercolor on a layer larger than the canvas (paste-extent
+/// or off-canvas-grown layer) must not corrupt pixels in the off-canvas
+/// strip.
+///
+/// The bug: `WatercolorEvaluator::begin_stroke` copied a canvas-sized
+/// rectangle from pre_stroke into stroke_scratch, but both textures are
+/// layer-sized. When the layer extends past the canvas, the strip beyond
+/// canvas dims was left uninitialized (transparent black) in the scratch.
+/// `commit_scratch_blit` then blits the full layer-sized scratch back to
+/// the layer, overwriting the existing pixels in the off-canvas strip with
+/// transparent black — manifesting as the rightmost ~1/3 of a wide layer
+/// going black after a single watercolor dab.
+#[test]
+fn off_canvas_strip_preserved_on_oversized_layer() {
+    let (device, queue) = shared_device();
+
+    // Canvas is 128×128; layer is 192×128 (50% wider, simulating a
+    // paste-extent or off-canvas-grown layer extending past the right
+    // edge of the canvas).
+    let layer_w = CANVAS + CANVAS / 2;
+    let layer_h = CANVAS;
+
+    let mut initial = vec![0u8; (layer_w * layer_h * 4) as usize];
+    for chunk in initial.chunks_exact_mut(4) {
+        chunk[0] = 255;
+        chunk[3] = 255;
+    }
+
+    let (layer_texture, layer_view) =
+        create_test_texture(&device, &queue, layer_w, layer_h, &initial);
+
+    let mut dab_pool = DabTexturePool::new(&device);
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        dab_pool.bind_group_layout(),
+        CANVAS,
+        CANVAS,
+    );
+
+    // Stroke buffer is sized to the layer (matches engine/painting.rs:610),
+    // not the canvas — that's the precondition that exposes the bug.
+    let stroke_buffer = StrokeBuffer::new(
+        &device,
+        layer_w,
+        layer_h,
+        dab_pool.bind_group_layout(),
+        pipelines.canvas_copy_bind_group_layout(),
+    );
+
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("watercolor-oversized-layer-pre-stroke"),
+    });
+    stroke_buffer.save_pre_stroke(
+        &device,
+        &mut enc,
+        &pipelines,
+        &darkly::gpu::paint_target::GpuPaintTarget {
+            texture: &layer_texture,
+            view: &layer_view,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            width: layer_w,
+            height: layer_h,
+            offset_x: 0,
+            offset_y: 0,
+            canvas_width: CANVAS,
+            canvas_height: CANVAS,
+        },
+    );
+    queue.submit([enc.finish()]);
+
+    let graph = watercolor_graph(0.05, 1.0, 1.0);
+    let mut runner = compile_graph(&graph).expect("graph compiles");
+    let resources: HashMap<String, TextureHandle> = HashMap::new();
+
+    macro_rules! ctx_for {
+        ($label:expr) => {
+            BrushGpuContext {
+                encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some($label),
+                }),
+                device: &device,
+                queue: &queue,
+                dab_pool: &mut dab_pool,
+                pipelines: &pipelines,
+                stroke_scratch_view: stroke_buffer.stroke_view(),
+                stroke_scratch_texture: stroke_buffer.stroke_texture(),
+                canvas_width: CANVAS,
+                canvas_height: CANVAS,
+                paint_target: Some(darkly::gpu::paint_target::GpuPaintTarget {
+                    texture: &layer_texture,
+                    view: &layer_view,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    width: layer_w,
+                    height: layer_h,
+                    offset_x: 0,
+                    offset_y: 0,
+                    canvas_width: CANVAS,
+                    canvas_height: CANVAS,
+                }),
+                selection_bind_group: pipelines.default_selection_bind_group(),
+                resource_handles: &resources,
+                blend_mode: 0,
+                canvas_copy_origin: None,
+                preview_mask_view: None,
+                preview_mask_size: (0, 0),
+                brush_preview_info: None,
+                pre_stroke_texture: Some(stroke_buffer.pre_stroke_texture()),
+                pre_stroke_bind_group: Some(stroke_buffer.pre_stroke_bind_group()),
+                scratch_bind_group: Some(stroke_buffer.stroke_bind_group()),
+                dab_write_canvas_bbox: None,
+            }
+        };
+    }
+
+    {
+        let mut ctx = ctx_for!("watercolor-oversized-begin");
+        runner.begin_stroke(&mut ctx);
+        queue.submit([ctx.encoder.finish()]);
+    }
+
+    let info = pen([CANVAS as f32 / 2.0, CANVAS as f32 / 2.0]);
+    runner.clear_slots();
+    runner.seed_sensors(&info, [0.0, 0.0, 1.0, 1.0], 0, info.index);
+    runner.execute_cpu();
+    {
+        let mut ctx = ctx_for!("watercolor-oversized-dab");
+        runner.execute_gpu(&mut ctx);
+        queue.submit([ctx.encoder.finish()]);
+    }
+
+    {
+        let mut ctx = ctx_for!("watercolor-oversized-commit");
+        runner.commit(&mut ctx);
+        queue.submit([ctx.encoder.finish()]);
+    }
+
+    let after = readback_texture(
+        &device,
+        &queue,
+        &layer_texture,
+        wgpu::TextureFormat::Rgba8Unorm,
+        layer_w,
+        layer_h,
+    );
+
+    // Pixel at (160, 64): well inside the off-canvas strip (x ∈ 128..192),
+    // far from any dab. Must remain opaque red — if it's transparent black
+    // the bug is present.
+    let off_x = CANVAS + CANVAS / 4;
+    let off_y = CANVAS / 2;
+    let i = ((off_y * layer_w + off_x) * 4) as usize;
+    let off_pixel = [after[i], after[i + 1], after[i + 2], after[i + 3]];
+    assert_eq!(
+        off_pixel,
+        [255, 0, 0, 255],
+        "Off-canvas pixel at ({off_x}, {off_y}) corrupted by watercolor \
+         stroke. The layer's right strip beyond the canvas got overwritten \
+         with transparent black — `WatercolorEvaluator::begin_stroke` \
+         seeds only a canvas-sized region of the scratch, leaving the rest \
+         uninitialized; commit_scratch_blit then blits the full \
+         layer-sized scratch back over the layer."
+    );
+}
+
 /// Reproduces the bug "watercolor brush deposits black always". Mirrors the
 /// real builtin watercolor brush graph (image-based tip, pen.pressure→flow,
 /// paint_color wired to BOTH stamp.color AND watercolor.color) on a

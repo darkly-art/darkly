@@ -249,8 +249,13 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let Some(pre_stroke) = gpu.pre_stroke_texture else {
             return;
         };
-        let w = gpu.canvas_width;
-        let h = gpu.canvas_height;
+        // Copy the full scratch — paste-extent or off-canvas-grown layers
+        // size pre_stroke and scratch beyond canvas dims; copying only
+        // canvas-sized would leave the off-canvas strip uninitialised,
+        // and `commit_scratch_blit` would blit transparent-black back
+        // over the layer.
+        let w = gpu.stroke_scratch_texture.width();
+        let h = gpu.stroke_scratch_texture.height();
         gpu.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: pre_stroke,
