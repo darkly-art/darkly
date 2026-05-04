@@ -375,3 +375,33 @@ fn centroid_lands_at_texture_centre_for_asymmetric_shapes() {
         );
     }
 }
+
+/// Frequency must be quantized to an integer so the sine/superformula r(θ)
+/// closes at θ = ±π without a seam. The slider does this via `PortDef::step`;
+/// the evaluator does it again in `ShapeParams::from_ctx` to defend against
+/// wired-in modulators that bypass the slider. This test exercises the
+/// evaluator's defense: render with `frequency = 6.5`, which rounds to 7,
+/// and confirm it's pixel-identical to `frequency = 7.0`.
+#[test]
+fn frequency_rounds_to_integer_for_seam_free_shape() {
+    let pixels_half = render_dab(
+        ALGO_SINE,
+        Inputs {
+            amplitude: 0.3,
+            frequency: 6.5,
+            ..Default::default()
+        },
+    );
+    let pixels_round = render_dab(
+        ALGO_SINE,
+        Inputs {
+            amplitude: 0.3,
+            frequency: 7.0,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        pixels_half, pixels_round,
+        "frequency=6.5 should be rounded to 7 and produce the same shape"
+    );
+}

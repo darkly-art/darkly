@@ -28,6 +28,11 @@ export interface PortDef {
      *  Rust serialization of `(String, Vec<i32>)`. UI-only — the engine
      *  ignores this field. */
     visible_when?: [string, number[]];
+    /** Quantization step for the slider. `0` means continuous; positive
+     *  values snap drag/scrub/typed values to multiples of `step` from
+     *  `min`. Used by integer-valued ports like the circle node's
+     *  `frequency`. */
+    step: number;
 }
 
 export interface NodeInstance {

@@ -73,11 +73,14 @@ pub fn register() -> BrushNodeRegistration {
             // matter for every algorithm.
             PortDef::input("frequency", BrushWireType::Scalar)
                 .with_range(1.0, 16.0, 6.0)
+                .with_step(1.0)
                 .with_label("Frequency")
                 .with_unit(UnitType::Raw)
                 .with_description(
                     "Sine: number of bumps (n). Perlin: base period in cells per revolution. \
-                     Superformula: symmetry order m.",
+                     Superformula: symmetry order m. Must be an integer — \
+                     non-integer values would create a seam at θ = ±π where the \
+                     shape fails to close.",
                 ),
             PortDef::input("phase", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
@@ -157,7 +160,11 @@ impl ShapeParams {
         ShapeParams {
             algorithm,
             amplitude: ctx.input_f32("amplitude").max(0.0),
-            frequency: ctx.input_f32("frequency").max(1.0),
+            // Frequency must be an integer for r(θ) to close at θ = ±π.
+            // Snap here too — the slider quantizes via PortDef::step, but a
+            // wired-in modulator (curve, pen pressure) bypasses the slider
+            // and would otherwise put a seam in the rendered shape.
+            frequency: ctx.input_f32("frequency").round().max(1.0),
             phase: ctx.input_f32("phase"),
             persistence: ctx.input_f32("persistence").clamp(0.0, 1.0),
             seed: ctx.input_f32("seed"),

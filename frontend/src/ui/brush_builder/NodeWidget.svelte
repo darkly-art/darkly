@@ -14,16 +14,13 @@
 
     let isSelected = $derived(brushGraph.selectedNode === node.id);
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
-<<<<<<< Updated upstream
     let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
-=======
     /** Any GPU node that produces a texture output gets an in-node preview
-     *  thumbnail. The engine's `brush_node_preview` walks the predecessor
+     *  thumbnail. The engine<< Updated upstream's `brush_node_preview` walks the predecessor
      *  closure of the node and renders it through the existing async
      *  preview path; this gate keeps us from showing previews for nodes
      *  whose output isn't visualisable (Scalar, Vec2, etc.). */
     let hasTextureOutput = $derived(outputPorts.some(p => p.wire_type === 'Texture'));
->>>>>>> Stashed changes
 
     // Node type info for display name and params.
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));

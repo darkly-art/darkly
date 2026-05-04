@@ -96,6 +96,16 @@ pub struct PortDef<W: WireKind> {
     pub max: f32,
     /// Default value when the port is disconnected.
     pub default: f32,
+    /// Quantization step. `0.0` (the default) means continuous; any positive
+    /// value snaps the slider, scrub, and typed-value commits to multiples of
+    /// `step` from `min`. Used when the wire takes a value but only certain
+    /// quantized values produce well-defined behavior — e.g. the circle
+    /// node's `frequency`, where only integer values yield a seam-free
+    /// closed shape. Frontend honors the snap; the engine should still
+    /// defend by quantizing inputs in the node evaluator (a wired-in float
+    /// from a curve or pen-pressure modulator bypasses the slider).
+    #[serde(default)]
+    pub step: f32,
     /// Human-readable description shown as a tooltip in the node editor.
     #[serde(default)]
     pub description: String,
@@ -158,6 +168,7 @@ impl<W: WireKind> PortDef<W> {
             exposed: false,
             preview_value: None,
             visible_when: None,
+            step: 0.0,
         }
     }
 
@@ -176,6 +187,7 @@ impl<W: WireKind> PortDef<W> {
             exposed: false,
             preview_value: None,
             visible_when: None,
+            step: 0.0,
         }
     }
 
@@ -183,6 +195,15 @@ impl<W: WireKind> PortDef<W> {
         self.min = min;
         self.max = max;
         self.default = default;
+        self
+    }
+
+    /// Quantize the port's slider to multiples of `step` from `min`. Pass
+    /// `1.0` for an integer-valued port. See [`PortDef::step`] for the full
+    /// contract — the engine still needs to defend against non-snapped
+    /// values arriving via wires.
+    pub fn with_step(mut self, step: f32) -> Self {
+        self.step = step;
         self
     }
 
@@ -815,6 +836,17 @@ mod tests {
         assert_eq!(port.label, "");
         assert!(!port.exposed);
         assert_eq!(port.description, "");
+        assert_eq!(port.step, 0.0);
+    }
+
+    #[test]
+    fn port_def_step_round_trip() {
+        let port = PortDef::input("frequency", TestWireKind::Scalar)
+            .with_range(1.0, 16.0, 6.0)
+            .with_step(1.0);
+        let json = serde_json::to_string(&port).unwrap();
+        let back: PortDef<TestWireKind> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.step, 1.0);
     }
 
     #[test]
