@@ -1,5 +1,93 @@
 # Darkly — Agent Guidelines
 
+Darkly is a web-based, gpu-native paint program written in Rust, Svelte and Typescript, leveraging WebAssembly and WebGPU.
+
+## Architecture
+
+Darkly's Rust core (`crates/darkly/`) is platform-agnostic. It contains the document model, GPU compositor, veils, brush engine, undo system, and the `DarklyEngine` — all with zero platform dependencies. A WASM bridge wraps the engine for the browser.
+
+State is split three ways: the **document** is authoritative and undoable (layer tree, masks, selection, canvas size); **session** state lives on `DarklyEngine` (active tool, view transform, in-flight stroke); the **compositor** is a derived realization (GPU textures, blend pipelines, render caches) that's always rebuildable from the document. Data flows downhill — document → compositor, session → compositor — never the other way.
+
+**Runtime stack** — how a pointer event becomes a pixel:
+
+```mermaid
+flowchart LR
+    User[Pointer / keyboard]
+    Svelte[Svelte UI<br/>frontend/src/]
+    Bridge[DarklyHandle<br/>frontend/wasm/<br/>command queue + queries]
+    Engine[DarklyEngine<br/>crates/darkly/]
+    WGPU[wgpu]
+    Canvas[WebGPU canvas]
+
+    User --> Svelte
+    Svelte -- JSON commands --> Bridge
+    Bridge -- JSON queries --> Svelte
+    Bridge --> Engine
+    Engine --> WGPU
+    WGPU --> Canvas
+```
+
+**Inside the Rust core** — the document is authoritative; the compositor is a derived realization. Data flows downhill, never up:
+
+```mermaid
+flowchart TB
+    Engine[DarklyEngine<br/>session: active tool, view transform,<br/>stroke lifecycle, undo stack]
+
+    subgraph Doc[Document — authoritative, undoable, GPU-free]
+        Tree[Layer tree]
+        Masks[Mask presence]
+        Sel[Selection regions]
+        Size[Canvas size]
+    end
+
+    subgraph Brush[Brush engine]
+        Stroke[StrokeEngine<br/>+ stabilizers]
+        Graph[Node graph<br/>+ nodes]
+    end
+
+    subgraph GPU[GPU layer — derived from document]
+        Comp[Compositor<br/>group ping-pong blend]
+        Veils[Veils]
+        Region[RegionStore<br/>GpuSelection<br/>ReadbackScheduler]
+    end
+
+    Tools[Tools<br/>brush, fill, select, transform]
+
+    Engine -->|mutate| Doc
+    Engine --> Tools
+    Engine --> Brush
+    Tools --> Doc
+    Brush -->|paint dabs| Region
+    Doc -.->|read| Comp
+    Region --> Comp
+    Comp --> Veils
+```
+
+**Modular subsystems** — `build.rs` scans these directories and auto-generates the registration code, so adding a veil / tool / brush node / stabilizer / config section is a single new file with a `register()` function. No central match arms, no hand-maintained lists.
+
+| Directory | What lives here |
+| --- | --- |
+| `gpu/veils/` | Veil effects (rainy glass, VHS, kuwahara, …) |
+| `tools/` | Selection + transform tools |
+| `brush/nodes/` | Brush graph nodes (pen_input, stamp, curve, …) |
+| `brush/stabilizers/` | Stroke stabilizers |
+| `config/sections/`, `config/presets/` | Config schema sections + bundled presets |
+
+```
+crates/darkly/          Platform-agnostic core (wgpu, pure Rust)
+  src/document.rs       Authoritative document model
+  src/engine/           DarklyEngine — session state + dispatch
+  src/gpu/              Compositor, veils, shaders
+  src/brush/            Node-graph brush engine, stroke engine, library
+  src/nodegraph/        Generic node-graph (graph, compiler, layout)
+  src/tools/            Selection / transform tools
+  src/undo/             Undo stack + per-domain undoable ops
+frontend/wasm/          WASM bridge (wasm-bindgen) → browser
+frontend/src/           Svelte UI
+shared/styles/          @darkly/styles — tokens + themes shared by UI and website
+website/                Astro + Starlight site (splash, docs, /demo/)
+```
+
 ## Modularity Principle
 
 Module-specific code lives in the module, and nowhere else.

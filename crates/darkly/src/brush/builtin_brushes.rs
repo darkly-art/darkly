@@ -24,6 +24,7 @@ pub fn all() -> Vec<Brush> {
         pencil(),
         charcoal(),
         canvas_brush(),
+        watercolor(),
         liquify_push(),
     ]
 }
@@ -488,6 +489,94 @@ fn canvas_brush() -> Brush {
         "painting",
         vec![("canvas_grain.png", ResourceKind::Pattern, pattern_bytes)],
     )
+}
+
+/// Watercolor brush. Stamps an organic-textured tip whose color is mixed
+/// toward the canvas pickup by `deposit` (0% = pure smudge, 100% = pure
+/// paint), with smudge persistence controlled by `wetness` (0% = each dab
+/// adopts local canvas; 100% = the brush carries its first pickup down the
+/// stroke).
+///
+/// Built directly rather than via `BrushBuilder` because the standard
+/// builder pre-wires `color_output` as the terminal — watercolor swaps
+/// that for its own `watercolor` terminal node.
+fn watercolor() -> Brush {
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    // Image-based tip rather than a procedural circle — watercolor benefits
+    // from organic texture variation. `ink_dry.png` is the closest match in
+    // the existing tip set; it has the right irregular, granulated feel.
+    let image = graph.add_node(
+        "image",
+        registry.get("image").unwrap().ports.clone(),
+        vec![ParamValue::String("ink_dry.png".into())],
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        registry.get("stamp").unwrap().ports.clone(),
+        vec![],
+    );
+    let watercolor = graph.add_node(
+        "watercolor",
+        registry.get("watercolor").unwrap().ports.clone(),
+        vec![],
+    );
+
+    let wires = [
+        // Stamp builds the dab shape and bakes paint color into RGB. The
+        // watercolor terminal reads `dab.a` for the alpha mask and uses the
+        // separately-wired `color` for the paint color in the mix.
+        (image, "texture", stamp, "tip"),
+        (paint_color, "color", stamp, "color"),
+        (paint_color, "color", watercolor, "color"),
+        // Pressure → flow so light strokes deposit less paint, the way a
+        // real brush carries less pigment with less pressure.
+        (pen, "pressure", stamp, "flow"),
+        (stamp, "dab", watercolor, "dab"),
+        (stamp, "dab_size", watercolor, "dab_size"),
+        (pen, "position", watercolor, "position"),
+        (stamp, "preview", watercolor, "brush_preview"),
+    ];
+    for (from_node, from_port, to_node, to_port) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    let mut metadata = BrushMetadata::from_graph("Watercolor", graph);
+    metadata.category = "painting".to_string();
+
+    let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");
+    metadata.resources.push(BrushResourceMeta {
+        name: "ink_dry.png".to_string(),
+        kind: ResourceKind::BrushTip,
+        path: "resources/ink_dry.png".to_string(),
+    });
+    Brush {
+        metadata,
+        resource_data: vec![("ink_dry.png".to_string(), tip_bytes.to_vec())],
+        thumbnail_png: None,
+    }
 }
 
 /// Liquify warp brush. Pushes pixels along pen motion with a radial

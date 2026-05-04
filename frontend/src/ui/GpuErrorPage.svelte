@@ -16,7 +16,7 @@
         allInstructions().filter(({ instructions }) => instructions !== primary),
     );
 
-    const headline = 'Darkly needs GPU.';
+    const headline = 'Darkly needs a GPU.';
 
     function causeFor(f: GpuCheckFailure): string {
         switch (f.reason) {
