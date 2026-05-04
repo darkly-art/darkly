@@ -51,12 +51,20 @@ pub enum ParamDef {
 }
 
 /// A concrete runtime parameter value, read from an effect instance.
+///
+/// Variants are ordered for `#[serde(untagged)]` deserialization: serde
+/// tries them top-down, so the more-specific shapes (`Bool`, `Int`) must
+/// precede `Float`. JSON `true`/`false` only deserializes as `Bool`; whole
+/// JSON numbers (`1`, `2`) match `i32`; only fractional numbers (`1.5`)
+/// fall through to `Float`. Putting `Float` first would silently coerce
+/// every `Int(n)` into `Float(n as f32)` on round-trip and break enum
+/// param matching (`match Some(ParamValue::Int(v))` would fall through).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum ParamValue {
-    Float(f32),
-    Int(i32),
     Bool(bool),
+    Int(i32),
+    Float(f32),
     String(String),
     Curve(Vec<[f32; 2]>),
 }
@@ -144,6 +152,50 @@ impl ParamDef {
             ParamDef::Enum { default, .. } => ParamValue::Int(*default),
             ParamDef::FloatInput { default, .. } => ParamValue::Float(*default),
             ParamDef::Icon { default, .. } => ParamValue::String(default.to_string()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: `ParamValue::Int(n)` must round-trip through JSON without
+    /// degrading to `ParamValue::Float`. The bug: Rough Watercolor's circle
+    /// node was configured with `algorithm = Int(1)` (Perlin), but after
+    /// `brush_load` (graph → JSON → graph) the variant became `Float(1.0)`,
+    /// and `circle.rs`'s `match Some(ParamValue::Int(v))` silently fell
+    /// through to the default `0` (Sine). Port defaults — which are floats
+    /// natively — round-tripped fine, so the UI showed correct numbers
+    /// while the GPU rendered the wrong shape. Fix was to reorder the
+    /// `#[serde(untagged)]` variants so the more-specific `Bool` and `Int`
+    /// are attempted before `Float`.
+    #[test]
+    fn paramvalue_round_trips_preserve_variant() {
+        for v in [
+            ParamValue::Bool(true),
+            ParamValue::Bool(false),
+            ParamValue::Int(0),
+            ParamValue::Int(1),
+            ParamValue::Int(-3),
+            ParamValue::Float(0.0),
+            ParamValue::Float(1.0),
+            ParamValue::Float(1.5),
+            ParamValue::Float(-2.25),
+            ParamValue::String("hello".into()),
+            ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
+        ] {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: ParamValue = serde_json::from_str(&json).unwrap();
+            let ok = match (&v, &back) {
+                (ParamValue::Bool(a), ParamValue::Bool(b)) => a == b,
+                (ParamValue::Int(a), ParamValue::Int(b)) => a == b,
+                (ParamValue::Float(a), ParamValue::Float(b)) => a == b,
+                (ParamValue::String(a), ParamValue::String(b)) => a == b,
+                (ParamValue::Curve(a), ParamValue::Curve(b)) => a == b,
+                _ => false,
+            };
+            assert!(ok, "round-trip changed variant: {v:?} → {json} → {back:?}");
         }
     }
 }

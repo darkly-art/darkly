@@ -24,7 +24,8 @@ pub fn all() -> Vec<Brush> {
         pencil(),
         charcoal(),
         canvas_brush(),
-        watercolor(),
+        smooth_watercolor(),
+        rough_watercolor(),
         liquify_push(),
     ]
 }
@@ -491,16 +492,21 @@ fn canvas_brush() -> Brush {
     )
 }
 
-/// Watercolor brush. Stamps an organic-textured tip whose color is mixed
-/// toward the canvas pickup by `deposit` (0% = pure smudge, 100% = pure
-/// paint), with smudge persistence controlled by `wetness` (0% = each dab
-/// adopts local canvas; 100% = the brush carries its first pickup down the
-/// stroke).
+/// Build a watercolor brush around a procedural `circle` tip.
+///
+/// All watercolor variants share the same wiring — pen + paint_color into a
+/// stamp into the `watercolor` terminal, with a per-dab random rotation so
+/// the dab's outline lands at a fresh angle every stamp. The variants only
+/// differ in how the circle is configured, so the caller passes a closure
+/// that sets the algorithm enum and any port defaults on the circle node.
 ///
 /// Built directly rather than via `BrushBuilder` because the standard
 /// builder pre-wires `color_output` as the terminal — watercolor swaps
 /// that for its own `watercolor` terminal node.
-fn watercolor() -> Brush {
+fn watercolor_brush(
+    name: &str,
+    configure_circle: impl FnOnce(&mut Graph<BrushWireType>, NodeId),
+) -> Brush {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::<BrushWireType>::new();
 
@@ -509,23 +515,34 @@ fn watercolor() -> Brush {
         registry.get("pen_input").unwrap().ports.clone(),
         vec![],
     );
+    // Stabilization: stroke smoothing helps watercolor read as a single
+    // continuous wash rather than a jittery line. 50% is enough to take the
+    // edge off without the brush feeling laggy.
+    graph.set_port_default(pen, "stabilize", 0.5).unwrap();
+    graph.set_port_exposed(pen, "stabilize", true).unwrap();
     let paint_color = graph.add_node(
         "paint_color",
         registry.get("paint_color").unwrap().ports.clone(),
         vec![],
     );
-    // Image-based tip rather than a procedural circle — watercolor benefits
-    // from organic texture variation. `ink_dry.png` is the closest match in
-    // the existing tip set; it has the right irregular, granulated feel.
-    let image = graph.add_node(
-        "image",
-        registry.get("image").unwrap().ports.clone(),
-        vec![ParamValue::String("ink_dry.png".into())],
+    let circle = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // overwritten by the closure if needed
     );
+    configure_circle(&mut graph, circle);
     let stamp = graph.add_node(
         "stamp",
         registry.get("stamp").unwrap().ports.clone(),
         vec![],
+    );
+    // Per-dab random rotation so the bumpy outline lands at a fresh angle
+    // every stamp — without it, every dab is identical and the bumps line
+    // up along the stroke.
+    let rand_rot = graph.add_node(
+        "random",
+        registry.get("random").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // 0 = per-dab
     );
     let watercolor = graph.add_node(
         "watercolor",
@@ -537,12 +554,13 @@ fn watercolor() -> Brush {
         // Stamp builds the dab shape and bakes paint color into RGB. The
         // watercolor terminal reads `dab.a` for the alpha mask and uses the
         // separately-wired `color` for the paint color in the mix.
-        (image, "texture", stamp, "tip"),
+        (circle, "texture", stamp, "tip"),
         (paint_color, "color", stamp, "color"),
         (paint_color, "color", watercolor, "color"),
         // Pressure → flow so light strokes deposit less paint, the way a
         // real brush carries less pigment with less pressure.
         (pen, "pressure", stamp, "flow"),
+        (rand_rot, "value", stamp, "rotation"),
         (stamp, "dab", watercolor, "dab"),
         (stamp, "dab_size", watercolor, "dab_size"),
         (pen, "position", watercolor, "position"),
@@ -563,20 +581,36 @@ fn watercolor() -> Brush {
             .unwrap();
     }
 
-    let mut metadata = BrushMetadata::from_graph("Watercolor", graph);
+    let mut metadata = BrushMetadata::from_graph(name, graph);
     metadata.category = "painting".to_string();
+    Brush::without_resources(metadata)
+}
 
-    let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");
-    metadata.resources.push(BrushResourceMeta {
-        name: "ink_dry.png".to_string(),
-        kind: ResourceKind::BrushTip,
-        path: "resources/ink_dry.png".to_string(),
-    });
-    Brush {
-        metadata,
-        resource_data: vec![("ink_dry.png".to_string(), tip_bytes.to_vec())],
-        thumbnail_png: None,
-    }
+/// Smooth watercolor: sine-harmonic dab with gentle bumps for an organic
+/// hand-painted edge.
+fn smooth_watercolor() -> Brush {
+    watercolor_brush("Smooth Watercolor", |graph, circle| {
+        graph
+            .set_param(circle, 0, ParamValue::Int(0)) // 0 = Sine Harmonic
+            .unwrap();
+        graph.set_port_default(circle, "amplitude", 0.1).unwrap();
+        graph.set_port_default(circle, "frequency", 5.0).unwrap();
+        graph.set_port_default(circle, "phase", 0.0).unwrap();
+    })
+}
+
+/// Rough watercolor: Perlin-noise dab with a more chaotic, granulated edge.
+fn rough_watercolor() -> Brush {
+    watercolor_brush("Rough Watercolor", |graph, circle| {
+        graph
+            .set_param(circle, 0, ParamValue::Int(1)) // 1 = Perlin Noise
+            .unwrap();
+        graph.set_port_default(circle, "softness", 0.05).unwrap();
+        graph.set_port_default(circle, "amplitude", 0.4).unwrap();
+        graph.set_port_default(circle, "frequency", 12.0).unwrap();
+        graph.set_port_default(circle, "persistence", 0.55).unwrap();
+        graph.set_port_default(circle, "octaves", 4.0).unwrap();
+    })
 }
 
 /// Liquify warp brush. Pushes pixels along pen motion with a radial
