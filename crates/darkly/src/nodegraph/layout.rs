@@ -10,6 +10,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use super::graph::{Graph, NodeId, PortDir};
 use super::WireKind;
 
+/// Map of node id → `[x, y]` produced by auto-layout. Positions are a
+/// pure UI concern — they are not stored on the graph.
+pub type NodeLayout = HashMap<NodeId, [f32; 2]>;
+
 /// Horizontal spacing between layers (pixels).
 const SPACING_X: f32 = 220.0;
 
@@ -68,12 +72,7 @@ fn reorder_by_barycenter(
 }
 
 /// Assign y positions to a vertical column of nodes, centered around y=0.
-fn assign_column(
-    nodes: &mut HashMap<NodeId, super::graph::NodeInstance<impl WireKind>>,
-    ids: &[NodeId],
-    x: f32,
-    heights: &HashMap<NodeId, f32>,
-) {
+fn assign_column(out: &mut NodeLayout, ids: &[NodeId], x: f32, heights: &HashMap<NodeId, f32>) {
     let h: Vec<f32> = ids
         .iter()
         .map(|id| heights.get(id).copied().unwrap_or(MIN_NODE_H))
@@ -81,15 +80,13 @@ fn assign_column(
     let total_h: f32 = h.iter().sum::<f32>() + ids.len().saturating_sub(1) as f32 * GAP_Y;
     let mut y = -total_h / 2.0;
     for (i, &id) in ids.iter().enumerate() {
-        if let Some(node) = nodes.get_mut(&id) {
-            node.position = [x, y];
-        }
+        out.insert(id, [x, y]);
         y += h[i] + GAP_Y;
     }
 }
 
 impl<W: WireKind> Graph<W> {
-    /// Compute and assign positions for all nodes using a layered layout.
+    /// Compute positions for all nodes using a layered layout.
     ///
     /// Data flows left-to-right: source nodes at x=0, downstream nodes
     /// at increasing x.  Nodes within a layer are spaced vertically and
@@ -97,16 +94,21 @@ impl<W: WireKind> Graph<W> {
     ///
     /// When no measured sizes are available (tests, freshly loaded brushes),
     /// falls back to port-count-based height estimation.
-    pub fn auto_layout(&mut self) {
-        self.auto_layout_with_sizes(&HashMap::new());
+    ///
+    /// Positions are not stored on the graph — the returned map is the
+    /// authoritative result and callers (currently the frontend node
+    /// editor) keep it as UI-only state.
+    pub fn auto_layout(&self) -> NodeLayout {
+        self.auto_layout_with_sizes(&HashMap::new())
     }
 
     /// Like [`auto_layout`], but uses measured `[width, height]` from
     /// the DOM for any node present in `sizes`.  Nodes not in the map
     /// fall back to port-count estimation.
-    pub fn auto_layout_with_sizes(&mut self, sizes: &HashMap<NodeId, [f32; 2]>) {
+    pub fn auto_layout_with_sizes(&self, sizes: &HashMap<NodeId, [f32; 2]>) -> NodeLayout {
+        let mut layout: NodeLayout = HashMap::new();
         if self.nodes.is_empty() {
-            return;
+            return layout;
         }
 
         // ── Build adjacency ─────────────────────────────────────────
@@ -256,7 +258,7 @@ impl<W: WireKind> Graph<W> {
                     SPACING_X
                 };
             }
-            assign_column(&mut self.nodes, layer_nodes, x, &heights);
+            assign_column(&mut layout, layer_nodes, x, &heights);
         }
 
         // ── Disconnected nodes ──────────────────────────────────────
@@ -276,8 +278,10 @@ impl<W: WireKind> Graph<W> {
                 // Place after the last connected layer.
                 x + SPACING_X
             };
-            assign_column(&mut self.nodes, &disconnected, disc_x, &heights);
+            assign_column(&mut layout, &disconnected, disc_x, &heights);
         }
+
+        layout
     }
 }
 
@@ -306,24 +310,21 @@ mod tests {
         )
         .unwrap();
     }
-    fn pos(g: &Graph<TestWireKind>, id: NodeId) -> [f32; 2] {
-        g.nodes[&id].position
-    }
-
     #[test]
     fn empty_graph() {
-        let mut g = Graph::<TestWireKind>::new();
-        g.auto_layout(); // should not panic
+        let g = Graph::<TestWireKind>::new();
+        let layout = g.auto_layout();
         assert!(g.nodes.is_empty());
+        assert!(layout.is_empty());
     }
 
     #[test]
     fn single_node() {
         let mut g = Graph::<TestWireKind>::new();
         let a = g.add_node("a", vec![scalar_out("out")], vec![]);
-        g.auto_layout();
+        let pos = g.auto_layout();
         // Disconnected single node at x=0, centered vertically.
-        assert_eq!(pos(&g, a)[0], 0.0);
+        assert_eq!(pos[&a][0], 0.0);
     }
 
     #[test]
@@ -335,11 +336,11 @@ mod tests {
         wire(&mut g, a, "out", b, "in");
         wire(&mut g, b, "out", c, "in");
 
-        g.auto_layout();
+        let pos = g.auto_layout();
 
         // Positions increase in x; single-node layers are vertically centered.
-        assert!(pos(&g, a)[0] < pos(&g, b)[0]);
-        assert!(pos(&g, b)[0] < pos(&g, c)[0]);
+        assert!(pos[&a][0] < pos[&b][0]);
+        assert!(pos[&b][0] < pos[&c][0]);
     }
 
     #[test]
@@ -355,15 +356,15 @@ mod tests {
         wire(&mut g, b, "out", d, "in_a");
         wire(&mut g, c, "out", d, "in_b");
 
-        g.auto_layout();
+        let pos = g.auto_layout();
 
         // A at layer 0, B and C at layer 1, D at layer 2.
-        assert_eq!(pos(&g, a)[0], 0.0);
-        assert_eq!(pos(&g, b)[0], pos(&g, c)[0]); // same layer
-        assert!(pos(&g, b)[0] > pos(&g, a)[0]);
-        assert!(pos(&g, d)[0] > pos(&g, b)[0]);
+        assert_eq!(pos[&a][0], 0.0);
+        assert_eq!(pos[&b][0], pos[&c][0]); // same layer
+        assert!(pos[&b][0] > pos[&a][0]);
+        assert!(pos[&d][0] > pos[&b][0]);
         // B and C at different y.
-        assert_ne!(pos(&g, b)[1], pos(&g, c)[1]);
+        assert_ne!(pos[&b][1], pos[&c][1]);
     }
 
     #[test]
@@ -378,12 +379,12 @@ mod tests {
         wire(&mut g, curve, "out", stamp, "in_a");
         wire(&mut g, src, "out2", stamp, "in_b");
 
-        g.auto_layout();
+        let pos = g.auto_layout();
 
         // src at layer 0, curve at layer 1, stamp at layer 2.
-        assert_eq!(pos(&g, src)[0], 0.0);
-        assert_eq!(pos(&g, curve)[0], SPACING_X);
-        assert_eq!(pos(&g, stamp)[0], 2.0 * SPACING_X);
+        assert_eq!(pos[&src][0], 0.0);
+        assert_eq!(pos[&curve][0], SPACING_X);
+        assert_eq!(pos[&stamp][0], 2.0 * SPACING_X);
     }
 
     #[test]
@@ -394,10 +395,10 @@ mod tests {
         let orphan = g.add_node("orphan", vec![scalar_out("out")], vec![]);
         wire(&mut g, a, "out", b, "in");
 
-        g.auto_layout();
+        let pos = g.auto_layout();
 
         // Orphan placed after the connected subgraph.
-        assert!(pos(&g, orphan)[0] > pos(&g, b)[0]);
+        assert!(pos[&orphan][0] > pos[&b][0]);
     }
 
     #[test]
@@ -407,14 +408,14 @@ mod tests {
         let b = g.add_node("b", vec![scalar_out("out")], vec![]);
         let c = g.add_node("c", vec![scalar_out("out")], vec![]);
 
-        g.auto_layout();
+        let pos = g.auto_layout();
 
         // All in a single column at x=0.
-        assert_eq!(pos(&g, a)[0], 0.0);
-        assert_eq!(pos(&g, b)[0], 0.0);
-        assert_eq!(pos(&g, c)[0], 0.0);
+        assert_eq!(pos[&a][0], 0.0);
+        assert_eq!(pos[&b][0], 0.0);
+        assert_eq!(pos[&c][0], 0.0);
         // Different y values.
-        let ys: HashSet<i32> = [a, b, c].iter().map(|&id| pos(&g, id)[1] as i32).collect();
+        let ys: HashSet<i32> = [a, b, c].iter().map(|id| pos[id][1] as i32).collect();
         assert_eq!(ys.len(), 3);
     }
 
@@ -437,11 +438,11 @@ mod tests {
         wire(&mut g, b1, "out", sink, "in_a");
         wire(&mut g, b2, "out", sink, "in_b");
 
-        g.auto_layout();
+        let pos = g.auto_layout();
 
         // If a1 is above a2, then b1 should be above b2 (no crossing).
-        let a1_above = pos(&g, a1)[1] < pos(&g, a2)[1];
-        let b1_above = pos(&g, b1)[1] < pos(&g, b2)[1];
+        let a1_above = pos[&a1][1] < pos[&a2][1];
+        let b1_above = pos[&b1][1] < pos[&b2][1];
         assert_eq!(a1_above, b1_above, "barycenter should prevent crossings");
     }
 
@@ -460,12 +461,12 @@ mod tests {
         wire(&mut g, tall, "out0", sink, "in1");
         wire(&mut g, small, "out", sink, "in2");
 
-        g.auto_layout();
+        let pos = g.auto_layout();
 
         // Tall node height ≈ 24 + 8 + 10*18 = 212px.
         // The bottom of one node must be above the top of the next.
-        let tall_y = pos(&g, tall)[1];
-        let small_y = pos(&g, small)[1];
+        let tall_y = pos[&tall][1];
+        let small_y = pos[&small][1];
         let (upper_y, upper_h) = if tall_y < small_y {
             (tall_y, NODE_HEADER_H + BODY_PAD * 2.0 + 10.0 * PORT_ROW_H)
         } else {
@@ -498,12 +499,12 @@ mod tests {
         wire(&mut g, src, "out2", mid, "in2");
         wire(&mut g, mid, "out", sink, "in");
 
-        g.auto_layout();
+        let pos = g.auto_layout();
 
         // All three nodes should be in distinct layers, not dumped
         // into the disconnected bucket.
-        assert_eq!(pos(&g, src)[0], 0.0);
-        assert_eq!(pos(&g, mid)[0], SPACING_X);
-        assert_eq!(pos(&g, sink)[0], 2.0 * SPACING_X);
+        assert_eq!(pos[&src][0], 0.0);
+        assert_eq!(pos[&mid][0], SPACING_X);
+        assert_eq!(pos[&sink][0], 2.0 * SPACING_X);
     }
 }

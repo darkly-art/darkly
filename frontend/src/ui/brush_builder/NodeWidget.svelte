@@ -14,6 +14,7 @@
     let isSelected = $derived(brushGraph.selectedNode === node.id);
     let inputPorts = $derived(node.ports.filter(p => p.dir === 'Input'));
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
+    let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
 
     // Node type info for display name and params.
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));
@@ -21,6 +22,8 @@
     let paramDefs = $derived(typeInfo?.params ?? []);
 
     // --- Drag to move (from any point on the node) ---
+    // Updates `brushGraph.nodePositions` directly — positions are
+    // UI-only state and never round-trip to Rust.
     let dragging = false;
     let dragStartX = 0;
     let dragStartY = 0;
@@ -42,8 +45,8 @@
         dragging = true;
         dragStartX = e.clientX;
         dragStartY = e.clientY;
-        nodeStartX = node.position[0];
-        nodeStartY = node.position[1];
+        nodeStartX = position[0];
+        nodeStartY = position[1];
         nodeEl.setPointerCapture(e.pointerId);
         app.beginInteraction();
     }
@@ -59,7 +62,6 @@
         if (!dragging) return;
         dragging = false;
         nodeEl.releasePointerCapture(e.pointerId);
-        brushGraph.syncNodePosition(node.id);
     }
 
     /** Guaranteed cleanup — fires when capture ends for any reason. */
@@ -231,7 +233,7 @@
 <div
     class="node-widget"
     class:selected={isSelected}
-    style="transform: translate({node.position[0]}px, {node.position[1]}px);"
+    style="transform: translate({position[0]}px, {position[1]}px);"
     data-node-id={node.id}
     bind:this={nodeEl}
     onpointerdown={onNodeDown}

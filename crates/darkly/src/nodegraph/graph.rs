@@ -218,8 +218,6 @@ pub struct NodeInstance<W: WireKind> {
     pub ports: Vec<PortDef<W>>,
     /// Per-instance parameter overrides.
     pub params: Vec<ParamValue>,
-    /// UI position (for layout persistence).
-    pub position: [f32; 2],
 }
 
 // ── Errors ───────────────────────────────────────────────────────────
@@ -305,7 +303,6 @@ impl<W: WireKind> Graph<W> {
                 type_id: type_id.into(),
                 ports,
                 params,
-                position: [0.0, 0.0],
             },
         );
         id
@@ -371,22 +368,6 @@ impl<W: WireKind> Graph<W> {
         self.connections
             .iter()
             .filter(move |c| c.from.node == node_id)
-    }
-
-    /// Returns `true` if every node sits at the origin — i.e. no positions
-    /// have been assigned yet and auto-layout should run.
-    pub fn needs_layout(&self) -> bool {
-        self.nodes.values().all(|n| n.position == [0.0, 0.0])
-    }
-
-    /// Update a node's UI position.
-    pub fn set_node_position(&mut self, id: NodeId, pos: [f32; 2]) -> Result<(), GraphError> {
-        let node = self
-            .nodes
-            .get_mut(&id)
-            .ok_or(GraphError::NodeNotFound(id))?;
-        node.position = pos;
-        Ok(())
     }
 
     /// Neutralize ports annotated with [`PortDef::preview_value`] so

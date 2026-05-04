@@ -164,23 +164,18 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
 
     let pen_reg = registry.get("pen_input").unwrap();
     let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
-    graph.nodes.get_mut(&pen).unwrap().position = [40.0, 40.0];
 
     let color_reg = registry.get("paint_color").unwrap();
     let paint_color = graph.add_node("paint_color", color_reg.ports.clone(), vec![]);
-    graph.nodes.get_mut(&paint_color).unwrap().position = [40.0, 200.0];
 
     let circle_reg = registry.get("circle").unwrap();
     let circle = graph.add_node("circle", circle_reg.ports.clone(), vec![]);
-    graph.nodes.get_mut(&circle).unwrap().position = [40.0, 360.0];
 
     let stamp_reg = registry.get("stamp").unwrap();
     let stamp = graph.add_node("stamp", stamp_reg.ports.clone(), vec![]);
-    graph.nodes.get_mut(&stamp).unwrap().position = [280.0, 40.0];
 
     let out_reg = registry.get("color_output").unwrap();
     let color_output = graph.add_node("color_output", out_reg.ports.clone(), vec![]);
-    graph.nodes.get_mut(&color_output).unwrap().position = [520.0, 40.0];
 
     // circle.texture → stamp.tip
     graph

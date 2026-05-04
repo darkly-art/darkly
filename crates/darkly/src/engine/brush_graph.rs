@@ -600,12 +600,7 @@ impl DarklyEngine {
 
     /// Add a node to the active graph and compile.
     /// Returns the updated graph JSON on success.
-    pub fn brush_graph_add_node(
-        &mut self,
-        type_id: &str,
-        x: f32,
-        y: f32,
-    ) -> Result<String, String> {
+    pub fn brush_graph_add_node(&mut self, type_id: &str) -> Result<String, String> {
         let registry = BrushNodeRegistry::new();
         let reg = registry
             .get(type_id)
@@ -616,12 +611,8 @@ impl DarklyEngine {
             .iter()
             .map(|p| p.default_value())
             .collect::<Vec<_>>();
-        let id = self
-            .active_brush_graph
+        self.active_brush_graph
             .add_node(type_id, reg.ports.clone(), params);
-
-        // Set position.
-        let _ = self.active_brush_graph.set_node_position(id, [x, y]);
 
         self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
@@ -716,21 +707,15 @@ impl DarklyEngine {
         Ok(self.active_graph_json())
     }
 
-    /// Update a node's position (UI-only, no compile).
-    pub fn brush_graph_move_node(&mut self, node_id: u64, x: f32, y: f32) {
-        let _ = self
-            .active_brush_graph
-            .set_node_position(NodeId(node_id), [x, y]);
-    }
-
-    /// Run auto-layout on the active brush graph and return updated JSON.
+    /// Compute auto-layout positions for the active brush graph.
     /// `sizes` maps `NodeId` → `[width, height]` measured from the DOM.
+    /// Returns the layout map directly — positions are a UI-only concern
+    /// and are not stored on the graph.
     pub fn brush_graph_auto_layout(
-        &mut self,
+        &self,
         sizes: &std::collections::HashMap<NodeId, [f32; 2]>,
-    ) -> String {
-        self.active_brush_graph.auto_layout_with_sizes(sizes);
-        self.active_graph_json()
+    ) -> crate::nodegraph::NodeLayout {
+        self.active_brush_graph.auto_layout_with_sizes(sizes)
     }
 
     /// Upload an RGBA8 image and associate it with a resource name.
@@ -772,10 +757,11 @@ impl DarklyEngine {
     /// Scans all nodes for input ports with `exposed == true`, and also
     /// includes legacy `user_input` nodes for backward compatibility.
     ///
-    /// The result is ordered by node position (top-to-bottom, left-to-right)
-    /// for a stable, creator-controlled layout in the properties panel.
+    /// The result is ordered by auto-layout position (top-to-bottom,
+    /// left-to-right) for a stable order in the properties panel.
     pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
         let registry = BrushNodeRegistry::new();
+        let layout = self.active_brush_graph.auto_layout();
         let mut result: Vec<ExposedPortInfo> = Vec::new();
 
         for node in self.active_brush_graph.nodes.values() {
@@ -843,7 +829,6 @@ impl DarklyEngine {
                     label,
                     icon,
                     description,
-                    position: node.position,
                     node_display_name: display_name.to_string(),
                     data: ExposedValue::Scalar {
                         value: unit_type.to_display(port.default),
@@ -856,14 +841,23 @@ impl DarklyEngine {
             }
         }
 
-        // Sort by position: top-to-bottom (y), then left-to-right (x).
+        // Sort by layout position: top-to-bottom (y), then left-to-right (x).
+        // Layout is computed above; entries for unknown nodes default to origin.
+        let key = |info: &ExposedPortInfo| -> [f32; 2] {
+            layout
+                .get(&NodeId(info.node_id))
+                .copied()
+                .unwrap_or([0.0, 0.0])
+        };
         result.sort_by(|a, b| {
-            a.position[1]
-                .partial_cmp(&b.position[1])
+            let ka = key(a);
+            let kb = key(b);
+            ka[1]
+                .partial_cmp(&kb[1])
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| {
-                    a.position[0]
-                        .partial_cmp(&b.position[0])
+                    ka[0]
+                        .partial_cmp(&kb[0])
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
         });
@@ -929,7 +923,6 @@ impl DarklyEngine {
             label,
             icon,
             description,
-            position: node.position,
             node_display_name: "User Input".to_string(),
             data: ExposedValue::Scalar {
                 value,
@@ -1054,7 +1047,6 @@ pub struct ExposedPortInfo {
     pub label: String,
     pub icon: String,
     pub description: String,
-    pub position: [f32; 2],
     pub node_display_name: String,
     pub data: ExposedValue,
 }

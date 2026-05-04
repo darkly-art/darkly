@@ -692,17 +692,11 @@ mod tests {
 
     #[test]
     fn builtin_brushes_no_overlapping_nodes() {
-        for mut brush in all() {
-            // Brushes ship without positions; auto-layout before checking.
-            if brush.metadata.graph.needs_layout() {
-                brush.metadata.graph.auto_layout();
-            }
-            let positions: Vec<[i32; 2]> = brush
-                .metadata
-                .graph
-                .nodes
+        for brush in all() {
+            let layout = brush.metadata.graph.auto_layout();
+            let positions: Vec<[i32; 2]> = layout
                 .values()
-                .map(|n| [n.position[0] as i32, n.position[1] as i32])
+                .map(|p| [p[0] as i32, p[1] as i32])
                 .collect();
             for (i, a) in positions.iter().enumerate() {
                 for b in &positions[i + 1..] {
