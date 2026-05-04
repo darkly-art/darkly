@@ -60,6 +60,18 @@ class AppState {
     canvasEl = $state<HTMLCanvasElement | null>(null);
 
     selectLayer(id: number | null) {
+        // Clicking any layer other than the currently isolated one exits
+        // isolation. The user is asking to navigate to a layer that's
+        // off-path under the current solo, so the click implies they're
+        // done with the solo session — keeping isolation would be a
+        // confusing UI deadlock (the click would silently appear to do
+        // nothing if the new layer is hidden by isolation). Selecting the
+        // same isolated node is a no-op.
+        if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
+            this.handle?.set_isolated_node(0);
+            this.isolatedNodeId = null;
+            this.requestFrame();
+        }
         this.activeLayerId = id;
         this.activeVeilIndex = null;
     }

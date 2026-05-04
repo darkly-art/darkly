@@ -114,6 +114,7 @@
             exporting = false;
         }
     }
+
 </script>
 
 <Modal bind:open={settings.open} title="Settings" size="md">
@@ -153,9 +154,10 @@
                                     <button
                                         type="button"
                                         class="menu-action"
-                                        title="Delete preset"
+                                        title={config.userPresetNames.length === 1
+                                            ? 'Delete preset and return to the preset picker'
+                                            : 'Delete preset'}
                                         onclick={() => deletePreset(name)}
-                                        disabled={config.userPresetNames.length === 1}
                                     >
                                         <i class="fa-solid fa-trash"></i>
                                     </button>

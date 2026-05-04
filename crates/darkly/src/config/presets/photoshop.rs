@@ -14,14 +14,13 @@ pub fn register() -> Preset {
             // Selection
             ("clearSelection", "$mod+KeyD"),
             // Photoshop has no keyboard shortcut for isolate-layer; the
-            // action is reachable only via alt+click on the layer eye.
+            // action is reachable only via alt+click on a thumbnail.
             ("isolateLayer", ""),
         ],
-        mouse_clicks: &[
-            // Override the default `layerItem:alt+click` (Krita) with the
-            // Photoshop site convention — alt+click on the eye icon.
-            ("isolateLayer", "layerEye:alt+click"),
-        ],
+        // No preset-specific mouse overrides for isolation: the action's
+        // defaults (`layerThumb:alt+click` and `maskThumb:alt+click`)
+        // match the "alt+click on a preview" rule we want everywhere.
+        mouse_clicks: &[],
         settings: &[],
     }
 }

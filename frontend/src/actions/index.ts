@@ -32,7 +32,6 @@ export function registerActions() {
     // -- Binding sites --
     sites.register({ name: 'keyboard',     provides: ['layerId'] });
     sites.register({ name: 'layerEye',     provides: ['layerId'] });
-    sites.register({ name: 'layerItem',    provides: ['layerId'] });
     sites.register({ name: 'layerThumb',   provides: ['layerId'] });
     sites.register({ name: 'maskThumb',    provides: ['layerId', 'maskIndex'] });
     sites.register({ name: 'canvas',       provides: ['x', 'y'] });
@@ -292,10 +291,14 @@ export function registerActions() {
         id: 'isolateLayer',
         displayName: 'Isolate Layer',
         category: 'layers',
-        description: 'Solo this layer (raster, group, or mask) by skipping off-path siblings in the compositor. Press again to restore. Pure session state — eye-icon visibility is preserved across toggles.',
+        description: 'Solo a layer (raster, group, or mask) by skipping off-path siblings in the compositor. Press again to restore. Pure session state — eye-icon visibility is preserved across toggles. Default chord fires from either thumbnail: alt+click on the layer thumb solos that layer; alt+click on the mask thumb solos the mask (renders as grayscale).',
         accepts: ['layerId'],
         defaultHotkey: 'KeyI',
-        defaultMouseClick: 'layerItem:alt+click',
+        // Two defaults: one per thumbnail. The dispatching click handler
+        // is responsible for putting the right node id (host vs mask
+        // modifier) in the context — that's what makes "alt+click on a
+        // preview = isolate that preview" work for both.
+        defaultMouseClick: ['layerThumb:alt+click', 'maskThumb:alt+click'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.handle) return;

@@ -46,24 +46,14 @@
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
-    // Sub-region click handlers stop propagation so the layer-item div's
-    // own onclick doesn't fire, but a binding scoped to the enclosing
-    // `layerItem` site (eg. `isolateLayer`'s default `layerItem:alt+click`)
-    // should still apply when clicking on a sub-region with no specific
-    // binding. We dispatch site-first, then fall through to `layerItem`
-    // before running each region's component default. This means alt+click
-    // anywhere on the layer item triggers isolation regardless of which
-    // preset is active.
-    function dispatchSiteOrLayer(site: string, e: MouseEvent): boolean {
-        return (
-            dispatchClick(site, e, { layerId: layer.id })
-            || dispatchClick('layerItem', e, { layerId: layer.id })
-        );
-    }
-
+    // Each click handler dispatches against its own site only — no
+    // cross-site fallback. Bindings on a thumbnail receive that
+    // thumbnail's node id (host for `layerThumb`, mask modifier for
+    // `maskThumb`), so `isolateLayer` resolves correctly without the
+    // dispatcher having to know which kind it's looking at.
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchSiteOrLayer('layerEye', e)) {
+        if (dispatchClick('layerEye', e, { layerId: layer.id })) {
             onupdate();
             return;
         }
@@ -71,16 +61,15 @@
         onupdate();
     }
 
-    function onLayerClick(e: MouseEvent) {
-        if (dispatchClick('layerItem', e, { layerId: layer.id })) {
-            return;
-        }
+    function onLayerClick() {
+        // The layer-item body has no bindings — modifier+click is reserved
+        // for the previews. Plain click selects.
         app.selectLayer(layer.id);
     }
 
     function clickLayerThumb(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchSiteOrLayer('layerThumb', e)) {
+        if (dispatchClick('layerThumb', e, { layerId: layer.id })) {
             onupdate();
             return;
         }
@@ -89,7 +78,8 @@
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchSiteOrLayer('maskThumb', e)) {
+        if (maskModifier !== null
+            && dispatchClick('maskThumb', e, { layerId: maskModifier.id })) {
             onupdate();
             return;
         }

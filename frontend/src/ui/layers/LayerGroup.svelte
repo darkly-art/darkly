@@ -42,20 +42,13 @@
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
-    // See LayerItem's note: a sub-region click that stops propagation still
-    // gets a chance to fire bindings scoped to the enclosing `layerItem`
-    // site, so alt+click anywhere on the row triggers isolation regardless
-    // of which preset is active.
-    function dispatchSiteOrLayer(site: string, e: MouseEvent): boolean {
-        return (
-            dispatchClick(site, e, { layerId: group.id })
-            || dispatchClick('layerItem', e, { layerId: group.id })
-        );
-    }
-
+    // Sub-region click handlers fire site-specific bindings only — no
+    // cross-site fallback. Modifier+click on the group's mask thumb
+    // dispatches with the mask's id so `isolateLayer` solos the mask, not
+    // the group.
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchSiteOrLayer('layerEye', e)) {
+        if (dispatchClick('layerEye', e, { layerId: group.id })) {
             onupdate();
             return;
         }
@@ -73,13 +66,9 @@
         }
     }
 
-    function onLayerClick(e: MouseEvent) {
-        // Mirror LayerItem: alt+click → isolate (Krita-style). Bound via
-        // the `layerItem` site so a single binding covers leaf layers and
-        // groups uniformly.
-        if (dispatchClick('layerItem', e, { layerId: group.id })) {
-            return;
-        }
+    function onLayerClick() {
+        // The group-header body has no bindings — modifier+click is
+        // reserved for the previews. Plain click selects.
         app.selectLayer(group.id);
     }
 
@@ -98,7 +87,8 @@
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchSiteOrLayer('maskThumb', e)) {
+        if (maskModifier !== null
+            && dispatchClick('maskThumb', e, { layerId: maskModifier.id })) {
             onupdate();
             return;
         }
