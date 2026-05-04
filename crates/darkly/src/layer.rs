@@ -125,10 +125,15 @@ pub struct RasterLayer {
 }
 
 impl RasterLayer {
-    pub fn new(id: LayerId, bounds: CanvasRect) -> Self {
+    /// Construct a raster layer. `name` is the display name shown in the
+    /// layer panel — owners (the [`Document`]) supply a sequential
+    /// "Layer N" string rather than letting each constructor invent one
+    /// from the slotmap key, which would surface raw ffi values like
+    /// "Layer 4294967301" to the user.
+    pub fn new(id: LayerId, bounds: CanvasRect, name: String) -> Self {
         RasterLayer {
             id,
-            common: NodeCommon::new(format!("Layer {:?}", id.to_ffi())),
+            common: NodeCommon::new(name),
             blend: BlendProps::new(),
             pixels: PixelBuffer::new(bounds, wgpu::TextureFormat::Rgba8Unorm),
             modifiers: Vec::new(),
@@ -153,10 +158,12 @@ pub struct LayerGroup {
 }
 
 impl LayerGroup {
-    pub fn new(id: LayerId) -> Self {
+    /// Construct a group. `name` is the display name; same rationale as
+    /// [`RasterLayer::new`] — owners pass a sequential string.
+    pub fn new(id: LayerId, name: String) -> Self {
         LayerGroup {
             id,
-            common: NodeCommon::new(format!("Group {:?}", id.to_ffi())),
+            common: NodeCommon::new(name),
             blend: BlendProps::new(),
             children: Vec::new(),
             modifiers: Vec::new(),

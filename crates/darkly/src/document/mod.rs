@@ -90,15 +90,26 @@ pub struct Document {
     /// allocated it stays for the document's lifetime, with `common.visible`
     /// toggling whether ops respect the selection.
     pub selection: Option<LayerId>,
+
+    /// Monotonic counters for default display names — "Layer 1", "Layer 2",
+    /// etc. Per-kind so renumbering is independent. They survive deletes
+    /// within a session (the next add doesn't reuse a freed number, just
+    /// like Photoshop and Krita), giving stable, readable labels even
+    /// after heavy churn.
+    next_raster_number: u32,
+    next_group_number: u32,
+    next_mask_number: u32,
 }
 
 impl Document {
     pub fn new(width: u32, height: u32) -> Self {
         let mut entities: SlotMap<LayerId, Entity> = SlotMap::with_key();
         // Allocate the root with a placeholder id, then patch the id after
-        // insertion. SlotMap::insert_with_key does this in one step.
-        let root =
-            entities.insert_with_key(|key| Entity::Node(LayerNode::Group(LayerGroup::new(key))));
+        // insertion. SlotMap::insert_with_key does this in one step. The
+        // root is never shown in the UI, so its name is internal only.
+        let root = entities.insert_with_key(|key| {
+            Entity::Node(LayerNode::Group(LayerGroup::new(key, "Root".to_string())))
+        });
         Document {
             width,
             height,
@@ -106,6 +117,9 @@ impl Document {
             parent: SecondaryMap::new(),
             root,
             selection: None,
+            next_raster_number: 1,
+            next_group_number: 1,
+            next_mask_number: 1,
         }
     }
 
@@ -384,9 +398,11 @@ impl Document {
     /// Add a new raster layer inside a group (or at root if parent is None).
     pub fn add_raster_layer_in(&mut self, parent: Option<LayerId>) -> LayerId {
         let bounds = CanvasRect::from_xywh(0, 0, self.width, self.height);
+        let name = format!("Layer {}", self.next_raster_number);
+        self.next_raster_number += 1;
         let id = self.entities.insert_with_key(|key| {
             Entity::Node(LayerNode::Layer(Layer::Raster(RasterLayer::new(
-                key, bounds,
+                key, bounds, name,
             ))))
         });
         let parent_id = self.resolve_parent_group(parent);
@@ -396,9 +412,11 @@ impl Document {
 
     /// Add a new empty group at the root top.
     pub fn add_group(&mut self) -> LayerId {
+        let name = format!("Group {}", self.next_group_number);
+        self.next_group_number += 1;
         let id = self
             .entities
-            .insert_with_key(|key| Entity::Node(LayerNode::Group(LayerGroup::new(key))));
+            .insert_with_key(|key| Entity::Node(LayerNode::Group(LayerGroup::new(key, name))));
         self.link_child(id, self.root, None);
         id
     }
@@ -412,10 +430,12 @@ impl Document {
     /// check [`Document::has_mask`] before adding.
     pub fn add_mask_modifier(&mut self, host_id: LayerId) -> Option<LayerId> {
         let bounds = self.host_default_bounds(host_id)?;
+        let name = format!("Mask {}", self.next_mask_number);
+        self.next_mask_number += 1;
         let id = self.entities.insert_with_key(|key| {
             Entity::Modifier(Modifier {
                 id: key,
-                common: NodeCommon::new(format!("Mask {:?}", key.to_ffi())),
+                common: NodeCommon::new(name),
                 kind: ModifierKind::mask_with_bounds(bounds),
             })
         });

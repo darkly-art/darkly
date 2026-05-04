@@ -207,17 +207,46 @@ impl DarklyEngine {
         }
     }
 
-    /// Set the session-level "isolate this node" flag. When `Some(id)`, the
-    /// renderer shows only that node's contribution (e.g. an R8 modifier
-    /// renders as grayscale on canvas).
+    /// Set the session-level "isolate this node" flag.
+    ///
+    /// When `Some(id)`, the renderer treats `id`'s subtree as the only
+    /// thing on the canvas: the compose walk skips off-path siblings and,
+    /// when `id` is a mask modifier, the host's blend pass renders the
+    /// mask channel as grayscale.
+    ///
+    /// Pure session state — no document mutation. The eye-icon column on
+    /// every layer is independent: toggling visibility while isolated
+    /// modifies that layer's `visible` field, and clearing isolation
+    /// preserves whatever the user set.
     pub fn set_isolated_node(&mut self, id: Option<LayerId>) {
+        if self.isolated_node == id {
+            return;
+        }
         self.isolated_node = id;
+        // Mirror to the compositor so the render walk can filter off-path
+        // subtrees, then resync host uniforms — the `isolated` flag on a
+        // host flips depending on whether one of its modifiers is the new
+        // target.
+        self.compositor.set_isolated_node(id);
+        self.sync_compositor_layers();
         self.compositor.mark_dirty();
     }
 
     /// Read the current isolated-node id, if any.
     pub fn isolated_node(&self) -> Option<LayerId> {
         self.isolated_node
+    }
+
+    /// True when the host's `isolated` blend uniform should fire — i.e. the
+    /// current isolation target is one of `host_id`'s modifiers (the user
+    /// asked to see the mask channel as grayscale on canvas). Isolating the
+    /// host itself doesn't trigger this; the host renders normally and the
+    /// compose walk hides its siblings instead.
+    pub(crate) fn host_renders_isolated(&self, host_id: LayerId) -> bool {
+        match self.isolated_node {
+            Some(t) => self.doc.modifiers_of(host_id).contains(&t),
+            None => false,
+        }
     }
 
     pub fn set_layer_name(&mut self, layer_id: LayerId, name: &str) {
@@ -252,12 +281,15 @@ impl DarklyEngine {
                 );
             }
             Some(LayerNode::Group(g)) => {
+                let opacity = g.blend.opacity;
+                let blend_mode = g.blend.blend_mode;
+                let isolated = self.host_renders_isolated(layer_id);
                 self.compositor.update_group_uniforms(
                     &self.gpu.queue,
                     layer_id,
-                    g.blend.opacity,
-                    g.blend.blend_mode,
-                    self.isolated_node == Some(layer_id),
+                    opacity,
+                    blend_mode,
+                    isolated,
                 );
             }
             None => {}
@@ -281,7 +313,7 @@ impl DarklyEngine {
         if !passthrough {
             self.compositor
                 .ensure_group_state(&self.gpu.device, &self.gpu.queue, group_id);
-            let isolated = self.isolated_node == Some(group_id);
+            let isolated = self.host_renders_isolated(group_id);
             if let Some(LayerNode::Group(g)) = self.doc.find_node(group_id) {
                 self.compositor.update_group_uniforms(
                     &self.gpu.queue,

@@ -2525,8 +2525,9 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
     let raster = LayerNode::Layer(Layer::Raster(RasterLayer::new(
         LayerId::from_ffi(1),
         darkly::coord::CanvasRect::from_xywh(0, 0, 1, 1),
+        "raster".to_string(),
     )));
-    let group = LayerNode::Group(LayerGroup::new(LayerId::from_ffi(2)));
+    let group = LayerNode::Group(LayerGroup::new(LayerId::from_ffi(2), "group".to_string()));
     must_destructure(&raster);
     must_destructure(&group);
 }
@@ -2668,4 +2669,176 @@ fn document_selection_is_a_typed_modifier() {
     // Suppress the unused warning about ModifierKind imports — the test
     // exercises it through the `_kind_is_selection` helper.
     let _ = std::any::type_name::<ModifierKind>();
+}
+
+// ============================================================================
+// Layer isolation — Krita/Photoshop "alt+click to solo" feature.
+// ============================================================================
+
+/// Helper: read the RGBA at canvas pixel (x, y).
+fn rgba_at(pixels: &[u8], w: u32, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * w + x) * 4) as usize;
+    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+}
+
+/// Paint a flood-fill of straight RGBA `(r, g, b, 255)` across `layer_id`.
+fn fill_layer(engine: &mut DarklyEngine, layer_id: LayerId, r: u8, g: u8, b: u8) {
+    engine.begin_stroke(layer_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r,
+        g,
+        b,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+}
+
+/// Isolating a sibling raster must skip the off-path layer in the compose
+/// walk — the canvas shows only the isolated layer's color, regardless of
+/// stacking order.
+#[test]
+fn isolate_skips_off_path_sibling_rasters() {
+    let (cw, ch) = (32u32, 32u32);
+    let mut engine = test_engine(cw, ch);
+
+    let bottom = engine.add_raster_layer();
+    fill_layer(&mut engine, bottom, 0, 0, 255); // Blue underneath
+    let top = engine.add_raster_layer();
+    fill_layer(&mut engine, top, 255, 0, 0); // Red on top
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // No isolation: top layer wins → red.
+    let normal = engine.test_readback_canvas();
+    let px = rgba_at(&normal, cw, cw / 2, ch / 2);
+    assert!(
+        px[0] > 200 && px[2] < 50,
+        "without isolation, top red layer should show; got {px:?}"
+    );
+
+    // Isolate the bottom layer → top is off-path and skipped, blue shows.
+    engine.set_isolated_node(Some(bottom));
+    engine.render(0.0);
+    let isolated = engine.test_readback_canvas();
+    let px = rgba_at(&isolated, cw, cw / 2, ch / 2);
+    assert!(
+        px[2] > 200 && px[0] < 50,
+        "isolating the bottom layer must hide the top; got {px:?}"
+    );
+
+    // Clear isolation → top layer reappears.
+    engine.set_isolated_node(None);
+    engine.render(0.0);
+    let restored = engine.test_readback_canvas();
+    assert_eq!(
+        restored, normal,
+        "clearing isolation must produce the same pixels as before isolating"
+    );
+}
+
+/// Isolation is session-only — toggling it on and off must not perturb any
+/// layer's `visible` doc state. Hide a layer manually, isolate a sibling,
+/// clear isolation: the manually-hidden layer must still be hidden, with
+/// no eye-icon state mutation under the hood.
+#[test]
+fn isolation_does_not_mutate_layer_visibility() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let red = engine.add_raster_layer();
+    fill_layer(&mut engine, red, 255, 0, 0);
+    let green = engine.add_raster_layer();
+    fill_layer(&mut engine, green, 0, 255, 0);
+    let blue = engine.add_raster_layer();
+    fill_layer(&mut engine, blue, 0, 0, 255);
+
+    // User hides the red layer manually. Doc state: red.visible = false.
+    engine.set_layer_visible(red, false);
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+    let baseline = engine.test_readback_canvas();
+    let px = rgba_at(&baseline, cw, cw / 2, ch / 2);
+    assert!(px[2] > 200, "baseline: blue (top) should show; got {px:?}");
+
+    // Isolate green. Render — only green should appear.
+    engine.set_isolated_node(Some(green));
+    engine.render(0.0);
+    let solo = engine.test_readback_canvas();
+    let px = rgba_at(&solo, cw, cw / 2, ch / 2);
+    assert!(
+        px[1] > 200 && px[0] < 50 && px[2] < 50,
+        "isolated green should be the only thing rendered; got {px:?}"
+    );
+
+    // Clear isolation. The hidden-red state must persist — the canvas must
+    // match the pre-isolation baseline byte-for-byte. If isolation had
+    // mutated `visible` and restored from a snapshot, there'd be a window
+    // for the manual `set_layer_visible(red, false)` to be clobbered or
+    // mis-restored. Round-tripping through the toggle is the regression.
+    engine.set_isolated_node(None);
+    engine.render(0.0);
+    let after = engine.test_readback_canvas();
+    assert_eq!(
+        after, baseline,
+        "clearing isolation must round-trip exactly to the pre-isolation \
+         render — anything else means visibility was puppetted"
+    );
+}
+
+/// Isolating a mask modifier renders the host's mask channel as grayscale
+/// on the canvas, regardless of the host's color. This is the "show mask"
+/// workflow: the mask becomes the canvas. Skipping siblings is the same
+/// path the raster case uses; here we additionally verify the host's
+/// `isolated` blend uniform engages so the shader picks the grayscale
+/// path.
+#[test]
+fn isolating_mask_modifier_renders_grayscale() {
+    let (cw, ch) = (32u32, 32u32);
+    let mut engine = test_engine(cw, ch);
+
+    let layer = engine.add_raster_layer();
+    fill_layer(&mut engine, layer, 255, 0, 0); // Red host.
+
+    engine.add_mask(layer);
+    let mask_id = engine.host_mask_id(layer).expect("layer has a mask");
+
+    // Fill the mask with mid-gray (~50% coverage). With a normal render
+    // the canvas would show red at half opacity over transparent.
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 128,
+        g: 128,
+        b: 128,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+
+    // Isolate the mask modifier itself — host renders as grayscale of its
+    // mask channel, fully opaque. No red anywhere.
+    engine.set_isolated_node(Some(mask_id));
+    engine.render(0.0);
+    let solo = engine.test_readback_canvas();
+    let px = rgba_at(&solo, cw, cw / 2, ch / 2);
+    assert!(
+        (px[0] as i32 - px[1] as i32).abs() < 4 && (px[1] as i32 - px[2] as i32).abs() < 4,
+        "isolated mask must render as RGB-equal grayscale (no red leak); \
+         got {px:?}"
+    );
+    assert!(
+        px[0] > 100 && px[0] < 160,
+        "grayscale value should reflect mid-gray mask coverage (~128); \
+         got {px:?}"
+    );
+    assert_eq!(
+        px[3], 255,
+        "isolated-mask grayscale output is fully opaque on canvas; got alpha={}",
+        px[3]
+    );
 }

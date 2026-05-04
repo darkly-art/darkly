@@ -18,8 +18,9 @@ pub fn register() -> Preset {
             ("isolateLayer", ""),
         ],
         mouse_clicks: &[
+            // Override the default `layerItem:alt+click` (Krita) with the
+            // Photoshop site convention — alt+click on the eye icon.
             ("isolateLayer", "layerEye:alt+click"),
-            ("isolateMask", "maskThumb:ctrl+click"),
         ],
         settings: &[],
     }

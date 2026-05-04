@@ -187,6 +187,17 @@ pub struct Compositor {
     // --- Floating Content Transform ---
     transform_pass: crate::gpu::transform::TransformPass,
 
+    // --- Isolation (session state) ---
+    /// When `Some(id)`, the render walk descends only into nodes on the
+    /// path between the root and `id` (ancestors + self + descendants).
+    /// Off-path subtrees are skipped entirely without touching their
+    /// `visible` document state — eye icons stay independent.
+    ///
+    /// Mirrored from `engine.isolated_node` via `set_isolated_node`. The
+    /// per-host `isolated` uniform (sample mask as grayscale) is driven
+    /// off the same field by `sync_compositor_layers`.
+    isolated_node: Option<LayerId>,
+
     // --- Selection (global) ---
     /// GPU realisation of the document's selection modifier — ping-pong R8
     /// textures + brush/paint bind groups. `None` until the engine allocates
@@ -588,6 +599,7 @@ impl Compositor {
             padded_height: padded_h,
             veil_chain,
             transform_pass,
+            isolated_node: None,
             selection_state: None,
             content_bounds,
             tool_overlay,
@@ -781,6 +793,50 @@ impl Compositor {
             let val = isolated as u32;
             queue.write_buffer(&pms.uniform_buf, 0, bytemuck::bytes_of(&val));
         }
+    }
+
+    /// Set the session-level isolation target. The render walk filters off-
+    /// path subtrees on the next composite. Pass `None` to clear isolation.
+    /// Engine state (`engine.isolated_node`) is the originator; this mirror
+    /// drives the renderer.
+    pub fn set_isolated_node(&mut self, id: Option<LayerId>) {
+        self.isolated_node = id;
+        self.mark_dirty();
+    }
+
+    /// True if the renderer should descend into / render `id` under the
+    /// current isolation target. When no target is set, every id qualifies.
+    /// Otherwise the path is `ancestors(target) ∪ {target} ∪ descendants(target)` —
+    /// ancestors so the walk reaches the target, descendants so an isolated
+    /// group renders its contents. Modifiers naturally fall in via their
+    /// host (which is the modifier's `parent_of`); they have no children, so
+    /// isolating a modifier limits the visible canvas to the host plus the
+    /// modifier itself, which the host's blend pass then renders as
+    /// grayscale via `sync_compositor_layers` setting `isolated=true`.
+    fn is_in_isolation_path(&self, doc: &Document, id: LayerId) -> bool {
+        let Some(target) = self.isolated_node else {
+            return true;
+        };
+        if id == target {
+            return true;
+        }
+        // Is `id` an ancestor of the target?
+        let mut cur = doc.parent_of(target);
+        while let Some(p) = cur {
+            if p == id {
+                return true;
+            }
+            cur = doc.parent_of(p);
+        }
+        // Is `id` a descendant of the target?
+        let mut cur = doc.parent_of(id);
+        while let Some(p) = cur {
+            if p == target {
+                return true;
+            }
+            cur = doc.parent_of(p);
+        }
+        false
     }
 
     /// Mark that recompositing is needed.
@@ -1631,6 +1687,13 @@ impl Compositor {
                 None => continue,
             };
             if !node.visible() {
+                continue;
+            }
+            // Isolation filter: skip children whose subtree doesn't touch
+            // the isolation target. `node.visible()` and isolation are
+            // orthogonal — the document's eye state is never inspected
+            // beyond this `visible()` check, and isolation never mutates it.
+            if !self.is_in_isolation_path(doc, child_id) {
                 continue;
             }
             match node {

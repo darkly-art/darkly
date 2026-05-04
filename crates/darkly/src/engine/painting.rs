@@ -481,7 +481,7 @@ impl DarklyEngine {
         }
 
         // Doc first — the layer's `PixelBuffer` is the source of truth.
-        let isolated = self.isolated_node == Some(layer_id);
+        let isolated = self.host_renders_isolated(layer_id);
         let (opacity, blend_mode) = match self.doc.layer_mut(layer_id) {
             Some(crate::layer::Layer::Raster(r)) => {
                 r.pixels.bounds = new_extent;

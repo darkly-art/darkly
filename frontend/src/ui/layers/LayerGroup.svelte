@@ -1,6 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import { getNodeThumbnail, THUMB_SIZE } from './thumbnails';
+    import { dispatchClick } from '../../actions/triggers';
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
 
@@ -41,8 +42,23 @@
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
+    // See LayerItem's note: a sub-region click that stops propagation still
+    // gets a chance to fire bindings scoped to the enclosing `layerItem`
+    // site, so alt+click anywhere on the row triggers isolation regardless
+    // of which preset is active.
+    function dispatchSiteOrLayer(site: string, e: MouseEvent): boolean {
+        return (
+            dispatchClick(site, e, { layerId: group.id })
+            || dispatchClick('layerItem', e, { layerId: group.id })
+        );
+    }
+
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
+        if (dispatchSiteOrLayer('layerEye', e)) {
+            onupdate();
+            return;
+        }
         if (app.handle) {
             app.handle.set_layer_visible(group.id, !group.visible);
             onupdate();
@@ -57,7 +73,13 @@
         }
     }
 
-    function setActive() {
+    function onLayerClick(e: MouseEvent) {
+        // Mirror LayerItem: alt+click → isolate (Krita-style). Bound via
+        // the `layerItem` site so a single binding covers leaf layers and
+        // groups uniformly.
+        if (dispatchClick('layerItem', e, { layerId: group.id })) {
+            return;
+        }
         app.selectLayer(group.id);
     }
 
@@ -76,6 +98,10 @@
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
+        if (dispatchSiteOrLayer('maskThumb', e)) {
+            onupdate();
+            return;
+        }
         if (maskModifier === null) return;
         // Activating the mask = setting the active node id to the modifier's
         // id. There is no separate "edit mask" redirect.
@@ -173,9 +199,9 @@
         class:drop-above={dropPos === 'above'}
         class:drop-below={dropPos === 'below'}
         class:drop-into={dropPos === 'into'}
-        onclick={setActive}
+        onclick={onLayerClick}
         ondblclick={startRename}
-        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActive(); }}}
+        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); app.selectLayer(group.id); }}}
         role="button"
         tabindex="0"
         draggable="true"

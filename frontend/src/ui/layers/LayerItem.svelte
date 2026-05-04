@@ -46,9 +46,24 @@
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
+    // Sub-region click handlers stop propagation so the layer-item div's
+    // own onclick doesn't fire, but a binding scoped to the enclosing
+    // `layerItem` site (eg. `isolateLayer`'s default `layerItem:alt+click`)
+    // should still apply when clicking on a sub-region with no specific
+    // binding. We dispatch site-first, then fall through to `layerItem`
+    // before running each region's component default. This means alt+click
+    // anywhere on the layer item triggers isolation regardless of which
+    // preset is active.
+    function dispatchSiteOrLayer(site: string, e: MouseEvent): boolean {
+        return (
+            dispatchClick(site, e, { layerId: layer.id })
+            || dispatchClick('layerItem', e, { layerId: layer.id })
+        );
+    }
+
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchClick('layerEye', e, { layerId: layer.id })) {
+        if (dispatchSiteOrLayer('layerEye', e)) {
             onupdate();
             return;
         }
@@ -56,18 +71,25 @@
         onupdate();
     }
 
-    function setActive() {
+    function onLayerClick(e: MouseEvent) {
+        if (dispatchClick('layerItem', e, { layerId: layer.id })) {
+            return;
+        }
         app.selectLayer(layer.id);
     }
 
     function clickLayerThumb(e: MouseEvent) {
         e.stopPropagation();
+        if (dispatchSiteOrLayer('layerThumb', e)) {
+            onupdate();
+            return;
+        }
         app.selectLayer(layer.id);
     }
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchClick('maskThumb', e, { layerId: layer.id })) {
+        if (dispatchSiteOrLayer('maskThumb', e)) {
             onupdate();
             return;
         }
@@ -184,9 +206,9 @@
     class:active={isActive}
     class:drop-above={dropPos === 'above'}
     class:drop-below={dropPos === 'below'}
-    onclick={setActive}
+    onclick={onLayerClick}
     ondblclick={startRename}
-    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActive(); }}}
+    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); app.selectLayer(layer.id); }}}
     role="button"
     tabindex="0"
     draggable={draggable ? 'true' : 'false'}

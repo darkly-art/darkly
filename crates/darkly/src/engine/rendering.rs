@@ -529,6 +529,18 @@ impl DarklyEngine {
 
     pub(crate) fn sync_compositor_layers(&mut self) {
         let isolated = self.isolated_node;
+        // The host's `isolated` uniform = "render my mask as grayscale on
+        // canvas". That's what mask isolation means: the canvas becomes the
+        // mask. When the target IS the host (raster/group itself), the host
+        // renders normally — the isolation filter elsewhere already hides
+        // its siblings. So this flag only fires when the target is a
+        // modifier whose host is this node.
+        let isolated_host = |node_id: LayerId| -> bool {
+            match isolated {
+                Some(t) => self.doc.modifiers_of(node_id).contains(&t),
+                None => false,
+            }
+        };
 
         // --- Raster layers: ensure the GPU texture + uniforms ---
         struct RasterInfo {
@@ -546,7 +558,7 @@ impl DarklyEngine {
                 id: r.id,
                 opacity: r.blend.opacity,
                 blend_mode: r.blend.blend_mode,
-                isolated: isolated == Some(r.id),
+                isolated: isolated_host(r.id),
                 bounds: r.pixels.bounds,
             })
             .collect();
@@ -607,24 +619,32 @@ impl DarklyEngine {
                 .ensure_passthrough_mask_state(&self.gpu.device, info.host_id);
         }
 
-        // --- Non-passthrough groups: ensure group state + uniforms ---
-        let groups: Vec<(LayerId, f32, BlendMode, bool)> = self
+        // --- Groups: ensure state + uniforms ---
+        // Non-passthrough groups need the full group_state + blend uniforms.
+        // Passthrough groups may still own a `passthrough_mask_state` whose
+        // `isolated` lerp uniform must track the engine's isolation target,
+        // so we update them through the same path — `update_group_uniforms`
+        // skips the group_state branch when none exists and writes only the
+        // pms uniform.
+        let groups: Vec<(LayerId, bool, f32, BlendMode, bool)> = self
             .doc
             .all_groups()
             .iter()
-            .filter(|g| !g.passthrough)
             .map(|g| {
                 (
                     g.id,
+                    g.passthrough,
                     g.blend.opacity,
                     g.blend.blend_mode,
-                    isolated == Some(g.id),
+                    isolated_host(g.id),
                 )
             })
             .collect();
-        for (id, opacity, blend_mode, isolated_flag) in groups {
-            self.compositor
-                .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
+        for (id, passthrough, opacity, blend_mode, isolated_flag) in groups {
+            if !passthrough {
+                self.compositor
+                    .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
+            }
             self.compositor.update_group_uniforms(
                 &self.gpu.queue,
                 id,

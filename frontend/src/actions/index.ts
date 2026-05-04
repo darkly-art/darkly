@@ -32,6 +32,7 @@ export function registerActions() {
     // -- Binding sites --
     sites.register({ name: 'keyboard',     provides: ['layerId'] });
     sites.register({ name: 'layerEye',     provides: ['layerId'] });
+    sites.register({ name: 'layerItem',    provides: ['layerId'] });
     sites.register({ name: 'layerThumb',   provides: ['layerId'] });
     sites.register({ name: 'maskThumb',    provides: ['layerId', 'maskIndex'] });
     sites.register({ name: 'canvas',       provides: ['x', 'y'] });
@@ -291,29 +292,14 @@ export function registerActions() {
         id: 'isolateLayer',
         displayName: 'Isolate Layer',
         category: 'layers',
-        description: 'Solo this layer, hiding all others. Press again to restore.',
+        description: 'Solo this layer (raster, group, or mask) by skipping off-path siblings in the compositor. Press again to restore. Pure session state — eye-icon visibility is preserved across toggles.',
         accepts: ['layerId'],
         defaultHotkey: 'KeyI',
+        defaultMouseClick: 'layerItem:alt+click',
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.handle) return;
-            toggleIsolation(layerId, false);
-        },
-    });
-
-    actions.register({
-        id: 'isolateMask',
-        displayName: 'Isolate Mask',
-        category: 'layers',
-        description: 'Solo this layer and show its mask as grayscale. Press again to restore.',
-        accepts: ['layerId'],
-        // No default keyboard or mouse trigger — Photoshop's preset turns on
-        // the alt+click default on `maskThumb`. Krita-style users have no
-        // mouse trigger by default.
-        handler: (ctx) => {
-            const layerId = ctx.layerId ?? app.activeLayerId;
-            if (layerId == null || !app.handle) return;
-            toggleIsolation(layerId, true);
+            toggleIsolation(layerId);
         },
     });
 
@@ -331,91 +317,20 @@ export function registerActions() {
     registerBrushParamActions();
 }
 
-// -- Layer isolation state --
+// -- Layer isolation --
+//
+// Isolation is pure session state — the engine's `isolated_node` is the
+// single source of truth. We never touch `set_layer_visible` here, so eye
+// icons stay independent: a user can toggle visibility on hidden siblings
+// while soloed and those changes persist after un-solo.
 
-interface IsolationSnapshot {
-    visibility: Map<number, boolean>;
-    /** Previous `isolated_node` value, restored on toggle-off. */
-    prevIsolatedId: number | null;
-}
-
-let isolationState: IsolationSnapshot | null = null;
-
-function findMaskModifierId(layer: any): number | null {
-    const mods = layer?.modifiers;
-    if (!Array.isArray(mods)) return null;
-    const mask = mods.find((m: any) => m.kind === 'mask');
-    return mask ? mask.id : null;
-}
-
-/** @param showMask - force mask view (isolateMask action or keyboard isolate while editing mask) */
-function toggleIsolation(targetId: number, showMask: boolean) {
+function toggleIsolation(targetId: number) {
     const handle = app.handle;
     if (!handle) return;
-
-    if (isolationState !== null) {
-        // Restore previous visibility
-        for (const [id, wasVisible] of isolationState.visibility) {
-            handle.set_layer_visible(id, wasVisible);
-        }
-        // Restore previous isolation flag.
-        const prev = isolationState.prevIsolatedId ?? 0;
-        handle.set_isolated_node(prev);
-        app.isolatedNodeId = prev === 0 ? null : prev;
-        isolationState = null;
-    } else {
-        // Save current visibility, then solo the target.
-        // The target + its ancestor groups must stay visible for it to render.
-        const ancestorIds = findAncestorIds(app.layerTree, targetId) ?? [];
-        const keepVisible = new Set([targetId, ...ancestorIds]);
-        const allLayers = collectLayers(app.layerTree);
-        const visibility = new Map<number, boolean>();
-        for (const layer of allLayers) {
-            visibility.set(layer.id, layer.visible);
-            handle.set_layer_visible(layer.id, keepVisible.has(layer.id));
-        }
-
-        const prevIsolatedId = app.isolatedNodeId;
-
-        // Isolate the mask modifier (grayscale render) when explicitly asked
-        // for the mask view, or when the active node is itself a mask.
-        const layer = findLayer(app.layerTree, targetId);
-        const maskId = findMaskModifierId(layer);
-        const activeIsMask = maskId !== null && app.activeLayerId === maskId;
-        if ((showMask || activeIsMask) && maskId !== null) {
-            handle.set_isolated_node(maskId);
-            app.isolatedNodeId = maskId;
-        }
-
-        isolationState = { visibility, prevIsolatedId };
-    }
-    app.refreshLayerTree();
+    const next = app.isolatedNodeId === targetId ? 0 : targetId;
+    handle.set_isolated_node(next);
+    app.isolatedNodeId = next === 0 ? null : next;
     app.requestFrame();
-}
-
-/** Find the chain of ancestor group IDs for a given layer.
- *  Returns null if the target is not found in this subtree. */
-function findAncestorIds(tree: any[], targetId: number): number[] | null {
-    for (const node of tree) {
-        if (node.id === targetId) return [];
-        if (node.children) {
-            const found = findAncestorIds(node.children, targetId);
-            if (found !== null) return [node.id, ...found];
-        }
-    }
-    return null;
-}
-
-/** Flatten the layer tree into a list of { id, visible } records. */
-function collectLayers(tree: any[]): { id: number; visible: boolean }[] {
-    const result: { id: number; visible: boolean }[] = [];
-    for (const node of tree) {
-        result.push({ id: node.id, visible: node.visible });
-        if (node.children) {
-            result.push(...collectLayers(node.children));
-        }
-    }
-    return result;
 }
 
 /** Find a layer by id in the tree (recursive search). */
