@@ -11,9 +11,6 @@
 </script>
 
 <div class="bottom-area">
-    {#if Panel}
-        <Panel />
-    {/if}
     <div class="tool-options">
         {#if Options}
             <Options />
@@ -22,6 +19,9 @@
             <div class="spacer"></div>
         {/if}
     </div>
+    {#if Panel}
+        <Panel />
+    {/if}
 </div>
 
 <style>

@@ -171,18 +171,6 @@
 <svelte:window on:keydown={onKeydown} />
 
 <div class="brush-builder" class:fullscreen>
-    <div class="builder-toolbar">
-        <span class="builder-title">Brush Builder</span>
-        <button
-            class="add-node-btn"
-            onclick={openMenuFromButton}
-            title="Add node (Shift+A)"
-        >+ Add Node</button>
-        <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
-        <button class="toolbar-btn" onclick={handleAutoLayout} title="Auto-layout nodes">Layout</button>
-        <div class="spacer"></div>
-    </div>
-
     <div class="canvas-wrapper">
         <NodeCanvas onaddrequest={openMenuAtCursor} />
         <div class="preview-dock">
@@ -226,6 +214,18 @@
             <i class={fullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand'}></i>
         </button>
     </div>
+
+    <div class="builder-toolbar">
+        <span class="builder-title">Brush Builder</span>
+        <button
+            class="add-node-btn"
+            onclick={openMenuFromButton}
+            title="Add node (Shift+A)"
+        >+ Add Node</button>
+        <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
+        <button class="toolbar-btn" onclick={handleAutoLayout} title="Auto-layout nodes">Layout</button>
+        <div class="spacer"></div>
+    </div>
 </div>
 
 <AddNodeMenu
@@ -250,7 +250,7 @@
         gap: 6px;
         padding: 4px 8px;
         background: var(--bg);
-        border-bottom: 1px solid var(--bg-hover);
+        border-top: 1px solid var(--bg-hover);
         min-height: 28px;
     }
     .builder-title {
