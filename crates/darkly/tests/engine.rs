@@ -2788,6 +2788,54 @@ fn isolation_does_not_mutate_layer_visibility() {
     );
 }
 
+/// Regression: the present shader used to do `vec4f(color.rgb, 1.0)`,
+/// discarding the (premultiplied) alpha channel. With nothing opaque
+/// underneath — the canonical case is an isolated layer, where the root
+/// accumulator clears to fully transparent and the off-path subtrees are
+/// skipped — that turned partial-alpha pixels into darkened-opaque pixels
+/// (a 50% red `[0.5, 0, 0, 0.5]` displayed as dark red `[0.5, 0, 0, 1]`)
+/// and fully transparent pixels into solid black. The fix composites the
+/// premultiplied source over a screen-space checker in the present shader,
+/// so any transparency in the final composite reads as transparency.
+///
+/// This test isolates an empty raster layer (everything off-path is skipped,
+/// the layer itself contributes zero alpha) and asserts the present output
+/// is the checker pattern, not solid black.
+#[test]
+fn isolated_transparency_presents_as_checker_not_black() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Off-path opaque content — must not leak through isolation.
+    let bg = engine.add_raster_layer();
+    fill_layer(&mut engine, bg, 255, 0, 0);
+    // Empty raster — when isolated, the canvas resolves to fully transparent.
+    let empty = engine.add_raster_layer();
+
+    engine.set_isolated_node(Some(empty));
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_present();
+
+    // Checker is screen-space, 8px tiles, gray values 0.4 (102) and 0.6 (153).
+    // With identity view transform, screen pixel (0, 0) lands in cell (0, 0)
+    // → parity 0 → gray 0.4 → 102. Pixel (8, 0) → cell (1, 0) → parity 1 →
+    // gray 0.6 → 153. Pre-fix, both pixels would be (0, 0, 0, 255).
+    let cell_a = rgba_at(&pixels, cw, 0, 0);
+    let cell_b = rgba_at(&pixels, cw, 8, 0);
+    assert_eq!(
+        cell_a,
+        [102, 102, 102, 255],
+        "isolated-empty canvas pixel (0, 0) must show the darker checker tile"
+    );
+    assert_eq!(
+        cell_b,
+        [153, 153, 153, 255],
+        "isolated-empty canvas pixel (8, 0) must show the lighter checker tile"
+    );
+}
+
 /// Repeated identity transforms on a mask must leave the mask byte-for-byte
 /// unchanged. Regression for the `transform_commit.wgsl` R8 branch that
 /// computed `dot(rgb, luminance_coeffs)`: an R8 texture sampled into vec4

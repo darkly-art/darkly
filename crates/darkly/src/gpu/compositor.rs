@@ -1720,6 +1720,78 @@ impl Compositor {
         true
     }
 
+    /// Run the present pass into a canvas-sized offscreen RGBA8 texture and
+    /// return its bytes. For tests: the production present pass writes to the
+    /// surface (un-readable), but the present shader is exactly where bugs
+    /// like premultiplied-alpha mishandling live, so test coverage of that
+    /// stage requires a parallel sink.
+    ///
+    /// Forces an identity 1:1 view transform so screen pixels map to canvas
+    /// pixels and the OOB branch is inactive across the whole target.
+    pub fn test_present_to_canvas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        doc: &mut Document,
+    ) -> Vec<u8> {
+        self.render_offscreen(device, queue, doc);
+
+        let cw = self.canvas_width;
+        let ch = self.canvas_height;
+        let identity = ViewTransform::from_pan_zoom_rotate(
+            0.0, 0.0, 1.0, 0.0, cw as f32, ch as f32, cw as f32, ch as f32,
+        );
+        self.update_view_transform(queue, &identity);
+
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("test-present-target"),
+            size: wgpu::Extent3d {
+                width: cw,
+                height: ch,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("test-present"),
+        });
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("test-present-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &target_view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            rpass.set_pipeline(&self.present_to_veil_pipeline);
+            rpass.set_bind_group(0, &self.present_cache_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+        queue.submit(std::iter::once(encoder.finish()));
+
+        crate::gpu::test_utils::readback_texture(
+            device,
+            queue,
+            &target,
+            wgpu::TextureFormat::Rgba8Unorm,
+            cw,
+            ch,
+        )
+    }
+
     /// Create a dynamic blend bind group for compositing a layer into a group.
     fn create_blend_bind_group(
         &self,

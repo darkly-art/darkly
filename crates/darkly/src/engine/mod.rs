@@ -565,6 +565,17 @@ impl DarklyEngine {
         )
     }
 
+    /// Blocking readback of the present pass output (composite cache run
+    /// through the present shader into a canvas-sized RGBA8 target). For test
+    /// assertions about the present stage itself — premultiplied-alpha
+    /// handling, the transparency checker, OOB workspace background, etc. —
+    /// which `test_readback_canvas` cannot cover because it reads the
+    /// pre-present composite cache.
+    pub fn test_readback_present(&mut self) -> Vec<u8> {
+        self.compositor
+            .test_present_to_canvas(&self.gpu.device, &self.gpu.queue, &mut self.doc)
+    }
+
     /// Blocking readback of a mask modifier's R8 texture. For test assertions
     /// only. Resolves the mask modifier on the host and reads its texture
     /// from the unified node-texture pool. Returns one byte per pixel.
