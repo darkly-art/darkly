@@ -191,9 +191,8 @@
         class:drop-into={dropPos === 'into'}
         onclick={onLayerClick}
         ondblclick={startRename}
-        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); app.selectLayer(group.id); }}}
         role="button"
-        tabindex="0"
+        tabindex="-1"
         draggable="true"
         ondragstart={onDragStart}
         ondragover={onDragOver}
@@ -256,7 +255,7 @@
         <button onclick={toggleShowMask}>
             {isMaskIsolated ? 'Hide mask' : 'Show mask'}
         </button>
-        <button onclick={removeMask}>Remove mask</button>
+        <button onclick={removeMask}>Delete mask</button>
     </div>
 {/if}
 
@@ -283,6 +282,12 @@
         min-height: 28px;
         position: relative;
         transition: background 0.1s;
+        user-select: none;
+    }
+
+    .group-header:focus,
+    .group-header:focus-visible {
+        outline: none;
     }
 
     .group-header:hover {

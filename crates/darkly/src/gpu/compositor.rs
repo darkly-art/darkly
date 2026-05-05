@@ -567,11 +567,7 @@ impl Compositor {
 
         let tool_overlay = ToolOverlay::new(device, queue, surface_format);
 
-        let transform_pass = crate::gpu::transform::TransformPass::new(
-            device,
-            accum_format,
-            &blend_pipelines.mask_bind_group_layout,
-        );
+        let transform_pass = crate::gpu::transform::TransformPass::new(device);
         let content_bounds = ContentBoundsPass::new(device);
 
         Compositor {
@@ -1307,52 +1303,115 @@ impl Compositor {
     }
 
     // --- Floating Content (Transform) ---
+    //
+    // The floating preview is a *derived view* of the target node's texture:
+    // when a transform is active, the compositor maintains a per-target
+    // preview texture rebuilt on every matrix update, holding "what the
+    // target would look like if commit ran right now". The render walk's
+    // `effective_node_view` and `effective_mask_bind_group` accessors swap
+    // the live view / mask bind group for the preview equivalents when the
+    // floating target is encountered, so the host's normal blend pass
+    // renders the preview without any extra render pass — and isolation,
+    // grouping, and other branch-free render concerns compose with it
+    // automatically.
+    //
+    // The compositor exposes primitives (set/clear floating content, update
+    // uniforms + preview, commit to live target). The engine drives them
+    // by calling `update_floating_preview` after each matrix change and on
+    // setup_transform.
 
-    /// Set up floating content for GPU preview. Uploads flat RGBA pixel data
-    /// as a texture and creates bind groups for compositing.
+    /// Allocate the per-target preview texture (and, when target is R8, a
+    /// mask-shape bind group sampling it). Sized and formatted to match
+    /// the live target so a `copy_texture_to_texture` is well-formed each
+    /// time the preview rebuilds.
+    fn allocate_preview_resources(
+        &self,
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        width: u32,
+        height: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView, Option<wgpu::BindGroup>) {
+        let preview = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("floating-preview"),
+            size: wgpu::Extent3d {
+                width: width.max(1),
+                height: height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            // COPY_SRC needed because `render_commit` runs
+            // `copy_for_compositing` against the render target before its
+            // shader pass — when the target is the preview texture, that
+            // copy reads from preview.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = preview.create_view(&wgpu::TextureViewDescriptor::default());
+        let mask_bg = if format == wgpu::TextureFormat::R8Unorm {
+            Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("floating-preview-mask-bg"),
+                layout: &self.blend_pipelines.mask_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                }],
+            }))
+        } else {
+            None
+        };
+        (preview, view, mask_bg)
+    }
+
+    /// Look up the target's format + dimensions. Falls back to canvas-sized
+    /// RGBA8 when the node texture hasn't been allocated yet (paste-as-
+    /// floating creates the layer before its texture).
+    fn target_format_and_dims(&self, target_layer: LayerId) -> (wgpu::TextureFormat, u32, u32) {
+        match self.node_textures.get(&target_layer) {
+            Some(t) => (t.format, t.width, t.height),
+            None => (
+                wgpu::TextureFormat::Rgba8Unorm,
+                self.canvas_width,
+                self.canvas_height,
+            ),
+        }
+    }
+
+    /// Set up floating content for GPU preview from straight-alpha RGBA
+    /// pixel data (used by the paste paths). The target's preview texture
+    /// is allocated alongside.
     pub fn set_floating_content(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         rgba_data: &[u8],
-        source_origin: (i32, i32),
+        _source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
         target_layer: LayerId,
     ) {
-        let (layer_offset, layer_size) = self.target_layer_bounds(target_layer);
-        let root = self
-            .group_state
-            .get(&self.root_id)
-            .expect("root GroupState missing");
+        let (target_format, tw, th) = self.target_format_and_dims(target_layer);
+        let (preview_texture, preview_view, preview_mask_bg) =
+            self.allocate_preview_resources(device, target_format, tw, th);
         self.transform_pass.set_floating_content(
             device,
             queue,
             &self.sampler,
-            &root.accum.views,
-            &root.composite_cache_view,
             rgba_data,
-            source_origin,
             source_width,
             source_height,
-            self.padded_width,
-            self.padded_height,
-            layer_offset,
-            layer_size,
             target_layer,
+            target_format,
+            preview_texture,
+            preview_view,
+            preview_mask_bg,
         );
         self.mark_dirty();
-    }
-
-    /// Look up the target node's canvas-space offset and texture dimensions.
-    /// Used to pin the floating preview shader's mask UV mapping to the
-    /// target's bounds. Falls back to (0,0) / canvas-size if the node texture
-    /// isn't found, which keeps the preview sane during edge cases.
-    fn target_layer_bounds(&self, target_layer: LayerId) -> ((i32, i32), (u32, u32)) {
-        match self.node_textures.get(&target_layer) {
-            Some(t) => ((t.offset_x, t.offset_y), (t.width, t.height)),
-            None => ((0, 0), (self.canvas_width, self.canvas_height)),
-        }
     }
 
     /// Set floating content by copying directly from a node's GPU texture.
@@ -1373,65 +1432,147 @@ impl Compositor {
             None => return,
         };
         let target_format = layer.format;
-        let root = self
-            .group_state
-            .get(&self.root_id)
-            .expect("root GroupState missing");
+        let target_w = layer.width;
+        let target_h = layer.height;
+        let (preview_texture, preview_view, preview_mask_bg) =
+            self.allocate_preview_resources(device, target_format, target_w, target_h);
+        // Re-borrow `layer` after `allocate_preview_resources` — the helper
+        // doesn't take `&mut self`, but rust-analyzer prefers the explicit
+        // re-fetch over keeping the borrow live across the helper call.
+        let layer = self
+            .node_textures
+            .get(&target_layer)
+            .expect("layer present after preview allocation");
         self.transform_pass.set_floating_content_from_gpu(
             device,
             queue,
             encoder,
             &self.sampler,
-            &root.accum.views,
-            &root.composite_cache_view,
             layer,
             source_origin,
             source_width,
             source_height,
-            self.padded_width,
-            self.padded_height,
             target_layer,
             target_format,
+            preview_texture,
+            preview_view,
+            preview_mask_bg,
         );
         self.mark_dirty();
     }
 
-    /// Public read of the target node's bounds. Used by the engine wrapper
-    /// for `update_floating_matrix` so the preview's mask UV stays correct
-    /// per frame in case the node is resized mid-transform.
-    pub fn floating_target_bounds(&self) -> Option<((i32, i32), (u32, u32))> {
-        let active = self.transform_pass.active.as_ref()?;
-        Some(self.target_layer_bounds(active.target_layer))
-    }
-
-    /// Update the floating content's affine transform matrix for real-time preview.
-    pub fn update_floating_matrix(
-        &mut self,
+    /// Update the floating preview: write the current matrix uniforms, copy
+    /// live target → preview texture, apply the engine-side `clear_shape`
+    /// (None for paste mode, `Some` for transform mode), then run the
+    /// commit shader into the preview. The resulting preview texture is
+    /// what the host's blend pass reads through `effective_node_view` /
+    /// `effective_mask_bind_group` for the rest of the frame.
+    ///
+    /// Called by the engine on `setup_transform` (initial preview) and
+    /// `update_floating_matrix` (per drag tick).
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_floating_preview(
+        &self,
+        device: &wgpu::Device,
         queue: &wgpu::Queue,
+        paint_pipelines: &crate::gpu::paint_target::PaintPipelines,
         matrix: &crate::gpu::transform::Affine2D,
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
+        clear_shape: Option<&crate::gpu::transform::ClearShape>,
     ) {
-        let (layer_offset, layer_size) = self
-            .floating_target_bounds()
-            .unwrap_or(((0, 0), (self.canvas_width, self.canvas_height)));
-        self.transform_pass.update_matrix(
+        let Some(state) = self.transform_pass.active.as_ref() else {
+            return;
+        };
+        let live = match self.node_textures.get(&state.target_layer) {
+            Some(t) => t,
+            None => return,
+        };
+
+        self.transform_pass.update_uniforms(
             queue,
             matrix,
             source_origin,
             source_width,
             source_height,
-            self.padded_width,
-            self.padded_height,
-            layer_offset,
-            layer_size,
+            (live.offset_x, live.offset_y),
+            live.width,
+            live.height,
+            self.canvas_width,
+            self.canvas_height,
         );
-        self.mark_dirty();
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("floating-preview-build"),
+        });
+
+        // 1. Copy live → preview so non-source-rect pixels are preserved.
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &live.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &state.preview_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: live.width,
+                height: live.height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        // 2. Apply the source-rect clear (transform mode only — paste mode
+        //    leaves the preview as a copy of the live target so the commit
+        //    shader composites over the existing pixels).
+        if let Some(cs) = clear_shape {
+            let preview_target = crate::gpu::paint_target::GpuPaintTarget {
+                texture: &state.preview_texture,
+                view: &state.preview_view,
+                format: state.target_format,
+                width: live.width,
+                height: live.height,
+                offset_x: live.offset_x,
+                offset_y: live.offset_y,
+                canvas_width: self.canvas_width,
+                canvas_height: self.canvas_height,
+            };
+            match cs {
+                crate::gpu::transform::ClearShape::Rect(rect) => {
+                    let canvas_rect = [rect.x0(), rect.y0(), rect.width as i32, rect.height as i32];
+                    preview_target.clear_rect(&mut encoder, paint_pipelines, queue, canvas_rect);
+                }
+                crate::gpu::transform::ClearShape::Selection { mask_bind_group } => {
+                    preview_target.erase_with_selection(
+                        &mut encoder,
+                        paint_pipelines,
+                        queue,
+                        mask_bind_group,
+                    );
+                }
+            }
+        }
+
+        // 3. Run the commit shader into the preview at the current matrix.
+        self.transform_pass.render_commit(
+            device,
+            &mut encoder,
+            &state.preview_texture,
+            &state.preview_view,
+        );
+
+        queue.submit(std::iter::once(encoder.finish()));
     }
 
-    /// Render the transform directly onto the target layer/mask texture.
-    /// Used by commit_floating() to replace CPU-side rasterize_to_tiles().
+    /// Render the transform directly into the live target texture.
+    /// Used by `commit_floating()` after the engine has applied the
+    /// `clear_shape` to the live target.
     pub fn commit_floating_to_texture(
         &mut self,
         device: &wgpu::Device,
@@ -1442,42 +1583,60 @@ impl Compositor {
         source_width: u32,
         source_height: u32,
     ) {
-        let layer_id = match &self.transform_pass.active {
-            Some(s) => s.target_layer,
+        let Some(state) = self.transform_pass.active.as_ref() else {
+            return;
+        };
+        let live = match self.node_textures.get(&state.target_layer) {
+            Some(t) => t,
             None => return,
         };
 
-        let (texture, view, format, target_w, target_h, target_off_x, target_off_y) =
-            match self.node_textures.get(&layer_id) {
-                Some(t) => (
-                    &t.texture, &t.view, t.format, t.width, t.height, t.offset_x, t.offset_y,
-                ),
-                None => return,
-            };
-
-        self.transform_pass.commit_to_texture(
-            device,
-            encoder,
+        self.transform_pass.update_uniforms(
             queue,
-            texture,
-            view,
-            format,
             matrix,
             source_origin,
             source_width,
             source_height,
-            (target_off_x, target_off_y),
-            target_w,
-            target_h,
+            (live.offset_x, live.offset_y),
+            live.width,
+            live.height,
             self.canvas_width,
             self.canvas_height,
         );
+
+        self.transform_pass
+            .render_commit(device, encoder, &live.texture, &live.view);
     }
 
     /// Remove floating content GPU state.
     pub fn clear_floating_content(&mut self) {
         self.transform_pass.clear();
         self.mark_dirty();
+    }
+
+    /// Effective mask bind group for a host raster/group during compositing
+    /// — substitutes the preview-mask bind group when one of the host's
+    /// modifiers is the floating target. Fall-through resolves the live
+    /// mask through the existing `mask_bind_group` lookup.
+    pub(crate) fn effective_mask_bind_group(
+        &self,
+        doc: &Document,
+        host_id: LayerId,
+    ) -> &wgpu::BindGroup {
+        let live_or_default = doc
+            .mask_modifier(host_id)
+            .filter(|m| m.common.visible)
+            .map(|m| self.mask_bind_group(m.id))
+            .unwrap_or(&self.default_mask_bind_group);
+
+        if let Some(state) = self.transform_pass.active.as_ref() {
+            if doc.parent_of(state.target_layer) == Some(host_id) {
+                if let Some(bg) = state.preview_mask_bind_group.as_ref() {
+                    return bg;
+                }
+            }
+        }
+        live_or_default
     }
 
     /// Get a reference to the transform source texture and its view.
@@ -1698,9 +1857,23 @@ impl Compositor {
             }
             match node {
                 LayerNode::Layer(Layer::Raster(raster)) => {
-                    let layer_view = match self.node_textures.get(&raster.id) {
-                        Some(t) => &t.view,
-                        None => continue,
+                    // Effective view: live texture by default, preview view
+                    // when this raster is the floating target. Inlined here
+                    // (rather than via `effective_node_view`) so the borrow
+                    // checker sees disjoint sub-field access — `group_state`
+                    // is mut-borrowed below for the ping-pong increment.
+                    let preview_override = self
+                        .transform_pass
+                        .active
+                        .as_ref()
+                        .filter(|s| s.target_layer == raster.id)
+                        .map(|s| &s.preview_view);
+                    let layer_view = match preview_override {
+                        Some(v) => v,
+                        None => match self.node_textures.get(&raster.id) {
+                            Some(t) => &t.view,
+                            None => continue,
+                        },
                     };
                     let uniform_buf_ptr = match self.raster_cache.get(&raster.id) {
                         Some(c) => &c.uniform_buf,
@@ -1723,14 +1896,10 @@ impl Compositor {
 
                     {
                         let gs = &self.group_state[&parent_group];
-                        // Resolve mask via `doc.mask_modifier`. The structural
-                        // detection lives here — the outer compositor never
-                        // branches on a node's kind.
-                        let mask_bg = doc
-                            .mask_modifier(raster.id)
-                            .filter(|m| m.common.visible)
-                            .map(|m| self.mask_bind_group(m.id))
-                            .unwrap_or(&self.default_mask_bind_group);
+                        // Effective mask bind group: live mask by default,
+                        // preview-mask bind group when one of this raster's
+                        // modifiers is the floating target.
+                        let mask_bg = self.effective_mask_bind_group(doc, raster.id);
                         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("blend-raster"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1751,64 +1920,11 @@ impl Compositor {
                         rpass.draw(0..3, 0..1);
                     }
 
-                    // Floating content pass: composite transformed source on
-                    // top of the layer we just blended.
-                    if self
-                        .transform_pass
-                        .active
-                        .as_ref()
-                        .is_some_and(|ts| ts.target_layer == raster.id)
-                    {
-                        // Advance the ping-pong index up front so the
-                        // mut-borrow of group_state ends before we acquire
-                        // the immutable mask + transform_pass borrows.
-                        let gs = self.group_state.get_mut(&parent_group).unwrap();
-                        let src = gs.current_accum;
-                        let dst = 1 - src;
-                        gs.current_accum = dst;
-
-                        let ts = self.transform_pass.active.as_ref().unwrap();
-                        // When transforming an R8 target (a mask itself) there
-                        // is no outer "mask of the mask" to apply — bind the
-                        // 1×1 white default so the preview shows the raw mask
-                        // content. Otherwise apply the target raster's mask
-                        // modifier, matching the regular blend pass. The
-                        // distinction is read off the target texture's format,
-                        // not a sidecar boolean.
-                        let target_is_r8 = self
-                            .node_textures
-                            .get(&ts.target_layer)
-                            .map(|t| t.format == wgpu::TextureFormat::R8Unorm)
-                            .unwrap_or(false);
-                        let preview_mask_bg = if target_is_r8 {
-                            &self.default_mask_bind_group
-                        } else {
-                            doc.mask_modifier(raster.id)
-                                .filter(|m| m.common.visible)
-                                .map(|m| self.mask_bind_group(m.id))
-                                .unwrap_or(&self.default_mask_bind_group)
-                        };
-
-                        let gs = &self.group_state[&parent_group];
-                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("transform-blend"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: &gs.accum.views[dst],
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            ..Default::default()
-                        });
-                        rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
-                        rpass.set_pipeline(&self.transform_pass.pipeline);
-                        rpass.set_bind_group(0, &ts.bind_groups[src], &[]);
-                        rpass.set_bind_group(1, preview_mask_bg, &[]);
-                        rpass.draw(0..3, 0..1);
-                    }
+                    // Floating preview is now baked into the host's blend
+                    // input via `effective_node_view` / `effective_mask_bind_group`
+                    // above — no separate render pass needed. The host's
+                    // regular blend renders the preview when this raster
+                    // (or its mask) is the floating target.
                 }
 
                 LayerNode::Group(g) => {
@@ -1867,11 +1983,11 @@ impl Compositor {
                         );
 
                         let gs_parent = &self.group_state[&parent_group];
-                        let child_mask_bg = doc
-                            .mask_modifier(group_id)
-                            .filter(|m| m.common.visible)
-                            .map(|m| self.mask_bind_group(m.id))
-                            .unwrap_or(&self.default_mask_bind_group);
+                        // Same effective-mask routing as the raster path —
+                        // when the floating target is one of this group's
+                        // modifiers, sample the preview-mask bind group
+                        // instead of the live one.
+                        let child_mask_bg = self.effective_mask_bind_group(doc, group_id);
                         {
                             let mut rpass =
                                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1996,11 +2112,9 @@ impl Compositor {
 
         {
             let gs = &self.group_state[&parent_group];
-            let group_mask_bg = doc
-                .mask_modifier(group_id)
-                .filter(|m| m.common.visible)
-                .map(|m| self.mask_bind_group(m.id))
-                .unwrap_or(&self.default_mask_bind_group);
+            // Effective mask: live by default, preview-mask when the
+            // floating target is this passthrough group's mask modifier.
+            let group_mask_bg = self.effective_mask_bind_group(doc, group_id);
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("mask-lerp"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

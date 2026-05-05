@@ -2788,6 +2788,67 @@ fn isolation_does_not_mutate_layer_visibility() {
     );
 }
 
+/// Repeated identity transforms on a mask must leave the mask byte-for-byte
+/// unchanged. Regression for the `transform_commit.wgsl` R8 branch that
+/// computed `dot(rgb, luminance_coeffs)`: an R8 texture sampled into vec4
+/// returns `(R, 0, 0, 1)`, so the dot multiplied every committed pixel by
+/// 0.2126 — every commit darkened the mask, repeated commits compounded.
+/// One identity round-trip is enough to catch the bug; doing five proves
+/// idempotency under composition.
+#[test]
+fn repeated_identity_transforms_on_mask_are_idempotent() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+    let host = engine.add_raster_layer();
+    fill_layer(&mut engine, host, 255, 255, 255);
+    engine.add_mask(host);
+    let mask_id = engine.host_mask_id(host).expect("host has mask");
+
+    // Mid-gray fill on the mask. Cleanly tests the multiplicative bug:
+    // each darkening pass would push 128 → 27 → 6 → ~1.
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 128,
+        g: 128,
+        b: 128,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+
+    let baseline = engine.test_readback_mask(host);
+    assert!(
+        baseline.iter().all(|&v| v == 128),
+        "fixture: mask should be mid-gray everywhere before transforming"
+    );
+
+    for cycle in 0..5 {
+        // Selection-driven transform path: synchronous, no async bounds.
+        // The selection-based path also exercises `erase_with_selection`
+        // for the source clear, which masks specifically used to break.
+        engine.select_all();
+        let started = engine.begin_transform(mask_id);
+        assert!(
+            started,
+            "begin_transform on mask must succeed (cycle {cycle})"
+        );
+        // Identity matrix — commit must be a no-op semantically.
+        engine.commit_floating();
+
+        let after = engine.test_readback_mask(host);
+        assert_eq!(
+            after,
+            baseline,
+            "identity transform on mask must preserve every pixel \
+             (cycle {cycle}); first diff at index {:?}",
+            after.iter().zip(&baseline).position(|(a, b)| a != b)
+        );
+    }
+}
+
 /// Isolating a mask modifier renders the host's mask channel as grayscale
 /// on the canvas, regardless of the host's color. This is the "show mask"
 /// workflow: the mask becomes the canvas. Skipping siblings is the same
@@ -2841,4 +2902,307 @@ fn isolating_mask_modifier_renders_grayscale() {
         "isolated-mask grayscale output is fully opaque on canvas; got alpha={}",
         px[3]
     );
+}
+
+/// Translating a mask transform commits the moved pixels to the new
+/// position and clears the source rect. Catches regressions in either
+/// the commit shader (output value) or the engine's clear/save sequence
+/// (which used to require a destructive setup-clear + un-clear dance).
+#[test]
+fn transform_translate_on_mask_moves_pixels() {
+    use darkly::gpu::transform::affine_translate;
+    let (cw, ch) = (32u32, 32u32);
+    let mut engine = test_engine(cw, ch);
+    let host = engine.add_raster_layer();
+    fill_layer(&mut engine, host, 255, 255, 255);
+    engine.add_mask(host);
+    let mask_id = engine.host_mask_id(host).expect("host has mask");
+
+    // Distinct fill so we can spot the moved pattern.
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 200,
+        g: 200,
+        b: 200,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+
+    let pre = engine.test_readback_mask(host);
+    assert_eq!(pre[0], 200, "fixture: mask is filled to value 200");
+
+    // Selection-driven path: select a small rect, then translate it.
+    let sel_x = 8;
+    let sel_y = 8;
+    let sel_w = 8;
+    let sel_h = 8;
+    engine.select_rect(
+        sel_x as f32,
+        sel_y as f32,
+        sel_w as f32,
+        sel_h as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    let started = engine.begin_transform(mask_id);
+    assert!(started, "begin_transform on mask must succeed");
+    engine.update_floating_matrix(affine_translate(12.0, 0.0));
+    engine.commit_floating();
+
+    let post = engine.test_readback_mask(host);
+
+    // New position (sel_x+12 .. sel_x+12+sel_w) should hold the moved value.
+    let new_x = sel_x + 12;
+    for dy in 0..sel_h {
+        for dx in 0..sel_w {
+            let v = post[((sel_y + dy) * cw + new_x + dx) as usize];
+            assert!(
+                v > 150,
+                "moved pixel at ({}, {}) should carry the original mask value, got {v}",
+                new_x + dx,
+                sel_y + dy,
+            );
+        }
+    }
+    // Source rect cleared to 0 by the commit-time ClearShape application.
+    for dy in 0..sel_h {
+        for dx in 0..sel_w {
+            let v = post[((sel_y + dy) * cw + sel_x + dx) as usize];
+            assert_eq!(
+                v,
+                0,
+                "source pixel at ({}, {}) should be cleared after commit, got {v}",
+                sel_x + dx,
+                sel_y + dy,
+            );
+        }
+    }
+    // Pixels outside the affected union stay at their original value.
+    let untouched = post[((cw - 1) + cw * (ch - 1)) as usize];
+    assert_eq!(
+        untouched, 200,
+        "pixels outside the affected rect must be unchanged"
+    );
+}
+
+/// While a mask transform is active, the host's blend must read through
+/// the *preview* texture so the mask's effect on the canvas reflects the
+/// currently-dragged matrix. Specifically: if the user translated the
+/// mask far away, the host pixels at the original mask position should
+/// no longer be hidden by the (moved-away) mask coverage.
+///
+/// This is the regression for "during transform, mask effects vanish":
+/// in the broken state, `setup_transform` destructively cleared the live
+/// mask and the in-line preview pass skipped mask-target transforms, so
+/// the host rendered with no mask at all.
+#[test]
+fn mask_visible_during_transform_drag() {
+    use darkly::gpu::transform::affine_translate;
+    let (cw, ch) = (32u32, 32u32);
+    let mut engine = test_engine(cw, ch);
+    let host = engine.add_raster_layer();
+    fill_layer(&mut engine, host, 255, 0, 0);
+    engine.add_mask(host);
+    let mask_id = engine.host_mask_id(host).expect("host has mask");
+
+    // Fresh masks default to fully visible (255). Black out the whole
+    // mask first, then paint white into the left half so we have a sharp
+    // 50/50 visibility boundary. Flood-fill is async — flush after each
+    // submission so the next stroke sees its predecessor's pixels and
+    // the selection state at *completion* time matches the intent.
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+
+    engine.select_rect(
+        0.0,
+        0.0,
+        (cw / 2) as f32,
+        ch as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+    engine.clear_selection();
+    engine.render(0.0);
+
+    // Sanity: pre-transform mask is half white / half black.
+    let mask_pre = engine.test_readback_mask(host);
+    assert_eq!(mask_pre[0], 255, "left edge of mask should be 255");
+    assert_eq!(
+        mask_pre[(cw - 1) as usize],
+        0,
+        "right edge of mask should be 0"
+    );
+    let baseline = engine.test_readback_canvas();
+    assert!(
+        rgba_at(&baseline, cw, 4, ch / 2)[0] > 200,
+        "left half should be opaque red; got {:?}",
+        rgba_at(&baseline, cw, 4, ch / 2)
+    );
+    assert_eq!(
+        rgba_at(&baseline, cw, cw - 4, ch / 2)[3],
+        0,
+        "right half should be transparent (mask=0)"
+    );
+
+    // Begin transform on the mask, translate by +cw/2 (mask shifts right).
+    engine.select_all();
+    let started = engine.begin_transform(mask_id);
+    assert!(started, "begin_transform on mask must succeed");
+    engine.update_floating_matrix(affine_translate((cw / 2) as f32, 0.0));
+    engine.render(0.0);
+
+    let dragging = engine.test_readback_canvas();
+    // After the translate, the *preview* mask covers the right half. So:
+    //   - left half should now be transparent (mask=0 there post-shift),
+    //   - right half should now be opaque red (mask=255 there post-shift).
+    // The broken state showed the left half still red because the live
+    // mask was destructively cleared and the preview never ran.
+    assert_eq!(
+        rgba_at(&dragging, cw, 4, ch / 2)[3],
+        0,
+        "during drag, original mask position should be uncovered by the preview mask"
+    );
+    assert!(
+        rgba_at(&dragging, cw, cw - 4, ch / 2)[0] > 200,
+        "during drag, transformed mask position should reveal red"
+    );
+
+    engine.cancel_floating();
+}
+
+/// Cancel after a non-identity drag must leave the live mask texture
+/// byte-for-byte identical to its pre-transform state. Under the old
+/// architecture this required a `restore_from_scratch` round-trip; under
+/// the derived-preview model the live texture was never touched, so cancel
+/// reduces to dropping floating state.
+#[test]
+fn cancel_transform_on_mask_leaves_texture_pristine() {
+    use darkly::gpu::transform::affine_translate;
+    let (cw, ch) = (32u32, 32u32);
+    let mut engine = test_engine(cw, ch);
+    let host = engine.add_raster_layer();
+    fill_layer(&mut engine, host, 255, 255, 255);
+    engine.add_mask(host);
+    let mask_id = engine.host_mask_id(host).expect("host has mask");
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 191,
+        g: 191,
+        b: 191,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+
+    let baseline = engine.test_readback_mask(host);
+
+    engine.select_all();
+    let started = engine.begin_transform(mask_id);
+    assert!(started);
+    engine.update_floating_matrix(affine_translate(7.0, 3.0));
+    engine.cancel_floating();
+
+    let after = engine.test_readback_mask(host);
+    assert_eq!(
+        after, baseline,
+        "cancel must leave the mask exactly as it was pre-transform"
+    );
+}
+
+/// Isolating a mask AND transforming it: the canvas must show the mask's
+/// channel as grayscale at the *transformed* position. Verifies that the
+/// preview indirection composes with the isolation render path — the host
+/// renders with `isolated=true`, samples the preview-mask bind group, and
+/// the shader's grayscale output reflects the moved mask shape.
+#[test]
+fn transform_mask_under_isolation_previews_grayscale() {
+    use darkly::gpu::transform::affine_translate;
+    let (cw, ch) = (32u32, 32u32);
+    let mut engine = test_engine(cw, ch);
+    let host = engine.add_raster_layer();
+    // Host content is irrelevant (isolation hides it); fill with red so a
+    // red leak in the assertion would be obvious.
+    fill_layer(&mut engine, host, 255, 0, 0);
+    engine.add_mask(host);
+    let mask_id = engine.host_mask_id(host).expect("host has mask");
+
+    // Mask: a small white square at (4..12, 4..12) on a black background.
+    engine.select_rect(4.0, 4.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 1.0,
+        y: 1.0,
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.clear_selection();
+    engine.test_flush_readbacks();
+
+    // Isolate the mask.
+    engine.set_isolated_node(Some(mask_id));
+
+    // Transform: translate the white square +16 pixels right.
+    engine.select_rect(4.0, 4.0, 8.0, 8.0, SelectionMode::Replace, false, 0.0);
+    let started = engine.begin_transform(mask_id);
+    assert!(started);
+    engine.update_floating_matrix(affine_translate(16.0, 0.0));
+    engine.render(0.0);
+
+    let canvas = engine.test_readback_canvas();
+    // New position (20..28, 4..12) should be opaque grayscale white.
+    let moved = rgba_at(&canvas, cw, 24, 8);
+    assert!(
+        moved[0] > 200 && moved[1] > 200 && moved[2] > 200 && moved[3] == 255,
+        "transformed mask position should render as grayscale white through \
+         the isolated-host shader path; got {moved:?}"
+    );
+    // RGB should be equal (grayscale) — no red leak from the host color.
+    assert!(
+        (moved[0] as i32 - moved[1] as i32).abs() < 4,
+        "isolated-mask preview must be RGB-equal grayscale; got {moved:?}"
+    );
+    // Original square position is now black (mask shifted away from it).
+    let original = rgba_at(&canvas, cw, 8, 8);
+    assert!(
+        original[0] < 32 && original[1] < 32 && original[2] < 32,
+        "original mask position should be black after the preview shift; \
+         got {original:?}"
+    );
+
+    engine.cancel_floating();
 }

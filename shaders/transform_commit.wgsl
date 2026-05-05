@@ -38,12 +38,9 @@ struct Uniforms {
     // Full document canvas dimensions in pixels.
     canvas_size: vec2f,
     opacity: f32,
-    // 0.0 = RGBA mode, 1.0 = R8 mode (luminance conversion to single channel)
+    // Format flag: 0.0 = RGBA passthrough, 1.0 = R8 (output the R channel
+    // straight — see the fix in fs_main).
     is_r8: f32,
-    // Unused by commit — preview uses these for mask UV mapping. Kept here
-    // so the uniform struct layout matches between preview and commit paths.
-    _layer_offset: vec2f,
-    _layer_size: vec2f,
 }
 @group(0) @binding(2) var<uniform> u: Uniforms;
 
@@ -86,10 +83,12 @@ struct Uniforms {
     let blended = source_over(fg_pre, fg_a, bg);
 
     if (u.is_r8 > 0.5) {
-        // R8 target: convert RGB to luminance, output as single-channel value.
-        // Only the R channel is written.
-        let lum = dot(blended.rgb, vec3f(0.2126, 0.7152, 0.0722));
-        return vec4f(lum, lum, lum, blended.a);
+        // R8 target: source and dest are both single-channel; the value
+        // we want is already in `.r`. The earlier RGB→luminance dot was a
+        // bug for R8 inputs — sampling an R8Unorm texture as vec4 yields
+        // (R, 0, 0, 1), so a luminance dot multiplied every committed
+        // pixel by 0.2126, darkening the mask each commit.
+        return vec4f(blended.r, blended.r, blended.r, blended.a);
     } else {
         // RGBA mode: output straight-alpha color.
         return blended;
