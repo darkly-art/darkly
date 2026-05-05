@@ -42,13 +42,15 @@ struct ViewTransform {
     let oob = canvas_x < 0.0 || canvas_x > canvas_dims.x
            || canvas_y < 0.0 || canvas_y > canvas_dims.y;
 
-    // Composite the (premultiplied) canvas over a screen-space checker so any
-    // transparency in the final composite reads as transparency, not as
-    // darkened-by-discarded-alpha. Matches the gray values the layer-panel
-    // thumbnails use (102/255, 153/255).
+    // Composite the canvas over a screen-space checker so any transparency
+    // in the final composite reads as transparency, not as darkened-by-
+    // discarded-alpha. The composite cache is straight-alpha (composite.wgsl's
+    // Porter-Duff divides rgb by out_a), so the source-over here multiplies
+    // rgb by alpha rather than treating it as premultiplied. Gray values
+    // match the layer-panel thumbnails (102/255, 153/255).
     let cell = floor(screen_pos / 8.0);
     let parity = (i32(cell.x) + i32(cell.y)) & 1;
     let checker = vec3f(select(0.6, 0.4, parity == 0));
-    let composed = color.rgb + checker * (1.0 - color.a);
+    let composed = color.rgb * color.a + checker * (1.0 - color.a);
     return select(vec4f(composed, 1.0), view.bg, oob);
 }

@@ -2836,6 +2836,67 @@ fn isolated_transparency_presents_as_checker_not_black() {
     );
 }
 
+/// Regression: the present shader's checker composite first treated the
+/// composite cache as premultiplied (`color.rgb + checker * (1 - color.a)`),
+/// but `composite.wgsl` divides `out_rgb` by `out_a` so the cache is
+/// straight-alpha. The premul formula made every partial-alpha pixel display
+/// near full intensity (a 50% red `[1, 0, 0, 0.5]` came out `[1.2, 0.2, 0.2]`
+/// → clamped `[1, 0.2, 0.2]`), which read on screen as a hard threshold —
+/// fully-painted areas were opaque, unpainted areas were checker, with no
+/// soft midtone in between. The fix multiplies `color.rgb` by `color.a`
+/// before blending over the checker.
+///
+/// Reproduces by isolating a 50% opacity opaque layer: the composite cache
+/// resolves to `(1, 0, 0, 0.5)` straight-alpha, which must present as red
+/// genuinely blended halfway with the checker — not as full red.
+#[test]
+fn isolated_partial_alpha_blends_with_checker_not_at_full_intensity() {
+    let (cw, ch) = (16u32, 16u32);
+    let mut engine = test_engine(cw, ch);
+
+    let bg = engine.add_raster_layer();
+    fill_layer(&mut engine, bg, 0, 255, 0); // off-path opaque green
+    let translucent = engine.add_raster_layer();
+    fill_layer(&mut engine, translucent, 255, 0, 0);
+    engine.set_opacity(translucent, 0.5);
+
+    engine.set_isolated_node(Some(translucent));
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    let pixels = engine.test_readback_present();
+
+    // Cell (0, 0) → checker = 0.4 (102). Straight-alpha source-over with
+    // src=(1,0,0,0.5):  out = src.rgb*0.5 + checker*0.5
+    //                     R = 0.5  + 0.4*0.5 = 0.7  → 178
+    //                     G = 0.0  + 0.4*0.5 = 0.2  → 51
+    //                     B = 0.0  + 0.4*0.5 = 0.2  → 51
+    let cell_a = rgba_at(&pixels, cw, 0, 0);
+    let r_dark = cell_a[0];
+    let g_dark = cell_a[1];
+    assert!(
+        (170..=185).contains(&r_dark),
+        "translucent red over the dark checker tile must blend halfway — \
+         expected R ~178, got {r_dark} (full {cell_a:?}). The pre-fix \
+         premul-formula bug clamps R to 255."
+    );
+    assert!(
+        (45..=60).contains(&g_dark),
+        "checker green channel must show through — expected G ~51, got \
+         {g_dark} (full {cell_a:?}). Pre-fix the formula clamped G to ~76 \
+         and hid the checker entirely."
+    );
+
+    // Cell (8, 0) → checker = 0.6 (153). Adjacent cell must visibly differ —
+    // a hard-threshold bug yields identical pixels across the whole stroke.
+    let cell_b = rgba_at(&pixels, cw, 8, 0);
+    assert_ne!(
+        cell_a, cell_b,
+        "adjacent checker cells must differ under the translucent layer — \
+         identical pixels mean the present shader is binarizing alpha."
+    );
+}
+
 /// Repeated identity transforms on a mask must leave the mask byte-for-byte
 /// unchanged. Regression for the `transform_commit.wgsl` R8 branch that
 /// computed `dot(rgb, luminance_coeffs)`: an R8 texture sampled into vec4
