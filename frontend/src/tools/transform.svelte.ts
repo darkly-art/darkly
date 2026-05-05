@@ -411,6 +411,16 @@ export const transformTool: Tool = {
         clearState();
     },
 
+    claimsPointer() {
+        // While transform is active (floating content present and tool
+        // selected), the canvas belongs to the tool — handle drags,
+        // body translates, and outside-bbox rotates are all transform
+        // gestures. Claiming here prevents global drag chords (e.g.
+        // shift+drag → brush-size scrub) from intercepting the
+        // pointerdown before our shift-locked corner resize fires.
+        return active;
+    },
+
     onPointerDown(ctx, _e, cx, cy) {
         if (!active) {
             if (app.handle && app.activeLayerId != null) {
