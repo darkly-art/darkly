@@ -147,15 +147,34 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         const DRAG_FACTOR: f32 = 0.25;
         let displacement = radius * DRAG_FACTOR * strength;
 
+        // The render target is the stroke scratch, sized to the layer
+        // (not the canvas). After mid-stroke layer growth or on a
+        // paste-extent layer, `pt.offset_x/y` may be non-zero and
+        // `pt.width/height` may exceed the canvas; clamp the dab footprint
+        // to the layer's canvas extent (mirrors `color_output`'s pattern)
+        // so liquify can warp off-canvas pixels too.
+        let pt = gpu
+            .paint_target
+            .as_ref()
+            .expect("liquify::evaluate_gpu requires a paint target");
+        let pt_offset_x = pt.offset_x;
+        let pt_offset_y = pt.offset_y;
+        let pt_width = pt.width;
+        let pt_height = pt.height;
+
         // Bounding box: disc + displacement padding so the bilinear-sampled
         // canvas_copy footprint is always inside the copied region.
         let half = radius + displacement;
         let unclipped_x0 = position[0] - half;
         let unclipped_y0 = position[1] - half;
-        let x0 = unclipped_x0.max(0.0);
-        let y0 = unclipped_y0.max(0.0);
-        let x1 = (position[0] + half).min(gpu.canvas_width as f32);
-        let y1 = (position[1] + half).min(gpu.canvas_height as f32);
+        let layer_x0 = pt_offset_x as f32;
+        let layer_y0 = pt_offset_y as f32;
+        let layer_x1 = layer_x0 + pt_width as f32;
+        let layer_y1 = layer_y0 + pt_height as f32;
+        let x0 = unclipped_x0.max(layer_x0);
+        let y0 = unclipped_y0.max(layer_y0);
+        let x1 = (position[0] + half).min(layer_x1);
+        let y1 = (position[1] + half).min(layer_y1);
 
         let rect_w = x1 - x0;
         let rect_h = y1 - y0;
@@ -163,29 +182,37 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             return vec![];
         }
 
-        // Integer copy rect — match composite.rs's floor-then-ceil pattern so
-        // every fragment in the quad has a valid canvas_copy texel to read.
-        let copy_x = x0.floor() as u32;
-        let copy_y = y0.floor() as u32;
-        let copy_w = ((x1.ceil() as u32).saturating_sub(copy_x)).min(gpu.canvas_width - copy_x);
-        let copy_h = ((y1.ceil() as u32).saturating_sub(copy_y)).min(gpu.canvas_height - copy_y);
+        // Integer canvas-space copy rect — floor-then-ceil so every fragment
+        // in the quad has a valid canvas_copy texel to read. `i32` keeps
+        // negative origins (paste-extent layers, leftward-grown layers)
+        // representable.
+        let copy_canvas_x = x0.floor() as i32;
+        let copy_canvas_y = y0.floor() as i32;
+        let copy_w = (x1.ceil() as i32 - copy_canvas_x) as u32;
+        let copy_h = (y1.ceil() as i32 - copy_canvas_y) as u32;
         if copy_w == 0 || copy_h == 0 {
             return vec![];
         }
 
-        // Publish the footprint so save_points / checkpoints cover the real
-        // damage region. Canvas coords are stable across mid-stroke layer
-        // growth.
+        // Publish the canvas-space footprint so save_points / checkpoints
+        // cover the real damage region. Canvas coords are stable across
+        // mid-stroke layer growth (Storage Frame Rule).
         gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            copy_x as i32,
-            copy_y as i32,
+            copy_canvas_x,
+            copy_canvas_y,
             copy_w,
             copy_h,
         ));
 
+        // canvas_copy indexes the stroke scratch, which is layer-sized —
+        // translate the canvas-space rect to the layer's local coord frame
+        // for the per-dab GPU dispatch.
+        let copy_local_x = (copy_canvas_x - pt_offset_x) as u32;
+        let copy_local_y = (copy_canvas_y - pt_offset_y) as u32;
+
         // Snapshot the scratch under the disc into canvas_copy. Subsequent
         // dabs in the same place see the prior dab's warp.
-        gpu.ensure_canvas_copy(copy_x, copy_y, copy_w, copy_h);
+        gpu.ensure_canvas_copy(copy_local_x, copy_local_y, copy_w, copy_h);
 
         // Direction → unit vector. First dab of a stroke has no prior
         // position and arrives here with `direction = 0` (east). Acceptable
@@ -195,8 +222,10 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let uniforms = LiquifyUniforms {
             rect_origin: [x0, y0],
             rect_size: [rect_w, rect_h],
+            target_offset: [pt_offset_x as f32, pt_offset_y as f32],
+            target_size: [pt_width as f32, pt_height as f32],
             canvas_size: [gpu.canvas_width as f32, gpu.canvas_height as f32],
-            copy_origin: [copy_x as f32, copy_y as f32],
+            copy_origin: [copy_local_x as f32, copy_local_y as f32],
             center: position,
             direction: dir_vec,
             displacement,
@@ -220,14 +249,10 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 })],
                 ..Default::default()
             });
-            pass.set_viewport(
-                0.0,
-                0.0,
-                gpu.canvas_width as f32,
-                gpu.canvas_height as f32,
-                0.0,
-                1.0,
-            );
+            // Viewport must be the full layer (not the canvas) so the
+            // shader can write into off-canvas pixels of paste-extent /
+            // grown layers.
+            pass.set_viewport(0.0, 0.0, pt_width as f32, pt_height as f32, 0.0, 1.0);
             pass.set_pipeline(gpu.pipelines.liquify_pipeline());
             pass.set_bind_group(0, &gpu.pipelines.liquify_uniform_bind_group, &[offset]);
             pass.set_bind_group(1, gpu.selection_bind_group, &[]);

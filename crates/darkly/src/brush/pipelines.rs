@@ -98,16 +98,26 @@ pub struct BlitUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LiquifyUniforms {
-    /// Top-left of the render-pass quad in canvas pixels (clamped to canvas
-    /// bounds). The quad covers the brush disc plus displacement padding.
+    /// Top-left of the render-pass quad in canvas pixels (clamped to the
+    /// **layer's** canvas extent so paste-extent / grown layers can warp
+    /// off-canvas pixels).
     pub rect_origin: [f32; 2],
     /// Width and height of the render-pass quad in canvas pixels.
     pub rect_size: [f32; 2],
-    /// Full canvas dimensions (for NDC conversion + selection UV).
+    /// Layer's canvas-space offset (= GpuPaintTarget.offset_x/y). Vertex
+    /// stage subtracts this from canvas_pos before the NDC divide so the
+    /// quad maps onto the layer-sized scratch render target correctly.
+    pub target_offset: [f32; 2],
+    /// Layer pixel dimensions (= GpuPaintTarget.width/height). Used by
+    /// the vertex stage as the NDC denominator.
+    pub target_size: [f32; 2],
+    /// Document canvas dimensions (fragment-stage selection UV only —
+    /// the selection texture is canvas-sized).
     pub canvas_size: [f32; 2],
-    /// Float copy origin matching the `canvas_copy` `copy_texture_to_texture`
-    /// call. The shader floors this before dividing to recover the texel
-    /// coordinate — same pattern as `composite.wgsl`.
+    /// Layer-local origin of the canvas_copy region (matches the
+    /// `ensure_canvas_copy` source origin). The fragment shader floors
+    /// this before dividing to recover the texel coordinate, same
+    /// floor-then-ceil pattern as `composite.wgsl`.
     pub copy_origin: [f32; 2],
     /// Brush centre in canvas pixels.
     pub center: [f32; 2],

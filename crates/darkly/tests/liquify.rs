@@ -52,6 +52,12 @@ struct Harness {
     queue: Arc<wgpu::Queue>,
     layer_texture: wgpu::Texture,
     layer_view: wgpu::TextureView,
+    /// Layer pixel dimensions (>= CANVAS for paste-extent / grown-layer tests).
+    layer_width: u32,
+    layer_height: u32,
+    /// Layer's canvas-space offset (non-zero for paste-extent / grown-layer tests).
+    offset_x: i32,
+    offset_y: i32,
     pipelines: BrushPipelines,
     dab_pool: DabTexturePool,
     stroke_buffer: StrokeBuffer,
@@ -173,6 +179,86 @@ fn harness(initial: &[u8], size: f32, strength: f32, softness: f32) -> Harness {
         queue,
         layer_texture,
         layer_view,
+        layer_width: CANVAS,
+        layer_height: CANVAS,
+        offset_x: 0,
+        offset_y: 0,
+        pipelines,
+        dab_pool,
+        stroke_buffer,
+        runner,
+    }
+}
+
+/// Like `harness()`, but with a layer larger than the canvas and offset
+/// in canvas space. Models the post-grow / paste-extent layer state where
+/// the brush scratch is layer-sized (not canvas-sized) and `offset_x/y`
+/// are non-zero. `initial` must be `layer_width * layer_height * 4` bytes
+/// of straight-alpha RGBA, addressed in the layer's local pixel grid.
+fn harness_offset(
+    initial: &[u8],
+    layer_width: u32,
+    layer_height: u32,
+    offset_x: i32,
+    offset_y: i32,
+    size: f32,
+    strength: f32,
+    softness: f32,
+) -> Harness {
+    let (device, queue) = shared_device();
+
+    let (layer_texture, layer_view) =
+        create_test_texture(&device, &queue, layer_width, layer_height, initial);
+
+    let dab_pool = DabTexturePool::new(&device);
+    // Brush pipelines (notably canvas_copy_texture) stay sized to the canvas;
+    // the canvas_copy snapshot region is bounded by the dab footprint, not by
+    // the full layer.
+    let pipelines = BrushPipelines::new(
+        &device,
+        &queue,
+        dab_pool.bind_group_layout(),
+        CANVAS,
+        CANVAS,
+    );
+
+    let stroke_buffer = StrokeBuffer::new(
+        &device,
+        layer_width,
+        layer_height,
+        dab_pool.bind_group_layout(),
+        pipelines.canvas_copy_bind_group_layout(),
+    );
+
+    let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget {
+        texture: &layer_texture,
+        view: &layer_view,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        width: layer_width,
+        height: layer_height,
+        offset_x,
+        offset_y,
+        canvas_width: CANVAS,
+        canvas_height: CANVAS,
+    };
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("test-pre-stroke-init-offset"),
+    });
+    stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke_paint_target);
+    queue.submit([enc.finish()]);
+
+    let graph = liquify_graph(size, strength, softness);
+    let runner = compile_graph(&graph).expect("graph compiles");
+
+    Harness {
+        device,
+        queue,
+        layer_texture,
+        layer_view,
+        layer_width,
+        layer_height,
+        offset_x,
+        offset_y,
         pipelines,
         dab_pool,
         stroke_buffer,
@@ -204,10 +290,10 @@ macro_rules! make_ctx {
                 texture: &$h.layer_texture,
                 view: &$h.layer_view,
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                width: CANVAS,
-                height: CANVAS,
-                offset_x: 0,
-                offset_y: 0,
+                width: $h.layer_width,
+                height: $h.layer_height,
+                offset_x: $h.offset_x,
+                offset_y: $h.offset_y,
                 canvas_width: CANVAS,
                 canvas_height: CANVAS,
             }),
@@ -264,10 +350,16 @@ impl Harness {
             &self.queue,
             &self.layer_texture,
             wgpu::TextureFormat::Rgba8Unorm,
-            CANVAS,
-            CANVAS,
+            self.layer_width,
+            self.layer_height,
         )
     }
+}
+
+/// Index a flat RGBA pixel buffer with an arbitrary stride.
+fn pixel_at(pixels: &[u8], stride_w: u32, x: u32, y: u32) -> [u8; 4] {
+    let i = ((y * stride_w + x) * 4) as usize;
+    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
 }
 
 fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
@@ -521,5 +613,82 @@ fn speed_does_not_affect_displacement() {
         slow_out, fast_out,
         "pen speed must not affect per-dab displacement — slow drag and fast flick \
          with identical direction/strength/position should produce identical output",
+    );
+}
+
+/// Regression: liquify on a layer that has been auto-grown beyond the
+/// canvas (or pasted-extent from the start) must paint into the entire
+/// layer — not just the layer's intersection with the canvas.
+///
+/// The bug: liquify hard-coded canvas dimensions in three places —
+/// `gpu.canvas_width`/`canvas_height` clamps for the dab footprint, the
+/// vertex-shader NDC mapping, and the per-pass viewport. With a
+/// non-zero `offset_x/y`, the canvas-sized viewport on the layer-sized
+/// render target only writes layer-local pixels [0..canvas_w] ×
+/// [0..canvas_h], leaving the rest of the layer untouched. Bar pixels
+/// that should be warped *into* the off-canvas region (e.g. canvas X
+/// past the canvas's right edge, but still inside the layer) just stay
+/// transparent.
+///
+/// Setup:
+///   - Layer is `(CANVAS + 64) × (CANVAS + 32)` with offset `(-32, -16)`.
+///     Canvas X ∈ [0, CANVAS) maps to layer-local X ∈ [32, 32+CANVAS) —
+///     so layer-local X ∈ [128, 192) is the off-canvas right strip.
+///   - A 2-column red bar at canvas X = 100 (layer-local X = 132) — well
+///     inside the layer but *outside* the buggy code's viewport
+///     ([0..CANVAS]).
+///   - A small eastward liquify dab at canvas (105, 64) shifts pixels
+///     ~13 px to the right (size = 0.2 → radius ≈ 51, displacement ≈
+///     13). The bar should appear at canvas X = 113 (layer-local X =
+///     145), again in the off-canvas right strip.
+///
+/// Probe layer-local (145, 80) — canvas (113, 64). With the fix this is
+/// red (warp landed correctly). With the bug this is background, because
+/// the canvas-sized viewport never reaches layer-local X = 145.
+#[test]
+fn warp_position_correct_on_offset_layer() {
+    const PAD_LEFT: u32 = 32;
+    const PAD_TOP: u32 = 16;
+    const PAD_RIGHT: u32 = 32;
+    const PAD_BOTTOM: u32 = 16;
+    let lw = CANVAS + PAD_LEFT + PAD_RIGHT;
+    let lh = CANVAS + PAD_TOP + PAD_BOTTOM;
+    let offset_x = -(PAD_LEFT as i32);
+    let offset_y = -(PAD_TOP as i32);
+
+    // Bar at canvas X=100 → layer-local X=132 (off-canvas in canvas
+    // terms: 100 < CANVAS=128, but layer-local 132 > CANVAS — the
+    // bug's viewport boundary).
+    let bar_canvas_x: i32 = 100;
+    let bar_layer_x = (bar_canvas_x - offset_x) as u32;
+    let mut initial = vec![0u8; (lw * lh * 4) as usize];
+    for y in 0..lh {
+        let i = ((y * lw + bar_layer_x) * 4) as usize;
+        initial[i] = 255;
+        initial[i + 3] = 255;
+    }
+
+    let mut h = harness_offset(&initial, lw, lh, offset_x, offset_y, 0.2, 1.0, 1.0);
+    h.begin_stroke();
+    // Dab eastward at canvas (105, 64). Brush radius ≈ 51, displacement
+    // ≈ 13 — covers the bar at canvas X=100 and shifts it to canvas
+    // X≈113 (layer-local X≈145).
+    h.dab(&pen([105.0, 64.0], 0.0));
+    h.commit();
+
+    let after = h.readback();
+
+    let probe_canvas_x: i32 = 113;
+    let probe_canvas_y: i32 = 64;
+    let probe_layer_x = (probe_canvas_x - offset_x) as u32;
+    let probe_layer_y = (probe_canvas_y - offset_y) as u32;
+    let shifted = pixel_at(&after, lw, probe_layer_x, probe_layer_y);
+    assert!(
+        shifted[0] > 200 && shifted[3] > 200,
+        "expected red at canvas ({probe_canvas_x},{probe_canvas_y}) → layer-local \
+         ({probe_layer_x},{probe_layer_y}) after eastward warp on an offset layer, \
+         got {:?} — liquify is treating canvas coords as layer-local and the \
+         canvas-sized viewport never reaches this layer-local pixel",
+        shifted,
     );
 }
