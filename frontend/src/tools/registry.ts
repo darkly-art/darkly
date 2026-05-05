@@ -19,8 +19,16 @@ export interface Tool {
      *  Used by hotkey registration to wire up tool switching automatically. */
     readonly hotkeyAction: string;
 
-    /** Optional Svelte component for tool-specific options panel */
+    /** Optional Svelte component rendered inside the always-visible bottom
+     *  options strip. Owns the per-tool widgets (sliders, toggles, pickers).
+     *  When absent, the strip shows a generic placeholder. */
     readonly optionsComponent?: Component;
+
+    /** Optional Svelte component rendered ABOVE the options strip — for
+     *  tools that need a collapsible secondary panel (e.g. the brush
+     *  builder). The component owns its own visibility logic and may
+     *  render nothing when collapsed. */
+    readonly panelComponent?: Component;
 
     onActivate?(ctx: ToolContext): void;
     onDeactivate?(ctx: ToolContext): void;

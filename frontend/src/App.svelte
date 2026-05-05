@@ -2,7 +2,7 @@
     import LeftSidebar from './ui/LeftSidebar.svelte';
     import CanvasView from './canvas/CanvasView.svelte';
     import RightSidebar from './ui/RightSidebar.svelte';
-    import BrushBar from './ui/BrushBar.svelte';
+    import ToolOptionsBar from './ui/ToolOptionsBar.svelte';
     import Toast from './ui/Toast.svelte';
     import PresetPicker from './ui/PresetPicker.svelte';
     import SettingsModal from './ui/settings/SettingsModal.svelte';
@@ -16,7 +16,7 @@
     <LeftSidebar />
     <div class="center-column">
         <CanvasView />
-        <BrushBar />
+        <ToolOptionsBar />
     </div>
     <RightSidebar />
 </div>

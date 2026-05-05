@@ -5,6 +5,7 @@ import { settings } from '../state/settings.svelte';
 import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
+import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { screenToCanvas } from '../canvas/coordinates';
 
@@ -283,8 +284,8 @@ export function registerActions() {
             if (app.activeToolId !== 'brush') {
                 app.activeToolId = 'brush';
             }
-            app.eraseMode = !app.eraseMode;
-            app.handle?.set_brush_blend_mode(app.eraseMode ? 1 : 0);
+            brushSession.eraseMode = !brushSession.eraseMode;
+            app.handle?.set_brush_blend_mode(brushSession.eraseMode ? 1 : 0);
         },
     });
 

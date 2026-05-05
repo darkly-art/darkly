@@ -31,11 +31,6 @@ class AppState {
     fillTolerance = $state(32);     // 0-255
     fillAll = $state(false);
     gradientType = $state<'linear' | 'radial'>('linear');
-    // Brush tool: when true, strokes use destination-out (erase) instead
-    // of source-over. Persists across strokes within the session; resets
-    // to false on reload. Engine-side mirror is pushed by brushTool's
-    // onActivate/onDeactivate and by the toggleEraseMode action.
-    eraseMode = $state(false);
 
     // Layer tree (read from WASM, refreshed after mutations/undo/redo).
     layerTree = $state<any[]>([]);
