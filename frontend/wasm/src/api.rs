@@ -895,22 +895,16 @@ impl DarklyHandle {
     // --- Layer CRUD ---
     // IDs use f64 because JS has no u64 — any JS-facing backend needs this.
 
-    pub fn add_raster_layer(&self) -> f64 {
+    pub fn add_raster_layer(&self, anchor_id: f64) -> f64 {
         self.flush_if_needed();
-        self.engine.borrow_mut().add_raster_layer().to_ffi() as f64
+        let anchor = (anchor_id >= 0.0).then(|| LayerId::from_ffi(anchor_id as u64));
+        self.engine.borrow_mut().add_raster_layer(anchor).to_ffi() as f64
     }
 
-    pub fn add_raster_layer_in(&self, group_id: f64) -> f64 {
+    pub fn add_group(&self, anchor_id: f64) -> f64 {
         self.flush_if_needed();
-        self.engine
-            .borrow_mut()
-            .add_raster_layer_in(LayerId::from_ffi(group_id as u64))
-            .to_ffi() as f64
-    }
-
-    pub fn add_group(&self) -> f64 {
-        self.flush_if_needed();
-        self.engine.borrow_mut().add_group().to_ffi() as f64
+        let anchor = (anchor_id >= 0.0).then(|| LayerId::from_ffi(anchor_id as u64));
+        self.engine.borrow_mut().add_group(anchor).to_ffi() as f64
     }
 
     pub fn remove_layer(&self, layer_id: f64) -> Result<(), JsError> {

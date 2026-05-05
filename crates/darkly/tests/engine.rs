@@ -79,7 +79,7 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
 fn engine_brush_stroke_respects_selection() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.select_rect(
         0.0,
@@ -112,7 +112,7 @@ fn engine_brush_stroke_respects_selection() {
 fn engine_transform_bounds_are_tight() {
     let (w, h) = (256, 256);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     let sel_x = 17.0_f32;
     let sel_y = 23.0_f32;
@@ -175,7 +175,7 @@ fn engine_transform_bounds_are_tight() {
 fn paste_floating_cancel_removes_layer() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let base_layer = engine.add_raster_layer();
+    let base_layer = engine.add_raster_layer(None);
 
     let pw: u32 = 8;
     let ph: u32 = 8;
@@ -229,7 +229,7 @@ fn paste_floating_cancel_removes_layer() {
 fn transform_on_off_canvas_layer_cancel_restores_pixels() {
     let (cw, ch) = (64, 64);
     let mut engine = test_engine(cw, ch);
-    let _base = engine.add_raster_layer();
+    let _base = engine.add_raster_layer(None);
 
     // 128×128 opaque red, centered: layer bounds (-32, -32, 128, 128).
     let pw: u32 = 128;
@@ -297,7 +297,7 @@ fn paste_image_floating_preserves_off_canvas_extent() {
 
     let (cw, ch) = (64, 64);
     let mut engine = test_engine(cw, ch);
-    let _base = engine.add_raster_layer();
+    let _base = engine.add_raster_layer(None);
 
     // 4× wider than canvas, 4× taller.
     let pw: u32 = 256;
@@ -337,7 +337,7 @@ fn paste_image_direct_preserves_off_canvas_extent() {
 
     let (cw, ch) = (64, 64);
     let mut engine = test_engine(cw, ch);
-    let _base = engine.add_raster_layer();
+    let _base = engine.add_raster_layer(None);
 
     let pw: u32 = 200;
     let ph: u32 = 100;
@@ -362,7 +362,7 @@ fn paste_image_direct_preserves_off_canvas_extent() {
 fn paste_floating_target_layer_matches_created() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let base_layer = engine.add_raster_layer();
+    let base_layer = engine.add_raster_layer(None);
 
     assert_eq!(
         engine.floating_target_layer(),
@@ -395,7 +395,7 @@ fn paste_floating_target_layer_matches_created() {
 fn paste_floating_commit_is_one_undo() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let base_layer = engine.add_raster_layer();
+    let base_layer = engine.add_raster_layer(None);
 
     let pw: u32 = 8;
     let ph: u32 = 8;
@@ -428,7 +428,7 @@ fn paste_floating_commit_is_one_undo() {
 fn lasso_selection_performance_and_correctness() {
     let (w, h) = (1024, 1024);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Generate a circle polygon with 200 vertices — similar to a real lasso.
     let cx = 500.0_f32;
@@ -528,7 +528,7 @@ fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
 fn scatter_brush_survives_checkpoint_restore() {
     let (w, h) = (256, 256);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.brush_load("Scatter Brush").expect("brush load");
 
@@ -656,7 +656,7 @@ fn pen_input_spacing_port_controls_dab_density() {
 
     // Baseline: default spacing (port default = 0.10).
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     let pen_id = find_node_id(&engine, "pen_input");
     engine
         .brush_graph_set_port_default(pen_id, "spacing", 0.10)
@@ -666,7 +666,7 @@ fn pen_input_spacing_port_controls_dab_density() {
 
     // Sparse: 100% spacing — dabs separated by a full diameter.
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     let pen_id = find_node_id(&engine, "pen_input");
     engine
         .brush_graph_set_port_default(pen_id, "spacing", 1.0)
@@ -794,7 +794,7 @@ fn brush_stroke_on_paste_extent_layer_lands_at_canvas_coords() {
 fn brush_stroke_off_canvas_grows_layer() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     let bounds_before = engine.layer_bounds(layer_id).expect("layer exists");
     assert_eq!(bounds_before.origin.x, 0);
@@ -833,7 +833,7 @@ fn brush_stroke_off_canvas_grows_layer() {
 fn brush_stroke_off_canvas_pixel_lands_correctly() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     let canvas_x: i32 = cw as i32 + 80;
     let canvas_y: i32 = ch as i32 / 2;
@@ -888,7 +888,7 @@ fn brush_stroke_off_canvas_pixel_lands_correctly() {
 fn layer_growth_negative_direction() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     paint_at(
         &mut engine,
@@ -918,7 +918,7 @@ fn layer_growth_negative_direction() {
 fn layer_growth_negative_direction_y() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     paint_at(
         &mut engine,
@@ -950,7 +950,7 @@ fn layer_growth_negative_direction_y() {
 fn layer_growth_chunked_to_256() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Just one pixel past the right edge.
     paint_at(
@@ -986,7 +986,7 @@ fn layer_growth_chunked_to_256() {
 fn undo_after_growth_restores_pixels_in_old_bounds() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Pre-stroke: fill a known canvas-aligned region so we can confirm
     // it's restored byte-for-byte after undo.
@@ -1047,7 +1047,7 @@ fn layer_growth_capped_at_max() {
     use darkly::gpu::compositor::MAX_LAYER_DIM;
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Paint far enough out to push past the cap. MAX_LAYER_DIM is 16384.
     paint_at(
@@ -1081,7 +1081,7 @@ fn layer_growth_capped_at_max() {
 fn mid_stroke_growth_preserves_already_saved_region() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Pre-paint distinctive canvas-aligned content so we have a baseline.
     paint_at(&mut engine, layer_id, 100.0, 100.0, 1.0, 0.0, 0.0);
@@ -1160,7 +1160,7 @@ fn layer_info_carries_paste_extent_bounds_through_serde() {
 
     let (cw, ch) = (64, 64);
     let mut engine = test_engine(cw, ch);
-    let _base = engine.add_raster_layer();
+    let _base = engine.add_raster_layer(None);
 
     // Paste 200×200 at (-50, -50) — paste-extent layer with bounds that
     // extend in both negative-canvas directions and past the canvas.
@@ -1209,7 +1209,7 @@ fn layer_info_carries_paste_extent_bounds_through_serde() {
 fn paste_cancel_cycles_dont_leak_layer_textures() {
     let (cw, ch) = (64, 64);
     let mut engine = test_engine(cw, ch);
-    let _base = engine.add_raster_layer();
+    let _base = engine.add_raster_layer(None);
 
     let baseline = engine.test_node_texture_count();
 
@@ -1242,12 +1242,12 @@ fn paste_cancel_cycles_dont_leak_layer_textures() {
 fn add_remove_cycles_dont_leak_layer_textures() {
     let (cw, ch) = (128, 128);
     let mut engine = test_engine(cw, ch);
-    let _base = engine.add_raster_layer();
+    let _base = engine.add_raster_layer(None);
 
     let baseline = engine.test_node_texture_count();
 
     for _ in 0..5 {
-        let id = engine.add_raster_layer();
+        let id = engine.add_raster_layer(None);
         assert!(engine.has_layer(id));
         engine.remove_layer(id).expect("remove should succeed");
         assert!(!engine.has_layer(id));
@@ -1268,7 +1268,7 @@ fn add_remove_cycles_dont_leak_layer_textures() {
 fn mid_stroke_growth_invalidates_mask_bind_group() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
     engine.render(0.0);
 
@@ -1392,7 +1392,7 @@ fn floating_transform_undo_with_rotation() {
 fn brush_stroke_off_canvas_undo_after_grow() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     let before = engine.test_readback_layer(layer_id);
 
@@ -1450,7 +1450,7 @@ fn brush_stroke_off_canvas_undo_after_grow() {
 fn stroke_crossing_canvas_edge_keeps_early_dabs_in_place() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Stroke from canvas (50, 100) to (-100, 100). The dab center crosses
     // x=0 partway through, triggering a negative-direction grow that
@@ -1539,7 +1539,7 @@ fn stroke_crossing_canvas_edge_keeps_early_dabs_in_place() {
 fn undo_after_grow_does_not_leave_prior_stroke_artifacts() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Stroke A: canvas (50, 50), inside the 256×256 canvas. No grow.
     paint_at(&mut engine, layer_id, 50.0, 50.0, 1.0, 0.0, 0.0);
@@ -1738,7 +1738,7 @@ fn transform_translate_with_selection_does_not_duplicate() {
 fn pending_undo_commit_survives_two_grows() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Stroke A: off-canvas in -X direction. Triggers grow #1.
     paint_at(&mut engine, layer_id, -50.0, 50.0, 1.0, 0.0, 0.0);
@@ -1825,7 +1825,7 @@ fn mask_byte_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
 fn engine_brush_stroke_paints_on_mask() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
 
     paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
@@ -1851,7 +1851,7 @@ fn engine_brush_stroke_paints_on_mask() {
 fn engine_mask_brush_unstroked_pixels_unchanged() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
 
     paint_mask_dab(&mut engine, layer_id, 10.0, 10.0, 0.0);
@@ -1873,7 +1873,7 @@ fn engine_mask_brush_unstroked_pixels_unchanged() {
 fn engine_mask_brush_undo_restores_mask() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
 
     paint_mask_dab(&mut engine, layer_id, (w / 2) as f32, (h / 2) as f32, 0.0);
@@ -1904,7 +1904,7 @@ fn engine_mask_brush_undo_restores_mask() {
 fn engine_mask_brush_respects_selection() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
 
     // add_mask ran with no selection, so the mask starts all-white (255);
@@ -1950,7 +1950,7 @@ fn engine_mask_brush_respects_selection() {
 fn engine_add_mask_seeds_from_active_selection() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.select_rect(
         0.0,
@@ -1984,7 +1984,7 @@ fn engine_add_mask_seeds_from_active_selection() {
 fn engine_add_mask_without_selection_is_all_white() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.add_mask(layer_id);
 
@@ -2004,7 +2004,7 @@ fn engine_add_mask_without_selection_is_all_white() {
 fn engine_no_mask_brush_safe_on_layer() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // No mask added; stroking on the layer must just paint the layer.
     engine.begin_stroke(layer_id);
@@ -2035,7 +2035,7 @@ fn engine_no_mask_brush_safe_on_layer() {
 fn engine_mask_flood_fill() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
     let mask_id = engine.host_mask_id(layer_id).unwrap();
 
@@ -2070,7 +2070,7 @@ fn engine_mask_flood_fill() {
 fn engine_magic_wand_on_mask_reads_mask_not_layer() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Seed the mask: select the left half, then add_mask copies the
     // selection into the new mask (left = 255, right = 0).
@@ -2121,7 +2121,7 @@ fn engine_magic_wand_on_mask_reads_mask_not_layer() {
 fn floating_preview_respects_layer_mask() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Paint a horizontal red stroke across the full canvas width.
     paint_full_stroke(&mut engine, layer_id, w, h);
@@ -2218,7 +2218,7 @@ fn floating_preview_respects_layer_mask() {
 fn mask_grows_in_lockstep_with_host_when_unlocked() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
     let mask_id = engine
         .host_mask_id(layer_id)
@@ -2297,7 +2297,7 @@ fn mask_grows_in_lockstep_with_host_when_unlocked() {
 fn locked_mask_does_not_follow_host_growth() {
     let (cw, ch) = (256u32, 256u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.add_mask(layer_id);
     let mask_id = engine.host_mask_id(layer_id).expect("mask exists");
 
@@ -2348,7 +2348,7 @@ fn locked_mask_does_not_follow_host_growth() {
 fn add_paint_apply_undo_round_trip_preserves_mask() {
     let (cw, ch) = (64u32, 64u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // `paint_full_stroke` paints across the canvas at y = h/2 only, so probe
     // a pixel on the painted line. Use (16, h/2) — well inside the stroke
@@ -2443,10 +2443,10 @@ fn passthrough_group_with_visible_mask_applies_via_snapshot_lerp() {
     let (cw, ch) = (64u32, 64u32);
     let mut engine = test_engine(cw, ch);
 
-    let group_id = engine.add_group();
+    let group_id = engine.add_group(None);
     engine.set_group_passthrough(group_id, true);
 
-    let child_id = engine.add_raster_layer();
+    let child_id = engine.add_raster_layer(None);
     engine.move_layer(child_id, MoveTarget::IntoGroupTop(group_id));
 
     // Paint the child red across the canvas.
@@ -2551,7 +2551,7 @@ fn selection_to_mask_round_trip_preserves_pixels() {
 
     let (cw, ch) = (64u32, 64u32);
     let mut engine = test_engine(cw, ch);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Make a known selection: rectangle in the top-left quadrant.
     engine.select_rect(4.0, 4.0, 20.0, 16.0, SelectionMode::Replace, false, 0.0);
@@ -2704,9 +2704,9 @@ fn isolate_skips_off_path_sibling_rasters() {
     let (cw, ch) = (32u32, 32u32);
     let mut engine = test_engine(cw, ch);
 
-    let bottom = engine.add_raster_layer();
+    let bottom = engine.add_raster_layer(None);
     fill_layer(&mut engine, bottom, 0, 0, 255); // Blue underneath
-    let top = engine.add_raster_layer();
+    let top = engine.add_raster_layer(None);
     fill_layer(&mut engine, top, 255, 0, 0); // Red on top
     engine.test_flush_readbacks();
     engine.render(0.0);
@@ -2748,11 +2748,11 @@ fn isolation_does_not_mutate_layer_visibility() {
     let (cw, ch) = (16u32, 16u32);
     let mut engine = test_engine(cw, ch);
 
-    let red = engine.add_raster_layer();
+    let red = engine.add_raster_layer(None);
     fill_layer(&mut engine, red, 255, 0, 0);
-    let green = engine.add_raster_layer();
+    let green = engine.add_raster_layer(None);
     fill_layer(&mut engine, green, 0, 255, 0);
-    let blue = engine.add_raster_layer();
+    let blue = engine.add_raster_layer(None);
     fill_layer(&mut engine, blue, 0, 0, 255);
 
     // User hides the red layer manually. Doc state: red.visible = false.
@@ -2807,10 +2807,10 @@ fn isolated_transparency_presents_as_checker_not_black() {
     let mut engine = test_engine(cw, ch);
 
     // Off-path opaque content — must not leak through isolation.
-    let bg = engine.add_raster_layer();
+    let bg = engine.add_raster_layer(None);
     fill_layer(&mut engine, bg, 255, 0, 0);
     // Empty raster — when isolated, the canvas resolves to fully transparent.
-    let empty = engine.add_raster_layer();
+    let empty = engine.add_raster_layer(None);
 
     engine.set_isolated_node(Some(empty));
     engine.test_flush_readbacks();
@@ -2854,9 +2854,9 @@ fn isolated_partial_alpha_blends_with_checker_not_at_full_intensity() {
     let (cw, ch) = (16u32, 16u32);
     let mut engine = test_engine(cw, ch);
 
-    let bg = engine.add_raster_layer();
+    let bg = engine.add_raster_layer(None);
     fill_layer(&mut engine, bg, 0, 255, 0); // off-path opaque green
-    let translucent = engine.add_raster_layer();
+    let translucent = engine.add_raster_layer(None);
     fill_layer(&mut engine, translucent, 255, 0, 0);
     engine.set_opacity(translucent, 0.5);
 
@@ -2908,7 +2908,7 @@ fn isolated_partial_alpha_blends_with_checker_not_at_full_intensity() {
 fn repeated_identity_transforms_on_mask_are_idempotent() {
     let (cw, ch) = (16u32, 16u32);
     let mut engine = test_engine(cw, ch);
-    let host = engine.add_raster_layer();
+    let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 255, 255, 255);
     engine.add_mask(host);
     let mask_id = engine.host_mask_id(host).expect("host has mask");
@@ -2969,7 +2969,7 @@ fn isolating_mask_modifier_renders_grayscale() {
     let (cw, ch) = (32u32, 32u32);
     let mut engine = test_engine(cw, ch);
 
-    let layer = engine.add_raster_layer();
+    let layer = engine.add_raster_layer(None);
     fill_layer(&mut engine, layer, 255, 0, 0); // Red host.
 
     engine.add_mask(layer);
@@ -3022,7 +3022,7 @@ fn transform_translate_on_mask_moves_pixels() {
     use darkly::gpu::transform::affine_translate;
     let (cw, ch) = (32u32, 32u32);
     let mut engine = test_engine(cw, ch);
-    let host = engine.add_raster_layer();
+    let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 255, 255, 255);
     engine.add_mask(host);
     let mask_id = engine.host_mask_id(host).expect("host has mask");
@@ -3114,7 +3114,7 @@ fn mask_visible_during_transform_drag() {
     use darkly::gpu::transform::affine_translate;
     let (cw, ch) = (32u32, 32u32);
     let mut engine = test_engine(cw, ch);
-    let host = engine.add_raster_layer();
+    let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 255, 0, 0);
     engine.add_mask(host);
     let mask_id = engine.host_mask_id(host).expect("host has mask");
@@ -3217,7 +3217,7 @@ fn cancel_transform_on_mask_leaves_texture_pristine() {
     use darkly::gpu::transform::affine_translate;
     let (cw, ch) = (32u32, 32u32);
     let mut engine = test_engine(cw, ch);
-    let host = engine.add_raster_layer();
+    let host = engine.add_raster_layer(None);
     fill_layer(&mut engine, host, 255, 255, 255);
     engine.add_mask(host);
     let mask_id = engine.host_mask_id(host).expect("host has mask");
@@ -3259,7 +3259,7 @@ fn transform_mask_under_isolation_previews_grayscale() {
     use darkly::gpu::transform::affine_translate;
     let (cw, ch) = (32u32, 32u32);
     let mut engine = test_engine(cw, ch);
-    let host = engine.add_raster_layer();
+    let host = engine.add_raster_layer(None);
     // Host content is irrelevant (isolation hides it); fill with red so a
     // red leak in the assertion would be obvious.
     fill_layer(&mut engine, host, 255, 0, 0);

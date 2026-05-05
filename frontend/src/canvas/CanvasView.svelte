@@ -77,11 +77,11 @@
             theme.pushToWasm();
 
             // Demo setup: background image + paint layer in a group
-            const bg = handle.add_raster_layer();
+            const bg = handle.add_raster_layer(-1);
             handle.fill_background(bg);
 
-            const groupId = handle.add_group();
-            const paintLayerId = handle.add_raster_layer_in(groupId);
+            const groupId = handle.add_group(-1);
+            const paintLayerId = handle.add_raster_layer(groupId);
             app.selectLayer(paintLayerId);
 
             // Observe element resizes to keep GPU surface in sync

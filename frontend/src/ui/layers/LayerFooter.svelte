@@ -22,14 +22,14 @@
 
     function addNormalLayer() {
         if (!app.handle) return;
-        const id = app.handle.add_raster_layer();
+        const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
         app.selectLayer(id);
         onupdate();
     }
 
     function addGroup() {
         if (!app.handle) return;
-        const id = app.handle.add_group();
+        const id = app.handle.add_group(app.activeLayerId ?? -1);
         app.selectLayer(id);
         onupdate();
     }

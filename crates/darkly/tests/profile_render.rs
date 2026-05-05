@@ -102,9 +102,9 @@ fn profile_render_pipeline() {
     );
 
     // Set up layers: bg + paint layer (gradient fill removed — GPU-only now).
-    let _bg_id = doc.add_raster_layer();
+    let _bg_id = doc.add_raster_layer(None);
 
-    let paint_id = doc.add_raster_layer();
+    let paint_id = doc.add_raster_layer(None);
     compositor.ensure_raster_layer(
         &device,
         &queue,

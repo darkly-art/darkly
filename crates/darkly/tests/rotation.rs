@@ -187,7 +187,7 @@ fn stroke_event(x: f32, y: f32, time_ms: f64) -> StrokeOp {
 fn stamp_rotation_port_default_is_radians() {
     // Horizontal tip (rotation = 0).
     let mut engine = test_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     let (stamp_id, _image_id) = install_bar_tip(&mut engine);
 
     // Big enough to see the orientation; set size/scale to make dab ~128px.
@@ -224,7 +224,7 @@ fn stamp_rotation_port_default_is_radians() {
 
     // Rotated by π/2 (quarter turn clockwise).
     let mut engine = test_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     let (stamp_id, _) = install_bar_tip(&mut engine);
     engine
         .brush_graph_set_port_default(stamp_id.0, "size_input", 0.25)
@@ -266,7 +266,7 @@ fn stamp_rotation_port_default_is_radians() {
 #[test]
 fn jitter_passthrough_preserves_drawing_angle() {
     let mut engine = test_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     let (stamp_id, _image_id) = install_bar_tip(&mut engine);
 
     engine
@@ -338,7 +338,7 @@ fn jitter_passthrough_preserves_drawing_angle() {
 #[test]
 fn drawing_angle_wire_rotates_brush_to_face_stroke() {
     let mut engine = test_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     let (stamp_id, _image_id) = install_bar_tip(&mut engine);
 
     engine

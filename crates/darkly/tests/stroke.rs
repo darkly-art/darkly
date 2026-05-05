@@ -660,7 +660,7 @@ fn gpu_cpu_undo_interleaved() {
     let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
     let mut undo_stack = UndoStack::new(50);
     let mut doc = Document::new(w, h);
-    let layer_id = doc.add_raster_layer();
+    let layer_id = doc.add_raster_layer(None);
 
     // Step 1: GPU paint stroke.
     let mut enc = encoder(&device);

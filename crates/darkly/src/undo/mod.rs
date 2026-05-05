@@ -154,7 +154,7 @@ mod tests {
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
 
-        let id = doc.add_raster_layer();
+        let id = doc.add_raster_layer(None);
 
         // Record the add as undoable.
         let parent = doc.parent_of(id);
@@ -177,7 +177,7 @@ mod tests {
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
 
-        let id = doc.add_raster_layer();
+        let id = doc.add_raster_layer(None);
 
         // Remove the layer (undoable).
         let parent = doc.parent_of(id);
@@ -201,9 +201,9 @@ mod tests {
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
 
-        let l1 = doc.add_raster_layer();
-        let l2 = doc.add_raster_layer();
-        let l3 = doc.add_raster_layer();
+        let l1 = doc.add_raster_layer(None);
+        let l2 = doc.add_raster_layer(None);
+        let l3 = doc.add_raster_layer(None);
 
         // Order: l1, l2, l3 (bottom to top).
         let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
@@ -241,7 +241,7 @@ mod tests {
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
 
-        let id = doc.add_raster_layer();
+        let id = doc.add_raster_layer(None);
 
         // Change opacity.
         undo.push(Box::new(PropertyAction::new(
@@ -272,7 +272,7 @@ mod tests {
 
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
-        let id = doc.add_raster_layer();
+        let id = doc.add_raster_layer(None);
 
         // Simulate a slider drag: opacity goes 1.0 → 0.9 → 0.7 → 0.5 → 0.3
         // Each step captures old from the document, applies new, then coalesces.
@@ -325,5 +325,36 @@ mod tests {
             (after_redo - 0.3).abs() < f32::EPSILON,
             "redo should restore final opacity 0.3, got {after_redo}"
         );
+    }
+
+    #[test]
+    fn undo_add_raster_layer_with_anchor_restores_position() {
+        // Adding a layer with an anchor lands it above the anchor; undo +
+        // redo must replay it back to the same anchored slot, not to the top
+        // of root.
+        let mut doc = Document::new(128, 128);
+        let mut undo = UndoStack::new(100);
+
+        let l1 = doc.add_raster_layer(None);
+        let l2 = doc.add_raster_layer(None);
+
+        // "Add above l1" — should land between l1 and l2.
+        let new_id = doc.add_raster_layer(Some(l1));
+        let parent = doc.parent_of(new_id);
+        let pos = doc.position_in_parent(new_id).unwrap();
+        undo.push(Box::new(LayerAddAction::new(new_id, parent, pos)));
+
+        let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
+        assert_eq!(flat, vec![l1, new_id, l2]);
+
+        // Undo removes the layer.
+        undo.undo(&mut doc);
+        let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
+        assert_eq!(flat, vec![l1, l2]);
+
+        // Redo restores the layer at its anchored position, not at the top.
+        undo.redo(&mut doc);
+        let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
+        assert_eq!(flat, vec![l1, new_id, l2]);
     }
 }

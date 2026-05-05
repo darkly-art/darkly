@@ -75,7 +75,7 @@ fn has_painted_pixels(bytes: &[u8]) -> bool {
 #[test]
 fn paint_stroke_auto_queues_thumbnail_readback() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Baseline render+flush so any startup readbacks settle. Capture
     // the version *after* settling so the assertion reflects the
@@ -110,7 +110,7 @@ fn paint_stroke_auto_queues_thumbnail_readback() {
 #[test]
 fn fill_background_auto_queues_thumbnail_readback() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.render(0.0);
     engine.test_flush_readbacks();
@@ -138,7 +138,7 @@ fn fill_background_auto_queues_thumbnail_readback() {
 #[test]
 fn undo_auto_queues_thumbnail_readback() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.render(0.0);
     engine.test_flush_readbacks();
@@ -187,7 +187,7 @@ fn undo_auto_queues_thumbnail_readback() {
 #[test]
 fn layer_thumbnail_does_not_auto_queue_readback() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.fill_background(layer_id);
 
     // Settle — let the legitimate auto-queue from `fill_background`
@@ -224,7 +224,7 @@ fn layer_thumbnail_does_not_auto_queue_readback() {
 #[test]
 fn brush_stroke_queues_thumbnail_readback_only_at_end() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Settle baseline — empty layer, no marks fired.
     engine.render(0.0);

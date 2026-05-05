@@ -390,13 +390,9 @@ impl Document {
     // children/modifier Vecs stay consistent.
     // ---------------------------------------------------------------
 
-    /// Add a new raster layer at the root top.
-    pub fn add_raster_layer(&mut self) -> LayerId {
-        self.add_raster_layer_in(None)
-    }
-
-    /// Add a new raster layer inside a group (or at root if parent is None).
-    pub fn add_raster_layer_in(&mut self, parent: Option<LayerId>) -> LayerId {
+    /// Add a new raster layer, positioning it relative to `anchor` per
+    /// [`Document::resolve_anchor_target`].
+    pub fn add_raster_layer(&mut self, anchor: Option<LayerId>) -> LayerId {
         let bounds = CanvasRect::from_xywh(0, 0, self.width, self.height);
         let name = format!("Layer {}", self.next_raster_number);
         self.next_raster_number += 1;
@@ -405,19 +401,21 @@ impl Document {
                 key, bounds, name,
             ))))
         });
-        let parent_id = self.resolve_parent_group(parent);
-        self.link_child(id, parent_id, None);
+        let target = self.resolve_anchor_target(anchor);
+        self.attach_at_target(id, target);
         id
     }
 
-    /// Add a new empty group at the root top.
-    pub fn add_group(&mut self) -> LayerId {
+    /// Add a new empty group; positioning follows the same rules as
+    /// [`Document::add_raster_layer`].
+    pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
         let name = format!("Group {}", self.next_group_number);
         self.next_group_number += 1;
         let id = self
             .entities
             .insert_with_key(|key| Entity::Node(LayerNode::Group(LayerGroup::new(key, name))));
-        self.link_child(id, self.root, None);
+        let target = self.resolve_anchor_target(anchor);
+        self.attach_at_target(id, target);
         id
     }
 
@@ -617,6 +615,31 @@ impl Document {
         Some(id)
     }
 
+    /// Resolve a UI "anchor" (typically the currently selected node in the
+    /// layers panel) into a [`MoveTarget`] that places a newly-created node
+    /// where the user expects.
+    ///
+    /// - `None` / unknown / stale id → top of root.
+    /// - Modifier id → recurse against the modifier's host.
+    /// - Group id → top of that group's children.
+    /// - Layer id → sibling immediately above the anchor.
+    pub fn resolve_anchor_target(&self, anchor: Option<LayerId>) -> MoveTarget {
+        let Some(id) = anchor else {
+            return MoveTarget::IntoGroupTop(self.root);
+        };
+        if self.is_modifier(id) {
+            return match self.parent.get(id).copied() {
+                Some(host) => self.resolve_anchor_target(Some(host)),
+                None => MoveTarget::IntoGroupTop(self.root),
+            };
+        }
+        match self.find_node(id) {
+            Some(LayerNode::Group(_)) => MoveTarget::IntoGroupTop(id),
+            Some(LayerNode::Layer(_)) => MoveTarget::After(id),
+            None => MoveTarget::IntoGroupTop(self.root),
+        }
+    }
+
     /// Apply a [`MoveTarget`] to a node already unlinked from the tree.
     fn attach_at_target(&mut self, node: LayerId, target: MoveTarget) {
         match target {
@@ -706,7 +729,7 @@ mod tests {
     #[test]
     fn add_layers() {
         let mut doc = Document::new(256, 256);
-        let id = doc.add_raster_layer();
+        let id = doc.add_raster_layer(None);
         assert_eq!(doc.flat_layers().len(), 1);
         assert_eq!(doc.flat_layers()[0].id(), id);
     }
@@ -714,9 +737,9 @@ mod tests {
     #[test]
     fn flat_layers_respects_group_visibility() {
         let mut doc = Document::new(256, 256);
-        let l1 = doc.add_raster_layer();
-        let g1 = doc.add_group();
-        let l2 = doc.add_raster_layer_in(Some(g1));
+        let l1 = doc.add_raster_layer(None);
+        let g1 = doc.add_group(None);
+        let l2 = doc.add_raster_layer(Some(g1));
 
         let flat = doc.flat_layers();
         assert_eq!(flat.len(), 2);
@@ -734,9 +757,9 @@ mod tests {
     #[test]
     fn move_layer_between_groups() {
         let mut doc = Document::new(256, 256);
-        let l1 = doc.add_raster_layer();
-        let g1 = doc.add_group();
-        let l2 = doc.add_raster_layer_in(Some(g1));
+        let l1 = doc.add_raster_layer(None);
+        let g1 = doc.add_group(None);
+        let l2 = doc.add_raster_layer(Some(g1));
 
         doc.move_layer(l2, MoveTarget::Before(l1));
         let flat = doc.flat_layers();
@@ -747,9 +770,9 @@ mod tests {
     #[test]
     fn nested_groups_flatten_correctly() {
         let mut doc = Document::new(256, 256);
-        let l1 = doc.add_raster_layer();
-        let g1 = doc.add_group();
-        let l2 = doc.add_raster_layer_in(Some(g1));
+        let l1 = doc.add_raster_layer(None);
+        let g1 = doc.add_group(None);
+        let l2 = doc.add_raster_layer(Some(g1));
 
         let flat = doc.flat_layers();
         assert_eq!(flat.len(), 2);
@@ -760,8 +783,8 @@ mod tests {
     #[test]
     fn remove_group_removes_children() {
         let mut doc = Document::new(256, 256);
-        let g1 = doc.add_group();
-        let _l1 = doc.add_raster_layer_in(Some(g1));
+        let g1 = doc.add_group(None);
+        let _l1 = doc.add_raster_layer(Some(g1));
 
         doc.remove_node(g1);
         assert!(doc.flat_layers().is_empty());
@@ -770,9 +793,9 @@ mod tests {
     #[test]
     fn detach_insert_roundtrip() {
         let mut doc = Document::new(256, 256);
-        let l1 = doc.add_raster_layer();
-        let l2 = doc.add_raster_layer();
-        let l3 = doc.add_raster_layer();
+        let l1 = doc.add_raster_layer(None);
+        let l2 = doc.add_raster_layer(None);
+        let l3 = doc.add_raster_layer(None);
 
         doc.move_layer(l1, MoveTarget::After(l3));
         let flat = doc.flat_layers();
@@ -784,7 +807,7 @@ mod tests {
     #[test]
     fn add_modifier_attaches_to_host() {
         let mut doc = Document::new(256, 256);
-        let l = doc.add_raster_layer();
+        let l = doc.add_raster_layer(None);
         assert!(doc.modifiers_of(l).is_empty());
 
         let mod_id = doc.add_mask_modifier(l).unwrap();
@@ -798,7 +821,7 @@ mod tests {
     #[test]
     fn remove_modifier_detaches() {
         let mut doc = Document::new(256, 256);
-        let l = doc.add_raster_layer();
+        let l = doc.add_raster_layer(None);
         let mod_id = doc.add_mask_modifier(l).unwrap();
 
         doc.remove_modifier(mod_id);
@@ -811,7 +834,7 @@ mod tests {
     #[test]
     fn pixel_buffer_dispatches_layer_or_modifier() {
         let mut doc = Document::new(256, 256);
-        let l = doc.add_raster_layer();
+        let l = doc.add_raster_layer(None);
         let mod_id = doc.add_mask_modifier(l).unwrap();
 
         let layer_buf = doc.pixel_buffer(l).unwrap();
@@ -820,14 +843,14 @@ mod tests {
         let mask_buf = doc.pixel_buffer(mod_id).unwrap();
         assert_eq!(mask_buf.format, wgpu::TextureFormat::R8Unorm);
 
-        let g = doc.add_group();
+        let g = doc.add_group(None);
         assert!(doc.pixel_buffer(g).is_none());
     }
 
     #[test]
     fn modifier_host_lookup() {
         let mut doc = Document::new(256, 256);
-        let l = doc.add_raster_layer();
+        let l = doc.add_raster_layer(None);
         let mod_id = doc.add_mask_modifier(l).unwrap();
 
         let host = doc.find_modifier_host(mod_id).unwrap();
@@ -845,11 +868,11 @@ mod tests {
         // — slotmap's generational keys make this safe even after another
         // layer is allocated into the same slot.
         let mut doc = Document::new(256, 256);
-        let stale = doc.add_raster_layer();
+        let stale = doc.add_raster_layer(None);
         doc.remove_node(stale);
         // Allocate something else; the slot may be recycled with a bumped
         // generation. The stale key must still not resolve.
-        let _other = doc.add_raster_layer();
+        let _other = doc.add_raster_layer(None);
         assert!(doc.find_node(stale).is_none());
         assert!(doc.layer(stale).is_none());
         assert!(doc.parent_of(stale).is_none());
@@ -859,9 +882,9 @@ mod tests {
     #[test]
     fn parent_index_consistent_after_move() {
         let mut doc = Document::new(256, 256);
-        let g1 = doc.add_group();
-        let g2 = doc.add_group();
-        let l = doc.add_raster_layer_in(Some(g1));
+        let g1 = doc.add_group(None);
+        let g2 = doc.add_group(None);
+        let l = doc.add_raster_layer(Some(g1));
         assert_eq!(doc.parent_of(l), Some(g1));
         doc.move_layer(l, MoveTarget::IntoGroupTop(g2));
         assert_eq!(doc.parent_of(l), Some(g2));
@@ -876,7 +899,7 @@ mod tests {
         // attached to the detached node stay attached, and reattach restores
         // everything at the requested position.
         let mut doc = Document::new(256, 256);
-        let l = doc.add_raster_layer();
+        let l = doc.add_raster_layer(None);
         let m = doc.add_mask_modifier(l).unwrap();
 
         let parent = doc.parent_of(l);
@@ -903,13 +926,13 @@ mod tests {
     fn purge_subtree_frees_descendants() {
         // remove_node must actually purge from `entities` — not just unlink.
         let mut doc = Document::new(256, 256);
-        let g = doc.add_group();
-        let l = doc.add_raster_layer_in(Some(g));
+        let g = doc.add_group(None);
+        let l = doc.add_raster_layer(Some(g));
         let m = doc.add_mask_modifier(l).unwrap();
-        let inner_g = doc.add_group();
+        let inner_g = doc.add_group(None);
         // Reparent inner_g under g.
         doc.move_layer(inner_g, MoveTarget::IntoGroupTop(g));
-        let inner_l = doc.add_raster_layer_in(Some(inner_g));
+        let inner_l = doc.add_raster_layer(Some(inner_g));
 
         doc.remove_node(g);
         for id in [g, l, m, inner_g, inner_l] {
@@ -919,5 +942,90 @@ mod tests {
                 id.to_ffi()
             );
         }
+    }
+
+    // -----------------------------------------------------------------
+    // Anchor-aware insertion (`add_raster_layer` / `add_group` with an
+    // optional anchor that points at the currently-selected node).
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn add_raster_layer_no_anchor_lands_at_root_top() {
+        let mut doc = Document::new(256, 256);
+        let _l1 = doc.add_raster_layer(None);
+        let _l2 = doc.add_raster_layer(None);
+        let new_id = doc.add_raster_layer(None);
+        assert_eq!(doc.children_of(doc.root).last().copied(), Some(new_id));
+    }
+
+    #[test]
+    fn add_raster_layer_with_layer_anchor_lands_above() {
+        let mut doc = Document::new(256, 256);
+        let l1 = doc.add_raster_layer(None);
+        let l2 = doc.add_raster_layer(None);
+        let l3 = doc.add_raster_layer(None);
+        let new_id = doc.add_raster_layer(Some(l1));
+        assert_eq!(doc.children_of(doc.root), &[l1, new_id, l2, l3]);
+    }
+
+    #[test]
+    fn add_raster_layer_with_layer_anchor_inside_group() {
+        let mut doc = Document::new(256, 256);
+        let g = doc.add_group(None);
+        let inner_a = doc.add_raster_layer(Some(g));
+        let inner_b = doc.add_raster_layer(Some(g));
+        let new_id = doc.add_raster_layer(Some(inner_a));
+        assert_eq!(doc.parent_of(new_id), Some(g));
+        assert_eq!(doc.children_of(g), &[inner_a, new_id, inner_b]);
+    }
+
+    #[test]
+    fn add_raster_layer_with_group_anchor_lands_inside_group_top() {
+        let mut doc = Document::new(256, 256);
+        let g = doc.add_group(None);
+        let inner_a = doc.add_raster_layer(Some(g));
+        let new_id = doc.add_raster_layer(Some(g));
+        assert_eq!(doc.parent_of(new_id), Some(g));
+        assert_eq!(doc.children_of(g), &[inner_a, new_id]);
+    }
+
+    #[test]
+    fn add_raster_layer_with_mask_anchor_lands_above_host() {
+        let mut doc = Document::new(256, 256);
+        let l1 = doc.add_raster_layer(None);
+        let l2 = doc.add_raster_layer(None);
+        let mask = doc.add_mask_modifier(l1).unwrap();
+        let new_id = doc.add_raster_layer(Some(mask));
+        // Modifier resolves to its host layer → After(host) in root.
+        assert_eq!(doc.children_of(doc.root), &[l1, new_id, l2]);
+    }
+
+    #[test]
+    fn add_raster_layer_with_stale_anchor_falls_back_to_root_top() {
+        let mut doc = Document::new(256, 256);
+        let stale = doc.add_raster_layer(None);
+        doc.remove_node(stale);
+        let _other = doc.add_raster_layer(None);
+        let new_id = doc.add_raster_layer(Some(stale));
+        assert_eq!(doc.children_of(doc.root).last().copied(), Some(new_id));
+    }
+
+    #[test]
+    fn add_group_with_layer_anchor_lands_above() {
+        let mut doc = Document::new(256, 256);
+        let l1 = doc.add_raster_layer(None);
+        let l2 = doc.add_raster_layer(None);
+        let new_g = doc.add_group(Some(l1));
+        assert_eq!(doc.children_of(doc.root), &[l1, new_g, l2]);
+    }
+
+    #[test]
+    fn add_group_with_group_anchor_lands_inside() {
+        let mut doc = Document::new(256, 256);
+        let outer = doc.add_group(None);
+        let inner_l = doc.add_raster_layer(Some(outer));
+        let new_g = doc.add_group(Some(outer));
+        assert_eq!(doc.parent_of(new_g), Some(outer));
+        assert_eq!(doc.children_of(outer), &[inner_l, new_g]);
     }
 }

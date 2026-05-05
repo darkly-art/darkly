@@ -111,7 +111,7 @@ impl DarklyEngine {
         let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
 
         // Create the target layer (no undo entry yet — pushed at commit).
-        let new_id = self.doc.add_raster_layer();
+        let new_id = self.doc.add_raster_layer(None);
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(new_id) {
             r.common.name = "Pasted Layer".to_string();
             r.pixels.bounds = layer_bounds;

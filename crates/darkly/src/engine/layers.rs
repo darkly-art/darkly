@@ -9,8 +9,8 @@ use crate::undo::{LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAc
 impl DarklyEngine {
     // --- Layer CRUD ---
 
-    pub fn add_raster_layer(&mut self) -> LayerId {
-        let id = self.doc.add_raster_layer();
+    pub fn add_raster_layer(&mut self, anchor: Option<LayerId>) -> LayerId {
+        let id = self.doc.add_raster_layer(anchor);
         let bounds = match self.doc.layer(id) {
             Some(Layer::Raster(r)) => r.pixels.bounds,
             _ => crate::coord::CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height),
@@ -27,26 +27,8 @@ impl DarklyEngine {
         id
     }
 
-    pub fn add_raster_layer_in(&mut self, group_id: LayerId) -> LayerId {
-        let id = self.doc.add_raster_layer_in(Some(group_id));
-        let bounds = match self.doc.layer(id) {
-            Some(Layer::Raster(r)) => r.pixels.bounds,
-            _ => crate::coord::CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height),
-        };
-        self.compositor
-            .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, bounds);
-        self.compositor.mark_dirty();
-
-        let parent = self.doc.parent_of(id);
-        let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack
-            .push(Box::new(LayerAddAction::new(id, parent, pos)));
-
-        id
-    }
-
-    pub fn add_group(&mut self) -> LayerId {
-        let id = self.doc.add_group();
+    pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
+        let id = self.doc.add_group(anchor);
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);

@@ -410,7 +410,7 @@ impl DarklyEngine {
         let layer_bounds = crate::coord::CanvasRect::from_xywh(offset_x, offset_y, width, height);
 
         // Create a new layer and insert above the active layer.
-        let id = self.doc.add_raster_layer();
+        let id = self.doc.add_raster_layer(None);
         if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
             r.common.name = "Pasted Layer".to_string();
             r.pixels.bounds = layer_bounds;
