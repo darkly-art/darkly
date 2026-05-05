@@ -11,9 +11,20 @@
 
 use super::wire::TextureHandle;
 
-/// Maximum dab texture dimension (width = height).
-/// This is the internal rendering resolution — the quality budget.
-pub const MAX_DAB_SIZE: u32 = 512;
+/// Reference dab texture dimension (width = height) in canvas pixels.
+///
+/// This is **not** a hard cap on dab footprint:
+/// - Stamp uses it as the reference for `effective_size = 1.0` (the
+///   slider's "100%" mark); users can drag past 100% to produce stamps
+///   well above this value.
+/// - Liquify uses it as the radius multiplier base
+///   (`radius = size * DAB_REFERENCE_SIZE * 0.5`).
+/// - `DabTexturePool::acquire` allocates at this size by default;
+///   `acquire_sized(w, h)` lets callers go larger.
+///
+/// If you need a hard cap somewhere, introduce a separately-named constant
+/// for it — do not reuse this one.
+pub const DAB_REFERENCE_SIZE: u32 = 512;
 
 /// High bit in TextureHandle distinguishes static textures from dab render targets.
 const STATIC_HANDLE_BIT: u16 = 0x8000;
@@ -100,7 +111,7 @@ impl DabTexturePool {
             entries: Vec::new(),
             bgl,
             sampler,
-            max_size: MAX_DAB_SIZE,
+            max_size: DAB_REFERENCE_SIZE,
             static_entries: Vec::new(),
         }
     }

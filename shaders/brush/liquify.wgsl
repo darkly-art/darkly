@@ -1,4 +1,4 @@
-// Liquify warp: sample the stroke scratch (via canvas_copy) at a displaced
+// Liquify warp: sample the stroke scratch (via scratch read mirror) at a displaced
 // UV inside a circular brush disc and write the result back to the scratch.
 // Each dab pushes pixels by `-direction × displacement × falloff`. Pen
 // speed is deliberately absent — `displacement` is CPU-computed from
@@ -27,7 +27,7 @@ struct LiquifyUniforms {
     target_offset: vec2f,  // layer's canvas-space (offset_x, offset_y)
     target_size:   vec2f,  // layer pixel dimensions (vertex NDC denom)
     canvas_size:   vec2f,  // full canvas (selection UV only)
-    copy_origin:   vec2f,  // layer-local origin of canvas_copy region (float form)
+    copy_origin:   vec2f,  // layer-local origin of scratch read mirror region (float form)
     center:        vec2f,  // brush centre in canvas pixels
     direction:     vec2f,  // unit vector of pen travel
     displacement:  f32,    // canvas-pixel shift at falloff = 1
@@ -39,8 +39,8 @@ struct LiquifyUniforms {
 @group(0) @binding(0) var<uniform> u: LiquifyUniforms;
 @group(1) @binding(0) var t_selection: texture_2d<f32>;
 @group(1) @binding(1) var s_selection: sampler;
-@group(2) @binding(0) var t_canvas_copy: texture_2d<f32>;
-@group(2) @binding(1) var s_canvas_copy: sampler;
+@group(2) @binding(0) var t_scratch_mirror: texture_2d<f32>;
+@group(2) @binding(1) var s_scratch_mirror: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -112,14 +112,14 @@ fn falloff(d: f32, softness: f32) -> f32 {
     // independent.
     let source_pos = canvas_pos - u.direction * u.displacement * f;
 
-    // UV into canvas_copy using the same floor(origin) convention as
+    // UV into scratch read mirror using the same floor(origin) convention as
     // composite.wgsl (gpu-lessons-learned.md §7). Both source_pos and
     // copy_origin are translated into the layer's local frame
     // (subtract target_offset for source_pos; copy_origin is already
     // layer-local from CPU side) before recovering the texel.
     let copy_uv = (source_pos - u.target_offset - floor(u.copy_origin))
-        / vec2f(textureDimensions(t_canvas_copy));
-    let warped = textureSample(t_canvas_copy, s_canvas_copy, copy_uv);
+        / vec2f(textureDimensions(t_scratch_mirror));
+    let warped = textureSample(t_scratch_mirror, s_scratch_mirror, copy_uv);
 
     // Selection mask is canvas-sized — UV stays in canvas coords.
     let sel_uv = canvas_pos / u.canvas_size;
@@ -127,8 +127,8 @@ fn falloff(d: f32, softness: f32) -> f32 {
     // Undisplaced sample (the pixel at canvas_pos before this dab) for
     // selection blending. Same canvas → layer-local translation.
     let original_uv = (canvas_pos - u.target_offset - floor(u.copy_origin))
-        / vec2f(textureDimensions(t_canvas_copy));
-    let original = textureSample(t_canvas_copy, s_canvas_copy, original_uv);
+        / vec2f(textureDimensions(t_scratch_mirror));
+    let original = textureSample(t_scratch_mirror, s_scratch_mirror, original_uv);
 
     return mix(original, warped, sel);
 }

@@ -19,7 +19,7 @@ use darkly::gpu::test_utils::{readback_texture, test_device};
 fn renders_s_curve_over_black_background() {
     let (device, queue) = test_device();
     let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout(), 320, 120);
+    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
     let resources: HashMap<_, _> = HashMap::new();
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();
@@ -107,7 +107,7 @@ fn renders_s_curve_over_black_background() {
 fn renderer_reuses_target_across_renders_of_same_size() {
     let (device, queue) = test_device();
     let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout(), 320, 120);
+    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
     let resources: HashMap<_, _> = HashMap::new();
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();
@@ -435,7 +435,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 fn empty_path_returns_none() {
     let (device, queue) = test_device();
     let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout(), 320, 120);
+    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
     let resources: HashMap<_, _> = HashMap::new();
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();

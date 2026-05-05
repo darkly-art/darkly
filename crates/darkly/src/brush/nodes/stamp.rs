@@ -11,13 +11,13 @@
 //! The dab viewport may be non-square: if the tip texture has a non-square
 //! aspect ratio, the viewport preserves it so the tip is sampled without
 //! distortion.  The effective size — `size_input * size` — scales the
-//! longer axis; `MAX_DAB_SIZE` is the canvas-pixel reference for
+//! longer axis; `DAB_REFERENCE_SIZE` is the canvas-pixel reference for
 //! `effective_size = 1.0` (i.e. the slider's "100%" mark) but is no longer
 //! a hard cap, so the user's slider keeps growing the brush past 100%.
 //! The shorter axis follows from the tip aspect ratio.
 
 use crate::brush::brush_tip::BrushTipApplication;
-use crate::brush::dab_pool::MAX_DAB_SIZE;
+use crate::brush::dab_pool::DAB_REFERENCE_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::pipelines::StampUniforms;
@@ -245,7 +245,8 @@ impl BrushNodeEvaluator for StampEvaluator {
         };
 
         let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
-        let (dab_w, dab_h) = compute_dab_dims(inputs.effective_size, tip_w, tip_h, MAX_DAB_SIZE);
+        let (dab_w, dab_h) =
+            compute_dab_dims(inputs.effective_size, tip_w, tip_h, DAB_REFERENCE_SIZE);
 
         // Allocate the dab texture at the exact size we need. The pool
         // reuses entries with matching dimensions across dabs, so a
@@ -300,7 +301,8 @@ impl BrushNodeEvaluator for StampEvaluator {
         inputs.color = [1.0, 1.0, 1.0, 1.0];
 
         let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
-        let (dab_w, dab_h) = compute_dab_dims(inputs.effective_size, tip_w, tip_h, MAX_DAB_SIZE);
+        let (dab_w, dab_h) =
+            compute_dab_dims(inputs.effective_size, tip_w, tip_h, DAB_REFERENCE_SIZE);
         if dab_w == 0 || dab_h == 0 {
             return vec![];
         }

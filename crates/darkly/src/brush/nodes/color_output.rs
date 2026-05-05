@@ -119,7 +119,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         // size the texture to match the dab exactly (content_uv = 1.0); a
         // mismatch only happens if a node deliberately renders into a
         // larger pool texture. Query the actual size — don't assume
-        // MAX_DAB_SIZE.
+        // DAB_REFERENCE_SIZE.
         let (pool_w, pool_h) = gpu.dab_pool.texture_size(dab_handle);
         let tex_w = pool_w as f32;
         let tex_h = pool_h as f32;
@@ -152,15 +152,19 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         let offset = gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
 
         let dab_bind_group = gpu.dab_pool.bind_group(dab_handle);
+        let scratch = gpu
+            .scratch
+            .as_deref()
+            .expect("color_output::evaluate_gpu requires Scratch");
 
         // Composite dab onto the stroke scratch (REPLACE blend — shader does
-        // Porter-Duff). The "bg" bind group is canvas_copy, which was just
-        // filled with the scratch's current contents above.
+        // Porter-Duff). The "bg" bind group is the read mirror, which was
+        // just filled with the scratch's current contents above.
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("brush-composite"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: gpu.stroke_scratch_view,
+                    view: scratch.write_view(),
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -184,7 +188,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[offset]);
             pass.set_bind_group(1, dab_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
-            pass.set_bind_group(3, &gpu.pipelines.canvas_copy_bind_group, &[]);
+            pass.set_bind_group(3, scratch.read_mirror_bind_group(), &[]);
             pass.draw(0..6, 0..1);
         }
 
@@ -195,10 +199,14 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
     /// Clear the stroke scratch to transparent. Paint starts from an empty
     /// accumulator — per-dab composites pile up from nothing.
     fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
+        let scratch = gpu
+            .scratch
+            .as_deref()
+            .expect("color_output::begin_stroke requires Scratch");
         let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("color_output-begin_stroke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: gpu.stroke_scratch_view,
+                view: scratch.write_view(),
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -222,9 +230,10 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
     /// terminal stays format-agnostic. Applies the stroke-level `opacity`
     /// port and honours the engine's `blend_mode` (paint vs erase).
     fn commit(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let (Some(scratch_bg), Some(pre_stroke_bg)) =
-            (gpu.scratch_bind_group, gpu.pre_stroke_bind_group)
-        else {
+        let Some(pre_stroke_bg) = gpu.pre_stroke_bind_group else {
+            return;
+        };
+        let Some(scratch) = gpu.scratch.as_deref() else {
             return;
         };
         let Some(paint_target) = gpu.paint_target.as_ref() else {
@@ -235,7 +244,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             &mut gpu.encoder,
             gpu.pipelines,
             gpu.queue,
-            scratch_bg,
+            scratch.write_bind_group(),
             gpu.selection_bind_group,
             pre_stroke_bg,
             opacity,

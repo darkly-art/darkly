@@ -338,7 +338,7 @@ impl DarklyEngine {
     /// blend uniforms are refreshed so the next composite pass sees the
     /// new offset/size.
     ///
-    /// The `needed` rect padded outward by `MAX_DAB_SIZE/2` so the new
+    /// The `needed` rect padded outward by `DAB_REFERENCE_SIZE/2` so the new
     /// chunk-aligned extent comfortably covers the dab's worst-case
     /// footprint, not just its center pixel.
     fn ensure_layer_covers_dab(&mut self, layer_id: LayerId, x: f32, y: f32) {
@@ -365,8 +365,8 @@ impl DarklyEngine {
         }
 
         // Center-out-of-bounds: pad the requested rect by half of
-        // MAX_DAB_SIZE so the grown extent includes the dab's footprint.
-        const HALF: i32 = (crate::brush::dab_pool::MAX_DAB_SIZE / 2) as i32;
+        // DAB_REFERENCE_SIZE so the grown extent includes the dab's footprint.
+        const HALF: i32 = (crate::brush::dab_pool::DAB_REFERENCE_SIZE / 2) as i32;
         let needed = crate::coord::CanvasRect::from_xywh(
             cx - HALF,
             cy - HALF,
@@ -394,7 +394,6 @@ impl DarklyEngine {
                     new_extent.height,
                     dx,
                     dy,
-                    self.dab_pool.bind_group_layout(),
                     self.brush_pipelines.canvas_copy_bind_group_layout(),
                 );
             });
@@ -629,7 +628,7 @@ impl DarklyEngine {
                     layer_tex.width,
                     layer_tex.height,
                     self.dab_pool.bind_group_layout(),
-                    self.brush_pipelines.canvas_copy_bind_group_layout(),
+                    &self.brush_pipelines,
                 );
                 let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
                 self.gpu.encode("stroke-buffer-init", |encoder| {
@@ -673,7 +672,7 @@ impl DarklyEngine {
 
         // Take the stroke engine and buffer out to avoid borrow conflicts.
         let mut engine = self.brush_stroke_engine.take().unwrap();
-        let stroke_buffer = self.stroke_buffer.take();
+        let mut stroke_buffer = self.stroke_buffer.take();
 
         let sel_bg = if self.has_selection() {
             self.compositor
@@ -684,7 +683,7 @@ impl DarklyEngine {
             &self.brush_pipelines.default_selection_bind_group
         };
 
-        if let Some(ref stroke_buffer) = stroke_buffer {
+        if let Some(ref mut stroke_buffer) = stroke_buffer {
             // Stabilized path: dabs render into the scratch, then the
             // terminal's `commit` hook lands them on the layer.
             self.brush_pipelines.reset_uniform_rings();
@@ -711,7 +710,12 @@ impl DarklyEngine {
             // `color_output::commit` calls `paint_target.commit_brush_dab(...)`
             // and never branches on R8 vs RGBA8.
             macro_rules! make_gpu_ctx {
-                ($label:expr) => {
+                ($label:expr) => {{
+                    // Re-borrow per invocation: each ctx holds &mut Scratch
+                    // for its own lifetime, then is consumed by `submit_final()`
+                    // before the next macro expansion reborrows.
+                    let (scratch, pre_stroke_texture, pre_stroke_bind_group) =
+                        stroke_buffer.parts_for_brush_ctx();
                     BrushGpuContext {
                         encoder: self.gpu.device.create_command_encoder(
                             &wgpu::CommandEncoderDescriptor {
@@ -722,27 +726,25 @@ impl DarklyEngine {
                         queue: &self.gpu.queue,
                         dab_pool: &mut self.dab_pool,
                         pipelines: &self.brush_pipelines,
-                        stroke_scratch_view: stroke_buffer.stroke_view(),
-                        stroke_scratch_texture: stroke_buffer.stroke_texture(),
+                        scratch: Some(scratch),
                         canvas_width: canvas_w,
                         canvas_height: canvas_h,
                         paint_target: Some(paint_target),
                         selection_bind_group: sel_bg,
+                        preview_target_view: None,
                         resource_handles: &self.resource_handles,
                         // blend_mode applies at commit (paint vs. erase). The
                         // per-dab composite inside `color_output::evaluate_gpu`
                         // hard-codes source-over regardless of this value.
                         blend_mode: self.brush_blend_mode,
-                        canvas_copy_origin: None,
                         preview_mask_view: None,
                         preview_mask_size: (0, 0),
                         brush_preview_info: None,
-                        pre_stroke_texture: Some(stroke_buffer.pre_stroke_texture()),
-                        pre_stroke_bind_group: Some(stroke_buffer.pre_stroke_bind_group()),
-                        scratch_bind_group: Some(stroke_buffer.stroke_bind_group()),
+                        pre_stroke_texture: Some(pre_stroke_texture),
+                        pre_stroke_bind_group: Some(pre_stroke_bind_group),
                         dab_write_canvas_bbox: None,
                     }
-                };
+                }};
             }
 
             // First event of the stroke — let the terminal set up its scratch.
@@ -764,7 +766,7 @@ impl DarklyEngine {
                 }
 
                 let stroke_frame = crate::gpu::atlas::CanvasFrame {
-                    texture: stroke_buffer.stroke_texture(),
+                    texture: stroke_buffer.scratch().write_texture(),
                     canvas_extent: paint_target.canvas_frame().canvas_extent,
                 };
                 let restore = self.gpu.encode_ret("stroke-checkpoint-restore", |encoder| {
@@ -809,7 +811,7 @@ impl DarklyEngine {
                         let sp_idx = engine.save_points.len().saturating_sub(1);
                         let render_state = engine.capture_render_state();
                         let stroke_frame = crate::gpu::atlas::CanvasFrame {
-                            texture: stroke_buffer.stroke_texture(),
+                            texture: stroke_buffer.scratch().write_texture(),
                             canvas_extent: paint_target.canvas_frame().canvas_extent,
                         };
                         self.gpu.encode("checkpoint-save", |encoder| {
@@ -851,7 +853,7 @@ impl DarklyEngine {
                         let sp_idx = engine.save_points.len() - 1;
                         let render_state = engine.capture_render_state();
                         let stroke_frame = crate::gpu::atlas::CanvasFrame {
-                            texture: stroke_buffer.stroke_texture(),
+                            texture: stroke_buffer.scratch().write_texture(),
                             canvas_extent: paint_target.canvas_frame().canvas_extent,
                         };
                         self.gpu.encode("checkpoint-save", |encoder| {
@@ -886,7 +888,6 @@ impl DarklyEngine {
             let layer_tex = self.compositor.node_texture(layer_id);
             if let Some(layer_tex) = layer_tex {
                 let canvas_view = &layer_tex.view;
-                let canvas_texture = &layer_tex.texture;
                 let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
                 let mut gpu_ctx = BrushGpuContext {
                     encoder: self.gpu.device.create_command_encoder(
@@ -898,21 +899,23 @@ impl DarklyEngine {
                     queue: &self.gpu.queue,
                     dab_pool: &mut self.dab_pool,
                     pipelines: &self.brush_pipelines,
-                    stroke_scratch_view: canvas_view,
-                    stroke_scratch_texture: canvas_texture,
+                    // No stroke buffer in this defensive fallback — `move_to`
+                    // only updates stabilizer state and never reaches into
+                    // scratch.  Anything that does would panic, which is the
+                    // correct signal that the fallback was reached.
+                    scratch: None,
                     canvas_width: canvas_w,
                     canvas_height: canvas_h,
                     paint_target: Some(paint_target),
                     selection_bind_group: sel_bg,
+                    preview_target_view: Some(canvas_view),
                     resource_handles: &self.resource_handles,
                     blend_mode: self.brush_blend_mode,
-                    canvas_copy_origin: None,
                     preview_mask_view: None,
                     preview_mask_size: (0, 0),
                     brush_preview_info: None,
                     pre_stroke_texture: None,
                     pre_stroke_bind_group: None,
-                    scratch_bind_group: None,
                     dab_write_canvas_bbox: None,
                 };
                 self.brush_pipelines.reset_uniform_rings();

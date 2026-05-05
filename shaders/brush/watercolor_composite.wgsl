@@ -5,7 +5,7 @@
 //   1. mixed_rgb = mix(pickup_rgb, paint_rgb, deposit)
 //        deposit = 1 → pure paint (regular stamp)
 //        deposit = 0 → pure pickup (flatten to local average → smudge)
-//   2. source_over(mixed_rgb premultiplied by dab.a, dab.a, canvas_copy[pixel])
+//   2. source_over(mixed_rgb premultiplied by dab.a, dab.a, scratch read mirror[pixel])
 //
 // The dab from upstream `stamp` already bakes in its own paint color, but
 // we ignore the dab's RGB — we read `dab.a` as the alpha mask only and use
@@ -36,12 +36,12 @@ struct WatercolorCompositeUniforms {
 @group(1) @binding(1) var s_dab: sampler;
 @group(2) @binding(0) var t_selection: texture_2d<f32>;
 @group(2) @binding(1) var s_selection: sampler;
-// Combined "watercolor sources" bind group: canvas_copy (sampled) + pickup
+// Combined "watercolor sources" bind group: scratch read mirror (sampled) + pickup
 // (loaded). Packed into one group because WebGPU caps bind groups at 4
 // (groups 0..=3). The pickup binding has no sampler — `textureLoad` doesn't
 // need one.
-@group(3) @binding(0) var t_canvas_copy: texture_2d<f32>;
-@group(3) @binding(1) var s_canvas_copy: sampler;
+@group(3) @binding(0) var t_scratch_mirror: texture_2d<f32>;
+@group(3) @binding(1) var s_scratch_mirror: sampler;
 @group(3) @binding(2) var t_pickup: texture_2d<f32>;
 
 struct VertexOutput {
@@ -113,8 +113,8 @@ struct VertexOutput {
 
     // Background: read canvas copy at this fragment's pixel — same UV
     // formulation as composite.wgsl (floor-then-divide-by-tex-dim).
-    let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_canvas_copy));
-    let bg = textureSample(t_canvas_copy, s_canvas_copy, copy_uv);
+    let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_scratch_mirror));
+    let bg = textureSample(t_scratch_mirror, s_scratch_mirror, copy_uv);
 
     return source_over(fg_rgb_pre, fg_a, bg);
 }

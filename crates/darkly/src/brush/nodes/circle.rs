@@ -26,7 +26,7 @@
 //! Cy)` on the CPU per dab and passes it to the shader, which translates the
 //! sample-space pole so the centroid lands at UV (0.5, 0.5).
 
-use crate::brush::dab_pool::MAX_DAB_SIZE;
+use crate::brush::dab_pool::DAB_REFERENCE_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::pipelines::CircleUniforms;
@@ -400,7 +400,7 @@ impl BrushNodeEvaluator for CircleEvaluator {
                 ..Default::default()
             });
 
-            let size = MAX_DAB_SIZE as f32;
+            let size = DAB_REFERENCE_SIZE as f32;
             pass.set_viewport(0.0, 0.0, size, size, 0.0, 1.0);
             pass.set_pipeline(gpu.pipelines.circle_pipeline());
             pass.set_bind_group(0, &gpu.pipelines.circle_uniform_bind_group, &[offset]);

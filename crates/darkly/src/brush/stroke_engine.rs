@@ -8,7 +8,7 @@
 //! - Evaluating the brush graph per dab (CPU + GPU)
 //! - Per-dab save points for rewind capability
 
-use super::dab_pool::MAX_DAB_SIZE;
+use super::dab_pool::DAB_REFERENCE_SIZE;
 use super::eval::BrushGraphRunner;
 use super::gpu_context::BrushGpuContext;
 use super::interpolation::{lerp_paint_info, CatmullRomSegment};
@@ -101,7 +101,7 @@ impl StrokeEngine {
 
     /// Default dab diameter for initial spacing (before the first dab is evaluated).
     fn default_diameter() -> f32 {
-        MAX_DAB_SIZE as f32 * 0.5
+        DAB_REFERENCE_SIZE as f32 * 0.5
     }
 
     /// The effective canvas-space diameter for spacing and bounding rect.
@@ -311,9 +311,9 @@ impl StrokeEngine {
         );
         self.runner.execute_cpu();
 
-        // Per-dab context state: reset the canvas_copy cache so the first
+        // Per-dab context state: reset the read-mirror cache so the first
         // node that needs a canvas region this dab actually issues the copy.
-        gpu.canvas_copy_origin = None;
+        gpu.reset_per_dab_read_cache();
         // Reset the write-bbox accumulator so each terminal's passes can
         // publish their footprint fresh. Read back after execute_gpu below.
         gpu.dab_write_canvas_bbox = None;

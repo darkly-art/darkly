@@ -386,13 +386,8 @@ impl DarklyEngine {
         let region_store = RegionStore::new(&gpu.device, doc_width, doc_height);
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
         let dab_pool = DabTexturePool::new(&gpu.device);
-        let brush_pipelines = BrushPipelines::new(
-            &gpu.device,
-            &gpu.queue,
-            dab_pool.bind_group_layout(),
-            doc_width,
-            doc_height,
-        );
+        let brush_pipelines =
+            BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout());
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
         let diff_rect = DiffRectPass::new(&gpu.device);
 

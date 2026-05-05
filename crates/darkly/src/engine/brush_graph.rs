@@ -231,6 +231,10 @@ impl DarklyEngine {
                 label: Some("brush-preview-regen"),
             });
 
+        // `preview_tex` is unused in this path (the preview writes to
+        // `preview_mask_view` instead).  We discard the binding to avoid an
+        // unused-variable warning while preserving the caller's lookup.
+        let _ = preview_tex;
         let mut gpu_ctx = BrushGpuContext {
             encoder,
             device: &self.gpu.device,
@@ -239,25 +243,23 @@ impl DarklyEngine {
             pipelines: &self.brush_pipelines,
             // The preview pipeline doesn't touch the stroke scratch — the
             // terminal's `render_preview` writes to `preview_mask_view`
-            // instead. Alias the scratch fields to the preview target so
-            // the struct is well-formed (no Option needed).
-            stroke_scratch_view: &target_view,
-            stroke_scratch_texture: preview_tex,
+            // instead. No `Scratch` is needed; any accidental call to a
+            // scratch accessor will panic, exposing the bug.
+            scratch: None,
             canvas_width: target_size.0,
             canvas_height: target_size.1,
             // No layer / pre-stroke state in preview — commit isn't called,
             // and `render_preview` writes to `preview_mask_view`.
             paint_target: None,
             selection_bind_group: sel_bg,
+            preview_target_view: Some(&target_view),
             resource_handles: &self.resource_handles,
             blend_mode: 0,
-            canvas_copy_origin: None,
             preview_mask_view: Some(&target_view),
             preview_mask_size: target_size,
             brush_preview_info: None,
             pre_stroke_texture: None,
             pre_stroke_bind_group: None,
-            scratch_bind_group: None,
             dab_write_canvas_bbox: None,
         };
 

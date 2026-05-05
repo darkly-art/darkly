@@ -86,7 +86,7 @@ pub struct BlitUniforms {
 
 /// Uniform data for the liquify warp shader.
 ///
-/// The shader samples `canvas_copy` (a copy of the stroke scratch) at a
+/// The shader samples `scratch read mirror` (a copy of the stroke scratch) at a
 /// displaced UV inside a circular brush disc and writes the warped sample
 /// back to the scratch. Everything is canvas-space; the shader converts to
 /// UVs via `canvas_size` and `copy_origin`.
@@ -114,7 +114,7 @@ pub struct LiquifyUniforms {
     /// Document canvas dimensions (fragment-stage selection UV only —
     /// the selection texture is canvas-sized).
     pub canvas_size: [f32; 2],
-    /// Layer-local origin of the canvas_copy region (matches the
+    /// Layer-local origin of the scratch read mirror region (matches the
     /// `ensure_canvas_copy` source origin). The fragment shader floors
     /// this before dividing to recover the texel coordinate, same
     /// floor-then-ceil pattern as `composite.wgsl`.
@@ -143,10 +143,10 @@ pub struct LiquifyUniforms {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct WatercolorPickupUniforms {
-    pub center: [f32; 2],           // brush centre in canvas pixels
-    pub copy_origin: [f32; 2],      // top-left of the valid canvas_copy region (canvas pixels)
-    pub canvas_copy_size: [f32; 2], // canvas_copy texture dimensions
-    pub half_extent: [f32; 2],      // half the dab footprint (canvas pixels) per axis
+    pub center: [f32; 2],              // brush centre in canvas pixels
+    pub copy_origin: [f32; 2], // top-left of the valid scratch-mirror region (canvas pixels)
+    pub scratch_mirror_size: [f32; 2], // scratch mirror texture dimensions
+    pub half_extent: [f32; 2], // half the dab footprint (canvas pixels) per axis
 }
 
 /// Uniform data for the watercolor compositing shader.
@@ -317,18 +317,14 @@ pub struct BrushPipelines {
     /// 1×1 RGBA8 pickup texture. Allocated once at engine startup and
     /// reused per dab — the pickup pass overwrites the single texel.
     _watercolor_pickup_texture: wgpu::Texture,
-    _watercolor_pickup_view: wgpu::TextureView,
+    /// Sampled-side view of the 1×1 pickup texture, embedded by every
+    /// `Scratch` in its `watercolor_sources_bind_group` at binding 2.
+    /// Static across strokes — only the read-mirror side of the bind
+    /// group needs rebuilding when the mirror grows.
+    watercolor_pickup_view: wgpu::TextureView,
     /// Render-attachment view of the pickup texture. The pickup pass
     /// writes one fragment here per dab.
     watercolor_pickup_attachment_view: wgpu::TextureView,
-
-    /// Combined watercolor sources bind group: canvas_copy texture+sampler
-    /// at bindings 0/1 plus the 1×1 pickup texture at binding 2. The
-    /// composite shader reads canvas_copy for the source-over background
-    /// and pickup for the brush's sampled canvas colour. Packed into one
-    /// bind group because WebGPU caps `max_bind_groups` at 4 (composite
-    /// uses uniforms/dab/selection on 0/1/2, leaving one slot here).
-    pub(crate) watercolor_sources_bind_group: wgpu::BindGroup,
 
     /// Watercolor composite pipeline. Always targets RGBA8 stroke scratch —
     /// stroke→layer commits go through the standard `composite_pipeline`,
@@ -341,17 +337,21 @@ pub struct BrushPipelines {
     pub(crate) default_selection_bind_group: wgpu::BindGroup,
     pub(crate) selection_bgl: wgpu::BindGroupLayout,
 
-    /// Canvas-region copy texture for shader-side Porter-Duff compositing.
-    /// Sized to full canvas dimensions — the brush footprint after scaling
-    /// can be up to the canvas size.
-    canvas_copy_texture: wgpu::Texture,
-    // View and BGL are held alive for the bind group's internal Arc references.
-    _canvas_copy_view: wgpu::TextureView,
-    pub(crate) canvas_copy_bind_group: wgpu::BindGroup,
+    /// BGL for the per-dab read mirror (texture+sampler).  Bound by every
+    /// brush composite pipeline (`composite.wgsl`,
+    /// `watercolor_composite.wgsl`, `liquify.wgsl`).  The actual texture
+    /// and bind group live on `Scratch` (stroke-scoped, lazy-grown to dab
+    /// footprint) — `BrushPipelines` only holds the size-agnostic layout
+    /// + sampler that all `Scratch` instances reuse.
     canvas_copy_bgl: wgpu::BindGroupLayout,
-    /// Linear sampler reused by ad-hoc bind groups built for the format-
-    /// bridging blits (`mask_blit` and `scratch_blit_r8`). Same sampler the
-    /// canvas-copy bind group uses internally.
+    /// BGL for the combined watercolor sources bind group (read mirror +
+    /// sampler at 0/1, pickup at 2).  Same story as `canvas_copy_bgl` —
+    /// layout lives here, the bind group lives on `Scratch`.
+    watercolor_sources_bgl: wgpu::BindGroupLayout,
+    /// Linear sampler shared by every `Scratch`'s read-mirror bind group
+    /// and the format-bridging blits (`mask_blit`, `scratch_blit_r8`).
+    /// Linear because liquify reads the read mirror at displaced sub-
+    /// pixel UVs and would otherwise produce blocky warp output.
     canvas_copy_sampler: wgpu::Sampler,
 }
 
@@ -359,15 +359,14 @@ impl BrushPipelines {
     /// Create brush pipelines.
     ///
     /// `dab_bgl` is the dab texture bind group layout from `DabTexturePool`.
-    /// `canvas_w`/`canvas_h` size the canvas-copy texture (used for shader-side
-    /// Porter-Duff compositing — must be large enough for the biggest possible
-    /// brush footprint, which is bounded by the canvas dimensions).
+    /// No canvas dimensions: the read-mirror texture that brush composite
+    /// shaders sample from now lives on `Scratch` (per-stroke, lazy-grown
+    /// to dab footprint), so engine-init no longer needs to know the canvas
+    /// size.
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         dab_bgl: &wgpu::BindGroupLayout,
-        canvas_w: u32,
-        canvas_h: u32,
     ) -> Self {
         // --- Shaders ---
         let circle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -837,48 +836,14 @@ impl BrushPipelines {
             ],
         });
 
-        // --- Canvas copy texture (for shader-side Porter-Duff) ---
-        // Sized to the full canvas so any brush footprint (including scaled
-        // brushes) can be composited without hitting a size cap.
-        let canvas_copy_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("brush-canvas-copy"),
-            size: wgpu::Extent3d {
-                width: canvas_w,
-                height: canvas_h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let canvas_copy_view =
-            canvas_copy_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        // Linear sampler — `composite.wgsl` reads at integer pixel origins
-        // (produces the same value as Nearest at pixel centres), while
-        // `liquify.wgsl` reads at displaced sub-pixel UVs and needs bilinear
-        // interpolation to avoid blocky warp output.
+        // Linear sampler shared by every `Scratch`'s read-mirror bind
+        // group and the format-bridging blits.  Linear because liquify
+        // reads at displaced sub-pixel UVs.
         let canvas_copy_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("brush-canvas-copy-sampler"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
-        });
-        let canvas_copy_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("brush-canvas-copy-bg"),
-            layout: &canvas_copy_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&canvas_copy_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&canvas_copy_sampler),
-                },
-            ],
         });
 
         // --- Watercolor pickup texture (1×1 RGBA8) ---
@@ -904,24 +869,6 @@ impl BrushPipelines {
             watercolor_pickup_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let watercolor_pickup_attachment_view =
             watercolor_pickup_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let watercolor_sources_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("brush-watercolor-sources-bg"),
-            layout: &watercolor_sources_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&canvas_copy_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&canvas_copy_sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&watercolor_pickup_view),
-                },
-            ],
-        });
 
         // --- Pipelines ---
 
@@ -1277,18 +1224,15 @@ impl BrushPipelines {
             watercolor_pickup_uniform_ring,
             watercolor_pickup_uniform_bind_group,
             _watercolor_pickup_texture: watercolor_pickup_texture,
-            _watercolor_pickup_view: watercolor_pickup_view,
+            watercolor_pickup_view,
             watercolor_pickup_attachment_view,
-            watercolor_sources_bind_group,
             watercolor_composite_pipeline,
             watercolor_composite_uniform_ring,
             watercolor_composite_uniform_bind_group,
             default_selection_bind_group,
             selection_bgl,
-            canvas_copy_texture,
-            _canvas_copy_view: canvas_copy_view,
-            canvas_copy_bind_group,
             canvas_copy_bgl,
+            watercolor_sources_bgl,
             canvas_copy_sampler,
         }
     }
@@ -1403,12 +1347,28 @@ impl BrushPipelines {
         &self.default_selection_bind_group
     }
 
-    pub fn canvas_copy_texture(&self) -> &wgpu::Texture {
-        &self.canvas_copy_texture
-    }
-
+    /// BGL used by the per-dab read-mirror bind group on every `Scratch`.
+    /// Brush composite pipelines bind a `Scratch::read_mirror_bind_group()`
+    /// against this layout.
     pub fn canvas_copy_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.canvas_copy_bgl
+    }
+
+    /// BGL used by the watercolor sources bind group on every `Scratch`
+    /// (read mirror + sampler + pickup texture).
+    pub fn watercolor_sources_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.watercolor_sources_bgl
+    }
+
+    /// Linear sampler shared by every `Scratch`'s read-mirror bind group.
+    pub fn canvas_copy_sampler(&self) -> &wgpu::Sampler {
+        &self.canvas_copy_sampler
+    }
+
+    /// Sampled-side view of the 1×1 watercolor pickup texture.  Embedded
+    /// by `Scratch` in its `watercolor_sources_bind_group` at binding 2.
+    pub fn watercolor_pickup_view(&self) -> &wgpu::TextureView {
+        &self.watercolor_pickup_view
     }
 
     /// Write circle mask uniforms to the next ring slot.

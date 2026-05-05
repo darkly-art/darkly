@@ -18,6 +18,7 @@ pub mod pipelines;
 pub mod preview_renderer;
 pub mod preview_subgraph;
 pub mod save_points;
+pub mod scratch;
 pub mod spacing;
 pub mod stabilizer;
 pub mod stabilizers;

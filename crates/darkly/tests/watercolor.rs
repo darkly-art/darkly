@@ -135,20 +135,14 @@ fn harness(initial: &[u8], size: f32, deposit: f32, wetness: f32) -> Harness {
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, initial);
 
     let dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(
-        &device,
-        &queue,
-        dab_pool.bind_group_layout(),
-        CANVAS,
-        CANVAS,
-    );
+    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
 
     let stroke_buffer = StrokeBuffer::new(
         &device,
         CANVAS,
         CANVAS,
         dab_pool.bind_group_layout(),
-        pipelines.canvas_copy_bind_group_layout(),
+        &pipelines,
     );
 
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget {
@@ -192,19 +186,13 @@ fn harness_image_tip(initial: &[u8], size: f32, deposit: f32, wetness: f32) -> H
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, initial);
     let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(
-        &device,
-        &queue,
-        dab_pool.bind_group_layout(),
-        CANVAS,
-        CANVAS,
-    );
+    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
     let stroke_buffer = StrokeBuffer::new(
         &device,
         CANVAS,
         CANVAS,
         dab_pool.bind_group_layout(),
-        pipelines.canvas_copy_bind_group_layout(),
+        &pipelines,
     );
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget {
         texture: &layer_texture,
@@ -318,7 +306,9 @@ fn watercolor_image_graph(size: f32, deposit: f32, wetness: f32) -> Graph<BrushW
 }
 
 macro_rules! make_ctx {
-    ($h:ident, $label:expr, $resources:expr) => {
+    ($h:ident, $label:expr, $resources:expr) => {{
+        let (_scratch, _pre_stroke_texture, _pre_stroke_bind_group) =
+            $h.stroke_buffer.parts_for_brush_ctx();
         BrushGpuContext {
             encoder: $h
                 .device
@@ -329,8 +319,7 @@ macro_rules! make_ctx {
             queue: &$h.queue,
             dab_pool: &mut $h.dab_pool,
             pipelines: &$h.pipelines,
-            stroke_scratch_view: $h.stroke_buffer.stroke_view(),
-            stroke_scratch_texture: $h.stroke_buffer.stroke_texture(),
+            scratch: Some(_scratch),
             canvas_width: CANVAS,
             canvas_height: CANVAS,
             paint_target: Some(darkly::gpu::paint_target::GpuPaintTarget {
@@ -345,18 +334,17 @@ macro_rules! make_ctx {
                 canvas_height: CANVAS,
             }),
             selection_bind_group: $h.pipelines.default_selection_bind_group(),
+            preview_target_view: None,
             resource_handles: $resources,
             blend_mode: 0,
-            canvas_copy_origin: None,
             preview_mask_view: None,
             preview_mask_size: (0, 0),
             brush_preview_info: None,
-            pre_stroke_texture: Some($h.stroke_buffer.pre_stroke_texture()),
-            pre_stroke_bind_group: Some($h.stroke_buffer.pre_stroke_bind_group()),
-            scratch_bind_group: Some($h.stroke_buffer.stroke_bind_group()),
+            pre_stroke_texture: Some(_pre_stroke_texture),
+            pre_stroke_bind_group: Some(_pre_stroke_bind_group),
             dab_write_canvas_bbox: None,
         }
-    };
+    }};
 }
 
 impl Harness {
@@ -677,22 +665,16 @@ fn off_canvas_strip_preserved_on_oversized_layer() {
         create_test_texture(&device, &queue, layer_w, layer_h, &initial);
 
     let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(
-        &device,
-        &queue,
-        dab_pool.bind_group_layout(),
-        CANVAS,
-        CANVAS,
-    );
+    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
 
     // Stroke buffer is sized to the layer (matches engine/painting.rs:610),
     // not the canvas — that's the precondition that exposes the bug.
-    let stroke_buffer = StrokeBuffer::new(
+    let mut stroke_buffer = StrokeBuffer::new(
         &device,
         layer_w,
         layer_h,
         dab_pool.bind_group_layout(),
-        pipelines.canvas_copy_bind_group_layout(),
+        &pipelines,
     );
 
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -721,7 +703,9 @@ fn off_canvas_strip_preserved_on_oversized_layer() {
     let resources: HashMap<String, TextureHandle> = HashMap::new();
 
     macro_rules! ctx_for {
-        ($label:expr) => {
+        ($label:expr) => {{
+            let (scratch, pre_stroke_texture, pre_stroke_bind_group) =
+                stroke_buffer.parts_for_brush_ctx();
             BrushGpuContext {
                 encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some($label),
@@ -730,8 +714,7 @@ fn off_canvas_strip_preserved_on_oversized_layer() {
                 queue: &queue,
                 dab_pool: &mut dab_pool,
                 pipelines: &pipelines,
-                stroke_scratch_view: stroke_buffer.stroke_view(),
-                stroke_scratch_texture: stroke_buffer.stroke_texture(),
+                scratch: Some(scratch),
                 canvas_width: CANVAS,
                 canvas_height: CANVAS,
                 paint_target: Some(darkly::gpu::paint_target::GpuPaintTarget {
@@ -746,18 +729,17 @@ fn off_canvas_strip_preserved_on_oversized_layer() {
                     canvas_height: CANVAS,
                 }),
                 selection_bind_group: pipelines.default_selection_bind_group(),
+                preview_target_view: None,
                 resource_handles: &resources,
                 blend_mode: 0,
-                canvas_copy_origin: None,
                 preview_mask_view: None,
                 preview_mask_size: (0, 0),
                 brush_preview_info: None,
-                pre_stroke_texture: Some(stroke_buffer.pre_stroke_texture()),
-                pre_stroke_bind_group: Some(stroke_buffer.pre_stroke_bind_group()),
-                scratch_bind_group: Some(stroke_buffer.stroke_bind_group()),
+                pre_stroke_texture: Some(pre_stroke_texture),
+                pre_stroke_bind_group: Some(pre_stroke_bind_group),
                 dab_write_canvas_bbox: None,
             }
-        };
+        }};
     }
 
     {

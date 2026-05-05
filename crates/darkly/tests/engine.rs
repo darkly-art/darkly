@@ -543,7 +543,7 @@ fn scatter_brush_survives_checkpoint_restore() {
         .brush_graph_set_port_default(pen_id, "stabilize", 0.5)
         .unwrap();
     // Pin dab size: pressure(=1) → stamp.size_input, size=0.1 → ~51px dab at
-    // MAX_DAB_SIZE=512. amount_y=1.0 offsets up to ±51px per dab.
+    // DAB_REFERENCE_SIZE=512. amount_y=1.0 offsets up to ±51px per dab.
     engine
         .brush_graph_set_port_default(stamp_id, "size", 0.1)
         .unwrap();

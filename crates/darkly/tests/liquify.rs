@@ -135,20 +135,14 @@ fn harness(initial: &[u8], size: f32, strength: f32, softness: f32) -> Harness {
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, initial);
 
     let dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(
-        &device,
-        &queue,
-        dab_pool.bind_group_layout(),
-        CANVAS,
-        CANVAS,
-    );
+    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
 
     let stroke_buffer = StrokeBuffer::new(
         &device,
         CANVAS,
         CANVAS,
         dab_pool.bind_group_layout(),
-        pipelines.canvas_copy_bind_group_layout(),
+        &pipelines,
     );
 
     // Snapshot the (untouched) layer into pre_stroke, same as the real engine
@@ -214,20 +208,14 @@ fn harness_offset(
     // Brush pipelines (notably canvas_copy_texture) stay sized to the canvas;
     // the canvas_copy snapshot region is bounded by the dab footprint, not by
     // the full layer.
-    let pipelines = BrushPipelines::new(
-        &device,
-        &queue,
-        dab_pool.bind_group_layout(),
-        CANVAS,
-        CANVAS,
-    );
+    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
 
     let stroke_buffer = StrokeBuffer::new(
         &device,
         layer_width,
         layer_height,
         dab_pool.bind_group_layout(),
-        pipelines.canvas_copy_bind_group_layout(),
+        &pipelines,
     );
 
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget {
@@ -271,7 +259,9 @@ fn harness_offset(
 /// we can still call `self.runner.*` afterwards (which borrows a disjoint
 /// field). Mirrors the engine's `make_gpu_ctx!` pattern in `painting.rs`.
 macro_rules! make_ctx {
-    ($h:ident, $label:expr, $resources:expr) => {
+    ($h:ident, $label:expr, $resources:expr) => {{
+        let (scratch, pre_stroke_texture, pre_stroke_bind_group) =
+            $h.stroke_buffer.parts_for_brush_ctx();
         BrushGpuContext {
             encoder: $h
                 .device
@@ -282,8 +272,7 @@ macro_rules! make_ctx {
             queue: &$h.queue,
             dab_pool: &mut $h.dab_pool,
             pipelines: &$h.pipelines,
-            stroke_scratch_view: $h.stroke_buffer.stroke_view(),
-            stroke_scratch_texture: $h.stroke_buffer.stroke_texture(),
+            scratch: Some(scratch),
             canvas_width: CANVAS,
             canvas_height: CANVAS,
             paint_target: Some(darkly::gpu::paint_target::GpuPaintTarget {
@@ -298,18 +287,17 @@ macro_rules! make_ctx {
                 canvas_height: CANVAS,
             }),
             selection_bind_group: $h.pipelines.default_selection_bind_group(),
+            preview_target_view: None,
             resource_handles: $resources,
             blend_mode: 0,
-            canvas_copy_origin: None,
             preview_mask_view: None,
             preview_mask_size: (0, 0),
             brush_preview_info: None,
-            pre_stroke_texture: Some($h.stroke_buffer.pre_stroke_texture()),
-            pre_stroke_bind_group: Some($h.stroke_buffer.pre_stroke_bind_group()),
-            scratch_bind_group: Some($h.stroke_buffer.stroke_bind_group()),
+            pre_stroke_texture: Some(pre_stroke_texture),
+            pre_stroke_bind_group: Some(pre_stroke_bind_group),
             dab_write_canvas_bbox: None,
         }
-    };
+    }};
 }
 
 impl Harness {
@@ -690,5 +678,63 @@ fn warp_position_correct_on_offset_layer() {
          got {:?} — liquify is treating canvas coords as layer-local and the \
          canvas-sized viewport never reaches this layer-local pixel",
         shifted,
+    );
+}
+
+/// Regression: with a paste-extent layer and a brush footprint that exceeds
+/// canvas dimensions, the per-dab `copy_texture_to_texture(stroke_scratch →
+/// scratch read mirror)` must succeed.  Pre-fix the read mirror was sized
+/// to the canvas (1920×1080-style fixed allocation), so any layer-clipped
+/// dab footprint larger than the canvas overflowed the destination and
+/// raised a wgpu validation error spamming the console on every pen event.
+///
+/// Setup: 128×128 canvas, 400×400 paste-extent layer offset to put the
+/// canvas in the centre, and a liquify dab whose disc + displacement
+/// extents to roughly 320 px clipped to the layer's full extent (~400 px).
+/// The clipped footprint exceeds the canvas in both dimensions, exercising
+/// the `Scratch::sync_read_mirror` lazy-grow path.  We wrap the GPU work
+/// in a Validation error scope and assert it stays empty.
+#[test]
+fn dab_footprint_exceeding_canvas_does_not_overflow_read_mirror() {
+    const PAD: u32 = 136;
+    let lw = CANVAS + 2 * PAD;
+    let lh = CANVAS + 2 * PAD;
+    let offset_x = -(PAD as i32);
+    let offset_y = -(PAD as i32);
+
+    // Solid-grey layer so any sample from inside the dab footprint hits a
+    // valid texel — keeps the test focused on the mirror-overflow signal,
+    // not on what the warp produces.
+    let initial = vec![128u8; (lw * lh * 4) as usize];
+
+    // size = 1.0  →  radius = 1 * 256 = 256 px
+    // displacement ≤ 0.25 * radius * strength = 64 px (with strength 1.0)
+    // half = radius + displacement = 320 px
+    // After layer-clipping: footprint = full layer = 400 px on each axis,
+    // which is > CANVAS=128 in both dimensions.
+    let mut h = harness_offset(&initial, lw, lh, offset_x, offset_y, 1.0, 1.0, 1.0);
+
+    let device = h.device.clone();
+    let err_guard = device.push_error_scope(wgpu::ErrorFilter::Validation);
+
+    h.begin_stroke();
+    // Dab at canvas centre with a clear motion vector so the warp actually
+    // engages (zero-motion dabs early-out before the copy).
+    h.dab(&pen([CANVAS as f32 / 2.0, CANVAS as f32 / 2.0], 0.0));
+    h.commit();
+
+    // Drain the queue so any deferred validation errors surface.
+    let _ = device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: None,
+    });
+    let err = pollster::block_on(err_guard.pop());
+    assert!(
+        err.is_none(),
+        "scratch read mirror overflow: a layer-clipped dab footprint \
+         exceeding the canvas dimensions raised a wgpu validation error \
+         (`copy_texture_to_texture` destination outside texture bounds). \
+         The read mirror must lazy-grow to fit the per-dab footprint via \
+         `Scratch::sync_read_mirror`. Got: {err:?}"
     );
 }

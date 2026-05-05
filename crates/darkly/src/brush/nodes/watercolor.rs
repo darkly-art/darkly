@@ -18,7 +18,7 @@
 //! Sibling of [`color_output`] and [`liquify`]. Lifecycle follows liquify:
 //!
 //! - `begin_stroke` — copies `pre_stroke_texture` → `stroke_scratch` so
-//!   `canvas_copy` reads real pixels from dab 1. Every rewind reseeds.
+//!   `scratch read mirror` reads real pixels from dab 1. Every rewind reseeds.
 //! - `evaluate_gpu` (per dab) — two GPU passes:
 //!     1. Pickup pass — alpha-weighted 8×8 average of canvas_copy across
 //!        the brush footprint, written to a 1×1 RGBA8 pickup texture.
@@ -165,20 +165,29 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let uv_max_y = (y1 - unclipped_y0) / foot_h * content_uv_h;
 
         // --- Pass 1: pickup (alpha-weighted average of canvas under brush) ---
-        let canvas_copy_tex = gpu.pipelines.canvas_copy_texture();
-        let canvas_copy_size = [
-            canvas_copy_tex.width() as f32,
-            canvas_copy_tex.height() as f32,
-        ];
+        // Capture the read-mirror dimensions before the borrow chain that
+        // follows ties up `gpu.scratch` for the rest of the function.
+        let scratch_mirror_size = {
+            let tex = gpu
+                .scratch
+                .as_deref()
+                .expect("watercolor::evaluate_gpu requires Scratch")
+                .read_mirror_texture();
+            [tex.width() as f32, tex.height() as f32]
+        };
         let pickup_uniforms = WatercolorPickupUniforms {
             center: position,
             copy_origin: [copy_canvas_x as f32, copy_canvas_y as f32],
-            canvas_copy_size,
+            scratch_mirror_size,
             half_extent: [half_w.max(1.0), half_h.max(1.0)],
         };
         let pickup_offset = gpu
             .pipelines
             .write_watercolor_pickup_uniforms(gpu.queue, &pickup_uniforms);
+        let scratch = gpu
+            .scratch
+            .as_deref()
+            .expect("watercolor::evaluate_gpu requires Scratch");
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("brush-watercolor-pickup"),
@@ -200,7 +209,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
                 &gpu.pipelines.watercolor_pickup_uniform_bind_group,
                 &[pickup_offset],
             );
-            pass.set_bind_group(1, &gpu.pipelines.canvas_copy_bind_group, &[]);
+            pass.set_bind_group(1, scratch.read_mirror_bind_group(), &[]);
             pass.draw(0..3, 0..1);
         }
 
@@ -227,7 +236,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("brush-watercolor-composite"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: gpu.stroke_scratch_view,
+                    view: scratch.write_view(),
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -246,7 +255,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             );
             pass.set_bind_group(1, dab_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
-            pass.set_bind_group(3, &gpu.pipelines.watercolor_sources_bind_group, &[]);
+            pass.set_bind_group(3, scratch.watercolor_sources_bind_group(), &[]);
             pass.draw(0..6, 0..1);
         }
 
@@ -254,7 +263,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     }
 
     /// Seed the stroke scratch with the immutable pre-stroke layer snapshot.
-    /// `canvas_copy` reads from the scratch, so seeding it with the layer's
+    /// `scratch read mirror` reads from the scratch, so seeding it with the layer's
     /// initial state lets every dab's pickup pass see real canvas pixels.
     /// Every rewind reseeds, discarding any in-stroke deposits.
     ///
@@ -268,8 +277,12 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let Some(pre_stroke) = gpu.pre_stroke_texture else {
             return;
         };
-        let w = gpu.stroke_scratch_texture.width();
-        let h = gpu.stroke_scratch_texture.height();
+        let Some(scratch) = gpu.scratch.as_deref() else {
+            return;
+        };
+        let scratch_tex = scratch.write_texture();
+        let w = scratch_tex.width();
+        let h = scratch_tex.height();
         gpu.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: pre_stroke,
@@ -278,7 +291,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {
-                texture: gpu.stroke_scratch_texture,
+                texture: scratch_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -301,12 +314,15 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let Some(paint_target) = gpu.paint_target.as_ref() else {
             return;
         };
+        let Some(scratch) = gpu.scratch.as_deref() else {
+            return;
+        };
         paint_target.commit_scratch_blit(
             gpu.device,
             &mut gpu.encoder,
             gpu.pipelines,
-            gpu.stroke_scratch_view,
-            gpu.stroke_scratch_texture,
+            scratch.write_view(),
+            scratch.write_texture(),
         );
     }
 

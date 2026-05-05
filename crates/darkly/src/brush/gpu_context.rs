@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use super::dab_pool::DabTexturePool;
 use super::eval::BrushPreviewInfo;
 use super::pipelines::BrushPipelines;
+use super::scratch::Scratch;
 use super::wire::TextureHandle;
 use crate::gpu::paint_target::GpuPaintTarget;
 
@@ -28,13 +29,15 @@ pub struct BrushGpuContext<'a> {
     pub queue: &'a wgpu::Queue,
     pub dab_pool: &'a mut DabTexturePool,
     pub pipelines: &'a BrushPipelines,
-    /// The stroke scratch texture view — dabs composite into this during
-    /// a stroke, and the terminal node commits it onto the layer on every
-    /// pen event. Reused as a placeholder in preview mode (nothing writes to it).
-    pub stroke_scratch_view: &'a wgpu::TextureView,
-    /// The stroke scratch texture (needed for copy_texture_to_texture by
-    /// `ensure_canvas_copy`).
-    pub stroke_scratch_texture: &'a wgpu::Texture,
+    /// The stroke scratch (write side + R/W-hazard read mirror).
+    /// `Some` during stroke evaluation and palette-thumbnail rendering;
+    /// `None` in cursor-preview mode where only `render_preview_pipeline`
+    /// runs (no scratch is needed because the preview writes to
+    /// `preview_mask_view` instead).
+    ///
+    /// Held mutably so `prepare_dab_canvas_copy` can lazy-grow the read
+    /// mirror to fit the current dab's footprint.
+    pub scratch: Option<&'a mut Scratch>,
     pub canvas_width: u32,
     pub canvas_height: u32,
     /// The paint target the terminal is committing to: a layer (RGBA8) or
@@ -49,22 +52,17 @@ pub struct BrushGpuContext<'a> {
     pub paint_target: Option<GpuPaintTarget<'a>>,
     /// Selection mask bind group (or default 1x1 white when no selection).
     pub selection_bind_group: &'a wgpu::BindGroup,
+    /// In cursor-preview mode where `scratch` is `None`, this is the
+    /// preview render target view that terminals' `render_preview` hooks
+    /// write into.  Aliased only for codepaths that need *some* texture
+    /// view (e.g. early-out checks).  `None` in stroke mode.
+    pub preview_target_view: Option<&'a wgpu::TextureView>,
     /// Resource name → TextureHandle for images uploaded by the brush loader.
     /// Image nodes read from this to resolve their `resource_name` param.
     pub resource_handles: &'a HashMap<String, TextureHandle>,
     /// Composite blend mode override: 0 = source-over (paint), 1 = destination-out (erase).
     /// Set per-stroke by the engine based on the active tool.
     pub blend_mode: u32,
-    /// Origin (in canvas pixels) of the valid region in `canvas_copy_texture`
-    /// for the current dab, if the copy has already been issued.  `None` means
-    /// no copy has been made yet for this dab.
-    ///
-    /// Multiple GPU nodes per dab may need canvas_copy (e.g. a displacement
-    /// node reads it to sample source pixels, color_output reads it for
-    /// Porter-Duff).  Tracking origin lets the second caller reuse the
-    /// first's copy when regions match.  Reset by `StrokeEngine::place_dab`
-    /// before each dab.
-    pub canvas_copy_origin: Option<[u32; 2]>,
     /// Preview mask target. Populated by the engine during preview regen;
     /// terminal `render_preview` hooks blit their preview texture into it.
     /// `None` during stroke evaluation (the preview path isn't running).
@@ -83,10 +81,6 @@ pub struct BrushGpuContext<'a> {
     /// by `StrokeBuffer` so `color_output::commit` can bind it as the
     /// composite background without recreating bind groups every event.
     pub pre_stroke_bind_group: Option<&'a wgpu::BindGroup>,
-    /// Bind group (dab BGL) over the stroke scratch, pre-built by
-    /// `StrokeBuffer` so `color_output::commit` can bind it as the
-    /// composite foreground (the per-dab accumulation).
-    pub scratch_bind_group: Option<&'a wgpu::BindGroup>,
     /// Union of canvas-pixel rects the current dab's passes write to. The
     /// node that issues the write is the only thing that knows the real
     /// footprint — stroke_engine can't derive it from `info.pos` because
@@ -106,6 +100,15 @@ impl<'a> BrushGpuContext<'a> {
     /// dynamic uniform buffer offsets.
     pub fn submit_final(self) {
         self.queue.submit([self.encoder.finish()]);
+    }
+
+    /// Reset per-dab read-mirror state.  Called by the stroke engine
+    /// before each dab so the first node that needs the read mirror this
+    /// dab actually issues a fresh copy.  No-op in cursor-preview mode.
+    pub fn reset_per_dab_read_cache(&mut self) {
+        if let Some(scratch) = self.scratch.as_deref_mut() {
+            scratch.reset_read_origin_cache();
+        }
     }
 
     /// If any uniform ring is nearly full, submit the current encoder,
@@ -143,7 +146,7 @@ impl<'a> BrushGpuContext<'a> {
     /// Compute the layer-clipped per-dab footprint, push the canvas-space
     /// write bbox (so save_points / checkpoints cover the real damage
     /// region), and snapshot the scratch under the dab into
-    /// `canvas_copy`. Returns `None` if the dab footprint doesn't overlap
+    /// `scratch read mirror`. Returns `None` if the dab footprint doesn't overlap
     /// the layer (early-out for the caller — typically `return vec![]`).
     ///
     /// Centralizes the canvas → layer-local translation that every brush
@@ -186,7 +189,7 @@ impl<'a> BrushGpuContext<'a> {
         }
 
         // Floor-then-ceil so every fragment in the quad has a valid
-        // canvas_copy texel to read. `i32` keeps negative origins
+        // scratch read mirror texel to read. `i32` keeps negative origins
         // (paste-extent layers, leftward-grown layers) representable.
         let copy_canvas_x = x0.floor() as i32;
         let copy_canvas_y = y0.floor() as i32;
@@ -206,12 +209,12 @@ impl<'a> BrushGpuContext<'a> {
             copy_h,
         ));
 
-        // canvas_copy is filled from the stroke scratch, which is
+        // The read mirror is filled from the stroke scratch, which is
         // layer-sized and indexed in layer-local pixels — translate
         // before issuing the copy.
         let copy_local_x = (copy_canvas_x - pt_offset_x) as u32;
         let copy_local_y = (copy_canvas_y - pt_offset_y) as u32;
-        self.ensure_canvas_copy(copy_local_x, copy_local_y, copy_w, copy_h);
+        self.sync_scratch_read_mirror(copy_local_x, copy_local_y, copy_w, copy_h);
 
         Some(DabFootprint {
             layer_offset: [pt_offset_x, pt_offset_y],
@@ -225,46 +228,35 @@ impl<'a> BrushGpuContext<'a> {
         })
     }
 
-    /// Ensure `canvas_copy_texture` holds the canvas region starting at the
-    /// given pixel origin, sized to cover `(width, height)`.  Idempotent per
+    /// Snapshot the stroke scratch under `(origin_x, origin_y, w, h)` into
+    /// the read mirror at `(0, 0)`, lazy-growing the read mirror first if
+    /// the requested footprint exceeds its current size.  Idempotent per
     /// dab: the first caller issues `copy_texture_to_texture`; subsequent
-    /// callers with matching origin are no-ops.  Mismatched origins force a
-    /// fresh copy.
+    /// callers with matching origin are no-ops.  Mismatched origins (or a
+    /// grow) force a fresh copy.
     ///
     /// Both `smudge_stamp` (canvas sampling) and `color_output` (Porter-Duff
     /// bg) need this, and both compute the same footprint from the same
     /// position — the cache prevents a redundant copy per dab.
-    pub fn ensure_canvas_copy(&mut self, origin_x: u32, origin_y: u32, width: u32, height: u32) {
-        if self.canvas_copy_origin == Some([origin_x, origin_y]) {
-            return;
-        }
-        if width == 0 || height == 0 {
-            return;
-        }
-        self.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: self.stroke_scratch_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: origin_x,
-                    y: origin_y,
-                    z: 0,
-                },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: self.pipelines.canvas_copy_texture(),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
+    ///
+    /// No-op in cursor-preview mode (no scratch).
+    pub fn sync_scratch_read_mirror(
+        &mut self,
+        origin_x: u32,
+        origin_y: u32,
+        width: u32,
+        height: u32,
+    ) {
+        if let Some(scratch) = self.scratch.as_deref_mut() {
+            scratch.sync_read_mirror(
+                self.device,
+                &mut self.encoder,
+                origin_x,
+                origin_y,
                 width,
                 height,
-                depth_or_array_layers: 1,
-            },
-        );
-        self.canvas_copy_origin = Some([origin_x, origin_y]);
+            );
+        }
     }
 }
 
@@ -272,7 +264,7 @@ impl<'a> BrushGpuContext<'a> {
 ///
 /// Bundles every value brush terminals need to populate per-dab uniforms:
 /// the layer-clipped quad in canvas coords, the layer-local origin of
-/// the `canvas_copy` snapshot the shader will read, and the layer's own
+/// the `scratch read mirror` snapshot the shader will read, and the layer's own
 /// offset/size (for vertex NDC mapping against the layer-sized scratch
 /// render target).
 ///
@@ -297,10 +289,10 @@ pub struct DabFootprint {
     /// Integer canvas-space copy rect origin (`i32` — may be negative
     /// on paste-extent layers).
     pub copy_canvas_origin: [i32; 2],
-    /// Layer-local origin of the `canvas_copy` snapshot region (matches
+    /// Layer-local origin of the `scratch read mirror` snapshot region (matches
     /// the `ensure_canvas_copy` source origin already issued). Use as
-    /// the `copy_origin` uniform for shaders that read `canvas_copy`.
+    /// the `copy_origin` uniform for shaders that read `scratch read mirror`.
     pub copy_local_origin: [u32; 2],
-    /// `canvas_copy` snapshot dimensions in pixels.
+    /// `scratch read mirror` snapshot dimensions in pixels.
     pub copy_size: [u32; 2],
 }
