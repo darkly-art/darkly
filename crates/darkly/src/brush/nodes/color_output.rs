@@ -96,77 +96,23 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
 
         let foot_w = dab_w;
         let foot_h = dab_h;
-
-        // The paint target carries the layer/mask dimensions and offset.
-        // Stroke-time evaluate_gpu always has a paint target.
-        let pt = gpu
-            .paint_target
-            .as_ref()
-            .expect("color_output::evaluate_gpu requires a paint target");
-        let pt_offset_x = pt.offset_x;
-        let pt_offset_y = pt.offset_y;
-        let pt_width = pt.width;
-        let pt_height = pt.height;
-
-        // Position the composite quad centered on the dab position,
-        // clamped to the LAYER's canvas extent. Paste-extent / grown
-        // layers may extend past the canvas bounds in either direction —
-        // dabs landing on those off-canvas pixels must still render.
         let half_w = foot_w * 0.5;
         let half_h = foot_h * 0.5;
-        let unclipped_x0 = position[0] - half_w;
-        let unclipped_y0 = position[1] - half_h;
-        let layer_x0 = pt_offset_x as f32;
-        let layer_y0 = pt_offset_y as f32;
-        let layer_x1 = layer_x0 + pt_width as f32;
-        let layer_y1 = layer_y0 + pt_height as f32;
-        let x0 = unclipped_x0.max(layer_x0);
-        let y0 = unclipped_y0.max(layer_y0);
-        let x1 = (position[0] + half_w).min(layer_x1);
-        let y1 = (position[1] + half_h).min(layer_y1);
 
-        let quad_w = x1 - x0;
-        let quad_h = y1 - y0;
-        if quad_w <= 0.0 || quad_h <= 0.0 {
-            return vec![];
-        }
-
-        // Integer canvas-space rect for the dab's footprint. The composite
-        // shader uses floor(origin) for the copy UV, so the copy must span
-        // from floor(x0) to ceil(x1) to cover every texel the shader can
-        // reach.
-        let copy_canvas_x = x0.floor() as i32;
-        let copy_canvas_y = y0.floor() as i32;
-        let copy_w = (x1.ceil() as i32 - copy_canvas_x) as u32;
-        let copy_h = (y1.ceil() as i32 - copy_canvas_y) as u32;
-
-        if copy_w == 0 || copy_h == 0 {
-            return vec![];
-        }
-
-        // Publish the dab's *canvas-space* footprint so the stroke engine
-        // can record a save-point bbox that matches what was actually
-        // drawn. Canvas coords are stable across mid-stroke layer growth.
-        // Authoritative — `info.pos ± dab_radius` isn't, because the graph
-        // may offset position (scatter etc.).
-        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            copy_canvas_x,
-            copy_canvas_y,
-            copy_w,
-            copy_h,
-        ));
-
-        // canvas_copy indexes the stroke scratch, which is layer-sized —
-        // translate the canvas-space rect to the layer's local coord frame
-        // for the per-dab GPU dispatch.
-        let copy_local_x = (copy_canvas_x - pt_offset_x) as u32;
-        let copy_local_y = (copy_canvas_y - pt_offset_y) as u32;
-
-        // Ensure the scratch region under the dab is in canvas_copy for the
-        // shader's straight-alpha Porter-Duff read. The bg here is the
-        // scratch (not the layer) — source-over against the running stroke
-        // accumulation.
-        gpu.ensure_canvas_copy(copy_local_x, copy_local_y, copy_w, copy_h);
+        // Layer-clip the dab footprint, push the canvas-space write bbox,
+        // and snapshot the scratch under the dab into canvas_copy. Returns
+        // None when the dab doesn't overlap the layer (early-out).
+        let footprint = match gpu.prepare_dab_canvas_copy(position, half_w, half_h) {
+            Some(f) => f,
+            None => return vec![],
+        };
+        let [pt_offset_x, pt_offset_y] = footprint.layer_offset;
+        let [pt_width, pt_height] = footprint.layer_size;
+        let [unclipped_x0, unclipped_y0] = footprint.unclipped_origin;
+        let [x0, y0] = footprint.origin;
+        let [quad_w, quad_h] = footprint.size;
+        let x1 = x0 + quad_w;
+        let y1 = y0 + quad_h;
 
         // UV mapping: the dab content occupies [0..dab_w] x [0..dab_h] within
         // a (tex_w x tex_h) texture allocated by the dab pool. Most stamps

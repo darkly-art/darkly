@@ -140,6 +140,91 @@ impl<'a> BrushGpuContext<'a> {
         });
     }
 
+    /// Compute the layer-clipped per-dab footprint, push the canvas-space
+    /// write bbox (so save_points / checkpoints cover the real damage
+    /// region), and snapshot the scratch under the dab into
+    /// `canvas_copy`. Returns `None` if the dab footprint doesn't overlap
+    /// the layer (early-out for the caller — typically `return vec![]`).
+    ///
+    /// Centralizes the canvas → layer-local translation that every brush
+    /// terminal needs (color_output, watercolor, liquify). Getting it
+    /// wrong manifests as strokes/warps shifted by `(offset_x, offset_y)`
+    /// on grown / paste-extent layers — see the liquify regression in
+    /// `tests/liquify.rs::warp_position_correct_on_offset_layer`.
+    ///
+    /// `half_w` / `half_h` are the dab's half-extent in canvas pixels,
+    /// pre-clip. For a normal stamp dab pass `dab_w * 0.5` / `dab_h * 0.5`;
+    /// for liquify pass `radius + displacement` (its disc plus the
+    /// bilinear-sample padding).
+    pub fn prepare_dab_canvas_copy(
+        &mut self,
+        position: [f32; 2],
+        half_w: f32,
+        half_h: f32,
+    ) -> Option<DabFootprint> {
+        let pt = self.paint_target.as_ref()?;
+        let pt_offset_x = pt.offset_x;
+        let pt_offset_y = pt.offset_y;
+        let pt_width = pt.width;
+        let pt_height = pt.height;
+
+        let unclipped_x0 = position[0] - half_w;
+        let unclipped_y0 = position[1] - half_h;
+        let layer_x0 = pt_offset_x as f32;
+        let layer_y0 = pt_offset_y as f32;
+        let layer_x1 = layer_x0 + pt_width as f32;
+        let layer_y1 = layer_y0 + pt_height as f32;
+        let x0 = unclipped_x0.max(layer_x0);
+        let y0 = unclipped_y0.max(layer_y0);
+        let x1 = (position[0] + half_w).min(layer_x1);
+        let y1 = (position[1] + half_h).min(layer_y1);
+
+        let quad_w = x1 - x0;
+        let quad_h = y1 - y0;
+        if quad_w <= 0.0 || quad_h <= 0.0 {
+            return None;
+        }
+
+        // Floor-then-ceil so every fragment in the quad has a valid
+        // canvas_copy texel to read. `i32` keeps negative origins
+        // (paste-extent layers, leftward-grown layers) representable.
+        let copy_canvas_x = x0.floor() as i32;
+        let copy_canvas_y = y0.floor() as i32;
+        let copy_w = (x1.ceil() as i32 - copy_canvas_x) as u32;
+        let copy_h = (y1.ceil() as i32 - copy_canvas_y) as u32;
+        if copy_w == 0 || copy_h == 0 {
+            return None;
+        }
+
+        // Canvas coords are stable across mid-stroke layer growth
+        // (Storage Frame Rule), so the bbox stored here remains valid
+        // regardless of subsequent grow_layer events.
+        self.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
+            copy_canvas_x,
+            copy_canvas_y,
+            copy_w,
+            copy_h,
+        ));
+
+        // canvas_copy is filled from the stroke scratch, which is
+        // layer-sized and indexed in layer-local pixels — translate
+        // before issuing the copy.
+        let copy_local_x = (copy_canvas_x - pt_offset_x) as u32;
+        let copy_local_y = (copy_canvas_y - pt_offset_y) as u32;
+        self.ensure_canvas_copy(copy_local_x, copy_local_y, copy_w, copy_h);
+
+        Some(DabFootprint {
+            layer_offset: [pt_offset_x, pt_offset_y],
+            layer_size: [pt_width, pt_height],
+            unclipped_origin: [unclipped_x0, unclipped_y0],
+            origin: [x0, y0],
+            size: [quad_w, quad_h],
+            copy_canvas_origin: [copy_canvas_x, copy_canvas_y],
+            copy_local_origin: [copy_local_x, copy_local_y],
+            copy_size: [copy_w, copy_h],
+        })
+    }
+
     /// Ensure `canvas_copy_texture` holds the canvas region starting at the
     /// given pixel origin, sized to cover `(width, height)`.  Idempotent per
     /// dab: the first caller issues `copy_texture_to_texture`; subsequent
@@ -181,4 +266,41 @@ impl<'a> BrushGpuContext<'a> {
         );
         self.canvas_copy_origin = Some([origin_x, origin_y]);
     }
+}
+
+/// Per-dab footprint produced by [`BrushGpuContext::prepare_dab_canvas_copy`].
+///
+/// Bundles every value brush terminals need to populate per-dab uniforms:
+/// the layer-clipped quad in canvas coords, the layer-local origin of
+/// the `canvas_copy` snapshot the shader will read, and the layer's own
+/// offset/size (for vertex NDC mapping against the layer-sized scratch
+/// render target).
+///
+/// Coordinates are reported as `[x, y]` arrays so callers can name them
+/// however reads best at the call site. `unclipped_origin` is the dab's
+/// *pre-clip* top-left in canvas pixels — kept here because terminal
+/// nodes that compute UVs for a stamp texture (color_output, watercolor)
+/// derive `uv_min/uv_max` relative to the original (pre-clip) footprint.
+#[derive(Copy, Clone, Debug)]
+pub struct DabFootprint {
+    /// `paint_target.offset_x/y` — layer's canvas-space offset.
+    pub layer_offset: [i32; 2],
+    /// `paint_target.width/height` — layer pixel dimensions.
+    pub layer_size: [u32; 2],
+    /// Dab footprint top-left in canvas pixels, *before* clipping to
+    /// the layer extent.
+    pub unclipped_origin: [f32; 2],
+    /// Layer-clipped quad top-left in canvas pixels.
+    pub origin: [f32; 2],
+    /// Layer-clipped quad size in canvas pixels.
+    pub size: [f32; 2],
+    /// Integer canvas-space copy rect origin (`i32` — may be negative
+    /// on paste-extent layers).
+    pub copy_canvas_origin: [i32; 2],
+    /// Layer-local origin of the `canvas_copy` snapshot region (matches
+    /// the `ensure_canvas_copy` source origin already issued). Use as
+    /// the `copy_origin` uniform for shaders that read `canvas_copy`.
+    pub copy_local_origin: [u32; 2],
+    /// `canvas_copy` snapshot dimensions in pixels.
+    pub copy_size: [u32; 2],
 }

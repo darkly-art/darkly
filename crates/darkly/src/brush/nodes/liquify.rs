@@ -147,72 +147,23 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         const DRAG_FACTOR: f32 = 0.25;
         let displacement = radius * DRAG_FACTOR * strength;
 
-        // The render target is the stroke scratch, sized to the layer
-        // (not the canvas). After mid-stroke layer growth or on a
-        // paste-extent layer, `pt.offset_x/y` may be non-zero and
-        // `pt.width/height` may exceed the canvas; clamp the dab footprint
-        // to the layer's canvas extent (mirrors `color_output`'s pattern)
-        // so liquify can warp off-canvas pixels too.
-        let pt = gpu
-            .paint_target
-            .as_ref()
-            .expect("liquify::evaluate_gpu requires a paint target");
-        let pt_offset_x = pt.offset_x;
-        let pt_offset_y = pt.offset_y;
-        let pt_width = pt.width;
-        let pt_height = pt.height;
-
-        // Bounding box: disc + displacement padding so the bilinear-sampled
-        // canvas_copy footprint is always inside the copied region.
+        // Layer-clip the dab footprint, push the canvas-space write bbox,
+        // and snapshot the scratch under the disc into canvas_copy.
+        // Subsequent dabs in the same place see the prior dab's warp via
+        // the cached snapshot. `half` includes displacement padding so
+        // the bilinear-sampled canvas_copy footprint always lies inside
+        // the copied region. None means the disc doesn't overlap the
+        // layer (early-out).
         let half = radius + displacement;
-        let unclipped_x0 = position[0] - half;
-        let unclipped_y0 = position[1] - half;
-        let layer_x0 = pt_offset_x as f32;
-        let layer_y0 = pt_offset_y as f32;
-        let layer_x1 = layer_x0 + pt_width as f32;
-        let layer_y1 = layer_y0 + pt_height as f32;
-        let x0 = unclipped_x0.max(layer_x0);
-        let y0 = unclipped_y0.max(layer_y0);
-        let x1 = (position[0] + half).min(layer_x1);
-        let y1 = (position[1] + half).min(layer_y1);
-
-        let rect_w = x1 - x0;
-        let rect_h = y1 - y0;
-        if rect_w <= 0.0 || rect_h <= 0.0 {
-            return vec![];
-        }
-
-        // Integer canvas-space copy rect — floor-then-ceil so every fragment
-        // in the quad has a valid canvas_copy texel to read. `i32` keeps
-        // negative origins (paste-extent layers, leftward-grown layers)
-        // representable.
-        let copy_canvas_x = x0.floor() as i32;
-        let copy_canvas_y = y0.floor() as i32;
-        let copy_w = (x1.ceil() as i32 - copy_canvas_x) as u32;
-        let copy_h = (y1.ceil() as i32 - copy_canvas_y) as u32;
-        if copy_w == 0 || copy_h == 0 {
-            return vec![];
-        }
-
-        // Publish the canvas-space footprint so save_points / checkpoints
-        // cover the real damage region. Canvas coords are stable across
-        // mid-stroke layer growth (Storage Frame Rule).
-        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            copy_canvas_x,
-            copy_canvas_y,
-            copy_w,
-            copy_h,
-        ));
-
-        // canvas_copy indexes the stroke scratch, which is layer-sized —
-        // translate the canvas-space rect to the layer's local coord frame
-        // for the per-dab GPU dispatch.
-        let copy_local_x = (copy_canvas_x - pt_offset_x) as u32;
-        let copy_local_y = (copy_canvas_y - pt_offset_y) as u32;
-
-        // Snapshot the scratch under the disc into canvas_copy. Subsequent
-        // dabs in the same place see the prior dab's warp.
-        gpu.ensure_canvas_copy(copy_local_x, copy_local_y, copy_w, copy_h);
+        let footprint = match gpu.prepare_dab_canvas_copy(position, half, half) {
+            Some(f) => f,
+            None => return vec![],
+        };
+        let [pt_offset_x, pt_offset_y] = footprint.layer_offset;
+        let [pt_width, pt_height] = footprint.layer_size;
+        let [x0, y0] = footprint.origin;
+        let [rect_w, rect_h] = footprint.size;
+        let [copy_local_x, copy_local_y] = footprint.copy_local_origin;
 
         // Direction → unit vector. First dab of a stroke has no prior
         // position and arrives here with `direction = 0` (east). Acceptable

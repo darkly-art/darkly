@@ -130,58 +130,24 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             return vec![];
         }
 
-        // Layer-clipped quad — same logic as color_output. Paste-extent /
-        // grown layers may extend past the canvas in either direction, so
-        // we clip to the layer bounds, not the canvas.
-        let pt = gpu
-            .paint_target
-            .as_ref()
-            .expect("watercolor::evaluate_gpu requires a paint target");
-        let pt_offset_x = pt.offset_x;
-        let pt_offset_y = pt.offset_y;
-        let pt_width = pt.width;
-        let pt_height = pt.height;
-
+        // Layer-clip the dab footprint, push the canvas-space write bbox,
+        // and snapshot the scratch under the dab into canvas_copy. Same
+        // helper color_output and liquify use — None means the dab
+        // doesn't overlap the layer (early-out).
         let half_w = dab_w * 0.5;
         let half_h = dab_h * 0.5;
-        let unclipped_x0 = position[0] - half_w;
-        let unclipped_y0 = position[1] - half_h;
-        let layer_x0 = pt_offset_x as f32;
-        let layer_y0 = pt_offset_y as f32;
-        let layer_x1 = layer_x0 + pt_width as f32;
-        let layer_y1 = layer_y0 + pt_height as f32;
-        let x0 = unclipped_x0.max(layer_x0);
-        let y0 = unclipped_y0.max(layer_y0);
-        let x1 = (position[0] + half_w).min(layer_x1);
-        let y1 = (position[1] + half_h).min(layer_y1);
-
-        let quad_w = x1 - x0;
-        let quad_h = y1 - y0;
-        if quad_w <= 0.0 || quad_h <= 0.0 {
-            return vec![];
-        }
-
-        // Integer canvas-space copy rect (matches composite.wgsl floor-then-
-        // ceil expectation so every fragment has a valid canvas_copy texel).
-        let copy_canvas_x = x0.floor() as i32;
-        let copy_canvas_y = y0.floor() as i32;
-        let copy_w = (x1.ceil() as i32 - copy_canvas_x) as u32;
-        let copy_h = (y1.ceil() as i32 - copy_canvas_y) as u32;
-        if copy_w == 0 || copy_h == 0 {
-            return vec![];
-        }
-
-        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            copy_canvas_x,
-            copy_canvas_y,
-            copy_w,
-            copy_h,
-        ));
-
-        let copy_local_x = (copy_canvas_x - pt_offset_x) as u32;
-        let copy_local_y = (copy_canvas_y - pt_offset_y) as u32;
-
-        gpu.ensure_canvas_copy(copy_local_x, copy_local_y, copy_w, copy_h);
+        let footprint = match gpu.prepare_dab_canvas_copy(position, half_w, half_h) {
+            Some(f) => f,
+            None => return vec![],
+        };
+        let [pt_offset_x, pt_offset_y] = footprint.layer_offset;
+        let [pt_width, pt_height] = footprint.layer_size;
+        let [unclipped_x0, unclipped_y0] = footprint.unclipped_origin;
+        let [x0, y0] = footprint.origin;
+        let [quad_w, quad_h] = footprint.size;
+        let x1 = x0 + quad_w;
+        let y1 = y0 + quad_h;
+        let [copy_canvas_x, copy_canvas_y] = footprint.copy_canvas_origin;
 
         // Dab UV mapping — identical to color_output. The dab content
         // occupies [0..dab_w]x[0..dab_h] within a (pool_w x pool_h) texture
