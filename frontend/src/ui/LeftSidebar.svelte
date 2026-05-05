@@ -66,7 +66,7 @@
                     onclick={() => app.activeToolId = tool.id}
                     title={(() => { const hk = formatHotkey(config.get(`hotkeys.${tool.hotkeyAction}`) as string | undefined); return hk ? `${tool.name} (${hk})` : tool.name; })()}
                 >
-                    <i class={tool.faIcon}></i>
+                    <i class={tool.id === 'brush' && app.eraseMode ? 'fa-solid fa-eraser' : tool.faIcon}></i>
                 </button>
             {/each}
         </div>

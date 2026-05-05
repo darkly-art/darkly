@@ -129,6 +129,10 @@ export const brushTool: Tool = {
         if (!brushGraph.graph && app.handle) {
             brushGraph.init();
         }
+        // Sync session erase-mode flag to the engine. Other tools that
+        // don't paint never read brush_blend_mode; brush tools that do
+        // (color_output) will pick this up on the next stroke.
+        ctx.handle.set_brush_blend_mode(app.eraseMode ? 1 : 0);
         // Hide the native cursor only if a preview is available — otherwise
         // fall back to the default cursor so the user has *something* to see.
         const info = ctx.handle.get_brush_preview_info();
@@ -137,6 +141,9 @@ export const brushTool: Tool = {
 
     onDeactivate(ctx) {
         ctx.handle.clear_overlay();
+        // Reset engine blend mode so a future paint-capable tool (or a
+        // direct WASM call) doesn't inherit our erase state.
+        ctx.handle.set_brush_blend_mode(0);
         app.toolCursor = null;
     },
 

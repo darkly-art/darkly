@@ -250,7 +250,6 @@ export function registerActions() {
     // co-located. Override these via `hotkeys.<toolHotkeyAction>` in config.
     const TOOL_DEFAULT_HOTKEYS: Record<string, string> = {
         brushTool: 'KeyB',
-        eraserTool: 'KeyE',
         fillTool: 'KeyF',
         gradientTool: 'KeyG',
         colorPickerTool: 'KeyP',
@@ -270,6 +269,24 @@ export function registerActions() {
             handler: () => { app.activeToolId = tool.id; },
         });
     }
+
+    // Erase mode is a flag on the brush tool, not a tool of its own.
+    // Hitting the hotkey from any other tool flips to brush AND turns
+    // erase on (matches Krita's "E from anywhere paints with the eraser").
+    actions.register({
+        id: 'toggleEraseMode',
+        displayName: 'Toggle Erase Mode',
+        category: 'tools',
+        description: 'Toggle erase mode on the brush tool. Switches to the brush tool first if another tool is active.',
+        defaultHotkey: 'KeyE',
+        handler: () => {
+            if (app.activeToolId !== 'brush') {
+                app.activeToolId = 'brush';
+            }
+            app.eraseMode = !app.eraseMode;
+            app.handle?.set_brush_blend_mode(app.eraseMode ? 1 : 0);
+        },
+    });
 
     // -- Layers --
     actions.register({
@@ -291,7 +308,7 @@ export function registerActions() {
         id: 'isolateLayer',
         displayName: 'Isolate Layer',
         category: 'layers',
-        description: 'Solo a layer (raster, group, or mask) by skipping off-path siblings in the compositor. Press again to restore. Pure session state — eye-icon visibility is preserved across toggles. Default chord fires from either thumbnail: alt+click on the layer thumb solos that layer; alt+click on the mask thumb solos the mask (renders as grayscale).',
+        description: 'Solo a layer so only it shows in the canvas. Press again to bring everything else back.',
         accepts: ['layerId'],
         defaultHotkey: 'KeyI',
         // Two defaults: one per thumbnail. The dispatching click handler

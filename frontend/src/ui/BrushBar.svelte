@@ -44,6 +44,11 @@
         }
     }
 
+    function toggleEraseMode() {
+        app.eraseMode = !app.eraseMode;
+        app.handle?.set_brush_blend_mode(app.eraseMode ? 1 : 0);
+    }
+
     let builderHeight = $state(33); // vh units
 
     function handleResizeStart(e: PointerEvent) {
@@ -149,6 +154,24 @@
             {/if}
         {/each}
 
+        <!-- Erase-mode toggle. Brush-tool-only state, so it lives next to
+             the brush's exposed scrubs but is hidden under other tools. -->
+        {#if app.activeToolId === 'brush'}
+            <button
+                type="button"
+                class="scrub erase-toggle"
+                class:on={app.eraseMode}
+                onclick={toggleEraseMode}
+                title="Erase mode (E)"
+            >
+                <i class="fa-solid fa-eraser scrub-icon"></i>
+                <div class="scrub-text">
+                    <span class="scrub-label">Erase</span>
+                    <span class="scrub-value">{app.eraseMode ? 'On' : 'Off'}</span>
+                </div>
+            </button>
+        {/if}
+
         <div class="spacer"></div>
 
         <!-- Error indicator -->
@@ -211,6 +234,23 @@
     :global(.scrub.dragging .scrub-icon),
     :global(.scrub.dragging .scrub-label),
     :global(.scrub.dragging .scrub-value) {
+        color: #ffffff;
+    }
+
+    /* Erase toggle reuses .scrub layout but is a click-to-toggle
+       button, not a drag-to-scrub control. `.on` highlights it when
+       erase mode is active — same accent treatment as `.dragging`. */
+    .erase-toggle {
+        border: none;
+        font: inherit;
+        cursor: pointer;
+    }
+    .erase-toggle.on {
+        background: var(--accent);
+    }
+    :global(.erase-toggle.on .scrub-icon),
+    :global(.erase-toggle.on .scrub-label),
+    :global(.erase-toggle.on .scrub-value) {
         color: #ffffff;
     }
 
