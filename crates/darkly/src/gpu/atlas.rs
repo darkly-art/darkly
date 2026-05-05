@@ -16,6 +16,11 @@ pub struct LayerTexture {
     /// or are placed inside canvas (e.g. paste of an oversized image).
     pub offset_x: i32,
     pub offset_y: i32,
+    /// Texture format. Tracked here so format-driven dispatch (R8 vs RGBA
+    /// paint pipelines, transform pipelines) doesn't have to reach into
+    /// `texture.format()` and matches what the document-side `PixelBuffer`
+    /// records.
+    pub format: wgpu::TextureFormat,
 }
 
 impl LayerTexture {
@@ -134,6 +139,7 @@ impl LayerTexture {
             height,
             offset_x: 0,
             offset_y: 0,
+            format,
         }
     }
 

@@ -1,12 +1,24 @@
-//! GPU-authoritative selection mask — owns the R8 texture and bind groups.
-//! CPU cache populated eagerly on upload and lazily from async readback.
+//! GPU-side state for the document's global selection: ping-pong R8 textures,
+//! the brush+paint pipeline bind groups, and the boolean-op render pipelines.
+//!
+//! This used to live in `engine/gpu_selection.rs` and carry the selection's
+//! pixel-level metadata (`active`, `pixel_bounds`, `cpu_cache`) directly. As of
+//! Phase 2 the selection is a typed [`crate::document::Modifier`] attached at
+//! the document root, and that metadata moved to [`SelectionModifier`]. What
+//! lives here is purely the GPU realisation: textures, bind groups, and the
+//! shaders that mutate them.
+//!
+//! Ping-pong: combine/invert ops can't read+write the same texture in a single
+//! render pass, so we keep two R8 textures and swap which is "current". The
+//! brush+paint bind groups always reference the current one and are rebuilt
+//! after a swap.
 
 use crate::document::SelectionMode;
-use crate::mask::RasterizedMask;
+use crate::layer::LayerId;
 
-/// Reusable pipelines for selection boolean operations.
+/// Reusable GPU pipelines for selection boolean operations.
 /// Created once in `DarklyEngine::new()`.
-pub(crate) struct SelectionPipelines {
+pub struct SelectionPipelines {
     combine_pipeline: wgpu::RenderPipeline,
     combine_bgl: wgpu::BindGroupLayout,
     mode_buf: wgpu::Buffer,
@@ -130,21 +142,21 @@ impl SelectionPipelines {
         }
     }
 
-    /// Run the combine shader: reads `selection.textures[current]` + shape → writes
-    /// to `selection.textures[1 - current]`, then swaps and rebuilds bind groups.
+    /// Run the combine shader: reads `state.textures[current]` + shape → writes
+    /// to `state.textures[1 - current]`, then swaps and rebuilds bind groups.
     pub fn combine(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        selection: &mut GpuSelection,
+        state: &mut SelectionState,
         shape_data: &[u8],
         mode: CombineMode,
         brush_bgl: &wgpu::BindGroupLayout,
         paint_bgl: &wgpu::BindGroupLayout,
     ) {
-        let w = selection.width;
-        let h = selection.height;
+        let w = state.width;
+        let h = state.height;
 
         // Upload shape to a temp texture.
         let shape_tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -182,7 +194,6 @@ impl SelectionPipelines {
         );
         let shape_view = shape_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Set mode uniform.
         queue.write_buffer(
             &self.mode_buf,
             0,
@@ -192,16 +203,13 @@ impl SelectionPipelines {
             }),
         );
 
-        // Create bind group: existing + shape + sampler + mode.
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sel-combine-bg"),
             layout: &self.combine_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &selection.views[selection.current],
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&state.views[state.current]),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -218,13 +226,12 @@ impl SelectionPipelines {
             ],
         });
 
-        // Render to the other ping-pong texture.
-        let dst = 1 - selection.current;
+        let dst = 1 - state.current;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("sel-combine-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &selection.views[dst],
+                    view: &state.views[dst],
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -240,10 +247,8 @@ impl SelectionPipelines {
             pass.draw(0..3, 0..1);
         }
 
-        // Swap ping-pong and rebuild bind groups.
-        selection.current = dst;
-        selection.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
-        selection.cpu_cache = None;
+        state.current = dst;
+        state.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
     }
 
     /// Run the combine shader in "invert" mode.
@@ -252,7 +257,7 @@ impl SelectionPipelines {
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        selection: &mut GpuSelection,
+        state: &mut SelectionState,
         brush_bgl: &wgpu::BindGroupLayout,
         paint_bgl: &wgpu::BindGroupLayout,
     ) {
@@ -271,15 +276,11 @@ impl SelectionPipelines {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &selection.views[selection.current],
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&state.views[state.current]),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &selection.views[selection.current],
-                    ),
+                    resource: wgpu::BindingResource::TextureView(&state.views[state.current]),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -292,12 +293,12 @@ impl SelectionPipelines {
             ],
         });
 
-        let dst = 1 - selection.current;
+        let dst = 1 - state.current;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("sel-invert-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &selection.views[dst],
+                    view: &state.views[dst],
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
@@ -313,14 +314,13 @@ impl SelectionPipelines {
             pass.draw(0..3, 0..1);
         }
 
-        selection.current = dst;
-        selection.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
-        selection.cpu_cache = None;
+        state.current = dst;
+        state.rebuild_bind_groups(device, brush_bgl, paint_bgl, &self.sampler);
     }
 }
 
 #[repr(u32)]
-pub(crate) enum CombineMode {
+pub enum CombineMode {
     Add = 0,
     Subtract = 1,
     Intersect = 2,
@@ -339,48 +339,32 @@ impl CombineMode {
 }
 
 // ---------------------------------------------------------------------------
-// GpuSelection — persistent selection state (always allocated)
+// SelectionState — GPU resources for the global selection (compositor-owned)
 // ---------------------------------------------------------------------------
 
-/// GPU-authoritative selection mask.
-///
-/// The GPU texture is the single source of truth. A CPU cache is maintained
-/// for operations that need pixel-level access (copy region bounds, selection
-/// masking for transforms). The cache is populated eagerly on `upload_replace`
-/// / `upload_replace_full` (where CPU data is already in hand) and lazily
-/// from async `SelectionReadback` completion (after boolean ops / invert).
-pub(crate) struct GpuSelection {
-    /// Ping-pong pair of R8Unorm textures (canvas-sized).
+/// Ping-pong R8 textures + brush/paint bind groups for the document's global
+/// selection. Allocated by the compositor when the selection modifier is first
+/// needed; lives until the document is dropped.
+pub struct SelectionState {
     pub textures: [wgpu::Texture; 2],
     pub views: [wgpu::TextureView; 2],
-    /// Index into `textures` for the current selection data.
+    /// Index into `textures` for the current (read) selection data.
     pub current: usize,
-
-    /// Bind group for `BrushPipelines::selection_bgl`.
+    /// Bind group for the brush pipeline's selection BGL.
     brush_bind_group: wgpu::BindGroup,
-    /// Bind group for `PaintPipelines::selection_bind_group_layout`.
+    /// Bind group for the paint pipeline's selection BGL.
     paint_bind_group: wgpu::BindGroup,
-
-    /// Cached tight pixel bounds, in canvas coords (the selection texture is
-    /// canvas-sized at offset (0, 0)). Set from rasterization params on
-    /// Replace, cleared on boolean ops / invert (recomputed from readback
-    /// when needed).
-    pub pixel_bounds: Option<crate::coord::CanvasRect>,
-    /// True when a selection is logically active.
-    pub active: bool,
-
+    /// Modifier id this state is paired with (for region-store and undo
+    /// keying — the document's selection modifier id).
+    pub modifier_id: LayerId,
     pub width: u32,
     pub height: u32,
-
-    /// CPU mirror of the current selection texture (full-canvas R8).
-    /// Populated eagerly on upload, lazily from async `SelectionReadback`.
-    /// `None` after `combine()` / `invert()` until the next readback completes.
-    pub cpu_cache: Option<Vec<u8>>,
 }
 
-impl GpuSelection {
+impl SelectionState {
     pub fn new(
         device: &wgpu::Device,
+        modifier_id: LayerId,
         width: u32,
         height: u32,
         brush_bgl: &wgpu::BindGroupLayout,
@@ -419,37 +403,23 @@ impl GpuSelection {
             ..Default::default()
         });
 
-        let brush_bind_group =
-            Self::create_brush_bind_group(device, &views[0], &sampler, brush_bgl);
-        let paint_bind_group =
-            Self::create_paint_bind_group(device, &views[0], &sampler, paint_bgl);
+        let brush_bind_group = Self::make_brush_bg(device, &views[0], &sampler, brush_bgl);
+        let paint_bind_group = Self::make_paint_bg(device, &views[0], &sampler, paint_bgl);
 
-        GpuSelection {
+        SelectionState {
             textures,
             views,
             current: 0,
             brush_bind_group,
             paint_bind_group,
-            pixel_bounds: None,
-            active: false,
+            modifier_id,
             width,
             height,
-            cpu_cache: None,
         }
     }
 
     pub fn texture(&self) -> &wgpu::Texture {
         &self.textures[self.current]
-    }
-
-    /// Borrow the current selection texture as a `CanvasFrame`. The selection
-    /// mask is canvas-sized at offset (0, 0), so the canvas extent is just
-    /// `(0, 0, width, height)`.
-    pub fn canvas_frame(&self) -> crate::gpu::atlas::CanvasFrame<'_> {
-        crate::gpu::atlas::CanvasFrame {
-            texture: self.texture(),
-            canvas_extent: crate::coord::CanvasRect::from_xywh(0, 0, self.width, self.height),
-        }
     }
 
     pub fn brush_bind_group(&self) -> &wgpu::BindGroup {
@@ -460,18 +430,27 @@ impl GpuSelection {
         &self.paint_bind_group
     }
 
-    /// Upload a tight-bounds R8 region (Replace mode).
-    /// Clears the previous selection region, writes the new subregion.
+    /// Borrow the current selection texture as a `CanvasFrame`. The selection
+    /// is canvas-sized at offset (0, 0).
+    pub fn canvas_frame(&self) -> crate::gpu::atlas::CanvasFrame<'_> {
+        crate::gpu::atlas::CanvasFrame {
+            texture: self.texture(),
+            canvas_extent: crate::coord::CanvasRect::from_xywh(0, 0, self.width, self.height),
+        }
+    }
+
+    /// Replace the selection with a tight-bounds rasterized R8 region. Clears
+    /// the previous active region first, then writes the new one.
     pub fn upload_replace(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        mask: &RasterizedMask,
+        old_bounds: Option<crate::coord::CanvasRect>,
+        mask: &crate::mask::RasterizedMask,
         brush_bgl: &wgpu::BindGroupLayout,
         paint_bgl: &wgpu::BindGroupLayout,
     ) {
-        // Clear the old selection region on GPU (if any).
-        if let Some(bounds) = self.pixel_bounds {
+        if let Some(bounds) = old_bounds {
             let ow = bounds.width;
             let oh = bounds.height;
             let zeros = vec![0u8; (ow * oh) as usize];
@@ -500,7 +479,6 @@ impl GpuSelection {
             );
         }
 
-        // Write the new shape subregion.
         if mask.width > 0 && mask.height > 0 {
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -536,27 +514,10 @@ impl GpuSelection {
             ..Default::default()
         });
         self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
-
-        self.pixel_bounds = Some(crate::coord::CanvasRect::from_xywh(
-            mask.x as i32,
-            mask.y as i32,
-            mask.width,
-            mask.height,
-        ));
-        self.active = true;
-
-        // Build full-canvas CPU cache from the tight-bounds mask.
-        let mut cache = vec![0u8; (self.width * self.height) as usize];
-        for y in 0..mask.height {
-            let src = (y * mask.width) as usize;
-            let dst = ((mask.y + y) * self.width + mask.x) as usize;
-            cache[dst..dst + mask.width as usize]
-                .copy_from_slice(&mask.data[src..src + mask.width as usize]);
-        }
-        self.cpu_cache = Some(cache);
     }
 
-    /// Upload full-canvas R8 data (used by magic wand, mask-to-selection).
+    /// Replace the selection with a full-canvas R8 buffer (magic wand, mask-
+    /// to-selection).
     pub fn upload_replace_full(
         &mut self,
         device: &wgpu::Device,
@@ -594,16 +555,11 @@ impl GpuSelection {
             ..Default::default()
         });
         self.rebuild_bind_groups(device, brush_bgl, paint_bgl, &sampler);
-
-        self.pixel_bounds = crate::mask::pixel_bounds_r8(data, self.width, self.height)
-            .map(|[x, y, w, h]| crate::coord::CanvasRect::from_xywh(x as i32, y as i32, w, h));
-        self.active = true;
-        self.cpu_cache = Some(data.to_vec());
     }
 
-    /// Clear the selection: zero the active region, mark inactive.
-    pub fn clear(&mut self, queue: &wgpu::Queue) {
-        if let Some(bounds) = self.pixel_bounds {
+    /// Zero out the previously-active region (clear).
+    pub fn clear_region(&mut self, queue: &wgpu::Queue, bounds: Option<crate::coord::CanvasRect>) {
+        if let Some(bounds) = bounds {
             let ow = bounds.width;
             let oh = bounds.height;
             let zeros = vec![0u8; (ow * oh) as usize];
@@ -631,9 +587,6 @@ impl GpuSelection {
                 },
             );
         }
-        self.pixel_bounds = None;
-        self.active = false;
-        self.cpu_cache = None;
     }
 
     /// Rebuild bind groups after a ping-pong swap.
@@ -645,12 +598,12 @@ impl GpuSelection {
         sampler: &wgpu::Sampler,
     ) {
         self.brush_bind_group =
-            Self::create_brush_bind_group(device, &self.views[self.current], sampler, brush_bgl);
+            Self::make_brush_bg(device, &self.views[self.current], sampler, brush_bgl);
         self.paint_bind_group =
-            Self::create_paint_bind_group(device, &self.views[self.current], sampler, paint_bgl);
+            Self::make_paint_bg(device, &self.views[self.current], sampler, paint_bgl);
     }
 
-    fn create_brush_bind_group(
+    fn make_brush_bg(
         device: &wgpu::Device,
         view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
@@ -672,7 +625,7 @@ impl GpuSelection {
         })
     }
 
-    fn create_paint_bind_group(
+    fn make_paint_bg(
         device: &wgpu::Device,
         view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,

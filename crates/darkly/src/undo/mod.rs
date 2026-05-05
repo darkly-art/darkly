@@ -1,14 +1,14 @@
 mod compound;
 mod gpu_region;
 mod layer;
-mod mask;
+mod modifier;
 pub mod property;
 mod selection;
 
 pub use compound::CompoundAction;
 pub use gpu_region::GpuRegionAction;
 pub use layer::{LayerAddAction, LayerMoveAction, LayerRemoveAction};
-pub use mask::MaskPropertyAction;
+pub use modifier::{ModifierAddAction, ModifierRemoveAction, NodeLockedAction, NodeVisibleAction};
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
 
@@ -154,7 +154,7 @@ mod tests {
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
 
-        let id = doc.add_raster_layer();
+        let id = doc.add_raster_layer(None);
 
         // Record the add as undoable.
         let parent = doc.parent_of(id);
@@ -177,7 +177,7 @@ mod tests {
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
 
-        let id = doc.add_raster_layer();
+        let id = doc.add_raster_layer(None);
 
         // Remove the layer (undoable).
         let parent = doc.parent_of(id);
@@ -201,9 +201,9 @@ mod tests {
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
 
-        let l1 = doc.add_raster_layer();
-        let l2 = doc.add_raster_layer();
-        let l3 = doc.add_raster_layer();
+        let l1 = doc.add_raster_layer(None);
+        let l2 = doc.add_raster_layer(None);
+        let l3 = doc.add_raster_layer(None);
 
         // Order: l1, l2, l3 (bottom to top).
         let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
@@ -241,7 +241,7 @@ mod tests {
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
 
-        let id = doc.add_raster_layer();
+        let id = doc.add_raster_layer(None);
 
         // Change opacity.
         undo.push(Box::new(PropertyAction::new(
@@ -250,19 +250,19 @@ mod tests {
             Property::Opacity(0.5),
         )));
         if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
-            r.common.opacity = 0.5;
+            r.blend.opacity = 0.5;
         }
 
         // Undo — opacity back to 1.0.
         undo.undo(&mut doc);
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            assert!((r.common.opacity - 1.0).abs() < f32::EPSILON);
+            assert!((r.blend.opacity - 1.0).abs() < f32::EPSILON);
         }
 
         // Redo — opacity back to 0.5.
         undo.redo(&mut doc);
         if let Some(Layer::Raster(r)) = doc.layer(id) {
-            assert!((r.common.opacity - 0.5).abs() < f32::EPSILON);
+            assert!((r.blend.opacity - 0.5).abs() < f32::EPSILON);
         }
     }
 
@@ -272,18 +272,18 @@ mod tests {
 
         let mut doc = Document::new(128, 128);
         let mut undo = UndoStack::new(100);
-        let id = doc.add_raster_layer();
+        let id = doc.add_raster_layer(None);
 
         // Simulate a slider drag: opacity goes 1.0 → 0.9 → 0.7 → 0.5 → 0.3
         // Each step captures old from the document, applies new, then coalesces.
         let steps = [0.9_f32, 0.7, 0.5, 0.3];
         for &new_val in &steps {
             let old_val = match doc.layer(id) {
-                Some(Layer::Raster(r)) => r.common.opacity,
+                Some(Layer::Raster(r)) => r.blend.opacity,
                 _ => unreachable!(),
             };
             if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
-                r.common.opacity = new_val;
+                r.blend.opacity = new_val;
             }
             undo.coalesce_property(PropertyAction::new(
                 id,
@@ -296,7 +296,7 @@ mod tests {
         assert!(undo.can_undo());
         assert_eq!(
             doc.layer(id).map(|l| match l {
-                Layer::Raster(r) => r.common.opacity,
+                Layer::Raster(r) => r.blend.opacity,
             }),
             Some(0.3),
         );
@@ -304,7 +304,7 @@ mod tests {
         // Single undo should restore original opacity (1.0), not 0.5.
         undo.undo(&mut doc);
         let after_undo = match doc.layer(id) {
-            Some(Layer::Raster(r)) => r.common.opacity,
+            Some(Layer::Raster(r)) => r.blend.opacity,
             _ => unreachable!(),
         };
         assert!(
@@ -318,12 +318,43 @@ mod tests {
         // Redo should go back to 0.3.
         undo.redo(&mut doc);
         let after_redo = match doc.layer(id) {
-            Some(Layer::Raster(r)) => r.common.opacity,
+            Some(Layer::Raster(r)) => r.blend.opacity,
             _ => unreachable!(),
         };
         assert!(
             (after_redo - 0.3).abs() < f32::EPSILON,
             "redo should restore final opacity 0.3, got {after_redo}"
         );
+    }
+
+    #[test]
+    fn undo_add_raster_layer_with_anchor_restores_position() {
+        // Adding a layer with an anchor lands it above the anchor; undo +
+        // redo must replay it back to the same anchored slot, not to the top
+        // of root.
+        let mut doc = Document::new(128, 128);
+        let mut undo = UndoStack::new(100);
+
+        let l1 = doc.add_raster_layer(None);
+        let l2 = doc.add_raster_layer(None);
+
+        // "Add above l1" — should land between l1 and l2.
+        let new_id = doc.add_raster_layer(Some(l1));
+        let parent = doc.parent_of(new_id);
+        let pos = doc.position_in_parent(new_id).unwrap();
+        undo.push(Box::new(LayerAddAction::new(new_id, parent, pos)));
+
+        let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
+        assert_eq!(flat, vec![l1, new_id, l2]);
+
+        // Undo removes the layer.
+        undo.undo(&mut doc);
+        let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
+        assert_eq!(flat, vec![l1, l2]);
+
+        // Redo restores the layer at its anchored position, not at the top.
+        undo.redo(&mut doc);
+        let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
+        assert_eq!(flat, vec![l1, new_id, l2]);
     }
 }

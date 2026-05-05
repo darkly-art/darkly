@@ -22,14 +22,14 @@
 
     function addNormalLayer() {
         if (!app.handle) return;
-        const id = app.handle.add_raster_layer();
+        const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
         app.selectLayer(id);
         onupdate();
     }
 
     function addGroup() {
         if (!app.handle) return;
-        const id = app.handle.add_group();
+        const id = app.handle.add_group(app.activeLayerId ?? -1);
         app.selectLayer(id);
         onupdate();
     }
@@ -41,19 +41,29 @@
         else pickerOpen = true;
     }
 
+    function hostHasMask(layer: any): boolean {
+        return Array.isArray(layer?.modifiers)
+            && layer.modifiers.some((m: any) => m.kind === 'mask');
+    }
+
     let canAddMask = $derived.by(() => {
         if (!app.handle || app.activeLayerId === null) return false;
         const layer = findNode(app.layerTree, app.activeLayerId);
-        return (layer?.type === 'raster' || layer?.type === 'group') && !layer.hasMask;
+        return (layer?.type === 'raster' || layer?.type === 'group') && !hostHasMask(layer);
     });
 
     function addMask() {
         if (!app.handle || app.activeLayerId === null) return;
         if (!canAddMask) return;
-        app.handle.add_mask(app.activeLayerId);
-        app.editingMaskLayerId = app.activeLayerId;
-        app.handle.set_editing_mask(app.activeLayerId, true);
+        const hostId = app.activeLayerId;
+        app.handle.add_mask(hostId);
+        // After add_mask the host gains a mask modifier; refresh tree, then
+        // activate the modifier id (the new paint target) so strokes land
+        // on the mask without a session redirect.
         onupdate();
+        const layer = findNode(app.layerTree, hostId);
+        const mask = layer?.modifiers?.find((m: any) => m.kind === 'mask');
+        if (mask) app.selectLayer(mask.id);
     }
 
     let canDelete = $derived(

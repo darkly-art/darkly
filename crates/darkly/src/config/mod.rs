@@ -220,16 +220,18 @@ mod tests {
         let krita = preset_values("Krita").expect("Krita preset");
         assert!(krita.is_empty(), "Krita preset should declare no overrides");
 
-        // Photoshop overrides colorPickerTool's hotkey and isolateLayer's
-        // mouse click. The flattened map uses the conventional namespaces.
+        // Photoshop overrides colorPickerTool's hotkey and clears the
+        // isolateLayer keyboard binding. It declares no mouse_clicks
+        // overrides — alt+click on a thumbnail is the universal default
+        // that lives on the action itself.
         let photoshop = preset_values("Photoshop").expect("Photoshop preset");
         assert_eq!(
             photoshop.get("hotkeys.colorPickerTool"),
             Some(&ConfigValue::Str("KeyI".into()))
         );
-        assert_eq!(
-            photoshop.get("mouseclicks.isolateLayer"),
-            Some(&ConfigValue::Str("layerEye:alt+click".into()))
+        assert!(
+            !photoshop.contains_key("mouseclicks.isolateLayer"),
+            "Photoshop preset should not override isolateLayer's mouse trigger"
         );
 
         // Photoshop is silent about canvas.width — it's not in the flattened

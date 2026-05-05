@@ -216,8 +216,11 @@ impl DarklyEngine {
             .overlay_preview_mask_texture()
             .expect("ensure_overlay_preview_mask just allocated it");
 
-        let sel_bg = if self.gpu_selection.active {
-            self.gpu_selection.brush_bind_group()
+        let sel_bg = if self.has_selection() {
+            self.compositor
+                .selection_state()
+                .map(|s| s.brush_bind_group())
+                .unwrap_or(&self.brush_pipelines.default_selection_bind_group)
         } else {
             &self.brush_pipelines.default_selection_bind_group
         };

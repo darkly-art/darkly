@@ -11,6 +11,7 @@ use darkly::gpu::test_utils::*;
 use darkly::gpu::transform::{
     affine_inverse, affine_multiply, affine_translate, Affine2D, TransformPass, IDENTITY,
 };
+use darkly::layer::LayerId;
 
 /// Build a CanvasFrame for a test texture sized `(w, h)` at canvas origin (0, 0).
 fn frame<'a>(tex: &'a wgpu::Texture, w: u32, h: u32) -> CanvasFrame<'a> {
@@ -35,68 +36,127 @@ fn pixel_at(pixels: &[u8], w: u32, x: u32, y: u32, bpp: u32) -> &[u8] {
     &pixels[offset..offset + bpp as usize]
 }
 
-/// Helper: create a TransformPass and the dummy accumulator/cache textures
-/// needed by set_floating_content. Returns (pass, accum_views, cache_view, sampler).
+/// Build a `TransformPass` for use by these tests, which all exercise the
+/// commit (live-target write) path. The derived-preview rework moved
+/// preview rendering to the compositor's wrapper, so the tests no longer
+/// need accumulator/cache views — but `TransformState` still owns a
+/// per-target `preview_texture` for completeness, so the helpers below
+/// supply a placeholder.
 fn setup_transform_pass(
     device: &wgpu::Device,
     _queue: &wgpu::Queue,
-    canvas_w: u32,
-    canvas_h: u32,
-) -> (
-    TransformPass,
-    [wgpu::TextureView; 2],
-    wgpu::TextureView,
-    wgpu::Sampler,
-) {
-    let fmt = wgpu::TextureFormat::Rgba8Unorm;
-    // Mock the compositor's mask BGL — single texture entry, fragment stage.
-    // Must match the layout the live BlendPipelines uses, since TransformPass
-    // links it into the preview pipeline. Only the layout matters here; the
-    // commit-only tests in this file don't actually run the preview pass.
-    let mask_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("test-mask-bgl"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        }],
-    });
-    let pass = TransformPass::new(device, fmt, &mask_bgl);
-
-    // Dummy accumulator textures (needed by set_floating_content for preview bind groups).
-    let make_dummy = || {
-        let tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("dummy-accum"),
-            size: wgpu::Extent3d {
-                width: canvas_w,
-                height: canvas_h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: fmt,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        tex.create_view(&wgpu::TextureViewDescriptor::default())
-    };
-
-    let accum_views = [make_dummy(), make_dummy()];
-    let cache_view = make_dummy();
-
+    _canvas_w: u32,
+    _canvas_h: u32,
+) -> (TransformPass, wgpu::Sampler) {
+    let pass = TransformPass::new(device);
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
         ..Default::default()
     });
+    (pass, sampler)
+}
 
-    (pass, accum_views, cache_view, sampler)
+/// Allocate a placeholder preview texture matching the target's format and
+/// dimensions. The commit-only tests don't read it back; it just satisfies
+/// `TransformState`'s ownership invariant.
+fn make_preview_placeholder(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("test-preview-placeholder"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_DST
+            | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    (tex, view)
+}
+
+/// Run the commit pipeline against a target texture. Wraps the
+/// `update_uniforms` → `render_commit` sequence into the single-call shape
+/// the old tests expected.
+#[allow(clippy::too_many_arguments)]
+fn commit_to_texture(
+    pass: &TransformPass,
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    queue: &wgpu::Queue,
+    target_tex: &wgpu::Texture,
+    target_view: &wgpu::TextureView,
+    matrix: &Affine2D,
+    source_origin: (i32, i32),
+    source_w: u32,
+    source_h: u32,
+    target_offset: (i32, i32),
+    target_w: u32,
+    target_h: u32,
+    canvas_w: u32,
+    canvas_h: u32,
+) {
+    pass.update_uniforms(
+        queue,
+        matrix,
+        source_origin,
+        source_w,
+        source_h,
+        target_offset,
+        target_w,
+        target_h,
+        canvas_w,
+        canvas_h,
+    );
+    pass.render_commit(device, encoder, target_tex, target_view);
+}
+
+/// Mirror of the production paste path: uploads RGBA pixel data and
+/// allocates a placeholder preview texture sized to the canvas.
+/// `target_format` matches the live target texture's format — RGBA8 for
+/// regular layers, R8 when committing onto a mask (the commit shader's
+/// `is_r8` branch maps the source's R channel into the single-channel
+/// output).
+#[allow(clippy::too_many_arguments)]
+fn set_floating_content_rgba(
+    pass: &mut TransformPass,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    sampler: &wgpu::Sampler,
+    rgba_data: &[u8],
+    source_w: u32,
+    source_h: u32,
+    target_layer: LayerId,
+    canvas_w: u32,
+    canvas_h: u32,
+    target_format: wgpu::TextureFormat,
+) {
+    let (preview_tex, preview_view) =
+        make_preview_placeholder(device, target_format, canvas_w, canvas_h);
+    pass.set_floating_content(
+        device,
+        queue,
+        sampler,
+        rgba_data,
+        source_w,
+        source_h,
+        target_layer,
+        target_format,
+        preview_tex,
+        preview_view,
+        None,
+    );
 }
 
 /// Helper: create flat RGBA pixel data with a solid-color rectangle.
@@ -134,41 +194,36 @@ fn transform_commit_translate() {
     let (target_tex, target_view) =
         create_test_texture(&device, &queue, cw, ch, &vec![0u8; (cw * ch * 4) as usize]);
 
-    let (mut pass, accum_views, cache_view, sampler) =
-        setup_transform_pass(&device, &queue, cw, ch);
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: 4×4 red block at (10, 10).
     let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [255, 0, 0, 255]);
 
-    pass.set_floating_content(
+    set_floating_content_rgba(
+        &mut pass,
         &device,
         &queue,
         &sampler,
-        &accum_views,
-        &cache_view,
         &source_data,
-        origin,
         sw,
         sh,
+        LayerId::from_ffi(1),
         cw,
         ch,
-        (0, 0),
-        (cw, ch),
-        1,
-        false,
+        wgpu::TextureFormat::Rgba8Unorm,
     );
 
     // Translate by (10, 10).
     let matrix = affine_translate(10.0, 10.0);
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(
+    commit_to_texture(
+        &pass,
         &device,
         &mut enc,
         &queue,
         &target_tex,
         &target_view,
-        fmt,
         &matrix,
         origin,
         sw,
@@ -235,27 +290,22 @@ fn transform_commit_translate_undo() {
         create_test_texture(&device, &queue, cw, ch, &vec![0u8; (cw * ch * 4) as usize]);
     let mut store = RegionStore::with_capacity(&device, cw, ch, 2 * 1024 * 1024);
 
-    let (mut pass, accum_views, cache_view, sampler) =
-        setup_transform_pass(&device, &queue, cw, ch);
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
     let (source_data, origin, sw, sh) = make_source_rect(5, 5, 4, 4, [0, 255, 0, 255]);
 
-    pass.set_floating_content(
+    set_floating_content_rgba(
+        &mut pass,
         &device,
         &queue,
         &sampler,
-        &accum_views,
-        &cache_view,
         &source_data,
-        origin,
         sw,
         sh,
+        LayerId::from_ffi(1),
         cw,
         ch,
-        (0, 0),
-        (cw, ch),
-        1,
-        false,
+        wgpu::TextureFormat::Rgba8Unorm,
     );
 
     // Save pre-commit state.
@@ -271,13 +321,13 @@ fn transform_commit_translate_undo() {
     // Commit with translation (15, 15).
     let matrix = affine_translate(15.0, 15.0);
     let mut enc = encoder(&device);
-    pass.commit_to_texture(
+    commit_to_texture(
+        &pass,
         &device,
         &mut enc,
         &queue,
         &target_tex,
         &target_view,
-        fmt,
         &matrix,
         origin,
         sw,
@@ -294,7 +344,7 @@ fn transform_commit_translate_undo() {
     let mut enc = encoder(&device);
     let entry = store.commit_region(
         &mut enc,
-        1,
+        LayerId::from_ffi(1),
         &frame(&target_tex, cw, ch),
         &snap,
         CanvasRect::from_xywh(0, 0, cw, ch),
@@ -339,8 +389,7 @@ fn transform_commit_rotate_90() {
     let (target_tex, target_view) =
         create_test_texture(&device, &queue, cw, ch, &vec![0u8; (cw * ch * 4) as usize]);
 
-    let (mut pass, accum_views, cache_view, sampler) =
-        setup_transform_pass(&device, &queue, cw, ch);
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: vertical line at x=2 in a 5×5 block.
     let (sw, sh) = (5u32, 5u32);
@@ -351,35 +400,31 @@ fn transform_commit_rotate_90() {
         source_data[off..off + 4].copy_from_slice(&[0, 0, 255, 255]);
     }
 
-    pass.set_floating_content(
+    set_floating_content_rgba(
+        &mut pass,
         &device,
         &queue,
         &sampler,
-        &accum_views,
-        &cache_view,
         &source_data,
-        (ox, oy),
         sw,
         sh,
+        LayerId::from_ffi(1),
         cw,
         ch,
-        (0, 0),
-        (cw, ch),
-        1,
-        false,
+        wgpu::TextureFormat::Rgba8Unorm,
     );
 
     // Rotate 90° CW: matrix [0, 1, 0, -1, 0, 5]
     let matrix: Affine2D = [0.0, 1.0, 0.0, -1.0, 0.0, 5.0];
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(
+    commit_to_texture(
+        &pass,
         &device,
         &mut enc,
         &queue,
         &target_tex,
         &target_view,
-        fmt,
         &matrix,
         (ox, oy),
         sw,
@@ -442,39 +487,34 @@ fn paste_commit_identity() {
     let (target_tex, target_view) =
         create_test_texture(&device, &queue, cw, ch, &vec![0u8; (cw * ch * 4) as usize]);
 
-    let (mut pass, accum_views, cache_view, sampler) =
-        setup_transform_pass(&device, &queue, cw, ch);
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: 8×8 magenta block at (20, 20).
     let (source_data, origin, sw, sh) = make_source_rect(20, 20, 8, 8, [255, 0, 255, 255]);
 
-    pass.set_floating_content(
+    set_floating_content_rgba(
+        &mut pass,
         &device,
         &queue,
         &sampler,
-        &accum_views,
-        &cache_view,
         &source_data,
-        origin,
         sw,
         sh,
+        LayerId::from_ffi(1),
         cw,
         ch,
-        (0, 0),
-        (cw, ch),
-        1,
-        false,
+        wgpu::TextureFormat::Rgba8Unorm,
     );
 
     // Commit with identity — pixels land at their original position.
     let mut enc = encoder(&device);
-    pass.commit_to_texture(
+    commit_to_texture(
+        &pass,
         &device,
         &mut enc,
         &queue,
         &target_tex,
         &target_view,
-        fmt,
         &IDENTITY,
         origin,
         sw,
@@ -530,27 +570,22 @@ fn paste_commit_undo() {
         create_test_texture(&device, &queue, cw, ch, &vec![0u8; (cw * ch * 4) as usize]);
     let mut store = RegionStore::with_capacity(&device, cw, ch, 2 * 1024 * 1024);
 
-    let (mut pass, accum_views, cache_view, sampler) =
-        setup_transform_pass(&device, &queue, cw, ch);
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
     let (source_data, origin, sw, sh) = make_source_rect(10, 10, 6, 6, [255, 255, 0, 255]);
 
-    pass.set_floating_content(
+    set_floating_content_rgba(
+        &mut pass,
         &device,
         &queue,
         &sampler,
-        &accum_views,
-        &cache_view,
         &source_data,
-        origin,
         sw,
         sh,
+        LayerId::from_ffi(1),
         cw,
         ch,
-        (0, 0),
-        (cw, ch),
-        1,
-        false,
+        wgpu::TextureFormat::Rgba8Unorm,
     );
 
     // Save pre-paste state.
@@ -565,13 +600,13 @@ fn paste_commit_undo() {
 
     // Commit paste.
     let mut enc = encoder(&device);
-    pass.commit_to_texture(
+    commit_to_texture(
+        &pass,
         &device,
         &mut enc,
         &queue,
         &target_tex,
         &target_view,
-        fmt,
         &IDENTITY,
         origin,
         sw,
@@ -587,7 +622,7 @@ fn paste_commit_undo() {
     let mut enc = encoder(&device);
     let entry = store.commit_region(
         &mut enc,
-        1,
+        LayerId::from_ffi(1),
         &frame(&target_tex, cw, ch),
         &snap,
         CanvasRect::from_xywh(0, 0, cw, ch),
@@ -643,38 +678,33 @@ fn commit_composites_over_existing() {
     let blue: Vec<u8> = (0..cw * ch).flat_map(|_| [0u8, 0, 255, 255]).collect();
     let (target_tex, target_view) = create_test_texture(&device, &queue, cw, ch, &blue);
 
-    let (mut pass, accum_views, cache_view, sampler) =
-        setup_transform_pass(&device, &queue, cw, ch);
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: semi-transparent red (alpha=128) at (10,10) size 4×4.
     let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [255, 0, 0, 128]);
 
-    pass.set_floating_content(
+    set_floating_content_rgba(
+        &mut pass,
         &device,
         &queue,
         &sampler,
-        &accum_views,
-        &cache_view,
         &source_data,
-        origin,
         sw,
         sh,
+        LayerId::from_ffi(1),
         cw,
         ch,
-        (0, 0),
-        (cw, ch),
-        1,
-        false,
+        wgpu::TextureFormat::Rgba8Unorm,
     );
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(
+    commit_to_texture(
+        &pass,
         &device,
         &mut enc,
         &queue,
         &target_tex,
         &target_view,
-        fmt,
         &IDENTITY,
         origin,
         sw,
@@ -730,41 +760,37 @@ fn transform_commit_on_mask() {
     );
 
     // TransformPass still uses Rgba8Unorm for its accumulator format (preview path).
-    let (mut pass, accum_views, cache_view, sampler) =
-        setup_transform_pass(&device, &queue, cw, ch);
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
-    // Source: 4×4 white block at (10, 10). White RGB → luminance = 1.0 → mask value 255.
+    // Source: 4×4 white block at (10, 10). The R8 commit shader pulls the
+    // R channel directly, so a white RGBA source maps to mask value 255.
     let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [255, 255, 255, 255]);
 
-    pass.set_floating_content(
+    set_floating_content_rgba(
+        &mut pass,
         &device,
         &queue,
         &sampler,
-        &accum_views,
-        &cache_view,
         &source_data,
-        origin,
         sw,
         sh,
+        LayerId::from_ffi(1),
         cw,
         ch,
-        (0, 0),
-        (cw, ch),
-        1,
-        true, // target_is_mask = true
+        mask_fmt,
     );
 
     // Translate by (5, 5).
     let matrix = affine_translate(5.0, 5.0);
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(
+    commit_to_texture(
+        &pass,
         &device,
         &mut enc,
         &queue,
         &target_tex,
         &target_view,
-        mask_fmt,
         &matrix,
         origin,
         sw,
@@ -860,40 +886,35 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
         &vec![0u8; (target_w * target_h * 4) as usize],
     );
 
-    let (mut pass, accum_views, cache_view, sampler) =
-        setup_transform_pass(&device, &queue, cw, ch);
+    let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
     // Source: 4×4 green block at canvas (10, 10). Identity transform — the
     // block should appear unchanged at canvas (10, 10), which is layer-local
     // (60, 60) on the offset target.
     let (source_data, origin, sw, sh) = make_source_rect(10, 10, 4, 4, [0, 255, 0, 255]);
 
-    pass.set_floating_content(
+    set_floating_content_rgba(
+        &mut pass,
         &device,
         &queue,
         &sampler,
-        &accum_views,
-        &cache_view,
         &source_data,
-        origin,
         sw,
         sh,
+        LayerId::from_ffi(1),
         cw,
         ch,
-        (0, 0),
-        (cw, ch),
-        1,
-        false,
+        wgpu::TextureFormat::Rgba8Unorm,
     );
 
     let mut enc = encoder(&device);
-    pass.commit_to_texture(
+    commit_to_texture(
+        &pass,
         &device,
         &mut enc,
         &queue,
         &target_tex,
         &target_view,
-        fmt,
         &IDENTITY,
         origin,
         sw,

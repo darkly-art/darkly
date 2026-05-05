@@ -19,6 +19,7 @@ png = { workspace = true }
 quick-xml = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
+slotmap = { workspace = true }
 
 [dev-dependencies]
 pollster = "0.4"

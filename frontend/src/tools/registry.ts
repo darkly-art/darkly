@@ -24,6 +24,11 @@ export interface Tool {
 
     onActivate?(ctx: ToolContext): void;
     onDeactivate?(ctx: ToolContext): void;
+    /** Optional: return true to consume this pointerdown before global
+     *  drag chords (e.g. shift+drag → brush-size scrub) are dispatched.
+     *  Tools with their own pointer-driven UI (handles, anchors, gizmos)
+     *  use this to prevent chord interception while their UI is active. */
+    claimsPointer?(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): boolean;
     onPointerDown(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
     onPointerMove(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
     onPointerUp(ctx: ToolContext, e: PointerEvent): void;

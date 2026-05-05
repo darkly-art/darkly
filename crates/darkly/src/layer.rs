@@ -1,4 +1,33 @@
-pub type LayerId = u64;
+use crate::coord::CanvasRect;
+
+slotmap::new_key_type! {
+    /// Unique identifier for any node, group, or modifier in a [`Document`].
+    /// Backed by a slotmap key — generational, so stale ids return `None` from
+    /// [`Document`] lookups instead of aliasing onto a recycled slot.
+    ///
+    /// At the WASM/JS boundary, marshal as `u64` via [`LayerId::to_ffi`] /
+    /// [`LayerId::from_ffi`].
+    ///
+    /// [`Document`]: crate::document::Document
+    pub struct LayerId;
+}
+
+impl LayerId {
+    /// Pack into a `u64` for the WASM/JS boundary. Index in the low 32 bits,
+    /// generation in the high 32. Round-trips losslessly through
+    /// [`LayerId::from_ffi`].
+    pub fn to_ffi(self) -> u64 {
+        slotmap::Key::data(&self).as_ffi()
+    }
+
+    /// Unpack a `u64` previously produced by [`LayerId::to_ffi`]. The result
+    /// is only meaningful within the [`Document`] that minted the original key.
+    ///
+    /// [`Document`]: crate::document::Document
+    pub fn from_ffi(v: u64) -> Self {
+        slotmap::KeyData::from_ffi(v).into()
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(u32)]
@@ -21,92 +50,134 @@ impl BlendMode {
     }
 }
 
-/// Properties shared by every layer node (raster layers and groups).
-/// Mask pixel data is GPU-authoritative — `has_mask` is just the doc-side
-/// flag the compositor reflects.
-pub struct LayerCommon {
+/// Properties shared by every node in the tree — raster layers, groups, and
+/// modifiers. Lock prevents any mutation; lives on every node by construction
+/// so the universal check is one line at every mutation entry point.
+pub struct NodeCommon {
     pub name: String,
+    pub visible: bool,
+    pub locked: bool,
+}
+
+impl NodeCommon {
+    pub fn new(name: String) -> Self {
+        NodeCommon {
+            name,
+            visible: true,
+            locked: false,
+        }
+    }
+}
+
+/// Compositing properties for nodes that participate in normal blending
+/// (raster layers and groups). Modifiers don't have one — masks structurally
+/// have no opacity or blend mode.
+pub struct BlendProps {
     pub opacity: f32,
     pub blend_mode: BlendMode,
-    pub visible: bool,
-    pub has_mask: bool,
-    pub mask_enabled: bool,
-    pub show_mask: bool,
 }
 
-impl LayerCommon {
-    pub fn new(name: String) -> Self {
-        LayerCommon {
-            name,
+impl BlendProps {
+    pub fn new() -> Self {
+        BlendProps {
             opacity: 1.0,
             blend_mode: BlendMode::Normal,
-            visible: true,
-            has_mask: false,
-            mask_enabled: true,
-            show_mask: false,
-        }
-    }
-
-    pub fn mask_snapshot(&self) -> MaskSnapshot {
-        MaskSnapshot {
-            has_mask: self.has_mask,
-            mask_enabled: self.mask_enabled,
-            show_mask: self.show_mask,
         }
     }
 }
 
-/// Snapshot of mask boolean state — used when capturing pre-mutation
-/// state for undo actions.
-#[derive(Clone, Copy)]
-pub struct MaskSnapshot {
-    pub has_mask: bool,
-    pub mask_enabled: bool,
-    pub show_mask: bool,
+impl Default for BlendProps {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-/// A raster (pixel) layer. Pixel data lives exclusively on GPU textures;
-/// this struct holds only metadata and compositing properties.
+/// Pixel-storage metadata for any node holding GPU pixels (raster layers, mask
+/// modifiers, future filter caches). Bulk pixel data is GPU-authoritative; this
+/// struct only carries canvas-space metadata: extent and texture format.
+///
+/// Every `PixelBuffer` is sampled independently — the blend shader computes UV
+/// from each buffer's own bounds. Lockstep growth (host + non-locked mask grow
+/// together) is a document-side convenience that drops out for free when both
+/// buffers receive the same rasterized transform.
+pub struct PixelBuffer {
+    pub bounds: CanvasRect,
+    pub format: wgpu::TextureFormat,
+}
+
+impl PixelBuffer {
+    pub fn new(bounds: CanvasRect, format: wgpu::TextureFormat) -> Self {
+        PixelBuffer { bounds, format }
+    }
+}
+
+/// A raster (pixel) layer.
 pub struct RasterLayer {
     pub id: LayerId,
-    pub common: LayerCommon,
-    /// Pixel-space bounds of the layer's GPU texture in canvas coordinates.
-    /// Initialized to canvas bounds at layer creation; grows to fit pasted
-    /// or transformed content that extends beyond the canvas.
-    pub bounds: crate::coord::CanvasRect,
+    pub common: NodeCommon,
+    pub blend: BlendProps,
+    pub pixels: PixelBuffer,
+    /// Modifiers attached to this layer, in bottom-up order. Each entry is a
+    /// [`LayerId`] resolvable in the owning [`Document`]'s entity store.
+    ///
+    /// [`Document`]: crate::document::Document
+    pub modifiers: Vec<LayerId>,
 }
 
 impl RasterLayer {
-    pub fn new(id: LayerId, bounds: crate::coord::CanvasRect) -> Self {
+    /// Construct a raster layer. `name` is the display name shown in the
+    /// layer panel — owners (the [`Document`]) supply a sequential
+    /// "Layer N" string rather than letting each constructor invent one
+    /// from the slotmap key, which would surface raw ffi values like
+    /// "Layer 4294967301" to the user.
+    pub fn new(id: LayerId, bounds: CanvasRect, name: String) -> Self {
         RasterLayer {
             id,
-            common: LayerCommon::new(format!("Layer {id}")),
-            bounds,
+            common: NodeCommon::new(name),
+            blend: BlendProps::new(),
+            pixels: PixelBuffer::new(bounds, wgpu::TextureFormat::Rgba8Unorm),
+            modifiers: Vec::new(),
         }
     }
 }
 
 pub struct LayerGroup {
     pub id: LayerId,
-    pub common: LayerCommon,
-    pub children: Vec<LayerNode>,
-    pub passthrough: bool, // true = passthrough (default), false = normal group
-    pub collapsed: bool,   // UI state: whether the group is visually collapsed
+    pub common: NodeCommon,
+    pub blend: BlendProps,
+    /// Child node ids in display order (bottom-to-top). Resolve via the owning
+    /// [`Document`]'s entity store.
+    ///
+    /// [`Document`]: crate::document::Document
+    pub children: Vec<LayerId>,
+    pub modifiers: Vec<LayerId>,
+    /// True = passthrough (default), false = normal isolated group.
+    pub passthrough: bool,
+    /// UI state: whether the group is visually collapsed in the layer panel.
+    pub collapsed: bool,
 }
 
 impl LayerGroup {
-    pub fn new(id: LayerId) -> Self {
+    /// Construct a group. `name` is the display name; same rationale as
+    /// [`RasterLayer::new`] — owners pass a sequential string.
+    pub fn new(id: LayerId, name: String) -> Self {
         LayerGroup {
             id,
-            common: LayerCommon::new(format!("Group {id}")),
+            common: NodeCommon::new(name),
+            blend: BlendProps::new(),
             children: Vec::new(),
+            modifiers: Vec::new(),
             passthrough: true,
             collapsed: false,
         }
     }
 }
 
-/// A node in the layer tree. Either a leaf layer or a group containing children.
+/// A node in the layer tree — either a leaf layer or a group containing children.
+/// Modifiers are NOT [`LayerNode`]s; they live on a host's `modifiers` list as
+/// [`LayerId`] references and are resolved through the owning [`Document`].
+///
+/// [`Document`]: crate::document::Document
 pub enum LayerNode {
     Layer(Layer),
     Group(LayerGroup),
@@ -120,22 +191,68 @@ impl LayerNode {
         }
     }
 
-    pub fn common(&self) -> &LayerCommon {
+    pub fn common(&self) -> &NodeCommon {
         match self {
-            LayerNode::Layer(Layer::Raster(r)) => &r.common,
+            LayerNode::Layer(l) => l.common(),
             LayerNode::Group(g) => &g.common,
         }
     }
 
-    pub fn common_mut(&mut self) -> &mut LayerCommon {
+    pub fn common_mut(&mut self) -> &mut NodeCommon {
         match self {
-            LayerNode::Layer(Layer::Raster(r)) => &mut r.common,
+            LayerNode::Layer(l) => l.common_mut(),
             LayerNode::Group(g) => &mut g.common,
+        }
+    }
+
+    pub fn blend(&self) -> &BlendProps {
+        match self {
+            LayerNode::Layer(l) => l.blend(),
+            LayerNode::Group(g) => &g.blend,
+        }
+    }
+
+    pub fn blend_mut(&mut self) -> &mut BlendProps {
+        match self {
+            LayerNode::Layer(l) => l.blend_mut(),
+            LayerNode::Group(g) => &mut g.blend,
+        }
+    }
+
+    pub fn modifiers(&self) -> &[LayerId] {
+        match self {
+            LayerNode::Layer(l) => l.modifiers(),
+            LayerNode::Group(g) => &g.modifiers,
+        }
+    }
+
+    pub fn modifiers_mut(&mut self) -> &mut Vec<LayerId> {
+        match self {
+            LayerNode::Layer(l) => l.modifiers_mut(),
+            LayerNode::Group(g) => &mut g.modifiers,
+        }
+    }
+
+    pub fn pixels(&self) -> Option<&PixelBuffer> {
+        match self {
+            LayerNode::Layer(Layer::Raster(r)) => Some(&r.pixels),
+            LayerNode::Group(_) => None,
+        }
+    }
+
+    pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
+        match self {
+            LayerNode::Layer(Layer::Raster(r)) => Some(&mut r.pixels),
+            LayerNode::Group(_) => None,
         }
     }
 
     pub fn visible(&self) -> bool {
         self.common().visible
+    }
+
+    pub fn locked(&self) -> bool {
+        self.common().locked
     }
 }
 
@@ -150,19 +267,59 @@ impl Layer {
         }
     }
 
-    pub fn common(&self) -> &LayerCommon {
+    pub fn common(&self) -> &NodeCommon {
         match self {
             Layer::Raster(r) => &r.common,
         }
     }
 
-    pub fn common_mut(&mut self) -> &mut LayerCommon {
+    pub fn common_mut(&mut self) -> &mut NodeCommon {
         match self {
             Layer::Raster(r) => &mut r.common,
         }
     }
 
+    pub fn blend(&self) -> &BlendProps {
+        match self {
+            Layer::Raster(r) => &r.blend,
+        }
+    }
+
+    pub fn blend_mut(&mut self) -> &mut BlendProps {
+        match self {
+            Layer::Raster(r) => &mut r.blend,
+        }
+    }
+
+    pub fn modifiers(&self) -> &[LayerId] {
+        match self {
+            Layer::Raster(r) => &r.modifiers,
+        }
+    }
+
+    pub fn modifiers_mut(&mut self) -> &mut Vec<LayerId> {
+        match self {
+            Layer::Raster(r) => &mut r.modifiers,
+        }
+    }
+
+    pub fn pixels(&self) -> &PixelBuffer {
+        match self {
+            Layer::Raster(r) => &r.pixels,
+        }
+    }
+
+    pub fn pixels_mut(&mut self) -> &mut PixelBuffer {
+        match self {
+            Layer::Raster(r) => &mut r.pixels,
+        }
+    }
+
     pub fn visible(&self) -> bool {
         self.common().visible
+    }
+
+    pub fn locked(&self) -> bool {
+        self.common().locked
     }
 }

@@ -40,17 +40,35 @@ export function dragChord(e: PointerEvent): string {
 }
 
 /**
- * Resolve an action's effective mouse trigger:
- *   user override (`mouseclicks.<id>`) ?? action.defaultMouseClick ?? unbound.
+ * Resolve an action's effective mouse trigger list:
+ *   user override (`mouseclicks.<id>`) ?? action.defaultMouseClick ?? [].
  *
- * Format: `"<site>:<chord>"` (e.g. `"layerEye:alt+click"`). Empty string
- * suppresses any default — use it in a preset to remove a click trigger.
+ * Format: each entry is `"<site>:<chord>"`. Most actions return a single-
+ * element list; actions that ship with the same chord on multiple sites
+ * (e.g. `isolateLayer` firing from both `layerThumb:alt+click` and
+ * `maskThumb:alt+click`) return all of them. A user override is stored as
+ * a single string and fully replaces the defaults — the customization
+ * model is "pick one binding", not "edit a list".
+ */
+export function effectiveMouseClicks(actionId: string): string[] {
+    const override = config.get(`mouseclicks.${actionId}`);
+    if (typeof override === 'string') {
+        return override ? [override] : [];
+    }
+    const def = actions.get(actionId)?.defaultMouseClick;
+    if (!def) return [];
+    if (typeof def === 'string') return def ? [def] : [];
+    return def.filter(Boolean);
+}
+
+/**
+ * Single-string view of an action's effective mouse trigger, for the
+ * Settings UI's input row. Returns the first binding from
+ * `effectiveMouseClicks` (or "" if none). The UI's "reset to default"
+ * button still drops back to the full default list at dispatch time.
  */
 export function effectiveMouseClick(actionId: string): string {
-    const override = config.get(`mouseclicks.${actionId}`);
-    if (typeof override === 'string') return override;
-    const action = actions.get(actionId);
-    return action?.defaultMouseClick ?? '';
+    return effectiveMouseClicks(actionId)[0] ?? '';
 }
 
 /**
@@ -67,12 +85,12 @@ let clickIndex: Map<string, string> = new Map();
 export function rebuildClickIndex() {
     const next = new Map<string, string>();
     for (const action of actions.all()) {
-        const trigger = effectiveMouseClick(action.id);
-        if (!trigger) continue;
-        // Last-wins on conflicts; the Settings UI's hotkey tab will surface
-        // these as warnings via the same conflict-detection pattern keyboard
-        // hotkeys use.
-        next.set(trigger, action.id);
+        for (const trigger of effectiveMouseClicks(action.id)) {
+            // Last-wins on conflicts; the Settings UI's hotkey tab will surface
+            // these as warnings via the same conflict-detection pattern keyboard
+            // hotkeys use.
+            next.set(trigger, action.id);
+        }
     }
     clickIndex = next;
 }

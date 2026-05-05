@@ -77,11 +77,11 @@
             theme.pushToWasm();
 
             // Demo setup: background image + paint layer in a group
-            const bg = handle.add_raster_layer();
+            const bg = handle.add_raster_layer(-1);
             handle.fill_background(bg);
 
-            const groupId = handle.add_group();
-            const paintLayerId = handle.add_raster_layer_in(groupId);
+            const groupId = handle.add_group(-1);
+            const paintLayerId = handle.add_raster_layer(groupId);
             app.selectLayer(paintLayerId);
 
             // Observe element resizes to keep GPU surface in sync
@@ -147,16 +147,22 @@
         // Navigation gets first chance (space+drag)
         if (nav.onPointerDown(e, canvas)) return;
 
-        // Drag-bound actions (e.g. shift+drag → brush size scrub) consume
-        // the pointer lifecycle before the active tool sees it.
         const pos = getCanvasCoords(e);
-        if (dispatchDrag('canvas', e, { x: pos.x, y: pos.y })) return;
+        const ctx = getToolContext();
+        const tool = toolRegistry.get(app.activeToolId);
+
+        // Active tool may claim the pointer before global drag chords
+        // (e.g. shift+drag → brush-size scrub) get a shot at it. Used
+        // by modal tools whose UI owns the canvas while active.
+        const claimed = !!(ctx && tool?.claimsPointer?.(ctx, e, pos.x, pos.y));
+
+        // Drag-bound actions consume the pointer lifecycle before the
+        // active tool sees it — unless the tool claimed it.
+        if (!claimed && dispatchDrag('canvas', e, { x: pos.x, y: pos.y })) return;
 
         canvas.setPointerCapture(e.pointerId);
 
-        const ctx = getToolContext();
         if (!ctx) return;
-        const tool = toolRegistry.get(app.activeToolId);
         tool?.onPointerDown(ctx, e, pos.x, pos.y);
         app.requestFrame();
     }

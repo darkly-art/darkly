@@ -10,15 +10,12 @@ pub enum LayerInfo {
         id: f64,
         name: String,
         visible: bool,
+        locked: bool,
         opacity: f32,
         blend_mode: u32,
-        has_mask: bool,
-        mask_enabled: bool,
-        show_mask: bool,
+        /// Modifiers attached to this layer (today: at most one mask).
+        modifiers: Vec<ModifierInfo>,
         /// Pixel-space bounds of the layer's GPU texture in canvas coords.
-        /// Equals `(0, 0, canvas_w, canvas_h)` for canvas-aligned layers;
-        /// paste-extent or grown layers report their actual canvas extent
-        /// so the frontend can show storage size and off-canvas indicators.
         bounds: crate::coord::CanvasRect,
     },
     #[serde(rename_all = "camelCase")]
@@ -26,15 +23,27 @@ pub enum LayerInfo {
         id: f64,
         name: String,
         visible: bool,
+        locked: bool,
         collapsed: bool,
         passthrough: bool,
         opacity: f32,
         blend_mode: u32,
-        has_mask: bool,
-        mask_enabled: bool,
-        show_mask: bool,
+        modifiers: Vec<ModifierInfo>,
         children: Vec<LayerInfo>,
     },
+}
+
+/// Serializable view of a single modifier attached to a host. Carries enough
+/// metadata for the frontend to render the modifier as a sub-row in the layer
+/// panel (name, visibility, lock toggles).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifierInfo {
+    pub id: f64,
+    pub kind: &'static str,
+    pub name: String,
+    pub visible: bool,
+    pub locked: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -231,34 +240,60 @@ pub struct ClipboardExport {
     pub offset_y: i32,
 }
 
-pub(crate) fn node_to_layer_info(node: &crate::layer::LayerNode) -> LayerInfo {
+pub(crate) fn node_to_layer_info(
+    doc: &crate::document::Document,
+    node_id: crate::layer::LayerId,
+) -> Option<LayerInfo> {
     use crate::layer::{Layer, LayerNode};
-    match node {
+    let node = doc.find_node(node_id)?;
+    let info = match node {
         LayerNode::Layer(layer) => match layer {
             Layer::Raster(r) => LayerInfo::Raster {
-                id: r.id as f64,
+                id: r.id.to_ffi() as f64,
                 name: r.common.name.clone(),
                 visible: r.common.visible,
-                opacity: r.common.opacity,
-                blend_mode: r.common.blend_mode as u32,
-                has_mask: r.common.has_mask,
-                mask_enabled: r.common.mask_enabled,
-                show_mask: r.common.show_mask,
-                bounds: r.bounds,
+                locked: r.common.locked,
+                opacity: r.blend.opacity,
+                blend_mode: r.blend.blend_mode as u32,
+                modifiers: r
+                    .modifiers
+                    .iter()
+                    .filter_map(|mid| doc.find_modifier(*mid).map(modifier_to_info))
+                    .collect(),
+                bounds: r.pixels.bounds,
             },
         },
         LayerNode::Group(g) => LayerInfo::Group {
-            id: g.id as f64,
+            id: g.id.to_ffi() as f64,
             name: g.common.name.clone(),
             visible: g.common.visible,
+            locked: g.common.locked,
             collapsed: g.collapsed,
             passthrough: g.passthrough,
-            opacity: g.common.opacity,
-            blend_mode: g.common.blend_mode as u32,
-            has_mask: g.common.has_mask,
-            mask_enabled: g.common.mask_enabled,
-            show_mask: g.common.show_mask,
-            children: g.children.iter().rev().map(node_to_layer_info).collect(),
+            opacity: g.blend.opacity,
+            blend_mode: g.blend.blend_mode as u32,
+            modifiers: g
+                .modifiers
+                .iter()
+                .filter_map(|mid| doc.find_modifier(*mid).map(modifier_to_info))
+                .collect(),
+            children: g
+                .children
+                .iter()
+                .rev()
+                .filter_map(|cid| node_to_layer_info(doc, *cid))
+                .collect(),
         },
+    };
+    Some(info)
+}
+
+pub(crate) fn modifier_to_info(modifier: &crate::document::Modifier) -> ModifierInfo {
+    ModifierInfo {
+        id: modifier.id.to_ffi() as f64,
+        kind: modifier.type_id(),
+        name: modifier.common.name.clone(),
+        visible: modifier.common.visible,
+        locked: modifier.common.locked,
     }
 }

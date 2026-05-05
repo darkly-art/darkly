@@ -61,6 +61,7 @@ use darkly::engine::{DarklyEngine, StrokeOp};
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::overlay::OverlayPrimitive;
 use darkly::gpu::params::{ParamDef, ParamValue};
+use darkly::layer::LayerId;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsError;
 
@@ -79,18 +80,21 @@ enum Command {
     // Layer properties
     SetOpacity(u64, f32),
     SetBlendMode(u64, u32),
+    /// Toggle visibility on any node — layer, group, or modifier (mask).
     SetLayerVisible(u64, bool),
     SetLayerName(u64, String),
     SetGroupCollapsed(u64, bool),
     SetGroupPassthrough(u64, bool),
+    /// Lock toggle on any node — paint/transform/property change refused while locked.
+    SetNodeLocked(u64, bool),
+    /// Session "isolate this node" flag. `0` = clear; otherwise the node id.
+    /// Replaces the previous `SetShowMask` per-layer flag.
+    SetIsolatedNode(u64),
 
-    // Layer masks
+    // Modifier (mask) operations
     AddMask(u64),
     RemoveMask(u64),
     ApplyMask(u64),
-    SetMaskEnabled(u64, bool),
-    SetShowMask(u64, bool),
-    SetEditingMask(u64, bool),
     SelectionToMask(u64),
     MaskToSelection(u64),
 
@@ -179,27 +183,40 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
     let cmds: Vec<Command> = commands.borrow_mut().drain(..).collect();
     for cmd in cmds {
         match cmd {
-            Command::BeginStroke(id) => engine.begin_stroke(id),
+            Command::BeginStroke(id) => engine.begin_stroke(LayerId::from_ffi(id)),
             Command::StrokeOp(op) => engine.stroke_to(op),
             Command::EndStroke => engine.end_stroke(),
 
-            Command::SetOpacity(id, v) => engine.set_opacity(id, v),
-            Command::SetBlendMode(id, v) => engine.set_blend_mode(id, v),
-            Command::SetLayerVisible(id, v) => engine.set_layer_visible(id, v),
-            Command::SetLayerName(id, ref name) => engine.set_layer_name(id, name),
-            Command::SetGroupCollapsed(id, v) => engine.set_group_collapsed(id, v),
-            Command::SetGroupPassthrough(id, v) => engine.set_group_passthrough(id, v),
+            Command::SetOpacity(id, v) => engine.set_opacity(LayerId::from_ffi(id), v),
+            Command::SetBlendMode(id, v) => engine.set_blend_mode(LayerId::from_ffi(id), v),
+            Command::SetLayerVisible(id, v) => engine.set_layer_visible(LayerId::from_ffi(id), v),
+            Command::SetLayerName(id, ref name) => {
+                engine.set_layer_name(LayerId::from_ffi(id), name)
+            }
+            Command::SetGroupCollapsed(id, v) => {
+                engine.set_group_collapsed(LayerId::from_ffi(id), v)
+            }
+            Command::SetGroupPassthrough(id, v) => {
+                engine.set_group_passthrough(LayerId::from_ffi(id), v)
+            }
 
-            Command::AddMask(id) => engine.add_mask(id),
-            Command::RemoveMask(id) => engine.remove_mask(id),
-            Command::ApplyMask(id) => engine.apply_mask(id),
-            Command::SetMaskEnabled(id, v) => engine.set_mask_enabled(id, v),
-            Command::SetShowMask(id, v) => engine.set_show_mask(id, v),
-            Command::SetEditingMask(id, v) => engine.set_editing_mask(id, v),
-            Command::SelectionToMask(id) => engine.selection_to_mask(id),
-            Command::MaskToSelection(id) => engine.mask_to_selection(id),
+            Command::AddMask(id) => engine.add_mask(LayerId::from_ffi(id)),
+            Command::RemoveMask(id) => engine.remove_mask(LayerId::from_ffi(id)),
+            Command::ApplyMask(id) => engine.apply_mask(LayerId::from_ffi(id)),
+            Command::SelectionToMask(id) => engine.selection_to_mask(LayerId::from_ffi(id)),
+            Command::MaskToSelection(id) => engine.mask_to_selection(LayerId::from_ffi(id)),
+            Command::SetNodeLocked(id, v) => engine.set_node_locked(LayerId::from_ffi(id), v),
+            Command::SetIsolatedNode(id) => {
+                // `id == 0` is the JS-side sentinel for "clear isolation".
+                let target = if id == 0 {
+                    None
+                } else {
+                    Some(LayerId::from_ffi(id))
+                };
+                engine.set_isolated_node(target);
+            }
 
-            Command::FillBackground(id) => engine.fill_background(id),
+            Command::FillBackground(id) => engine.fill_background(LayerId::from_ffi(id)),
 
             Command::SelectRect {
                 x,
@@ -238,10 +255,18 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
                 tolerance,
                 mode,
             } => {
-                engine.select_magic_wand(layer_id, seed_x, seed_y, tolerance, mode);
+                engine.select_magic_wand(
+                    LayerId::from_ffi(layer_id),
+                    seed_x,
+                    seed_y,
+                    tolerance,
+                    mode,
+                );
             }
             Command::ClearSelection => engine.clear_selection(),
-            Command::ClearSelectionContents(id) => engine.clear_selection_contents(id),
+            Command::ClearSelectionContents(id) => {
+                engine.clear_selection_contents(LayerId::from_ffi(id))
+            }
             Command::SelectAll => engine.select_all(),
             Command::InvertSelection => engine.invert_selection(),
 
@@ -464,31 +489,29 @@ impl DarklyHandle {
         self.push(Command::SetGroupPassthrough(group_id as u64, passthrough));
     }
 
-    // --- Layer masks ---
+    // --- Modifier (mask) operations ---
 
-    pub fn add_mask(&self, layer_id: f64) {
-        self.push(Command::AddMask(layer_id as u64));
+    pub fn add_mask(&self, host_id: f64) {
+        self.push(Command::AddMask(host_id as u64));
     }
-    pub fn remove_mask(&self, layer_id: f64) {
-        self.push(Command::RemoveMask(layer_id as u64));
+    pub fn remove_mask(&self, host_id: f64) {
+        self.push(Command::RemoveMask(host_id as u64));
     }
-    pub fn apply_mask(&self, layer_id: f64) {
-        self.push(Command::ApplyMask(layer_id as u64));
+    pub fn apply_mask(&self, host_id: f64) {
+        self.push(Command::ApplyMask(host_id as u64));
     }
-    pub fn set_mask_enabled(&self, layer_id: f64, enabled: bool) {
-        self.push(Command::SetMaskEnabled(layer_id as u64, enabled));
+    pub fn selection_to_mask(&self, host_id: f64) {
+        self.push(Command::SelectionToMask(host_id as u64));
     }
-    pub fn set_show_mask(&self, layer_id: f64, show: bool) {
-        self.push(Command::SetShowMask(layer_id as u64, show));
+    pub fn mask_to_selection(&self, modifier_id: f64) {
+        self.push(Command::MaskToSelection(modifier_id as u64));
     }
-    pub fn set_editing_mask(&self, layer_id: f64, editing: bool) {
-        self.push(Command::SetEditingMask(layer_id as u64, editing));
+    pub fn set_node_locked(&self, node_id: f64, locked: bool) {
+        self.push(Command::SetNodeLocked(node_id as u64, locked));
     }
-    pub fn selection_to_mask(&self, layer_id: f64) {
-        self.push(Command::SelectionToMask(layer_id as u64));
-    }
-    pub fn mask_to_selection(&self, layer_id: f64) {
-        self.push(Command::MaskToSelection(layer_id as u64));
+    /// Set the session-isolated node. Pass `0` to clear.
+    pub fn set_isolated_node(&self, node_id: f64) {
+        self.push(Command::SetIsolatedNode(node_id as u64));
     }
 
     // --- Painting ---
@@ -872,48 +895,50 @@ impl DarklyHandle {
     // --- Layer CRUD ---
     // IDs use f64 because JS has no u64 — any JS-facing backend needs this.
 
-    pub fn add_raster_layer(&self) -> f64 {
+    pub fn add_raster_layer(&self, anchor_id: f64) -> f64 {
         self.flush_if_needed();
-        self.engine.borrow_mut().add_raster_layer() as f64
+        let anchor = (anchor_id >= 0.0).then(|| LayerId::from_ffi(anchor_id as u64));
+        self.engine.borrow_mut().add_raster_layer(anchor).to_ffi() as f64
     }
 
-    pub fn add_raster_layer_in(&self, group_id: f64) -> f64 {
+    pub fn add_group(&self, anchor_id: f64) -> f64 {
         self.flush_if_needed();
-        self.engine
-            .borrow_mut()
-            .add_raster_layer_in(group_id as u64) as f64
-    }
-
-    pub fn add_group(&self) -> f64 {
-        self.flush_if_needed();
-        self.engine.borrow_mut().add_group() as f64
+        let anchor = (anchor_id >= 0.0).then(|| LayerId::from_ffi(anchor_id as u64));
+        self.engine.borrow_mut().add_group(anchor).to_ffi() as f64
     }
 
     pub fn remove_layer(&self, layer_id: f64) -> Result<(), JsError> {
         self.flush_if_needed();
         self.engine
             .borrow_mut()
-            .remove_layer(layer_id as u64)
+            .remove_layer(LayerId::from_ffi(layer_id as u64))
             .map_err(|e| JsError::new(&e))
     }
 
     pub fn move_layer(&self, layer_id: f64, target_type: &str, target_id: f64) {
         self.flush_if_needed();
+        let target_id = LayerId::from_ffi(target_id as u64);
         let target = match target_type {
-            "before" => MoveTarget::Before(target_id as u64),
-            "after" => MoveTarget::After(target_id as u64),
-            "into_top" => MoveTarget::IntoGroupTop(target_id as u64),
-            "into_bottom" => MoveTarget::IntoGroupBottom(target_id as u64),
+            "before" => MoveTarget::Before(target_id),
+            "after" => MoveTarget::After(target_id),
+            "into_top" => MoveTarget::IntoGroupTop(target_id),
+            "into_bottom" => MoveTarget::IntoGroupBottom(target_id),
             _ => return,
         };
-        self.engine.borrow_mut().move_layer(layer_id as u64, target)
+        self.engine
+            .borrow_mut()
+            .move_layer(LayerId::from_ffi(layer_id as u64), target)
     }
 
     // --- Copy / Cut / Paste ---
 
     pub fn copy(&self, layer_id: f64) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow_mut().copy(layer_id as u64) {
+        match self
+            .engine
+            .borrow_mut()
+            .copy(LayerId::from_ffi(layer_id as u64))
+        {
             Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
             None => JsValue::NULL,
         }
@@ -921,7 +946,11 @@ impl DarklyHandle {
 
     pub fn cut(&self, layer_id: f64) -> JsValue {
         self.flush_if_needed();
-        match self.engine.borrow_mut().cut(layer_id as u64) {
+        match self
+            .engine
+            .borrow_mut()
+            .cut(LayerId::from_ffi(layer_id as u64))
+        {
             Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
             None => JsValue::NULL,
         }
@@ -946,13 +975,14 @@ impl DarklyHandle {
     ) -> f64 {
         self.flush_if_needed();
         let active = if active_layer_id >= 0.0 {
-            Some(active_layer_id as u64)
+            Some(LayerId::from_ffi(active_layer_id as u64))
         } else {
             None
         };
         self.engine
             .borrow_mut()
-            .paste_image(width, height, rgba, offset_x, offset_y, active) as f64
+            .paste_image(width, height, rgba, offset_x, offset_y, active)
+            .to_ffi() as f64
     }
 
     pub fn paste_image_floating(
@@ -966,24 +996,25 @@ impl DarklyHandle {
     ) -> f64 {
         self.flush_if_needed();
         let active = if active_layer_id >= 0.0 {
-            Some(active_layer_id as u64)
+            Some(LayerId::from_ffi(active_layer_id as u64))
         } else {
             None
         };
         self.engine
             .borrow_mut()
-            .paste_image_floating(width, height, rgba, offset_x, offset_y, active) as f64
+            .paste_image_floating(width, height, rgba, offset_x, offset_y, active)
+            .to_ffi() as f64
     }
 
     pub fn paste_in_place(&self, active_layer_id: f64) -> f64 {
         self.flush_if_needed();
         let active = if active_layer_id >= 0.0 {
-            Some(active_layer_id as u64)
+            Some(LayerId::from_ffi(active_layer_id as u64))
         } else {
             None
         };
         match self.engine.borrow_mut().paste_in_place(active) {
-            Some(id) => id as f64,
+            Some(id) => id.to_ffi() as f64,
             None => -1.0,
         }
     }
@@ -994,12 +1025,14 @@ impl DarklyHandle {
         self.flush_if_needed();
         self.engine
             .borrow_mut()
-            .paste_in_place_floating(layer_id as u64)
+            .paste_in_place_floating(LayerId::from_ffi(layer_id as u64))
     }
 
     pub fn begin_transform(&self, layer_id: f64) -> bool {
         self.flush_if_needed();
-        self.engine.borrow_mut().begin_transform(layer_id as u64)
+        self.engine
+            .borrow_mut()
+            .begin_transform(LayerId::from_ffi(layer_id as u64))
     }
 
     // --- Veils (direct — need engine access for param defs) ---
@@ -1186,20 +1219,15 @@ impl DarklyHandle {
         }
     }
 
-    // --- Thumbnails (direct — kick off async readback) ---
+    // --- Thumbnails ---
 
-    pub fn layer_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
+    /// Cached thumbnail bytes for any node id (raster layer or mask modifier).
+    /// Format dispatch happens internally — callers just pass the node id.
+    pub fn node_thumbnail(&self, node_id: f64, width: u32, height: u32) -> Vec<u8> {
         self.flush_if_needed();
         self.engine
             .borrow_mut()
-            .layer_thumbnail(layer_id as u64, width, height)
-    }
-
-    pub fn mask_thumbnail(&self, layer_id: f64, width: u32, height: u32) -> Vec<u8> {
-        self.flush_if_needed();
-        self.engine
-            .borrow_mut()
-            .mask_thumbnail(layer_id as u64, width, height)
+            .node_thumbnail(LayerId::from_ffi(node_id as u64), width, height)
     }
 
     /// Monotonic counter bumped by the engine each time a thumbnail
@@ -1265,7 +1293,7 @@ impl DarklyHandle {
         self.engine
             .borrow()
             .floating_target_layer()
-            .map(|id| id as f64)
+            .map(|id| id.to_ffi() as f64)
             .unwrap_or(-1.0)
     }
 

@@ -22,8 +22,10 @@ class AppState {
     // sidebar's properties pane shows the props of whichever is non-null.
     activeVeilIndex = $state<number | null>(null);
 
-    // Mask editing — which layer's mask is the current paint target (null = editing layer content)
-    editingMaskLayerId = $state<number | null>(null);
+    // Session "isolate this node" flag. When set, the renderer shows only
+    // that node's contribution (e.g. a mask renders grayscale on canvas).
+    // Replaces the old per-layer `showMaskLayerId`.
+    isolatedNodeId = $state<number | null>(null);
 
     // Tool runtime state -- working values adjusted while painting.
     fillTolerance = $state(32);     // 0-255
@@ -35,8 +37,8 @@ class AppState {
 
     // Mirrors the engine's `thumbnail_version` counter. Bumped from
     // `requestFrame` after each render so any `$derived` that reads
-    // a thumbnail (via getLayerThumbnail / getMaskThumbnail) re-runs
-    // when an async readback lands and the wasm cache is updated.
+    // a thumbnail (via getNodeThumbnail) re-runs when an async readback
+    // lands and the wasm cache is updated.
     thumbnailEpoch = $state(0);
 
     // Veil list (read from WASM, refreshed after mutations).
@@ -58,6 +60,18 @@ class AppState {
     canvasEl = $state<HTMLCanvasElement | null>(null);
 
     selectLayer(id: number | null) {
+        // Clicking any layer other than the currently isolated one exits
+        // isolation. The user is asking to navigate to a layer that's
+        // off-path under the current solo, so the click implies they're
+        // done with the solo session — keeping isolation would be a
+        // confusing UI deadlock (the click would silently appear to do
+        // nothing if the new layer is hidden by isolation). Selecting the
+        // same isolated node is a no-op.
+        if (this.isolatedNodeId !== null && id !== this.isolatedNodeId) {
+            this.handle?.set_isolated_node(0);
+            this.isolatedNodeId = null;
+            this.requestFrame();
+        }
         this.activeLayerId = id;
         this.activeVeilIndex = null;
     }

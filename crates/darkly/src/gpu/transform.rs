@@ -1,9 +1,12 @@
-//! Floating content GPU pipeline — transform-blend shader, texture management,
-//! and GPU commit render pass.
+//! Floating content GPU pipeline — source-texture management + the commit
+//! render pass that writes transformed pixels into a target texture.
 //!
-//! Used by both paste-in-place and the interactive transform tool. The GPU
-//! texture provides real-time preview during interaction, and the commit
-//! render pass writes transformed pixels directly to the layer texture.
+//! Used by both paste-in-place and the interactive transform tool. The
+//! interactive preview is **not** a separate render path: the compositor
+//! maintains a per-target preview texture rebuilt by re-running the same
+//! commit shader after each matrix update, and the host's blend pass reads
+//! through `effective_*` accessors so the preview composes naturally
+//! without a parallel pipeline.
 
 use crate::gpu::atlas::LayerTexture;
 use crate::layer::LayerId;
@@ -102,15 +105,15 @@ pub enum FloatingMode {
     /// for this paste and should be removed on cancel. `None` means paste
     /// targets a pre-existing layer; cancel is a no-op.
     Paste { created_layer_id: Option<LayerId> },
-    /// Extracted from layer — commit writes transformed pixels.
-    /// Cancel restores the pre-clear state from RegionStore scratch.
+    /// Extracted from a layer — commit writes transformed pixels into the
+    /// live target after applying `clear_shape` to the source rect.
+    /// Cancel is a no-op on the texture: setup_transform doesn't touch
+    /// the live target, so there's nothing to restore.
     Transform {
-        /// Pre-clear snapshot of the source region. Used by `cancel_floating`
-        /// to undo the source clear; carries the saved rect and format.
-        cancel_snapshot: crate::gpu::region_store::Snapshot,
-        /// Shape of the clear setup_transform applied — replayed at commit
-        /// time before the transform render. Carrying the shape as data
-        /// keeps the selection and no-selection branches symmetric.
+        /// Shape of the source-rect clear that commit applies before the
+        /// transform render. The same shape is also applied to the
+        /// per-update preview texture so the preview matches what commit
+        /// will write.
         clear_shape: ClearShape,
     },
 }
@@ -127,10 +130,10 @@ pub struct FloatingContent {
     pub source_height: u32,
     /// Current affine transform matrix.
     pub matrix: Affine2D,
-    /// Target layer.
+    /// Target node id. Resolves to either a raster layer or a mask modifier;
+    /// the texture's own format (looked up via `compositor.node_texture(...)`)
+    /// distinguishes the two — no sidecar boolean needed.
     pub target_layer: LayerId,
-    /// Whether the target is a mask (vs layer tiles).
-    pub target_is_mask: bool,
     /// Determines commit/cancel behavior.
     pub mode: FloatingMode,
 }
@@ -175,7 +178,11 @@ impl FloatingContent {
 // TransformPass — GPU pipeline and active state, owned by compositor
 // ---------------------------------------------------------------------------
 
-/// Uniforms for the transform-blend shader (96 bytes, std140-aligned).
+/// Uniforms for the transform-commit shader (80 bytes, std140-aligned).
+///
+/// One uniform struct; one shader (commit). The preview is now a derived
+/// view of the target node's texture, rebuilt by running the same commit
+/// shader into a preview texture — no separate preview pipeline.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TransformBlendUniforms {
@@ -195,150 +202,57 @@ pub struct TransformBlendUniforms {
     pub canvas_size: [f32; 2],
     /// Opacity (0.0–1.0).
     pub opacity: f32,
-    /// Repurposed as `is_mask` flag by the commit shader (0.0 = RGBA, 1.0 = mask).
-    /// Unused by the preview shader.
-    pub _pad: f32,
-    /// Target layer pixel offset in canvas coords. Used by the preview shader
-    /// to sample the target layer's mask at the correct UV. Ignored by the
-    /// commit shader.
-    pub layer_offset: [f32; 2],
-    /// Target layer texture dimensions in pixels. Same role as layer_offset.
-    pub layer_size: [f32; 2],
+    /// Format flag (0.0 = RGBA, 1.0 = R8). The shader uses this to pick the
+    /// output channel layout — it's a format property, not a mask concept.
+    pub is_r8: f32,
 }
 
 /// GPU resources for an active floating content.
+///
+/// The "preview" — what the canvas would show if commit ran right now — is
+/// a derived view of the target's texture: each time the matrix updates,
+/// `render_preview` rebuilds `preview_texture` from a copy of the live
+/// target plus the commit shader at the current matrix. The compositor's
+/// `effective_*` accessors transparently swap the live view/mask bind
+/// group for the preview equivalents, so the host's normal blend pass
+/// renders the floating preview without any extra render path.
 pub struct TransformState {
     pub source_texture: wgpu::Texture,
     pub source_view: wgpu::TextureView,
     pub uniform_buf: wgpu::Buffer,
-    /// bind_groups[src_accum_index] — two for ping-pong.
-    pub bind_groups: [wgpu::BindGroup; 2],
-    /// Bind group reading from composite cache as background.
-    pub cache_source_bind_group: wgpu::BindGroup,
-    /// Bind group for commit pass (source + sampler + uniforms only).
+    /// Bind group for the commit pass (source + sampler + uniforms).
     pub commit_bind_group: wgpu::BindGroup,
     pub target_layer: LayerId,
-    pub target_is_mask: bool,
+    pub target_format: wgpu::TextureFormat,
+
+    /// Per-target preview texture, sized and formatted to match the live
+    /// target. Owned by this state — destroyed when floating ends.
+    pub preview_texture: wgpu::Texture,
+    pub preview_view: wgpu::TextureView,
+    /// Bind group sampling `preview_view` against the mask BGL — built
+    /// only when the target is R8, so the host's mask sampling can route
+    /// through the preview during a mask transform.
+    pub preview_mask_bind_group: Option<wgpu::BindGroup>,
 }
 
-/// GPU pipeline + optional active floating content.
+/// GPU pipelines for the floating-content commit pass + optional active state.
 pub struct TransformPass {
-    pub pipeline: wgpu::RenderPipeline,
-    pub bind_group_layout: wgpu::BindGroupLayout,
-    /// Commit pipelines: render transform directly to layer/mask texture.
+    /// Commit pipelines: render transform directly into a target texture.
+    /// The same pipelines drive both real commits (writing to the live
+    /// target) and per-update preview renders (writing to the preview
+    /// texture).
     commit_rgba_pipeline: wgpu::RenderPipeline,
     commit_r8_pipeline: wgpu::RenderPipeline,
     commit_bind_group_layout: wgpu::BindGroupLayout,
-    /// Single-texture BGL used for both dest copy (commit) and premultiply passes.
+    /// Single-texture BGL used for dest copy (commit) and premultiply passes.
     single_tex_bgl: wgpu::BindGroupLayout,
     premultiply_pipeline: wgpu::RenderPipeline,
     pub active: Option<TransformState>,
 }
 
 impl TransformPass {
-    /// `mask_bind_group_layout` must match the layout used by the compositor's
-    /// existing per-layer mask bind groups (single texture binding, fragment
-    /// stage). Reused so the preview pass can bind the same mask BG that the
-    /// blend pass uses for the target layer.
-    pub fn new(
-        device: &wgpu::Device,
-        accum_format: wgpu::TextureFormat,
-        mask_bind_group_layout: &wgpu::BindGroupLayout,
-    ) -> Self {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("transform-bgl"),
-            entries: &[
-                // binding 0: background accumulator
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 1: source texture
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                // binding 2: sampler
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-                // binding 3: uniforms
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("transform-pipeline-layout"),
-            bind_group_layouts: &[&bind_group_layout, mask_bind_group_layout],
-            immediate_size: 0,
-        });
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("transform-shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                concat!(
-                    include_str!("../../../../shaders/source_over.wgsl"),
-                    "\n",
-                    include_str!("../../../../shaders/transform.wgsl"),
-                )
-                .into(),
-            ),
-        });
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("transform-blend-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: accum_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // --- Commit pipelines (render directly to layer/mask texture) ---
+    pub fn new(device: &wgpu::Device) -> Self {
+        // --- Commit pipelines (render directly to a target texture) ---
         let commit_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("transform-commit-bgl"),
@@ -478,8 +392,6 @@ impl TransformPass {
         });
 
         TransformPass {
-            pipeline,
-            bind_group_layout,
             commit_rgba_pipeline,
             commit_r8_pipeline,
             commit_bind_group_layout,
@@ -489,34 +401,32 @@ impl TransformPass {
         }
     }
 
-    /// Upload flat RGBA pixel data as a source texture and create bind groups
-    /// for compositing against both ping-pong accumulators.
+    /// Build the source texture + uniforms + commit bind group for a paste.
     ///
     /// `rgba_data` must be `source_width * source_height * 4` bytes, row-major,
-    /// in straight alpha. This method converts to premultiplied alpha for
-    /// correct hardware bilinear interpolation.
+    /// in straight alpha. The pixel data is uploaded to a staging texture and
+    /// premultiplied via `premultiply_pipeline` so bilinear sampling during
+    /// transform produces correct edge blending.
+    ///
+    /// `preview_*` parameters are owned by the caller (the compositor builds
+    /// them sized to match the live target's `LayerTexture`). They live on
+    /// `TransformState` for the duration of the floating session and are
+    /// dropped when `clear()` runs.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_floating_content(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         sampler: &wgpu::Sampler,
-        accum_views: &[wgpu::TextureView; 2],
-        cache_view: &wgpu::TextureView,
         rgba_data: &[u8],
-        source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
-        canvas_width: u32,
-        canvas_height: u32,
-        layer_offset: (i32, i32),
-        layer_size: (u32, u32),
         target_layer: LayerId,
-        target_is_mask: bool,
+        target_format: wgpu::TextureFormat,
+        preview_texture: wgpu::Texture,
+        preview_view: wgpu::TextureView,
+        preview_mask_bind_group: Option<wgpu::BindGroup>,
     ) {
-        // Source texture is the premultiplied destination for the floating
-        // shaders. We upload the caller's straight-alpha RGBA into a temp
-        // texture and run the existing premultiply pipeline GPU-side — this
-        // avoids a 9M-iteration scalar loop in WASM for a 3K paste.
         let source_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transform-source"),
             size: wgpu::Extent3d {
@@ -534,8 +444,6 @@ impl TransformPass {
             view_formats: &[],
         });
 
-        // Staging texture for straight-alpha upload — sampled by the
-        // premultiply shader.
         let temp_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transform-source-staging"),
             size: wgpu::Extent3d {
@@ -573,8 +481,7 @@ impl TransformPass {
 
         let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Render the staging texture through the premultiply pipeline into
-        // source_texture.
+        // Render the staging texture through the premultiply pipeline.
         {
             let temp_view = temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
             let premul_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -610,125 +517,59 @@ impl TransformPass {
             queue.submit(std::iter::once(encoder.finish()));
         }
 
-        // Uniform buffer (identity matrix initially). Preview pass renders to
-        // canvas-sized accumulator: target_offset=0, target_size=canvas_size.
-        let uniforms = TransformBlendUniforms {
-            inv_row0: [1.0, 0.0, 0.0, 0.0],
-            inv_row1: [0.0, 1.0, 0.0, 0.0],
-            source_origin: [source_origin.0 as f32, source_origin.1 as f32],
-            source_size: [source_width as f32, source_height as f32],
-            target_offset: [0.0, 0.0],
-            target_size: [canvas_width as f32, canvas_height as f32],
-            canvas_size: [canvas_width as f32, canvas_height as f32],
-            opacity: 1.0,
-            _pad: 0.0,
-            layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
-            layer_size: [layer_size.0 as f32, layer_size.1 as f32],
-        };
-
+        // Allocate the uniform buffer; caller will fill it via `update_uniforms`.
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("transform-uniforms"),
             size: std::mem::size_of::<TransformBlendUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
-        // Create bind groups for both ping-pong directions
-        let make_bind_group = |bg_view: &wgpu::TextureView, label: &str| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(bg_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&source_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: uniform_buf.as_entire_binding(),
-                    },
-                ],
-            })
-        };
-
-        let bg0 = make_bind_group(&accum_views[0], "transform-bg0");
-        let bg1 = make_bind_group(&accum_views[1], "transform-bg1");
-        let cache_bg = make_bind_group(cache_view, "transform-bg-cache");
-
-        // Commit bind group (source + sampler + uniforms — no background)
-        let commit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("transform-commit-bg"),
-            layout: &self.commit_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: uniform_buf.as_entire_binding(),
-                },
-            ],
-        });
+        let commit_bind_group =
+            self.make_commit_bind_group(device, &source_view, sampler, &uniform_buf);
 
         self.active = Some(TransformState {
             source_texture,
             source_view,
             uniform_buf,
-            bind_groups: [bg0, bg1],
-            cache_source_bind_group: cache_bg,
             commit_bind_group,
             target_layer,
-            target_is_mask,
+            target_format,
+            preview_texture,
+            preview_view,
+            preview_mask_bind_group,
         });
     }
 
-    /// Set floating content by copying a region directly from a layer GPU texture.
+    /// Build the source texture by GPU-copying a region from a layer's
+    /// texture. Used by interactive transform on existing pixels.
     ///
-    /// GPU→GPU copy via `copy_texture_to_texture` — no CPU round-trip.
-    /// Used by `begin_transform` when extracting content from a GPU-authoritative layer.
+    /// `target_format` matches the layer's format. RGBA8 sources are
+    /// premultiplied (straight-alpha layer data needs premul for correct
+    /// bilinear interpolation in the commit shader). R8 (mask) sources skip
+    /// premultiply — single-channel, no alpha.
+    #[allow(clippy::too_many_arguments)]
     pub fn set_floating_content_from_gpu(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        _queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         sampler: &wgpu::Sampler,
-        accum_views: &[wgpu::TextureView; 2],
-        cache_view: &wgpu::TextureView,
         layer: &LayerTexture,
         source_origin: (i32, i32),
         source_width: u32,
         source_height: u32,
-        canvas_width: u32,
-        canvas_height: u32,
         target_layer: LayerId,
-        target_is_mask: bool,
+        target_format: wgpu::TextureFormat,
+        preview_texture: wgpu::Texture,
+        preview_view: wgpu::TextureView,
+        preview_mask_bind_group: Option<wgpu::BindGroup>,
     ) {
         let layer_texture = &layer.texture;
         let layer_offset = (layer.offset_x, layer.offset_y);
         let layer_dims = (layer.width, layer.height);
-        let src_format = if target_is_mask {
-            wgpu::TextureFormat::R8Unorm
-        } else {
-            wgpu::TextureFormat::Rgba8Unorm
-        };
+        let is_r8 = target_format == wgpu::TextureFormat::R8Unorm;
 
-        // The source texture is always RGBA8 (the transform shader expects RGBA).
-        // For masks (R8), we create an RGBA8 texture and copy the R8 channel.
-        // The transform commit shader handles the RGBA→R8 conversion.
         let source_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transform-source-gpu"),
             size: wgpu::Extent3d {
@@ -739,17 +580,14 @@ impl TransformPass {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: src_format,
+            format: target_format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
 
-        // GPU→GPU copy from layer texture to source texture.
-        // `source_origin` is canvas-space; convert to layer-local pixel
-        // coords by subtracting the layer's offset, then clip the read to
-        // the layer texture's actual extent (which may differ from canvas).
+        // GPU→GPU copy: canvas-space `source_origin` → layer-local pixel coords.
         let local_src_x_signed = source_origin.0 - layer_offset.0;
         let local_src_y_signed = source_origin.1 - layer_offset.1;
         let src_x = local_src_x_signed.max(0) as u32;
@@ -758,7 +596,6 @@ impl TransformPass {
         let copy_h = source_height.min(layer_dims.1.saturating_sub(src_y));
         let dst_x = (-local_src_x_signed).max(0) as u32;
         let dst_y = (-local_src_y_signed).max(0) as u32;
-        let _ = (canvas_width, canvas_height); // kept on the signature for the uniform write below.
 
         let copy_src = wgpu::TexelCopyTextureInfo {
             texture: layer_texture,
@@ -771,15 +608,13 @@ impl TransformPass {
             aspect: wgpu::TextureAspect::All,
         };
         let copy_size = wgpu::Extent3d {
-            width: copy_w.min(source_width - dst_x),
-            height: copy_h.min(source_height - dst_y),
+            width: copy_w.min(source_width.saturating_sub(dst_x)),
+            height: copy_h.min(source_height.saturating_sub(dst_y)),
             depth_or_array_layers: 1,
         };
 
-        if !target_is_mask && copy_w > 0 && copy_h > 0 {
-            // RGBA: copy layer → temp, then premultiply render to source.
-            // Straight-alpha layer data must be converted to premultiplied alpha
-            // for correct bilinear interpolation in the transform shaders.
+        if !is_r8 && copy_size.width > 0 && copy_size.height > 0 {
+            // RGBA: copy → temp, then premultiply render to source.
             let temp_texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("premultiply-temp"),
                 size: wgpu::Extent3d {
@@ -810,7 +645,6 @@ impl TransformPass {
                 copy_size,
             );
 
-            // Render pass: temp (straight) → source (premultiplied).
             let temp_view = temp_texture.create_view(&wgpu::TextureViewDescriptor::default());
             let premul_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("premultiply-bg"),
@@ -841,8 +675,8 @@ impl TransformPass {
                 rpass.set_bind_group(0, &premul_bg, &[]);
                 rpass.draw(0..3, 0..1);
             }
-        } else if copy_w > 0 && copy_h > 0 {
-            // Mask (R8): direct copy, no premultiply needed.
+        } else if copy_size.width > 0 && copy_size.height > 0 {
+            // Mask (R8): direct copy, no premultiply.
             encoder.copy_texture_to_texture(
                 copy_src,
                 wgpu::TexelCopyTextureInfo {
@@ -861,69 +695,44 @@ impl TransformPass {
 
         let source_view = source_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Uniform buffer (identity matrix initially). Preview pass renders to
-        // canvas-sized accumulator: target_offset=0, target_size=canvas_size.
-        // The mask shares the layer's bounds, so layer_offset/layer_size also
-        // double as the mask's UV mapping for the preview shader.
-        let uniforms = TransformBlendUniforms {
-            inv_row0: [1.0, 0.0, 0.0, 0.0],
-            inv_row1: [0.0, 1.0, 0.0, 0.0],
-            source_origin: [source_origin.0 as f32, source_origin.1 as f32],
-            source_size: [source_width as f32, source_height as f32],
-            target_offset: [0.0, 0.0],
-            target_size: [canvas_width as f32, canvas_height as f32],
-            canvas_size: [canvas_width as f32, canvas_height as f32],
-            opacity: 1.0,
-            _pad: 0.0,
-            layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
-            layer_size: [layer_dims.0 as f32, layer_dims.1 as f32],
-        };
-
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("transform-uniforms"),
             size: std::mem::size_of::<TransformBlendUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
-        // Create bind groups (same pattern as set_floating_content)
-        let make_bind_group = |bg_view: &wgpu::TextureView, label: &str| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(label),
-                layout: &self.bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(bg_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&source_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: uniform_buf.as_entire_binding(),
-                    },
-                ],
-            })
-        };
+        let commit_bind_group =
+            self.make_commit_bind_group(device, &source_view, sampler, &uniform_buf);
 
-        let bg0 = make_bind_group(&accum_views[0], "transform-gpu-bg0");
-        let bg1 = make_bind_group(&accum_views[1], "transform-gpu-bg1");
-        let cache_bg = make_bind_group(cache_view, "transform-gpu-bg-cache");
+        self.active = Some(TransformState {
+            source_texture,
+            source_view,
+            uniform_buf,
+            commit_bind_group,
+            target_layer,
+            target_format,
+            preview_texture,
+            preview_view,
+            preview_mask_bind_group,
+        });
+    }
 
-        let commit_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("transform-gpu-commit-bg"),
+    /// Bind group for the commit pass: source + sampler + uniforms.
+    fn make_commit_bind_group(
+        &self,
+        device: &wgpu::Device,
+        source_view: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+        uniform_buf: &wgpu::Buffer,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("transform-commit-bg"),
             layout: &self.commit_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&source_view),
+                    resource: wgpu::BindingResource::TextureView(source_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -934,76 +743,19 @@ impl TransformPass {
                     resource: uniform_buf.as_entire_binding(),
                 },
             ],
-        });
-
-        self.active = Some(TransformState {
-            source_texture,
-            source_view,
-            uniform_buf,
-            bind_groups: [bg0, bg1],
-            cache_source_bind_group: cache_bg,
-            commit_bind_group,
-            target_layer,
-            target_is_mask,
-        });
+        })
     }
 
-    /// Update the affine matrix uniform for real-time preview.
-    pub fn update_matrix(
+    /// Update the uniform buffer for the current matrix + target geometry.
+    /// Used by both `commit_to_texture` (writes into the live target) and
+    /// preview rendering (writes into the preview texture). The uniform
+    /// `target_offset` / `target_size` describe where on the canvas the
+    /// render target's pixels live, so the shader can map UV→canvas coords
+    /// for paste-extent (offset/oversized) targets.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_uniforms(
         &self,
         queue: &wgpu::Queue,
-        matrix: &Affine2D,
-        source_origin: (i32, i32),
-        source_width: u32,
-        source_height: u32,
-        canvas_width: u32,
-        canvas_height: u32,
-        layer_offset: (i32, i32),
-        layer_size: (u32, u32),
-    ) {
-        let state = match &self.active {
-            Some(s) => s,
-            None => return,
-        };
-
-        let inv = affine_inverse(matrix).unwrap_or(IDENTITY);
-
-        // Preview pass renders to canvas-sized accumulator.
-        let uniforms = TransformBlendUniforms {
-            inv_row0: [inv[0], inv[1], inv[2], 0.0],
-            inv_row1: [inv[3], inv[4], inv[5], 0.0],
-            source_origin: [source_origin.0 as f32, source_origin.1 as f32],
-            source_size: [source_width as f32, source_height as f32],
-            target_offset: [0.0, 0.0],
-            target_size: [canvas_width as f32, canvas_height as f32],
-            canvas_size: [canvas_width as f32, canvas_height as f32],
-            opacity: 1.0,
-            _pad: 0.0,
-            layer_offset: [layer_offset.0 as f32, layer_offset.1 as f32],
-            layer_size: [layer_size.0 as f32, layer_size.1 as f32],
-        };
-
-        queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
-    }
-
-    /// Render the transformed source directly onto a target texture (layer or mask).
-    /// Used by commit_floating() to replace CPU-side rasterize_to_tiles().
-    ///
-    /// The destination is copied to a temp texture and the shader computes
-    /// Porter-Duff source-over manually, outputting with REPLACE blend. This
-    /// avoids the premultiplied-stored-as-straight bug from hardware blending.
-    ///
-    /// `source_origin` is canvas-space; the target's `(target_offset,
-    /// target_width, target_height)` describe its canvas-space placement so
-    /// the shader can map UV → canvas coords on offset paste-extent layers.
-    pub fn commit_to_texture(
-        &self,
-        device: &wgpu::Device,
-        encoder: &mut wgpu::CommandEncoder,
-        queue: &wgpu::Queue,
-        target_texture: &wgpu::Texture,
-        target_view: &wgpu::TextureView,
-        target_format: wgpu::TextureFormat,
         matrix: &Affine2D,
         source_origin: (i32, i32),
         source_width: u32,
@@ -1014,20 +766,15 @@ impl TransformPass {
         canvas_width: u32,
         canvas_height: u32,
     ) {
-        let state = match &self.active {
-            Some(s) => s,
-            None => return,
+        let Some(state) = self.active.as_ref() else {
+            return;
         };
-
         let inv = affine_inverse(matrix).unwrap_or(IDENTITY);
-        let is_mask = if target_format == wgpu::TextureFormat::R8Unorm {
+        let is_r8 = if state.target_format == wgpu::TextureFormat::R8Unorm {
             1.0
         } else {
             0.0
         };
-
-        // Reuse the preview uniform struct — _pad becomes is_mask for commit.
-        // layer_offset/layer_size are unused by the commit shader.
         let uniforms = TransformBlendUniforms {
             inv_row0: [inv[0], inv[1], inv[2], 0.0],
             inv_row1: [inv[3], inv[4], inv[5], 0.0],
@@ -1037,23 +784,40 @@ impl TransformPass {
             target_size: [target_width as f32, target_height as f32],
             canvas_size: [canvas_width as f32, canvas_height as f32],
             opacity: 1.0,
-            _pad: is_mask,
-            layer_offset: [0.0, 0.0],
-            layer_size: [0.0, 0.0],
+            is_r8,
+        };
+        queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+    }
+
+    /// Run the commit shader, writing the transformed source into
+    /// `target_view`. Caller is responsible for `update_uniforms` first.
+    /// Used both for real commits (writing to the live target) and for
+    /// preview renders (writing to the preview texture).
+    ///
+    /// The destination is copied to a temp via `copy_for_compositing` so
+    /// the shader can do straight-alpha source-over without feedback. The
+    /// pipeline is REPLACE-blend; the shader picks the output channel
+    /// layout off the `is_r8` uniform.
+    pub fn render_commit(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        target_texture: &wgpu::Texture,
+        target_view: &wgpu::TextureView,
+    ) {
+        let Some(state) = self.active.as_ref() else {
+            return;
         };
 
-        queue.write_buffer(&state.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
-
-        // Copy destination for shader-side Porter-Duff (see straight_composite module).
         let dest_bg = super::straight_composite::copy_for_compositing(
             device,
             encoder,
             &self.single_tex_bgl,
             target_texture,
-            target_format,
+            state.target_format,
         );
 
-        let pipeline = match target_format {
+        let pipeline = match state.target_format {
             wgpu::TextureFormat::R8Unorm => &self.commit_r8_pipeline,
             _ => &self.commit_rgba_pipeline,
         };

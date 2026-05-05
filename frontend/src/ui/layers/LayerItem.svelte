@@ -1,81 +1,92 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import { getLayerThumbnail, getMaskThumbnail, THUMB_SIZE } from './thumbnails';
+    import { getNodeThumbnail, THUMB_SIZE } from './thumbnails';
     import { dispatchClick } from '../../actions/triggers';
     import { actions } from '../../actions/registry';
 
+    interface Modifier {
+        id: number; kind: string; name: string; visible: boolean; locked: boolean;
+    }
+
     let { layer, depth = 0, onupdate }: {
         layer: {
-            type: string; id: number; name: string; visible: boolean;
+            type: string; id: number; name: string; visible: boolean; locked?: boolean;
             opacity?: number; blendMode?: number;
-            hasMask?: boolean; maskEnabled?: boolean; showMask?: boolean;
+            modifiers?: Modifier[];
         };
         depth?: number;
         onupdate: () => void;
     } = $props();
 
+    // The mask modifier (if any) is one of the host's modifiers. The model
+    // permits N; the UI exposes one.
+    let maskModifier = $derived<Modifier | null>(
+        layer.modifiers?.find((m) => m.kind === 'mask') ?? null,
+    );
+    let hasMask = $derived(maskModifier !== null);
+    let maskEnabled = $derived(maskModifier?.visible ?? true);
+    let isMaskIsolated = $derived(
+        maskModifier !== null && app.isolatedNodeId === maskModifier.id,
+    );
+
     let isActive = $derived(app.activeLayerId === layer.id);
-    let isEditingMask = $derived(app.editingMaskLayerId === layer.id);
+    // The mask is the active edit target whenever the active node id IS the
+    // mask modifier id — no session redirect.
+    let isEditingMask = $derived(
+        maskModifier !== null && app.activeLayerId === maskModifier.id,
+    );
     let editing = $state(false);
     let editInput = $state<HTMLInputElement | null>(null);
     let dropPos = $state<'none' | 'above' | 'below'>('none');
 
-    // Thumbnails — regenerated when layer data changes (onupdate triggers re-render)
-    let layerThumb = $derived(layer.type === 'raster' && app.handle ? getLayerThumbnail(layer.id) : '');
-    let maskThumb = $derived(layer.hasMask && app.handle ? getMaskThumbnail(layer.id) : '');
+    let layerThumb = $derived(layer.type === 'raster' && app.handle ? getNodeThumbnail(layer.id) : '');
+    let maskThumb = $derived(maskModifier !== null && app.handle ? getNodeThumbnail(maskModifier.id) : '');
 
-    // Mask context menu
     let showMaskMenu = $state(false);
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
+    // Each click handler dispatches against its own site only — no
+    // cross-site fallback. Bindings on a thumbnail receive that
+    // thumbnail's node id (host for `layerThumb`, mask modifier for
+    // `maskThumb`), so `isolateLayer` resolves correctly without the
+    // dispatcher having to know which kind it's looking at.
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
         if (dispatchClick('layerEye', e, { layerId: layer.id })) {
             onupdate();
             return;
         }
-        // Default: plain click toggles visibility
         actions.dispatch('toggleVisibility', { layerId: layer.id });
         onupdate();
     }
 
-    function setActive() {
+    function onLayerClick() {
+        // The layer-item body has no bindings — modifier+click is reserved
+        // for the previews. Plain click selects.
         app.selectLayer(layer.id);
-        // If we're clicking the layer row (not the mask thumb), switch to layer editing
-        if (isEditingMask) {
-            app.editingMaskLayerId = null;
-            app.handle?.set_editing_mask(layer.id, false);
-            onupdate();
-        }
     }
 
     function clickLayerThumb(e: MouseEvent) {
         e.stopPropagation();
-        app.selectLayer(layer.id);
-        if (isEditingMask) {
-            app.editingMaskLayerId = null;
-            app.handle?.set_editing_mask(layer.id, false);
+        if (dispatchClick('layerThumb', e, { layerId: layer.id })) {
             onupdate();
+            return;
         }
+        app.selectLayer(layer.id);
     }
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchClick('maskThumb', e, { layerId: layer.id })) {
+        if (maskModifier !== null
+            && dispatchClick('maskThumb', e, { layerId: maskModifier.id })) {
             onupdate();
             return;
         }
-        // Default: plain click toggles mask editing mode
-        app.selectLayer(layer.id);
-        if (!isEditingMask) {
-            app.editingMaskLayerId = layer.id;
-            app.handle?.set_editing_mask(layer.id, true);
-        } else {
-            app.editingMaskLayerId = null;
-            app.handle?.set_editing_mask(layer.id, false);
-        }
-        onupdate();
+        // Default: plain click activates the mask modifier as the paint
+        // target — the active node id IS the modifier id.
+        if (maskModifier === null) return;
+        app.selectLayer(maskModifier.id);
     }
 
     function onMaskContextMenu(e: MouseEvent) {
@@ -85,31 +96,28 @@
         maskMenuY = e.clientY;
         showMaskMenu = true;
 
-        // Close on next click anywhere
         const close = () => { showMaskMenu = false; document.removeEventListener('click', close); };
         requestAnimationFrame(() => document.addEventListener('click', close));
     }
 
     function toggleMaskEnabled() {
-        if (app.handle) {
-            app.handle.set_mask_enabled(layer.id, !layer.maskEnabled);
+        if (app.handle && maskModifier !== null) {
+            app.handle.set_layer_visible(maskModifier.id, !maskEnabled);
             onupdate();
         }
     }
 
     function toggleShowMask() {
-        if (app.handle) {
-            app.handle.set_show_mask(layer.id, !layer.showMask);
+        if (app.handle && maskModifier !== null) {
+            const next = isMaskIsolated ? 0 : maskModifier.id;
+            app.handle.set_isolated_node(next);
+            app.isolatedNodeId = next === 0 ? null : next;
             onupdate();
         }
     }
 
     function applyMask() {
         if (app.handle) {
-            if (isEditingMask) {
-                app.editingMaskLayerId = null;
-                app.handle.set_editing_mask(layer.id, false);
-            }
             app.handle.apply_mask(layer.id);
             onupdate();
         }
@@ -117,10 +125,6 @@
 
     function removeMask() {
         if (app.handle) {
-            if (isEditingMask) {
-                app.editingMaskLayerId = null;
-                app.handle.set_editing_mask(layer.id, false);
-            }
             app.handle.remove_mask(layer.id);
             onupdate();
         }
@@ -192,11 +196,10 @@
     class:active={isActive}
     class:drop-above={dropPos === 'above'}
     class:drop-below={dropPos === 'below'}
-    onclick={setActive}
+    onclick={onLayerClick}
     ondblclick={startRename}
-    onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActive(); }}}
     role="button"
-    tabindex="0"
+    tabindex="-1"
     draggable={draggable ? 'true' : 'false'}
     ondragstart={onDragStart}
     ondragover={onDragOver}
@@ -231,12 +234,12 @@
         />
     {/if}
 
-    {#if layer.hasMask && maskThumb}
+    {#if hasMask && maskThumb}
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
         <img
             class="thumb"
             class:thumb-active={isEditingMask}
-            class:mask-disabled={!layer.maskEnabled}
+            class:mask-disabled={!maskEnabled}
             src={maskThumb}
             alt="mask"
             width={THUMB_SIZE}
@@ -264,13 +267,13 @@
 {#if showMaskMenu}
     <div class="mask-menu" style:left="{maskMenuX}px" style:top="{maskMenuY}px">
         <button onclick={toggleMaskEnabled}>
-            {layer.maskEnabled ? 'Disable mask' : 'Enable mask'}
+            {maskEnabled ? 'Disable mask' : 'Enable mask'}
         </button>
         <button onclick={toggleShowMask}>
-            {layer.showMask ? 'Hide mask' : 'Show mask'}
+            {isMaskIsolated ? 'Hide mask' : 'Show mask'}
         </button>
         <button onclick={applyMask}>Apply mask</button>
-        <button onclick={removeMask}>Remove mask</button>
+        <button onclick={removeMask}>Delete mask</button>
     </div>
 {/if}
 
@@ -284,6 +287,12 @@
         min-height: 28px;
         position: relative;
         transition: background 0.1s;
+        user-select: none;
+    }
+
+    .layer-item:focus,
+    .layer-item:focus-visible {
+        outline: none;
     }
 
     .layer-item:hover {

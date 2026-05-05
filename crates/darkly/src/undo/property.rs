@@ -27,8 +27,8 @@ impl Property {
             None => return,
         };
         match self {
-            Property::Opacity(v) => node.common_mut().opacity = *v,
-            Property::BlendMode(v) => node.common_mut().blend_mode = *v,
+            Property::Opacity(v) => node.blend_mut().opacity = *v,
+            Property::BlendMode(v) => node.blend_mut().blend_mode = *v,
             Property::Visible(v) => node.common_mut().visible = *v,
             Property::Name(v) => node.common_mut().name = v.clone(),
             Property::Passthrough(v) => {

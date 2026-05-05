@@ -25,6 +25,11 @@ fn main() {
     );
 
     generate_registry(&src.join("config/presets"), "crate::config::schema::Preset");
+
+    generate_registry(
+        &src.join("document/modifiers"),
+        "crate::document::modifier::ModifierRegistration",
+    );
 }
 
 /// Scan a directory for .rs module files (excluding mod.rs) and generate

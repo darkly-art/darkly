@@ -30,7 +30,7 @@ fn fresh_engine() -> DarklyEngine {
 }
 
 /// Paint a short brush stroke across the layer at its vertical center.
-fn paint_short_stroke(engine: &mut DarklyEngine, layer_id: u64) {
+fn paint_short_stroke(engine: &mut DarklyEngine, layer_id: darkly::layer::LayerId) {
     engine.begin_stroke(layer_id);
     for step in 0..10 {
         engine.stroke_to(StrokeOp::BrushStroke {
@@ -75,7 +75,7 @@ fn has_painted_pixels(bytes: &[u8]) -> bool {
 #[test]
 fn paint_stroke_auto_queues_thumbnail_readback() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Baseline render+flush so any startup readbacks settle. Capture
     // the version *after* settling so the assertion reflects the
@@ -95,7 +95,7 @@ fn paint_stroke_auto_queues_thumbnail_readback() {
     );
 
     let cached = engine
-        .test_thumbnail_cache_peek(layer_id, false)
+        .test_thumbnail_cache_peek(layer_id)
         .expect("auto-queue path should have populated the layer thumbnail cache");
     assert!(
         !cached.is_empty(),
@@ -110,7 +110,7 @@ fn paint_stroke_auto_queues_thumbnail_readback() {
 #[test]
 fn fill_background_auto_queues_thumbnail_readback() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.render(0.0);
     engine.test_flush_readbacks();
@@ -127,7 +127,7 @@ fn fill_background_auto_queues_thumbnail_readback() {
     );
 
     let cached = engine
-        .test_thumbnail_cache_peek(layer_id, false)
+        .test_thumbnail_cache_peek(layer_id)
         .expect("auto-queue path should have populated the layer thumbnail cache");
     assert!(
         !cached.is_empty(),
@@ -138,7 +138,7 @@ fn fill_background_auto_queues_thumbnail_readback() {
 #[test]
 fn undo_auto_queues_thumbnail_readback() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.render(0.0);
     engine.test_flush_readbacks();
@@ -149,7 +149,7 @@ fn undo_auto_queues_thumbnail_readback() {
 
     let v_after_paint = engine.thumbnail_version();
     let painted = engine
-        .test_thumbnail_cache_peek(layer_id, false)
+        .test_thumbnail_cache_peek(layer_id)
         .expect("paint path populated the cache");
     assert!(
         has_painted_pixels(&painted),
@@ -168,7 +168,7 @@ fn undo_auto_queues_thumbnail_readback() {
     );
 
     let post_undo = engine
-        .test_thumbnail_cache_peek(layer_id, false)
+        .test_thumbnail_cache_peek(layer_id)
         .expect("undo path repopulated the cache");
     assert!(
         !has_painted_pixels(&post_undo),
@@ -187,7 +187,7 @@ fn undo_auto_queues_thumbnail_readback() {
 #[test]
 fn layer_thumbnail_does_not_auto_queue_readback() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
     engine.fill_background(layer_id);
 
     // Settle — let the legitimate auto-queue from `fill_background`
@@ -203,7 +203,7 @@ fn layer_thumbnail_does_not_auto_queue_readback() {
     // readback; the next render+flush would complete it and bump the
     // version, retriggering the JS-side sync, retriggering the call.
     for _ in 0..50 {
-        let _ = engine.layer_thumbnail(layer_id, 36, 36);
+        let _ = engine.node_thumbnail(layer_id, 36, 36);
         engine.render(0.016);
         engine.test_flush_readbacks();
     }
@@ -224,7 +224,7 @@ fn layer_thumbnail_does_not_auto_queue_readback() {
 #[test]
 fn brush_stroke_queues_thumbnail_readback_only_at_end() {
     let mut engine = fresh_engine();
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Settle baseline — empty layer, no marks fired.
     engine.render(0.0);

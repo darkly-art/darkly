@@ -11,6 +11,7 @@ use crate::brush::stroke_engine::StrokeEngine;
 use crate::gpu::flood_fill;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
+use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
 impl DarklyEngine {
@@ -69,7 +70,7 @@ impl DarklyEngine {
             None => commit.snapshot.saved,
         };
 
-        let layer_frame = match self.compositor.layer_texture(commit.layer_id) {
+        let layer_frame = match self.compositor.node_texture(commit.layer_id) {
             Some(t) => t.canvas_frame(),
             None => return,
         };
@@ -90,7 +91,7 @@ impl DarklyEngine {
 
     /// Fill the layer with the default background image, centered and clipped
     /// to the canvas. The image is baked into the binary at build time.
-    pub fn fill_background(&mut self, layer_id: u64) {
+    pub fn fill_background(&mut self, layer_id: LayerId) {
         const IMAGE_BYTES: &[u8] = include_bytes!("../../resources/backgrounds/quiet-night.jpg");
 
         let canvas_w = self.compositor.canvas_width();
@@ -98,7 +99,7 @@ impl DarklyEngine {
         let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
-        let layer_tex = match self.compositor.layer_texture(layer_id) {
+        let layer_tex = match self.compositor.node_texture(layer_id) {
             Some(t) => t,
             None => return,
         };
@@ -131,7 +132,7 @@ impl DarklyEngine {
         let copy_h = (img_h - src_y).min(canvas_h - dst_y);
 
         if copy_w > 0 && copy_h > 0 {
-            let layer_tex = self.compositor.layer_texture(layer_id).unwrap();
+            let layer_tex = self.compositor.node_texture(layer_id).unwrap();
             let row_bytes = copy_w as usize * 4;
             let mut buf = vec![0u8; row_bytes * copy_h as usize];
             let full = decoded.as_raw();
@@ -166,16 +167,17 @@ impl DarklyEngine {
             );
         }
 
-        self.compositor.mark_layer_pixels_dirty(layer_id, false);
+        self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
     // --- Stroke lifecycle ---
-    // Following GIMP's edit_mask flag: when editing_mask_layer is set,
-    // strokes are routed to the mask instead of the layer.
+    // The active node id directly identifies the paint target — for a mask
+    // modifier id, paint goes to the mask's R8 PixelBuffer; for a raster id,
+    // paint goes to the RGBA layer texture. No sidecar redirect.
     //
     // All stroke ops go through GPU render passes (Phase 3).
 
-    pub fn begin_stroke(&mut self, layer_id: u64) {
+    pub fn begin_stroke(&mut self, layer_id: LayerId) {
         self.auto_commit_floating();
         self.active_stroke_layer = Some(layer_id);
         // GPU setup is deferred to first stroke_to (lazy init).
@@ -190,7 +192,7 @@ impl DarklyEngine {
     }
 
     /// GPU paint path for all stroke operations.
-    fn gpu_stroke_to(&mut self, layer_id: u64, op: StrokeOp) {
+    fn gpu_stroke_to(&mut self, layer_id: LayerId, op: StrokeOp) {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
 
@@ -207,35 +209,18 @@ impl DarklyEngine {
         // Lazy init: save the paint target to scratch for undo on first
         // stroke_to. Uses the target's actual texture dimensions (not canvas)
         // so paste-extent layers preserve off-canvas pixels through undo.
-        // `paint_target()` returns the mask texture when the user is editing
-        // the layer's mask, else the layer texture — single dispatch site.
+        // The unified node-texture pool dispatches by node id; format dispatch
+        // is read off `LayerTexture.format` rather than a sidecar boolean.
         if self.scratch_snapshot.is_none() {
             self.flush_pending_undo_commit();
             // Inline dispatch: the borrow checker treats `self.paint_target(...)`
             // as borrowing all of &self, which conflicts with the
             // &mut self.region_store call below. Direct field access via
-            // `self.compositor.{mask,layer}_texture` borrows only that
-            // sub-field, so split borrowing of `region_store` works.
-            let (frame, format, layer_w, layer_h) = if self.editing_mask_layer == Some(layer_id) {
-                match self.compositor.mask_texture(layer_id) {
-                    Some(t) => (
-                        t.canvas_frame(),
-                        wgpu::TextureFormat::R8Unorm,
-                        t.width,
-                        t.height,
-                    ),
-                    None => return,
-                }
-            } else {
-                match self.compositor.layer_texture(layer_id) {
-                    Some(t) => (
-                        t.canvas_frame(),
-                        wgpu::TextureFormat::Rgba8Unorm,
-                        t.width,
-                        t.height,
-                    ),
-                    None => return,
-                }
+            // `self.compositor.node_texture(...)` borrows only that sub-field,
+            // so split borrowing of `region_store` works.
+            let (frame, format, layer_w, layer_h) = match self.compositor.node_texture(layer_id) {
+                Some(t) => (t.canvas_frame(), t.format, t.width, t.height),
+                None => return,
             };
 
             self.region_store
@@ -356,10 +341,10 @@ impl DarklyEngine {
     /// The `needed` rect padded outward by `MAX_DAB_SIZE/2` so the new
     /// chunk-aligned extent comfortably covers the dab's worst-case
     /// footprint, not just its center pixel.
-    fn ensure_layer_covers_dab(&mut self, layer_id: u64, x: f32, y: f32) {
+    fn ensure_layer_covers_dab(&mut self, layer_id: LayerId, x: f32, y: f32) {
         // Fetch the current paint-target extent before mutating the compositor.
-        // `paint_target()` resolves to either the mask or layer texture
-        // depending on `editing_mask_layer` — a single dispatch site.
+        // `paint_target()` resolves the node id against the unified texture
+        // pool; format dispatch lives behind that interface.
         let current_extent = match self.paint_target(layer_id) {
             Some(t) => t.canvas_frame().canvas_extent,
             None => return,
@@ -466,13 +451,13 @@ impl DarklyEngine {
     /// `None` if no growth was needed or the cap was hit.
     pub(crate) fn grow_layer(
         &mut self,
-        layer_id: u64,
+        layer_id: LayerId,
         needed: crate::coord::CanvasRect,
     ) -> Option<crate::coord::CanvasRect> {
         use crate::gpu::compositor::{LAYER_GROWTH_CHUNK, MAX_LAYER_DIM};
 
         let current = match self.doc.layer(layer_id) {
-            Some(crate::layer::Layer::Raster(r)) => r.bounds,
+            Some(crate::layer::Layer::Raster(r)) => r.pixels.bounds,
             _ => return None,
         };
         if current.contains(needed) {
@@ -482,12 +467,10 @@ impl DarklyEngine {
         let new_extent = current.union(needed).round_outward(LAYER_GROWTH_CHUNK);
 
         if new_extent.width > MAX_LAYER_DIM || new_extent.height > MAX_LAYER_DIM {
-            // Once-per-process warning. Subsequent at-cap requests are
-            // silent — the dab-clip path does the right thing.
             if !self.layer_growth_capped {
                 self.layer_growth_capped = true;
                 log::warn!(
-                    "Layer {} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
+                    "Layer {:?} growth refused: requested {}×{} exceeds MAX_LAYER_DIM ({})",
                     layer_id,
                     new_extent.width,
                     new_extent.height,
@@ -497,11 +480,12 @@ impl DarklyEngine {
             return None;
         }
 
-        // Doc first — `RasterLayer.bounds` is the source of truth.
-        let (opacity, blend_mode, show_mask) = match self.doc.layer_mut(layer_id) {
+        // Doc first — the layer's `PixelBuffer` is the source of truth.
+        let isolated = self.host_renders_isolated(layer_id);
+        let (opacity, blend_mode) = match self.doc.layer_mut(layer_id) {
             Some(crate::layer::Layer::Raster(r)) => {
-                r.bounds = new_extent;
-                (r.common.opacity, r.common.blend_mode, r.common.show_mask)
+                r.pixels.bounds = new_extent;
+                (r.blend.opacity, r.blend.blend_mode)
             }
             _ => return None,
         };
@@ -510,15 +494,53 @@ impl DarklyEngine {
         // submitted before any subsequent dab dispatch can start a new
         // encoder against the new texture. `gpu.encode` already does
         // one-encoder-per-call.
+        // Lockstep growth: collect mask-modifier ids of this host that
+        // share the host's UV space (i.e. non-locked) and grow them in the
+        // same encoder. Locked modifiers stay at their old extent — the
+        // shader samples each `PixelBuffer` via its own bounds, so a
+        // diverged modifier just renders at its frozen position.
+        let lockstep_ids: Vec<LayerId> = self
+            .doc
+            .modifiers_of(layer_id)
+            .iter()
+            .copied()
+            .filter(|mid| {
+                self.doc
+                    .find_modifier(*mid)
+                    .map(|m| !m.common.locked && m.pixels().is_some())
+                    .unwrap_or(false)
+            })
+            .collect();
+
         self.gpu.encode("layer-grow", |encoder| {
-            self.compositor.resize_layer_texture(
+            self.compositor.resize_node_texture(
                 &self.gpu.device,
                 &self.gpu.queue,
                 encoder,
                 layer_id,
                 new_extent,
             );
+            for mod_id in &lockstep_ids {
+                self.compositor.resize_node_texture(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    encoder,
+                    *mod_id,
+                    new_extent,
+                );
+            }
         });
+
+        // Sync each lockstep modifier's document `PixelBuffer.bounds` to
+        // match its newly-grown GPU texture. The compositor is the realization;
+        // the document is the source of truth — both must agree post-resize.
+        for mod_id in &lockstep_ids {
+            if let Some(modifier) = self.doc.find_modifier_mut(*mod_id) {
+                if let Some(buf) = modifier.pixels_mut() {
+                    buf.bounds = new_extent;
+                }
+            }
+        }
 
         // Refresh the blend-uniform buffer so the composite pass sees the
         // new offset/size on the next render.
@@ -527,7 +549,7 @@ impl DarklyEngine {
             layer_id,
             opacity,
             blend_mode,
-            show_mask,
+            isolated,
         );
 
         Some(new_extent)
@@ -540,7 +562,7 @@ impl DarklyEngine {
     /// and re-rendering of the stroke from scratch.
     fn brush_stroke_to(
         &mut self,
-        layer_id: u64,
+        layer_id: LayerId,
         x: f32,
         y: f32,
         pressure: f32,
@@ -594,14 +616,10 @@ impl DarklyEngine {
 
             // Create the stroke buffer and save the pre-stroke snapshot.
             // Inline dispatch (vs `self.paint_target(...)`) so the borrow of
-            // `self.compositor.{layer,mask}_textures[id]` is at the field
-            // level — letting `&self.gpu`, `&self.dab_pool`, etc. be borrowed
+            // `self.compositor.node_textures[id]` is at the field level —
+            // letting `&self.gpu`, `&self.dab_pool`, etc. be borrowed
             // alongside it without conflict.
-            let layer_tex = if self.editing_mask_layer == Some(layer_id) {
-                self.compositor.mask_texture(layer_id)
-            } else {
-                self.compositor.layer_texture(layer_id)
-            };
+            let layer_tex = self.compositor.node_texture(layer_id);
             if let Some(layer_tex) = layer_tex {
                 // Size the stroke scratch and pre-stroke snapshot to the
                 // layer's bounds. For paste-extent layers larger than the
@@ -614,11 +632,7 @@ impl DarklyEngine {
                     self.dab_pool.bind_group_layout(),
                     self.brush_pipelines.canvas_copy_bind_group_layout(),
                 );
-                let paint_target = if self.editing_mask_layer == Some(layer_id) {
-                    GpuPaintTarget::from_mask(layer_tex, canvas_w, canvas_h)
-                } else {
-                    GpuPaintTarget::from_layer(layer_tex, canvas_w, canvas_h)
-                };
+                let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
                 self.gpu.encode("stroke-buffer-init", |encoder| {
                     stroke_buffer.save_pre_stroke(
                         &self.gpu.device,
@@ -652,29 +666,21 @@ impl DarklyEngine {
         // Inline dispatch (vs `self.paint_target(...)`) for borrow-checker
         // reasons — the BrushGpuContext construction below needs &mut
         // self.dab_pool alongside this borrow.
-        let layer_tex = if self.editing_mask_layer == Some(layer_id) {
-            match self.compositor.mask_texture(layer_id) {
-                Some(t) => t,
-                None => return,
-            }
-        } else {
-            match self.compositor.layer_texture(layer_id) {
-                Some(t) => t,
-                None => return,
-            }
+        let layer_tex = match self.compositor.node_texture(layer_id) {
+            Some(t) => t,
+            None => return,
         };
-        let paint_target = if self.editing_mask_layer == Some(layer_id) {
-            GpuPaintTarget::from_mask(layer_tex, canvas_w, canvas_h)
-        } else {
-            GpuPaintTarget::from_layer(layer_tex, canvas_w, canvas_h)
-        };
+        let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
 
         // Take the stroke engine and buffer out to avoid borrow conflicts.
         let mut engine = self.brush_stroke_engine.take().unwrap();
         let stroke_buffer = self.stroke_buffer.take();
 
-        let sel_bg = if self.gpu_selection.active {
-            self.gpu_selection.brush_bind_group()
+        let sel_bg = if self.has_selection() {
+            self.compositor
+                .selection_state()
+                .map(|s| s.brush_bind_group())
+                .unwrap_or(&self.brush_pipelines.default_selection_bind_group)
         } else {
             &self.brush_pipelines.default_selection_bind_group
         };
@@ -878,19 +884,11 @@ impl DarklyEngine {
             // hooks since there's no scratch to clear or commit. Inline
             // dispatch so the borrow of `self.compositor.X[id]` is at the
             // field level, leaving `&mut self.dab_pool` free.
-            let layer_tex = if self.editing_mask_layer == Some(layer_id) {
-                self.compositor.mask_texture(layer_id)
-            } else {
-                self.compositor.layer_texture(layer_id)
-            };
+            let layer_tex = self.compositor.node_texture(layer_id);
             if let Some(layer_tex) = layer_tex {
                 let canvas_view = &layer_tex.view;
                 let canvas_texture = &layer_tex.texture;
-                let paint_target = if self.editing_mask_layer == Some(layer_id) {
-                    GpuPaintTarget::from_mask(layer_tex, canvas_w, canvas_h)
-                } else {
-                    GpuPaintTarget::from_layer(layer_tex, canvas_w, canvas_h)
-                };
+                let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
                 let mut gpu_ctx = BrushGpuContext {
                     encoder: self.gpu.device.create_command_encoder(
                         &wgpu::CommandEncoderDescriptor {
@@ -933,7 +931,7 @@ impl DarklyEngine {
     /// complete on a subsequent frame when the data arrives.
     fn gpu_flood_fill(
         &mut self,
-        layer_id: u64,
+        layer_id: LayerId,
         seed_x: i32,
         seed_y: i32,
         color: [u8; 4],
@@ -947,7 +945,6 @@ impl DarklyEngine {
         };
         let texture = pt.texture;
         let format = pt.format;
-        let mask_editing = self.is_editing_mask(layer_id);
 
         let mut encoder = self
             .gpu
@@ -966,8 +963,7 @@ impl DarklyEngine {
         self.readbacks.submit(
             request,
             ReadbackContext::FloodFill {
-                layer_id,
-                mask_editing,
+                node_id: layer_id,
                 seed_x,
                 seed_y,
                 color,
@@ -979,10 +975,12 @@ impl DarklyEngine {
     }
 
     /// Complete a pending flood fill once readback data is available.
+    /// Format-driven: the node id resolves to either an R8 mask or an RGBA
+    /// layer texture, and the CPU-side scanline fill picks the matching
+    /// flood-fill variant from the texture's format.
     pub(crate) fn complete_flood_fill(
         &mut self,
-        layer_id: u64,
-        mask_editing: bool,
+        layer_id: LayerId,
         seed_x: i32,
         seed_y: i32,
         color: [u8; 4],
@@ -991,21 +989,28 @@ impl DarklyEngine {
         canvas_h: u32,
         pixels: Vec<u8>,
     ) {
-        // 1. CPU scanline fill → produce R8 mask.
-        let fill_mask = if mask_editing {
-            flood_fill::flood_fill_r8(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
-        } else {
-            flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
+        let format = self
+            .compositor
+            .node_texture(layer_id)
+            .map(|t| t.format)
+            .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
+        let fill_mask = match format {
+            wgpu::TextureFormat::R8Unorm => {
+                flood_fill::flood_fill_r8(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
+            }
+            _ => {
+                flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
+            }
         };
 
         // 2. Combine fill mask with active selection (if any), then upload.
-        let effective_mask = if self.gpu_selection.active {
-            if let Some(sel) = &self.gpu_selection.cpu_cache {
+        let effective_mask = if self.has_selection() {
+            if let Some(sel) = self.selection_cpu_cache() {
                 fill_mask
                     .iter()
                     .zip(sel.iter())
                     .map(|(&f, &s)| ((f as u16 * s as u16) / 255) as u8)
-                    .collect()
+                    .collect::<Vec<u8>>()
             } else {
                 fill_mask
             }
@@ -1048,16 +1053,14 @@ impl DarklyEngine {
             // never called for this op) — extremely unusual; bail rather
             // than fabricate an empty snapshot.
             None => {
-                self.compositor
-                    .mark_layer_pixels_dirty(layer_id, mask_editing);
+                self.compositor.mark_node_pixels_dirty(layer_id);
                 return;
             }
         };
-        let layer_frame = match self.compositor.layer_texture(layer_id) {
+        let layer_frame = match self.compositor.node_texture(layer_id) {
             Some(t) => t.canvas_frame(),
             None => {
-                self.compositor
-                    .mark_layer_pixels_dirty(layer_id, mask_editing);
+                self.compositor.mark_node_pixels_dirty(layer_id);
                 return;
             }
         };
@@ -1069,18 +1072,15 @@ impl DarklyEngine {
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
 
-        self.compositor
-            .mark_layer_pixels_dirty(layer_id, mask_editing);
+        self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
-            // Per-stroke thumbnail refresh — the layer (or its mask) now
-            // holds the cumulative pixels of every dab/op since
-            // begin_stroke. Live mid-stroke updates are intentionally
-            // skipped.
-            let is_mask = self.editing_mask_layer == Some(layer_id);
-            self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
+            // Per-stroke thumbnail refresh — the node texture (raster or mask
+            // modifier) now holds the cumulative pixels of every dab/op since
+            // begin_stroke. Live mid-stroke updates are intentionally skipped.
+            self.compositor.mark_node_pixels_dirty(layer_id);
 
             // If a flood fill is pending, defer undo commit — complete_flood_fill
             // will handle it when the readback arrives.
@@ -1103,15 +1103,10 @@ impl DarklyEngine {
                 self.scratch_snapshot.take(),
                 self.pending_undo_commit.is_none(),
             ) {
-                let layer_extent = if self.editing_mask_layer == Some(layer_id) {
-                    self.compositor
-                        .mask_texture(layer_id)
-                        .map(|t| (&t.view, t.canvas_extent()))
-                } else {
-                    self.compositor
-                        .layer_texture(layer_id)
-                        .map(|t| (&t.view, t.canvas_extent()))
-                };
+                let layer_extent = self
+                    .compositor
+                    .node_texture(layer_id)
+                    .map(|t| (&t.view, t.canvas_extent()));
                 if let Some((current_view, layer_canvas_extent)) = layer_extent {
                     let scratch_view = self.region_store.scratch_view(snap.format);
                     self.diff_rect.request(
@@ -1133,8 +1128,8 @@ impl DarklyEngine {
     // --- GPU erase helpers ---
 
     /// Clear layer pixels within the current selection via GPU erase pass.
-    pub(crate) fn gpu_clear_selection(&mut self, layer_id: u64) {
-        if !self.gpu_selection.active {
+    pub(crate) fn gpu_clear_selection(&mut self, layer_id: LayerId) {
+        if !self.has_selection() {
             return;
         }
 
@@ -1153,19 +1148,11 @@ impl DarklyEngine {
         // `self.region_store` / `self.undo_stack` access.
         macro_rules! pt_for {
             () => {
-                if self.editing_mask_layer == Some(layer_id) {
-                    GpuPaintTarget::from_mask(
-                        self.compositor.mask_texture(layer_id).unwrap(),
-                        canvas_w,
-                        canvas_h,
-                    )
-                } else {
-                    GpuPaintTarget::from_layer(
-                        self.compositor.layer_texture(layer_id).unwrap(),
-                        canvas_w,
-                        canvas_h,
-                    )
-                }
+                GpuPaintTarget::from_node(
+                    self.compositor.node_texture(layer_id).unwrap(),
+                    canvas_w,
+                    canvas_h,
+                )
             };
         }
 
@@ -1176,7 +1163,11 @@ impl DarklyEngine {
         });
 
         // Erase within selection using the cached GPU selection bind group.
-        let sel_bg = self.gpu_selection.paint_bind_group();
+        let sel_bg = self
+            .compositor
+            .selection_state()
+            .map(|s| s.paint_bind_group())
+            .expect("has_selection true → selection_state allocated");
         self.gpu.encode("clear-sel-erase", |encoder| {
             pt_for!().erase_with_selection(encoder, &self.paint_pipelines, &self.gpu.queue, sel_bg);
         });
@@ -1189,12 +1180,11 @@ impl DarklyEngine {
                 .commit_region(encoder, layer_id, &frame, &snap, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
-        let is_mask = self.editing_mask_layer == Some(layer_id);
-        self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
+        self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
     /// Clear entire layer to transparent via GPU.
-    pub(crate) fn gpu_clear_layer(&mut self, layer_id: u64) {
+    pub(crate) fn gpu_clear_layer(&mut self, layer_id: LayerId) {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         let format = match self.paint_target(layer_id) {
@@ -1207,19 +1197,11 @@ impl DarklyEngine {
         // is needed instead of calling `self.paint_target(...)` directly.
         macro_rules! pt_for {
             () => {
-                if self.editing_mask_layer == Some(layer_id) {
-                    GpuPaintTarget::from_mask(
-                        self.compositor.mask_texture(layer_id).unwrap(),
-                        canvas_w,
-                        canvas_h,
-                    )
-                } else {
-                    GpuPaintTarget::from_layer(
-                        self.compositor.layer_texture(layer_id).unwrap(),
-                        canvas_w,
-                        canvas_h,
-                    )
-                }
+                GpuPaintTarget::from_node(
+                    self.compositor.node_texture(layer_id).unwrap(),
+                    canvas_w,
+                    canvas_h,
+                )
             };
         }
 
@@ -1247,38 +1229,21 @@ impl DarklyEngine {
                 .commit_region(encoder, layer_id, &frame, &snap, rect);
             self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
         });
-        let is_mask = self.editing_mask_layer == Some(layer_id);
-        self.compositor.mark_layer_pixels_dirty(layer_id, is_mask);
+        self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
     /// Resolve the active paint target for a layer.
     ///
-    /// Single source of truth for the layer-vs-mask choice: when
-    /// `editing_mask_layer == Some(layer_id)`, the mask texture (R8) is
-    /// returned; otherwise the layer texture (RGBA8). All paint operations
-    /// (brush stroke, gradient, flood fill, fill rect, clear) route through
-    /// this accessor so the dispatch lives in one place — no `if mask_editing`
-    /// branches at call sites.
-    pub(crate) fn paint_target(&self, layer_id: u64) -> Option<GpuPaintTarget<'_>> {
+    /// Resolve the GPU paint target for a node id. Format-driven dispatch
+    /// (R8 mask vs RGBA layer) lives behind the unified node-texture pool —
+    /// callers don't branch on the kind. Returns `None` for groups, unknown
+    /// ids, or any node without a `PixelBuffer`.
+    pub(crate) fn paint_target(&self, node_id: LayerId) -> Option<GpuPaintTarget<'_>> {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
-        if self.editing_mask_layer == Some(layer_id) {
-            self.compositor
-                .mask_texture(layer_id)
-                .map(|t| GpuPaintTarget::from_mask(t, canvas_w, canvas_h))
-        } else {
-            self.compositor
-                .layer_texture(layer_id)
-                .map(|t| GpuPaintTarget::from_layer(t, canvas_w, canvas_h))
-        }
-    }
-
-    /// True when the active stroke target for `layer_id` is its mask.
-    /// Convenience around `editing_mask_layer == Some(layer_id)` — exposed
-    /// here so engine code that needs the boolean for clamping/etc. doesn't
-    /// reimplement the check.
-    pub(crate) fn is_editing_mask(&self, layer_id: u64) -> bool {
-        self.editing_mask_layer == Some(layer_id)
+        self.compositor
+            .node_texture(node_id)
+            .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
     }
 
     /// Upload a cropped region of the GPU selection as an R8 texture bind group.
@@ -1289,14 +1254,14 @@ impl DarklyEngine {
         width: u32,
         height: u32,
     ) -> Option<wgpu::BindGroup> {
-        if !self.gpu_selection.active {
+        if !self.has_selection() {
             return None;
         }
 
-        let full = self.gpu_selection.cpu_cache.as_ref()?;
+        let full = self.selection_cpu_cache()?;
         let (ox, oy) = origin;
-        let cw = self.gpu_selection.width;
-        let ch = self.gpu_selection.height;
+        let cw = self.doc.width;
+        let ch = self.doc.height;
 
         let mut pixels = vec![0u8; (width * height) as usize];
         for py in 0..height {

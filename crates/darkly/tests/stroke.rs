@@ -102,7 +102,13 @@ fn gpu_stroke_paint_undo_redo() {
     // Bounding rect: x=45..65, y=45..55 (approx) — use conservative rect.
     let stroke_rect = cr(43, 43, 24, 14);
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, stroke_rect);
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap,
+        stroke_rect,
+    );
     submit(&queue, enc);
 
     // Verify paint landed.
@@ -302,7 +308,13 @@ fn gpu_stroke_on_mask_undo() {
 
     // end_stroke: commit.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(52, 52, 24, 24));
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap,
+        cr(52, 52, 24, 24),
+    );
     submit(&queue, enc);
 
     // Verify mask is painted.
@@ -373,7 +385,13 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry1 = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap1, cr(23, 23, 14, 14));
+    let entry1 = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap1,
+        cr(23, 23, 14, 14),
+    );
     submit(&queue, enc);
 
     let after_stroke1 = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -408,7 +426,13 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry2 = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap2, cr(83, 83, 14, 14));
+    let entry2 = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap2,
+        cr(83, 83, 14, 14),
+    );
     submit(&queue, enc);
 
     // Verify both painted.
@@ -552,7 +576,13 @@ fn gpu_region_action_undo_stack() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(22, 22, 20, 20));
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap,
+        cr(22, 22, 20, 20),
+    );
     submit(&queue, enc);
     undo_stack.push(Box::new(GpuRegionAction::new(entry)));
 
@@ -630,7 +660,7 @@ fn gpu_cpu_undo_interleaved() {
     let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
     let mut undo_stack = UndoStack::new(50);
     let mut doc = Document::new(w, h);
-    let layer_id = doc.add_raster_layer();
+    let layer_id = doc.add_raster_layer(None);
 
     // Step 1: GPU paint stroke.
     let mut enc = encoder(&device);
@@ -679,7 +709,7 @@ fn gpu_cpu_undo_interleaved() {
         Property::Opacity(0.5),
     )));
     if let Some(Layer::Raster(r)) = doc.layer_mut(layer_id) {
-        r.common.opacity = 0.5;
+        r.blend.opacity = 0.5;
     }
 
     // Undo #1: property change (CPU — no GPU work).
@@ -693,7 +723,7 @@ fn gpu_cpu_undo_interleaved() {
 
     if let Some(Layer::Raster(r)) = doc.layer(layer_id) {
         assert!(
-            (r.common.opacity - 1.0).abs() < f32::EPSILON,
+            (r.blend.opacity - 1.0).abs() < f32::EPSILON,
             "opacity should be restored to 1.0"
         );
     }
@@ -739,7 +769,7 @@ fn gpu_cpu_undo_interleaved() {
 
     if let Some(Layer::Raster(r)) = doc.layer(layer_id) {
         assert!(
-            (r.common.opacity - 0.5).abs() < f32::EPSILON,
+            (r.blend.opacity - 0.5).abs() < f32::EPSILON,
             "opacity should be 0.5 after redo"
         );
     }
@@ -784,7 +814,13 @@ fn gpu_erase_stroke_undo() {
 
     // end_stroke: commit.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(52, 52, 24, 24));
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap,
+        cr(52, 52, 24, 24),
+    );
     submit(&queue, enc);
 
     // Verify erased.
@@ -966,7 +1002,13 @@ fn diff_rect_undo_restores_offset_paint() {
 
     // Commit with the diff-derived rect.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, rect);
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap,
+        rect,
+    );
     submit(&queue, enc);
 
     // Undo: restore the pre-stroke state.
@@ -1121,7 +1163,13 @@ fn negative_direction_grow_crosses_zero() {
     // local frame at (156, 156, 200, 200).
     let mut enc = encoder(&device);
     let commit_rect = cr(-100, -100, 200, 200);
-    let entry = store.commit_region(&mut enc, 1, &new_frame, &snap, commit_rect);
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &new_frame,
+        &snap,
+        commit_rect,
+    );
     submit(&queue, enc);
 
     // Undo: restore the pre-stroke pixels at canvas (-100, -100, 200, 200).

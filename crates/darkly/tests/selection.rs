@@ -12,6 +12,7 @@ use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
 use darkly::gpu::test_utils::*;
+use darkly::layer::LayerId;
 use darkly::mask;
 
 fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
@@ -34,7 +35,7 @@ fn test_engine(width: u32, height: u32) -> DarklyEngine {
 }
 
 /// Paint a horizontal brush stroke across the canvas at vertical center.
-fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: u64, w: u32, h: u32) {
+fn paint_full_stroke(engine: &mut DarklyEngine, layer_id: LayerId, w: u32, h: u32) {
     engine.begin_stroke(layer_id);
     for x_step in 0..20 {
         let x = x_step as f32 * (w as f32 / 20.0);
@@ -275,7 +276,13 @@ fn gpu_clear_selection_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(0, 0, w, h));
+    let entry = store.commit_region(
+        &mut enc,
+        LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap,
+        cr(0, 0, w, h),
+    );
     submit(&queue, enc);
 
     // Verify cleared.
@@ -388,7 +395,7 @@ fn gpu_flood_fill_respects_selection() {
 fn selection_add_mode() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.select_rect(0.0, 0.0, 32.0, h as f32, SelectionMode::Replace, false, 0.0);
     engine.select_rect(96.0, 0.0, 32.0, h as f32, SelectionMode::Add, false, 0.0);
@@ -416,7 +423,7 @@ fn selection_add_mode() {
 fn selection_subtract_mode() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.select_all();
     engine.select_rect(
@@ -452,7 +459,7 @@ fn selection_subtract_mode() {
 fn selection_intersect_mode() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.select_rect(0.0, 0.0, 64.0, h as f32, SelectionMode::Replace, false, 0.0);
     engine.select_rect(
@@ -535,7 +542,7 @@ fn selection_intersect_mode() {
 fn selection_invert() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.select_rect(0.0, 0.0, 64.0, h as f32, SelectionMode::Replace, false, 0.0);
     engine.invert_selection();
@@ -562,7 +569,7 @@ fn selection_invert() {
 fn selection_select_all() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.select_all();
     assert!(engine.has_selection());
@@ -580,7 +587,7 @@ fn selection_select_all() {
 fn selection_clear() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     engine.select_rect(0.0, 0.0, 32.0, h as f32, SelectionMode::Replace, false, 0.0);
     assert!(engine.has_selection());
@@ -622,7 +629,7 @@ fn selection_clear() {
 fn selection_undo_redo() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     assert!(!engine.has_selection());
 
@@ -679,7 +686,7 @@ fn selection_undo_redo() {
 fn selection_add_undo_does_not_restore_stale_pixels() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Pollute the R8 scratch: select_all then narrow to a left band.
     // The narrow replace's save_region captures the full-canvas 1s state.
@@ -719,7 +726,7 @@ fn selection_add_undo_does_not_restore_stale_pixels() {
 fn clear_selection_contents() {
     let (w, h) = (128, 128);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     // Paint at center — default brush (scale=0.1, size=0.5) at pressure=1.0
     // produces ~26px diameter dab, centered at (64,64).
@@ -765,7 +772,7 @@ fn clear_selection_contents() {
 fn no_selection_paints_normally() {
     let (w, h) = (64, 64);
     let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer();
+    let layer_id = engine.add_raster_layer(None);
 
     assert!(!engine.has_selection());
 

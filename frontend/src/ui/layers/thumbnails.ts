@@ -21,8 +21,9 @@ export function rgbaToDataUrl(rgba: Uint8Array, width: number, height: number): 
     return tmpCanvas.toDataURL();
 }
 
-/** Get a layer content thumbnail as a data URL. Returns empty string for non-raster layers. */
-export function getLayerThumbnail(layerId: number): string {
+/** Get a thumbnail as a data URL for any node id (raster layer or modifier).
+ *  Returns empty string when no cached bytes exist yet. */
+export function getNodeThumbnail(nodeId: number): string {
     // Subscribe to `thumbnailEpoch` so any `$derived` calling this
     // function re-runs when an async readback lands in the wasm cache.
     // Do NOT delete this read — without it the cache update is invisible
@@ -30,17 +31,7 @@ export function getLayerThumbnail(layerId: number): string {
     // the first call. (See `app.svelte.ts` `requestFrame` for the bump.)
     void app.thumbnailEpoch;
     if (!app.handle) return '';
-    const rgba = app.handle.layer_thumbnail(layerId, THUMB_SIZE, THUMB_SIZE);
-    if (!rgba || rgba.length === 0) return '';
-    return rgbaToDataUrl(rgba, THUMB_SIZE, THUMB_SIZE);
-}
-
-/** Get a mask thumbnail as a data URL. Returns empty string if no mask. */
-export function getMaskThumbnail(layerId: number): string {
-    // See `getLayerThumbnail` — same dependency, same reason.
-    void app.thumbnailEpoch;
-    if (!app.handle) return '';
-    const rgba = app.handle.mask_thumbnail(layerId, THUMB_SIZE, THUMB_SIZE);
+    const rgba = app.handle.node_thumbnail(nodeId, THUMB_SIZE, THUMB_SIZE);
     if (!rgba || rgba.length === 0) return '';
     return rgbaToDataUrl(rgba, THUMB_SIZE, THUMB_SIZE);
 }

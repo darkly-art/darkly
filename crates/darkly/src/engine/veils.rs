@@ -51,11 +51,10 @@ impl DarklyEngine {
 
     pub fn layer_tree(&self) -> Vec<LayerInfo> {
         self.doc
-            .root
-            .children
+            .children_of(self.doc.root_id())
             .iter()
             .rev()
-            .map(node_to_layer_info)
+            .filter_map(|id| node_to_layer_info(&self.doc, *id))
             .collect()
     }
 

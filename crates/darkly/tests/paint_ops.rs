@@ -144,7 +144,13 @@ fn gpu_gradient_undo() {
 
     // Commit for undo.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(0, 0, w, h));
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap,
+        cr(0, 0, w, h),
+    );
     submit(&queue, enc);
 
     // Verify gradient was painted.
@@ -398,7 +404,13 @@ fn gpu_flood_fill_undo() {
 
     // Commit undo entry.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(&mut enc, 1, &frame(&tex, w, h), &snap, cr(0, 0, w, h));
+    let entry = store.commit_region(
+        &mut enc,
+        darkly::layer::LayerId::from_ffi(1),
+        &frame(&tex, w, h),
+        &snap,
+        cr(0, 0, w, h),
+    );
     submit(&queue, enc);
 
     // Verify fill landed.

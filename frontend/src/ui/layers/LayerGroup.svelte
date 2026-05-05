@@ -1,33 +1,57 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import { getMaskThumbnail, THUMB_SIZE } from './thumbnails';
+    import { getNodeThumbnail, THUMB_SIZE } from './thumbnails';
+    import { dispatchClick } from '../../actions/triggers';
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
+
+    interface Modifier {
+        id: number; kind: string; name: string; visible: boolean; locked: boolean;
+    }
 
     let { group, depth = 0, onupdate }: {
         group: {
             type: 'group'; id: number; name: string; visible: boolean;
             collapsed: boolean; passthrough: boolean; opacity: number;
             blendMode: number; children: any[];
-            hasMask?: boolean; maskEnabled?: boolean; showMask?: boolean;
+            modifiers?: Modifier[];
         };
         depth?: number;
         onupdate: () => void;
     } = $props();
 
+    let maskModifier = $derived<Modifier | null>(
+        group.modifiers?.find((m) => m.kind === 'mask') ?? null,
+    );
+    let hasMask = $derived(maskModifier !== null);
+    let maskEnabled = $derived(maskModifier?.visible ?? true);
+    let isMaskIsolated = $derived(
+        maskModifier !== null && app.isolatedNodeId === maskModifier.id,
+    );
+
     let isActive = $derived(app.activeLayerId === group.id);
-    let isEditingMask = $derived(app.editingMaskLayerId === group.id);
+    let isEditingMask = $derived(
+        maskModifier !== null && app.activeLayerId === maskModifier.id,
+    );
     let editing = $state(false);
     let editInput = $state<HTMLInputElement | null>(null);
     let dropPos = $state<'none' | 'above' | 'below' | 'into'>('none');
 
-    let maskThumb = $derived(group.hasMask && app.handle ? getMaskThumbnail(group.id) : '');
+    let maskThumb = $derived(maskModifier !== null && app.handle ? getNodeThumbnail(maskModifier.id) : '');
     let showMaskMenu = $state(false);
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
+    // Sub-region click handlers fire site-specific bindings only — no
+    // cross-site fallback. Modifier+click on the group's mask thumb
+    // dispatches with the mask's id so `isolateLayer` solos the mask, not
+    // the group.
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
+        if (dispatchClick('layerEye', e, { layerId: group.id })) {
+            onupdate();
+            return;
+        }
         if (app.handle) {
             app.handle.set_layer_visible(group.id, !group.visible);
             onupdate();
@@ -42,7 +66,9 @@
         }
     }
 
-    function setActive() {
+    function onLayerClick() {
+        // The group-header body has no bindings — modifier+click is
+        // reserved for the previews. Plain click selects.
         app.selectLayer(group.id);
     }
 
@@ -61,15 +87,15 @@
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
-        app.selectLayer(group.id);
-        if (!isEditingMask) {
-            app.editingMaskLayerId = group.id;
-            app.handle?.set_editing_mask(group.id, true);
-        } else {
-            app.editingMaskLayerId = null;
-            app.handle?.set_editing_mask(group.id, false);
+        if (maskModifier !== null
+            && dispatchClick('maskThumb', e, { layerId: maskModifier.id })) {
+            onupdate();
+            return;
         }
-        onupdate();
+        if (maskModifier === null) return;
+        // Activating the mask = setting the active node id to the modifier's
+        // id. There is no separate "edit mask" redirect.
+        app.selectLayer(maskModifier.id);
     }
 
     function onMaskContextMenu(e: MouseEvent) {
@@ -83,25 +109,23 @@
     }
 
     function toggleMaskEnabled() {
-        if (app.handle) {
-            app.handle.set_mask_enabled(group.id, !group.maskEnabled);
+        if (app.handle && maskModifier !== null) {
+            app.handle.set_layer_visible(maskModifier.id, !maskEnabled);
             onupdate();
         }
     }
 
     function toggleShowMask() {
-        if (app.handle) {
-            app.handle.set_show_mask(group.id, !group.showMask);
+        if (app.handle && maskModifier !== null) {
+            const next = isMaskIsolated ? 0 : maskModifier.id;
+            app.handle.set_isolated_node(next);
+            app.isolatedNodeId = next === 0 ? null : next;
             onupdate();
         }
     }
 
     function removeMask() {
         if (app.handle) {
-            if (isEditingMask) {
-                app.editingMaskLayerId = null;
-                app.handle.set_editing_mask(group.id, false);
-            }
             app.handle.remove_mask(group.id);
             onupdate();
         }
@@ -165,11 +189,10 @@
         class:drop-above={dropPos === 'above'}
         class:drop-below={dropPos === 'below'}
         class:drop-into={dropPos === 'into'}
-        onclick={setActive}
+        onclick={onLayerClick}
         ondblclick={startRename}
-        onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActive(); }}}
         role="button"
-        tabindex="0"
+        tabindex="-1"
         draggable="true"
         ondragstart={onDragStart}
         ondragover={onDragOver}
@@ -207,12 +230,12 @@
             <span class="group-name">{group.name}</span>
         {/if}
 
-        {#if group.hasMask && maskThumb}
+        {#if hasMask && maskThumb}
             <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <img
                 class="thumb"
                 class:thumb-active={isEditingMask}
-                class:mask-disabled={!group.maskEnabled}
+                class:mask-disabled={!maskEnabled}
                 src={maskThumb}
                 alt="mask"
                 width={THUMB_SIZE}
@@ -227,12 +250,12 @@
 {#if showMaskMenu}
     <div class="mask-menu" style:left="{maskMenuX}px" style:top="{maskMenuY}px">
         <button onclick={toggleMaskEnabled}>
-            {group.maskEnabled ? 'Disable mask' : 'Enable mask'}
+            {maskEnabled ? 'Disable mask' : 'Enable mask'}
         </button>
         <button onclick={toggleShowMask}>
-            {group.showMask ? 'Hide mask' : 'Show mask'}
+            {isMaskIsolated ? 'Hide mask' : 'Show mask'}
         </button>
-        <button onclick={removeMask}>Remove mask</button>
+        <button onclick={removeMask}>Delete mask</button>
     </div>
 {/if}
 
@@ -259,6 +282,12 @@
         min-height: 28px;
         position: relative;
         transition: background 0.1s;
+        user-select: none;
+    }
+
+    .group-header:focus,
+    .group-header:focus-visible {
+        outline: none;
     }
 
     .group-header:hover {
