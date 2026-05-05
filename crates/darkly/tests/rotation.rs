@@ -61,7 +61,7 @@ fn install_bar_tip(engine: &mut DarklyEngine) -> (NodeId, u64) {
         .map(|id| id.0)
         .collect();
     engine
-        .brush_graph_add_node("image", 100.0, 600.0)
+        .brush_graph_add_node("image")
         .expect("add image node");
     let image_id = engine
         .active_brush_graph_ref()
@@ -293,7 +293,7 @@ fn jitter_passthrough_preserves_drawing_angle() {
         .map(|id| id.0)
         .collect();
     engine
-        .brush_graph_add_node("jitter", 200.0, 400.0)
+        .brush_graph_add_node("jitter")
         .expect("add jitter node");
     let jitter_id = engine
         .active_brush_graph_ref()

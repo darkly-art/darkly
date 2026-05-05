@@ -1,14 +1,33 @@
 <script lang="ts">
-    import { setContext, tick } from 'svelte';
+    import { onMount, setContext, tick } from 'svelte';
     import { brushGraph, WIRE_COLORS } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
 
-    // --- Auto-layout when nodes have no positions ---
-    // $effect runs after DOM is updated, so node elements can be measured.
+    interface Props {
+        /** Fires when the user requests "add node" from inside the canvas
+         *  (currently: Shift+A while the cursor is over the graph). The
+         *  parent owns the popup; coords let it both place the popup and
+         *  drop the resulting node at the cursor. */
+        onaddrequest?: (info: {
+            screenX: number;
+            screenY: number;
+            canvasX: number;
+            canvasY: number;
+        }) => void;
+    }
+
+    let { onaddrequest }: Props = $props();
+
+    // --- Auto-layout when nodes lack positions ---
+    // Positions are UI-only state. After a brush load/reset they're
+    // cleared, and this effect lays everything out using DOM-measured
+    // sizes for tight packing. User drags update positions in place;
+    // re-laying out then would clobber the user's arrangement, so the
+    // guard keeps this a one-shot per fresh graph.
     $effect(() => {
-        if (!brushGraph.needsLayout) return;
+        if (!brushGraph.hasUnpositionedNodes) return;
         const sizes: Record<string, [number, number]> = {};
         for (const el of document.querySelectorAll<HTMLElement>('[data-node-id]')) {
             const id = el.dataset.nodeId;
@@ -21,7 +40,8 @@
 
     // --- Port offset registration ---
     // PortWidget measures its dot's offset relative to its node on mount
-    // and registers it here.  Wire paths use node.position + offset.
+    // and registers it here.  Wire paths use the node's auto-layout
+    // position + this port offset.
 
     export interface PortRegistration {
         register(nodeId: number, portName: string, dir: string, offset: { x: number; y: number }): void;
@@ -60,6 +80,14 @@
     let mouseX = $state(0);
     let mouseY = $state(0);
 
+    // --- Hover tracking for Shift+A ---
+    // We need cursor-in-canvas state and the latest screen-space cursor
+    // position so the add-node menu can open at the cursor and the new
+    // node can be dropped there too.
+    let cursorInside = false;
+    let lastClientX = 0;
+    let lastClientY = 0;
+
     function capturePointer(e: PointerEvent) {
         containerEl.setPointerCapture(e.pointerId);
         if (!interactionActive) {
@@ -73,6 +101,8 @@
     function portWorldPos(nodeId: number, portName: string, dir: string) {
         const node = brushGraph.graph?.nodes[String(nodeId)];
         if (!node) return null;
+        const pos = brushGraph.nodePositions[nodeId];
+        if (!pos) return null;
         const key = `${nodeId}:${portName}:${dir}`;
         let offset = portOffsets.get(key);
         if (!offset) {
@@ -92,7 +122,7 @@
             }
         }
         if (!offset) return null;
-        return { x: node.position[0] + offset.x, y: node.position[1] + offset.y };
+        return { x: pos[0] + offset.x, y: pos[1] + offset.y };
     }
 
     function bezierPath(from: { x: number; y: number }, to: { x: number; y: number }): string {
@@ -195,6 +225,8 @@
         const r = containerEl.getBoundingClientRect();
         mouseX = e.clientX - r.left;
         mouseY = e.clientY - r.top;
+        lastClientX = e.clientX;
+        lastClientY = e.clientY;
 
         if (isPanning) {
             panX = panOriginX + (e.clientX - panStartX);
@@ -249,6 +281,30 @@
         }
     }
 
+    // --- 'addBrushNode' action → open menu at the cursor ---
+    // The action lives in the global registry (so it appears in the
+    // hotkey cheat sheet and respects user-overridden shortcuts). Its
+    // handler dispatches `darkly:add-node-request`; we listen here
+    // because pan/zoom and cursor tracking are local to this component.
+    function handleAddNodeRequest() {
+        if (brushGraph.draggingFrom) return;
+        if (!cursorInside || !containerEl) return;
+        const g = screenToGraph(lastClientX, lastClientY);
+        onaddrequest?.({
+            screenX: lastClientX,
+            screenY: lastClientY,
+            canvasX: g.x,
+            canvasY: g.y,
+        });
+    }
+
+    onMount(() => {
+        window.addEventListener('darkly:add-node-request', handleAddNodeRequest);
+        return () => {
+            window.removeEventListener('darkly:add-node-request', handleAddNodeRequest);
+        };
+    });
+
     // --- Image upload: drag & drop onto the container ---
 
     function onDragOver(e: DragEvent) {
@@ -261,8 +317,7 @@
     async function onDrop(e: DragEvent) {
         e.preventDefault();
         if (!e.dataTransfer) return;
-        // Find the Image node under the drop point, or the selected one.
-        const g = screenToGraph(e.clientX, e.clientY);
+        // Drop targets the selected Image node, if any.
         let nodeId: number | null = null;
         if (brushGraph.selectedNode != null) {
             const node = brushGraph.graph?.nodes[String(brushGraph.selectedNode)];
@@ -287,6 +342,8 @@
     onpointerdown={onPointerDown}
     onpointermove={onPointerMove}
     onpointerup={onPointerUp}
+    onpointerenter={() => (cursorInside = true)}
+    onpointerleave={() => (cursorInside = false)}
     onlostpointercapture={onLostCapture}
     oncontextmenu={(e) => e.preventDefault()}
     ondragover={onDragOver}

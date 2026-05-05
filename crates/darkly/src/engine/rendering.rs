@@ -336,6 +336,24 @@ impl DarklyEngine {
                     }
                 }
             }
+            ReadbackContext::NodePreview {
+                node_id,
+                topology_version,
+            } => {
+                // Drop stale results — same shape as `ActiveBrushDab`. If
+                // the topology bumped between submit and now, the user has
+                // changed the graph and another render is queued; this
+                // result is for the old graph and would lie about the
+                // current node output.
+                if topology_version == self.brush_topology_version {
+                    let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
+                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
+                    if !png_bytes.is_empty() {
+                        self.node_preview_cache
+                            .insert(node_id, (topology_version, png_bytes));
+                    }
+                }
+            }
         }
     }
 

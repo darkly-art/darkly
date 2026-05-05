@@ -19,7 +19,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "image",
-        category: "gpu",
+        category: "texture",
         display_name: "Image",
         ports: vec![PortDef::output("texture", BrushWireType::Texture)
             .with_description("The loaded brush tip image as a GPU texture")],

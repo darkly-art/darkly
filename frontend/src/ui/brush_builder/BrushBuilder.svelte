@@ -4,14 +4,72 @@
     import { config } from '../../config/store.svelte';
     import LiveBrushPreviewStrip from '../brush_picker/LiveBrushPreviewStrip.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
-    import NodePalette from './NodePalette.svelte';
+    import AddNodeMenu from './AddNodeMenu.svelte';
+
+    // --- Add-node menu state ---
+    // Two open paths land here:
+    //  - the toolbar "+ Add Node" button (anchor: bottom-left, placement:
+    //    auto-grid offset based on existing nodes);
+    //  - Shift+A over the canvas (anchor: cursor top-left, placement: at
+    //    the cursor in canvas coords).
+    // `placement` is consumed once on pick.
+    type AddMenuState = {
+        open: boolean;
+        x: number;
+        y: number;
+        anchor: 'top-left' | 'bottom-left';
+        placement: { x: number; y: number };
+    };
+
+    function defaultPlacement(): { x: number; y: number } {
+        const count = brushGraph.nodeList.length;
+        return {
+            x: 100 + (count % 4) * 180,
+            y: 50 + Math.floor(count / 4) * 120,
+        };
+    }
+
+    let addMenu = $state<AddMenuState>({
+        open: false,
+        x: 0,
+        y: 0,
+        anchor: 'top-left',
+        placement: { x: 0, y: 0 },
+    });
+
+    function openMenuFromButton(e: MouseEvent) {
+        const btn = e.currentTarget as HTMLElement;
+        const r = btn.getBoundingClientRect();
+        addMenu = {
+            open: true,
+            x: r.left,
+            y: r.top, // popup grows up; bottom-left of popup sits at button top
+            anchor: 'bottom-left',
+            placement: defaultPlacement(),
+        };
+    }
+
+    function openMenuAtCursor(info: {
+        screenX: number;
+        screenY: number;
+        canvasX: number;
+        canvasY: number;
+    }) {
+        addMenu = {
+            open: true,
+            x: info.screenX,
+            y: info.screenY,
+            anchor: 'top-left',
+            placement: { x: info.canvasX, y: info.canvasY },
+        };
+    }
+
+    function closeMenu() {
+        addMenu = { ...addMenu, open: false };
+    }
 
     function handleAddNode(typeId: string) {
-        // Place new nodes near the center of the canvas.
-        // A simple offset based on how many nodes exist.
-        const count = brushGraph.nodeList.length;
-        const x = 100 + (count % 4) * 180;
-        const y = 50 + Math.floor(count / 4) * 120;
+        const { x, y } = addMenu.placement;
         brushGraph.addNode(typeId, x, y);
     }
 
@@ -115,14 +173,18 @@
 <div class="brush-builder" class:fullscreen>
     <div class="builder-toolbar">
         <span class="builder-title">Brush Builder</span>
-        <NodePalette onaddnode={handleAddNode} />
+        <button
+            class="add-node-btn"
+            onclick={openMenuFromButton}
+            title="Add node (Shift+A)"
+        >+ Add Node</button>
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
         <button class="toolbar-btn" onclick={handleAutoLayout} title="Auto-layout nodes">Layout</button>
         <div class="spacer"></div>
     </div>
 
     <div class="canvas-wrapper">
-        <NodeCanvas />
+        <NodeCanvas onaddrequest={openMenuAtCursor} />
         <div class="preview-dock">
             {#if previewVisible}
                 <LiveBrushPreviewStrip width={previewSize.w} />
@@ -166,6 +228,15 @@
     </div>
 </div>
 
+<AddNodeMenu
+    open={addMenu.open}
+    x={addMenu.x}
+    y={addMenu.y}
+    anchor={addMenu.anchor}
+    onclose={closeMenu}
+    onpick={handleAddNode}
+/>
+
 <style>
     .brush-builder {
         display: flex;
@@ -198,6 +269,20 @@
         transition: background 0.1s, color 0.1s;
     }
     .toolbar-btn:hover {
+        background: var(--bg-active);
+        color: var(--text);
+    }
+    .add-node-btn {
+        background: var(--bg-hover);
+        border: none;
+        border-radius: 4px;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 11px;
+        padding: 4px 10px;
+        transition: background 0.1s, color 0.1s;
+    }
+    .add-node-btn:hover {
         background: var(--bg-active);
         color: var(--text);
     }

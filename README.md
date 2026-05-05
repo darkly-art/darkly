@@ -2,108 +2,27 @@
 
 # DARKLY
 
-Darkly is a digital paint program for artists. Its purpose is to empower veteran and new artists alike by accomodating their existing workflows, and introducing new elements designed to help them compete with AI.
+[Darkly](https://darkly.art) is a paint program for free-spirited artists. Fully free and open source, it has [everything you expect](#standard-paint-features) from a paint program, plus some **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
-Darkly's characteristic feature is "veils" - a way of mutating or obfuscating the canvas to stimulate creative exploration. 
+Darkly runs on your PC or in the web browser via WebAssembly and WebGPU. Try out the demo [here](https://demo.darkly.art).
 
-Similar to how an AI leverages entropy to iteratively derive an image from noise, Darkly introduces entropy onto the canvas in a variety of clever and satisfying ways -- heat waves, rainy glass, turbulent water, retro CRT. These veil effects help to counteract inherent human tendencies which have always plagued artists:
+## Standard Paint Features
 
-- artist's block (the dreaded "white canvas")
-- premature fixation on detail (RIP composition)
-- lack of confidence / fear of exploration
-- artist blindness (losing fresh eyes after staring at a work for too long)
+### Brush Engine
 
-Basically, Darkly gives you permission to explore wildly and freely, brainstorming with entropy, trying out different compositions, and unlocking secrets latent in your own imagination. 
+- Node-based and infinitely customizable
+- Smooth and satisfying stroke stabilization
+- Lots of brush presets:
+    - Pencils, Charcoal
+    - Watercolor
+    - Oils
+    - Liquify
 
-It frees you from rulers, sharp lines, and your own inner critic, enabling you to paint freely and without judgement, behind the veil.
+## Unique Darkly Features
 
-The result is a speedier and more creative ideation process, which unearths artistic expressions unique to you. What will *YOU* see in the entropy? It may surprise you!
+### Veils
 
-## Architecture
-
-Darkly's Rust core (`crates/darkly/`) is platform-agnostic. It contains the document model, GPU compositor, veils, brush engine, undo system, and the `DarklyEngine` — all with zero platform dependencies. A WASM bridge wraps the engine for the browser.
-
-State is split three ways: the **document** is authoritative and undoable (layer tree, masks, selection, canvas size); **session** state lives on `DarklyEngine` (active tool, view transform, in-flight stroke); the **compositor** is a derived realization (GPU textures, blend pipelines, render caches) that's always rebuildable from the document. Data flows downhill — document → compositor, session → compositor — never the other way.
-
-**Runtime stack** — how a pointer event becomes a pixel:
-
-```mermaid
-flowchart TB
-    User[Pointer / keyboard]
-    Svelte[Svelte UI<br/>frontend/src/]
-    Bridge[DarklyHandle<br/>frontend/wasm/<br/>command queue + queries]
-    Engine[DarklyEngine<br/>crates/darkly/]
-    WGPU[wgpu]
-    Canvas[WebGPU canvas]
-
-    User --> Svelte
-    Svelte -- JSON commands --> Bridge
-    Bridge -- JSON queries --> Svelte
-    Bridge --> Engine
-    Engine --> WGPU
-    WGPU --> Canvas
-```
-
-**Inside the Rust core** — the document is authoritative; the compositor is a derived realization. Data flows downhill, never up:
-
-```mermaid
-flowchart TB
-    Engine[DarklyEngine<br/>session: active tool, view transform,<br/>stroke lifecycle, undo stack]
-
-    subgraph Doc[Document — authoritative, undoable, GPU-free]
-        Tree[Layer tree]
-        Masks[Mask presence]
-        Sel[Selection regions]
-        Size[Canvas size]
-    end
-
-    subgraph Brush[Brush engine]
-        Stroke[StrokeEngine<br/>+ stabilizers]
-        Graph[Node graph<br/>+ nodes]
-    end
-
-    subgraph GPU[GPU layer — derived from document]
-        Comp[Compositor<br/>group ping-pong blend]
-        Veils[Veils]
-        Region[RegionStore<br/>GpuSelection<br/>ReadbackScheduler]
-    end
-
-    Tools[Tools<br/>brush, fill, select, transform]
-
-    Engine -->|mutate| Doc
-    Engine --> Tools
-    Engine --> Brush
-    Tools --> Doc
-    Brush -->|paint dabs| Region
-    Doc -.->|read| Comp
-    Region --> Comp
-    Comp --> Veils
-```
-
-**Modular subsystems** — `build.rs` scans these directories and auto-generates the registration code, so adding a veil / tool / brush node / stabilizer / config section is a single new file with a `register()` function. No central match arms, no hand-maintained lists.
-
-| Directory | What lives here |
-| --- | --- |
-| `gpu/veils/` | Veil effects (rainy glass, VHS, kuwahara, …) |
-| `tools/` | Selection + transform tools |
-| `brush/nodes/` | Brush graph nodes (pen_input, stamp, curve, …) |
-| `brush/stabilizers/` | Stroke stabilizers |
-| `config/sections/`, `config/presets/` | Config schema sections + bundled presets |
-
-```
-crates/darkly/          Platform-agnostic core (wgpu, pure Rust)
-  src/document.rs       Authoritative document model
-  src/engine/           DarklyEngine — session state + dispatch
-  src/gpu/              Compositor, veils, shaders
-  src/brush/            Node-graph brush engine, stroke engine, library
-  src/nodegraph/        Generic node-graph (graph, compiler, layout)
-  src/tools/            Selection / transform tools
-  src/undo/             Undo stack + per-domain undoable ops
-frontend/wasm/          WASM bridge (wasm-bindgen) → browser
-frontend/src/           Svelte UI
-shared/styles/          @darkly/styles — tokens + themes shared by UI and website
-website/                Astro + Starlight site (splash, docs, /demo/)
-```
+### Muses
 
 ## Getting started
 

@@ -38,9 +38,7 @@ impl DarklyEngine {
     /// Load a brush by name and set it as the active brush graph.
     ///
     /// Also uploads any brush tip resources to the GPU dab pool cache.
-    /// Returns `true` if the brush has no saved positions and the
-    /// frontend should run auto-layout with DOM-measured sizes.
-    pub fn brush_load(&mut self, name: &str) -> Result<bool, String> {
+    pub fn brush_load(&mut self, name: &str) -> Result<(), String> {
         let brush = self
             .brush_library
             .get(name)
@@ -54,7 +52,7 @@ impl DarklyEngine {
             .map_err(|e| format!("failed to serialize graph: {e}"))?;
         self.set_brush_graph(&json)?;
 
-        Ok(self.active_brush_graph.needs_layout())
+        Ok(())
     }
 
     /// Save the active brush graph as a brush in the library.

@@ -21,7 +21,7 @@ const DEFAULT_CURVE: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "curve",
-        category: "math",
+        category: "modulate",
         display_name: "Curve",
         ports: vec![
             PortDef::input("input", BrushWireType::Scalar)

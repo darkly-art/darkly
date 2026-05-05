@@ -16,7 +16,9 @@ use crate::gpu::params::ParamDef;
 pub struct NodeRegistration<W: WireKind> {
     /// Unique identifier (e.g. "pen_input", "multiply").
     pub type_id: &'static str,
-    /// UI category (e.g. "sensor", "math", "gpu").
+    /// UI category for the add-node palette — describes what the node *does*,
+    /// not how it executes. Current values: "input", "math", "modulate",
+    /// "color", "shape", "texture", "output", and "internal" (filtered out).
     pub category: &'static str,
     /// Human-readable name (e.g. "Pen Input", "Multiply").
     pub display_name: &'static str,

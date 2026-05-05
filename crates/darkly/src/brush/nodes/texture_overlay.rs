@@ -24,7 +24,7 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 pub fn register() -> BrushNodeRegistration {
     NodeRegistration {
         type_id: "texture_overlay",
-        category: "gpu",
+        category: "texture",
         display_name: "Texture Overlay",
         ports: vec![
             PortDef::input("dab", BrushWireType::Texture)

@@ -210,7 +210,7 @@ fn preview_uses_arbitrary_brush_preview_texture() {
     let json_before: serde_json::Value =
         serde_json::from_str(&serde_json::to_string(engine.active_brush_graph_ref()).unwrap())
             .unwrap();
-    let _ = engine.brush_graph_add_node("image", 100.0, 600.0).unwrap();
+    let _ = engine.brush_graph_add_node("image").unwrap();
     let json_after: serde_json::Value =
         serde_json::from_str(&serde_json::to_string(engine.active_brush_graph_ref()).unwrap())
             .unwrap();

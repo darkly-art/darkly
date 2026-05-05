@@ -7,10 +7,14 @@
 
     let { onaddnode }: Props = $props();
 
-    // Group node types by category.
+    // Group node types by category. `internal` is a hidden category used by
+    // the engine for synthesised terminals (e.g. `preview_terminal` for the
+    // per-node preview pipeline) — these are not user-placeable and would
+    // confuse the palette UI.
     let categories = $derived((() => {
         const cats: Record<string, NodeTypeInfo[]> = {};
         for (const nt of brushGraph.nodeTypes) {
+            if (nt.category === 'internal') continue;
             const cat = nt.category || 'other';
             if (!cats[cat]) cats[cat] = [];
             cats[cat].push(nt);

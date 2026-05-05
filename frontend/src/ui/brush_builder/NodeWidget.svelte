@@ -3,6 +3,7 @@
     import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
     import CurveEditor from '../CurveEditor.svelte';
+    import NodePreview from './NodePreview.svelte';
 
     interface Props {
         node: NodeInstance;
@@ -12,15 +13,38 @@
     let { node, zoom }: Props = $props();
 
     let isSelected = $derived(brushGraph.selectedNode === node.id);
-    let inputPorts = $derived(node.ports.filter(p => p.dir === 'Input'));
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
+    let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
+    /** Any GPU node that produces a texture output gets an in-node preview
+     *  thumbnail. The engine<< Updated upstream's `brush_node_preview` walks the predecessor
+     *  closure of the node and renders it through the existing async
+     *  preview path; this gate keeps us from showing previews for nodes
+     *  whose output isn't visualisable (Scalar, Vec2, etc.). */
+    let hasTextureOutput = $derived(outputPorts.some(p => p.wire_type === 'Texture'));
 
     // Node type info for display name and params.
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));
     let displayName = $derived(typeInfo?.display_name ?? node.type_id);
     let paramDefs = $derived(typeInfo?.params ?? []);
 
+    /** Apply the port's `visible_when` rule against the current params.
+     *  Engine-side the port still works regardless — this is purely UI. */
+    function isPortVisible(port: PortDef): boolean {
+        if (!port.visible_when) return true;
+        const [paramName, allowed] = port.visible_when;
+        const idx = paramDefs.findIndex((d: any) => d.name === paramName);
+        if (idx < 0) return true; // misconfigured rule — fall back to visible
+        const def = paramDefs[idx] as any;
+        const raw = node.params[idx] ?? def?.default ?? 0;
+        return allowed.includes(Number(raw));
+    }
+    let inputPorts = $derived(
+        node.ports.filter(p => p.dir === 'Input' && isPortVisible(p))
+    );
+
     // --- Drag to move (from any point on the node) ---
+    // Updates `brushGraph.nodePositions` directly — positions are
+    // UI-only state and never round-trip to Rust.
     let dragging = false;
     let dragStartX = 0;
     let dragStartY = 0;
@@ -42,8 +66,8 @@
         dragging = true;
         dragStartX = e.clientX;
         dragStartY = e.clientY;
-        nodeStartX = node.position[0];
-        nodeStartY = node.position[1];
+        nodeStartX = position[0];
+        nodeStartY = position[1];
         nodeEl.setPointerCapture(e.pointerId);
         app.beginInteraction();
     }
@@ -59,7 +83,6 @@
         if (!dragging) return;
         dragging = false;
         nodeEl.releasePointerCapture(e.pointerId);
-        brushGraph.syncNodePosition(node.id);
     }
 
     /** Guaranteed cleanup — fires when capture ends for any reason. */
@@ -231,7 +254,7 @@
 <div
     class="node-widget"
     class:selected={isSelected}
-    style="transform: translate({node.position[0]}px, {node.position[1]}px);"
+    style="transform: translate({position[0]}px, {position[1]}px);"
     data-node-id={node.id}
     bind:this={nodeEl}
     onpointerdown={onNodeDown}
@@ -245,23 +268,8 @@
     </div>
 
     <div class="node-body">
-        {#if outputPorts.length > 0}
-            <div class="ports-outputs">
-                {#each outputPorts as port}
-                    <PortWidget {port} nodeId={node.id} side="right" />
-                {/each}
-            </div>
-        {/if}
-        {#if inputPorts.length > 0}
-            <div class="ports-inputs">
-                {#each inputPorts as port}
-                    <PortWidget {port} nodeId={node.id} side="left" />
-                {/each}
-            </div>
-        {/if}
-
         {#if paramDefs.length > 0}
-            <div class="params">
+            <div class="params params-top">
                 {#each paramDefs as pdef, i}
                     {#if pdef.kind === 'curve'}
                         <CurveEditor
@@ -385,6 +393,25 @@
                 {/each}
             </div>
         {/if}
+
+        {#if outputPorts.length > 0}
+            <div class="ports-outputs">
+                {#each outputPorts as port}
+                    <PortWidget {port} nodeId={node.id} side="right" />
+                {/each}
+            </div>
+        {/if}
+        {#if inputPorts.length > 0}
+            <div class="ports-inputs">
+                {#each inputPorts as port}
+                    <PortWidget {port} nodeId={node.id} side="left" />
+                {/each}
+            </div>
+        {/if}
+
+        {#if hasTextureOutput}
+            <NodePreview nodeId={node.id} width={96} height={96} />
+        {/if}
     </div>
 </div>
 
@@ -444,8 +471,13 @@
     }
     .params {
         padding: 4px 6px;
-        border-top: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
-        margin-top: 4px;
+    }
+    /* When the params block sits at the top of the node body, draw the
+       divider below it (separating sticky config from per-dab data ports)
+       instead of the previous "params at the bottom" layout's top divider. */
+    .params-top {
+        border-bottom: 1px solid color-mix(in srgb, var(--text) 8%, transparent);
+        margin-bottom: 4px;
     }
     .param-row {
         display: flex;

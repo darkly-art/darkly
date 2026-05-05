@@ -318,6 +318,22 @@ export function registerActions() {
 
     // -- Brush parameters (size hotkeys + shift+drag scrub) --
     registerBrushParamActions();
+
+    // -- Brush builder --
+    actions.register({
+        id: 'addBrushNode',
+        displayName: 'Add Brush Node',
+        category: 'brush',
+        description: 'Open the add-node menu at the cursor (brush builder).',
+        defaultHotkey: 'Shift+KeyA',
+        handler: () => {
+            // No-op if the brush builder isn't visible. The actual placement
+            // — at the cursor in canvas coords — happens in NodeCanvas, which
+            // owns pan/zoom and the cursor; we just signal it via an event.
+            if (!brushGraph.isOpen) return;
+            window.dispatchEvent(new CustomEvent('darkly:add-node-request'));
+        },
+    });
 }
 
 // -- Layer isolation --

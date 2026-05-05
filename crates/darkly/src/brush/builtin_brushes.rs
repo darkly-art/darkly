@@ -24,6 +24,8 @@ pub fn all() -> Vec<Brush> {
         pencil(),
         charcoal(),
         canvas_brush(),
+        smooth_watercolor(),
+        rough_watercolor(),
         liquify_push(),
     ]
 }
@@ -490,6 +492,127 @@ fn canvas_brush() -> Brush {
     )
 }
 
+/// Build a watercolor brush around a procedural `circle` tip.
+///
+/// All watercolor variants share the same wiring — pen + paint_color into a
+/// stamp into the `watercolor` terminal, with a per-dab random rotation so
+/// the dab's outline lands at a fresh angle every stamp. The variants only
+/// differ in how the circle is configured, so the caller passes a closure
+/// that sets the algorithm enum and any port defaults on the circle node.
+///
+/// Built directly rather than via `BrushBuilder` because the standard
+/// builder pre-wires `color_output` as the terminal — watercolor swaps
+/// that for its own `watercolor` terminal node.
+fn watercolor_brush(
+    name: &str,
+    configure_circle: impl FnOnce(&mut Graph<BrushWireType>, NodeId),
+) -> Brush {
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    // Stabilization: stroke smoothing helps watercolor read as a single
+    // continuous wash rather than a jittery line. 50% is enough to take the
+    // edge off without the brush feeling laggy.
+    graph.set_port_default(pen, "stabilize", 0.5).unwrap();
+    graph.set_port_exposed(pen, "stabilize", true).unwrap();
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let circle = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // overwritten by the closure if needed
+    );
+    configure_circle(&mut graph, circle);
+    let stamp = graph.add_node(
+        "stamp",
+        registry.get("stamp").unwrap().ports.clone(),
+        vec![],
+    );
+    // Per-dab random rotation so the bumpy outline lands at a fresh angle
+    // every stamp — without it, every dab is identical and the bumps line
+    // up along the stroke.
+    let rand_rot = graph.add_node(
+        "random",
+        registry.get("random").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // 0 = per-dab
+    );
+    let watercolor = graph.add_node(
+        "watercolor",
+        registry.get("watercolor").unwrap().ports.clone(),
+        vec![],
+    );
+
+    let wires = [
+        // Stamp builds the dab shape and bakes paint color into RGB. The
+        // watercolor terminal reads `dab.a` for the alpha mask and uses the
+        // separately-wired `color` for the paint color in the mix.
+        (circle, "texture", stamp, "tip"),
+        (paint_color, "color", stamp, "color"),
+        (paint_color, "color", watercolor, "color"),
+        // Pressure → flow so light strokes deposit less paint, the way a
+        // real brush carries less pigment with less pressure.
+        (pen, "pressure", stamp, "flow"),
+        (rand_rot, "value", stamp, "rotation"),
+        (stamp, "dab", watercolor, "dab"),
+        (stamp, "dab_size", watercolor, "dab_size"),
+        (pen, "position", watercolor, "position"),
+        (stamp, "preview", watercolor, "brush_preview"),
+    ];
+    for (from_node, from_port, to_node, to_port) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    let mut metadata = BrushMetadata::from_graph(name, graph);
+    metadata.category = "painting".to_string();
+    Brush::without_resources(metadata)
+}
+
+/// Smooth watercolor: sine-harmonic dab with gentle bumps for an organic
+/// hand-painted edge.
+fn smooth_watercolor() -> Brush {
+    watercolor_brush("Smooth Watercolor", |graph, circle| {
+        graph
+            .set_param(circle, 0, ParamValue::Int(0)) // 0 = Sine Harmonic
+            .unwrap();
+        graph.set_port_default(circle, "amplitude", 0.1).unwrap();
+        graph.set_port_default(circle, "frequency", 5.0).unwrap();
+        graph.set_port_default(circle, "phase", 0.0).unwrap();
+    })
+}
+
+/// Rough watercolor: Perlin-noise dab with a more chaotic, granulated edge.
+fn rough_watercolor() -> Brush {
+    watercolor_brush("Rough Watercolor", |graph, circle| {
+        graph
+            .set_param(circle, 0, ParamValue::Int(1)) // 1 = Perlin Noise
+            .unwrap();
+        graph.set_port_default(circle, "softness", 0.05).unwrap();
+        graph.set_port_default(circle, "amplitude", 0.4).unwrap();
+        graph.set_port_default(circle, "frequency", 12.0).unwrap();
+        graph.set_port_default(circle, "persistence", 0.55).unwrap();
+        graph.set_port_default(circle, "octaves", 4.0).unwrap();
+    })
+}
+
 /// Liquify warp brush. Pushes pixels along pen motion with a radial
 /// falloff. Unlike paint brushes, the graph has no stamp / paint_color /
 /// color_output — the liquify node is itself the terminal, with its own
@@ -603,17 +726,11 @@ mod tests {
 
     #[test]
     fn builtin_brushes_no_overlapping_nodes() {
-        for mut brush in all() {
-            // Brushes ship without positions; auto-layout before checking.
-            if brush.metadata.graph.needs_layout() {
-                brush.metadata.graph.auto_layout();
-            }
-            let positions: Vec<[i32; 2]> = brush
-                .metadata
-                .graph
-                .nodes
+        for brush in all() {
+            let layout = brush.metadata.graph.auto_layout();
+            let positions: Vec<[i32; 2]> = layout
                 .values()
-                .map(|n| [n.position[0] as i32, n.position[1] as i32])
+                .map(|p| [p[0] as i32, p[1] as i32])
                 .collect();
             for (i, a) in positions.iter().enumerate() {
                 for b in &positions[i + 1..] {
