@@ -915,7 +915,7 @@ impl Compositor {
         self.content_bounds.is_pending(layer_id)
     }
 
-    // --- Paint Target Accessors (Phase 2: GPU brush) ---
+    // --- Paint Target Accessors ---
 
     /// Look up a node's GPU texture by id. Works uniformly for raster layers
     /// and mask modifiers — format and extent come from the texture's own

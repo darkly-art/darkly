@@ -657,8 +657,7 @@ fn gpu_fill_rect_with_mask() {
 
 /// Linear gradient on an offset paste-extent layer: gradient endpoints are
 /// canvas-space; the white→black transition must follow canvas coordinates,
-/// not target-local. Regression guard for the gradient.wgsl `target_offset`
-/// migration.
+/// not target-local.
 #[test]
 fn gpu_gradient_on_offset_layer_uses_canvas_endpoints() {
     let (device, queue) = test_device();

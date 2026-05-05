@@ -175,7 +175,7 @@ impl DarklyEngine {
     // modifier id, paint goes to the mask's R8 PixelBuffer; for a raster id,
     // paint goes to the RGBA layer texture. No sidecar redirect.
     //
-    // All stroke ops go through GPU render passes (Phase 3).
+    // All stroke ops go through GPU render passes.
 
     pub fn begin_stroke(&mut self, layer_id: LayerId) {
         self.auto_commit_floating();
@@ -401,10 +401,9 @@ impl DarklyEngine {
         }
 
         // The brush engine's bbox metadata (`save_points`, `checkpoint_ring`)
-        // is in canvas coords (Storage Frame Rule, see plan
-        // `mossy-sleeping-flame.md`). Canvas coords are stable across layer
-        // growth, so no metadata patch is needed — only the GPU textures
-        // got rebased above, and the metadata translates to the new
+        // is in canvas coords (Storage Frame Rule). Canvas coords are stable
+        // across layer growth, so no metadata patch is needed — only the GPU
+        // textures got rebased above, and the metadata translates to the new
         // layer-local frame on demand at the wgpu boundary.
 
         // Re-anchor the region_store scratch so the diff_rect at end_stroke

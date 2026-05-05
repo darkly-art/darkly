@@ -727,8 +727,7 @@ fn brush_stroke_on_paste_extent_layer_undo_preserves_off_canvas_pixels() {
 
 /// Brush stroke at a canvas position on a paste-extent layer with negative
 /// offset must land at the corresponding layer-local position, not at
-/// canvas-pos interpreted as layer-local. Regression for P1b.4 brush
-/// composite shader migration.
+/// canvas-pos interpreted as layer-local.
 #[test]
 fn brush_stroke_on_paste_extent_layer_lands_at_canvas_coords() {
     let (cw, ch) = (64, 64);
@@ -784,7 +783,7 @@ fn brush_stroke_on_paste_extent_layer_lands_at_canvas_coords() {
 }
 
 // ============================================================================
-// P2 — Brush strokes grow the layer (Phase 2B)
+// Brush strokes grow the layer
 // ============================================================================
 
 /// Brush stroke whose center falls past the canvas right edge must extend
@@ -1293,7 +1292,7 @@ fn mid_stroke_growth_invalidates_mask_bind_group() {
 }
 
 // ============================================================================
-// Floating undo on offset / paste-extent layers (typed-coord refactor)
+// Floating undo on offset / paste-extent layers
 // ============================================================================
 
 /// Transform-commit with rotation: a 90° rotation moves pixels OUTSIDE the
@@ -1726,14 +1725,13 @@ fn transform_translate_with_selection_does_not_duplicate() {
     );
 }
 
-/// Regression for the bug class fixed by the canvas-coord storage refactor
-/// (see plan `mossy-sleeping-flame.md`): a deferred `pending_undo_commit`
-/// from stroke A must remain valid when stroke B grows the layer a second
-/// time before A's diff has been polled. Pre-fix, the diff rect was in
-/// scratch-local coords captured at A's request time; B's second grow
-/// rebased the scratch and shifted the layer-local frame, so when the
-/// diff finally landed it pointed at the wrong layer-space pixels.
-/// Canvas coords are stable across grows, so this round-trips cleanly now.
+/// Regression for canvas-coord storage of pending undo commits: a deferred
+/// `pending_undo_commit` from stroke A must remain valid when stroke B grows
+/// the layer a second time before A's diff has been polled. With layer-local
+/// coords the diff rect captured at A's request time would be invalidated by
+/// B's grow rebasing the scratch and shifting the local frame, so the diff
+/// would land at the wrong texels. Canvas coords are stable across grows, so
+/// this round-trips cleanly.
 #[test]
 fn pending_undo_commit_survives_two_grows() {
     let (cw, ch) = (256u32, 256u32);
@@ -2199,9 +2197,9 @@ fn floating_preview_respects_layer_mask() {
 }
 
 // ============================================================================
-// Phase 1: Mask → Modifier-Node refactor regression tests
+// Mask → Modifier-Node regression tests
 //
-// These tests defend the structural invariants the refactor introduced:
+// These tests defend the structural invariants of the modifier-node model:
 // the document model has no `has_mask` / `mask_enabled` / `show_mask`
 // booleans, masks are real nodes with their own `PixelBuffer`, lockstep
 // growth is a document-side operation, and the type system forbids ever
@@ -2533,7 +2531,7 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
 }
 
 // ============================================================================
-// Phase 2: Selection unification regression tests
+// Selection unification regression tests
 //
 // The selection is now a typed `Modifier` attached at `Document.selection`.
 // The R8 GPU texture lives in the compositor's selection sub-system; the CPU
@@ -2616,9 +2614,9 @@ fn selection_to_mask_round_trip_preserves_pixels() {
 }
 
 /// The document model must expose the selection as a typed [`Modifier`] —
-/// not as a parallel `Option<AlphaMask>` slot. This is the §1 invariant of
-/// Phase 2: `Document.selection` is a Modifier with `kind = Selection(...)`,
-/// addressable through the same `Modifier::pixels()` interface as a mask.
+/// not as a parallel `Option<AlphaMask>` slot. `Document.selection` is a
+/// Modifier with `kind = Selection(...)`, addressable through the same
+/// `Modifier::pixels()` interface as a mask.
 #[test]
 fn document_selection_is_a_typed_modifier() {
     use darkly::document::ModifierKind;
@@ -2649,8 +2647,8 @@ fn document_selection_is_a_typed_modifier() {
         .expect("selection modifier must be present");
     assert!(
         kind_is_selection,
-        "Document.selection.kind must be ModifierKind::Selection — the type \
-         system unification of Phase 2"
+        "Document.selection.kind must be ModifierKind::Selection — the \
+         type-system unification of selection and mask under Modifier"
     );
 
     // Pixel-bearing: same `pixels()` accessor as masks. This proves the

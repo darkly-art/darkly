@@ -1,9 +1,7 @@
 //! Engine-level selection ops (shape fills, booleans, active toggle, undo).
 //!
-//! Replaces the old `engine/selection.rs` after the Phase 2 refactor that made
-//! the global selection a typed [`crate::document::Modifier`] attached at the
-//! document root. The `gpu_selection: GpuSelection` field is gone; selection
-//! state now splits cleanly across:
+//! The global selection is a typed [`crate::document::Modifier`] attached at
+//! the document root. Selection state splits cleanly across:
 //!
 //! - **Document model**: `doc.selection: Option<Modifier>` carries name,
 //!   visibility (active toggle), lock, [`crate::layer::PixelBuffer`] bounds,

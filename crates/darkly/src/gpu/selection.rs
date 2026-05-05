@@ -1,12 +1,10 @@
 //! GPU-side state for the document's global selection: ping-pong R8 textures,
 //! the brush+paint pipeline bind groups, and the boolean-op render pipelines.
 //!
-//! This used to live in `engine/gpu_selection.rs` and carry the selection's
-//! pixel-level metadata (`active`, `pixel_bounds`, `cpu_cache`) directly. As of
-//! Phase 2 the selection is a typed [`crate::document::Modifier`] attached at
-//! the document root, and that metadata moved to [`SelectionModifier`]. What
-//! lives here is purely the GPU realisation: textures, bind groups, and the
-//! shaders that mutate them.
+//! The selection itself is a typed [`crate::document::Modifier`] attached at
+//! the document root, with its pixel-level metadata (`active`, `pixel_bounds`,
+//! `cpu_cache`) on [`SelectionModifier`]. What lives here is purely the GPU
+//! realisation: textures, bind groups, and the shaders that mutate them.
 //!
 //! Ping-pong: combine/invert ops can't read+write the same texture in a single
 //! render pass, so we keep two R8 textures and swap which is "current". The

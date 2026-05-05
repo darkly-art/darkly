@@ -11,9 +11,7 @@
 //! call. The scratch is texture-aligned (scratch[(x, y)] holds the pre-op
 //! snapshot of source[(x, y)]) but the *metadata* — `Snapshot.saved` and
 //! `UndoRegionEntry.canvas_rect` — is in canvas coords so it remains valid
-//! across mid-stroke layer growth.
-//!
-//! See plan: `mossy-sleeping-flame.md` (Storage Frame Rule).
+//! across mid-stroke layer growth (the Storage Frame Rule).
 //!
 //! [`save_region`](Self::save_region) returns a [`Snapshot`] token. The token
 //! is required by [`commit_region`](Self::commit_region) and

@@ -866,8 +866,7 @@ fn affine_multiply_translate_chain() {
 
 /// Transform-commit onto a paste-extent layer at non-zero canvas offset:
 /// the source must land at the requested canvas position, not at
-/// canvas-pos minus offset. Regression guard for transform_commit.wgsl
-/// `target_offset` migration.
+/// canvas-pos minus offset.
 #[test]
 fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
     let (device, queue) = test_device();
@@ -966,17 +965,16 @@ fn transform_commit_onto_offset_layer_lands_at_canvas_coords() {
     }
 }
 
-/// Regression for the canvas-coord storage refactor (see plan
-/// `mossy-sleeping-flame.md`): a floating transform's `cancel_snapshot`
-/// must restore at the correct canvas position even if the layer's
-/// canvas extent changes between setup and cancel. This simulates that
-/// scenario directly with `RegionStore`: save into a 256×256 layer at
-/// canvas (0, 0), simulate a negative-direction grow that shifts the
-/// layer's local-coord origin to (256, 256) in a 512×512 texture, then
-/// `restore_from_scratch` using the canvas-coord snapshot. Pre-fix
-/// (`Snapshot.saved: LayerRect`) the saved rect would still name the
-/// pre-grow layer-local frame and write to the wrong texels in the new
-/// frame; canvas-coord storage round-trips cleanly via
+/// Regression for canvas-coord snapshot storage in floating transforms: a
+/// `cancel_snapshot` must restore at the correct canvas position even if the
+/// layer's canvas extent changes between setup and cancel. This simulates
+/// that scenario directly with `RegionStore`: save into a 256×256 layer at
+/// canvas (0, 0), simulate a negative-direction grow that shifts the layer's
+/// local-coord origin to (256, 256) in a 512×512 texture, then
+/// `restore_from_scratch` using the canvas-coord snapshot. With a layer-local
+/// `Snapshot.saved` the saved rect would still name the pre-grow frame and
+/// write to the wrong texels in the new frame; canvas-coord storage
+/// round-trips cleanly via
 /// `canvas_to_layer_rect`.
 #[test]
 fn cancel_floating_after_layer_grow() {
