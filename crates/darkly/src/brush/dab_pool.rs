@@ -11,19 +11,46 @@
 
 use super::wire::TextureHandle;
 
-/// Reference dab texture dimension (width = height) in canvas pixels.
+/// Reference dab dimension (width = height), in canvas pixels.
 ///
-/// This is **not** a hard cap on dab footprint:
-/// - Stamp uses it as the reference for `effective_size = 1.0` (the
-///   slider's "100%" mark); users can drag past 100% to produce stamps
-///   well above this value.
-/// - Liquify uses it as the radius multiplier base
-///   (`radius = size * DAB_REFERENCE_SIZE * 0.5`).
-/// - `DabTexturePool::acquire` allocates at this size by default;
-///   `acquire_sized(w, h)` lets callers go larger.
+/// This single value plays two distinct roles that happen to want the same
+/// number today.  Both are documented here so a future consumer that needs
+/// them to differ knows to split the constant rather than silently change
+/// the meaning of the other.
 ///
-/// If you need a hard cap somewhere, introduce a separately-named constant
-/// for it — do not reuse this one.
+/// **Role 1 — canvas-pixel unit of "brush size = 1.0"** (UI/UX convention).
+/// Brush nodes scale their slider input by this constant to translate user-
+/// facing percentages into canvas pixels.  Specifically:
+/// - Stamp: the rendered dab's longer axis at `effective_size = 1.0` is
+///   `DAB_REFERENCE_SIZE` canvas pixels (the slider's "100%" mark).
+/// - Liquify: `radius = size * DAB_REFERENCE_SIZE * 0.5` — the disc at
+///   `size = 1.0` has the same canvas-pixel diameter as a 100% stamp.
+/// - StrokeEngine: `default_diameter() = DAB_REFERENCE_SIZE * 0.5` is the
+///   spacing fallback for the very first dab of a stroke (before any real
+///   dab has reported its own size).
+///
+/// **Role 2 — default dab pool texture allocation size** (perf/quality).
+/// `DabTexturePool::acquire()` (no args) returns a texture of
+/// `DAB_REFERENCE_SIZE × DAB_REFERENCE_SIZE`.  Procedural shape nodes
+/// (e.g. circle) render into one of these.  Callers that need a different
+/// size go through `acquire_sized(w, h)`.
+///
+/// **Important: not a hard cap on dab footprint.**  Stamp's actual dimension
+/// is `effective_size × DAB_REFERENCE_SIZE` where `effective_size`
+/// (= `size_input × size`) can exceed 1.0 unbounded — both the slider and
+/// any wired sensor (pen pressure, random, ...) can push past 100%.  The
+/// system must tolerate dab footprints arbitrarily larger than this value;
+/// the brush scratch's read mirror lazy-grows per-dab to fit.
+///
+/// **Latent issue — `ensure_layer_covers_dab` padding heuristic.**
+/// `engine::painting::ensure_layer_covers_dab` pads layer growth by
+/// `DAB_REFERENCE_SIZE / 2`, with a comment claiming this covers the
+/// dab's worst-case footprint.  That assumption no longer holds — a
+/// stamp at 4× size has half-extent 1024 px, four times the padding.
+/// Fix is out of scope here; track separately.
+///
+/// If you need a hard cap on something, introduce a separately-named
+/// constant.  Do not repurpose this one.
 pub const DAB_REFERENCE_SIZE: u32 = 512;
 
 /// High bit in TextureHandle distinguishes static textures from dab render targets.
