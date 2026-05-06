@@ -83,11 +83,15 @@ impl BrushNodeEvaluator for PreviewTerminalEvaluator {
         };
         let offset = gpu.pipelines.write_blit_uniforms(gpu.queue, &uniforms);
         let bg = gpu.dab_pool.bind_group(texture_handle).clone();
+        let scratch = gpu
+            .scratch
+            .as_deref()
+            .expect("preview_terminal::evaluate_gpu requires Scratch");
 
         let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("preview_terminal-blit"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: gpu.stroke_scratch_view,
+                view: scratch.write_view(),
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -113,12 +117,15 @@ impl BrushNodeEvaluator for PreviewTerminalEvaluator {
         let Some(paint_target) = gpu.paint_target.as_ref() else {
             return;
         };
+        let Some(scratch) = gpu.scratch.as_deref() else {
+            return;
+        };
         paint_target.commit_scratch_blit(
             gpu.device,
             &mut gpu.encoder,
             gpu.pipelines,
-            gpu.stroke_scratch_view,
-            gpu.stroke_scratch_texture,
+            scratch.write_view(),
+            scratch.write_texture(),
         );
     }
 }

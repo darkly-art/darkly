@@ -8,6 +8,17 @@ import {
     FLAG_SOFT_CONTRAST,
     prim,
 } from './selection_helpers';
+import BrushOptions from '../ui/BrushOptions.svelte';
+import BrushBuilderPanel from '../ui/BrushBuilderPanel.svelte';
+
+/** Brush-tool session state. Persists across strokes within the session;
+ *  resets on reload. The engine-side blend-mode mirror is pushed by
+ *  `onActivate` / `onDeactivate` and by the toggleEraseMode action. */
+class BrushSession {
+    /** When true, strokes use destination-out (erase) instead of source-over. */
+    eraseMode = $state(false);
+}
+export const brushSession = new BrushSession();
 
 /** Soft-contrast strength for big brushes. Tuned by eye. */
 const BASE_STRENGTH = 0.22;
@@ -120,15 +131,29 @@ function brushStrokeParams(e: PointerEvent, cx: number, cy: number) {
 export const brushTool: Tool = {
     id: 'brush',
     name: 'Brush',
-    faIcon: 'fa-solid fa-paintbrush',
+    /** Icon swaps to the eraser glyph while `brushSession.eraseMode` is on,
+     *  giving the toolbar button a visible mode indicator. Reactive because
+     *  Svelte's template re-reads the getter when `brushSession.eraseMode`
+     *  ($state) changes. */
+    get faIcon() {
+        return brushSession.eraseMode
+            ? 'fa-solid fa-eraser'
+            : 'fa-solid fa-paintbrush';
+    },
     group: 'paint',
     hotkeyAction: 'brushTool',
+    optionsComponent: BrushOptions,
+    panelComponent: BrushBuilderPanel,
 
     onActivate(ctx) {
         // Initialize brush graph state from WASM on first activation.
         if (!brushGraph.graph && app.handle) {
             brushGraph.init();
         }
+        // Sync session erase-mode flag to the engine. Other tools that
+        // don't paint never read brush_blend_mode; brush tools that do
+        // (color_output) will pick this up on the next stroke.
+        ctx.handle.set_brush_blend_mode(brushSession.eraseMode ? 1 : 0);
         // Hide the native cursor only if a preview is available — otherwise
         // fall back to the default cursor so the user has *something* to see.
         const info = ctx.handle.get_brush_preview_info();
@@ -137,6 +162,9 @@ export const brushTool: Tool = {
 
     onDeactivate(ctx) {
         ctx.handle.clear_overlay();
+        // Reset engine blend mode so a future paint-capable tool (or a
+        // direct WASM call) doesn't inherit our erase state.
+        ctx.handle.set_brush_blend_mode(0);
         app.toolCursor = null;
     },
 

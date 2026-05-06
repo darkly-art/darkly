@@ -24,14 +24,14 @@
 
 struct WatercolorPickupUniforms {
     center: vec2f,           // brush centre in canvas pixels
-    copy_origin: vec2f,      // top-left of valid region in canvas_copy (canvas pixels)
-    canvas_copy_size: vec2f, // canvas_copy texture dimensions (pixels)
+    copy_origin: vec2f,      // top-left of valid region in scratch read mirror (canvas pixels)
+    scratch_mirror_size: vec2f, // scratch read mirror texture dimensions (pixels)
     half_extent: vec2f,      // half the dab footprint (canvas pixels) per axis
 }
 
 @group(0) @binding(0) var<uniform> u: WatercolorPickupUniforms;
-@group(1) @binding(0) var t_canvas_copy: texture_2d<f32>;
-@group(1) @binding(1) var s_canvas_copy: sampler;
+@group(1) @binding(0) var t_scratch_mirror: texture_2d<f32>;
+@group(1) @binding(1) var s_scratch_mirror: sampler;
 
 @vertex fn vs_main(@builtin(vertex_index) idx: u32) -> @builtin(position) vec4f {
     let positions = array<vec2f, 3>(
@@ -52,8 +52,8 @@ struct WatercolorPickupUniforms {
         for (var i: u32 = 0u; i < n; i = i + 1u) {
             let cell = (vec2f(f32(i), f32(j)) + 0.5) * inv_n;
             let canvas_pos = u.center + (cell - 0.5) * 2.0 * u.half_extent;
-            let copy_uv = (canvas_pos - floor(u.copy_origin)) / u.canvas_copy_size;
-            let s = textureSampleLevel(t_canvas_copy, s_canvas_copy, copy_uv, 0.0);
+            let copy_uv = (canvas_pos - floor(u.copy_origin)) / u.scratch_mirror_size;
+            let s = textureSampleLevel(t_scratch_mirror, s_scratch_mirror, copy_uv, 0.0);
             sum_rgb = sum_rgb + s.rgb * s.a;
             sum_a = sum_a + s.a;
         }

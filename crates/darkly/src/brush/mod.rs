@@ -1,6 +1,4 @@
 //! Node-graph composable brush engine.
-//!
-//! Phase 9: Texture overlay.
 
 pub mod brush_tip;
 pub mod builtin_brushes;
@@ -20,6 +18,7 @@ pub mod pipelines;
 pub mod preview_renderer;
 pub mod preview_subgraph;
 pub mod save_points;
+pub mod scratch;
 pub mod spacing;
 pub mod stabilizer;
 pub mod stabilizers;

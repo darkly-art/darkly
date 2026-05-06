@@ -232,10 +232,10 @@ class BrushGraphState {
         }
         this.refreshBrushes();
 
-        // Boot with a real library brush selected so the BrushBar trigger
-        // (and anywhere else that reads `activeBrush`) has a named brush
-        // to render. The engine's procedural default graph would leave
-        // `activeBrush` null and the trigger would fall back to "Custom".
+        // Boot with a real library brush selected so the brush picker
+        // trigger (and anywhere else that reads `activeBrush`) has a named
+        // brush to render. The engine's procedural default graph would
+        // leave `activeBrush` null and the trigger would fall back to "Custom".
         const defaultBrush =
             this.brushes.find(b => b.name === 'Soft Round') ?? this.brushes[0];
         if (defaultBrush) {

@@ -7,7 +7,7 @@ pub fn register() -> Preset {
         hotkeys: &[
             // Tools
             ("brushTool", "KeyP"),
-            ("eraserTool", "Shift+KeyE"),
+            ("toggleEraseMode", "Shift+KeyE"),
             ("fillTool", "Shift+KeyB"),
             ("colorPickerTool", "KeyO"),
             ("ellipseSelectTool", "KeyE"),

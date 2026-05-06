@@ -19,7 +19,7 @@
 //!   to the stable pre-stroke state, discarding all accumulated warps; the
 //!   checkpoint system then overlays the bbox snapshot for partial rewinds.
 //! - `evaluate_gpu` (per dab) — `ensure_canvas_copy` captures the scratch's
-//!   current warp state into `canvas_copy`, then the liquify shader reads
+//!   current warp state into `scratch read mirror`, then the liquify shader reads
 //!   the copy at a displaced UV (`canvas_pos − direction × magnitude × falloff`)
 //!   and writes the warped sample back into the scratch. Successive dabs
 //!   read each other's output, so the warp compounds along the stroke.
@@ -40,7 +40,7 @@
 //! 0 → spike (sharp peak), 0.4 → saw (linear), 0.5 → sine (smooth),
 //! 1 → square (hard edge). See `liquify.wgsl` for the interpolation formula.
 
-use crate::brush::dab_pool::MAX_DAB_SIZE;
+use crate::brush::dab_pool::DAB_REFERENCE_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, BrushPreviewInfo, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::paint_target_ext::BrushPaintTargetExt;
@@ -62,7 +62,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-up-right-and-down-left-from-center")
                 .exposed()
-                .with_description("Brush size. Can go above 100% for large-area warps."),
+                .with_description("Brush size. Can go above 100% for large-area warps (capped at 400%)."),
             PortDef::input("strength", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_label("Strength")
@@ -96,11 +96,11 @@ pub struct LiquifyEvaluator;
 
 impl BrushNodeEvaluator for LiquifyEvaluator {
     /// Publish `dab_size` so the stroke engine can space dabs along the
-    /// path. `size = 1.0` maps to diameter `MAX_DAB_SIZE`; larger values
+    /// path. `size = 1.0` maps to diameter `DAB_REFERENCE_SIZE`; larger values
     /// allow brushes wider than that for full-canvas warp effects.
     fn evaluate_cpu(&self, ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        let size = ctx.input_f32("size").max(0.0);
-        let diameter = (size * MAX_DAB_SIZE as f32).max(1.0);
+        let size = ctx.input_f32("size").clamp(0.0, 4.0);
+        let diameter = (size * DAB_REFERENCE_SIZE as f32).max(1.0);
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
 
@@ -113,14 +113,14 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let size = ctx.input_f32("size").max(0.0);
+        let size = ctx.input_f32("size").clamp(0.0, 4.0);
         let strength = ctx.input_f32("strength").clamp(0.0, 1.0);
         let softness = ctx.input_f32("softness").clamp(0.0, 1.0);
         let position = ctx.input("position").as_vec2();
         let direction = ctx.input_f32("direction");
         let distance = ctx.input_f32("distance");
 
-        let radius = size * (MAX_DAB_SIZE as f32) * 0.5;
+        let radius = size * (DAB_REFERENCE_SIZE as f32) * 0.5;
         if radius < 1.0 {
             return vec![];
         }
@@ -147,45 +147,23 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         const DRAG_FACTOR: f32 = 0.25;
         let displacement = radius * DRAG_FACTOR * strength;
 
-        // Bounding box: disc + displacement padding so the bilinear-sampled
-        // canvas_copy footprint is always inside the copied region.
+        // Layer-clip the dab footprint, push the canvas-space write bbox,
+        // and snapshot the scratch under the disc into canvas_copy.
+        // Subsequent dabs in the same place see the prior dab's warp via
+        // the cached snapshot. `half` includes displacement padding so
+        // the bilinear-sampled canvas_copy footprint always lies inside
+        // the copied region. None means the disc doesn't overlap the
+        // layer (early-out).
         let half = radius + displacement;
-        let unclipped_x0 = position[0] - half;
-        let unclipped_y0 = position[1] - half;
-        let x0 = unclipped_x0.max(0.0);
-        let y0 = unclipped_y0.max(0.0);
-        let x1 = (position[0] + half).min(gpu.canvas_width as f32);
-        let y1 = (position[1] + half).min(gpu.canvas_height as f32);
-
-        let rect_w = x1 - x0;
-        let rect_h = y1 - y0;
-        if rect_w <= 0.0 || rect_h <= 0.0 {
-            return vec![];
-        }
-
-        // Integer copy rect — match composite.rs's floor-then-ceil pattern so
-        // every fragment in the quad has a valid canvas_copy texel to read.
-        let copy_x = x0.floor() as u32;
-        let copy_y = y0.floor() as u32;
-        let copy_w = ((x1.ceil() as u32).saturating_sub(copy_x)).min(gpu.canvas_width - copy_x);
-        let copy_h = ((y1.ceil() as u32).saturating_sub(copy_y)).min(gpu.canvas_height - copy_y);
-        if copy_w == 0 || copy_h == 0 {
-            return vec![];
-        }
-
-        // Publish the footprint so save_points / checkpoints cover the real
-        // damage region. Canvas coords are stable across mid-stroke layer
-        // growth.
-        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            copy_x as i32,
-            copy_y as i32,
-            copy_w,
-            copy_h,
-        ));
-
-        // Snapshot the scratch under the disc into canvas_copy. Subsequent
-        // dabs in the same place see the prior dab's warp.
-        gpu.ensure_canvas_copy(copy_x, copy_y, copy_w, copy_h);
+        let footprint = match gpu.prepare_dab_canvas_copy(position, half, half) {
+            Some(f) => f,
+            None => return vec![],
+        };
+        let [pt_offset_x, pt_offset_y] = footprint.layer_offset;
+        let [pt_width, pt_height] = footprint.layer_size;
+        let [x0, y0] = footprint.origin;
+        let [rect_w, rect_h] = footprint.size;
+        let [copy_local_x, copy_local_y] = footprint.copy_local_origin;
 
         // Direction → unit vector. First dab of a stroke has no prior
         // position and arrives here with `direction = 0` (east). Acceptable
@@ -195,8 +173,10 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let uniforms = LiquifyUniforms {
             rect_origin: [x0, y0],
             rect_size: [rect_w, rect_h],
+            target_offset: [pt_offset_x as f32, pt_offset_y as f32],
+            target_size: [pt_width as f32, pt_height as f32],
             canvas_size: [gpu.canvas_width as f32, gpu.canvas_height as f32],
-            copy_origin: [copy_x as f32, copy_y as f32],
+            copy_origin: [copy_local_x as f32, copy_local_y as f32],
             center: position,
             direction: dir_vec,
             displacement,
@@ -205,12 +185,16 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             _pad: 0.0,
         };
         let offset = gpu.pipelines.write_liquify_uniforms(gpu.queue, &uniforms);
+        let scratch = gpu
+            .scratch
+            .as_deref()
+            .expect("liquify::evaluate_gpu requires Scratch");
 
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("brush-liquify"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: gpu.stroke_scratch_view,
+                    view: scratch.write_view(),
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -220,18 +204,14 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 })],
                 ..Default::default()
             });
-            pass.set_viewport(
-                0.0,
-                0.0,
-                gpu.canvas_width as f32,
-                gpu.canvas_height as f32,
-                0.0,
-                1.0,
-            );
+            // Viewport must be the full layer (not the canvas) so the
+            // shader can write into off-canvas pixels of paste-extent /
+            // grown layers.
+            pass.set_viewport(0.0, 0.0, pt_width as f32, pt_height as f32, 0.0, 1.0);
             pass.set_pipeline(gpu.pipelines.liquify_pipeline());
             pass.set_bind_group(0, &gpu.pipelines.liquify_uniform_bind_group, &[offset]);
             pass.set_bind_group(1, gpu.selection_bind_group, &[]);
-            pass.set_bind_group(2, &gpu.pipelines.canvas_copy_bind_group, &[]);
+            pass.set_bind_group(2, scratch.read_mirror_bind_group(), &[]);
             pass.draw(0..6, 0..1);
         }
 
@@ -249,13 +229,17 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let Some(pre_stroke) = gpu.pre_stroke_texture else {
             return;
         };
+        let Some(scratch) = gpu.scratch.as_deref() else {
+            return;
+        };
         // Copy the full scratch — paste-extent or off-canvas-grown layers
         // size pre_stroke and scratch beyond canvas dims; copying only
         // canvas-sized would leave the off-canvas strip uninitialised,
         // and `commit_scratch_blit` would blit transparent-black back
         // over the layer.
-        let w = gpu.stroke_scratch_texture.width();
-        let h = gpu.stroke_scratch_texture.height();
+        let scratch_tex = scratch.write_texture();
+        let w = scratch_tex.width();
+        let h = scratch_tex.height();
         gpu.encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: pre_stroke,
@@ -264,7 +248,7 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {
-                texture: gpu.stroke_scratch_texture,
+                texture: scratch_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -287,12 +271,15 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let Some(paint_target) = gpu.paint_target.as_ref() else {
             return;
         };
+        let Some(scratch) = gpu.scratch.as_deref() else {
+            return;
+        };
         paint_target.commit_scratch_blit(
             gpu.device,
             &mut gpu.encoder,
             gpu.pipelines,
-            gpu.stroke_scratch_view,
-            gpu.stroke_scratch_texture,
+            scratch.write_view(),
+            scratch.write_texture(),
         );
     }
 
@@ -312,11 +299,11 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             return vec![];
         }
 
-        let size = ctx.input_f32("size").max(0.0);
+        let size = ctx.input_f32("size").clamp(0.0, 4.0);
         // Soft edge for the preview ring — independent of the `softness`
         // waveshape knob (which controls warp falloff, not visual hardness).
         let preview_softness = 0.3_f32;
-        let diameter_px = ((size * MAX_DAB_SIZE as f32).max(4.0)) as u32;
+        let diameter_px = ((size * DAB_REFERENCE_SIZE as f32).max(4.0)) as u32;
 
         // Render the circle mask into a dab pool texture sized to the brush
         // extent. `acquire_sized` makes the texture self-describe its size,

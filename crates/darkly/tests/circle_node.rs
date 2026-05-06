@@ -23,7 +23,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-use darkly::brush::dab_pool::{DabTexturePool, MAX_DAB_SIZE};
+use darkly::brush::dab_pool::{DabTexturePool, DAB_REFERENCE_SIZE};
 use darkly::brush::eval::{BrushNodeEvaluator, EvalContext};
 use darkly::brush::gpu_context::BrushGpuContext;
 use darkly::brush::nodes::circle::CircleEvaluator;
@@ -34,7 +34,7 @@ use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::{readback_texture, test_device};
 use darkly::nodegraph::{NodeId, PortDef};
 
-const DAB: u32 = MAX_DAB_SIZE;
+const DAB: u32 = DAB_REFERENCE_SIZE;
 
 fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     static HANDLES: OnceLock<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> = OnceLock::new();
@@ -85,7 +85,7 @@ impl Default for Inputs {
 fn render_dab(algorithm: i32, inputs: Inputs) -> Vec<u8> {
     let (device, queue) = shared_device();
     let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout(), DAB, DAB);
+    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
 
     // Pull the circle node's port_defs from the registry — keeps the test
     // honest if registration changes.
@@ -117,10 +117,6 @@ fn render_dab(algorithm: i32, inputs: Inputs) -> Vec<u8> {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("circle-test-encoder"),
     });
-    let view = pipelines
-        .canvas_copy_texture()
-        .create_view(&Default::default());
-    let stroke_view = view; // borrow placeholder; circle doesn't read it.
 
     // Build a context. The circle evaluator only touches `dab_pool`,
     // `pipelines`, `device`, `queue`, and `encoder` — the other fields are
@@ -133,21 +129,19 @@ fn render_dab(algorithm: i32, inputs: Inputs) -> Vec<u8> {
             queue: &queue,
             dab_pool: &mut dab_pool,
             pipelines: &pipelines,
-            stroke_scratch_view: &stroke_view,
-            stroke_scratch_texture: pipelines.canvas_copy_texture(),
+            scratch: None,
             canvas_width: DAB,
             canvas_height: DAB,
             paint_target: None,
             selection_bind_group: pipelines.default_selection_bind_group(),
+            preview_target_view: None,
             resource_handles: &resources,
             blend_mode: 0,
-            canvas_copy_origin: None,
             preview_mask_view: None,
             preview_mask_size: (0, 0),
             brush_preview_info: None,
             pre_stroke_texture: None,
             pre_stroke_bind_group: None,
-            scratch_bind_group: None,
             dab_write_canvas_bbox: None,
         };
         let eval_ctx = EvalContext {

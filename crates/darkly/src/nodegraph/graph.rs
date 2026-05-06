@@ -191,6 +191,18 @@ impl<W: WireKind> PortDef<W> {
         }
     }
 
+    /// Declare the slider/preset range and default value for this port.
+    ///
+    /// `(min, max)` is a **UI hint** — bounds for slider widgets and preset
+    /// editors.  It is **not enforced at evaluation**: `EvalContext::input_f32`
+    /// returns whatever value flowed through the wire (including out-of-range
+    /// values from upstream sensors, math nodes, or hand-edited graph data).
+    /// Consumers that require a hard bound must clamp explicitly inside
+    /// their own `evaluate_gpu` (see e.g. `liquify::evaluate_gpu`'s
+    /// `.clamp(0.0, 4.0)`).  A blanket "enforce all declared ranges" would
+    /// constrain ports that intentionally accept slider over-drag (notably
+    /// `stamp.size`, whose 100% mark is at `1.0` but whose slider extends
+    /// further to support dramatically over-sized stamps).
     pub fn with_range(mut self, min: f32, max: f32, default: f32) -> Self {
         self.min = min;
         self.max = max;

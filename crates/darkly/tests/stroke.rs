@@ -1036,13 +1036,12 @@ fn diff_rect_undo_restores_offset_paint() {
     }
 }
 
-/// Regression for the canvas-coord storage refactor (see plan
-/// `mossy-sleeping-flame.md`): a `Snapshot` saved on a 256×256 layer at
-/// canvas (0, 0) survives a negative-direction grow that shifts the
-/// layer's local-coord origin by (256, 256). Commit at canvas (-100, -100)
-/// must round-trip via `canvas_to_layer_rect` to layer-local (156, 156)
-/// in the new frame, and undo must restore the correct pre-stroke pixels
-/// at the original canvas position.
+/// Regression for canvas-coord snapshot storage: a `Snapshot` saved on a
+/// 256×256 layer at canvas (0, 0) survives a negative-direction grow that
+/// shifts the layer's local-coord origin by (256, 256). Commit at canvas
+/// (-100, -100) must round-trip via `canvas_to_layer_rect` to layer-local
+/// (156, 156) in the new frame, and undo must restore the correct pre-stroke
+/// pixels at the original canvas position.
 #[test]
 fn negative_direction_grow_crosses_zero() {
     use wgpu::TextureUsages;

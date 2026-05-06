@@ -15,8 +15,8 @@
 //!
 //! Critical methodology: assertions go through `test_thumbnail_cache_peek`,
 //! NOT `layer_thumbnail`. Calling the latter inside the assertion would
-//! make these tests pass on master too — see plan notes for the
-//! `git stash` verification step that proves they don't.
+//! queue a readback through the legacy path and mask the bug — these tests
+//! must observe the auto-queued readback, not synthesize one.
 
 use darkly::engine::types::StrokeOp;
 use darkly::engine::DarklyEngine;

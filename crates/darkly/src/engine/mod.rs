@@ -211,7 +211,7 @@ pub struct DarklyEngine {
     /// Active floating content (paste-in-place or interactive transform).
     pub(crate) floating: Option<FloatingContent>,
 
-    // --- GPU Paint Infrastructure (Phase 2) ---
+    // --- GPU Paint Infrastructure ---
     pub(crate) region_store: RegionStore,
     pub(crate) paint_pipelines: PaintPipelines,
     /// Pre-stroke scratch snapshot for the current stroke. Lazily populated
@@ -225,7 +225,7 @@ pub struct DarklyEngine {
     /// completion — the snapshot lives across that boundary.
     pub(crate) pending_selection_snapshot: Option<crate::gpu::region_store::Snapshot>,
 
-    // --- Brush Engine (Phase 4-5) ---
+    // --- Brush Engine ---
     pub(crate) dab_pool: DabTexturePool,
     pub(crate) brush_pipelines: BrushPipelines,
     /// Active brush stroke engine (only during a BrushStroke operation).
@@ -312,7 +312,7 @@ pub struct DarklyEngine {
     pub(crate) preview_theme_fg: [f32; 4],
     pub(crate) preview_theme_bg: [f32; 4],
 
-    // --- Brush Library (Phase 7) ---
+    // --- Brush Library ---
     pub(crate) brush_library: BrushLibrary,
     /// Resource name → TextureHandle for images uploaded by the current brush.
     /// Built by `upload_brush_resources()`, read by Image nodes via BrushGpuContext.
@@ -386,13 +386,8 @@ impl DarklyEngine {
         let region_store = RegionStore::new(&gpu.device, doc_width, doc_height);
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
         let dab_pool = DabTexturePool::new(&gpu.device);
-        let brush_pipelines = BrushPipelines::new(
-            &gpu.device,
-            &gpu.queue,
-            dab_pool.bind_group_layout(),
-            doc_width,
-            doc_height,
-        );
+        let brush_pipelines =
+            BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout());
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
         let diff_rect = DiffRectPass::new(&gpu.device);
 

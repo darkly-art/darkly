@@ -96,84 +96,30 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
 
         let foot_w = dab_w;
         let foot_h = dab_h;
-
-        // The paint target carries the layer/mask dimensions and offset.
-        // Stroke-time evaluate_gpu always has a paint target.
-        let pt = gpu
-            .paint_target
-            .as_ref()
-            .expect("color_output::evaluate_gpu requires a paint target");
-        let pt_offset_x = pt.offset_x;
-        let pt_offset_y = pt.offset_y;
-        let pt_width = pt.width;
-        let pt_height = pt.height;
-
-        // Position the composite quad centered on the dab position,
-        // clamped to the LAYER's canvas extent. Paste-extent / grown
-        // layers may extend past the canvas bounds in either direction —
-        // dabs landing on those off-canvas pixels must still render.
         let half_w = foot_w * 0.5;
         let half_h = foot_h * 0.5;
-        let unclipped_x0 = position[0] - half_w;
-        let unclipped_y0 = position[1] - half_h;
-        let layer_x0 = pt_offset_x as f32;
-        let layer_y0 = pt_offset_y as f32;
-        let layer_x1 = layer_x0 + pt_width as f32;
-        let layer_y1 = layer_y0 + pt_height as f32;
-        let x0 = unclipped_x0.max(layer_x0);
-        let y0 = unclipped_y0.max(layer_y0);
-        let x1 = (position[0] + half_w).min(layer_x1);
-        let y1 = (position[1] + half_h).min(layer_y1);
 
-        let quad_w = x1 - x0;
-        let quad_h = y1 - y0;
-        if quad_w <= 0.0 || quad_h <= 0.0 {
-            return vec![];
-        }
-
-        // Integer canvas-space rect for the dab's footprint. The composite
-        // shader uses floor(origin) for the copy UV, so the copy must span
-        // from floor(x0) to ceil(x1) to cover every texel the shader can
-        // reach.
-        let copy_canvas_x = x0.floor() as i32;
-        let copy_canvas_y = y0.floor() as i32;
-        let copy_w = (x1.ceil() as i32 - copy_canvas_x) as u32;
-        let copy_h = (y1.ceil() as i32 - copy_canvas_y) as u32;
-
-        if copy_w == 0 || copy_h == 0 {
-            return vec![];
-        }
-
-        // Publish the dab's *canvas-space* footprint so the stroke engine
-        // can record a save-point bbox that matches what was actually
-        // drawn. Canvas coords are stable across mid-stroke layer growth.
-        // Authoritative — `info.pos ± dab_radius` isn't, because the graph
-        // may offset position (scatter etc.).
-        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            copy_canvas_x,
-            copy_canvas_y,
-            copy_w,
-            copy_h,
-        ));
-
-        // canvas_copy indexes the stroke scratch, which is layer-sized —
-        // translate the canvas-space rect to the layer's local coord frame
-        // for the per-dab GPU dispatch.
-        let copy_local_x = (copy_canvas_x - pt_offset_x) as u32;
-        let copy_local_y = (copy_canvas_y - pt_offset_y) as u32;
-
-        // Ensure the scratch region under the dab is in canvas_copy for the
-        // shader's straight-alpha Porter-Duff read. The bg here is the
-        // scratch (not the layer) — source-over against the running stroke
-        // accumulation.
-        gpu.ensure_canvas_copy(copy_local_x, copy_local_y, copy_w, copy_h);
+        // Layer-clip the dab footprint, push the canvas-space write bbox,
+        // and snapshot the scratch under the dab into canvas_copy. Returns
+        // None when the dab doesn't overlap the layer (early-out).
+        let footprint = match gpu.prepare_dab_canvas_copy(position, half_w, half_h) {
+            Some(f) => f,
+            None => return vec![],
+        };
+        let [pt_offset_x, pt_offset_y] = footprint.layer_offset;
+        let [pt_width, pt_height] = footprint.layer_size;
+        let [unclipped_x0, unclipped_y0] = footprint.unclipped_origin;
+        let [x0, y0] = footprint.origin;
+        let [quad_w, quad_h] = footprint.size;
+        let x1 = x0 + quad_w;
+        let y1 = y0 + quad_h;
 
         // UV mapping: the dab content occupies [0..dab_w] x [0..dab_h] within
         // a (tex_w x tex_h) texture allocated by the dab pool. Most stamps
         // size the texture to match the dab exactly (content_uv = 1.0); a
         // mismatch only happens if a node deliberately renders into a
         // larger pool texture. Query the actual size — don't assume
-        // MAX_DAB_SIZE.
+        // DAB_REFERENCE_SIZE.
         let (pool_w, pool_h) = gpu.dab_pool.texture_size(dab_handle);
         let tex_w = pool_w as f32;
         let tex_h = pool_h as f32;
@@ -206,15 +152,19 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         let offset = gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
 
         let dab_bind_group = gpu.dab_pool.bind_group(dab_handle);
+        let scratch = gpu
+            .scratch
+            .as_deref()
+            .expect("color_output::evaluate_gpu requires Scratch");
 
         // Composite dab onto the stroke scratch (REPLACE blend — shader does
-        // Porter-Duff). The "bg" bind group is canvas_copy, which was just
-        // filled with the scratch's current contents above.
+        // Porter-Duff). The "bg" bind group is the read mirror, which was
+        // just filled with the scratch's current contents above.
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("brush-composite"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: gpu.stroke_scratch_view,
+                    view: scratch.write_view(),
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -238,7 +188,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[offset]);
             pass.set_bind_group(1, dab_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
-            pass.set_bind_group(3, &gpu.pipelines.canvas_copy_bind_group, &[]);
+            pass.set_bind_group(3, scratch.read_mirror_bind_group(), &[]);
             pass.draw(0..6, 0..1);
         }
 
@@ -249,10 +199,14 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
     /// Clear the stroke scratch to transparent. Paint starts from an empty
     /// accumulator — per-dab composites pile up from nothing.
     fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
+        let scratch = gpu
+            .scratch
+            .as_deref()
+            .expect("color_output::begin_stroke requires Scratch");
         let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("color_output-begin_stroke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: gpu.stroke_scratch_view,
+                view: scratch.write_view(),
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -276,9 +230,10 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
     /// terminal stays format-agnostic. Applies the stroke-level `opacity`
     /// port and honours the engine's `blend_mode` (paint vs erase).
     fn commit(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let (Some(scratch_bg), Some(pre_stroke_bg)) =
-            (gpu.scratch_bind_group, gpu.pre_stroke_bind_group)
-        else {
+        let Some(pre_stroke_bg) = gpu.pre_stroke_bind_group else {
+            return;
+        };
+        let Some(scratch) = gpu.scratch.as_deref() else {
             return;
         };
         let Some(paint_target) = gpu.paint_target.as_ref() else {
@@ -289,7 +244,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             &mut gpu.encoder,
             gpu.pipelines,
             gpu.queue,
-            scratch_bg,
+            scratch.write_bind_group(),
             gpu.selection_bind_group,
             pre_stroke_bg,
             opacity,

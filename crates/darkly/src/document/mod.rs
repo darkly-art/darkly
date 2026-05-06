@@ -859,7 +859,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
-    // Slotmap-invariant regression tests — locked in by the refactor.
+    // Slotmap-invariant regression tests.
     // -----------------------------------------------------------------
 
     #[test]

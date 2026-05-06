@@ -281,9 +281,9 @@ impl DarklyEngine {
         self.compositor.mark_dirty();
     }
 
-    /// Read a mask modifier's pixels into the global selection. Phase 2: a
-    /// straight GPU-to-GPU copy via [`Self::clone_modifier_pixels`]; the CPU
-    /// cache for the new selection contents is repopulated by the async
+    /// Read a mask modifier's pixels into the global selection. A straight
+    /// GPU-to-GPU copy via [`Self::clone_modifier_pixels`]; the CPU cache for
+    /// the new selection contents is repopulated by the async
     /// `SelectionReadback` kicked at the end.
     pub fn mask_to_selection(&mut self, modifier_id: LayerId) {
         if self.compositor.node_texture(modifier_id).is_none() {

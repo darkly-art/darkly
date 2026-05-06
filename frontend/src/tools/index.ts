@@ -1,6 +1,5 @@
 import { toolRegistry } from './registry';
 import { brushTool } from './brush.svelte';
-import { eraserTool } from './eraser.svelte';
 import { fillTool } from './fill.svelte';
 import { gradientTool } from './gradient.svelte';
 import { colorPickerTool } from './colorpicker.svelte';
@@ -11,7 +10,6 @@ import { magicWandTool } from './magic_wand.svelte';
 import { transformTool } from './transform.svelte';
 
 toolRegistry.register(brushTool);
-toolRegistry.register(eraserTool);
 toolRegistry.register(fillTool);
 toolRegistry.register(gradientTool);
 toolRegistry.register(colorPickerTool);

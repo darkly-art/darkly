@@ -804,8 +804,8 @@ impl DarklyHandle {
     }
 
     /// Render a single-dab preview of the active brush — the small
-    /// tip-shape thumbnail used by the BrushBar trigger and the picker's
-    /// active-brush strip. Returns the most recent cached PNG bytes
+    /// tip-shape thumbnail used by the brush options bar trigger and the
+    /// picker's active-brush strip. Returns the most recent cached PNG bytes
     /// synchronously; the async readback updates them on a later frame.
     /// Output is byte-identical to `brush_dab_thumbnail(active_name)`
     /// when the active brush matches a preset, so the frontend can

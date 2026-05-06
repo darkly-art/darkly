@@ -159,6 +159,12 @@
         transition: background var(--transition-fast), color var(--transition-fast);
     }
 
+    .footer > .footer-btn {
+        width: 34px;
+        height: 34px;
+        font-size: 16px;
+    }
+
     .footer-btn:hover:not(:disabled) {
         background: var(--bg-hover);
         color: var(--text);
@@ -211,14 +217,14 @@
 
     .mask-glyph {
         position: relative;
-        width: 14px;
-        height: 14px;
+        width: 18px;
+        height: 18px;
         display: inline-block;
     }
     .mask-square {
         position: absolute;
         inset: 0;
-        font-size: 14px;
+        font-size: 18px;
         color: currentColor;
     }
     .mask-dot {
@@ -226,7 +232,7 @@
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        font-size: 5px;
+        font-size: 7px;
         color: var(--bg);
     }
 </style>

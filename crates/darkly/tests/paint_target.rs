@@ -385,8 +385,7 @@ fn readback_sub_rect() {
 }
 
 /// Painting on an offset paste-extent layer: the painted pixels must land at
-/// the canvas position requested, not at (canvas_pos − offset). Regression
-/// guard for the paint_circle.wgsl `target_offset` migration.
+/// the canvas position requested, not at (canvas_pos − offset).
 #[test]
 fn paint_target_composite_circle_on_offset_layer() {
     let (device, queue) = test_device();
@@ -444,7 +443,7 @@ fn paint_target_composite_circle_on_offset_layer() {
 
     // The OLD buggy mapping would have painted at canvas (50,50) interpreted
     // as layer-local — i.e. at layer-local (50, 50). That position must be
-    // empty after the migration.
+    // empty.
     let bug = ((50u32 * lw + 50) * 4) as usize;
     assert_eq!(
         pixels[bug + 3],

@@ -1,7 +1,6 @@
 //! Architectural invariant: `LayerRect` is a function-local translation
 //! type, never long-lived storage.
 //!
-//! See plan: `mossy-sleeping-flame.md` and `let-s-implement-this-plan-starry-moon.md`.
 //! Long-lived rect storage must use `CanvasRect`. `LayerRect` is permitted
 //! only as a function parameter, return type, or local `let` binding —
 //! never as a struct field or enum variant field, except in the type
@@ -27,9 +26,9 @@ fn layer_rect_is_never_stored() {
     assert!(
         violations.is_empty(),
         "LayerRect appears as a struct field outside whitelisted modules:\n  {}\n\n\
-         The Storage Frame Rule (see plans/mossy-sleeping-flame.md): long-lived\n\
-         rect storage must use CanvasRect. LayerRect is a function-local\n\
-         translation type used only at the wgpu boundary.",
+         The Storage Frame Rule: long-lived rect storage must use CanvasRect.\n\
+         LayerRect is a function-local translation type used only at the\n\
+         wgpu boundary.",
         violations.join("\n  "),
     );
 }

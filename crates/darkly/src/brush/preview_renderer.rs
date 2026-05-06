@@ -42,7 +42,7 @@ impl PreviewTarget {
         width: u32,
         height: u32,
         dab_bgl: &wgpu::BindGroupLayout,
-        canvas_copy_bgl: &wgpu::BindGroupLayout,
+        pipelines: &BrushPipelines,
     ) -> Self {
         let layer_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-preview-layer"),
@@ -62,7 +62,7 @@ impl PreviewTarget {
             view_formats: &[],
         });
         let layer_view = layer_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let stroke_buffer = StrokeBuffer::new(device, width, height, dab_bgl, canvas_copy_bgl);
+        let stroke_buffer = StrokeBuffer::new(device, width, height, dab_bgl, pipelines);
         Self {
             width,
             height,
@@ -121,10 +121,10 @@ impl BrushPreviewRenderer {
                 width,
                 height,
                 dab_pool.bind_group_layout(),
-                pipelines.canvas_copy_bind_group_layout(),
+                pipelines,
             ));
         }
-        let target = self.target.as_ref().unwrap();
+        let target = self.target.as_mut().unwrap();
 
         // Pre-fill the layer with the background color, then snapshot it as
         // the pre-stroke. `color_output::commit` composites the stroke
@@ -191,7 +191,9 @@ impl BrushPreviewRenderer {
         // creates a fresh context, runs one phase, and submits — the borrow
         // ends before the next block reborrows the pool.
         macro_rules! make_gpu_ctx {
-            ($label:expr) => {
+            ($label:expr) => {{
+                let (scratch, pre_stroke_texture, pre_stroke_bind_group) =
+                    target.stroke_buffer.parts_for_brush_ctx();
                 BrushGpuContext {
                     encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                         label: Some($label),
@@ -200,25 +202,23 @@ impl BrushPreviewRenderer {
                     queue,
                     dab_pool,
                     pipelines,
-                    stroke_scratch_view: target.stroke_buffer.stroke_view(),
-                    stroke_scratch_texture: target.stroke_buffer.stroke_texture(),
+                    scratch: Some(scratch),
                     canvas_width: width,
                     canvas_height: height,
                     // Preview render target is canvas-aligned RGBA8.
                     paint_target: Some(paint_target),
                     selection_bind_group: sel_bg,
+                    preview_target_view: None,
                     resource_handles,
                     blend_mode: 0,
-                    canvas_copy_origin: None,
                     preview_mask_view: None,
                     preview_mask_size: (0, 0),
                     brush_preview_info: None,
-                    pre_stroke_texture: Some(target.stroke_buffer.pre_stroke_texture()),
-                    pre_stroke_bind_group: Some(target.stroke_buffer.pre_stroke_bind_group()),
-                    scratch_bind_group: Some(target.stroke_buffer.stroke_bind_group()),
+                    pre_stroke_texture: Some(pre_stroke_texture),
+                    pre_stroke_bind_group: Some(pre_stroke_bind_group),
                     dab_write_canvas_bbox: None,
                 }
-            };
+            }};
         }
 
         // Terminal setup — color_output clears the scratch to transparent.

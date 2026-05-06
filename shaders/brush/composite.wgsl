@@ -28,8 +28,8 @@ struct CompositeUniforms {
 @group(1) @binding(1) var s_dab: sampler;
 @group(2) @binding(0) var t_selection: texture_2d<f32>;
 @group(2) @binding(1) var s_selection: sampler;
-@group(3) @binding(0) var t_canvas_copy: texture_2d<f32>;
-@group(3) @binding(1) var s_canvas_copy: sampler;
+@group(3) @binding(0) var t_scratch_mirror: texture_2d<f32>;
+@group(3) @binding(1) var s_scratch_mirror: sampler;
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -83,8 +83,8 @@ struct VertexOutput {
     // Background: read canvas copy (straight alpha).
     // The copy_texture_to_texture origin is floor(u.origin) — integer pixel coords.
     // Use floored origin so the UV maps each fragment to the correct canvas texel.
-    let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_canvas_copy));
-    let bg = textureSample(t_canvas_copy, s_canvas_copy, copy_uv);
+    let copy_uv = (in.canvas_pos - floor(u.origin)) / vec2f(textureDimensions(t_scratch_mirror));
+    let bg = textureSample(t_scratch_mirror, s_scratch_mirror, copy_uv);
 
     // Composite: source-over (paint) or destination-out (erase).
     if u.blend_mode == 1u {
