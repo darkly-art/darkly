@@ -37,17 +37,112 @@ struct Uniforms {
 // When no mask is present, a 1x1 white fallback texture is bound (mask_alpha=1.0).
 @group(1) @binding(0) var t_mask: texture_2d<f32>;
 
+// Color Burn — Krita KoCompositeOpFunctions.h:329–361.
+// d=1 is a stable point; s=0 forces full burn. NaN/Inf are masked rather
+// than relying on IEEE behavior (WGSL doesn't guarantee it across backends).
+fn pd_color_burn(s: vec3f, d: vec3f) -> vec3f {
+    let safe_s = max(s, vec3f(1e-7));
+    let raw = vec3f(1.0) - (vec3f(1.0) - d) / safe_s;
+    var out = clamp(raw, vec3f(0.0), vec3f(1.0));
+    out = select(out, vec3f(0.0), s <= vec3f(0.0));
+    out = select(out, vec3f(1.0), d >= vec3f(1.0));
+    return out;
+}
+
+// Color Dodge — Krita KoCompositeOpFunctions.h:376–403.
+// s=1 lights up only where the destination has signal.
+fn pd_color_dodge(s: vec3f, d: vec3f) -> vec3f {
+    let safe_denom = max(vec3f(1.0) - s, vec3f(1e-7));
+    let raw = d / safe_denom;
+    let one_or_zero = select(vec3f(0.0), vec3f(1.0), d > vec3f(0.0));
+    var out = clamp(raw, vec3f(0.0), vec3f(1.0));
+    out = select(out, one_or_zero, s >= vec3f(1.0));
+    return out;
+}
+
+// Soft Light — Photoshop variant (Krita KoCompositeOpFunctions.h:513–529).
+fn pd_soft_light(s: vec3f, d: vec3f) -> vec3f {
+    let lighten = d + (2.0 * s - vec3f(1.0)) * (sqrt(d) - d);
+    let darken = d - (vec3f(1.0) - 2.0 * s) * d * (vec3f(1.0) - d);
+    return select(darken, lighten, s > vec3f(0.5));
+}
+
+// HSL helpers — PDF 11.3.5.3 / W3C Compositing-1, matching Krita's HSY model
+// (luma weights from KoColorSpaceMaths.h:912).
+fn pd_lum(c: vec3f) -> f32 {
+    return dot(c, vec3f(0.299, 0.587, 0.114));
+}
+
+fn pd_clip_color(c: vec3f) -> vec3f {
+    let l = pd_lum(c);
+    let n = min(min(c.r, c.g), c.b);
+    let x = max(max(c.r, c.g), c.b);
+    var out = c;
+    // Conditions test the original n/x; each branch's update reads the running
+    // `out`, so a triggered low-clip feeds into a subsequent high-clip
+    // (matching Krita's ToneMapping in KoColorSpaceMaths.h:1052).
+    if (n < 0.0) {
+        out = vec3f(l) + ((out - vec3f(l)) * l) / (l - n);
+    }
+    if (x > 1.0) {
+        out = vec3f(l) + ((out - vec3f(l)) * (1.0 - l)) / (x - l);
+    }
+    return out;
+}
+
+fn pd_set_lum(c: vec3f, l: f32) -> vec3f {
+    return pd_clip_color(c + vec3f(l - pd_lum(c)));
+}
+
+fn pd_sat(c: vec3f) -> f32 {
+    return max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b);
+}
+
+fn pd_set_sat(c: vec3f, s: f32) -> vec3f {
+    let cmax = max(max(c.r, c.g), c.b);
+    let cmin = min(min(c.r, c.g), c.b);
+    let range = cmax - cmin;
+    if (range <= 0.0) {
+        return vec3f(0.0);
+    }
+    return (c - vec3f(cmin)) * (s / range);
+}
+
 fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
     // Blend modes operate on straight-alpha colors (PDF/SVG spec).
     var Cs: vec3f;
     switch mode {
         case 0u: { Cs = fg.rgb; }                                    // Normal
-        case 1u: { Cs = fg.rgb * bg.rgb; }                           // Multiply
-        case 2u: { Cs = fg.rgb + bg.rgb - fg.rgb * bg.rgb; }         // Screen
-        case 3u: {                                                    // Overlay
+        case 1u: { Cs = min(fg.rgb, bg.rgb); }                       // Darken
+        case 2u: { Cs = fg.rgb * bg.rgb; }                           // Multiply
+        case 3u: { Cs = pd_color_burn(fg.rgb, bg.rgb); }             // Color Burn
+        case 4u: { Cs = max(fg.rgb, bg.rgb); }                       // Lighten
+        case 5u: { Cs = fg.rgb + bg.rgb - fg.rgb * bg.rgb; }         // Screen
+        case 6u: { Cs = pd_color_dodge(fg.rgb, bg.rgb); }            // Color Dodge
+        case 7u: { Cs = clamp(fg.rgb + bg.rgb, vec3f(0.0), vec3f(1.0)); } // Linear Dodge (Add)
+        case 8u: {                                                    // Overlay
             let lo = 2.0 * fg.rgb * bg.rgb;
             let hi = 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb);
             Cs = select(hi, lo, bg.rgb < vec3f(0.5));
+        }
+        case 9u: { Cs = pd_soft_light(fg.rgb, bg.rgb); }             // Soft Light
+        case 10u: {                                                   // Hard Light
+            let lo = 2.0 * fg.rgb * bg.rgb;
+            let hi = 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb);
+            Cs = select(hi, lo, fg.rgb <= vec3f(0.5));
+        }
+        case 11u: { Cs = abs(fg.rgb - bg.rgb); }                     // Difference
+        case 12u: {                                                   // Hue
+            Cs = pd_set_lum(pd_set_sat(fg.rgb, pd_sat(bg.rgb)), pd_lum(bg.rgb));
+        }
+        case 13u: {                                                   // Saturation
+            Cs = pd_set_lum(pd_set_sat(bg.rgb, pd_sat(fg.rgb)), pd_lum(bg.rgb));
+        }
+        case 14u: {                                                   // Color
+            Cs = pd_set_lum(fg.rgb, pd_lum(bg.rgb));
+        }
+        case 15u: {                                                   // Luminosity
+            Cs = pd_set_lum(bg.rgb, pd_lum(fg.rgb));
         }
         default: { Cs = fg.rgb; }
     }

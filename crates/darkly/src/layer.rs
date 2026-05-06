@@ -33,18 +33,42 @@ impl LayerId {
 #[repr(u32)]
 pub enum BlendMode {
     Normal = 0,
-    Multiply = 1,
-    Screen = 2,
-    Overlay = 3,
+    Darken = 1,
+    Multiply = 2,
+    ColorBurn = 3,
+    Lighten = 4,
+    Screen = 5,
+    ColorDodge = 6,
+    LinearDodge = 7,
+    Overlay = 8,
+    SoftLight = 9,
+    HardLight = 10,
+    Difference = 11,
+    Hue = 12,
+    Saturation = 13,
+    Color = 14,
+    Luminosity = 15,
 }
 
 impl BlendMode {
     pub fn from_u32(v: u32) -> Self {
         match v {
             0 => BlendMode::Normal,
-            1 => BlendMode::Multiply,
-            2 => BlendMode::Screen,
-            3 => BlendMode::Overlay,
+            1 => BlendMode::Darken,
+            2 => BlendMode::Multiply,
+            3 => BlendMode::ColorBurn,
+            4 => BlendMode::Lighten,
+            5 => BlendMode::Screen,
+            6 => BlendMode::ColorDodge,
+            7 => BlendMode::LinearDodge,
+            8 => BlendMode::Overlay,
+            9 => BlendMode::SoftLight,
+            10 => BlendMode::HardLight,
+            11 => BlendMode::Difference,
+            12 => BlendMode::Hue,
+            13 => BlendMode::Saturation,
+            14 => BlendMode::Color,
+            15 => BlendMode::Luminosity,
             _ => BlendMode::Normal,
         }
     }
