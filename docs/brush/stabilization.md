@@ -9,6 +9,71 @@ TODO:
 - A better solution to "higher" stabilization may be tweaking the time element instead of the length one. Right now, faster strokes = more stabilization. Is that dial hard-coded? Can it be customized? Or is it naturally this way, just as a function of the number of input points?
 ```
 
+## Lag investigation findings
+
+Live in-browser perf instrumentation (the `[stab-perf]` summary at `end_stroke` and the `[frame-perf]` slow-frame log in the WASM bridge) measured a small-brush, high-stabilization stroke. The numbers below are wall-clock host time only — GPU shader cost is not measured (`web_time::Instant` resolves to `performance.now()` on WASM, which only sees the CPU side).
+
+### Where the frame budget goes
+
+Across all observed slow frames, `drain` (command processing) is **>99% of the frame**; `render` (compositor + present) stays well under 1 ms. The lag is host-side, not GPU-shader-side. Inside `gpu_stroke_to`, `segments` (the segment-render loop) is ~98% of per-event time; `stabilize`, `rewind`, `restore`, `tail`, and `commit` are sub-millisecond.
+
+### Where per-dab cost goes
+
+A representative steady-state stroke:
+
+```
+per dab top-level (avg µs):  total=57  graph_eval=3  execute_gpu=53  
+                             release_all=0  flush_submit=0  post_dab=0
+
+execute_gpu breakdown:       stamp_pass=6  composite_pass=4  
+                             read_mirror_copy=4  pool_acquire=0  other=40
+
+runner:  steps/dab=3.0  gather_inputs=5  step_outputs=1  
+         eval_gpu_call=43  eval_cpu_in_gpu=0  framework=4
+
+evaluator hotspots:  prepare_canvas_copy=4 (footprint_math=0)  
+                     write_composite_uniforms=1  write_stamp_uniforms=1  
+                     ctx_input=1
+```
+
+Per-event cost scales linearly with dab count at ~57 µs/dab. Max events observed: ~50 ms with ~900 dabs. There is no single hot function; cost is distributed across the per-dab cycle.
+
+### What's NOT the bottleneck
+
+- **Render-pass setup overhead** — stamp + composite passes total 10 µs/dab. Even N×stamp + N×composite passes don't dominate.
+- **`queue.write_buffer`** — stamp + composite uniform writes total ~2 µs/dab. The WebGPU IPC per dab is real but tiny.
+- **HashMap-keyed `ctx.input` lookups** in color_output — 1 µs/dab for 3 lookups.
+- **`prepare_dab_canvas_copy` footprint math** (`push_dab_write_bbox`, float clip, `DabFootprint` build) — 0 µs after subtracting the read-mirror copy. Sub-resolution.
+- **The brush-graph runner framework** — `gather_inputs`, evaluator lookup, `EvalContext` build, output write-back together cost 10 µs/dab. Real, not dominant.
+- **`queue.submit` IPC** — ~7 submits/event at 0.07 ms each = 0.5 ms/event. Not the bottleneck.
+
+### What IS the bottleneck
+
+The 26 µs/dab that *no* timer attributes lives in the per-dab work that's individually too cheap to time but accumulates across the cycle:
+
+- `dab_pool` lookups (`texture_size`, `view`, `bind_group` — 5+ per dab across stamp + color_output)
+- `stamp::resolve_inputs` (~10 `ctx.input` HashMap reads)
+- String allocations in stamp's `vec![("dab".into(), …), ("dab_size".into(), …)]`
+- The third GPU step's `evaluate_gpu` body
+- Small `Arc::clone`s, struct constructions, `as_deref`s
+
+The pattern is **death by a thousand cuts**: dozens of sub-microsecond operations per dab, each individually irreducible. There is no big lever for local optimization — every operation is already cheap. Cost scales linearly with dab count, and a small brush at high stabilization can produce 800+ dabs per event.
+
+### Implications
+
+Localized timer hunting cannot close this gap. The fix is structural: **stop running the per-dab cycle per dab.** The only architectures with enough leverage are ones that pay the cycle once per event, over a buffer of N dab parameters:
+
+- **Instanced render pipeline.** Build a `Vec<DabParams>` during the segment loop, one `queue.write_buffer` for the whole batch, one draw call with N instances reading by `instance_index`. Hardware blend stays. Requires premultiplied scratch.
+- **Compute dispatch.** Same N-dab buffer, one compute pass partitioning output pixels across threads. No scratch-convention change, but requires ping-pong (or a feature-gated read-write storage texture) and Porter-Duff math in shader.
+
+Both eliminate the per-dab dispatch of the brush graph runner, the per-dab dab_pool lookups, and the per-dab encoder operations. The current per-dab cost (57 µs) becomes per-event amortized.
+
+### Catastrophic full re-render fallbacks (orthogonal)
+
+The investigation also surfaced that early-in-stroke divergence indices in `[1..spacing-1]` had no preceding checkpoint and triggered full-stroke re-renders. A **`vi=0` anchor** was added to `CheckpointRing::compute_segment_boundaries` (and the segment loop's skip-check tightened from `<=` to `<`), which dropped observed `full_rerender_events` from 15/33 events to 2/37 in matched strokes.
+
+The remaining 2 mid-stroke fallbacks per stroke trace to the ring's slot-eviction policy, which evicts the lowest-`vi` slot on save and over time can leave the lower edge of the divergence window uncovered. The eviction policy is being redesigned separately; see [`../../checkpoint-ring-handoff.md`](../../checkpoint-ring-handoff.md) for the design problem and its constraints.
+
 Stabilization retroactively reshapes a stroke as the user draws. The tip is always pinned at the cursor (zero lag), but the path behind the pen continuously smooths — the "taffy" feel, like pulling a thread through honey.
 
 The key insight: instead of re-rendering the entire stroke every frame when earlier positions shift, a ring of GPU checkpoints tracks the stroke at segment boundaries. On each frame, the system restores the nearest checkpoint before the divergence point and re-renders only the changed tail — typically ~1/7th of the smoothing window. This keeps stabilization O(window_slice) per frame rather than O(total_stroke), so a long stroke at full strength costs the same as a short one.

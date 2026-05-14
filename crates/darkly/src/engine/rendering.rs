@@ -399,21 +399,35 @@ impl DarklyEngine {
 
     /// Render a frame. Returns true if animations need another frame.
     pub fn render(&mut self, time_secs: f32) -> bool {
+        // Sub-phase wall-clock timing for the slow-frame log. Always
+        // recorded into `self.last_frame_phases` even on fast frames — the
+        // WASM bridge decides whether to emit; nominal cost is a handful
+        // of `Instant::now()` calls.
+        let t_poll = web_time::Instant::now();
         let pending_completed = self.poll_pending();
         if pending_completed {
             self.compositor.mark_dirty();
         }
+        let poll_us = t_poll.elapsed().as_micros() as u64;
 
+        let t_thumb = web_time::Instant::now();
         // Auto-queue thumbnail readbacks for layers whose pixels were
         // modified since the last frame. Must run *before* the headless
         // early-return below so tests exercise the same code path the
         // production frame loop does.
         self.drain_dirty_thumbnail_readbacks();
+        let thumb_us = t_thumb.elapsed().as_micros() as u64;
 
         // Headless mode (tests): poll pending ops but skip presentation.
         let (surface, surface_config) = match (&self.gpu.surface, &self.gpu.surface_config) {
             (Some(s), Some(c)) => (s, c),
             _ => {
+                self.last_frame_phases = super::FrameRenderPhases {
+                    poll_us,
+                    thumb_us,
+                    anim_us: 0,
+                    compositor_us: 0,
+                };
                 return self.readbacks.has_pending()
                     || self.compositor.has_pending_content_bounds()
                     || self.diff_rect.is_pending();
@@ -424,11 +438,21 @@ impl DarklyEngine {
         // squeezed to 0 height by a UI panel).  WebGPU cannot create
         // 0-dimension textures and attempting to do so corrupts the device.
         if surface_config.width == 0 || surface_config.height == 0 {
+            self.last_frame_phases = super::FrameRenderPhases {
+                poll_us,
+                thumb_us,
+                anim_us: 0,
+                compositor_us: 0,
+            };
             return self.readbacks.has_pending() || self.compositor.has_pending_content_bounds();
         }
 
+        let t_anim = web_time::Instant::now();
         self.compositor
             .update_animations(&self.gpu.queue, time_secs);
+        let anim_us = t_anim.elapsed().as_micros() as u64;
+
+        let t_comp = web_time::Instant::now();
         self.compositor.render(
             &self.gpu.device,
             &self.gpu.queue,
@@ -436,6 +460,14 @@ impl DarklyEngine {
             surface_config,
             &mut self.doc,
         );
+        let compositor_us = t_comp.elapsed().as_micros() as u64;
+
+        self.last_frame_phases = super::FrameRenderPhases {
+            poll_us,
+            thumb_us,
+            anim_us,
+            compositor_us,
+        };
 
         // Keep requesting frames while async operations are in flight.
         self.compositor.needs_animation()

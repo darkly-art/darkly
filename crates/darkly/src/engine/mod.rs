@@ -15,6 +15,11 @@ pub use types::{
     ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
 };
 
+pub use perf::FrameRenderPhases;
+
+mod perf;
+use perf::StrokePerfStats;
+
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
 use crate::brush::library::BrushLibrary;
@@ -374,6 +379,14 @@ pub struct DarklyEngine {
     /// `MAX_LAYER_DIM` — used to log the cap warning at most once per
     /// process lifetime.
     pub(crate) layer_growth_capped: bool,
+
+    /// Per-stroke perf accumulator. Reset at `begin_stroke`, emitted at
+    /// `end_stroke`. See `StrokePerfStats` for what each field means.
+    pub(crate) stroke_perf: StrokePerfStats,
+
+    /// Most recent `render()` sub-phase timings. Overwritten every frame;
+    /// read by the WASM bridge when it logs a slow frame.
+    pub(crate) last_frame_phases: FrameRenderPhases,
 }
 
 impl DarklyEngine {
@@ -457,6 +470,8 @@ impl DarklyEngine {
             thumbnail_cache: ThumbnailCache::new(),
             thumbnail_version: 0,
             layer_growth_capped: false,
+            stroke_perf: StrokePerfStats::default(),
+            last_frame_phases: FrameRenderPhases::default(),
         };
 
         // Snapshot the default graph's port defaults so reset-to-default

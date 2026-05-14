@@ -180,6 +180,16 @@ enum Command {
 
 fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
     let cmds: Vec<Command> = commands.borrow_mut().drain(..).collect();
+    // Largest backlog of `BrushStroke` ops in a single drain. High values
+    // mean the engine is falling behind input — each backed-up event will
+    // still be processed in this drain. Fed to the stroke perf summary.
+    let brush_backlog = cmds
+        .iter()
+        .filter(|c| matches!(c, Command::StrokeOp(StrokeOp::BrushStroke { .. })))
+        .count() as u32;
+    if brush_backlog > 0 {
+        engine.record_input_backlog(brush_backlog);
+    }
     for cmd in cmds {
         match cmd {
             Command::BeginStroke(id) => engine.begin_stroke(LayerId::from_ffi(id)),
@@ -1467,8 +1477,40 @@ impl DarklyHandle {
         let Ok(mut e) = self.engine.try_borrow_mut() else {
             return false;
         };
+
+        // Frame-level perf probe. The per-event `[stab-perf]` log captures
+        // `gpu_stroke_to` only; the full rAF frame also pays for command
+        // draining (which may process multiple BrushStroke events at high
+        // input rate) and `engine.render` (composite + veils + overlays +
+        // present). The slow-frame log fires only when a frame exceeds
+        // ~1.5× one 60Hz budget so healthy frames cost nothing.
+        let frame_start = web_time::Instant::now();
+        let drain_start = web_time::Instant::now();
         drain_commands(&self.commands, &mut e);
-        e.render(time_secs)
+        let drain_us = drain_start.elapsed().as_micros() as u64;
+
+        let render_start = web_time::Instant::now();
+        let result = e.render(time_secs);
+        let render_us = render_start.elapsed().as_micros() as u64;
+
+        let frame_us = frame_start.elapsed().as_micros() as u64;
+        // 16667 µs is one 60Hz frame. Threshold at 25 ms (~1.5×) so we
+        // surface only the frames the user actually perceives as slow.
+        if frame_us > 25_000 {
+            let p = e.last_render_phases();
+            log::warn!(
+                "[frame-perf] slow frame={:.2}ms drain={:.2}ms render={:.2}ms \
+                 [render breakdown: poll={:.2}ms thumb={:.2}ms anim={:.2}ms composite={:.2}ms]",
+                frame_us as f32 / 1000.0,
+                drain_us as f32 / 1000.0,
+                render_us as f32 / 1000.0,
+                p.poll_us as f32 / 1000.0,
+                p.thumb_us as f32 / 1000.0,
+                p.anim_us as f32 / 1000.0,
+                p.compositor_us as f32 / 1000.0,
+            );
+        }
+        result
     }
 }
 

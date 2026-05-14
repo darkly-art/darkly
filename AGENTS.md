@@ -192,7 +192,7 @@ When you finish implementing a plan, emit a concise PR description in a fenced m
 
 ## Lint / CI Checks
 
-Run before committing. All must pass:
+Run at commit time only — not during iterative debugging. Use `cargo check` for mid-iteration build sanity. All must pass:
 
 ```bash
 cargo fmt --all -- --check

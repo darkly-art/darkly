@@ -213,6 +213,7 @@ fn encode_stamp_pass(
     target_view: &wgpu::TextureView,
     viewport: (u32, u32),
     label: &'static str,
+    perf: Option<&mut crate::brush::gpu_context::BrushPerfCounters>,
 ) {
     let (view_w, view_h) = viewport;
 
@@ -227,7 +228,12 @@ fn encode_stamp_pass(
         application: inputs.application_int,
         ratio: inputs.ratio,
     };
+    let t_wu = web_time::Instant::now();
     let offset = pipelines.write_stamp_uniforms(queue, &uniforms);
+    let wu_us = t_wu.elapsed().as_micros() as u64;
+    if let Some(p) = perf {
+        p.record_write_stamp_uniforms(wu_us);
+    }
 
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
@@ -275,9 +281,13 @@ impl BrushNodeEvaluator for StampEvaluator {
         // constant-pressure stroke allocates once. Variable-pressure
         // strokes get one entry per distinct integer pixel size — bounded
         // by the dab pool's existing free-list reuse.
+        let t_acquire = web_time::Instant::now();
         let handle = gpu.dab_pool.acquire_sized(gpu.device, dab_w, dab_h);
+        gpu.perf
+            .record_pool_acquire(t_acquire.elapsed().as_micros() as u64);
         let dab_view = gpu.dab_pool.view(handle).clone();
         let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
+        let t_pass = web_time::Instant::now();
         encode_stamp_pass(
             &mut gpu.encoder,
             gpu.queue,
@@ -287,7 +297,10 @@ impl BrushNodeEvaluator for StampEvaluator {
             &dab_view,
             (dab_w, dab_h),
             "brush-stamp",
+            Some(&mut gpu.perf),
         );
+        gpu.perf
+            .record_stamp_pass(t_pass.elapsed().as_micros() as u64);
 
         vec![
             ("dab".into(), ScalarValue::Texture(handle)),
@@ -344,6 +357,7 @@ impl BrushNodeEvaluator for StampEvaluator {
             &view,
             (dab_w, dab_h),
             "brush-stamp-preview",
+            None,
         );
 
         vec![

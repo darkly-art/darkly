@@ -327,7 +327,27 @@ impl CheckpointRing {
 
     /// Compute segment boundary vector indices for a re-render from
     /// `start_vi` to `tip_vi`. Returns positions where checkpoints
-    /// should be saved (excludes start_vi, includes tip_vi).
+    /// should be saved; includes `start_vi` only when it equals `0`
+    /// (the coverage anchor described below), and always includes
+    /// `tip_vi`.
+    ///
+    /// **Coverage invariant.** The ring must hold at least one checkpoint
+    /// with `vi < div_idx` for every reachable divergence index — that's
+    /// what makes partial restore possible. The stabilizer's
+    /// `max_divergence_window()` bounds how far back divergence can reach
+    /// from the tip, so spacing-distance checkpoints near the tip cover
+    /// any `div_idx` further than `spacing` from `vi=0`. The remaining
+    /// range `[1..spacing]` is only covered if a checkpoint exists at
+    /// `vi=0` itself. We anchor by prepending `0` whenever `start_vi=0`,
+    /// so the first event of every stroke saves the empty-scratch state
+    /// at `vi=0` and all subsequent events can restore from it.
+    ///
+    /// Without this anchor, the first ~`spacing` events of every stroke
+    /// fall back to full re-render (`restore_before` finds nothing for
+    /// `div_idx ∈ [1..spacing]`), the ring clears on fallback, and the
+    /// cycle repeats until `tip_vi` crosses `spacing`. Empirically, that
+    /// produced ~15 catastrophic full re-renders per stroke at high
+    /// stabilization.
     pub fn compute_segment_boundaries(
         start_vi: usize,
         tip_vi: usize,
@@ -340,6 +360,10 @@ impl CheckpointRing {
         }
 
         let mut boundaries = Vec::new();
+        // Coverage anchor: see invariant above.
+        if start_vi == 0 {
+            boundaries.push(0);
+        }
         let mut pos = start_vi + spacing;
         while pos < tip_vi {
             boundaries.push(pos);

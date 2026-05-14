@@ -186,7 +186,7 @@ impl DarklyEngine {
         &mut self,
         pen: crate::brush::paint_info::PaintInformation,
     ) {
-        use crate::brush::gpu_context::BrushGpuContext;
+        use crate::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 
         let mut runner = match crate::brush::compile_graph(&self.active_brush_graph) {
             Ok(r) => r,
@@ -261,6 +261,7 @@ impl DarklyEngine {
             pre_stroke_texture: None,
             pre_stroke_bind_group: None,
             dab_write_canvas_bbox: None,
+            perf: BrushPerfCounters::default(),
         };
 
         self.brush_pipelines.reset_uniform_rings();
