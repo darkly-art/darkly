@@ -18,24 +18,46 @@ pub fn register() -> BrushNodeRegistration {
         display_name: "Pen Input",
         ports: vec![
             PortDef::output("pressure", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Pen pressure (0 = no pressure, 1 = full pressure)"),
             PortDef::output("x_tilt", BrushWireType::Scalar)
+                .with_natural_range(-1.0, 1.0)
                 .with_description("Horizontal tilt of the pen barrel (-1 = left, 1 = right)"),
             PortDef::output("y_tilt", BrushWireType::Scalar)
+                .with_natural_range(-1.0, 1.0)
                 .with_description("Vertical tilt of the pen barrel (-1 = toward user, 1 = away)"),
-            PortDef::output("tilt_magnitude", BrushWireType::Scalar).with_description(
-                "How far the pen is tilted from vertical (0 = upright, 1 = flat)",
-            ),
+            PortDef::output("tilt_magnitude", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
+                .with_description(
+                    "How far the pen is tilted from vertical (0 = upright, 1 = flat)",
+                ),
+            // No `natural_range`: radians are a unit, not a normalized
+            // signal. A wire from `tilt_direction → stamp.rotation` (both
+            // in radians) is a unit-preserving identity. Users who want a
+            // normalized angle can pre-scale through `multiply` or `curve`.
             PortDef::output("tilt_direction", BrushWireType::Scalar)
-                .with_description("Compass direction of pen tilt in radians (0 = right, π/2 = down)"),
+                .with_description(
+                    "Compass direction of pen tilt in radians (0 = right, π/2 = down)",
+                ),
             PortDef::output("rotation", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Barrel rotation of the pen around its own axis (0\u{2013}1)"),
             PortDef::output("tangential_pressure", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Pressure on the pen's side wheel/slider (Wacom Airbrush)"),
             PortDef::output("speed", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Stroke speed in pixels per second, normalized"),
+            // `distance`, `time`, and `index` are intentionally without a
+            // `natural_range`: they're unbounded cumulative counters and
+            // there is no meaningful upper end to remap against. Wires from
+            // them pass through raw — feed them into a `clamp` or `remap`
+            // node first if you need them in a bounded domain.
             PortDef::output("distance", BrushWireType::Scalar)
                 .with_description("Cumulative distance traveled along the stroke (pixels)"),
+            // No `natural_range`: radians are a unit. `drawing_angle →
+            // stamp.rotation` is the canonical use case (brush faces the
+            // stroke) and it must pass radians through unchanged.
             PortDef::output("drawing_angle", BrushWireType::Scalar)
                 .with_description("Direction of motion along the stroke in radians (0 = right, π/2 = down). Wire to `stamp.rotation` for brushes that face the stroke."),
             PortDef::output("time", BrushWireType::Scalar)
@@ -48,6 +70,7 @@ pub fn register() -> BrushNodeRegistration {
             PortDef::output("index", BrushWireType::Int)
                 .with_description("Dab index within the current stroke (0, 1, 2, ...)"),
             PortDef::output("fade", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Stroke fade-out (0 at start, 1 at stroke end)"),
             // Stabilization strength — input port read at stroke start,
             // not per-dab.  Exposed via the eye toggle like any other port.
@@ -60,6 +83,7 @@ pub fn register() -> BrushNodeRegistration {
             // re-rendering a full stroke for an output-irrelevant change.
             PortDef::input("stabilize", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
+                .with_natural_range(0.0, 1.0)
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-wave-square")
                 .with_label("Stabilize")
@@ -78,6 +102,7 @@ pub fn register() -> BrushNodeRegistration {
             // *should* re-render the preview.
             PortDef::input("spacing", BrushWireType::Scalar)
                 .with_range(0.04, 1.0, 0.10)
+                .with_natural_range(0.04, 1.0)
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-grip-lines-vertical")
                 .with_label("Spacing")

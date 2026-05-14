@@ -37,6 +37,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Canvas position for pattern tiling alignment"),
             PortDef::input("scale", BrushWireType::Scalar)
                 .with_range(0.01, 4.0, 1.0)
+                .with_natural_range(0.01, 4.0)
                 .with_label("Scale")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-up-right-and-down-left-from-center")
@@ -44,6 +45,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Pattern scale (100% = natural size)"),
             PortDef::input("strength", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Strength")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-mountain")
@@ -54,11 +56,12 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Pass-through dab dimensions"),
         ],
         params: &[
-            // 0 = Multiply, 1 = Subtract, 2 = Overlay
-            ParamDef::Int {
+            // Enum stored as Int — see `BLEND_*` constants in the shader
+            // and the match arm in evaluate_gpu. Labeled dropdown so users
+            // pick by name rather than memorizing indices.
+            ParamDef::Enum {
                 name: "blend_mode",
-                min: 0,
-                max: 2,
+                options: &["Multiply", "Subtract", "Overlay"],
                 default: 0,
             },
         ],

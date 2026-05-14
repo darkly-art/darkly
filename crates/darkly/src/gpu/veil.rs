@@ -64,6 +64,7 @@ pub trait Veil: std::fmt::Debug {
 /// What each veil module returns from its `register()` function.
 pub struct VeilRegistration {
     pub type_id: &'static str,
+    pub display_name: &'static str,
     pub params: &'static [ParamDef],
     pub create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
@@ -75,6 +76,7 @@ pub struct VeilRegistry {
 }
 
 struct RegistryEntry {
+    display_name: &'static str,
     create_pipeline: fn(&wgpu::Device, wgpu::TextureFormat) -> EffectPipeline,
     params: &'static [ParamDef],
     from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Veil>,
@@ -94,6 +96,7 @@ impl VeilRegistry {
             entries.insert(
                 reg.type_id,
                 RegistryEntry {
+                    display_name: reg.display_name,
                     create_pipeline: reg.create_pipeline,
                     params: reg.params,
                     from_params: reg.from_params,
@@ -104,16 +107,29 @@ impl VeilRegistry {
         VeilRegistry { entries }
     }
 
-    /// Return all registered veil type IDs with their parameter definitions.
-    pub fn types(&self) -> Vec<(&'static str, &'static [ParamDef])> {
-        let mut types: Vec<_> = self.entries.iter().map(|(&id, e)| (id, e.params)).collect();
-        types.sort_by_key(|(id, _)| *id);
+    /// Return all registered veil type IDs with display name and parameter definitions.
+    pub fn types(&self) -> Vec<(&'static str, &'static str, &'static [ParamDef])> {
+        let mut types: Vec<_> = self
+            .entries
+            .iter()
+            .map(|(&id, e)| (id, e.display_name, e.params))
+            .collect();
+        types.sort_by_key(|(id, _, _)| *id);
         types
     }
 
     /// Get the static parameter definitions for a veil type.
     pub fn param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
+    }
+
+    /// Get the human-friendly display name for a veil type, falling back to
+    /// the `type_id` literal when the type is unknown.
+    pub fn display_name(&self, type_id: &str) -> &'static str {
+        self.entries
+            .get(type_id)
+            .map(|e| e.display_name)
+            .unwrap_or("")
     }
 
     /// Get or create the shared pipeline for a veil type.

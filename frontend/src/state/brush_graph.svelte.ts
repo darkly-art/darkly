@@ -237,7 +237,7 @@ class BrushGraphState {
         // brush to render. The engine's procedural default graph would
         // leave `activeBrush` null and the trigger would fall back to "Custom".
         const defaultBrush =
-            this.brushes.find(b => b.name === 'Soft Round') ?? this.brushes[0];
+            this.brushes.find(b => b.name === 'Rough Watercolor') ?? this.brushes[0];
         if (defaultBrush) {
             this.loadBrush(defaultBrush.name);
         } else {

@@ -11,7 +11,7 @@
     let { layer, depth = 0, onupdate }: {
         layer: {
             type: string; id: number; name: string; visible: boolean; locked?: boolean;
-            opacity?: number; blendMode?: number;
+            opacity?: number; blendMode?: string;
             modifiers?: Modifier[];
         };
         depth?: number;

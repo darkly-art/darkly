@@ -64,6 +64,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Paint color"),
             PortDef::input("deposit", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Deposit")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-fill-drip")
@@ -73,6 +74,7 @@ pub fn register() -> BrushNodeRegistration {
                 ),
             PortDef::input("wetness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Wetness")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-water")
@@ -82,6 +84,7 @@ pub fn register() -> BrushNodeRegistration {
                 ),
             PortDef::input("opacity", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Opacity")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-droplet")

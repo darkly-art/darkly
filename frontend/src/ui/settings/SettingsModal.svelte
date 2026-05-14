@@ -2,7 +2,7 @@
     import { config } from '../../config/store.svelte';
     import { settings } from '../../state/settings.svelte';
     import { actions, type ActionRegistration } from '../../actions/registry';
-    import { exportRootAsZip, downloadBlob } from '../../storage/root';
+    import { exportRootAsZip, downloadBlob } from '../../storage';
     import Modal from '../Modal.svelte';
     import PrefRow from './PrefRow.svelte';
     import ActionTriggerRow from './ActionTriggerRow.svelte';

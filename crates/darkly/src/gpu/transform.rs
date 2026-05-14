@@ -225,14 +225,24 @@ pub struct TransformState {
     pub target_layer: LayerId,
     pub target_format: wgpu::TextureFormat,
 
-    /// Per-target preview texture, sized and formatted to match the live
-    /// target. Owned by this state — destroyed when floating ends.
+    /// Per-target preview texture. Canvas-sized so a translate that drags
+    /// content past the source bounding box still has somewhere on the
+    /// preview to write — clipped at canvas bounds (the only thing the
+    /// viewport renders), not at the live texture's bounds. Owned by this
+    /// state — destroyed when floating ends.
     pub preview_texture: wgpu::Texture,
     pub preview_view: wgpu::TextureView,
     /// Bind group sampling `preview_view` against the mask BGL — built
     /// only when the target is R8, so the host's mask sampling can route
     /// through the preview during a mask transform.
     pub preview_mask_bind_group: Option<wgpu::BindGroup>,
+    /// Canvas-aligned blend uniforms used by the host blend pass when it
+    /// samples the preview. Mirrors the live layer's blend props (opacity,
+    /// blend mode, isolated) but overrides `layer_offset = (0, 0)` and
+    /// `layer_size = canvas` to match the preview texture's canvas-aligned
+    /// extent. Decouples preview's sampling geometry from the live
+    /// texture's so the preview can be sized independently.
+    pub preview_blend_uniform_buf: wgpu::Buffer,
 }
 
 /// GPU pipelines for the floating-content commit pass + optional active state.
@@ -426,6 +436,7 @@ impl TransformPass {
         preview_texture: wgpu::Texture,
         preview_view: wgpu::TextureView,
         preview_mask_bind_group: Option<wgpu::BindGroup>,
+        preview_blend_uniform_buf: wgpu::Buffer,
     ) {
         let source_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("transform-source"),
@@ -538,6 +549,7 @@ impl TransformPass {
             preview_texture,
             preview_view,
             preview_mask_bind_group,
+            preview_blend_uniform_buf,
         });
     }
 
@@ -564,6 +576,7 @@ impl TransformPass {
         preview_texture: wgpu::Texture,
         preview_view: wgpu::TextureView,
         preview_mask_bind_group: Option<wgpu::BindGroup>,
+        preview_blend_uniform_buf: wgpu::Buffer,
     ) {
         let layer_texture = &layer.texture;
         let layer_offset = (layer.offset_x, layer.offset_y);
@@ -715,6 +728,7 @@ impl TransformPass {
             preview_texture,
             preview_view,
             preview_mask_bind_group,
+            preview_blend_uniform_buf,
         });
     }
 

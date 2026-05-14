@@ -24,6 +24,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Value at factor = 1"),
             PortDef::input("factor", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Blend factor (0 = all a, 1 = all b)"),
             PortDef::output("result", BrushWireType::Scalar)
                 .with_description("Interpolated scalar result"),

@@ -1,13 +1,16 @@
 use super::UndoAction;
 use crate::document::Document;
-use crate::layer::{BlendMode, LayerId, LayerNode};
+use crate::gpu::blend_mode::BlendModeRegistration;
+use crate::layer::{LayerId, LayerNode};
 use std::collections::{HashMap, HashSet};
 
 /// A layer property value that can be saved and restored.
 #[derive(Clone)]
 pub enum Property {
     Opacity(f32),
-    BlendMode(BlendMode),
+    /// Held as a registry reference so undo records the *same* identity the
+    /// document carries — there is no enum copy that could drift.
+    BlendMode(&'static BlendModeRegistration),
     Visible(bool),
     Name(String),
     Passthrough(bool),

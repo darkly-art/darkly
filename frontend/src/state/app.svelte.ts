@@ -15,6 +15,57 @@ class AppState {
     // Active tool
     activeToolId = $state<string>('brush');
 
+    // Registry-backed display-name lookups. Each map is populated once at
+    // startup from the matching `*_types()` WASM query (see `loadRegistries`).
+    // Per-instance payloads (LayerInfo, VeilInfo, ModifierInfo, etc.) carry
+    // only the stable `type_id`; UI code resolves the human-readable label
+    // through these maps — there is no second copy of the display string.
+    toolDisplayNames = $state<Record<string, string>>({});
+    veilDisplayNames = $state<Record<string, string>>({});
+    blendModeDisplayNames = $state<Record<string, string>>({});
+    modifierDisplayNames = $state<Record<string, string>>({});
+    layerKindDisplayNames = $state<Record<string, string>>({});
+
+    toolDisplayName(id: string): string {
+        return this.toolDisplayNames[id] ?? id;
+    }
+    veilDisplayName(id: string): string {
+        return this.veilDisplayNames[id] ?? id;
+    }
+    blendModeDisplayName(id: string): string {
+        return this.blendModeDisplayNames[id] ?? id;
+    }
+    modifierDisplayName(id: string): string {
+        return this.modifierDisplayNames[id] ?? id;
+    }
+    layerKindDisplayName(id: string): string {
+        return this.layerKindDisplayNames[id] ?? id;
+    }
+
+    /** Populate every registry-backed display-name map from the Rust core in
+     *  one pass. Called once during editor init, before action registration
+     *  and before `this.handle` is set, so the maps are ready by the time any
+     *  UI mounts. */
+    loadRegistries(handle: { tool_types(): string; veil_types(): string;
+        blend_mode_types(): string; modifier_types(): string;
+        layer_kind_types(): string }) {
+        const buildMap = (json: string): Record<string, string> => {
+            try {
+                const arr = JSON.parse(json) as Array<{ type: string; displayName: string }>;
+                const m: Record<string, string> = {};
+                for (const e of arr) m[e.type] = e.displayName;
+                return m;
+            } catch {
+                return {};
+            }
+        };
+        this.toolDisplayNames = buildMap(handle.tool_types());
+        this.veilDisplayNames = buildMap(handle.veil_types());
+        this.blendModeDisplayNames = buildMap(handle.blend_mode_types());
+        this.modifierDisplayNames = buildMap(handle.modifier_types());
+        this.layerKindDisplayNames = buildMap(handle.layer_kind_types());
+    }
+
     // Active layer
     activeLayerId = $state<number | null>(null);
 
@@ -26,11 +77,6 @@ class AppState {
     // that node's contribution (e.g. a mask renders grayscale on canvas).
     // Replaces the old per-layer `showMaskLayerId`.
     isolatedNodeId = $state<number | null>(null);
-
-    // Tool runtime state -- working values adjusted while painting.
-    fillTolerance = $state(32);     // 0-255
-    fillAll = $state(false);
-    gradientType = $state<'linear' | 'radial'>('linear');
 
     // Layer tree (read from WASM, refreshed after mutations/undo/redo).
     layerTree = $state<any[]>([]);

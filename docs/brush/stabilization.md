@@ -1,5 +1,14 @@
 # Stroke Stabilization
 
+```
+TODO:
+- Debug lag on long+fast strokes when stabilization is turned up high
+     - When we doubled the max stabilization value, did we inadvertently reintroduce the possibility of fallback to full stroke-redraws? This existed in a careful balance.
+     - When we get behind in rendering, does there become a backlog of queued inputs? Are we trying to render all of them? Is there a way to detect when rendering falls behind and discard all but the most recent input event?
+- Is the stabilization engine in screen-space (dependent on inputs), or in canvas space (dependent on DPI)? Ideally it should look identical to the user no matter what zoom level they're at or whether the canvas size is 720p or 4K.
+- A better solution to "higher" stabilization may be tweaking the time element instead of the length one. Right now, faster strokes = more stabilization. Is that dial hard-coded? Can it be customized? Or is it naturally this way, just as a function of the number of input points?
+```
+
 Stabilization retroactively reshapes a stroke as the user draws. The tip is always pinned at the cursor (zero lag), but the path behind the pen continuously smooths — the "taffy" feel, like pulling a thread through honey.
 
 The key insight: instead of re-rendering the entire stroke every frame when earlier positions shift, a ring of GPU checkpoints tracks the stroke at segment boundaries. On each frame, the system restores the nearest checkpoint before the divergence point and re-renders only the changed tail — typically ~1/7th of the smoothing window. This keeps stabilization O(window_slice) per frame rather than O(total_stroke), so a long stroke at full strength costs the same as a short one.

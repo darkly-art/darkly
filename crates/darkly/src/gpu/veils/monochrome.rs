@@ -38,6 +38,7 @@ const PARAMS: &[ParamDef] = &[
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "monochrome",
+        display_name: "Monochrome",
         params: PARAMS,
         create_pipeline: create_monochrome_pipeline,
         from_params: |params, shared| {

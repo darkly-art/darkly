@@ -23,6 +23,7 @@ const NOISE_SIZE: u32 = 256;
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "watercolor",
+        display_name: "Watercolor",
         params: PARAMS,
         create_pipeline: create_watercolor_pipeline,
         from_params: |params, shared| {

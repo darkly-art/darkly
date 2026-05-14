@@ -77,10 +77,13 @@ impl BlendPipelines {
             immediate_size: 0,
         });
 
+        // The composite shader's blend `switch` body is generated from the
+        // blend-mode registry — per-mode WGSL math lives in each
+        // `crates/darkly/src/gpu/blend_modes/<name>.rs`, not in the .wgsl file.
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("composite-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../shaders/composite.wgsl").into(),
+                crate::gpu::blend_mode::build_composite_source().into(),
             ),
         });
 

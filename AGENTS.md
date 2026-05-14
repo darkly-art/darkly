@@ -186,6 +186,10 @@ Every system must be implemented properly. No hacks, no hardcoding, no shortcuts
 
 Darkly is in pre-release / alpha. Until the first public release, breaking on-disk and on-the-wire formats is fine — do not write migrations, format-version upgrade paths, or legacy compatibility shims. Make the breaking change directly and update every producer and consumer in the same pass; existing user data can be invalidated.
 
+## PR Descriptions
+
+When you finish implementing a plan, emit a concise PR description in a fenced markdown code block as part of your reply. If follow-up work on the same branch changes what would be in the PR, emit an updated version.
+
 ## Lint / CI Checks
 
 Run before committing. All must pass:

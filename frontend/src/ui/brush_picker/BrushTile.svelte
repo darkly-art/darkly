@@ -46,6 +46,8 @@
     }
     .brush-tile.active {
         border-color: var(--accent);
+        background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+        box-shadow: 0 0 0 1px var(--accent) inset;
     }
     .name {
         font-size: 11px;

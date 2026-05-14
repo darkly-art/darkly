@@ -59,6 +59,7 @@ pub fn register() -> BrushNodeRegistration {
         category: "input",
         display_name: "User Input",
         ports: vec![PortDef::output("value", BrushWireType::Scalar)
+            .with_natural_range(0.0, 1.0)
             .with_description("The user-controlled value, normalized to 0\u{2013}1")],
         params: &[
             ParamDef::String {

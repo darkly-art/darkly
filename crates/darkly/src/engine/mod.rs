@@ -11,7 +11,8 @@ mod veils;
 
 pub use rendering::DEFAULT_THUMB_SIZE;
 pub use types::{
-    ClipboardExport, LayerInfo, ModifierInfo, ParamInfo, StrokeOp, VeilInfo, VeilTypeInfo,
+    BlendModeTypeInfo, ClipboardExport, LayerInfo, LayerKindTypeInfo, ModifierInfo,
+    ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
 };
 
 use crate::brush::checkpoint_ring::CheckpointRing;
@@ -96,6 +97,12 @@ pub(crate) enum ReadbackContext {
     SelectionReadback,
     Thumbnail {
         node_id: LayerId,
+        /// Dimensions of the readback buffer in pixels — the source layout
+        /// the downscale samples from. This is the layer texture's own
+        /// extent at readback time, not the canvas extent (layers may be
+        /// smaller or larger than canvas; see `request_thumbnail_readback`).
+        source_w: u32,
+        source_h: u32,
         thumb_w: u32,
         thumb_h: u32,
     },
@@ -708,6 +715,10 @@ mod tests {
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["type"], "pixelate");
+        // Per the no-duplicate-display-name rule, only the type_id ships
+        // with the instance — display name is resolved by the UI via the
+        // veil_types() registry table.
+        assert!(json.get("displayName").is_none());
         assert_eq!(json["visible"], true);
         assert_eq!(json["index"], 0);
 

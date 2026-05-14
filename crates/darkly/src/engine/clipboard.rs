@@ -90,8 +90,13 @@ impl DarklyEngine {
             let cut_snapshot = if is_cut {
                 target_frame.map(|frame| {
                     self.gpu.encode_ret("cut-save", |encoder| {
-                        self.region_store
-                            .save_region(encoder, &frame, format, undo_rect)
+                        self.region_store.save_region(
+                            &self.gpu.device,
+                            encoder,
+                            &frame,
+                            format,
+                            undo_rect,
+                        )
                     })
                 })
             } else {

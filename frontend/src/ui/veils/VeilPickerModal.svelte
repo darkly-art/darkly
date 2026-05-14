@@ -3,12 +3,6 @@
 
     let { onclose }: { onclose: () => void } = $props();
 
-    const ACRONYMS: Record<string, string> = { vhs: 'VHS' };
-
-    function displayName(typeId: string): string {
-        return ACRONYMS[typeId] ?? typeId.replace(/_/g, ' ');
-    }
-
     let veilTypes = $state<any[]>([]);
 
     $effect(() => {
@@ -61,7 +55,7 @@
                 <button class="card" onclick={() => pick(vt)}>
                     <!-- TODO: replace with <video> preview when assets land -->
                     <div class="preview"></div>
-                    <span class="card-name">{displayName(vt.type)}</span>
+                    <span class="card-name">{vt.displayName}</span>
                 </button>
             {/each}
             {#if veilTypes.length === 0}

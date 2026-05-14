@@ -110,41 +110,15 @@ fn pd_set_sat(c: vec3f, s: f32) -> vec3f {
 
 fn blend(fg: vec4f, bg: vec4f, mode: u32) -> vec4f {
     // Blend modes operate on straight-alpha colors (PDF/SVG spec).
+    //
+    // The `case` arms are generated at runtime from the blend-mode registry —
+    // each `crates/darkly/src/gpu/blend_modes/<name>.rs` declares its own WGSL
+    // math, and `gpu::blend_mode::build_composite_source` splices them in
+    // before this shader is compiled. Edit a blend mode's `.rs` file, not the
+    // switch table.
     var Cs: vec3f;
     switch mode {
-        case 0u: { Cs = fg.rgb; }                                    // Normal
-        case 1u: { Cs = min(fg.rgb, bg.rgb); }                       // Darken
-        case 2u: { Cs = fg.rgb * bg.rgb; }                           // Multiply
-        case 3u: { Cs = pd_color_burn(fg.rgb, bg.rgb); }             // Color Burn
-        case 4u: { Cs = max(fg.rgb, bg.rgb); }                       // Lighten
-        case 5u: { Cs = fg.rgb + bg.rgb - fg.rgb * bg.rgb; }         // Screen
-        case 6u: { Cs = pd_color_dodge(fg.rgb, bg.rgb); }            // Color Dodge
-        case 7u: { Cs = clamp(fg.rgb + bg.rgb, vec3f(0.0), vec3f(1.0)); } // Linear Dodge (Add)
-        case 8u: {                                                    // Overlay
-            let lo = 2.0 * fg.rgb * bg.rgb;
-            let hi = 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb);
-            Cs = select(hi, lo, bg.rgb < vec3f(0.5));
-        }
-        case 9u: { Cs = pd_soft_light(fg.rgb, bg.rgb); }             // Soft Light
-        case 10u: {                                                   // Hard Light
-            let lo = 2.0 * fg.rgb * bg.rgb;
-            let hi = 1.0 - 2.0 * (1.0 - fg.rgb) * (1.0 - bg.rgb);
-            Cs = select(hi, lo, fg.rgb <= vec3f(0.5));
-        }
-        case 11u: { Cs = abs(fg.rgb - bg.rgb); }                     // Difference
-        case 12u: {                                                   // Hue
-            Cs = pd_set_lum(pd_set_sat(fg.rgb, pd_sat(bg.rgb)), pd_lum(bg.rgb));
-        }
-        case 13u: {                                                   // Saturation
-            Cs = pd_set_lum(pd_set_sat(bg.rgb, pd_sat(fg.rgb)), pd_lum(bg.rgb));
-        }
-        case 14u: {                                                   // Color
-            Cs = pd_set_lum(fg.rgb, pd_lum(bg.rgb));
-        }
-        case 15u: {                                                   // Luminosity
-            Cs = pd_set_lum(bg.rgb, pd_lum(fg.rgb));
-        }
-        default: { Cs = fg.rgb; }
+        // @blend-switch
     }
 
     // Porter-Duff source-over compositing (PDF 11.3.7):

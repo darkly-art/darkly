@@ -20,6 +20,7 @@ const PARAMS: &[ParamDef] = &[
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "noise",
+        display_name: "Noise",
         params: PARAMS,
         create_pipeline: create_evolve_pipeline,
         from_params: |params, shared| {

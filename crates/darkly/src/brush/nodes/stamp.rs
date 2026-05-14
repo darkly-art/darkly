@@ -37,12 +37,18 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Brush tip image"),
             PortDef::input("size_input", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Size Input")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-circle")
                 .with_description(
                     "Per-touch size multiplier. Connect Pen Input pressure (or a curve on top) here for pressure-sensitive size.",
                 ),
+            // `size` deliberately has no `natural_range` — the slider
+            // intentionally over-drags past 100% to support dramatically
+            // over-sized stamps, so a wire feeding in (e.g. pen pressure)
+            // must pass through raw rather than getting clamped/remapped
+            // into the slider's 0..4 hint.
             PortDef::input("size", BrushWireType::Scalar)
                 .with_range(0.0, 4.0, 0.1)
                 .with_label("Size")
@@ -55,6 +61,10 @@ pub fn register() -> BrushNodeRegistration {
                 // preview pipeline never reads the user's actual size.
                 .with_preview_value(0.1)
                 .with_description("Overall brush size"),
+            // No `natural_range`: radians are a unit, not a normalized
+            // signal. Wiring `pen.drawing_angle` (also radians) here is
+            // a unit-preserving identity wire — both ports speak the
+            // same language, so the value passes through raw.
             PortDef::input("rotation", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_label("Rotation")
@@ -65,18 +75,22 @@ pub fn register() -> BrushNodeRegistration {
                 ),
             PortDef::input("mirror_x", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Flip horizontally"),
             PortDef::input("mirror_y", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Flip vertically"),
             PortDef::input("ratio", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Ratio")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-arrows-left-right")
                 .with_description("Aspect ratio (100% = round)"),
             PortDef::input("flow", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Flow")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-droplet")
@@ -92,7 +106,15 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Brush shape shown under the cursor on hover, with rotation, aspect ratio, and mirroring applied"),
         ],
         params: &[
-            ParamDef::Int { name: "application", min: 0, max: 3, default: 0 },
+            // Enum stored as Int — order MUST match the `BrushTipApplication`
+            // match in `resolve_inputs`: AlphaMask=0, ImageStamp=1,
+            // LightnessMap=2, GradientMap=3. Labeled dropdown so users pick
+            // by name rather than memorizing application indices.
+            ParamDef::Enum {
+                name: "application",
+                options: &["Alpha Mask", "Image Stamp", "Lightness Map", "Gradient Map"],
+                default: 0,
+            },
         ],
         is_gpu: true,
     }

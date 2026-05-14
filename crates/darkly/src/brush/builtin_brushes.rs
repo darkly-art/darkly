@@ -593,7 +593,7 @@ fn smooth_watercolor() -> Brush {
         graph
             .set_param(circle, 0, ParamValue::Int(0)) // 0 = Sine Harmonic
             .unwrap();
-        graph.set_port_default(circle, "amplitude", 0.1).unwrap();
+        graph.set_port_default(circle, "amplitude", 0.05).unwrap();
         graph.set_port_default(circle, "frequency", 5.0).unwrap();
         graph.set_port_default(circle, "phase", 0.0).unwrap();
     })

@@ -55,6 +55,7 @@ pub fn register() -> BrushNodeRegistration {
         ports: vec![
             PortDef::input("softness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Softness")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-feather")
@@ -64,6 +65,7 @@ pub fn register() -> BrushNodeRegistration {
             // its n1/n2/n3 instead, so we hide this knob for it.
             PortDef::input("amplitude", BrushWireType::Scalar)
                 .with_range(0.0, 0.5, 0.0)
+                .with_natural_range(0.0, 0.5)
                 .with_label("Amplitude")
                 .with_unit(UnitType::Percent)
                 .with_visible_when("algorithm", [ALGO_SINE as i32, ALGO_PERLIN as i32])
@@ -73,6 +75,7 @@ pub fn register() -> BrushNodeRegistration {
             // matter for every algorithm.
             PortDef::input("frequency", BrushWireType::Scalar)
                 .with_range(1.0, 16.0, 6.0)
+                .with_natural_range(1.0, 16.0)
                 .with_step(1.0)
                 .with_label("Frequency")
                 .with_unit(UnitType::Raw)
@@ -82,6 +85,10 @@ pub fn register() -> BrushNodeRegistration {
                      non-integer values would create a seam at θ = ±π where the \
                      shape fails to close.",
                 ),
+            // No `natural_range`: radians are a unit, not a normalized
+            // signal. `pen.drawing_angle → phase` is a unit-preserving
+            // identity wire; users wanting `random → phase` to span a
+            // full revolution must pre-scale through `multiply`.
             PortDef::input("phase", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_label("Phase")
@@ -89,36 +96,42 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Rotation of the shape around its own centre."),
             PortDef::input("persistence", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Persistence")
                 .with_unit(UnitType::Percent)
                 .with_visible_when("algorithm", [ALGO_PERLIN as i32])
                 .with_description("Per-octave amplitude falloff. Higher = rougher edge."),
             PortDef::input("seed", BrushWireType::Scalar)
                 .with_range(0.0, 1024.0, 0.0)
+                .with_natural_range(0.0, 1024.0)
                 .with_label("Seed")
                 .with_unit(UnitType::Raw)
                 .with_visible_when("algorithm", [ALGO_PERLIN as i32])
                 .with_description("RNG seed for the noise array."),
             PortDef::input("octaves", BrushWireType::Scalar)
                 .with_range(1.0, 6.0, 3.0)
+                .with_natural_range(1.0, 6.0)
                 .with_label("Octaves")
                 .with_unit(UnitType::Raw)
                 .with_visible_when("algorithm", [ALGO_PERLIN as i32])
                 .with_description("Number of stacked frequencies."),
             PortDef::input("n1", BrushWireType::Scalar)
                 .with_range(0.1, 16.0, 1.0)
+                .with_natural_range(0.1, 16.0)
                 .with_label("n1")
                 .with_unit(UnitType::Raw)
                 .with_visible_when("algorithm", [ALGO_SUPERFORMULA as i32])
                 .with_description("Overall fatness/sharpness."),
             PortDef::input("n2", BrushWireType::Scalar)
                 .with_range(0.1, 16.0, 1.0)
+                .with_natural_range(0.1, 16.0)
                 .with_label("n2")
                 .with_unit(UnitType::Raw)
                 .with_visible_when("algorithm", [ALGO_SUPERFORMULA as i32])
                 .with_description("Shape of bump rise."),
             PortDef::input("n3", BrushWireType::Scalar)
                 .with_range(0.1, 16.0, 1.0)
+                .with_natural_range(0.1, 16.0)
                 .with_label("n3")
                 .with_unit(UnitType::Raw)
                 .with_visible_when("algorithm", [ALGO_SUPERFORMULA as i32])

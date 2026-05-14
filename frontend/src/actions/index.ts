@@ -260,12 +260,17 @@ export function registerActions() {
         magicWandTool: 'KeyW',
         transformTool: 'KeyT',
     };
+    // Tool display names live in Rust (`ToolRegistration`). Resolve through
+    // `app.toolDisplayName(id)` which reads the registry map populated by
+    // `app.loadRegistries(handle)` during editor init — the frontend never
+    // hardcodes a label.
     for (const tool of toolRegistry.all()) {
+        const name = app.toolDisplayName(tool.id);
         actions.register({
             id: tool.hotkeyAction,
-            displayName: tool.name,
+            displayName: name,
             category: 'tools',
-            description: `Switch to ${tool.name} tool`,
+            description: `Switch to ${name} tool`,
             defaultHotkey: TOOL_DEFAULT_HOTKEYS[tool.hotkeyAction],
             handler: () => { app.activeToolId = tool.id; },
         });

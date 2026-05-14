@@ -5,6 +5,7 @@ use crate::tool::ToolRegistration;
 pub fn register() -> ToolRegistration {
     ToolRegistration {
         type_id: "lasso_select",
+        display_name: "Lasso Select",
         params: &[],
     }
 }

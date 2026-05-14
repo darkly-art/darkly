@@ -107,9 +107,13 @@ impl DarklyEngine {
 
         // Save current state to scratch for undo.
         self.gpu.encode("fill-background-save", |encoder| {
-            let snap = self
-                .region_store
-                .save_region(encoder, &layer_frame, format, rect);
+            let snap = self.region_store.save_region(
+                &self.gpu.device,
+                encoder,
+                &layer_frame,
+                format,
+                rect,
+            );
             let entry =
                 self.region_store
                     .commit_region(encoder, layer_id, &layer_frame, &snap, rect);
@@ -218,17 +222,15 @@ impl DarklyEngine {
             // &mut self.region_store call below. Direct field access via
             // `self.compositor.node_texture(...)` borrows only that sub-field,
             // so split borrowing of `region_store` works.
-            let (frame, format, layer_w, layer_h) = match self.compositor.node_texture(layer_id) {
-                Some(t) => (t.canvas_frame(), t.format, t.width, t.height),
+            let (frame, format) = match self.compositor.node_texture(layer_id) {
+                Some(t) => (t.canvas_frame(), t.format),
                 None => return,
             };
 
-            self.region_store
-                .ensure_scratch_capacity(&self.gpu.device, layer_w, layer_h);
             let saved_rect = frame.canvas_extent;
             let snap = self.gpu.encode_ret("stroke-begin", |encoder| {
                 self.region_store
-                    .save_region(encoder, &frame, format, saved_rect)
+                    .save_region(&self.gpu.device, encoder, &frame, format, saved_rect)
             });
             self.scratch_snapshot = Some(snap);
         }
@@ -441,6 +443,28 @@ impl DarklyEngine {
         }
     }
 
+    /// Grow whichever raster layer owns `node_id` to cover `needed`.
+    ///
+    /// - If `node_id` is a raster layer, grows it directly.
+    /// - If `node_id` is a modifier (e.g. a mask), grows its host raster —
+    ///   which lockstep-grows the modifier alongside it.
+    ///
+    /// Lets callers that hold a generic node id (transform commit, paste
+    /// commit) request growth without first disambiguating between raster
+    /// and modifier ids.
+    pub(crate) fn grow_node_to_fit(
+        &mut self,
+        node_id: crate::layer::LayerId,
+        needed: crate::coord::CanvasRect,
+    ) -> Option<crate::coord::CanvasRect> {
+        let target_id = if self.doc.is_modifier(node_id) {
+            self.doc.parent_of(node_id)?
+        } else {
+            node_id
+        };
+        self.grow_layer(target_id, needed)
+    }
+
     /// Grow a raster layer's bounds to cover `needed` (canvas-space).
     ///
     /// Document-led: writes `RasterLayer.bounds` first, then resizes the
@@ -480,10 +504,10 @@ impl DarklyEngine {
 
         // Doc first — the layer's `PixelBuffer` is the source of truth.
         let isolated = self.host_renders_isolated(layer_id);
-        let (opacity, blend_mode) = match self.doc.layer_mut(layer_id) {
+        let (opacity, blend_mode_gpu) = match self.doc.layer_mut(layer_id) {
             Some(crate::layer::Layer::Raster(r)) => {
                 r.pixels.bounds = new_extent;
-                (r.blend.opacity, r.blend.blend_mode)
+                (r.blend.opacity, r.blend.blend_mode.gpu_value)
             }
             _ => return None,
         };
@@ -546,7 +570,7 @@ impl DarklyEngine {
             &self.gpu.queue,
             layer_id,
             opacity,
-            blend_mode,
+            blend_mode_gpu,
             isolated,
         );
 
@@ -1161,7 +1185,8 @@ impl DarklyEngine {
         // Save region for undo.
         let snap = self.gpu.encode_ret("clear-sel-save", |encoder| {
             let frame = pt_for!().canvas_frame();
-            self.region_store.save_region(encoder, &frame, format, rect)
+            self.region_store
+                .save_region(&self.gpu.device, encoder, &frame, format, rect)
         });
 
         // Erase within selection using the cached GPU selection bind group.
@@ -1210,7 +1235,8 @@ impl DarklyEngine {
         // Save region for undo.
         let snap = self.gpu.encode_ret("clear-layer-save", |encoder| {
             let frame = pt_for!().canvas_frame();
-            self.region_store.save_region(encoder, &frame, format, rect)
+            self.region_store
+                .save_region(&self.gpu.device, encoder, &frame, format, rect)
         });
 
         // Clear the full canvas.

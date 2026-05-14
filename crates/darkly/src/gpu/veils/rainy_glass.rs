@@ -38,6 +38,7 @@ const PARAMS: &[ParamDef] = &[
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "rainy_glass",
+        display_name: "Rainy Glass",
         params: PARAMS,
         create_pipeline: create_rainy_glass_pipeline,
         from_params: |params, shared| {

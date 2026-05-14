@@ -49,9 +49,11 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Where on the canvas to place the brush mark"),
             PortDef::input("blend_mode", BrushWireType::Int)
                 .with_range(0.0, 1.0, 0.0)
+                .with_natural_range(0.0, 1.0)
                 .with_description("0 = paint normally, 1 = erase"),
             PortDef::input("opacity", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Opacity")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-fill-drip")

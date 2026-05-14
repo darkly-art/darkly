@@ -71,8 +71,11 @@ impl SelectionModifier {
     }
 }
 
+pub const TYPE_ID: &str = "selection";
+
 pub fn register() -> ModifierRegistration {
     ModifierRegistration {
-        type_id: "selection",
+        type_id: TYPE_ID,
+        display_name: "Selection",
     }
 }

@@ -79,7 +79,7 @@ enum Command {
 
     // Layer properties
     SetOpacity(u64, f32),
-    SetBlendMode(u64, u32),
+    SetBlendMode(u64, String),
     /// Toggle visibility on any node — layer, group, or modifier (mask).
     SetLayerVisible(u64, bool),
     SetLayerName(u64, String),
@@ -187,7 +187,7 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::EndStroke => engine.end_stroke(),
 
             Command::SetOpacity(id, v) => engine.set_opacity(LayerId::from_ffi(id), v),
-            Command::SetBlendMode(id, v) => engine.set_blend_mode(LayerId::from_ffi(id), v),
+            Command::SetBlendMode(id, ref v) => engine.set_blend_mode(LayerId::from_ffi(id), v),
             Command::SetLayerVisible(id, v) => engine.set_layer_visible(LayerId::from_ffi(id), v),
             Command::SetLayerName(id, ref name) => {
                 engine.set_layer_name(LayerId::from_ffi(id), name)
@@ -471,8 +471,8 @@ impl DarklyHandle {
     pub fn set_opacity(&self, layer_id: f64, opacity: f32) {
         self.push(Command::SetOpacity(layer_id as u64, opacity));
     }
-    pub fn set_blend_mode(&self, layer_id: f64, mode: u32) {
-        self.push(Command::SetBlendMode(layer_id as u64, mode));
+    pub fn set_blend_mode(&self, layer_id: f64, type_id: &str) {
+        self.push(Command::SetBlendMode(layer_id as u64, type_id.into()));
     }
     pub fn set_layer_visible(&self, layer_id: f64, visible: bool) {
         self.push(Command::SetLayerVisible(layer_id as u64, visible));
@@ -1407,6 +1407,37 @@ impl DarklyHandle {
     pub fn veil_types(&self) -> String {
         self.flush_if_needed();
         serde_json::to_string(&self.engine.borrow().veil_types()).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Return registered tool types as JSON: `[{ type, displayName, params }, ...]`.
+    /// The UI uses `displayName` directly, so tool labels live in Rust now.
+    pub fn tool_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().tool_types()).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Return registered blend modes as JSON: `[{ type, displayName, category }, ...]`.
+    /// The layer-properties dropdown is populated entirely from this list.
+    pub fn blend_mode_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().blend_mode_types())
+            .unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Return registered modifier kinds as JSON: `[{ type, displayName }, ...]`.
+    /// UI resolves `ModifierInfo.kind` → label via this table.
+    pub fn modifier_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().modifier_types())
+            .unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Return registered layer kinds as JSON: `[{ type, displayName }, ...]`.
+    /// UI resolves a layer's `type` discriminator → label via this table.
+    pub fn layer_kind_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().layer_kind_types())
+            .unwrap_or_else(|_| "[]".into())
     }
 
     pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> i32 {

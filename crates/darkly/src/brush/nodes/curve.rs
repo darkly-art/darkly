@@ -25,8 +25,10 @@ pub fn register() -> BrushNodeRegistration {
         display_name: "Curve",
         ports: vec![
             PortDef::input("input", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Input value (0\u{2013}1) to remap through the curve"),
             PortDef::output("output", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Remapped output from the spline transfer function"),
         ],
         params: &[ParamDef::Curve {

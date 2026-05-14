@@ -64,9 +64,13 @@
                     class="tool"
                     class:active={app.activeToolId === tool.id}
                     onclick={() => app.activeToolId = tool.id}
-                    title={(() => { const hk = formatHotkey(config.get(`hotkeys.${tool.hotkeyAction}`) as string | undefined); return hk ? `${tool.name} (${hk})` : tool.name; })()}
+                    title={(() => { const hk = formatHotkey(config.get(`hotkeys.${tool.hotkeyAction}`) as string | undefined); const name = app.toolDisplayName(tool.id); return hk ? `${name} (${hk})` : name; })()}
                 >
-                    <i class={tool.faIcon}></i>
+                    {#if tool.iconSvg}
+                        {@html tool.iconSvg}
+                    {:else}
+                        <i class={tool.faIcon}></i>
+                    {/if}
                 </button>
             {/each}
         </div>

@@ -3,7 +3,7 @@
 use super::{DarklyEngine, ReadbackContext};
 use crate::gpu::readback;
 use crate::gpu::view::ViewTransform;
-use crate::layer::{BlendMode, LayerId};
+use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
 /// Thumbnail size used for the layer panel previews. Single source of
@@ -95,6 +95,13 @@ impl DarklyEngine {
     /// Kick off an async GPU readback for a thumbnail of any node by id,
     /// if one isn't already pending. Format is derived from the node's
     /// GPU texture — callers don't dispatch on layer-vs-modifier.
+    ///
+    /// Reads the texture's full extent, not a canvas-sized rect. Layer
+    /// textures may be smaller than canvas (e.g. a small paste) or larger
+    /// (off-canvas paste, chunk-aligned growth past canvas edge); copying
+    /// `[0, 0, canvas_w, canvas_h]` would over-read in either case and
+    /// fail wgpu validation. The source dims are carried to the completion
+    /// handler so the downscale uses the same layout the buffer holds.
     fn request_thumbnail_readback(&mut self, node_id: LayerId, thumb_w: u32, thumb_h: u32) {
         if self
             .readbacks
@@ -103,11 +110,8 @@ impl DarklyEngine {
             return;
         }
 
-        let doc_w = self.doc.width;
-        let doc_h = self.doc.height;
-
-        let (texture, format) = match self.compositor.node_texture(node_id) {
-            Some(t) => (&t.texture, t.format),
+        let (texture, format, tex_w, tex_h) = match self.compositor.node_texture(node_id) {
+            Some(t) => (&t.texture, t.format, t.width, t.height),
             None => return,
         };
 
@@ -117,12 +121,14 @@ impl DarklyEngine {
                 encoder,
                 texture,
                 format,
-                [0, 0, doc_w, doc_h],
+                [0, 0, tex_w, tex_h],
             );
             self.readbacks.submit(
                 request,
                 ReadbackContext::Thumbnail {
                     node_id,
+                    source_w: tex_w,
+                    source_h: tex_h,
                     thumb_w,
                     thumb_h,
                 },
@@ -258,20 +264,24 @@ impl DarklyEngine {
             }
             ReadbackContext::Thumbnail {
                 node_id,
+                source_w,
+                source_h,
                 thumb_w,
                 thumb_h,
             } => {
-                let doc_w = self.doc.width;
-                let doc_h = self.doc.height;
                 let is_r8 = self
                     .compositor
                     .node_texture(node_id)
                     .map(|t| t.format == wgpu::TextureFormat::R8Unorm)
                     .unwrap_or(false);
                 let thumb = if is_r8 {
-                    generate_mask_thumbnail_from_pixels(&pixels, doc_w, doc_h, thumb_w, thumb_h)
+                    generate_mask_thumbnail_from_pixels(
+                        &pixels, source_w, source_h, thumb_w, thumb_h,
+                    )
                 } else {
-                    generate_rgba_thumbnail_from_pixels(&pixels, doc_w, doc_h, thumb_w, thumb_h)
+                    generate_rgba_thumbnail_from_pixels(
+                        &pixels, source_w, source_h, thumb_w, thumb_h,
+                    )
                 };
                 self.thumbnail_cache.insert(node_id, thumb);
                 // Tell the frontend "fresh thumbnail bytes available".
@@ -564,7 +574,7 @@ impl DarklyEngine {
         struct RasterInfo {
             id: LayerId,
             opacity: f32,
-            blend_mode: BlendMode,
+            blend_mode_gpu: u32,
             isolated: bool,
             bounds: crate::coord::CanvasRect,
         }
@@ -575,7 +585,7 @@ impl DarklyEngine {
             .map(|r| RasterInfo {
                 id: r.id,
                 opacity: r.blend.opacity,
-                blend_mode: r.blend.blend_mode,
+                blend_mode_gpu: r.blend.blend_mode.gpu_value,
                 isolated: isolated_host(r.id),
                 bounds: r.pixels.bounds,
             })
@@ -592,7 +602,7 @@ impl DarklyEngine {
                 &self.gpu.queue,
                 info.id,
                 info.opacity,
-                info.blend_mode,
+                info.blend_mode_gpu,
                 info.isolated,
             );
         }
@@ -644,7 +654,7 @@ impl DarklyEngine {
         // so we update them through the same path — `update_group_uniforms`
         // skips the group_state branch when none exists and writes only the
         // pms uniform.
-        let groups: Vec<(LayerId, bool, f32, BlendMode, bool)> = self
+        let groups: Vec<(LayerId, bool, f32, u32, bool)> = self
             .doc
             .all_groups()
             .iter()
@@ -653,12 +663,12 @@ impl DarklyEngine {
                     g.id,
                     g.passthrough,
                     g.blend.opacity,
-                    g.blend.blend_mode,
+                    g.blend.blend_mode.gpu_value,
                     isolated_host(g.id),
                 )
             })
             .collect();
-        for (id, passthrough, opacity, blend_mode, isolated_flag) in groups {
+        for (id, passthrough, opacity, blend_mode_gpu, isolated_flag) in groups {
             if !passthrough {
                 self.compositor
                     .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
@@ -667,7 +677,7 @@ impl DarklyEngine {
                 &self.gpu.queue,
                 id,
                 opacity,
-                blend_mode,
+                blend_mode_gpu,
                 isolated_flag,
             );
         }

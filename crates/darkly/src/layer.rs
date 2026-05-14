@@ -1,4 +1,5 @@
 use crate::coord::CanvasRect;
+use crate::gpu::blend_mode::{self, BlendModeRegistration};
 
 slotmap::new_key_type! {
     /// Unique identifier for any node, group, or modifier in a [`Document`].
@@ -29,51 +30,6 @@ impl LayerId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[repr(u32)]
-pub enum BlendMode {
-    Normal = 0,
-    Darken = 1,
-    Multiply = 2,
-    ColorBurn = 3,
-    Lighten = 4,
-    Screen = 5,
-    ColorDodge = 6,
-    LinearDodge = 7,
-    Overlay = 8,
-    SoftLight = 9,
-    HardLight = 10,
-    Difference = 11,
-    Hue = 12,
-    Saturation = 13,
-    Color = 14,
-    Luminosity = 15,
-}
-
-impl BlendMode {
-    pub fn from_u32(v: u32) -> Self {
-        match v {
-            0 => BlendMode::Normal,
-            1 => BlendMode::Darken,
-            2 => BlendMode::Multiply,
-            3 => BlendMode::ColorBurn,
-            4 => BlendMode::Lighten,
-            5 => BlendMode::Screen,
-            6 => BlendMode::ColorDodge,
-            7 => BlendMode::LinearDodge,
-            8 => BlendMode::Overlay,
-            9 => BlendMode::SoftLight,
-            10 => BlendMode::HardLight,
-            11 => BlendMode::Difference,
-            12 => BlendMode::Hue,
-            13 => BlendMode::Saturation,
-            14 => BlendMode::Color,
-            15 => BlendMode::Luminosity,
-            _ => BlendMode::Normal,
-        }
-    }
-}
-
 /// Properties shared by every node in the tree — raster layers, groups, and
 /// modifiers. Lock prevents any mutation; lives on every node by construction
 /// so the universal check is one line at every mutation entry point.
@@ -96,16 +52,22 @@ impl NodeCommon {
 /// Compositing properties for nodes that participate in normal blending
 /// (raster layers and groups). Modifiers don't have one — masks structurally
 /// have no opacity or blend mode.
+///
+/// `blend_mode` is a registry reference, not an enum: `type_id` is the
+/// identity (used by the wire format, undo, and `set_blend_mode`), and
+/// `gpu_value` is the integer the composite shader switches on. There is no
+/// parallel enum representation — registry-resolved registrations are the
+/// only carrier.
 pub struct BlendProps {
     pub opacity: f32,
-    pub blend_mode: BlendMode,
+    pub blend_mode: &'static BlendModeRegistration,
 }
 
 impl BlendProps {
     pub fn new() -> Self {
         BlendProps {
             opacity: 1.0,
-            blend_mode: BlendMode::Normal,
+            blend_mode: blend_mode::registry().default(),
         }
     }
 }
@@ -277,6 +239,26 @@ impl LayerNode {
 
     pub fn locked(&self) -> bool {
         self.common().locked
+    }
+
+    /// The registration record for this node's kind — owns `type_id` (wire
+    /// format), `display_name` (UI), and any future per-kind metadata. The
+    /// match arms reference each kind module's own `TYPE_ID` constant rather
+    /// than re-typing the string literal, so there is no parallel name to
+    /// keep in sync with the registration files.
+    pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
+        use crate::document::layer_kind::registry;
+        use crate::document::layer_kinds::{group, raster};
+        match self {
+            LayerNode::Layer(Layer::Raster(_)) => registry().get(raster::TYPE_ID).unwrap(),
+            LayerNode::Group(_) => registry().get(group::TYPE_ID).unwrap(),
+        }
+    }
+
+    /// Convenience for the wire format / save file — just the stable `type_id`
+    /// string from `kind()`.
+    pub fn type_id(&self) -> &'static str {
+        self.kind().type_id
     }
 }
 

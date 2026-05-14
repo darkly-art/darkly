@@ -2,6 +2,9 @@
 
 use crate::gpu::params::{ParamDef, ParamValue};
 
+/// Per-instance view of a tree node. `type` (variant tag) and `blendMode` are
+/// stable registry `type_id`s — display labels are looked up by the UI through
+/// the matching `*_types()` table, never carried alongside as a redundant copy.
 #[derive(serde::Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum LayerInfo {
@@ -12,7 +15,10 @@ pub enum LayerInfo {
         visible: bool,
         locked: bool,
         opacity: f32,
-        blend_mode: u32,
+        /// Stable `type_id` from the blend-mode registry (snake_case, e.g.
+        /// `"normal"`, `"color_burn"`). Resolve to a display label via the
+        /// blend-mode registry, not a sibling field on this struct.
+        blend_mode: &'static str,
         /// Modifiers attached to this layer (today: at most one mask).
         modifiers: Vec<ModifierInfo>,
         /// Pixel-space bounds of the layer's GPU texture in canvas coords.
@@ -27,7 +33,7 @@ pub enum LayerInfo {
         collapsed: bool,
         passthrough: bool,
         opacity: f32,
-        blend_mode: u32,
+        blend_mode: &'static str,
         modifiers: Vec<ModifierInfo>,
         children: Vec<LayerInfo>,
     },
@@ -35,7 +41,8 @@ pub enum LayerInfo {
 
 /// Serializable view of a single modifier attached to a host. Carries enough
 /// metadata for the frontend to render the modifier as a sub-row in the layer
-/// panel (name, visibility, lock toggles).
+/// panel (name, visibility, lock toggles). `kind` is the registry `type_id`;
+/// resolve to a display label via `modifier_types()`.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModifierInfo {
@@ -51,9 +58,54 @@ pub struct ModifierInfo {
 pub struct VeilTypeInfo {
     #[serde(rename = "type")]
     pub type_id: &'static str,
+    pub display_name: &'static str,
     pub params: Vec<ParamInfo>,
 }
 
+/// Flat serialization-friendly view of a tool's registration metadata.
+/// Mirrors `VeilTypeInfo` so the UI consumes both in the same shape.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolTypeInfo {
+    #[serde(rename = "type")]
+    pub type_id: &'static str,
+    pub display_name: &'static str,
+    pub params: Vec<ParamInfo>,
+}
+
+/// Flat view of a registered blend mode for the layer-properties dropdown.
+/// `category` drives the `<optgroup>` grouping (Darken / Lighten / etc.).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlendModeTypeInfo {
+    #[serde(rename = "type")]
+    pub type_id: &'static str,
+    pub display_name: &'static str,
+    pub category: &'static str,
+}
+
+/// Registry view of a modifier kind — the UI uses this to render the
+/// "Add modifier" menu and to look up display labels for `ModifierInfo.kind`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifierTypeInfo {
+    #[serde(rename = "type")]
+    pub type_id: &'static str,
+    pub display_name: &'static str,
+}
+
+/// Registry view of a layer kind — used by the layer panel to render labels
+/// like "Raster Layer" / "Group" for the layer's own `type` discriminator.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerKindTypeInfo {
+    #[serde(rename = "type")]
+    pub type_id: &'static str,
+    pub display_name: &'static str,
+}
+
+/// Per-instance view of a veil in the chain. `type` is the registry `type_id`;
+/// resolve to a display label via `veil_types()` — never duplicate it here.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VeilInfo {
@@ -254,7 +306,7 @@ pub(crate) fn node_to_layer_info(
                 visible: r.common.visible,
                 locked: r.common.locked,
                 opacity: r.blend.opacity,
-                blend_mode: r.blend.blend_mode as u32,
+                blend_mode: r.blend.blend_mode.type_id,
                 modifiers: r
                     .modifiers
                     .iter()
@@ -271,7 +323,7 @@ pub(crate) fn node_to_layer_info(
             collapsed: g.collapsed,
             passthrough: g.passthrough,
             opacity: g.blend.opacity,
-            blend_mode: g.blend.blend_mode as u32,
+            blend_mode: g.blend.blend_mode.type_id,
             modifiers: g
                 .modifiers
                 .iter()

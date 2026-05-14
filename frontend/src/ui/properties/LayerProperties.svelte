@@ -2,39 +2,35 @@
     import { app } from '../../state/app.svelte';
 
     let { node }: {
-        node: { id: number; opacity: number; blendMode: number };
+        node: { id: number; opacity: number; blendMode: string };
     } = $props();
 
-    const BLEND_MODE_GROUPS: { label: string; modes: { value: number; label: string }[] }[] = [
-        { label: 'Normal', modes: [
-            { value: 0, label: 'Normal' },
-        ]},
-        { label: 'Darken', modes: [
-            { value: 1, label: 'Darken' },
-            { value: 2, label: 'Multiply' },
-            { value: 3, label: 'Color Burn' },
-        ]},
-        { label: 'Lighten', modes: [
-            { value: 4, label: 'Lighten' },
-            { value: 5, label: 'Screen' },
-            { value: 6, label: 'Color Dodge' },
-            { value: 7, label: 'Linear Dodge (Add)' },
-        ]},
-        { label: 'Contrast', modes: [
-            { value: 8, label: 'Overlay' },
-            { value: 9, label: 'Soft Light' },
-            { value: 10, label: 'Hard Light' },
-        ]},
-        { label: 'Inversion', modes: [
-            { value: 11, label: 'Difference' },
-        ]},
-        { label: 'Component', modes: [
-            { value: 12, label: 'Hue' },
-            { value: 13, label: 'Saturation' },
-            { value: 14, label: 'Color' },
-            { value: 15, label: 'Luminosity' },
-        ]},
-    ];
+    // Blend modes come from the Rust BlendModeRegistry — the dropdown
+    // (and its category-based <optgroup>s) is built entirely from that table.
+    interface BlendModeType { type: string; displayName: string; category: string; }
+    let blendModeTypes = $state<BlendModeType[]>([]);
+    $effect(() => {
+        if (!app.handle) return;
+        try {
+            blendModeTypes = JSON.parse(app.handle.blend_mode_types()) as BlendModeType[];
+        } catch {
+            blendModeTypes = [];
+        }
+    });
+
+    interface BlendModeGroup { label: string; modes: BlendModeType[]; }
+    let blendModeGroups = $derived((() => {
+        const groups: BlendModeGroup[] = [];
+        let current: BlendModeGroup | null = null;
+        for (const bm of blendModeTypes) {
+            if (!current || current.label !== bm.category) {
+                current = { label: bm.category, modes: [] };
+                groups.push(current);
+            }
+            current.modes.push(bm);
+        }
+        return groups;
+    })());
 
     function onOpacityInput(e: Event) {
         const value = parseFloat((e.target as HTMLInputElement).value);
@@ -44,7 +40,7 @@
     }
 
     function onBlendModeChange(e: Event) {
-        const value = parseInt((e.target as HTMLSelectElement).value, 10);
+        const value = (e.target as HTMLSelectElement).value;
         app.handle?.set_blend_mode(node.id, value);
         app.refreshLayerTree();
         app.requestFrame();
@@ -65,11 +61,11 @@
 
 <div class="row">
     <span class="label">Blend</span>
-    <select class="select" value={node.blendMode ?? 0} onchange={onBlendModeChange}>
-        {#each BLEND_MODE_GROUPS as group (group.label)}
+    <select class="select" value={node.blendMode ?? 'normal'} onchange={onBlendModeChange}>
+        {#each blendModeGroups as group (group.label)}
             <optgroup label={group.label}>
-                {#each group.modes as bm (bm.value)}
-                    <option value={bm.value}>{bm.label}</option>
+                {#each group.modes as bm (bm.type)}
+                    <option value={bm.type}>{bm.displayName}</option>
                 {/each}
             </optgroup>
         {/each}

@@ -56,7 +56,7 @@ fn gpu_stroke_paint_undo_redo() {
 
     // --- begin_stroke: save full canvas ---
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // --- stroke_to: two circles ---
@@ -277,7 +277,7 @@ fn gpu_stroke_on_mask_undo() {
 
     // begin_stroke: save full canvas.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // stroke_to: paint black circles → mask toward 0.
@@ -357,7 +357,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Stroke 1: red circle at (30, 30) ---
     let mut enc = encoder(&device);
-    let snap1 = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap1 = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     let target = GpuPaintTarget {
@@ -398,7 +398,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Stroke 2: blue circle at (90, 90) ---
     let mut enc = encoder(&device);
-    let snap2 = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap2 = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     let target = GpuPaintTarget {
@@ -548,7 +548,7 @@ fn gpu_region_action_undo_stack() {
 
     // save → paint → commit → push.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     let target = GpuPaintTarget {
@@ -664,7 +664,7 @@ fn gpu_cpu_undo_interleaved() {
 
     // Step 1: GPU paint stroke.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     let target = GpuPaintTarget {
@@ -793,7 +793,7 @@ fn gpu_erase_stroke_undo() {
 
     // begin_stroke: save.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // stroke_to: erase circle at center.
@@ -949,7 +949,7 @@ fn diff_rect_undo_restores_offset_paint() {
 
     // begin_stroke: save full canvas to scratch.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Paint a circle at (100, 100) — far from origin, simulating scatter.
@@ -1064,7 +1064,13 @@ fn negative_direction_grow_crosses_zero() {
     // Save the full 256×256 layer (canvas (0, 0) → (256, 256)) as the
     // pre-stroke snapshot.
     let mut enc = encoder(&device);
-    let mut snap = store.save_region(&mut enc, &initial_frame, fmt, cr(0, 0, init_w, init_h));
+    let mut snap = store.save_region(
+        &device,
+        &mut enc,
+        &initial_frame,
+        fmt,
+        cr(0, 0, init_w, init_h),
+    );
     submit(&queue, enc);
 
     // Simulate a negative-direction grow: new 512×512 layer at canvas

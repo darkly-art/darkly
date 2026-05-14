@@ -288,6 +288,88 @@ fn transform_on_off_canvas_layer_cancel_restores_pixels() {
     );
 }
 
+/// Regression: committing a floating transform that translates content past
+/// the canvas edge must grow the target layer to fit the moved pixels,
+/// rather than clamping the affected rect to canvas bounds and silently
+/// dropping anything outside it.
+///
+/// Bug symptom before fix: a translated selection whose new bounds extend
+/// past the canvas edge would be cropped at the canvas boundary on commit —
+/// pixels beyond the edge were never written to the target layer texture.
+#[test]
+fn commit_floating_translate_past_canvas_preserves_pixels() {
+    use darkly::coord::CanvasRect;
+    use darkly::gpu::transform::affine_translate;
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    // Opaque red 8×8 block at canvas (50, 30) — fully inside the canvas.
+    let bw: u32 = 8;
+    let bh: u32 = 8;
+    let mut rgba = vec![0u8; (bw * bh * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 255;
+        px[3] = 255;
+    }
+    let red_layer = engine.paste_image(bw, bh, &rgba, 50, 30, None);
+    assert_eq!(
+        engine.layer_bounds(red_layer),
+        Some(CanvasRect::from_xywh(50, 30, bw, bh)),
+        "pasted layer should start sized to the paste"
+    );
+
+    // Select the block; transform it.
+    engine.select_rect(
+        50.0,
+        30.0,
+        bw as f32,
+        bh as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    let started = engine.begin_transform(red_layer);
+    assert!(
+        started,
+        "begin_transform with a selection should be synchronous"
+    );
+
+    // Translate the floating by +20 in X — transformed bounds (70, 30, 8, 8)
+    // sit entirely past the canvas right edge (canvas width = 64).
+    engine.update_floating_matrix(affine_translate(20.0, 0.0));
+    engine.commit_floating();
+
+    // Layer must have grown to contain the translated rect.
+    let bounds = engine
+        .layer_bounds(red_layer)
+        .expect("layer must still exist after commit");
+    assert!(
+        bounds.contains(CanvasRect::from_xywh(70, 30, bw, bh)),
+        "layer bounds must contain the off-canvas translated rect (70, 30, 8, 8); got {:?}",
+        bounds
+    );
+
+    // Verify the moved red is actually written into the grown texture at
+    // the right canvas-space location. This is what the bug was dropping.
+    let pixels = engine.test_readback_layer(red_layer);
+    let lw = bounds.width;
+    let lx = (70 - bounds.x0()) as u32;
+    let ly = (30 - bounds.y0()) as u32;
+    let p_idx = ((ly * lw + lx) * 4) as usize;
+    assert!(
+        pixels[p_idx] > 200,
+        "moved pixel at canvas (70, 30) should be red, got R={}",
+        pixels[p_idx]
+    );
+    assert!(
+        pixels[p_idx + 3] > 200,
+        "moved pixel at canvas (70, 30) should be opaque, got A={}",
+        pixels[p_idx + 3]
+    );
+}
+
 /// Regression for the canvas-clamping bug: pasting an image larger than
 /// the canvas must preserve the full extent on the layer, not crop to
 /// canvas dimensions.
@@ -411,6 +493,195 @@ fn paste_floating_commit_is_one_undo() {
     assert!(
         !engine.has_layer(pasted_id),
         "single undo must remove the pasted layer entirely"
+    );
+}
+
+/// Regression: a paste smaller than canvas in any dimension produces a
+/// paste-extent layer texture smaller than the canvas. The thumbnail
+/// readback must source from the texture's actual dimensions — copying
+/// `[0, 0, canvas_w, canvas_h]` exceeds the texture and fails wgpu
+/// validation, invalidating the entire command encoder.
+#[test]
+fn thumbnail_readback_handles_layer_smaller_than_canvas() {
+    let (cw, ch) = (1920, 1080);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    // 256×256 paste — both dims smaller than canvas.
+    let pw: u32 = 256;
+    let ph: u32 = 256;
+    let mut rgba = vec![0u8; (pw * ph * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[1] = 200;
+        px[3] = 255;
+    }
+    let pasted = engine.paste_image(pw, ph, &rgba, 100, 100, None);
+
+    // Render drives `drain_dirty_thumbnail_readbacks` which encodes the
+    // copy. Pre-fix this submits an invalid CommandEncoder ("touches outside
+    // of layer-texture") and poisons the queue.
+    engine.render(0.0);
+    for _ in 0..8 {
+        engine.test_flush_readbacks();
+        if engine.test_thumbnail_cache_peek(pasted).is_some() {
+            break;
+        }
+    }
+
+    let thumb = engine
+        .test_thumbnail_cache_peek(pasted)
+        .expect("thumbnail must complete after a few flushes");
+    let any_visible = thumb.chunks_exact(4).any(|p| p[3] > 0);
+    assert!(
+        any_visible,
+        "thumbnail of a non-empty paste must contain visible pixels"
+    );
+}
+
+/// Regression: the floating preview after `paste_image_floating` must be
+/// populated immediately. Pre-fix, `set_floating_content` allocated the
+/// preview texture but never wrote into it; the host blend pass sampled
+/// from an uninitialized texture, so the paste appeared invisible until
+/// the first drag triggered `update_floating_matrix` →
+/// `update_floating_preview`.
+#[test]
+fn paste_image_floating_preview_visible_before_any_drag() {
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    // 32×32 opaque green paste centered on canvas.
+    let pw: u32 = 32;
+    let ph: u32 = 32;
+    let mut rgba = vec![0u8; (pw * ph * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[1] = 255;
+        px[3] = 255;
+    }
+    let ox = (cw as i32 - pw as i32) / 2;
+    let oy = (ch as i32 - ph as i32) / 2;
+    let _pasted = engine.paste_image_floating(pw, ph, &rgba, ox, oy, None);
+
+    // No `update_floating_matrix` call — just composite once and read the
+    // canvas back. The paste must already be visible.
+    let canvas = engine.test_readback_canvas();
+    let center_x = (cw / 2) as usize;
+    let center_y = (ch / 2) as usize;
+    let p_idx = (center_y * cw as usize + center_x) * 4;
+    assert!(
+        canvas[p_idx + 1] > 200,
+        "center pixel must be green from the paste preview, got G={}",
+        canvas[p_idx + 1]
+    );
+    assert!(
+        canvas[p_idx + 3] > 200,
+        "center pixel must be opaque, got A={}",
+        canvas[p_idx + 3]
+    );
+}
+
+/// Regression: while dragging a floating, the preview must show the
+/// transformed content at the new canvas position — not clip it to the
+/// floating's source bounding box.
+///
+/// Pre-fix, the preview texture was allocated at the live layer's
+/// dimensions (which for a paste = the source's bounding box) and reused
+/// the live layer's blend uniforms. Translating the matrix moved the
+/// transform-shader's write outside the preview texture, so the host
+/// blend pass sampled the still-empty parts of the preview at the new
+/// destination — the moved content was invisible until commit.
+#[test]
+fn floating_preview_visible_when_translation_extends_past_source_bbox() {
+    use darkly::gpu::transform::affine_translate;
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    // 8×8 opaque red paste at canvas (10, 10). Source bbox = (10, 10, 8, 8).
+    let bw: u32 = 8;
+    let bh: u32 = 8;
+    let mut rgba = vec![0u8; (bw * bh * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 255;
+        px[3] = 255;
+    }
+    let _pasted = engine.paste_image_floating(bw, bh, &rgba, 10, 10, None);
+
+    // Translate by +20 in X → transformed bounds (30, 10, 8, 8), well
+    // outside the source bbox at (10, 10, 8, 8) but still inside canvas.
+    engine.update_floating_matrix(affine_translate(20.0, 0.0));
+
+    let canvas = engine.test_readback_canvas();
+    let pixel_at = |x: u32, y: u32| {
+        let i = ((y * cw + x) * 4) as usize;
+        [canvas[i], canvas[i + 1], canvas[i + 2], canvas[i + 3]]
+    };
+
+    // Moved content must be visible at (30..38, 10..18).
+    let moved = pixel_at(34, 14);
+    assert!(
+        moved[0] > 200 && moved[3] > 200,
+        "moved pixel at canvas (34, 14) should be opaque red, got {:?}",
+        moved
+    );
+
+    // Old position must be cleared.
+    let old = pixel_at(14, 14);
+    assert!(
+        old[3] < 50,
+        "old position (14, 14) should be transparent during transform, got A={}",
+        old[3]
+    );
+}
+
+/// Regression: dragging the floating must not leave ghost copies of the
+/// content at the previous frame's destination. The canvas-aligned preview
+/// is a long-lived texture; each `update_floating_matrix` overwrites the
+/// transformed region, but pixels at the *previous* destination must be
+/// reset — otherwise the shader's "discard outside transformed bounds"
+/// leaves the old pixels in place, building a smear across the drag path.
+#[test]
+fn floating_preview_does_not_leave_ghost_pixels_when_dragged() {
+    use darkly::gpu::transform::affine_translate;
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    let bw: u32 = 8;
+    let bh: u32 = 8;
+    let mut rgba = vec![0u8; (bw * bh * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 255;
+        px[3] = 255;
+    }
+    let _pasted = engine.paste_image_floating(bw, bh, &rgba, 10, 10, None);
+
+    // First drag: move to (+15, 0) → (25, 10, 8, 8).
+    engine.update_floating_matrix(affine_translate(15.0, 0.0));
+    let _ = engine.test_readback_canvas();
+
+    // Second drag: move further to (+30, 0) → (40, 10, 8, 8).
+    engine.update_floating_matrix(affine_translate(30.0, 0.0));
+    let canvas = engine.test_readback_canvas();
+
+    let pixel_at = |x: u32, y: u32| {
+        let i = ((y * cw + x) * 4) as usize;
+        canvas[i + 3]
+    };
+
+    // Current position must be visible.
+    assert!(
+        pixel_at(44, 14) > 200,
+        "current drag position (44, 14) must be opaque, got A={}",
+        pixel_at(44, 14)
+    );
+    // Previous-drag destination (25..33, 10..18) must NOT still hold pixels.
+    assert!(
+        pixel_at(29, 14) < 50,
+        "previous-drag position (29, 14) must NOT retain pixels, got A={}",
+        pixel_at(29, 14)
     );
 }
 

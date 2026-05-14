@@ -36,7 +36,6 @@ function clearPreviewOverlay() {
 
 export const ellipseSelectTool: Tool = {
     id: 'ellipse_select',
-    name: 'Ellipse Select',
     faIcon: 'fa-regular fa-circle',
     group: 'select',
     hotkeyAction: 'ellipseSelectTool',

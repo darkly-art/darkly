@@ -150,6 +150,19 @@ pub struct PortDef<W: WireKind> {
     /// `seed`, Superformula's `n1`/`n2`/`n3`) under the wrong algorithm.
     #[serde(default)]
     pub visible_when: Option<(String, Vec<i32>)>,
+    /// Wire-side natural value range. When a connection's source and dest
+    /// ports both declare this, the runner remaps the scalar value at
+    /// slot-read time from source range to dest range (affine transform).
+    /// When either side is `None`, the value passes through raw.
+    ///
+    /// Distinct from `min`/`max`, which are slider/UI hints — `with_range`
+    /// stays "UI hint only, not enforced", and `with_natural_range` is the
+    /// separate, explicit opt-in for wire-boundary range mapping. Most
+    /// ports declare both with the same numbers; the two diverge for
+    /// over-drag sliders like `stamp.size`, where the slider range is
+    /// a hint but the wire-side semantics are passthrough.
+    #[serde(default)]
+    pub natural_range: Option<(f32, f32)>,
 }
 
 impl<W: WireKind> PortDef<W> {
@@ -169,6 +182,7 @@ impl<W: WireKind> PortDef<W> {
             preview_value: None,
             visible_when: None,
             step: 0.0,
+            natural_range: None,
         }
     }
 
@@ -188,6 +202,7 @@ impl<W: WireKind> PortDef<W> {
             preview_value: None,
             visible_when: None,
             step: 0.0,
+            natural_range: None,
         }
     }
 
@@ -203,10 +218,30 @@ impl<W: WireKind> PortDef<W> {
     /// constrain ports that intentionally accept slider over-drag (notably
     /// `stamp.size`, whose 100% mark is at `1.0` but whose slider extends
     /// further to support dramatically over-sized stamps).
+    ///
+    /// Separate from [`PortDef::with_natural_range`], which declares the
+    /// **wire-side** value semantics used for cross-range remap when two
+    /// connected ports speak different ranges. Most ports declare both
+    /// with the same numbers; the two diverge for over-drag sliders.
     pub fn with_range(mut self, min: f32, max: f32, default: f32) -> Self {
         self.min = min;
         self.max = max;
         self.default = default;
+        self
+    }
+
+    /// Declare this port's wire-side natural value range. When a connection's
+    /// source and dest ports **both** declare a natural range, the runner
+    /// remaps the scalar value at slot-read time (affine transform from
+    /// source range to dest range). When either side is `None`, the wire
+    /// passes the value through raw — preserving math-node passthrough and
+    /// over-drag-slider passthrough (e.g. `stamp.size`).
+    ///
+    /// Independent of [`PortDef::with_range`], which is a UI/slider hint
+    /// only. A port can have a slider range without a natural range (the
+    /// over-drag case) or a natural range without a slider (most outputs).
+    pub fn with_natural_range(mut self, min: f32, max: f32) -> Self {
+        self.natural_range = Some((min, max));
         self
     }
 
@@ -849,6 +884,21 @@ mod tests {
         assert!(!port.exposed);
         assert_eq!(port.description, "");
         assert_eq!(port.step, 0.0);
+        assert_eq!(port.natural_range, None);
+    }
+
+    #[test]
+    fn port_def_natural_range_round_trip() {
+        let port = PortDef::input("seed", TestWireKind::Scalar)
+            .with_range(0.0, 1024.0, 0.0)
+            .with_natural_range(0.0, 1024.0);
+        let json = serde_json::to_string(&port).unwrap();
+        let back: PortDef<TestWireKind> = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.natural_range, Some((0.0, 1024.0)));
+
+        // Default builder leaves natural_range unset — opt-in only.
+        let bare = PortDef::input("x", TestWireKind::Scalar);
+        assert_eq!(bare.natural_range, None);
     }
 
     #[test]

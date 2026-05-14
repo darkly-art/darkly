@@ -6,7 +6,7 @@ use crate::gpu::content_bounds::ContentBoundsPass;
 use crate::gpu::overlay::{OverlayPrimitive, ToolOverlay};
 use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
-use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
+use crate::layer::{Layer, LayerId, LayerNode};
 use std::collections::{HashMap, HashSet};
 
 /// Maximum allowed layer texture dimension in either axis. Strokes that
@@ -77,6 +77,16 @@ struct GroupState {
 struct RasterLayerCache {
     /// Uniform buffer holding opacity + blend_mode + isolated.
     uniform_buf: wgpu::Buffer,
+    /// CPU-side cache of the blend properties last written to `uniform_buf`.
+    /// Kept here so the floating-preview path can mirror them into its own
+    /// canvas-aligned uniform buffer without re-reading the GPU buffer.
+    opacity: f32,
+    /// Cached gpu_value for the layer's blend mode. The compositor never
+    /// branches on which mode this is — the shader does — so we mirror the
+    /// raw shader integer rather than carry a registration pointer through
+    /// every per-frame access.
+    blend_mode: u32,
+    isolated: bool,
 }
 
 /// Uniforms for raster layer compositing. The shader samples the layer
@@ -271,9 +281,10 @@ impl Compositor {
             Self::make_accum_texture(device, padded_w, padded_h, &format!("cache-{group_id:?}"));
 
         let canvas = [padded_w as f32, padded_h as f32];
+        let normal = crate::gpu::blend_mode::registry().default().gpu_value;
         let uniforms = BlendUniforms {
             opacity: 1.0,
-            blend_mode: BlendMode::Normal as u32,
+            blend_mode: normal,
             isolated: 0,
             _pad1: 0.0,
             layer_offset: [0.0, 0.0],
@@ -624,9 +635,10 @@ impl Compositor {
 
         let layer_tex = LayerTexture::with_bounds(device, bounds);
 
+        let normal = crate::gpu::blend_mode::registry().default().gpu_value;
         let uniforms = BlendUniforms {
             opacity: 1.0,
-            blend_mode: BlendMode::Normal as u32,
+            blend_mode: normal,
             isolated: 0,
             _pad1: 0.0,
             layer_offset: [bounds.origin.x as f32, bounds.origin.y as f32],
@@ -643,8 +655,15 @@ impl Compositor {
         });
         queue.write_buffer(&uniform_buf, 0, bytemuck::bytes_of(&uniforms));
 
-        self.raster_cache
-            .insert(layer_id, RasterLayerCache { uniform_buf });
+        self.raster_cache.insert(
+            layer_id,
+            RasterLayerCache {
+                uniform_buf,
+                opacity: 1.0,
+                blend_mode: normal,
+                isolated: false,
+            },
+        );
         self.node_textures.insert(layer_id, layer_tex);
     }
 
@@ -760,12 +779,17 @@ impl Compositor {
     }
 
     /// Update a group's blend uniforms (opacity, blend_mode).
+    ///
+    /// `blend_mode_gpu` is the registry-resolved gpu_value (i.e.
+    /// `blend_props.blend_mode.gpu_value`). Engine callers fetch the
+    /// integer at the call site so the compositor's per-frame paths stay
+    /// pointer-indirection-free.
     pub fn update_group_uniforms(
         &mut self,
         queue: &wgpu::Queue,
         group_id: LayerId,
         opacity: f32,
-        blend_mode: BlendMode,
+        blend_mode_gpu: u32,
         isolated: bool,
     ) {
         if let Some(gs) = self.group_state.get(&group_id) {
@@ -774,7 +798,7 @@ impl Compositor {
             let canvas = [self.canvas_width as f32, self.canvas_height as f32];
             let uniforms = BlendUniforms {
                 opacity,
-                blend_mode: blend_mode as u32,
+                blend_mode: blend_mode_gpu,
                 isolated: isolated as u32,
                 _pad1: 0.0,
                 layer_offset: [0.0, 0.0],
@@ -1161,34 +1185,32 @@ impl Compositor {
         queue: &wgpu::Queue,
         layer_id: LayerId,
         opacity: f32,
-        blend_mode: BlendMode,
+        blend_mode_gpu: u32,
     ) {
-        self.update_raster_uniforms_full(queue, layer_id, opacity, blend_mode, false);
+        self.update_raster_uniforms_full(queue, layer_id, opacity, blend_mode_gpu, false);
     }
 
     /// Update a raster layer's uniforms including the isolated flag.
     /// Reads the layer's bounds from its `LayerTexture` so callers don't
     /// need to thread them through; bounds-changing operations update the
     /// texture's stored offset/size directly via `resize_raster_layer`.
+    ///
+    /// `blend_mode_gpu` is the registry-resolved gpu_value.
     pub fn update_raster_uniforms_full(
         &mut self,
         queue: &wgpu::Queue,
         layer_id: LayerId,
         opacity: f32,
-        blend_mode: BlendMode,
+        blend_mode_gpu: u32,
         isolated: bool,
     ) {
-        let cache = match self.raster_cache.get(&layer_id) {
-            Some(c) => c,
-            None => return,
-        };
         let tex = match self.node_textures.get(&layer_id) {
             Some(t) => t,
             None => return,
         };
         let uniforms = BlendUniforms {
             opacity,
-            blend_mode: blend_mode as u32,
+            blend_mode: blend_mode_gpu,
             isolated: isolated as u32,
             _pad1: 0.0,
             layer_offset: [tex.offset_x as f32, tex.offset_y as f32],
@@ -1196,7 +1218,50 @@ impl Compositor {
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             _pad2: [0.0, 0.0],
         };
+        let cache = match self.raster_cache.get_mut(&layer_id) {
+            Some(c) => c,
+            None => return,
+        };
         queue.write_buffer(&cache.uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        cache.opacity = opacity;
+        cache.blend_mode = blend_mode_gpu;
+        cache.isolated = isolated;
+
+        // Mirror into the floating preview's canvas-aligned uniform buffer
+        // so the host's blend pass reads the same blend props (with canvas
+        // dims/offset) when sampling the preview view.
+        self.write_preview_blend_uniforms_if_active(queue, layer_id);
+    }
+
+    /// Write the floating preview's canvas-aligned blend uniforms using the
+    /// given layer's cached blend props. No-op when there is no active
+    /// floating, or when the active floating's target is not `layer_id`.
+    /// Called from both `update_raster_uniforms_full` (on prop change) and
+    /// the floating setup paths (to seed the buffer at session start).
+    fn write_preview_blend_uniforms_if_active(&self, queue: &wgpu::Queue, layer_id: LayerId) {
+        let state = match self.transform_pass.active.as_ref() {
+            Some(s) if s.target_layer == layer_id => s,
+            _ => return,
+        };
+        let cache = match self.raster_cache.get(&layer_id) {
+            Some(c) => c,
+            None => return,
+        };
+        let uniforms = BlendUniforms {
+            opacity: cache.opacity,
+            blend_mode: cache.blend_mode,
+            isolated: cache.isolated as u32,
+            _pad1: 0.0,
+            layer_offset: [0.0, 0.0],
+            layer_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            _pad2: [0.0, 0.0],
+        };
+        queue.write_buffer(
+            &state.preview_blend_uniform_buf,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
     }
 
     /// Look up the resolved mask bind group for a modifier id, falling back to
@@ -1321,21 +1386,30 @@ impl Compositor {
     // setup_transform.
 
     /// Allocate the per-target preview texture (and, when target is R8, a
-    /// mask-shape bind group sampling it). Sized and formatted to match
-    /// the live target so a `copy_texture_to_texture` is well-formed each
-    /// time the preview rebuilds.
+    /// mask-shape bind group sampling it) plus the canvas-aligned blend
+    /// uniform buffer the host's blend pass reads when this layer is the
+    /// floating target.
+    ///
+    /// Preview is canvas-sized (not live-sized) so a translate that moves
+    /// content past the live layer's bounding box still has room on the
+    /// preview to write — clipped at canvas bounds, which is all the
+    /// viewport renders anyway. Commit's `grow_node_to_fit` separately
+    /// expands the live layer so off-canvas pixels survive the commit.
     fn allocate_preview_resources(
         &self,
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
-        width: u32,
-        height: u32,
-    ) -> (wgpu::Texture, wgpu::TextureView, Option<wgpu::BindGroup>) {
+    ) -> (
+        wgpu::Texture,
+        wgpu::TextureView,
+        Option<wgpu::BindGroup>,
+        wgpu::Buffer,
+    ) {
         let preview = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("floating-preview"),
             size: wgpu::Extent3d {
-                width: width.max(1),
-                height: height.max(1),
+                width: self.canvas_width.max(1),
+                height: self.canvas_height.max(1),
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -1365,7 +1439,13 @@ impl Compositor {
         } else {
             None
         };
-        (preview, view, mask_bg)
+        let blend_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("floating-preview-blend-uniforms"),
+            size: std::mem::size_of::<BlendUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        (preview, view, mask_bg, blend_uniform_buf)
     }
 
     /// Look up the target's format + dimensions. Falls back to canvas-sized
@@ -1395,9 +1475,9 @@ impl Compositor {
         source_height: u32,
         target_layer: LayerId,
     ) {
-        let (target_format, tw, th) = self.target_format_and_dims(target_layer);
-        let (preview_texture, preview_view, preview_mask_bg) =
-            self.allocate_preview_resources(device, target_format, tw, th);
+        let (target_format, _tw, _th) = self.target_format_and_dims(target_layer);
+        let (preview_texture, preview_view, preview_mask_bg, preview_blend_uniform_buf) =
+            self.allocate_preview_resources(device, target_format);
         self.transform_pass.set_floating_content(
             device,
             queue,
@@ -1410,7 +1490,11 @@ impl Compositor {
             preview_texture,
             preview_view,
             preview_mask_bg,
+            preview_blend_uniform_buf,
         );
+        // Seed the preview's blend uniforms from the live layer's cached
+        // props now that the floating session is active.
+        self.write_preview_blend_uniforms_if_active(queue, target_layer);
         self.mark_dirty();
     }
 
@@ -1432,10 +1516,8 @@ impl Compositor {
             None => return,
         };
         let target_format = layer.format;
-        let target_w = layer.width;
-        let target_h = layer.height;
-        let (preview_texture, preview_view, preview_mask_bg) =
-            self.allocate_preview_resources(device, target_format, target_w, target_h);
+        let (preview_texture, preview_view, preview_mask_bg, preview_blend_uniform_buf) =
+            self.allocate_preview_resources(device, target_format);
         // Re-borrow `layer` after `allocate_preview_resources` — the helper
         // doesn't take `&mut self`, but rust-analyzer prefers the explicit
         // re-fetch over keeping the borrow live across the helper call.
@@ -1457,7 +1539,11 @@ impl Compositor {
             preview_texture,
             preview_view,
             preview_mask_bg,
+            preview_blend_uniform_buf,
         );
+        // Seed the preview's blend uniforms from the live layer's cached
+        // props now that the floating session is active.
+        self.write_preview_blend_uniforms_if_active(queue, target_layer);
         self.mark_dirty();
     }
 
@@ -1490,15 +1576,19 @@ impl Compositor {
             None => return,
         };
 
+        // The preview is canvas-aligned: the transform shader writes the
+        // moved source content using target_offset=(0,0), target_size=canvas,
+        // so any pixel that lands within the canvas survives — including
+        // ones that fell outside the live texture's bounding box.
         self.transform_pass.update_uniforms(
             queue,
             matrix,
             source_origin,
             source_width,
             source_height,
-            (live.offset_x, live.offset_y),
-            live.width,
-            live.height,
+            (0, 0),
+            self.canvas_width,
+            self.canvas_height,
             self.canvas_width,
             self.canvas_height,
         );
@@ -1507,39 +1597,79 @@ impl Compositor {
             label: Some("floating-preview-build"),
         });
 
-        // 1. Copy live → preview so non-source-rect pixels are preserved.
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &live.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: &state.preview_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: live.width,
-                height: live.height,
-                depth_or_array_layers: 1,
-            },
+        // 0. Reset the whole preview to transparent. The copy below only
+        //    repaints the canvas portion live actually covers, and the
+        //    commit shader discards outside the transformed source bounds —
+        //    so canvas pixels outside live's extent would otherwise retain
+        //    previous-frame transform writes (ghost trails).
+        crate::gpu::clear_view_transparent(
+            &mut encoder,
+            &state.preview_view,
+            "floating-preview-clear",
         );
+
+        // 1. Copy live → preview so non-source-rect pixels are preserved.
+        //    Live texture sits at `(live.offset_x, live.offset_y)` in canvas
+        //    space; clip the copy to the on-canvas portion (the preview is
+        //    canvas-sized at origin 0,0). Off-canvas pixels are not in the
+        //    preview — the viewport never renders them anyway, and commit's
+        //    `grow_node_to_fit` preserves them on the live texture.
+        let canvas_rect =
+            crate::coord::CanvasRect::from_xywh(0, 0, self.canvas_width, self.canvas_height);
+        let live_canvas_extent = crate::coord::CanvasRect::from_xywh(
+            live.offset_x,
+            live.offset_y,
+            live.width,
+            live.height,
+        );
+        if let Some(visible) = live_canvas_extent.intersect(canvas_rect) {
+            // visible is in canvas coords; positive by construction.
+            let src_x = (visible.x0() - live.offset_x) as u32;
+            let src_y = (visible.y0() - live.offset_y) as u32;
+            let dst_x = visible.x0() as u32;
+            let dst_y = visible.y0() as u32;
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &live.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: src_x,
+                        y: src_y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &state.preview_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: dst_x,
+                        y: dst_y,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::Extent3d {
+                    width: visible.width,
+                    height: visible.height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
 
         // 2. Apply the source-rect clear (transform mode only — paste mode
         //    leaves the preview as a copy of the live target so the commit
-        //    shader composites over the existing pixels).
+        //    shader composites over the existing pixels). The preview is
+        //    canvas-aligned, so the paint target reports canvas dims/offset.
         if let Some(cs) = clear_shape {
             let preview_target = crate::gpu::paint_target::GpuPaintTarget {
                 texture: &state.preview_texture,
                 view: &state.preview_view,
                 format: state.target_format,
-                width: live.width,
-                height: live.height,
-                offset_x: live.offset_x,
-                offset_y: live.offset_y,
+                width: self.canvas_width,
+                height: self.canvas_height,
+                offset_x: 0,
+                offset_y: 0,
                 canvas_width: self.canvas_width,
                 canvas_height: self.canvas_height,
             };
@@ -1929,27 +2059,30 @@ impl Compositor {
             }
             match node {
                 LayerNode::Layer(Layer::Raster(raster)) => {
-                    // Effective view: live texture by default, preview view
-                    // when this raster is the floating target. Inlined here
-                    // (rather than via `effective_node_view`) so the borrow
-                    // checker sees disjoint sub-field access — `group_state`
-                    // is mut-borrowed below for the ping-pong increment.
-                    let preview_override = self
+                    // Effective view + uniforms: when this raster is the
+                    // floating target, swap the live texture view for the
+                    // (canvas-aligned) preview view AND swap the live's
+                    // layer-aligned blend uniforms for the preview's
+                    // canvas-aligned ones — both halves must move together
+                    // or the shader maps fragments to the wrong region.
+                    let active_floating = self
                         .transform_pass
                         .active
                         .as_ref()
-                        .filter(|s| s.target_layer == raster.id)
-                        .map(|s| &s.preview_view);
-                    let layer_view = match preview_override {
-                        Some(v) => v,
+                        .filter(|s| s.target_layer == raster.id);
+                    let layer_view = match active_floating {
+                        Some(s) => &s.preview_view,
                         None => match self.node_textures.get(&raster.id) {
                             Some(t) => &t.view,
                             None => continue,
                         },
                     };
-                    let uniform_buf_ptr = match self.raster_cache.get(&raster.id) {
-                        Some(c) => &c.uniform_buf,
-                        None => continue,
+                    let uniform_buf_ptr = match active_floating {
+                        Some(s) => &s.preview_blend_uniform_buf,
+                        None => match self.raster_cache.get(&raster.id) {
+                            Some(c) => &c.uniform_buf,
+                            None => continue,
+                        },
                     };
 
                     // Ping-pong: read from current accum, write to the other.

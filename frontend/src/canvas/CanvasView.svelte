@@ -76,13 +76,9 @@
             // match the user's current theme from frame one.
             theme.pushToWasm();
 
-            // Demo setup: background image + paint layer in a group
             const bg = handle.add_raster_layer(-1);
             handle.fill_background(bg);
-
-            const groupId = handle.add_group(-1);
-            const paintLayerId = handle.add_raster_layer(groupId);
-            app.selectLayer(paintLayerId);
+            app.selectLayer(bg);
 
             // Observe element resizes to keep GPU surface in sync
             const ro = new ResizeObserver(() => syncCanvasSize());

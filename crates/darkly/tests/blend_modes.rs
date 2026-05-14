@@ -11,7 +11,6 @@
 use darkly::engine::DarklyEngine;
 use darkly::gpu::context::GpuContext;
 use darkly::gpu::test_utils::test_device;
-use darkly::layer::BlendMode;
 
 const W: u32 = 4;
 const H: u32 = 4;
@@ -55,11 +54,11 @@ fn solid_rgba(c: [u8; 4]) -> Vec<u8> {
     v
 }
 
-fn render_blend(mode: BlendMode) -> [f32; 3] {
+fn render_blend(type_id: &str) -> [f32; 3] {
     let mut engine = test_engine();
     let bg_id = engine.paste_image(W, H, &solid_rgba(BG_RGBA), 0, 0, None);
     let fg_id = engine.paste_image(W, H, &solid_rgba(FG_RGBA), 0, 0, Some(bg_id));
-    engine.set_blend_mode(fg_id, mode as u32);
+    engine.set_blend_mode(fg_id, type_id);
     let pixels = engine.test_readback_canvas();
     let center = ((H / 2) * W + (W / 2)) as usize * 4;
     [
@@ -69,13 +68,13 @@ fn render_blend(mode: BlendMode) -> [f32; 3] {
     ]
 }
 
-fn assert_close(actual: [f32; 3], expected: [f32; 3], mode: BlendMode) {
+fn assert_close(actual: [f32; 3], expected: [f32; 3], type_id: &str) {
     for i in 0..3 {
         let diff = (actual[i] - expected[i]).abs();
         assert!(
             diff < EPSILON,
-            "{:?} channel {}: actual {:.4} expected {:.4} diff {:.4}",
-            mode,
+            "{} channel {}: actual {:.4} expected {:.4} diff {:.4}",
+            type_id,
             i,
             actual[i],
             expected[i],
@@ -237,146 +236,86 @@ fn rf_luminosity(s: [f32; 3], d: [f32; 3]) -> [f32; 3] {
 
 // ---------- Tests (one per mode) ----------
 
+fn check(type_id: &str, reference: [f32; 3]) {
+    assert_close(render_blend(type_id), reference, type_id);
+}
+
 #[test]
 fn blend_normal() {
-    assert_close(
-        render_blend(BlendMode::Normal),
-        rf_normal(fg(), bg()),
-        BlendMode::Normal,
-    );
+    check("normal", rf_normal(fg(), bg()));
 }
 
 #[test]
 fn blend_darken() {
-    assert_close(
-        render_blend(BlendMode::Darken),
-        rf_darken(fg(), bg()),
-        BlendMode::Darken,
-    );
+    check("darken", rf_darken(fg(), bg()));
 }
 
 #[test]
 fn blend_multiply() {
-    assert_close(
-        render_blend(BlendMode::Multiply),
-        rf_multiply(fg(), bg()),
-        BlendMode::Multiply,
-    );
+    check("multiply", rf_multiply(fg(), bg()));
 }
 
 #[test]
 fn blend_color_burn() {
-    assert_close(
-        render_blend(BlendMode::ColorBurn),
-        rf_color_burn(fg(), bg()),
-        BlendMode::ColorBurn,
-    );
+    check("color_burn", rf_color_burn(fg(), bg()));
 }
 
 #[test]
 fn blend_lighten() {
-    assert_close(
-        render_blend(BlendMode::Lighten),
-        rf_lighten(fg(), bg()),
-        BlendMode::Lighten,
-    );
+    check("lighten", rf_lighten(fg(), bg()));
 }
 
 #[test]
 fn blend_screen() {
-    assert_close(
-        render_blend(BlendMode::Screen),
-        rf_screen(fg(), bg()),
-        BlendMode::Screen,
-    );
+    check("screen", rf_screen(fg(), bg()));
 }
 
 #[test]
 fn blend_color_dodge() {
-    assert_close(
-        render_blend(BlendMode::ColorDodge),
-        rf_color_dodge(fg(), bg()),
-        BlendMode::ColorDodge,
-    );
+    check("color_dodge", rf_color_dodge(fg(), bg()));
 }
 
 #[test]
 fn blend_linear_dodge() {
-    assert_close(
-        render_blend(BlendMode::LinearDodge),
-        rf_linear_dodge(fg(), bg()),
-        BlendMode::LinearDodge,
-    );
+    check("linear_dodge", rf_linear_dodge(fg(), bg()));
 }
 
 #[test]
 fn blend_overlay() {
-    assert_close(
-        render_blend(BlendMode::Overlay),
-        rf_overlay(fg(), bg()),
-        BlendMode::Overlay,
-    );
+    check("overlay", rf_overlay(fg(), bg()));
 }
 
 #[test]
 fn blend_soft_light() {
-    assert_close(
-        render_blend(BlendMode::SoftLight),
-        rf_soft_light(fg(), bg()),
-        BlendMode::SoftLight,
-    );
+    check("soft_light", rf_soft_light(fg(), bg()));
 }
 
 #[test]
 fn blend_hard_light() {
-    assert_close(
-        render_blend(BlendMode::HardLight),
-        rf_hard_light(fg(), bg()),
-        BlendMode::HardLight,
-    );
+    check("hard_light", rf_hard_light(fg(), bg()));
 }
 
 #[test]
 fn blend_difference() {
-    assert_close(
-        render_blend(BlendMode::Difference),
-        rf_difference(fg(), bg()),
-        BlendMode::Difference,
-    );
+    check("difference", rf_difference(fg(), bg()));
 }
 
 #[test]
 fn blend_hue() {
-    assert_close(
-        render_blend(BlendMode::Hue),
-        rf_hue(fg(), bg()),
-        BlendMode::Hue,
-    );
+    check("hue", rf_hue(fg(), bg()));
 }
 
 #[test]
 fn blend_saturation() {
-    assert_close(
-        render_blend(BlendMode::Saturation),
-        rf_saturation(fg(), bg()),
-        BlendMode::Saturation,
-    );
+    check("saturation", rf_saturation(fg(), bg()));
 }
 
 #[test]
 fn blend_color() {
-    assert_close(
-        render_blend(BlendMode::Color),
-        rf_color(fg(), bg()),
-        BlendMode::Color,
-    );
+    check("color", rf_color(fg(), bg()));
 }
 
 #[test]
 fn blend_luminosity() {
-    assert_close(
-        render_blend(BlendMode::Luminosity),
-        rf_luminosity(fg(), bg()),
-        BlendMode::Luminosity,
-    );
+    check("luminosity", rf_luminosity(fg(), bg()));
 }

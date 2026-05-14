@@ -4,6 +4,7 @@ import { registerHotkeys } from './config/hotkeys.svelte';
 import { registerActions } from './actions';
 import { rebuildClickIndex } from './actions/triggers';
 import { theme } from './state/theme.svelte';
+import { app } from './state/app.svelte';
 
 let initialized = false;
 
@@ -20,6 +21,11 @@ export async function initEditor(canvas: HTMLCanvasElement): Promise<DarklyHandl
     const docWidth = config.get('canvas.width') as number;
     const docHeight = config.get('canvas.height') as number;
     const handle = await DarklyHandle.create(canvas, docWidth, docHeight);
+
+    // Load registry-backed display-name lookups (tools, veils, blend modes,
+    // modifiers, layer kinds) before anything that might read them — action
+    // registration is one such reader.
+    app.loadRegistries(handle);
 
     // Register actions once, then wire up hotkeys + mouse-click index.
     registerActions();

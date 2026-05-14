@@ -19,6 +19,14 @@ impl MaskModifier {
     }
 }
 
+/// Stable wire-format identifier. Owned by this module so dispatch sites
+/// (notably `Modifier::kind`) reference the same constant the registration
+/// uses — no parallel string literal anywhere.
+pub const TYPE_ID: &str = "mask";
+
 pub fn register() -> ModifierRegistration {
-    ModifierRegistration { type_id: "mask" }
+    ModifierRegistration {
+        type_id: TYPE_ID,
+        display_name: "Mask",
+    }
 }
