@@ -209,8 +209,7 @@ impl BrushPerfCounters {
     }
 
     pub fn record_write_composite_uniforms(&mut self, us: u64) {
-        self.write_composite_uniforms_us =
-            self.write_composite_uniforms_us.saturating_add(us);
+        self.write_composite_uniforms_us = self.write_composite_uniforms_us.saturating_add(us);
     }
 
     pub fn record_write_stamp_uniforms(&mut self, us: u64) {

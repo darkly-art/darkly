@@ -156,9 +156,7 @@ impl StrokePerfStats {
         self.total_gather_inputs_us = self
             .total_gather_inputs_us
             .saturating_add(c.gather_inputs_us);
-        self.total_step_outputs_us = self
-            .total_step_outputs_us
-            .saturating_add(c.step_outputs_us);
+        self.total_step_outputs_us = self.total_step_outputs_us.saturating_add(c.step_outputs_us);
         self.total_evaluate_gpu_call_us = self
             .total_evaluate_gpu_call_us
             .saturating_add(c.evaluate_gpu_call_us);

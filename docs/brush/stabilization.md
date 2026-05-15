@@ -68,11 +68,17 @@ Localized timer hunting cannot close this gap. The fix is structural: **stop run
 
 Both eliminate the per-dab dispatch of the brush graph runner, the per-dab dab_pool lookups, and the per-dab encoder operations. The current per-dab cost (57 µs) becomes per-event amortized.
 
-### Catastrophic full re-render fallbacks (orthogonal)
+### Catastrophic full re-render fallbacks (resolved)
 
-The investigation also surfaced that early-in-stroke divergence indices in `[1..spacing-1]` had no preceding checkpoint and triggered full-stroke re-renders. A **`vi=0` anchor** was added to `CheckpointRing::compute_segment_boundaries` (and the segment loop's skip-check tightened from `<=` to `<`), which dropped observed `full_rerender_events` from 15/33 events to 2/37 in matched strokes.
+The investigation surfaced that early-in-stroke divergence indices in `[1..spacing-1]` had no preceding checkpoint and triggered full-stroke re-renders. A **`vi=0` anchor** in `CheckpointRing::compute_segment_boundaries` cut this from ~15 fallbacks per stroke to ~2.
 
-The remaining 2 mid-stroke fallbacks per stroke trace to the ring's slot-eviction policy, which evicts the lowest-`vi` slot on save and over time can leave the lower edge of the divergence window uncovered. The eviction policy is being redesigned separately; see [`../../checkpoint-ring-handoff.md`](../../checkpoint-ring-handoff.md) for the design problem and its constraints.
+The remaining mid-stroke fallbacks traced to two compounding defects, both since fixed:
+
+1. **`max_divergence_window` and `find_divergence` were not co-derived.** The Laplacian stabilizer advertised a bound (`iterations * 10 + 5`) that its detector did not respect — `find_divergence` could walk all the way to `Some(0)`. The ring's coverage invariant depends on the bound being a real ceiling on `tip_vi − div_idx`, not an aspirational one. The fix derives both from the relaxation's influence model (a Gauss-Seidel Laplacian sweep propagates backward by exactly one index, so `N` sweeps reach `N` indices back; plus the newly-interior previous tip adds one). `max_divergence_window = N + 1`, and `find_divergence` walks only this window — the bound is enforced by construction.
+
+2. **`pick_slot` evicted the lowest-`vi` slot unconditionally.** Once the ring filled, this destroyed the anchor below the divergence boundary; over time only slots near the tip survived, and a divergence reaching back to `tip − max_div` found no slot below it. The fix is anchor-protected min-gap eviction: the lowest-`vi` slot is protected while it is the sole slot satisfying `vi < tip − max_div`; among non-protected candidates, eviction picks the slot whose removal leaves the smallest worst consecutive gap. A `debug_assert!` after every save validates the coverage invariant.
+
+A populated-ring `restore_before(div_idx)` returning `None` is now impossible whenever the stabilizer's `max_divergence_window` bound holds. `full_rerender_events` counts only this case — the empty-ring "initialization fallback" on the first divergence event of a stroke is structurally unavoidable and cheap, so it is not counted.
 
 Stabilization retroactively reshapes a stroke as the user draws. The tip is always pinned at the cursor (zero lag), but the path behind the pen continuously smooths — the "taffy" feel, like pulling a thread through honey.
 
@@ -113,9 +119,11 @@ Pluggable algorithm behind a `StabilizerAlgorithm` trait. Each frame:
 
 The divergence index tells the rendering system "everything from here to the tip changed, re-render it."
 
-**Laplacian relaxation** (`stabilizers/laplacian.rs`) is the current algorithm. It runs N iterations of neighbor-averaging on interior points, with first and last points pinned. `iterations = ceil(strength * 10)`, so strength 0.0 is pass-through, strength 1.0 is 10 iterations.
+**Laplacian relaxation** (`stabilizers/laplacian.rs`) is the current algorithm. It runs N iterations of Gauss-Seidel neighbor-averaging on interior points, with first and last points pinned. `iterations = ceil(strength * 10)`, so strength 0.0 is pass-through, strength 1.0 is 10 iterations.
 
-Each stabilizer also reports `max_divergence_window()` — a conservative upper bound on how far back divergence can reach. This drives checkpoint spacing.
+Each stabilizer also reports `max_divergence_window()` — a *true* upper bound on `tip_vi − find_divergence().unwrap()`. The checkpoint ring depends on this being a real ceiling: violating it breaks coverage and degrades re-render to `O(total_stroke)`. The bound and the detector must be derived from the same algorithmic model.
+
+For Laplacian relaxation: a Gauss-Seidel sweep propagates backward by exactly one index (forward in-sweep updates do not move information backward). `N` sweeps reach `N` indices back. The previous tip (formerly pinned, now interior) is itself a perturbation, so the earliest possibly-divergent index is `len − 2 − N`, giving `max_divergence_window = N + 1`. `find_divergence` walks only this window — the bound is enforced by construction.
 
 ### Stroke Buffer (`stroke_buffer.rs`)
 
@@ -146,14 +154,16 @@ A ring buffer of 8 GPU texture slots, each storing the stroke buffer's **bbox re
 
 **Restoring**: Clear the stroke buffer to transparent, then GPU-copy the checkpoint's bbox region back. Since the stroke buffer only contains dab pixels (no background), clear + patch is an exact reconstruction.
 
-**Spacing**: Checkpoints are spaced `max_divergence_window / 7` vector indices apart. This means:
-- The oldest checkpoint sits just past the maximum divergence boundary
-- The remaining 7 checkpoints are densely packed in the volatile zone
-- Worst-case re-render per frame: ~1/7th of the divergence window
+**Spacing**: Checkpoints are nominally spaced `max_divergence_window / 7` vector indices apart. The intent: 8 slots at spacing-distance positions cover the divergence window with one slot just past the lower boundary and the rest packed in the volatile zone. The eviction policy doesn't strictly hold to this layout — see "Slot selection" — but uses spacing to break ties when choosing what to evict.
 
-At max stabilization strength (window = 105), that's ~15 vector indices of dabs re-rendered per frame instead of the entire stroke.
+**Slot selection**: Anchor-protected min-gap eviction. When saving a new checkpoint and all 8 slots are occupied:
 
-**Slot selection**: When saving a new checkpoint and all 8 slots are occupied, the ring overwrites the slot with the **lowest vector_index** — the one furthest from the tip and least useful for future divergences. This naturally keeps all slots concentrated within the divergence window near the tip. Do NOT use FIFO (write-cursor) slot selection or "even spread" heuristics — both cause the ring to lose coverage of the divergence window, leading to catastrophic full re-renders (see invariants below).
+- Sort slots by `vector_index`. The lowest-`vi` slot is the *anchor*.
+- The anchor is **protected** while it is the sole slot satisfying `vi < tip_vi − max_divergence_window`. Evicting it would drop the lower edge of the divergence window uncovered, forcing a full re-render fallback on the next deep divergence.
+- The anchor becomes **releasable** once the second-lowest slot also satisfies that strict inequality. The original anchor is now redundant; eviction is allowed.
+- Among non-protected candidates, the policy picks the slot whose removal leaves the smallest worst consecutive gap (sorted by `vi`). This keeps slot density even.
+
+A `debug_assert!` after every save checks the coverage invariant. Naive "evict the lowest" (the prior policy) destroys the anchor as soon as the ring fills and is what produced the residual ~2 mid-stroke fallbacks per stroke before the redesign.
 
 **Invalidation**: When restoring from a checkpoint, only checkpoints **at or after the divergence index** are invalidated — not checkpoints after the restore point. This distinction is critical:
 
@@ -163,13 +173,13 @@ At max stabilization strength (window = 105), that's ~15 vector indices of dabs 
 
 ### Checkpoint Ring Invariants
 
-The ring's correctness depends on three invariants that interact in non-obvious ways. Violating any one of them causes the re-render cost to degrade from O(window/8) to O(total_stroke) over time:
+Two invariants — one for correctness, one for performance — together make full-stroke re-render fallback impossible by construction whenever the stabilizer's `max_divergence_window` bound holds.
 
-1. **Slot selection must favor the tip.** Overwrite the checkpoint furthest from the tip (lowest vector_index). This keeps all 8 slots within the divergence window. FIFO selection fails because during a full re-render with many segment boundaries, the ring wraps many times and only the last 8 saves survive — all clustered at the very tip, with no coverage further back. "Even spread" selection fails because it preserves useless checkpoints from early in the stroke while starving the tip region.
+1. **Coverage (correctness).** After every save, there exists a valid slot with `vi < tip_vi − max_divergence_window`. That slot is what `restore_before(div_idx)` returns for the worst-case `div_idx = tip_vi − max_divergence_window`; the slot's existence guarantees no fallback. The anchor-protected min-gap eviction policy in `pick_slot` is the load-bearing mechanism — it never evicts the sole anchor and never picks a victim that breaks the invariant. A `debug_assert!` after every save enforces it in debug builds.
 
-2. **Invalidation must be scoped to the divergence zone.** `invalidate_from(div_idx)`, not `invalidate_from(restore_point + 1)`. The stroke buffer content between the restore point and the divergence index is identical before and after the re-render (same raw positions → same dabs). Over-invalidating destroys these valid checkpoints, preventing the restore point from advancing toward the tip on subsequent frames.
+2. **Density (performance).** Consecutive valid slot gaps (sorted by `vi`) stay close to `spacing = max_divergence_window / 7`. The min-gap eviction picks the most-clustered slot, which keeps the layout even. Density bounds per-event re-render cost at roughly `spacing` dabs.
 
-3. **The restore point must advance.** On each divergence frame, the system restores from the best checkpoint before `div_idx`, re-renders to the tip, and saves new checkpoints at segment boundaries. The new checkpoints that fall between the old restore point and `div_idx` are outside the divergence zone, so they survive the next frame's invalidation. On the next frame, `restore_before` finds one of these closer checkpoints, reducing the re-render range. After a few frames, the ring converges to covering exactly the divergence window. If the restore point doesn't advance (because intermediate checkpoints are invalidated or overwritten), the re-render range grows by 1 vector index per frame indefinitely.
+3. **Scoped invalidation.** `invalidate_from(div_idx)`, not `invalidate_from(restore_point + 1)`. The stroke buffer content between the restore point and the divergence index is identical before and after the re-render (same raw positions → same dabs). Over-invalidating destroys these valid checkpoints, preventing the restore point from advancing toward the tip on subsequent frames. With scoped invalidation, the new checkpoints saved during segment-by-segment re-render survive the next frame, and the restore point converges toward the tip within a few frames of any disruption.
 
 ### Per-Frame Flow (`painting.rs`)
 

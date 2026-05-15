@@ -644,6 +644,14 @@ impl DarklyEngine {
         self.thumbnail_cache.get(node_id).cloned()
     }
 
+    /// Count of mid-stroke full-re-render fallbacks observed during the
+    /// most recent stroke (drained at `end_stroke`). Used by integration
+    /// tests to assert that the checkpoint ring's coverage invariant
+    /// kept fallback at zero across a stroke.
+    pub fn test_stroke_full_rerender_events(&self) -> u32 {
+        self.stroke_perf.full_rerender_events
+    }
+
     /// Block until all pending async readbacks complete. For tests only.
     /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
     /// dispatches every completed readback through the shared handler —

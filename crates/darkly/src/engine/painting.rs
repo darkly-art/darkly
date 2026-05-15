@@ -755,6 +755,23 @@ impl DarklyEngine {
                 None => None,
             };
 
+            // The checkpoint ring's coverage invariant depends on
+            // `max_divergence_window` being a true upper bound on
+            // `tip_vi - find_divergence().unwrap()`. Make any future drift
+            // between the stabilizer's bound and its detector loud in debug
+            // builds. (The synthetic tip-divergence path is always within
+            // bound by construction, but `result.divergence_index` is what
+            // the stabilizer reported.)
+            #[cfg(debug_assertions)]
+            if let Some(k) = result.divergence_index {
+                let earliest = tip_vi.saturating_sub(max_div);
+                debug_assert!(
+                    k >= earliest,
+                    "stabilizer returned divergence_index={k} but max_div={max_div} \
+                     requires >= {earliest} (tip_vi={tip_vi})",
+                );
+            }
+
             // Helper macro: create a BrushGpuContext wired with the stroke
             // scratch, paint target (layer or mask), and pre-stroke snapshot.
             // The paint target carries the destination format internally;
@@ -845,9 +862,21 @@ impl DarklyEngine {
                     self.checkpoint_ring.invalidate_from(div_idx);
                     cp.vector_index + 1
                 } else {
-                    // No checkpoint before divergence — full re-render. The
-                    // `begin_stroke` above already reset the scratch.
-                    self.stroke_perf.full_rerender_events += 1;
+                    // No checkpoint before divergence — full re-render.
+                    //
+                    // Two cases here. If the ring had valid slots but none
+                    // satisfied `vi < div_idx`, the coverage invariant has
+                    // failed (the architectural defect the ring's eviction
+                    // policy is designed to prevent). If the ring was
+                    // empty, this is initialization — the first divergence
+                    // event of the stroke, before any checkpoint has been
+                    // saved — which is structurally unavoidable and cheap
+                    // (`tip_vi` is small, so the re-render is short).
+                    // Only the former is a "mid-stroke full re-render
+                    // fallback" worth counting.
+                    if self.checkpoint_ring.has_any_valid() {
+                        self.stroke_perf.full_rerender_events += 1;
+                    }
                     engine.reset_render_state();
                     self.checkpoint_ring.clear();
                     0
@@ -899,6 +928,8 @@ impl DarklyEngine {
                                 boundary,
                                 bbox,
                                 render_state,
+                                tip_vi,
+                                max_div,
                             );
                         });
                         self.stroke_perf.total_submits += 1;
@@ -948,6 +979,8 @@ impl DarklyEngine {
                                 tip_vi,
                                 bbox,
                                 render_state,
+                                tip_vi,
+                                max_div,
                             );
                         });
                         self.stroke_perf.total_submits += 1;
@@ -1247,9 +1280,7 @@ impl DarklyEngine {
                     + p.total_dab_release_all_us
                     + p.total_dab_flush_us
                     + p.total_dab_post_us;
-                let unattributed = p
-                    .total_dab_us
-                    .saturating_sub(top_level_attributed);
+                let unattributed = p.total_dab_us.saturating_sub(top_level_attributed);
                 let exec_gpu_attributed = p.total_dab_stamp_us
                     + p.total_dab_composite_us
                     + p.total_dab_read_mirror_us
@@ -1285,25 +1316,20 @@ impl DarklyEngine {
                 // time figures are the per-dab averages of `gather_inputs`
                 // and the per-step output write-back loop (both are
                 // per-step costs × steps/dab).
-                let steps_per_dab =
-                    p.total_gpu_steps as f32 / total_dabs;
+                let steps_per_dab = p.total_gpu_steps as f32 / total_dabs;
                 // Per-dab time spent in evaluator bodies vs runner framework:
                 //   eval_gpu_call: sum of `evaluator.evaluate_gpu(...)` calls
                 //   eval_cpu_in_gpu: sum of promoted-CPU `evaluate_cpu(...)` calls
                 //   framework = execute_gpu − eval_gpu_call − eval_cpu_in_gpu
                 //               − gather_inputs − step_outputs
                 let eval_gpu_call_us = p.total_evaluate_gpu_call_us as f32 / total_dabs;
-                let eval_cpu_in_gpu_us =
-                    p.total_evaluate_cpu_in_gpu_us as f32 / total_dabs;
+                let eval_cpu_in_gpu_us = p.total_evaluate_cpu_in_gpu_us as f32 / total_dabs;
                 let gather_us = p.total_gather_inputs_us as f32 / total_dabs;
                 let outputs_us = p.total_step_outputs_us as f32 / total_dabs;
                 let exec_gpu_us = p.total_dab_execute_gpu_us as f32 / total_dabs;
-                let framework_us = (exec_gpu_us
-                    - eval_gpu_call_us
-                    - eval_cpu_in_gpu_us
-                    - gather_us
-                    - outputs_us)
-                    .max(0.0);
+                let framework_us =
+                    (exec_gpu_us - eval_gpu_call_us - eval_cpu_in_gpu_us - gather_us - outputs_us)
+                        .max(0.0);
                 log::info!(
                     "[stab-perf] runner per dab: steps/dab={:.1} \
                      gather_inputs={:.0}µs step_outputs={:.0}µs \
@@ -1321,8 +1347,7 @@ impl DarklyEngine {
                 // is the footprint math, isolated from the read_mirror
                 // copy already shown above.
                 let prep_total = p.total_prepare_canvas_copy_us as f32 / total_dabs;
-                let prep_no_copy = (p.total_prepare_canvas_copy_us
-                    as i64
+                let prep_no_copy = (p.total_prepare_canvas_copy_us as i64
                     - p.total_dab_read_mirror_us as i64)
                     .max(0) as f32
                     / total_dabs;

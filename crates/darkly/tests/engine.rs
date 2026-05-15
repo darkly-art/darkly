@@ -3584,3 +3584,81 @@ fn transform_mask_under_isolation_previews_grayscale() {
 
     engine.cancel_floating();
 }
+
+// ============================================================================
+// Checkpoint ring — coverage invariant on a long stabilized stroke
+// ============================================================================
+
+/// Regression for the checkpoint ring coverage architecture.
+///
+/// Before the redesign, [`pick_slot`] (the eviction policy) destroyed the
+/// lowest-vi anchor as soon as the ring filled, and `find_divergence` could
+/// return values outside the advertised `max_divergence_window`. The two
+/// defects compounded to ~2 mid-stroke full re-render fallbacks on long
+/// high-stabilization strokes — each fallback re-renders the entire stroke
+/// instead of the `O(window/8)` slice the architecture promises.
+///
+/// This test paints a long curving stroke at full Laplacian strength and
+/// asserts that `full_rerender_events == 0`. With the redesign the
+/// coverage invariant — at least one valid slot with
+/// `vi < tip_vi − max_divergence_window` — holds after every save, so
+/// `restore_before` always finds a checkpoint.
+#[test]
+fn long_stabilized_stroke_no_fallback() {
+    let (w, h) = (512, 512);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    engine.brush_load("Scatter Brush").expect("brush load");
+
+    let pen_id = find_node_id(&engine, "pen_input");
+    let stamp_id = find_node_id(&engine, "stamp");
+    // Full-strength stabilization → max_divergence_window = 11 (iterations=10
+    // + 1 from the influence-radius model). Spacing = 11 / 7 = 1.
+    engine
+        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .unwrap();
+    // Smallish dab so the bbox stays cheap.
+    engine
+        .brush_graph_set_port_default(stamp_id, "size", 0.08)
+        .unwrap();
+
+    engine.begin_stroke(layer_id);
+    // 400 samples along a slow spiral — enough to push the ring well past
+    // `2 * max_divergence_window` (the failure threshold for defect 2). The
+    // spiral exercises divergence on every event because relaxation keeps
+    // shifting interior points as the tip continues to curve.
+    let samples = 400usize;
+    let cx = (w / 2) as f32;
+    let cy = (h / 2) as f32;
+    for i in 0..samples {
+        let t = i as f32 / samples as f32;
+        let theta = t * std::f32::consts::TAU * 3.0;
+        let r = 20.0 + t * 200.0;
+        let x = cx + r * theta.cos();
+        let y = cy + r * theta.sin();
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: i as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+
+    assert_eq!(
+        engine.test_stroke_full_rerender_events(),
+        0,
+        "long stabilized stroke must not trigger any mid-stroke full \
+         re-render fallback — the coverage invariant guarantees \
+         `restore_before` succeeds for every reachable divergence index"
+    );
+}

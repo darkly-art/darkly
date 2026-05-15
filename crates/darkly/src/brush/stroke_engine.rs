@@ -398,7 +398,8 @@ impl StrokeEngine {
         );
 
         self.dab_count += 1;
-        gpu.perf.record_post_dab(t_post.elapsed().as_micros() as u64);
+        gpu.perf
+            .record_post_dab(t_post.elapsed().as_micros() as u64);
         // End-to-end per-dab wall-clock (CPU only). The summary log
         // divides this by `dabs_placed` for an average host cost per dab.
         gpu.perf.record_dab(t_dab.elapsed().as_micros() as u64);
