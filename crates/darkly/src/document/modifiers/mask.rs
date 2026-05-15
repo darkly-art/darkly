@@ -1,6 +1,6 @@
 //! Mask modifier — multiplies a host's alpha by an R8 alpha texture.
 //!
-//! Per the Modularity Principle in [CLAUDE.md], the entire mask kind lives in
+//! Per the Modularity Principle in [AGENTS.md], the entire mask kind lives in
 //! this file: data struct, construction, and the `register()` discovery hook.
 
 use crate::coord::CanvasRect;

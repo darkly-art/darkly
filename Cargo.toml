@@ -8,6 +8,9 @@ default-members = [
 ]
 resolver = "2"
 
+[workspace.package]
+license = "AGPL-3.0-or-later"
+
 [workspace.dependencies]
 # Local crates
 darkly = { path = "crates/darkly" }

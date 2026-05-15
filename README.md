@@ -85,6 +85,14 @@ Darkly uses auto-discovery: drop a `.rs` file in `crates/darkly/src/gpu/veils/` 
 
 See `veils/pixelate.rs` for the pattern. The same auto-discovery pattern applies to `tools/`, `brush/nodes/`, `brush/stabilizers/`, `config/sections/`, and `config/presets/` - see [crates/darkly/build.rs](crates/darkly/build.rs).
 
+## License
+
+Darkly is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later). You can use, fork, modify, and self-host Darkly freely. If you distribute it or run a modified version as a network service, you must make your source available under the AGPL.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and conventions.
+
 ## Acknowledgments
 
 Darkly stands on the shoulders of giants. Two programs in particular have influenced this project, and we love them dearly.

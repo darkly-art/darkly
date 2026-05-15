@@ -7,7 +7,7 @@
 //! `ModifierKind::apply` for each visible modifier. The outer compositor never
 //! branches on whether a host has a mask.
 //!
-//! Per the Modularity Principle in [CLAUDE.md], each kind lives in a single
+//! Per the Modularity Principle in [AGENTS.md], each kind lives in a single
 //! file under `document/modifiers/<kind>.rs` and exports a `register()` that
 //! returns a [`ModifierRegistration`]. `build.rs` auto-discovers the directory
 //! and emits `document/modifiers/mod.rs`.
