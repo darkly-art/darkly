@@ -957,6 +957,87 @@ fn pen_input_spacing_port_controls_dab_density() {
     );
 }
 
+/// Regression: at the smallest brush sizes, `SpacingConfig::distance()`
+/// previously relied on `min_px` defaulting to 1.0 to avoid sub-pixel
+/// dab stepping. If any code path constructed a `SpacingConfig` with
+/// `min_px < 1.0` — or a future change scaled spacing without going
+/// through `SpacingConfig::distance()` — strokes with a tiny brush would
+/// emit one dab per *fractional* pixel of stroke, producing catastrophic
+/// dab counts. Guard the invariant end-to-end: a long stroke painted
+/// with the smallest brush must not place more dabs than the stroke is
+/// pixels long.
+#[test]
+fn small_brush_does_not_emit_subpixel_dab_spacing() {
+    let (w, h) = (256, 256);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Force the densest configuration the UI allows:
+    // - Spacing ratio at its 4 % floor (any lower swamps the stabilizer).
+    // - Stamp size at near-zero, so the dab is clamped to 1×1 px and
+    //   the per-iteration step would be `1 * 0.04 = 0.04 px` without
+    //   the absolute floor.
+    let pen_id = find_node_id(&engine, "pen_input");
+    engine
+        .brush_graph_set_port_default(pen_id, "spacing", 0.04)
+        .expect("spacing port must exist");
+    let stamp_id = find_node_id(&engine, "stamp");
+    engine
+        .brush_graph_set_port_default(stamp_id, "size", 0.001)
+        .expect("stamp size port must exist");
+
+    // Horizontal stroke from x=16 to x=(w-16) at y = h/2. Same shape
+    // as `paint_horizontal_stroke`, repeated here so the stroke length
+    // is explicit at the assertion site.
+    let x0 = 16.0_f32;
+    let x1 = (w as f32) - 16.0;
+    let stroke_length_px = (x1 - x0).abs();
+
+    engine.begin_stroke(layer_id);
+    let samples = 40;
+    for i in 0..samples {
+        let t = i as f32 / (samples - 1) as f32;
+        let x = x0 + t * (x1 - x0);
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y: (h / 2) as f32,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: i as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+
+    let dabs = engine.test_stroke_total_dabs();
+    // The 1 px floor caps *fresh* dab placements at one per stroke pixel.
+    // `total_dabs` also counts dabs re-placed by the tip-divergence re-render
+    // (every pen event re-renders the tip segment with proper Catmull-Rom
+    // lookahead) and any checkpoint-restore replay, so the observed total is
+    // higher than the stroke length even when the floor holds.
+    //
+    // The bound below is the gross-regression guard: if `SpacingConfig::distance()`
+    // ever returned a sub-pixel value (e.g. 0.5 px), this number would roughly
+    // double; if it returned 0.1 px, it'd grow ~10×. The companion
+    // `debug_assert!(step >= ABSOLUTE_MIN_SPACING_PX, …)` in
+    // `stroke_engine::render_from_stabilized_*` is the precise per-step guard
+    // and would trip first under cargo test (which runs with debug_assertions).
+    let max_expected = (stroke_length_px.ceil() as u64) * 4;
+    assert!(
+        dabs <= max_expected,
+        "tiny-brush stroke emitted {dabs} dabs across {stroke_length_px:.0}px \
+         of stroke (gross-regression bound {max_expected}); spacing floor \
+         appears to have been bypassed"
+    );
+}
+
 /// Brush stroke on a paste-extent layer (offset, larger than canvas) +
 /// undo: the layer texture must be byte-identical to its pre-stroke state
 /// after undo, including off-canvas pixels that were unaffected.

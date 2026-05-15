@@ -265,7 +265,12 @@ impl StrokeEngine {
                 let mut dab_info = lerp_paint_info(&prev, &info, t_lerp);
                 dab_info.pos = cr_dab.pos;
                 self.place_dab(&dab_info, gpu, i);
-                traveled += self.spacing.distance(self.effective_diameter());
+                let step = self.spacing.distance(self.effective_diameter());
+                debug_assert!(
+                    step >= super::spacing::ABSOLUTE_MIN_SPACING_PX,
+                    "dab spacing dropped below 1px: {step}"
+                );
+                traveled += step;
             }
 
             self.leftover_distance = traveled - arc_len;
@@ -457,7 +462,12 @@ impl StrokeEngine {
             let mut dab_info = lerp_paint_info(&prev, &info, t_lerp);
             dab_info.pos = cr_dab.pos;
             self.place_dab(&dab_info, gpu, len - 1);
-            traveled += self.spacing.distance(self.effective_diameter());
+            let step = self.spacing.distance(self.effective_diameter());
+            debug_assert!(
+                step >= super::spacing::ABSOLUTE_MIN_SPACING_PX,
+                "dab spacing dropped below 1px: {step}"
+            );
+            traveled += step;
         }
 
         self.leftover_distance = traveled - arc_len;

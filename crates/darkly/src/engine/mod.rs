@@ -652,6 +652,13 @@ impl DarklyEngine {
         self.stroke_perf.full_rerender_events
     }
 
+    /// Total dabs placed during the most recent stroke. `stroke_perf` is
+    /// reset at `begin_stroke`, so call this between `end_stroke` and the
+    /// next `begin_stroke` to read the just-finished stroke's count.
+    pub fn test_stroke_total_dabs(&self) -> u64 {
+        self.stroke_perf.total_dabs
+    }
+
     /// Block until all pending async readbacks complete. For tests only.
     /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
     /// dispatches every completed readback through the shared handler —

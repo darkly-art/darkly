@@ -198,7 +198,8 @@ Run at commit time only — not during iterative debugging. Use `cargo check` fo
 cargo fmt --all -- --check
 RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --exclude darkly-wasm -- -D warnings
 RUSTFLAGS="-D warnings" cargo clippy -p darkly-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
-cargo test --workspace --exclude darkly-wasm
+# `--test-threads=1` is mandatory: GPU-touching integration tests (`engine.rs`, `blend_modes.rs`, etc.) share a process-wide wgpu device and SIGSEGV when run in parallel.
+cargo test --workspace --exclude darkly-wasm -- --test-threads=1
 (cd frontend/wasm && wasm-pack build --release --target web --out-dir pkg)
 (cd frontend && npm run build)
 ```
