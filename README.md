@@ -1,7 +1,7 @@
 ![darkly](https://github.com/user-attachments/assets/31a3a6d0-b2c2-4cad-acc8-87b968f0d87b)
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge)](https://discord.gg/kFz2FGhbpu)
-[![Patreon](https://img.shields.io/badge/Patreon-Sick_ass_perks-orange?logo=patreon&style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
+[![Patreon](https://img.shields.io/badge/Patreon-Sick_Ass_Perks-orange?logo=patreon&style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
 [![Blog](https://img.shields.io/badge/Blog-Deranged_Rants-orange?logo=substack&style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)
@@ -20,7 +20,7 @@ Try the demo [here](https://demo.darkly.art).
 
 ## Kickstarter
 
-We're gearing up for a Kickstarter. Go vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want to see, and help us rescue our friends and colleagues from the iron grip of Adobe!
+We're gearing up for a Kickstarter! Go vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want to see, and help us rescue our friends and colleagues from the iron grip of Adobe!
 
 ## Standard Paint Features
 
