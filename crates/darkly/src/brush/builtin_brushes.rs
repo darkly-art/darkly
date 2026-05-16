@@ -607,6 +607,28 @@ fn rough_watercolor() -> Brush {
         graph.set_port_default(circle, "frequency", 12.0).unwrap();
         graph.set_port_default(circle, "persistence", 0.55).unwrap();
         graph.set_port_default(circle, "octaves", 4.0).unwrap();
+        // Per-dab random seed so every dab gets a fresh Perlin pattern —
+        // without it, every dab has the same bumpy outline (just rotated
+        // by `rand_rot`) and the repetition reads as a regular texture
+        // rather than the chaotic granulation this brush is meant for.
+        let registry = BrushNodeRegistry::new();
+        let rand_seed = graph.add_node(
+            "random",
+            registry.get("random").unwrap().ports.clone(),
+            vec![ParamValue::Int(0)], // 0 = per-dab
+        );
+        graph
+            .connect(
+                PortRef {
+                    node: rand_seed,
+                    port: "value".into(),
+                },
+                PortRef {
+                    node: circle,
+                    port: "seed".into(),
+                },
+            )
+            .unwrap();
     })
 }
 
