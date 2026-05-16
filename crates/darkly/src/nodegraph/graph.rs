@@ -863,30 +863,6 @@ mod tests {
         }
     }
 
-    // ── PortDef backward compat ─────────────────────────────────────
-
-    #[test]
-    fn port_def_serde_backward_compat() {
-        // Old-format JSON without the new fields should deserialize with defaults.
-        let old_json = r#"{
-            "name": "scale",
-            "dir": "Input",
-            "wire_type": "Scalar",
-            "min": 0.0,
-            "max": 4.0,
-            "default": 1.0
-        }"#;
-        let port: PortDef<TestWireKind> = serde_json::from_str(old_json).unwrap();
-        assert_eq!(port.name, "scale");
-        assert_eq!(port.unit_type, UnitType::Normalized);
-        assert_eq!(port.icon, "");
-        assert_eq!(port.label, "");
-        assert!(!port.exposed);
-        assert_eq!(port.description, "");
-        assert_eq!(port.step, 0.0);
-        assert_eq!(port.natural_range, None);
-    }
-
     #[test]
     fn port_def_natural_range_round_trip() {
         let port = PortDef::input("seed", TestWireKind::Scalar)

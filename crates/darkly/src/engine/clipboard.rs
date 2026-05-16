@@ -1,9 +1,13 @@
 //! Copy, cut, paste operations.
 
 use super::types::ClipboardExport;
-use super::{DarklyEngine, PendingCopy, ReadbackContext};
-use crate::clipboard::{Clipboard, ImageClip};
+use super::{DarklyEngine, PendingCopy, ReadbackContext, RichCopyMask, RichCopyMetadata};
+use crate::clipboard::{
+    Clipboard, ClipboardRect, ImageClip, LayerClipboard, MaskClipboard,
+    LAYER_CLIPBOARD_SCHEMA_VERSION,
+};
 use crate::document::MoveTarget;
+use crate::gpu::blend_mode;
 use crate::gpu::paint_target::GpuPaintTarget;
 use crate::gpu::readback;
 use crate::layer::{Layer, LayerId};
@@ -377,7 +381,44 @@ impl DarklyEngine {
             offset_x: eox,
             offset_y: eoy,
         });
-        self.clipboard = Some(Clipboard::ImageData(clip));
+
+        // Promote to a `LayerClipboard` if `copy_layer_rich` captured the
+        // source layer's metadata. The pixels we just received become the
+        // base64 payload; everything else (blend mode, opacity, …) was
+        // snapshotted at copy time.
+        if let Some(meta) = self.pending_rich_metadata.take() {
+            use base64::{engine::general_purpose::STANDARD, Engine as _};
+            let layer_clip = LayerClipboard {
+                schema_version: LAYER_CLIPBOARD_SCHEMA_VERSION,
+                name: meta.name,
+                visible: meta.visible,
+                locked: meta.locked,
+                opacity: meta.opacity,
+                blend_mode: meta.blend_mode,
+                bounds: ClipboardRect {
+                    x: eox,
+                    y: eoy,
+                    width: ew,
+                    height: eh,
+                },
+                pixels_b64: STANDARD.encode(export_rgba),
+                mask: meta.mask.map(|m| MaskClipboard {
+                    name: m.name,
+                    visible: m.visible,
+                    bounds: ClipboardRect {
+                        x: m.bounds.x0(),
+                        y: m.bounds.y0(),
+                        width: m.bounds.width,
+                        height: m.bounds.height,
+                    },
+                    pixels_b64: String::new(),
+                }),
+            };
+            self.pending_layer_clip = Some(layer_clip.to_json());
+            self.clipboard = Some(Clipboard::Layer(layer_clip));
+        } else {
+            self.clipboard = Some(Clipboard::ImageData(clip));
+        }
 
         let _ = is_cut;
     }
@@ -474,5 +515,115 @@ impl DarklyEngine {
         let offset_y = clip.offset_y;
         let rgba = clip.data.clone();
         Some(self.paste_image(width, height, &rgba, offset_x, offset_y, active_layer_id))
+    }
+
+    // -----------------------------------------------------------------------
+    // Rich (layer-with-metadata) copy/paste — cross-tab interop
+    // -----------------------------------------------------------------------
+
+    /// Like `copy`, but also captures CPU-side layer metadata (blend mode,
+    /// opacity, name, mask presence) so the receiving tab can restore it on
+    /// paste. Pixel bytes still flow through the existing async readback;
+    /// the metadata is stitched in when `complete_copy` runs.
+    ///
+    /// Returns `None` immediately. The result is available via
+    /// `poll_copy_rich_result()` once the readback lands (next frame).
+    pub fn copy_layer_rich(&mut self, layer_id: LayerId) -> Option<()> {
+        // Snapshot metadata up-front. Layers can mutate while the readback
+        // is in flight; pinning at copy time matches user intent and keeps
+        // the snapshot independent of whatever happens before completion.
+        let meta = {
+            let Layer::Raster(layer) = self.doc.layer(layer_id)?;
+            let mask = layer.modifiers.iter().find_map(|mid| {
+                let m = self.doc.find_modifier(*mid)?;
+                if !m.is_mask() {
+                    return None;
+                }
+                let bounds = m.pixels().map(|p| p.bounds).unwrap_or(layer.pixels.bounds);
+                Some(RichCopyMask {
+                    name: m.common.name.clone(),
+                    visible: m.common.visible,
+                    bounds,
+                })
+            });
+            RichCopyMetadata {
+                name: layer.common.name.clone(),
+                visible: layer.common.visible,
+                locked: layer.common.locked,
+                opacity: layer.blend.opacity,
+                blend_mode: layer.blend.blend_mode.type_id.to_string(),
+                mask,
+            }
+        };
+        self.pending_rich_metadata = Some(meta);
+
+        // Reuse the standard copy path for the pixel readback. When
+        // `complete_copy` runs and finds `pending_rich_metadata` populated,
+        // it builds the `LayerClipboard` JSON and stashes it on
+        // `pending_layer_clip`.
+        if self.has_selection() && self.selection_cpu_cache().is_none() {
+            self.pending_copy = Some(PendingCopy {
+                layer_id,
+                is_cut: false,
+            });
+            return None;
+        }
+        self.start_copy_readback(layer_id, false);
+        None
+    }
+
+    /// Drain the most recent rich-copy result. Returns the JSON-serialised
+    /// `LayerClipboard` when the async readback has completed, otherwise
+    /// `None`. Mirrors `poll_copy_result`.
+    pub fn poll_copy_rich_result(&mut self) -> Option<String> {
+        self.pending_layer_clip.take()
+    }
+
+    /// Paste a `LayerClipboard` JSON envelope as a new layer. Restores the
+    /// source's name, blend mode, opacity, visibility, and pixel data. If
+    /// the source had a mask, an empty (fully opaque) mask is attached at
+    /// the recorded bounds — v1 doesn't carry mask pixels yet (see
+    /// [`crate::clipboard::LayerClipboard`]).
+    ///
+    /// Returns the new layer's id, or `None` if the JSON failed to parse
+    /// or the blend-mode/pixel data was malformed.
+    pub fn paste_layer_rich(
+        &mut self,
+        json: &str,
+        active_layer_id: Option<LayerId>,
+    ) -> Option<LayerId> {
+        let clip = LayerClipboard::from_json(json).ok()?;
+        let pixels = clip.decode_pixels().ok()?;
+        let expected_len = (clip.bounds.width * clip.bounds.height * 4) as usize;
+        if pixels.len() != expected_len {
+            return None;
+        }
+
+        let id = self.paste_image(
+            clip.bounds.width,
+            clip.bounds.height,
+            &pixels,
+            clip.bounds.x,
+            clip.bounds.y,
+            active_layer_id,
+        );
+
+        // Restore metadata onto the freshly-created raster layer.
+        if let Some(Layer::Raster(r)) = self.doc.layer_mut(id) {
+            r.common.name = clip.name.clone();
+            r.common.visible = clip.visible;
+            r.common.locked = clip.locked;
+            r.blend.opacity = clip.opacity;
+            if let Some(reg) = blend_mode::registry().get(&clip.blend_mode) {
+                r.blend.blend_mode = reg;
+            }
+        }
+
+        // Restore mask presence (without pixels — v1).
+        if clip.mask.is_some() {
+            self.add_mask(id);
+        }
+
+        Some(id)
     }
 }

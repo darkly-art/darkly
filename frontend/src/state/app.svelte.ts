@@ -5,7 +5,26 @@ export interface Color {
     r: number; g: number; b: number; a: number;
 }
 
-class AppState {
+/**
+ * A self-contained Darkly editor: one `DarklyHandle`, one canvas, one
+ * document, one set of UI state (active tool, layer selection, view
+ * transform, copy callback, frame scheduler, …). Multiple instances can
+ * coexist (multi-tab host); a stand-alone embed has just one. The instance
+ * has zero awareness of tabs, siblings, or any host that might contain it —
+ * tab management is an outer layer (`frontend/src/multi_tab/shell.svelte.ts`)
+ * that simply owns a collection of instances.
+ *
+ * Components throughout the UI import the global `app` proxy (below) instead
+ * of holding an instance reference directly; the host swaps which instance
+ * `app` resolves to via [`setActiveInstance`].
+ */
+export class DarklyInstance {
+    /** Stable id, useful as a `{#each}` key in the multi-tab shell. */
+    readonly id: string =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `instance-${Math.random().toString(36).slice(2)}`;
+
     handle = $state<DarklyHandle | null>(null);
 
     // Colors
@@ -273,10 +292,54 @@ class AppState {
     }
 }
 
-export const app = new AppState();
+// ---------------------------------------------------------------------------
+// `app` — global proxy for "the currently focused instance"
+// ---------------------------------------------------------------------------
+//
+// 40+ files do `import { app } from './state/app.svelte'`. To keep them
+// untouched, `app` stays a single exported symbol — but it's now a Proxy
+// over a swappable underlying instance. Single-instance hosts call
+// `setActiveInstance(theLoneInstance)` at boot; the multi-tab shell calls it
+// whenever the focused tab changes.
 
-// `app` owns the live DarklyHandle. HMR'ing this module resets `handle` to
-// null, orphaning the running engine. Force a full reload instead.
+let activeInstance = $state<DarklyInstance | null>(null);
+
+/** Replace the underlying instance that the global `app` proxy resolves to.
+ *  Calling this triggers Svelte reactivity on every consumer that reads
+ *  `app.<x>` (because the proxy's getter reads the `$state` `activeInstance`,
+ *  threading the dependency through). */
+export function setActiveInstance(inst: DarklyInstance | null) {
+    activeInstance = inst;
+}
+
+/** The currently focused instance, or `null` if none has been set. Useful for
+ *  the multi-tab shell or boot code that needs the raw instance. */
+export function getActiveInstance(): DarklyInstance | null {
+    return activeInstance;
+}
+
+export const app = new Proxy({} as DarklyInstance, {
+    get(_target, prop, _receiver) {
+        const inst = activeInstance;
+        if (!inst) return undefined;
+        const value = (inst as any)[prop];
+        // Bind methods so `this` resolves to the instance, not the proxy.
+        return typeof value === 'function' ? value.bind(inst) : value;
+    },
+    set(_target, prop, value) {
+        const inst = activeInstance;
+        if (!inst) return false;
+        (inst as any)[prop] = value;
+        return true;
+    },
+    has(_target, prop) {
+        return activeInstance ? prop in activeInstance : false;
+    },
+});
+
+// `app` resolves through `activeInstance`. HMR'ing this module resets
+// `activeInstance` to null, orphaning the running engine. Force a full
+// reload instead.
 if (import.meta.hot) {
     import.meta.hot.accept(() => import.meta.hot!.invalidate());
 }

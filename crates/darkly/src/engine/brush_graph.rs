@@ -44,30 +44,10 @@ impl DarklyEngine {
         crate::brush::default_graph()
     }
 
-    /// Return a reference to the currently active brush graph.
-    pub fn active_brush_graph_ref(&self) -> &Graph<BrushWireType> {
-        &self.active_brush_graph
-    }
-
-    /// Topology version counter — bumped only by structural mutations
-    /// (nodes, wires, params, exposed flags, brush load/reset/clear), not
-    /// by exposed-port scrubs. The frontend snapshots this to distinguish
-    /// "preset still selected, just scrubbing" from "graph actually
-    /// changed → drop the preset name".
-    pub fn brush_topology_version(&self) -> u64 {
-        self.brush_topology_version
-    }
-
-    /// Editor-preview version counter — bumped on changes that can alter
-    /// the full-stroke editor preview's rendered output. Topology bumps
-    /// it; scrubs on preview-affecting ports bump it; scrubs on ports
-    /// declared `preview_value` (neutralised by `apply_preview_overrides`
-    /// before render) do *not* bump it. Used by `brush_editor_preview`
-    /// as its cache key, and by tests asserting that preview-irrelevant
-    /// scrubs don't trigger a wasted re-render.
-    pub fn brush_graph_version(&self) -> u64 {
-        self.brush_graph_version
-    }
+    // `active_brush_graph()` and `brush_graph_version()` /
+    // `brush_topology_version()` live on `super::DarklyEngine` (see
+    // `engine/mod.rs`) — they pull from the shared brush session under
+    // a read lock. Same public API, different storage.
 
     /// Validate a brush graph from JSON without setting it as active.
     ///
@@ -86,7 +66,7 @@ impl DarklyEngine {
         // If compilation succeeded, store the deserialized graph.
         let graph: Graph<BrushWireType> =
             serde_json::from_str(json).map_err(|e| format!("JSON parse error: {e}"))?;
-        self.active_brush_graph = graph;
+        self.brush_session.write().graph = graph;
         self.snapshot_brush_defaults();
         // Run the post-mutation pipeline so the brush preview mask (and any
         // other graph-dependent state) refreshes from the new graph.
@@ -96,33 +76,32 @@ impl DarklyEngine {
 
     /// Reset the active brush graph to the built-in default.
     pub fn reset_brush_graph(&mut self) {
-        self.active_brush_graph = crate::brush::default_graph();
+        self.brush_session.write().graph = crate::brush::default_graph();
         self.snapshot_brush_defaults();
         let _ = self.compile_active(ChangeKind::Topology);
     }
 
-    /// Capture every input port's current default into `brush_defaults`.
-    /// Called whenever the active graph is replaced as a whole — brush
-    /// load, reset, save — so that "reset to default" returns to the
-    /// loaded/saved baseline rather than the node-type registration value.
-    /// Not called on individual port edits; that's the whole point.
-    ///
-    /// Also captures the legacy `user_input` node's `value` param under
-    /// a synthetic ("value") key — that node surfaces in the toolbar via
-    /// the legacy compat path and needs the same reset semantics.
+    /// Capture every input port's current default into the shared brush
+    /// session's `defaults` map. Called whenever the active graph is
+    /// replaced as a whole — brush load, reset, save — so that "reset to
+    /// default" returns to the loaded/saved baseline rather than the
+    /// node-type registration value. Not called on individual port edits;
+    /// that's the whole point.
     pub(crate) fn snapshot_brush_defaults(&mut self) {
-        self.brush_defaults.clear();
-        for node in self.active_brush_graph.nodes.values() {
+        let mut session = self.brush_session.write();
+        session.defaults.clear();
+        // Re-borrow split: pull a snapshot of node data we need to read,
+        // then write `defaults`. Cheapest path is to walk nodes while
+        // holding the same write guard — `defaults` and `graph` are
+        // disjoint fields on `BrushSession`, so splitting the borrow is
+        // legal.
+        let session: &mut crate::brush::session::BrushSession = &mut session;
+        for node in session.graph.nodes.values() {
             for port in &node.ports {
                 if port.dir == PortDir::Input {
-                    self.brush_defaults
+                    session
+                        .defaults
                         .insert((node.id, port.name.clone()), port.default);
-                }
-            }
-            if node.type_id == "user_input" {
-                if let Some(ParamValue::Float(v)) = node.params.get(1) {
-                    self.brush_defaults
-                        .insert((node.id, "value".to_string()), *v);
                 }
             }
         }
@@ -188,12 +167,19 @@ impl DarklyEngine {
     ) {
         use crate::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 
-        let mut runner = match crate::brush::compile_graph(&self.active_brush_graph) {
-            Ok(r) => r,
-            Err(_) => {
-                self.compositor.clear_overlay_preview_mask();
-                self.brush_preview_info = None;
-                return;
+        // Compile under a read guard; drop the guard before any GPU
+        // work to keep the critical section narrow. The guard is held
+        // only for the synchronous compile_graph call.
+        let mut runner = {
+            let session = self.brush_session.read();
+            match crate::brush::compile_graph(&session.graph) {
+                Ok(r) => r,
+                Err(_) => {
+                    drop(session);
+                    self.compositor.clear_overlay_preview_mask();
+                    self.brush_preview_info = None;
+                    return;
+                }
             }
         };
 
@@ -308,19 +294,21 @@ impl DarklyEngine {
     ///
     /// Returns Ok on success or an error string.
     fn compile_active(&mut self, kind: ChangeKind) -> Result<(), String> {
-        crate::brush::compile_graph(&self.active_brush_graph).map_err(|e| format!("{e}"))?;
-
-        // Collect resource names still referenced by Image nodes.
-        let live: std::collections::HashSet<String> = self
-            .active_brush_graph
-            .nodes
-            .values()
-            .filter(|n| n.type_id == "image")
-            .filter_map(|n| match n.params.first() {
-                Some(ParamValue::String(s)) if !s.is_empty() => Some(s.clone()),
-                _ => None,
-            })
-            .collect();
+        // Compile + scan-for-live-resources under one read guard.
+        let live: std::collections::HashSet<String> = {
+            let session = self.brush_session.read();
+            crate::brush::compile_graph(&session.graph).map_err(|e| format!("{e}"))?;
+            session
+                .graph
+                .nodes
+                .values()
+                .filter(|n| n.type_id == "image")
+                .filter_map(|n| match n.params.first() {
+                    Some(ParamValue::String(s)) if !s.is_empty() => Some(s.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
 
         // Release static textures whose resource name is no longer live.
         let stale: Vec<String> = self
@@ -339,13 +327,8 @@ impl DarklyEngine {
         // `ChangeKind` doc above for the full rule. PreviewIrrelevantScrub
         // bumps nothing: the rendered preview output can't have changed.
         match kind {
-            ChangeKind::Topology => {
-                self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
-                self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
-            }
-            ChangeKind::ScrubOnly => {
-                self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
-            }
+            ChangeKind::Topology => self.bump_brush_topology_version(),
+            ChangeKind::ScrubOnly => self.bump_brush_graph_version(),
             ChangeKind::PreviewIrrelevantScrub => {}
         }
 
@@ -404,8 +387,9 @@ impl DarklyEngine {
         // skip if a real stroke is in progress — return the most recent
         // cached bytes so the UI stays responsive without clobbering the
         // stroke's GPU state.
+        let current_graph_version = self.brush_graph_version();
         let nothing_to_do = in_stroke
-            || (self.last_rendered_preview_version == self.brush_graph_version
+            || (self.last_rendered_preview_version == current_graph_version
                 && self.brush_editor_preview_cache_size == Some((width, height)));
         if nothing_to_do {
             return cached.unwrap_or_default();
@@ -429,7 +413,7 @@ impl DarklyEngine {
         // canvas regardless of the user's working brush parameters.
         // Per-node knowledge about what to neutralize lives on the port
         // registrations; this pipeline doesn't introspect node types.
-        let mut graph = self.active_brush_graph.clone();
+        let mut graph = self.active_brush_graph();
         graph.apply_preview_overrides();
         let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_preview_stroke(
@@ -450,10 +434,10 @@ impl DarklyEngine {
                 height: rh,
                 target_width: width,
                 target_height: height,
-                graph_version: self.brush_graph_version,
+                graph_version: current_graph_version,
             },
         );
-        self.last_rendered_preview_version = self.brush_graph_version;
+        self.last_rendered_preview_version = current_graph_version;
 
         cached.unwrap_or_default()
     }
@@ -471,8 +455,7 @@ impl DarklyEngine {
         // Theme changes alter rendered colors → both editor preview and
         // dab thumbnail need to re-render and discard any in-flight
         // readbacks. Bump both versions.
-        self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
-        self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
+        self.bump_brush_topology_version();
     }
 
     /// Render a single-dab preview of the active brush and return the
@@ -505,8 +488,9 @@ impl DarklyEngine {
         // skip while a real stroke is in progress — return the most recent
         // cached bytes so the UI stays responsive without clobbering the
         // stroke's GPU state.
+        let current_topology = self.brush_topology_version();
         let nothing_to_do = in_stroke
-            || (self.last_rendered_dab_topology_version == self.brush_topology_version
+            || (self.last_rendered_dab_topology_version == current_topology
                 && self.active_dab_preview_cache.is_some());
         if nothing_to_do {
             return cached.unwrap_or_default();
@@ -526,7 +510,7 @@ impl DarklyEngine {
         // registration default before rendering. The dab thumbnail
         // represents the brush's identity (shape, texture, dynamics);
         // user-facing scrubs belong in the brush bar, not the icon.
-        let mut graph = self.active_brush_graph.clone();
+        let mut graph = self.active_brush_graph();
         crate::brush::reset_exposed_scrubs(&mut graph);
         let (rw, rh) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_preview_dab(rw as f32, rh as f32);
@@ -538,10 +522,10 @@ impl DarklyEngine {
             fg,
             bg,
             ReadbackContext::ActiveBrushDab {
-                topology_version: self.brush_topology_version,
+                topology_version: current_topology,
             },
         );
-        self.last_rendered_dab_topology_version = self.brush_topology_version;
+        self.last_rendered_dab_topology_version = current_topology;
 
         cached.unwrap_or_default()
     }
@@ -576,10 +560,11 @@ impl DarklyEngine {
         // Cache hit on the current topology version → return immediately.
         // Mid-stroke we always return the cached bytes (if any) without
         // queuing a render to avoid trampling the active stroke's GPU state.
+        let current_topology = self.brush_topology_version();
         let cache_fresh = self
             .node_preview_cache
             .get(&node_id)
-            .map(|(v, _)| *v == self.brush_topology_version)
+            .map(|(v, _)| *v == current_topology)
             .unwrap_or(false);
         if cache_fresh || in_stroke {
             return cached.unwrap_or_default();
@@ -594,14 +579,14 @@ impl DarklyEngine {
             return cached.unwrap_or_default();
         }
 
-        // Build the per-node preview subgraph. Returns None if `node_id`
-        // doesn't exist or the target has no Texture output — both cases
-        // mean "no preview to render", which we surface as empty bytes.
+        // Build the per-node preview subgraph under a read guard. Returns
+        // None if `node_id` doesn't exist or the target has no Texture
+        // output — both surface as empty bytes ("no preview to render").
         let target = crate::nodegraph::NodeId(node_id);
-        let Some(graph) = crate::brush::preview_subgraph::build_node_preview_graph(
-            &self.active_brush_graph,
-            target,
-        ) else {
+        let Some(graph) = ({
+            let session = self.brush_session.read();
+            crate::brush::preview_subgraph::build_node_preview_graph(&session.graph, target)
+        }) else {
             return Vec::new();
         };
 
@@ -618,7 +603,7 @@ impl DarklyEngine {
             bg,
             ReadbackContext::NodePreview {
                 node_id,
-                topology_version: self.brush_topology_version,
+                topology_version: current_topology,
             },
         );
 
@@ -680,7 +665,7 @@ impl DarklyEngine {
 
     /// Serialize the active graph as JSON.
     fn active_graph_json(&self) -> String {
-        serde_json::to_string(&self.active_brush_graph).unwrap_or_else(|_| "null".into())
+        serde_json::to_string(&self.brush_session.read().graph).unwrap_or_else(|_| "null".into())
     }
 
     /// Add a node to the active graph and compile.
@@ -696,7 +681,9 @@ impl DarklyEngine {
             .iter()
             .map(|p| p.default_value())
             .collect::<Vec<_>>();
-        self.active_brush_graph
+        self.brush_session
+            .write()
+            .graph
             .add_node(type_id, reg.ports.clone(), params);
 
         self.compile_active(ChangeKind::Topology)?;
@@ -705,7 +692,9 @@ impl DarklyEngine {
 
     /// Remove a node from the active graph and compile.
     pub fn brush_graph_remove_node(&mut self, node_id: u64) -> Result<String, String> {
-        self.active_brush_graph
+        self.brush_session
+            .write()
+            .graph
             .remove_node(NodeId(node_id))
             .map_err(|e| format!("{e}"))?;
         self.compile_active(ChangeKind::Topology)?;
@@ -720,24 +709,25 @@ impl DarklyEngine {
         to_node: u64,
         to_port: &str,
     ) -> Result<String, String> {
-        // Remove any existing connection to this input first.
         let to_ref = PortRef {
             node: NodeId(to_node),
             port: to_port.into(),
         };
-        self.active_brush_graph
-            .connections
-            .retain(|c| c.to != to_ref);
-
-        self.active_brush_graph
-            .connect(
-                PortRef {
-                    node: NodeId(from_node),
-                    port: from_port.into(),
-                },
-                to_ref.clone(),
-            )
-            .map_err(|e| format!("{e}"))?;
+        {
+            let mut session = self.brush_session.write();
+            // Remove any existing connection to this input first.
+            session.graph.connections.retain(|c| c.to != to_ref);
+            session
+                .graph
+                .connect(
+                    PortRef {
+                        node: NodeId(from_node),
+                        port: from_port.into(),
+                    },
+                    to_ref.clone(),
+                )
+                .map_err(|e| format!("{e}"))?;
+        }
         self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
@@ -750,7 +740,7 @@ impl DarklyEngine {
         to_node: u64,
         to_port: &str,
     ) -> Result<String, String> {
-        self.active_brush_graph.disconnect(
+        self.brush_session.write().graph.disconnect(
             &PortRef {
                 node: NodeId(from_node),
                 port: from_port.into(),
@@ -771,7 +761,9 @@ impl DarklyEngine {
         param_index: usize,
         value: ParamValue,
     ) -> Result<String, String> {
-        self.active_brush_graph
+        self.brush_session
+            .write()
+            .graph
             .set_param(NodeId(node_id), param_index, value)
             .map_err(|e| format!("{e}"))?;
         self.compile_active(ChangeKind::Topology)?;
@@ -785,7 +777,9 @@ impl DarklyEngine {
         port_name: &str,
         value: f32,
     ) -> Result<String, String> {
-        self.active_brush_graph
+        self.brush_session
+            .write()
+            .graph
             .set_port_default(NodeId(node_id), port_name, value)
             .map_err(|e| format!("{e}"))?;
         self.compile_active(ChangeKind::Topology)?;
@@ -800,7 +794,10 @@ impl DarklyEngine {
         &self,
         sizes: &std::collections::HashMap<NodeId, [f32; 2]>,
     ) -> crate::nodegraph::NodeLayout {
-        self.active_brush_graph.auto_layout_with_sizes(sizes)
+        self.brush_session
+            .read()
+            .graph
+            .auto_layout_with_sizes(sizes)
     }
 
     /// Upload an RGBA8 image and associate it with a resource name.
@@ -839,25 +836,17 @@ impl DarklyEngine {
 
     /// Return info about all exposed ports in the active brush graph.
     ///
-    /// Scans all nodes for input ports with `exposed == true`, and also
-    /// includes legacy `user_input` nodes for backward compatibility.
+    /// Scans all nodes for input ports with `exposed == true`.
     ///
     /// The result is ordered by auto-layout position (top-to-bottom,
     /// left-to-right) for a stable order in the properties panel.
     pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
         let registry = BrushNodeRegistry::new();
-        let layout = self.active_brush_graph.auto_layout();
+        let session = self.brush_session.read();
+        let layout = session.graph.auto_layout();
         let mut result: Vec<ExposedPortInfo> = Vec::new();
 
-        for node in self.active_brush_graph.nodes.values() {
-            // Legacy user_input nodes: synthesize as exposed scalar entries.
-            if node.type_id == "user_input" {
-                if let Some(info) = self.legacy_user_input_to_exposed(node) {
-                    result.push(info);
-                    continue;
-                }
-            }
-
+        for node in session.graph.nodes.values() {
             let reg = registry.get(&node.type_id);
             let display_name = reg.map(|r| r.display_name).unwrap_or("");
 
@@ -872,8 +861,8 @@ impl DarklyEngine {
                 }
 
                 // A connected input is driven by its wire, not the user.
-                let connected = self
-                    .active_brush_graph
+                let connected = session
+                    .graph
                     .connections
                     .iter()
                     .any(|c| c.to.node == node.id && c.to.port == port.name);
@@ -903,8 +892,8 @@ impl DarklyEngine {
                 // on nodes the user added after load (those weren't part
                 // of the brush, so registration default is the right
                 // baseline).
-                let reset_default = self
-                    .brush_defaults
+                let reset_default = session
+                    .defaults
                     .get(&(node.id, port.name.clone()))
                     .copied()
                     .unwrap_or_else(|| reg_port.map(|rp| rp.default).unwrap_or(port.default));
@@ -950,75 +939,6 @@ impl DarklyEngine {
         result
     }
 
-    /// Backward compat: synthesize an `ExposedPortInfo` from a legacy
-    /// `user_input` node by reading its params.
-    fn legacy_user_input_to_exposed(
-        &self,
-        node: &crate::nodegraph::NodeInstance<BrushWireType>,
-    ) -> Option<ExposedPortInfo> {
-        let label = match node.params.first() {
-            Some(ParamValue::String(s)) => s.clone(),
-            _ => String::new(),
-        };
-        let value = match node.params.get(1) {
-            Some(ParamValue::Float(v)) => *v,
-            _ => 0.5,
-        };
-        let min = match node.params.get(2) {
-            Some(ParamValue::Float(v)) => *v,
-            _ => 0.0,
-        };
-        let max = match node.params.get(3) {
-            Some(ParamValue::Float(v)) => *v,
-            _ => 1.0,
-        };
-        let units = match node.params.get(4) {
-            Some(ParamValue::Int(v)) => *v as u32,
-            _ => 0,
-        };
-        let icon = match node.params.get(5) {
-            Some(ParamValue::String(s)) => s.clone(),
-            _ => String::new(),
-        };
-        let description = match node.params.get(6) {
-            Some(ParamValue::String(s)) => s.clone(),
-            _ => String::new(),
-        };
-
-        // Map legacy units enum to UnitType.
-        let unit_type = match units {
-            1 => UnitType::Raw, // pixels (display as-is)
-            2 => UnitType::Degrees,
-            3 => UnitType::Raw,
-            _ => UnitType::Percent, // 0 = percent
-        };
-
-        // Reset target = snapshotted brush value if available; otherwise
-        // fall back to the midpoint of the user-defined range (legacy
-        // user_input nodes don't have a registration default to reach
-        // for, since the value is itself a node param).
-        let reset_default = self
-            .brush_defaults
-            .get(&(node.id, "value".to_string()))
-            .copied()
-            .unwrap_or((min + max) * 0.5);
-        Some(ExposedPortInfo {
-            node_id: node.id.0,
-            port_name: "value".to_string(),
-            label,
-            icon,
-            description,
-            node_display_name: "User Input".to_string(),
-            data: ExposedValue::Scalar {
-                value,
-                min,
-                max,
-                default: reset_default,
-                unit_type,
-            },
-        })
-    }
-
     /// Set an exposed port's value from display-space, converting to
     /// port-space via the port's UnitType.  Compiles afterward.
     pub fn brush_set_exposed_port(
@@ -1029,28 +949,23 @@ impl DarklyEngine {
     ) -> Result<String, String> {
         let nid = NodeId(node_id);
 
-        // For legacy user_input nodes, delegate to param update.
-        if let Some(node) = self.active_brush_graph.nodes.get(&nid) {
-            if node.type_id == "user_input" && port_name == "value" {
-                return self.brush_graph_set_param(
-                    node_id,
-                    1, // param index 1 = value
-                    ParamValue::Float(display_value),
-                );
+        // Snapshot the node's type_id under a brief read guard so the
+        // registry lookup below doesn't have to re-acquire the lock.
+        // All later mutation happens through a fresh write guard.
+        let type_id = {
+            let session = self.brush_session.read();
+            match session.graph.nodes.get(&nid) {
+                Some(node) => node.type_id.clone(),
+                None => return Err(format!("node {node_id} not found")),
             }
-        }
+        };
 
         // Look up UnitType + preview_value from the registration. Both
         // come from the same port lookup so we don't pay for it twice;
         // `preview_value` decides whether this scrub can affect the
         // editor preview's rendered output (see `ChangeKind` docs).
-        let node = self
-            .active_brush_graph
-            .nodes
-            .get(&nid)
-            .ok_or_else(|| format!("node {node_id} not found"))?;
         let registry = BrushNodeRegistry::new();
-        let port_meta = registry.get(&node.type_id).and_then(|r| {
+        let port_meta = registry.get(&type_id).and_then(|r| {
             r.ports
                 .iter()
                 .find(|rp| rp.name == port_name && rp.dir == PortDir::Input)
@@ -1060,7 +975,9 @@ impl DarklyEngine {
 
         let port_value = unit_type.from_display(display_value);
 
-        self.active_brush_graph
+        self.brush_session
+            .write()
+            .graph
             .set_port_default(nid, port_name, port_value)
             .map_err(|e| format!("{e}"))?;
         let kind = if preview_irrelevant {
@@ -1084,11 +1001,12 @@ impl DarklyEngine {
         port_name: &str,
         exposed: bool,
     ) -> Result<String, String> {
-        self.active_brush_graph
+        self.brush_session
+            .write()
+            .graph
             .set_port_exposed(NodeId(node_id), port_name, exposed)
             .map_err(|e| format!("{e}"))?;
-        self.brush_graph_version = self.brush_graph_version.wrapping_add(1);
-        self.brush_topology_version = self.brush_topology_version.wrapping_add(1);
+        self.bump_brush_topology_version();
         Ok(self.active_graph_json())
     }
 }

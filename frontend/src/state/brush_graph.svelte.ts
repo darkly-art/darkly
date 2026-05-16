@@ -220,6 +220,26 @@ class BrushGraphState {
 
     // --- Public API ---
 
+    /** Re-sync this singleton's local view from the currently-active
+     *  engine. Call after a tab switch — `brushGraph.graph` /
+     *  `.exposedPorts` / `.lastTopologyVersion` are a CACHE of the
+     *  active engine's brush state, and become stale when the focused
+     *  instance changes.
+     *
+     *  Does NOT touch `activeBrush`. The engine doesn't track which
+     *  named library brush a graph came from (it just has a graph), so
+     *  the singleton's `activeBrush` is the only place that knowledge
+     *  lives. For v1 we leave it as-is — re-syncing the brush name
+     *  cross-tab would mean tracking it per-instance, which is the
+     *  follow-up after we decide whether named-brush selection is
+     *  per-tab or shell-global. */
+    syncFromActiveEngine() {
+        if (!app.handle) return;
+        this.fetchGraph();
+        this.refreshExposedPorts();
+        this.snapshotTopologyVersion();
+    }
+
     /** Initialize from WASM — load node types, brushes, and default graph. */
     init() {
         if (!app.handle) return;

@@ -153,9 +153,6 @@ impl BrushBuilder {
     /// Set a port's default value and expose it as a user-adjustable control.
     ///
     /// The port's existing metadata (label, unit, icon, range) drives the UI.
-    /// Use this for brush-specific knobs that reuse a port's built-in label.
-    /// If you need a custom label for a specific brush, fall back to
-    /// `add_user_input` + `wire`.
     fn expose_port(&mut self, node: NodeId, port: &str, value: f32) {
         self.graph.set_port_default(node, port, value).unwrap();
         self.graph.set_port_exposed(node, port, true).unwrap();

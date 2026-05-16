@@ -772,7 +772,7 @@ fn lasso_selection_performance_and_correctness() {
 
 fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
     engine
-        .active_brush_graph_ref()
+        .active_brush_graph()
         .nodes
         .values()
         .find(|n: &&NodeInstance<BrushWireType>| n.type_id == type_id)

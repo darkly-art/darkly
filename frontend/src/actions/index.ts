@@ -3,7 +3,7 @@ import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
 import { toolRegistry } from '../tools/registry';
-import { copyToSystemClipboard, readImageFromClipboard } from '../clipboard';
+import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
@@ -111,11 +111,18 @@ export function registerActions() {
         defaultHotkey: '$mod+KeyC',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
-            app.handle.copy(app.activeLayerId);
+            const handle = app.handle;
+            // `copy_layer_rich` snapshots metadata up front and then drives
+            // the same async pixel readback that `copy` does — it's a
+            // superset, so we don't need to call both.
+            handle.copy_layer_rich(app.activeLayerId);
             app.onCopyResult((result) => {
-                if (result?.rgba) {
-                    copyToSystemClipboard(result.rgba, result.width, result.height);
-                }
+                if (!result?.rgba) return;
+                // The rich JSON lands one frame later, on the same readback
+                // completion path. Polling here is safe because we got the
+                // pixel result; the rich result is set before this callback.
+                const richJson = handle.poll_copy_rich_result() ?? undefined;
+                copyToSystemClipboard(result.rgba, result.width, result.height, richJson);
             });
         },
     });
@@ -126,7 +133,12 @@ export function registerActions() {
         defaultHotkey: '$mod+KeyX',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
-            app.handle.cut(app.activeLayerId);
+            const handle = app.handle;
+            // No `cut_layer_rich` yet — fall back to the pixels-only path
+            // for cut. Cross-tab paste of a cut layer still works (PNG
+            // fallback restores the bitmap) but loses blend mode/opacity.
+            // Worth a follow-up.
+            handle.cut(app.activeLayerId);
             app.onCopyResult((result) => {
                 if (result?.rgba) {
                     copyToSystemClipboard(result.rgba, result.width, result.height);
@@ -140,8 +152,32 @@ export function registerActions() {
         displayName: 'Paste',
         category: 'edit',
         defaultHotkey: '$mod+KeyV',
-        handler: () => {
+        handler: async () => {
             if (!app.handle) return;
+
+            // Prefer the rich-layer payload if a Darkly tab put one on the
+            // clipboard. Cross-tab paste this way preserves blend mode and
+            // opacity, which the PNG fallback cannot. Brush-builder pastes
+            // always want the pixel path, so skip rich there.
+            if (!brushGraph.isOpen) {
+                const rich = await readLayerFromClipboard();
+                if (rich && app.handle) {
+                    const activeId = app.activeLayerId ?? -1;
+                    const layerId = app.handle.paste_layer_rich(rich, activeId);
+                    if (layerId >= 0) {
+                        app.selectLayer(layerId);
+                        const activateTransform =
+                            config.get('edit.activateTransformAfterPaste') !== false;
+                        if (activateTransform) enterTransformTool();
+                        app.refreshLayerTree();
+                        app.requestFrame();
+                        return;
+                    }
+                    // Rich paste failed (malformed JSON, bad pixel data) —
+                    // fall through to the PNG path below.
+                }
+            }
+
             readImageFromClipboard().then(clip => {
                 if (!clip || !app.handle) return;
 

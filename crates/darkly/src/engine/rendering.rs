@@ -297,7 +297,7 @@ impl DarklyEngine {
                 // Drop stale results — if the graph has changed since
                 // this render was issued, a fresher render has already
                 // been queued and will supersede this one.
-                if graph_version == self.brush_graph_version {
+                if graph_version == self.brush_graph_version() {
                     let framed = frame_stroke_thumbnail(
                         &pixels,
                         width,
@@ -338,7 +338,7 @@ impl DarklyEngine {
                 // version: scrub-only changes don't affect the rendered
                 // dab thanks to `reset_exposed_scrubs`, so a readback
                 // queued before a scrub change is still valid.
-                if topology_version == self.brush_topology_version {
+                if topology_version == self.brush_topology_version() {
                     let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
                     let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
                     if !png_bytes.is_empty() {
@@ -355,7 +355,7 @@ impl DarklyEngine {
                 // changed the graph and another render is queued; this
                 // result is for the old graph and would lie about the
                 // current node output.
-                if topology_version == self.brush_topology_version {
+                if topology_version == self.brush_topology_version() {
                     let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
                     let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
                     if !png_bytes.is_empty() {

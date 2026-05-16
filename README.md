@@ -1,10 +1,26 @@
 ![darkly](https://github.com/user-attachments/assets/31a3a6d0-b2c2-4cad-acc8-87b968f0d87b)
 
-# DARKLY
+[![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge)](https://discord.gg/kFz2FGhbpu)
+[![Patreon](https://img.shields.io/badge/Patreon-Sick_ass_perks-orange?logo=patreon&style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
+[![Patreon](https://img.shields.io/badge/Blog-Substack-orange?style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust. It has [everything you expect](#standard-paint-features) from a paint program, plus some **[dark arts](#unique-darkly-features)** to help you rage against the machine.
+![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)
+![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=FF3E00)
+![WebAssembly](https://img.shields.io/badge/WebAssembly-000000?style=for-the-badge&logo=WebAssembly&logoColor=white)
 
-Darkly runs on your PC or in your browser via WebAssembly and WebGPU. Try out the demo [here](https://demo.darkly.art).
+[Darkly](https://darkly.art) is a GPU-native editor written in Rust. Geared towards digital artists, it's armed with special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
+
+Darkly vows to:
+- Honor human imagination
+- Run offline and without a login
+- Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
+- Stay free and open source forever
+
+Try the demo [here](https://demo.darkly.art). 
+
+## Kickstarter
+
+We're gearing up for a Kickstarter. Go vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want to see, and help us rescue our friends and colleagues from the iron grip of Adobe!
 
 ## Standard Paint Features
 

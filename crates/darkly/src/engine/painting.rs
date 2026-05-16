@@ -19,7 +19,8 @@ impl DarklyEngine {
     /// default in the active brush graph.  Returns 0.0 if not found.
     fn pen_input_stabilize_strength(&self) -> f32 {
         use crate::nodegraph::PortDir;
-        for node in self.active_brush_graph.nodes.values() {
+        let session = self.brush_session.read();
+        for node in session.graph.nodes.values() {
             if node.type_id == "pen_input" {
                 for port in &node.ports {
                     if port.name == "stabilize" && port.dir == PortDir::Input {
@@ -36,7 +37,8 @@ impl DarklyEngine {
     /// that predate the port (loaded from older brushes).
     fn pen_input_spacing_ratio(&self) -> f32 {
         use crate::nodegraph::PortDir;
-        for node in self.active_brush_graph.nodes.values() {
+        let session = self.brush_session.read();
+        for node in session.graph.nodes.values() {
             if node.type_id == "pen_input" {
                 for port in &node.ports {
                     if port.name == "spacing" && port.dir == PortDir::Input {
@@ -621,11 +623,16 @@ impl DarklyEngine {
         // Lazy-init: compile the active brush graph + create stroke buffer.
         if self.brush_stroke_engine.is_none() {
             need_begin_stroke = true;
-            let runner = match crate::brush::compile_graph(&self.active_brush_graph) {
-                Ok(r) => r,
-                Err(e) => {
-                    log::error!("brush graph compilation failed: {e:?}");
-                    return;
+            // Brief read guard around the compile — drop before any GPU
+            // work so other engines (multi-tab) can take the lock.
+            let runner = {
+                let session = self.brush_session.read();
+                match crate::brush::compile_graph(&session.graph) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        log::error!("brush graph compilation failed: {e:?}");
+                        return;
+                    }
                 }
             };
 

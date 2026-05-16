@@ -65,7 +65,7 @@ impl DarklyEngine {
     /// `preview.png` — loads still work, pickers fall back to whatever
     /// placeholder they prefer.
     pub fn brush_save(&mut self, name: &str, category: &str) -> Result<(), String> {
-        let mut metadata = BrushMetadata::from_graph(name, self.active_brush_graph.clone());
+        let mut metadata = BrushMetadata::from_graph(name, self.active_brush_graph());
         metadata.category = category.to_string();
         self.brush_library
             .insert(Brush::without_resources(metadata));
@@ -77,7 +77,7 @@ impl DarklyEngine {
         // fg) so the picker grid looks consistent across brushes.
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
-        let mut graph = self.active_brush_graph.clone();
+        let mut graph = self.active_brush_graph();
         graph.apply_preview_overrides();
         let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_preview_stroke(

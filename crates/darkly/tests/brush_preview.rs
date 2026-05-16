@@ -22,7 +22,7 @@ fn test_engine(w: u32, h: u32) -> DarklyEngine {
 
 fn find_node_id(engine: &DarklyEngine, type_id: &str) -> NodeId {
     engine
-        .active_brush_graph_ref()
+        .active_brush_graph()
         .nodes
         .values()
         .find(|n: &&NodeInstance<BrushWireType>| n.type_id == type_id)
@@ -208,11 +208,11 @@ fn preview_uses_arbitrary_brush_preview_texture() {
     // brush_graph_add_node returns updated JSON, but we need the new
     // node id. Walk the graph after the call.
     let json_before: serde_json::Value =
-        serde_json::from_str(&serde_json::to_string(engine.active_brush_graph_ref()).unwrap())
+        serde_json::from_str(&serde_json::to_string(&engine.active_brush_graph()).unwrap())
             .unwrap();
     let _ = engine.brush_graph_add_node("image").unwrap();
     let json_after: serde_json::Value =
-        serde_json::from_str(&serde_json::to_string(engine.active_brush_graph_ref()).unwrap())
+        serde_json::from_str(&serde_json::to_string(&engine.active_brush_graph()).unwrap())
             .unwrap();
     // Find the node id present in `after` but not `before`.
     let before_ids: std::collections::HashSet<u64> = json_before["nodes"]
