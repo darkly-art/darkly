@@ -58,6 +58,19 @@ class MultiTabShell {
         setActiveInstance(this.active);
     }
 
+    /** Move the tab with `id` to position `toIndex` in `instances`.
+     *  No-op if the id isn't present, the index is out of range, or the
+     *  order wouldn't change. Active tab and names are unaffected — only
+     *  the strip order changes. */
+    reorder(id: string, toIndex: number): void {
+        const fromIndex = this.instances.findIndex(i => i.id === id);
+        if (fromIndex === -1) return;
+        if (toIndex < 0 || toIndex >= this.instances.length) return;
+        if (toIndex === fromIndex) return;
+        const [inst] = this.instances.splice(fromIndex, 1);
+        this.instances.splice(toIndex, 0, inst);
+    }
+
     /** Close `id`. Drops the instance's WASM handle (and thus the engine
      *  and its GPU textures), focuses the previous tab when the closed one
      *  was active, or null when none remain. */
