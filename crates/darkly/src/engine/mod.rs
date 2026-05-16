@@ -262,15 +262,16 @@ pub struct DarklyEngine {
     pub(crate) brush_pipelines: BrushPipelines,
     /// Active brush stroke engine (only during a BrushStroke operation).
     pub(crate) brush_stroke_engine: Option<StrokeEngine>,
-    /// Shared brush session — the active graph, captured defaults, and
-    /// version counters. Owned by `DarklySession` (WASM bridge) and
-    /// cloned into every engine constructed from it, so multi-tab
-    /// editors paint with the same brush across tabs without any sync
-    /// step. The data lives behind an `Arc<RwLock<…>>`; engines take a
-    /// read guard for stroke compile / preview, a write guard for the
-    /// JS-driven mutation methods on `engine/brush_graph.rs` and
-    /// `engine/brush_library.rs`.
-    pub(crate) brush_session: crate::brush::session::SharedBrushSession,
+    /// Shared tool session — a generic bag of per-tool state shared
+    /// across every engine in a `DarklySession`. The brush module stores
+    /// its [`crate::brush::state::BrushState`] entry here; other tools
+    /// that grow cross-engine state in future register theirs the same
+    /// way. Owned by `DarklySession` (WASM bridge) and cloned into every
+    /// engine, so multi-tab editors see one source of truth for shared
+    /// tool state with no sync step. The data lives behind an
+    /// `Arc<RwLock<…>>`; engines take a read guard for stroke compile /
+    /// preview, a write guard for JS-driven mutation methods.
+    pub(crate) tool_session: crate::tool::SharedToolSession,
 
     /// Canvas-space positioning info for the brush preview overlay, cached
     /// after each `regenerate_brush_preview()` call. Consumed by the brush
@@ -297,12 +298,12 @@ pub struct DarklyEngine {
     /// Dimensions of the bytes in `brush_editor_preview_cache`. Cleared
     /// alongside the cache on invalidation.
     pub(crate) brush_editor_preview_cache_size: Option<(u32, u32)>,
-    // `brush_graph_version` and `brush_topology_version` moved into
-    // `brush_session` (shared). The per-engine `last_rendered_*` cursors
-    // below stay per-engine because they track this engine's own render
-    // cache versus the shared session's monotonic counter.
+    // `brush_graph_version` and `brush_topology_version` moved into the
+    // shared `BrushState` (looked up via `tool_session`). The per-engine
+    // `last_rendered_*` cursors below stay per-engine because they track
+    // this engine's own render cache versus the shared monotonic counter.
     /// Graph version at the last time we issued a preview render. Compared
-    /// against `brush_session.version` to skip redundant work.
+    /// against `BrushState::version` to skip redundant work.
     pub(crate) last_rendered_preview_version: u64,
 
     // --- Active brush dab preview ---
@@ -407,22 +408,22 @@ pub struct DarklyEngine {
 
 impl DarklyEngine {
     /// Convenience constructor for single-engine use (tests, headless,
-    /// embedded host). Allocates a fresh `SharedBrushSession` that's
-    /// owned exclusively by this engine. Multi-tab hosts use
-    /// `new_with_brush_session` instead, passing a `DarklySession`-owned
-    /// handle so every engine paints from the same brush.
+    /// embedded host). Allocates a fresh `SharedToolSession` that's
+    /// owned exclusively by this engine and seeds it with a default
+    /// `BrushState`. Multi-tab hosts use `new_with_tool_session`
+    /// instead, passing a `DarklySession`-owned handle so every engine
+    /// reads the same tool state.
     pub fn new(gpu: GpuContext, doc_width: u32, doc_height: u32) -> Self {
-        Self::new_with_brush_session(
-            gpu,
-            crate::brush::session::BrushSession::shared(),
-            doc_width,
-            doc_height,
-        )
+        let session = crate::tool::SharedToolSession::new();
+        session
+            .write()
+            .insert(crate::brush::state::BrushState::new());
+        Self::new_with_tool_session(gpu, session, doc_width, doc_height)
     }
 
-    pub fn new_with_brush_session(
+    pub fn new_with_tool_session(
         gpu: GpuContext,
-        brush_session: crate::brush::session::SharedBrushSession,
+        tool_session: crate::tool::SharedToolSession,
         doc_width: u32,
         doc_height: u32,
     ) -> Self {
@@ -465,7 +466,7 @@ impl DarklyEngine {
             dab_pool,
             brush_pipelines,
             brush_stroke_engine: None,
-            brush_session,
+            tool_session,
             brush_preview_info: None,
             last_preview_pose: None,
             brush_preview_renderer: BrushPreviewRenderer::new(),
@@ -694,40 +695,64 @@ impl DarklyEngine {
     }
 
     // -----------------------------------------------------------------
-    // Brush-session lock accessors — keep call sites compact.
+    // BrushState accessors — keep call sites compact.
     // -----------------------------------------------------------------
+    //
+    // The brush's shared state lives in `tool_session` (generic) under
+    // the type-keyed slot for `BrushState`. These helpers hide the
+    // double indirection (lock guard → typed lookup) for the cases that
+    // only need to read or bump a scalar.
 
     /// A clone of the active brush graph. Tests and the few external
     /// inspectors use this; per-frame paths inside the engine take a
-    /// `brush_session.read()` guard directly to skip the clone.
+    /// `tool_session.read()` guard directly to skip the clone.
     pub fn active_brush_graph(&self) -> crate::nodegraph::Graph<BrushWireType> {
-        self.brush_session.read().graph.clone()
+        self.tool_session
+            .read()
+            .get::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init")
+            .graph
+            .clone()
     }
 
     /// Version counter snapshot. Bumped on every brush-graph mutation —
     /// drives editor-preview cache invalidation.
     pub fn brush_graph_version(&self) -> u64 {
-        self.brush_session.read().version
+        self.tool_session
+            .read()
+            .get::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init")
+            .version
     }
 
     /// Topology version counter snapshot. Bumped only on changes that
     /// affect the brush's *identity* (graph topology, params, unwired
     /// non-exposed defaults). Drives dab-thumbnail cache invalidation.
     pub fn brush_topology_version(&self) -> u64 {
-        self.brush_session.read().topology_version
+        self.tool_session
+            .read()
+            .get::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init")
+            .topology_version
     }
 
     /// Bump the brush-graph version counter (e.g. after a scrub).
     pub(crate) fn bump_brush_graph_version(&self) {
-        let mut s = self.brush_session.write();
-        s.version = s.version.wrapping_add(1);
+        let mut tool = self.tool_session.write();
+        let brush = tool
+            .get_mut::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init");
+        brush.version = brush.version.wrapping_add(1);
     }
 
     /// Bump both version counters (e.g. after a topology change).
     pub(crate) fn bump_brush_topology_version(&self) {
-        let mut s = self.brush_session.write();
-        s.version = s.version.wrapping_add(1);
-        s.topology_version = s.topology_version.wrapping_add(1);
+        let mut tool = self.tool_session.write();
+        let brush = tool
+            .get_mut::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init");
+        brush.version = brush.version.wrapping_add(1);
+        brush.topology_version = brush.topology_version.wrapping_add(1);
     }
 
     /// Block until all pending async readbacks complete. For tests only.

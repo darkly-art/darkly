@@ -4,11 +4,17 @@
 //! get/set the active brush graph, and compile graphs.
 
 use super::{DarklyEngine, ReadbackContext};
+use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
 use crate::brush::{BrushNodeRegistration, BrushNodeRegistry};
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
+
+/// Panic message used by every `tool_session` BrushState lookup. The
+/// session is seeded with `BrushState::new()` at engine construction;
+/// `None` here would mean someone removed the entry, which is a bug.
+const NO_BRUSH_STATE: &str = "BrushState registered at session init";
 
 /// Classifies a brush-graph mutation by which preview consumers it
 /// actually invalidates.
@@ -66,7 +72,11 @@ impl DarklyEngine {
         // If compilation succeeded, store the deserialized graph.
         let graph: Graph<BrushWireType> =
             serde_json::from_str(json).map_err(|e| format!("JSON parse error: {e}"))?;
-        self.brush_session.write().graph = graph;
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph = graph;
         self.snapshot_brush_defaults();
         // Run the post-mutation pipeline so the brush preview mask (and any
         // other graph-dependent state) refreshes from the new graph.
@@ -76,30 +86,33 @@ impl DarklyEngine {
 
     /// Reset the active brush graph to the built-in default.
     pub fn reset_brush_graph(&mut self) {
-        self.brush_session.write().graph = crate::brush::default_graph();
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph = crate::brush::default_graph();
         self.snapshot_brush_defaults();
         let _ = self.compile_active(ChangeKind::Topology);
     }
 
     /// Capture every input port's current default into the shared brush
-    /// session's `defaults` map. Called whenever the active graph is
+    /// state's `defaults` map. Called whenever the active graph is
     /// replaced as a whole — brush load, reset, save — so that "reset to
     /// default" returns to the loaded/saved baseline rather than the
     /// node-type registration value. Not called on individual port edits;
     /// that's the whole point.
     pub(crate) fn snapshot_brush_defaults(&mut self) {
-        let mut session = self.brush_session.write();
-        session.defaults.clear();
-        // Re-borrow split: pull a snapshot of node data we need to read,
-        // then write `defaults`. Cheapest path is to walk nodes while
-        // holding the same write guard — `defaults` and `graph` are
-        // disjoint fields on `BrushSession`, so splitting the borrow is
-        // legal.
-        let session: &mut crate::brush::session::BrushSession = &mut session;
-        for node in session.graph.nodes.values() {
+        let mut tool = self.tool_session.write();
+        let brush = tool.get_mut::<BrushState>().expect(NO_BRUSH_STATE);
+        brush.defaults.clear();
+        // Re-borrow split: walking `brush.graph.nodes` and inserting
+        // into `brush.defaults` are reads/writes of disjoint fields on
+        // `BrushState`, so the borrow checker permits both inside the
+        // loop with no separate snapshot.
+        for node in brush.graph.nodes.values() {
             for port in &node.ports {
                 if port.dir == PortDir::Input {
-                    session
+                    brush
                         .defaults
                         .insert((node.id, port.name.clone()), port.default);
                 }
@@ -171,11 +184,12 @@ impl DarklyEngine {
         // work to keep the critical section narrow. The guard is held
         // only for the synchronous compile_graph call.
         let mut runner = {
-            let session = self.brush_session.read();
-            match crate::brush::compile_graph(&session.graph) {
+            let tool = self.tool_session.read();
+            let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
+            match crate::brush::compile_graph(&brush.graph) {
                 Ok(r) => r,
                 Err(_) => {
-                    drop(session);
+                    drop(tool);
                     self.compositor.clear_overlay_preview_mask();
                     self.brush_preview_info = None;
                     return;
@@ -296,9 +310,10 @@ impl DarklyEngine {
     fn compile_active(&mut self, kind: ChangeKind) -> Result<(), String> {
         // Compile + scan-for-live-resources under one read guard.
         let live: std::collections::HashSet<String> = {
-            let session = self.brush_session.read();
-            crate::brush::compile_graph(&session.graph).map_err(|e| format!("{e}"))?;
-            session
+            let tool = self.tool_session.read();
+            let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
+            crate::brush::compile_graph(&brush.graph).map_err(|e| format!("{e}"))?;
+            brush
                 .graph
                 .nodes
                 .values()
@@ -584,8 +599,9 @@ impl DarklyEngine {
         // output — both surface as empty bytes ("no preview to render").
         let target = crate::nodegraph::NodeId(node_id);
         let Some(graph) = ({
-            let session = self.brush_session.read();
-            crate::brush::preview_subgraph::build_node_preview_graph(&session.graph, target)
+            let tool = self.tool_session.read();
+            let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
+            crate::brush::preview_subgraph::build_node_preview_graph(&brush.graph, target)
         }) else {
             return Vec::new();
         };
@@ -665,7 +681,9 @@ impl DarklyEngine {
 
     /// Serialize the active graph as JSON.
     fn active_graph_json(&self) -> String {
-        serde_json::to_string(&self.brush_session.read().graph).unwrap_or_else(|_| "null".into())
+        let tool = self.tool_session.read();
+        let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
+        serde_json::to_string(&brush.graph).unwrap_or_else(|_| "null".into())
     }
 
     /// Add a node to the active graph and compile.
@@ -681,8 +699,10 @@ impl DarklyEngine {
             .iter()
             .map(|p| p.default_value())
             .collect::<Vec<_>>();
-        self.brush_session
+        self.tool_session
             .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
             .graph
             .add_node(type_id, reg.ports.clone(), params);
 
@@ -692,8 +712,10 @@ impl DarklyEngine {
 
     /// Remove a node from the active graph and compile.
     pub fn brush_graph_remove_node(&mut self, node_id: u64) -> Result<String, String> {
-        self.brush_session
+        self.tool_session
             .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
             .graph
             .remove_node(NodeId(node_id))
             .map_err(|e| format!("{e}"))?;
@@ -714,10 +736,11 @@ impl DarklyEngine {
             port: to_port.into(),
         };
         {
-            let mut session = self.brush_session.write();
+            let mut tool = self.tool_session.write();
+            let brush = tool.get_mut::<BrushState>().expect(NO_BRUSH_STATE);
             // Remove any existing connection to this input first.
-            session.graph.connections.retain(|c| c.to != to_ref);
-            session
+            brush.graph.connections.retain(|c| c.to != to_ref);
+            brush
                 .graph
                 .connect(
                     PortRef {
@@ -740,16 +763,21 @@ impl DarklyEngine {
         to_node: u64,
         to_port: &str,
     ) -> Result<String, String> {
-        self.brush_session.write().graph.disconnect(
-            &PortRef {
-                node: NodeId(from_node),
-                port: from_port.into(),
-            },
-            &PortRef {
-                node: NodeId(to_node),
-                port: to_port.into(),
-            },
-        );
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph
+            .disconnect(
+                &PortRef {
+                    node: NodeId(from_node),
+                    port: from_port.into(),
+                },
+                &PortRef {
+                    node: NodeId(to_node),
+                    port: to_port.into(),
+                },
+            );
         self.compile_active(ChangeKind::Topology)?;
         Ok(self.active_graph_json())
     }
@@ -761,8 +789,10 @@ impl DarklyEngine {
         param_index: usize,
         value: ParamValue,
     ) -> Result<String, String> {
-        self.brush_session
+        self.tool_session
             .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
             .graph
             .set_param(NodeId(node_id), param_index, value)
             .map_err(|e| format!("{e}"))?;
@@ -777,8 +807,10 @@ impl DarklyEngine {
         port_name: &str,
         value: f32,
     ) -> Result<String, String> {
-        self.brush_session
+        self.tool_session
             .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
             .graph
             .set_port_default(NodeId(node_id), port_name, value)
             .map_err(|e| format!("{e}"))?;
@@ -794,8 +826,10 @@ impl DarklyEngine {
         &self,
         sizes: &std::collections::HashMap<NodeId, [f32; 2]>,
     ) -> crate::nodegraph::NodeLayout {
-        self.brush_session
+        self.tool_session
             .read()
+            .get::<BrushState>()
+            .expect(NO_BRUSH_STATE)
             .graph
             .auto_layout_with_sizes(sizes)
     }
@@ -842,11 +876,12 @@ impl DarklyEngine {
     /// left-to-right) for a stable order in the properties panel.
     pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
         let registry = BrushNodeRegistry::new();
-        let session = self.brush_session.read();
-        let layout = session.graph.auto_layout();
+        let tool = self.tool_session.read();
+        let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
+        let layout = brush.graph.auto_layout();
         let mut result: Vec<ExposedPortInfo> = Vec::new();
 
-        for node in session.graph.nodes.values() {
+        for node in brush.graph.nodes.values() {
             let reg = registry.get(&node.type_id);
             let display_name = reg.map(|r| r.display_name).unwrap_or("");
 
@@ -861,7 +896,7 @@ impl DarklyEngine {
                 }
 
                 // A connected input is driven by its wire, not the user.
-                let connected = session
+                let connected = brush
                     .graph
                     .connections
                     .iter()
@@ -892,7 +927,7 @@ impl DarklyEngine {
                 // on nodes the user added after load (those weren't part
                 // of the brush, so registration default is the right
                 // baseline).
-                let reset_default = session
+                let reset_default = brush
                     .defaults
                     .get(&(node.id, port.name.clone()))
                     .copied()
@@ -953,8 +988,9 @@ impl DarklyEngine {
         // registry lookup below doesn't have to re-acquire the lock.
         // All later mutation happens through a fresh write guard.
         let type_id = {
-            let session = self.brush_session.read();
-            match session.graph.nodes.get(&nid) {
+            let tool = self.tool_session.read();
+            let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
+            match brush.graph.nodes.get(&nid) {
                 Some(node) => node.type_id.clone(),
                 None => return Err(format!("node {node_id} not found")),
             }
@@ -975,8 +1011,10 @@ impl DarklyEngine {
 
         let port_value = unit_type.from_display(display_value);
 
-        self.brush_session
+        self.tool_session
             .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
             .graph
             .set_port_default(nid, port_name, port_value)
             .map_err(|e| format!("{e}"))?;
@@ -1001,8 +1039,10 @@ impl DarklyEngine {
         port_name: &str,
         exposed: bool,
     ) -> Result<String, String> {
-        self.brush_session
+        self.tool_session
             .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
             .graph
             .set_port_exposed(NodeId(node_id), port_name, exposed)
             .map_err(|e| format!("{e}"))?;

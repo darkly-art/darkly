@@ -337,29 +337,35 @@ pub struct DarklySession {
     /// `None` until the first canvas is attached; `Some` thereafter.
     /// Single-threaded interior mutability is safe — JS calls are serial.
     gpu: RefCell<Option<Arc<GpuDevice>>>,
-    /// Shared brush graph — every `DarklyHandle` minted from this
-    /// session is constructed with a clone of this handle, so all
-    /// engines paint with the same brush. JS-driven brush mutations
-    /// (`brush_load`, scrubs, …) write through here once and every
-    /// engine sees the change with no per-engine push step.
-    brush_session: darkly::brush::session::SharedBrushSession,
+    /// Shared tool session — generic bag of per-tool state (currently
+    /// just `BrushState`, but the container has no module-specific
+    /// knowledge). Every `DarklyHandle` minted from this session is
+    /// constructed with a clone of the handle, so all engines see the
+    /// same tool state. JS-driven mutations write through here once and
+    /// every engine sees the change with no per-engine push step.
+    tool_session: darkly::tool::SharedToolSession,
 }
 
 #[wasm_bindgen]
 impl DarklySession {
     /// Create a new session. Cheap — only allocates a `wgpu::Instance`
-    /// and an empty shared brush session. The actual GPU device is
-    /// acquired on the first `createHandle` call.
+    /// and an empty shared tool session seeded with a default
+    /// `BrushState`. The actual GPU device is acquired on the first
+    /// `createHandle` call.
     #[wasm_bindgen(constructor)]
     pub fn new() -> DarklySession {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends: wgpu::Backends::BROWSER_WEBGPU,
             ..Default::default()
         });
+        let tool_session = darkly::tool::SharedToolSession::new();
+        tool_session
+            .write()
+            .insert(darkly::brush::state::BrushState::new());
         DarklySession {
             instance,
             gpu: RefCell::new(None),
-            brush_session: darkly::brush::session::BrushSession::shared(),
+            tool_session,
         }
     }
 
@@ -411,9 +417,9 @@ impl DarklySession {
         };
 
         DarklyHandle {
-            engine: RefCell::new(DarklyEngine::new_with_brush_session(
+            engine: RefCell::new(DarklyEngine::new_with_tool_session(
                 gpu,
-                self.brush_session.clone(),
+                self.tool_session.clone(),
                 doc_width,
                 doc_height,
             )),

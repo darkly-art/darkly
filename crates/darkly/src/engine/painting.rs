@@ -18,9 +18,13 @@ impl DarklyEngine {
     /// Read the stabilize strength from the pen_input node's "stabilize" port
     /// default in the active brush graph.  Returns 0.0 if not found.
     fn pen_input_stabilize_strength(&self) -> f32 {
+        use crate::brush::state::BrushState;
         use crate::nodegraph::PortDir;
-        let session = self.brush_session.read();
-        for node in session.graph.nodes.values() {
+        let tool = self.tool_session.read();
+        let brush = tool
+            .get::<BrushState>()
+            .expect("BrushState registered at session init");
+        for node in brush.graph.nodes.values() {
             if node.type_id == "pen_input" {
                 for port in &node.ports {
                     if port.name == "stabilize" && port.dir == PortDir::Input {
@@ -36,9 +40,13 @@ impl DarklyEngine {
     /// default. Falls back to `SpacingConfig::default().ratio` for graphs
     /// that predate the port (loaded from older brushes).
     fn pen_input_spacing_ratio(&self) -> f32 {
+        use crate::brush::state::BrushState;
         use crate::nodegraph::PortDir;
-        let session = self.brush_session.read();
-        for node in session.graph.nodes.values() {
+        let tool = self.tool_session.read();
+        let brush = tool
+            .get::<BrushState>()
+            .expect("BrushState registered at session init");
+        for node in brush.graph.nodes.values() {
             if node.type_id == "pen_input" {
                 for port in &node.ports {
                     if port.name == "spacing" && port.dir == PortDir::Input {
@@ -626,8 +634,12 @@ impl DarklyEngine {
             // Brief read guard around the compile — drop before any GPU
             // work so other engines (multi-tab) can take the lock.
             let runner = {
-                let session = self.brush_session.read();
-                match crate::brush::compile_graph(&session.graph) {
+                use crate::brush::state::BrushState;
+                let tool = self.tool_session.read();
+                let brush = tool
+                    .get::<BrushState>()
+                    .expect("BrushState registered at session init");
+                match crate::brush::compile_graph(&brush.graph) {
                     Ok(r) => r,
                     Err(e) => {
                         log::error!("brush graph compilation failed: {e:?}");

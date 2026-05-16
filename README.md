@@ -2,7 +2,7 @@
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge)](https://discord.gg/kFz2FGhbpu)
 [![Patreon](https://img.shields.io/badge/Patreon-Sick_ass_perks-orange?logo=patreon&style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
-[![Patreon](https://img.shields.io/badge/Blog-Substack-orange?style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
+[![Blog](https://img.shields.io/badge/Blog-Deranged_Rants-orange?logo=substack&style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)
 ![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=FF3E00)
