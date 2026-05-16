@@ -6,6 +6,21 @@ use super::graph::{Graph, GraphError, NodeId, PortDir, PortRef};
 use super::registration::NodeRegistration;
 use super::WireKind;
 
+/// A wired input on an execution step: which port, which slot to read from,
+/// and which source port wrote to that slot. The `source` ref lets the
+/// runner look up the source port's declared `natural_range` to remap
+/// the value when the source and dest use different value ranges.
+///
+/// Only connected inputs appear in `ExecStep::input_slots` (disconnected
+/// inputs fall back to their port default at eval time), so `source` is
+/// always present — never `None`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InputSlot {
+    pub port_name: String,
+    pub slot: usize,
+    pub source: PortRef,
+}
+
 /// One step in a compiled execution plan.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExecStep {
@@ -15,8 +30,9 @@ pub struct ExecStep {
     pub type_id: String,
     /// Whether this node runs on the GPU.
     pub is_gpu: bool,
-    /// Mapping from each input port name → the slot index it reads from.
-    pub input_slots: Vec<(String, usize)>,
+    /// One entry per **connected** input port — disconnected inputs are
+    /// resolved against the port's default at eval time and don't appear here.
+    pub input_slots: Vec<InputSlot>,
     /// Mapping from each output port name → the slot index it writes to.
     pub output_slots: Vec<(String, usize)>,
 }
@@ -172,7 +188,11 @@ pub fn compile<W: WireKind>(
                     };
                     if let Some(src) = input_wire.get(&pr) {
                         let slot = output_slot_map[src];
-                        input_slots.push((port.name.clone(), slot));
+                        input_slots.push(InputSlot {
+                            port_name: port.name.clone(),
+                            slot,
+                            source: src.clone(),
+                        });
                     }
                     // Disconnected inputs use their default value — the
                     // evaluator handles that (no slot assigned).
@@ -339,8 +359,11 @@ mod tests {
 
         // a's output slot should match b's input slot.
         let a_out_slot = a_step.output_slots[0].1;
-        let b_in_slot = b_step.input_slots[0].1;
+        let b_in_slot = b_step.input_slots[0].slot;
         assert_eq!(a_out_slot, b_in_slot);
+        // ...and b's input must record `a.out` as its source port.
+        assert_eq!(b_step.input_slots[0].source.node, a);
+        assert_eq!(b_step.input_slots[0].source.port, "out");
     }
 
     #[test]

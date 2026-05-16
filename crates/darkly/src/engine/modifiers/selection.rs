@@ -25,6 +25,50 @@ use crate::layer::LayerId;
 use crate::mask::RasterizedMask;
 use crate::undo::SelectionAction;
 
+/// Emit marching-ants overlay primitives from contour polylines. Each edge
+/// produces a pair of dashed-line primitives — black backing + white dashes —
+/// carrying cumulative arc length in `dash_offset` so dash phase flows
+/// continuously around the contour. Without that, each edge resets phase at
+/// its start: invisible at high zoom, glitchy flicker when zoomed out.
+///
+/// Two passes (all backings, then all dashes) preserve the original draw order
+/// so white dashes always render on top of any backing at corner overlaps.
+fn emit_marching_ants(
+    polylines: &[Vec<[f32; 2]>],
+    ox: f32,
+    oy: f32,
+    out: &mut Vec<OverlayPrimitive>,
+) {
+    for polyline in polylines {
+        for w in polyline.windows(2) {
+            let a = [w[0][0] + ox, w[0][1] + oy];
+            let b = [w[1][0] + ox, w[1][1] + oy];
+            let mut bg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, a, b);
+            bg.color = [0.0, 0.0, 0.0, 1.0];
+            bg.thickness = 1.5;
+            bg.dash_len = 0.0;
+            out.push(bg);
+        }
+    }
+    for polyline in polylines {
+        let mut arc = 0.0_f32;
+        for w in polyline.windows(2) {
+            let a = [w[0][0] + ox, w[0][1] + oy];
+            let b = [w[1][0] + ox, w[1][1] + oy];
+            let mut fg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, a, b);
+            fg.color = [1.0, 1.0, 1.0, 1.0];
+            fg.thickness = 1.0;
+            fg.dash_len = 8.0;
+            fg.dash_offset = arc;
+            out.push(fg);
+
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            arc += (dx * dx + dy * dy).sqrt();
+        }
+    }
+}
+
 impl DarklyEngine {
     // ========================================================================
     // Bridge helpers — read/write the selection's split state through one
@@ -403,28 +447,11 @@ impl DarklyEngine {
                 .copy_from_slice(&mask.data[src..src + mask.width as usize]);
         }
 
-        let segments = crate::mask::contour_segments_r8(&buf, bw, bh, 127);
+        let polylines = crate::mask::contour_polylines_r8(&buf, bw, bh, 127);
 
         let ox = mask.x as f32 - pad as f32;
         let oy = mask.y as f32 - pad as f32;
-        for (a, b) in &segments {
-            let ca = [a[0] + ox, a[1] + oy];
-            let cb = [b[0] + ox, b[1] + oy];
-            let mut bg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, ca, cb);
-            bg.color = [0.0, 0.0, 0.0, 1.0];
-            bg.thickness = 1.5;
-            bg.dash_len = 0.0;
-            self.selection_overlay.push(bg);
-        }
-        for (a, b) in &segments {
-            let ca = [a[0] + ox, a[1] + oy];
-            let cb = [b[0] + ox, b[1] + oy];
-            let mut fg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, ca, cb);
-            fg.color = [1.0, 1.0, 1.0, 1.0];
-            fg.thickness = 1.0;
-            fg.dash_len = 8.0;
-            self.selection_overlay.push(fg);
-        }
+        emit_marching_ants(&polylines, ox, oy, &mut self.selection_overlay);
 
         self.push_merged_overlay();
     }
@@ -542,8 +569,13 @@ impl DarklyEngine {
             None => return,
         };
         let snap = self.gpu.encode_ret("sel-undo-save", |encoder| {
-            self.region_store
-                .save_region(encoder, &frame, wgpu::TextureFormat::R8Unorm, rect)
+            self.region_store.save_region(
+                &self.gpu.device,
+                encoder,
+                &frame,
+                wgpu::TextureFormat::R8Unorm,
+                rect,
+            )
         });
         self.pending_selection_snapshot = Some(snap);
     }
@@ -641,22 +673,9 @@ impl DarklyEngine {
 
         self.set_selection_cpu_cache(pixels.clone());
 
-        let segments =
-            crate::mask::contour_segments_r8(&pixels, self.doc.width, self.doc.height, 127);
-        for (a, b) in &segments {
-            let mut bg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, *a, *b);
-            bg.color = [0.0, 0.0, 0.0, 1.0];
-            bg.thickness = 1.5;
-            bg.dash_len = 0.0;
-            self.selection_overlay.push(bg);
-        }
-        for (a, b) in &segments {
-            let mut fg = OverlayPrimitive::new(KIND_DASHED_LINE, FLAG_CANVAS_SPACE, *a, *b);
-            fg.color = [1.0, 1.0, 1.0, 1.0];
-            fg.thickness = 1.0;
-            fg.dash_len = 8.0;
-            self.selection_overlay.push(fg);
-        }
+        let polylines =
+            crate::mask::contour_polylines_r8(&pixels, self.doc.width, self.doc.height, 127);
+        emit_marching_ants(&polylines, 0.0, 0.0, &mut self.selection_overlay);
 
         self.push_merged_overlay();
     }

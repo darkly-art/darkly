@@ -2,7 +2,11 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::tool::ToolRegistration`.
 
+pub mod brush;
+pub mod colorpicker;
 pub mod ellipse_select;
+pub mod fill;
+pub mod gradient;
 pub mod lasso_select;
 pub mod magic_wand;
 pub mod rect_select;
@@ -13,7 +17,11 @@ use crate::tool::ToolRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<ToolRegistration> {
     vec![
+        brush::register(),
+        colorpicker::register(),
         ellipse_select::register(),
+        fill::register(),
+        gradient::register(),
         lasso_select::register(),
         magic_wand::register(),
         rect_select::register(),

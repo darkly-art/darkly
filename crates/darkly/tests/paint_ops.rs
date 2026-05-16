@@ -112,7 +112,7 @@ fn gpu_gradient_undo() {
 
     // Save pre-gradient state.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Render gradient.
@@ -332,7 +332,7 @@ fn gpu_flood_fill_undo() {
 
     // Save region for undo.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Flood fill entire canvas (all transparent → seed matches everywhere).

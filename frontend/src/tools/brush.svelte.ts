@@ -130,7 +130,6 @@ function brushStrokeParams(e: PointerEvent, cx: number, cy: number) {
 
 export const brushTool: Tool = {
     id: 'brush',
-    name: 'Brush',
     /** Icon swaps to the eraser glyph while `brushSession.eraseMode` is on,
      *  giving the toolbar button a visible mode indicator. Reactive because
      *  Svelte's template re-reads the getter when `brushSession.eraseMode`

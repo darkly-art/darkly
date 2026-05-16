@@ -3,8 +3,8 @@ import {
     config_preset_names, config_preset_values, config_schema,
 } from '../../wasm/pkg/darkly_wasm';
 import {
-    getDir, listEntries, readJson, readText, removeEntry, writeJson, writeText, sanitizeFilename,
-} from '../storage/root';
+    storage, readJson, readText, writeJson, writeText, sanitizeFilename,
+} from '../storage';
 import type { SectionInfo } from './schema';
 import { validateOverrides } from './validate';
 
@@ -166,16 +166,15 @@ class ConfigStore {
 
         // Discover user presets and the active pointer in the Darkly dir.
         try {
-            const dir = await getDir(PRESETS_DIR);
-            const entries = await listEntries(dir);
+            const entries = await storage.list(PRESETS_DIR);
             this.userPresetNames = entries
                 .filter(e => e.kind === 'file' && e.name.endsWith('.json'))
                 .map(e => e.name.slice(0, -'.json'.length))
                 .sort();
 
-            const active = (await readText(dir, ACTIVE_FILE))?.trim() || null;
+            const active = (await readText(`${PRESETS_DIR}/${ACTIVE_FILE}`))?.trim() || null;
             if (active && this.userPresetNames.includes(active)) {
-                await this.#loadIntoMemory(dir, active);
+                await this.#loadIntoMemory(active);
             } else {
                 // First launch (or stale active pointer with no surviving preset).
                 this.needsPresetChoice = true;
@@ -301,8 +300,7 @@ class ConfigStore {
     /** Delete a user preset. If it was active, switch to another (or back
      *  to the picker if none remain). */
     async deletePreset(name: string) {
-        const dir = await getDir(PRESETS_DIR);
-        await removeEntry(dir, `${name}.json`);
+        await storage.remove(`${PRESETS_DIR}/${name}.json`);
         this.userPresetNames = this.userPresetNames.filter(n => n !== name);
         if (this.activePresetName === name) {
             const next = this.userPresetNames[0] ?? null;
@@ -333,8 +331,8 @@ class ConfigStore {
     }
 
     /** Read a preset file and load it as the active value map. */
-    async #loadIntoMemory(dir: FileSystemDirectoryHandle, name: string) {
-        const raw = (await readJson<unknown>(dir, `${name}.json`)) ?? {};
+    async #loadIntoMemory(name: string) {
+        const raw = (await readJson<unknown>(`${PRESETS_DIR}/${name}.json`)) ?? {};
         const flat = unstructure(raw);
         const { cleaned, changed } = validateOverrides(this.schema, flat);
         this.#values = cleaned;
@@ -344,14 +342,13 @@ class ConfigStore {
         for (const [k, v] of Object.entries(cleaned)) config_set(k, v);
         if (changed) {
             // Write the cleaned-up values back so we don't keep warning.
-            await writeJson(dir, `${name}.json`, structure(name, cleaned));
+            await writeJson(`${PRESETS_DIR}/${name}.json`, structure(name, cleaned));
         }
     }
 
     /** Create a new preset file with the given values. */
     async #createPreset(name: string, values: Record<string, unknown>) {
-        const dir = await getDir(PRESETS_DIR);
-        await writeJson(dir, `${name}.json`, structure(name, values));
+        await writeJson(`${PRESETS_DIR}/${name}.json`, structure(name, values));
         if (!this.userPresetNames.includes(name)) {
             this.userPresetNames = [...this.userPresetNames, name].sort();
         }
@@ -359,8 +356,7 @@ class ConfigStore {
 
     /** Switch active preset, loading its values and updating .active. */
     async #switchTo(name: string) {
-        const dir = await getDir(PRESETS_DIR);
-        await this.#loadIntoMemory(dir, name);
+        await this.#loadIntoMemory(name);
         await this.#flushActiveFile(name);
     }
 
@@ -371,17 +367,16 @@ class ConfigStore {
         config_reset_all();
         for (const [k, v] of Object.entries(values)) config_set(k, v);
         this.#values = values;
-        const dir = await getDir(PRESETS_DIR);
-        await writeJson(dir, `${name}.json`, structure(name, values));
+        await writeJson(`${PRESETS_DIR}/${name}.json`, structure(name, values));
     }
 
     /** Persist the .active pointer file (or remove it if name is null). */
     async #flushActiveFile(name: string | null) {
-        const dir = await getDir(PRESETS_DIR);
+        const activePath = `${PRESETS_DIR}/${ACTIVE_FILE}`;
         if (name === null) {
-            await removeEntry(dir, ACTIVE_FILE);
+            await storage.remove(activePath);
         } else {
-            await writeText(dir, ACTIVE_FILE, name);
+            await writeText(activePath, name);
         }
     }
 
@@ -397,8 +392,7 @@ class ConfigStore {
             const snapshot = this.#values;
             (async () => {
                 try {
-                    const dir = await getDir(PRESETS_DIR);
-                    await writeJson(dir, `${name}.json`, structure(name, snapshot));
+                    await writeJson(`${PRESETS_DIR}/${name}.json`, structure(name, snapshot));
                 } catch (e) {
                     console.error('[config] preset write failed', e);
                 }

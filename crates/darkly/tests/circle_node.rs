@@ -25,7 +25,7 @@ use std::sync::{Arc, OnceLock};
 
 use darkly::brush::dab_pool::{DabTexturePool, DAB_REFERENCE_SIZE};
 use darkly::brush::eval::{BrushNodeEvaluator, EvalContext};
-use darkly::brush::gpu_context::BrushGpuContext;
+use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use darkly::brush::nodes::circle::CircleEvaluator;
 use darkly::brush::pipelines::BrushPipelines;
 use darkly::brush::wire::{BrushWireType, ScalarValue};
@@ -143,6 +143,7 @@ fn render_dab(algorithm: i32, inputs: Inputs) -> Vec<u8> {
             pre_stroke_texture: None,
             pre_stroke_bind_group: None,
             dab_write_canvas_bbox: None,
+            perf: BrushPerfCounters::default(),
         };
         let eval_ctx = EvalContext {
             inputs: &input_map,

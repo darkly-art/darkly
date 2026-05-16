@@ -1,7 +1,10 @@
+pub mod layer_kind;
+pub mod layer_kinds;
 pub mod modifier;
 pub mod modifiers;
 
-pub use modifier::{Modifier, ModifierKind, ModifierRegistration};
+pub use layer_kind::{LayerKindRegistration, LayerKindRegistry};
+pub use modifier::{Modifier, ModifierKind, ModifierRegistration, ModifierRegistry};
 pub use modifiers::mask::MaskModifier;
 pub use modifiers::selection::{SelectionCpuCache, SelectionModifier};
 

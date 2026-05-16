@@ -5,7 +5,26 @@ export interface Color {
     r: number; g: number; b: number; a: number;
 }
 
-class AppState {
+/**
+ * A self-contained Darkly editor: one `DarklyHandle`, one canvas, one
+ * document, one set of UI state (active tool, layer selection, view
+ * transform, copy callback, frame scheduler, …). Multiple instances can
+ * coexist (multi-tab host); a stand-alone embed has just one. The instance
+ * has zero awareness of tabs, siblings, or any host that might contain it —
+ * tab management is an outer layer (`frontend/src/multi_tab/shell.svelte.ts`)
+ * that simply owns a collection of instances.
+ *
+ * Components throughout the UI import the global `app` proxy (below) instead
+ * of holding an instance reference directly; the host swaps which instance
+ * `app` resolves to via [`setActiveInstance`].
+ */
+export class DarklyInstance {
+    /** Stable id, useful as a `{#each}` key in the multi-tab shell. */
+    readonly id: string =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+            ? crypto.randomUUID()
+            : `instance-${Math.random().toString(36).slice(2)}`;
+
     handle = $state<DarklyHandle | null>(null);
 
     // Colors
@@ -14,6 +33,57 @@ class AppState {
 
     // Active tool
     activeToolId = $state<string>('brush');
+
+    // Registry-backed display-name lookups. Each map is populated once at
+    // startup from the matching `*_types()` WASM query (see `loadRegistries`).
+    // Per-instance payloads (LayerInfo, VeilInfo, ModifierInfo, etc.) carry
+    // only the stable `type_id`; UI code resolves the human-readable label
+    // through these maps — there is no second copy of the display string.
+    toolDisplayNames = $state<Record<string, string>>({});
+    veilDisplayNames = $state<Record<string, string>>({});
+    blendModeDisplayNames = $state<Record<string, string>>({});
+    modifierDisplayNames = $state<Record<string, string>>({});
+    layerKindDisplayNames = $state<Record<string, string>>({});
+
+    toolDisplayName(id: string): string {
+        return this.toolDisplayNames[id] ?? id;
+    }
+    veilDisplayName(id: string): string {
+        return this.veilDisplayNames[id] ?? id;
+    }
+    blendModeDisplayName(id: string): string {
+        return this.blendModeDisplayNames[id] ?? id;
+    }
+    modifierDisplayName(id: string): string {
+        return this.modifierDisplayNames[id] ?? id;
+    }
+    layerKindDisplayName(id: string): string {
+        return this.layerKindDisplayNames[id] ?? id;
+    }
+
+    /** Populate every registry-backed display-name map from the Rust core in
+     *  one pass. Called once during editor init, before action registration
+     *  and before `this.handle` is set, so the maps are ready by the time any
+     *  UI mounts. */
+    loadRegistries(handle: { tool_types(): string; veil_types(): string;
+        blend_mode_types(): string; modifier_types(): string;
+        layer_kind_types(): string }) {
+        const buildMap = (json: string): Record<string, string> => {
+            try {
+                const arr = JSON.parse(json) as Array<{ type: string; displayName: string }>;
+                const m: Record<string, string> = {};
+                for (const e of arr) m[e.type] = e.displayName;
+                return m;
+            } catch {
+                return {};
+            }
+        };
+        this.toolDisplayNames = buildMap(handle.tool_types());
+        this.veilDisplayNames = buildMap(handle.veil_types());
+        this.blendModeDisplayNames = buildMap(handle.blend_mode_types());
+        this.modifierDisplayNames = buildMap(handle.modifier_types());
+        this.layerKindDisplayNames = buildMap(handle.layer_kind_types());
+    }
 
     // Active layer
     activeLayerId = $state<number | null>(null);
@@ -26,11 +96,6 @@ class AppState {
     // that node's contribution (e.g. a mask renders grayscale on canvas).
     // Replaces the old per-layer `showMaskLayerId`.
     isolatedNodeId = $state<number | null>(null);
-
-    // Tool runtime state -- working values adjusted while painting.
-    fillTolerance = $state(32);     // 0-255
-    fillAll = $state(false);
-    gradientType = $state<'linear' | 'radial'>('linear');
 
     // Layer tree (read from WASM, refreshed after mutations/undo/redo).
     layerTree = $state<any[]>([]);
@@ -227,10 +292,54 @@ class AppState {
     }
 }
 
-export const app = new AppState();
+// ---------------------------------------------------------------------------
+// `app` — global proxy for "the currently focused instance"
+// ---------------------------------------------------------------------------
+//
+// 40+ files do `import { app } from './state/app.svelte'`. To keep them
+// untouched, `app` stays a single exported symbol — but it's now a Proxy
+// over a swappable underlying instance. Single-instance hosts call
+// `setActiveInstance(theLoneInstance)` at boot; the multi-tab shell calls it
+// whenever the focused tab changes.
 
-// `app` owns the live DarklyHandle. HMR'ing this module resets `handle` to
-// null, orphaning the running engine. Force a full reload instead.
+let activeInstance = $state<DarklyInstance | null>(null);
+
+/** Replace the underlying instance that the global `app` proxy resolves to.
+ *  Calling this triggers Svelte reactivity on every consumer that reads
+ *  `app.<x>` (because the proxy's getter reads the `$state` `activeInstance`,
+ *  threading the dependency through). */
+export function setActiveInstance(inst: DarklyInstance | null) {
+    activeInstance = inst;
+}
+
+/** The currently focused instance, or `null` if none has been set. Useful for
+ *  the multi-tab shell or boot code that needs the raw instance. */
+export function getActiveInstance(): DarklyInstance | null {
+    return activeInstance;
+}
+
+export const app = new Proxy({} as DarklyInstance, {
+    get(_target, prop, _receiver) {
+        const inst = activeInstance;
+        if (!inst) return undefined;
+        const value = (inst as any)[prop];
+        // Bind methods so `this` resolves to the instance, not the proxy.
+        return typeof value === 'function' ? value.bind(inst) : value;
+    },
+    set(_target, prop, value) {
+        const inst = activeInstance;
+        if (!inst) return false;
+        (inst as any)[prop] = value;
+        return true;
+    },
+    has(_target, prop) {
+        return activeInstance ? prop in activeInstance : false;
+    },
+});
+
+// `app` resolves through `activeInstance`. HMR'ing this module resets
+// `activeInstance` to null, orphaning the running engine. Force a full
+// reload instead.
 if (import.meta.hot) {
     import.meta.hot.accept(() => import.meta.hot!.invalidate());
 }

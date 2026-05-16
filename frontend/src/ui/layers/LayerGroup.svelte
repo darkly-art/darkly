@@ -13,7 +13,7 @@
         group: {
             type: 'group'; id: number; name: string; visible: boolean;
             collapsed: boolean; passthrough: boolean; opacity: number;
-            blendMode: number; children: any[];
+            blendMode: string; children: any[];
             modifiers?: Modifier[];
         };
         depth?: number;

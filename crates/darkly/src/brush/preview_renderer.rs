@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use super::dab_pool::DabTexturePool;
-use super::gpu_context::BrushGpuContext;
+use super::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use super::paint_info::PaintInformation;
 use super::pipelines::BrushPipelines;
 use super::spacing::SpacingConfig;
@@ -217,6 +217,7 @@ impl BrushPreviewRenderer {
                     pre_stroke_texture: Some(pre_stroke_texture),
                     pre_stroke_bind_group: Some(pre_stroke_bind_group),
                     dab_write_canvas_bbox: None,
+                    perf: BrushPerfCounters::default(),
                 }
             }};
         }

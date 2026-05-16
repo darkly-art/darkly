@@ -58,6 +58,7 @@ pub fn register() -> BrushNodeRegistration {
         ports: vec![
             PortDef::input("size", BrushWireType::Scalar)
                 .with_range(0.0, 4.0, 0.3)
+                .with_natural_range(0.0, 4.0)
                 .with_label("Size")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-up-right-and-down-left-from-center")
@@ -65,6 +66,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Brush size. Can go above 100% for large-area warps (capped at 400%)."),
             PortDef::input("strength", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Strength")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-gauge-high")
@@ -72,6 +74,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("How far pixels are pushed by each brush touch"),
             PortDef::input("softness", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Softness")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-wave-square")
@@ -79,6 +82,9 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Edge shape. Low values concentrate the warp at the brush center; high values spread it evenly across the brush."),
             PortDef::input("position", BrushWireType::Vec2)
                 .with_description("Where to apply the warp"),
+            // No `natural_range`: radians are a unit, not a normalized
+            // signal. `pen.drawing_angle → direction` (the canonical
+            // wire) is a unit-preserving identity.
             PortDef::input("direction", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_description("Direction to push pixels"),

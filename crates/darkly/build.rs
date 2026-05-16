@@ -30,6 +30,16 @@ fn main() {
         &src.join("document/modifiers"),
         "crate::document::modifier::ModifierRegistration",
     );
+
+    generate_registry(
+        &src.join("document/layer_kinds"),
+        "crate::document::layer_kind::LayerKindRegistration",
+    );
+
+    generate_registry(
+        &src.join("gpu/blend_modes"),
+        "crate::gpu::blend_mode::BlendModeRegistration",
+    );
 }
 
 /// Scan a directory for .rs module files (excluding mod.rs) and generate

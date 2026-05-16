@@ -3,7 +3,7 @@
 use super::{DarklyEngine, ReadbackContext};
 use crate::gpu::readback;
 use crate::gpu::view::ViewTransform;
-use crate::layer::{BlendMode, LayerId};
+use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
 /// Thumbnail size used for the layer panel previews. Single source of
@@ -95,6 +95,13 @@ impl DarklyEngine {
     /// Kick off an async GPU readback for a thumbnail of any node by id,
     /// if one isn't already pending. Format is derived from the node's
     /// GPU texture — callers don't dispatch on layer-vs-modifier.
+    ///
+    /// Reads the texture's full extent, not a canvas-sized rect. Layer
+    /// textures may be smaller than canvas (e.g. a small paste) or larger
+    /// (off-canvas paste, chunk-aligned growth past canvas edge); copying
+    /// `[0, 0, canvas_w, canvas_h]` would over-read in either case and
+    /// fail wgpu validation. The source dims are carried to the completion
+    /// handler so the downscale uses the same layout the buffer holds.
     fn request_thumbnail_readback(&mut self, node_id: LayerId, thumb_w: u32, thumb_h: u32) {
         if self
             .readbacks
@@ -103,11 +110,8 @@ impl DarklyEngine {
             return;
         }
 
-        let doc_w = self.doc.width;
-        let doc_h = self.doc.height;
-
-        let (texture, format) = match self.compositor.node_texture(node_id) {
-            Some(t) => (&t.texture, t.format),
+        let (texture, format, tex_w, tex_h) = match self.compositor.node_texture(node_id) {
+            Some(t) => (&t.texture, t.format, t.width, t.height),
             None => return,
         };
 
@@ -117,12 +121,14 @@ impl DarklyEngine {
                 encoder,
                 texture,
                 format,
-                [0, 0, doc_w, doc_h],
+                [0, 0, tex_w, tex_h],
             );
             self.readbacks.submit(
                 request,
                 ReadbackContext::Thumbnail {
                     node_id,
+                    source_w: tex_w,
+                    source_h: tex_h,
                     thumb_w,
                     thumb_h,
                 },
@@ -258,20 +264,24 @@ impl DarklyEngine {
             }
             ReadbackContext::Thumbnail {
                 node_id,
+                source_w,
+                source_h,
                 thumb_w,
                 thumb_h,
             } => {
-                let doc_w = self.doc.width;
-                let doc_h = self.doc.height;
                 let is_r8 = self
                     .compositor
                     .node_texture(node_id)
                     .map(|t| t.format == wgpu::TextureFormat::R8Unorm)
                     .unwrap_or(false);
                 let thumb = if is_r8 {
-                    generate_mask_thumbnail_from_pixels(&pixels, doc_w, doc_h, thumb_w, thumb_h)
+                    generate_mask_thumbnail_from_pixels(
+                        &pixels, source_w, source_h, thumb_w, thumb_h,
+                    )
                 } else {
-                    generate_rgba_thumbnail_from_pixels(&pixels, doc_w, doc_h, thumb_w, thumb_h)
+                    generate_rgba_thumbnail_from_pixels(
+                        &pixels, source_w, source_h, thumb_w, thumb_h,
+                    )
                 };
                 self.thumbnail_cache.insert(node_id, thumb);
                 // Tell the frontend "fresh thumbnail bytes available".
@@ -287,7 +297,7 @@ impl DarklyEngine {
                 // Drop stale results — if the graph has changed since
                 // this render was issued, a fresher render has already
                 // been queued and will supersede this one.
-                if graph_version == self.brush_graph_version {
+                if graph_version == self.brush_graph_version() {
                     let framed = frame_stroke_thumbnail(
                         &pixels,
                         width,
@@ -328,7 +338,7 @@ impl DarklyEngine {
                 // version: scrub-only changes don't affect the rendered
                 // dab thanks to `reset_exposed_scrubs`, so a readback
                 // queued before a scrub change is still valid.
-                if topology_version == self.brush_topology_version {
+                if topology_version == self.brush_topology_version() {
                     let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
                     let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
                     if !png_bytes.is_empty() {
@@ -345,7 +355,7 @@ impl DarklyEngine {
                 // changed the graph and another render is queued; this
                 // result is for the old graph and would lie about the
                 // current node output.
-                if topology_version == self.brush_topology_version {
+                if topology_version == self.brush_topology_version() {
                     let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
                     let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
                     if !png_bytes.is_empty() {
@@ -389,21 +399,35 @@ impl DarklyEngine {
 
     /// Render a frame. Returns true if animations need another frame.
     pub fn render(&mut self, time_secs: f32) -> bool {
+        // Sub-phase wall-clock timing for the slow-frame log. Always
+        // recorded into `self.last_frame_phases` even on fast frames — the
+        // WASM bridge decides whether to emit; nominal cost is a handful
+        // of `Instant::now()` calls.
+        let t_poll = web_time::Instant::now();
         let pending_completed = self.poll_pending();
         if pending_completed {
             self.compositor.mark_dirty();
         }
+        let poll_us = t_poll.elapsed().as_micros() as u64;
 
+        let t_thumb = web_time::Instant::now();
         // Auto-queue thumbnail readbacks for layers whose pixels were
         // modified since the last frame. Must run *before* the headless
         // early-return below so tests exercise the same code path the
         // production frame loop does.
         self.drain_dirty_thumbnail_readbacks();
+        let thumb_us = t_thumb.elapsed().as_micros() as u64;
 
         // Headless mode (tests): poll pending ops but skip presentation.
         let (surface, surface_config) = match (&self.gpu.surface, &self.gpu.surface_config) {
             (Some(s), Some(c)) => (s, c),
             _ => {
+                self.last_frame_phases = super::FrameRenderPhases {
+                    poll_us,
+                    thumb_us,
+                    anim_us: 0,
+                    compositor_us: 0,
+                };
                 return self.readbacks.has_pending()
                     || self.compositor.has_pending_content_bounds()
                     || self.diff_rect.is_pending();
@@ -414,11 +438,21 @@ impl DarklyEngine {
         // squeezed to 0 height by a UI panel).  WebGPU cannot create
         // 0-dimension textures and attempting to do so corrupts the device.
         if surface_config.width == 0 || surface_config.height == 0 {
+            self.last_frame_phases = super::FrameRenderPhases {
+                poll_us,
+                thumb_us,
+                anim_us: 0,
+                compositor_us: 0,
+            };
             return self.readbacks.has_pending() || self.compositor.has_pending_content_bounds();
         }
 
+        let t_anim = web_time::Instant::now();
         self.compositor
             .update_animations(&self.gpu.queue, time_secs);
+        let anim_us = t_anim.elapsed().as_micros() as u64;
+
+        let t_comp = web_time::Instant::now();
         self.compositor.render(
             &self.gpu.device,
             &self.gpu.queue,
@@ -426,6 +460,14 @@ impl DarklyEngine {
             surface_config,
             &mut self.doc,
         );
+        let compositor_us = t_comp.elapsed().as_micros() as u64;
+
+        self.last_frame_phases = super::FrameRenderPhases {
+            poll_us,
+            thumb_us,
+            anim_us,
+            compositor_us,
+        };
 
         // Keep requesting frames while async operations are in flight.
         self.compositor.needs_animation()
@@ -564,7 +606,7 @@ impl DarklyEngine {
         struct RasterInfo {
             id: LayerId,
             opacity: f32,
-            blend_mode: BlendMode,
+            blend_mode_gpu: u32,
             isolated: bool,
             bounds: crate::coord::CanvasRect,
         }
@@ -575,7 +617,7 @@ impl DarklyEngine {
             .map(|r| RasterInfo {
                 id: r.id,
                 opacity: r.blend.opacity,
-                blend_mode: r.blend.blend_mode,
+                blend_mode_gpu: r.blend.blend_mode.gpu_value,
                 isolated: isolated_host(r.id),
                 bounds: r.pixels.bounds,
             })
@@ -592,7 +634,7 @@ impl DarklyEngine {
                 &self.gpu.queue,
                 info.id,
                 info.opacity,
-                info.blend_mode,
+                info.blend_mode_gpu,
                 info.isolated,
             );
         }
@@ -644,7 +686,7 @@ impl DarklyEngine {
         // so we update them through the same path — `update_group_uniforms`
         // skips the group_state branch when none exists and writes only the
         // pms uniform.
-        let groups: Vec<(LayerId, bool, f32, BlendMode, bool)> = self
+        let groups: Vec<(LayerId, bool, f32, u32, bool)> = self
             .doc
             .all_groups()
             .iter()
@@ -653,12 +695,12 @@ impl DarklyEngine {
                     g.id,
                     g.passthrough,
                     g.blend.opacity,
-                    g.blend.blend_mode,
+                    g.blend.blend_mode.gpu_value,
                     isolated_host(g.id),
                 )
             })
             .collect();
-        for (id, passthrough, opacity, blend_mode, isolated_flag) in groups {
+        for (id, passthrough, opacity, blend_mode_gpu, isolated_flag) in groups {
             if !passthrough {
                 self.compositor
                     .ensure_group_state(&self.gpu.device, &self.gpu.queue, id);
@@ -667,7 +709,7 @@ impl DarklyEngine {
                 &self.gpu.queue,
                 id,
                 opacity,
-                blend_mode,
+                blend_mode_gpu,
                 isolated_flag,
             );
         }

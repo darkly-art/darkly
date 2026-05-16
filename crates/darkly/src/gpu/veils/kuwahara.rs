@@ -26,6 +26,7 @@ const PARAMS: &[ParamDef] = &[
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "kuwahara",
+        display_name: "Kuwahara",
         params: PARAMS,
         create_pipeline: create_kuwahara_pipeline,
         from_params: |params, shared| {

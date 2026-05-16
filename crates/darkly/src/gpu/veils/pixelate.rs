@@ -18,6 +18,7 @@ const PARAMS: &[ParamDef] = &[
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "pixelate",
+        display_name: "Pixelate",
         params: PARAMS,
         create_pipeline: create_pixelate_pipeline,
         from_params: |params, shared| {

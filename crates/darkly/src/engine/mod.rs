@@ -11,8 +11,14 @@ mod veils;
 
 pub use rendering::DEFAULT_THUMB_SIZE;
 pub use types::{
-    ClipboardExport, LayerInfo, ModifierInfo, ParamInfo, StrokeOp, VeilInfo, VeilTypeInfo,
+    BlendModeTypeInfo, ClipboardExport, LayerInfo, LayerKindTypeInfo, ModifierInfo,
+    ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
 };
+
+pub use perf::FrameRenderPhases;
+
+mod perf;
+use perf::StrokePerfStats;
 
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
@@ -56,6 +62,26 @@ pub(crate) struct PendingCopy {
     pub is_cut: bool,
 }
 
+/// Layer metadata snapshot captured at `copy_layer_rich` time. Combined with
+/// the async pixel readback to produce a `LayerClipboard`. CPU-side fields
+/// only — pixel data still flows through the existing readback pipeline.
+pub(crate) struct RichCopyMetadata {
+    pub name: String,
+    pub visible: bool,
+    pub locked: bool,
+    pub opacity: f32,
+    pub blend_mode: String,
+    /// Snapshot of any mask modifier on the source. Pixel data is NOT
+    /// captured in v1 — it requires a parallel readback that lands in v2.
+    pub mask: Option<RichCopyMask>,
+}
+
+pub(crate) struct RichCopyMask {
+    pub name: String,
+    pub visible: bool,
+    pub bounds: crate::coord::CanvasRect,
+}
+
 /// Deferred undo commit — waiting for async GPU diff rect result.
 pub(crate) struct PendingUndoCommit {
     pub layer_id: LayerId,
@@ -96,6 +122,12 @@ pub(crate) enum ReadbackContext {
     SelectionReadback,
     Thumbnail {
         node_id: LayerId,
+        /// Dimensions of the readback buffer in pixels — the source layout
+        /// the downscale samples from. This is the layer texture's own
+        /// extent at readback time, not the canvas extent (layers may be
+        /// smaller or larger than canvas; see `request_thumbnail_readback`).
+        source_w: u32,
+        source_h: u32,
         thumb_w: u32,
         thumb_h: u32,
     },
@@ -230,16 +262,16 @@ pub struct DarklyEngine {
     pub(crate) brush_pipelines: BrushPipelines,
     /// Active brush stroke engine (only during a BrushStroke operation).
     pub(crate) brush_stroke_engine: Option<StrokeEngine>,
-    /// The brush graph that will be compiled into a runner on each stroke start.
-    /// Defaults to `brush::default_graph()`.  Updated via `set_brush_graph()`.
-    pub(crate) active_brush_graph: crate::nodegraph::Graph<BrushWireType>,
-
-    /// Snapshot of input port defaults captured the last time the graph
-    /// was loaded as a whole (brush load / reset / save). Drives
-    /// double-click-to-reset on toolbar scrubs — reset returns to the
-    /// brush's shipped value, not the node-type registration default.
-    /// Keyed by (node_id, port_name); raw values (not display-space).
-    pub(crate) brush_defaults: std::collections::HashMap<(crate::nodegraph::NodeId, String), f32>,
+    /// Shared tool session — a generic bag of per-tool state shared
+    /// across every engine in a `DarklySession`. The brush module stores
+    /// its [`crate::brush::state::BrushState`] entry here; other tools
+    /// that grow cross-engine state in future register theirs the same
+    /// way. Owned by `DarklySession` (WASM bridge) and cloned into every
+    /// engine, so multi-tab editors see one source of truth for shared
+    /// tool state with no sync step. The data lives behind an
+    /// `Arc<RwLock<…>>`; engines take a read guard for stroke compile /
+    /// preview, a write guard for JS-driven mutation methods.
+    pub(crate) tool_session: crate::tool::SharedToolSession,
 
     /// Canvas-space positioning info for the brush preview overlay, cached
     /// after each `regenerate_brush_preview()` call. Consumed by the brush
@@ -266,24 +298,13 @@ pub struct DarklyEngine {
     /// Dimensions of the bytes in `brush_editor_preview_cache`. Cleared
     /// alongside the cache on invalidation.
     pub(crate) brush_editor_preview_cache_size: Option<(u32, u32)>,
-    /// Bumped on every brush-graph mutation (`compile_active`). Used both
-    /// as the key the editor preview render is identified by (so stale
-    /// readbacks can be discarded) and as a skip predicate — if the
-    /// last-rendered version matches, there's nothing to re-render.
-    ///
-    /// Reflects ALL changes including user-facing scrubs (size, opacity,
-    /// …) so the editor and hover previews update as the user adjusts.
-    pub(crate) brush_graph_version: u64,
+    // `brush_graph_version` and `brush_topology_version` moved into the
+    // shared `BrushState` (looked up via `tool_session`). The per-engine
+    // `last_rendered_*` cursors below stay per-engine because they track
+    // this engine's own render cache versus the shared monotonic counter.
     /// Graph version at the last time we issued a preview render. Compared
-    /// against `brush_graph_version` to skip redundant work.
+    /// against `BrushState::version` to skip redundant work.
     pub(crate) last_rendered_preview_version: u64,
-    /// Bumped only on changes that affect the brush's *identity* — graph
-    /// topology (nodes, wires, exposed flags), node params, and unwired
-    /// non-exposed port defaults. User-facing exposed-port scrubs do NOT
-    /// bump this version because [`crate::brush::reset_exposed_scrubs`]
-    /// neutralises them in the dab-thumbnail render path. The dab cache
-    /// keys off this version so resizing the brush leaves the icon alone.
-    pub(crate) brush_topology_version: u64,
 
     // --- Active brush dab preview ---
     /// Cached PNG bytes of the most recently-completed active-dab
@@ -352,6 +373,14 @@ pub struct DarklyEngine {
     pub(crate) readbacks: ReadbackScheduler<ReadbackContext>,
     /// Completed copy result — picked up by the frontend on the next poll.
     pub(crate) pending_copy_result: Option<ClipboardExport>,
+    /// Metadata snapshot captured at `copy_layer_rich` time. When the async
+    /// pixel readback completes, this snapshot is combined with the pixels
+    /// to build a `LayerClipboard` and stash it in `pending_layer_clip`.
+    pub(crate) pending_rich_metadata: Option<RichCopyMetadata>,
+    /// Completed rich-copy result, ready for the frontend to drain. Holds
+    /// the JSON-serialised `LayerClipboard` for transmission via the
+    /// system clipboard's `web application/x-darkly-layer` custom MIME.
+    pub(crate) pending_layer_clip: Option<String>,
     /// Last picked color — returned immediately while async readback is in flight.
     pub(crate) last_picked_color: [u8; 4],
     pub(crate) thumbnail_cache: ThumbnailCache,
@@ -367,10 +396,37 @@ pub struct DarklyEngine {
     /// `MAX_LAYER_DIM` — used to log the cap warning at most once per
     /// process lifetime.
     pub(crate) layer_growth_capped: bool,
+
+    /// Per-stroke perf accumulator. Reset at `begin_stroke`, emitted at
+    /// `end_stroke`. See `StrokePerfStats` for what each field means.
+    pub(crate) stroke_perf: StrokePerfStats,
+
+    /// Most recent `render()` sub-phase timings. Overwritten every frame;
+    /// read by the WASM bridge when it logs a slow frame.
+    pub(crate) last_frame_phases: FrameRenderPhases,
 }
 
 impl DarklyEngine {
+    /// Convenience constructor for single-engine use (tests, headless,
+    /// embedded host). Allocates a fresh `SharedToolSession` that's
+    /// owned exclusively by this engine and seeds it with a default
+    /// `BrushState`. Multi-tab hosts use `new_with_tool_session`
+    /// instead, passing a `DarklySession`-owned handle so every engine
+    /// reads the same tool state.
     pub fn new(gpu: GpuContext, doc_width: u32, doc_height: u32) -> Self {
+        let session = crate::tool::SharedToolSession::new();
+        session
+            .write()
+            .insert(crate::brush::state::BrushState::new());
+        Self::new_with_tool_session(gpu, session, doc_width, doc_height)
+    }
+
+    pub fn new_with_tool_session(
+        gpu: GpuContext,
+        tool_session: crate::tool::SharedToolSession,
+        doc_width: u32,
+        doc_height: u32,
+    ) -> Self {
         // Allocate the document first so the compositor can read its root id
         // (which replaces the legacy `ROOT_ID = 0` constant).
         let doc = Document::new(doc_width, doc_height);
@@ -410,16 +466,13 @@ impl DarklyEngine {
             dab_pool,
             brush_pipelines,
             brush_stroke_engine: None,
-            active_brush_graph: crate::brush::default_graph(),
-            brush_defaults: std::collections::HashMap::new(),
+            tool_session,
             brush_preview_info: None,
             last_preview_pose: None,
             brush_preview_renderer: BrushPreviewRenderer::new(),
             brush_editor_preview_cache: None,
             brush_editor_preview_cache_size: None,
-            brush_graph_version: 0,
             last_rendered_preview_version: 0,
-            brush_topology_version: 0,
             active_dab_preview_cache: None,
             last_rendered_dab_topology_version: 0,
             node_preview_cache: std::collections::HashMap::new(),
@@ -446,10 +499,14 @@ impl DarklyEngine {
             pending_copy: None,
             readbacks: ReadbackScheduler::new(),
             pending_copy_result: None,
+            pending_rich_metadata: None,
+            pending_layer_clip: None,
             last_picked_color: [0, 0, 0, 0],
             thumbnail_cache: ThumbnailCache::new(),
             thumbnail_version: 0,
             layer_growth_capped: false,
+            stroke_perf: StrokePerfStats::default(),
+            last_frame_phases: FrameRenderPhases::default(),
         };
 
         // Snapshot the default graph's port defaults so reset-to-default
@@ -622,6 +679,82 @@ impl DarklyEngine {
         self.thumbnail_cache.get(node_id).cloned()
     }
 
+    /// Count of mid-stroke full-re-render fallbacks observed during the
+    /// most recent stroke (drained at `end_stroke`). Used by integration
+    /// tests to assert that the checkpoint ring's coverage invariant
+    /// kept fallback at zero across a stroke.
+    pub fn test_stroke_full_rerender_events(&self) -> u32 {
+        self.stroke_perf.full_rerender_events
+    }
+
+    /// Total dabs placed during the most recent stroke. `stroke_perf` is
+    /// reset at `begin_stroke`, so call this between `end_stroke` and the
+    /// next `begin_stroke` to read the just-finished stroke's count.
+    pub fn test_stroke_total_dabs(&self) -> u64 {
+        self.stroke_perf.total_dabs
+    }
+
+    // -----------------------------------------------------------------
+    // BrushState accessors — keep call sites compact.
+    // -----------------------------------------------------------------
+    //
+    // The brush's shared state lives in `tool_session` (generic) under
+    // the type-keyed slot for `BrushState`. These helpers hide the
+    // double indirection (lock guard → typed lookup) for the cases that
+    // only need to read or bump a scalar.
+
+    /// A clone of the active brush graph. Tests and the few external
+    /// inspectors use this; per-frame paths inside the engine take a
+    /// `tool_session.read()` guard directly to skip the clone.
+    pub fn active_brush_graph(&self) -> crate::nodegraph::Graph<BrushWireType> {
+        self.tool_session
+            .read()
+            .get::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init")
+            .graph
+            .clone()
+    }
+
+    /// Version counter snapshot. Bumped on every brush-graph mutation —
+    /// drives editor-preview cache invalidation.
+    pub fn brush_graph_version(&self) -> u64 {
+        self.tool_session
+            .read()
+            .get::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init")
+            .version
+    }
+
+    /// Topology version counter snapshot. Bumped only on changes that
+    /// affect the brush's *identity* (graph topology, params, unwired
+    /// non-exposed defaults). Drives dab-thumbnail cache invalidation.
+    pub fn brush_topology_version(&self) -> u64 {
+        self.tool_session
+            .read()
+            .get::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init")
+            .topology_version
+    }
+
+    /// Bump the brush-graph version counter (e.g. after a scrub).
+    pub(crate) fn bump_brush_graph_version(&self) {
+        let mut tool = self.tool_session.write();
+        let brush = tool
+            .get_mut::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init");
+        brush.version = brush.version.wrapping_add(1);
+    }
+
+    /// Bump both version counters (e.g. after a topology change).
+    pub(crate) fn bump_brush_topology_version(&self) {
+        let mut tool = self.tool_session.write();
+        let brush = tool
+            .get_mut::<crate::brush::state::BrushState>()
+            .expect("BrushState registered at session init");
+        brush.version = brush.version.wrapping_add(1);
+        brush.topology_version = brush.topology_version.wrapping_add(1);
+    }
+
     /// Block until all pending async readbacks complete. For tests only.
     /// Uses `device.poll(Wait)` to ensure mapping callbacks fire, then
     /// dispatches every completed readback through the shared handler —
@@ -708,6 +841,10 @@ mod tests {
         };
         let json = serde_json::to_value(&info).unwrap();
         assert_eq!(json["type"], "pixelate");
+        // Per the no-duplicate-display-name rule, only the type_id ships
+        // with the instance — display name is resolved by the UI via the
+        // veil_types() registry table.
+        assert!(json.get("displayName").is_none());
         assert_eq!(json["visible"], true);
         assert_eq!(json["index"], 0);
 

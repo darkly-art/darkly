@@ -22,6 +22,7 @@ pub mod scratch;
 pub mod spacing;
 pub mod stabilizer;
 pub mod stabilizers;
+pub mod state;
 pub mod stroke_buffer;
 pub mod stroke_engine;
 pub mod wire;
@@ -114,10 +115,6 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert(
         "make_color".into(),
         Box::new(nodes::make_color::MakeColorEvaluator),
-    );
-    map.insert(
-        "user_input".into(),
-        Box::new(nodes::user_input::UserInputEvaluator),
     );
     map.insert("random".into(), Box::new(nodes::random::RandomEvaluator));
     map.insert("jitter".into(), Box::new(nodes::jitter::JitterEvaluator));

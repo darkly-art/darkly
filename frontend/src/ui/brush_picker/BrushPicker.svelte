@@ -35,9 +35,7 @@
     );
 
     const filtered = $derived(
-        brushGraph.brushes.filter(
-            b => matches(b, query) && b.name !== brushGraph.activeBrush
-        )
+        brushGraph.brushes.filter(b => matches(b, query))
     );
 
     /** Group filtered brushes by category, preserving first-seen order
@@ -149,7 +147,11 @@
                                     class="grid-cell"
                                     class:highlight={offset + bi === highlightIndex}
                                 >
-                                    <BrushTile {brush} active={false} {onSelect} />
+                                    <BrushTile
+                                        {brush}
+                                        active={brush.name === brushGraph.activeBrush}
+                                        {onSelect}
+                                    />
                                 </div>
                             {/each}
                         </div>

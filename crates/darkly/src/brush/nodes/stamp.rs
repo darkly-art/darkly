@@ -37,12 +37,18 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Brush tip image"),
             PortDef::input("size_input", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Size Input")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-circle")
                 .with_description(
                     "Per-touch size multiplier. Connect Pen Input pressure (or a curve on top) here for pressure-sensitive size.",
                 ),
+            // `size` deliberately has no `natural_range` — the slider
+            // intentionally over-drags past 100% to support dramatically
+            // over-sized stamps, so a wire feeding in (e.g. pen pressure)
+            // must pass through raw rather than getting clamped/remapped
+            // into the slider's 0..4 hint.
             PortDef::input("size", BrushWireType::Scalar)
                 .with_range(0.0, 4.0, 0.1)
                 .with_label("Size")
@@ -55,6 +61,10 @@ pub fn register() -> BrushNodeRegistration {
                 // preview pipeline never reads the user's actual size.
                 .with_preview_value(0.1)
                 .with_description("Overall brush size"),
+            // No `natural_range`: radians are a unit, not a normalized
+            // signal. Wiring `pen.drawing_angle` (also radians) here is
+            // a unit-preserving identity wire — both ports speak the
+            // same language, so the value passes through raw.
             PortDef::input("rotation", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_label("Rotation")
@@ -65,18 +75,22 @@ pub fn register() -> BrushNodeRegistration {
                 ),
             PortDef::input("mirror_x", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Flip horizontally"),
             PortDef::input("mirror_y", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
+                .with_natural_range(0.0, 1.0)
                 .with_description("Flip vertically"),
             PortDef::input("ratio", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Ratio")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-arrows-left-right")
                 .with_description("Aspect ratio (100% = round)"),
             PortDef::input("flow", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 1.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Flow")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-droplet")
@@ -92,7 +106,15 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Brush shape shown under the cursor on hover, with rotation, aspect ratio, and mirroring applied"),
         ],
         params: &[
-            ParamDef::Int { name: "application", min: 0, max: 3, default: 0 },
+            // Enum stored as Int — order MUST match the `BrushTipApplication`
+            // match in `resolve_inputs`: AlphaMask=0, ImageStamp=1,
+            // LightnessMap=2, GradientMap=3. Labeled dropdown so users pick
+            // by name rather than memorizing application indices.
+            ParamDef::Enum {
+                name: "application",
+                options: &["Alpha Mask", "Image Stamp", "Lightness Map", "Gradient Map"],
+                default: 0,
+            },
         ],
         is_gpu: true,
     }
@@ -191,6 +213,7 @@ fn encode_stamp_pass(
     target_view: &wgpu::TextureView,
     viewport: (u32, u32),
     label: &'static str,
+    perf: Option<&mut crate::brush::gpu_context::BrushPerfCounters>,
 ) {
     let (view_w, view_h) = viewport;
 
@@ -205,7 +228,12 @@ fn encode_stamp_pass(
         application: inputs.application_int,
         ratio: inputs.ratio,
     };
+    let t_wu = web_time::Instant::now();
     let offset = pipelines.write_stamp_uniforms(queue, &uniforms);
+    let wu_us = t_wu.elapsed().as_micros() as u64;
+    if let Some(p) = perf {
+        p.record_write_stamp_uniforms(wu_us);
+    }
 
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
@@ -253,9 +281,13 @@ impl BrushNodeEvaluator for StampEvaluator {
         // constant-pressure stroke allocates once. Variable-pressure
         // strokes get one entry per distinct integer pixel size — bounded
         // by the dab pool's existing free-list reuse.
+        let t_acquire = web_time::Instant::now();
         let handle = gpu.dab_pool.acquire_sized(gpu.device, dab_w, dab_h);
+        gpu.perf
+            .record_pool_acquire(t_acquire.elapsed().as_micros() as u64);
         let dab_view = gpu.dab_pool.view(handle).clone();
         let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
+        let t_pass = web_time::Instant::now();
         encode_stamp_pass(
             &mut gpu.encoder,
             gpu.queue,
@@ -265,7 +297,10 @@ impl BrushNodeEvaluator for StampEvaluator {
             &dab_view,
             (dab_w, dab_h),
             "brush-stamp",
+            Some(&mut gpu.perf),
         );
+        gpu.perf
+            .record_stamp_pass(t_pass.elapsed().as_micros() as u64);
 
         vec![
             ("dab".into(), ScalarValue::Texture(handle)),
@@ -322,6 +357,7 @@ impl BrushNodeEvaluator for StampEvaluator {
             &view,
             (dab_w, dab_h),
             "brush-stamp-preview",
+            None,
         );
 
         vec![

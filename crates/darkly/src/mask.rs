@@ -522,12 +522,40 @@ pub fn contour_segments_r8(
     height: u32,
     threshold: u8,
 ) -> Vec<([f32; 2], [f32; 2])> {
+    let segments = contour_raw_segments_r8(pixels, width, height, threshold);
+    simplify_segments(merge_collinear(segments))
+}
+
+/// Same as [`contour_segments_r8`] but returns chained polylines (one per connected
+/// contour) instead of a flat list of independent segments. Each inner `Vec` is a
+/// sequence of points forming a polyline: points `[p0, p1, ..., pN]` describe `N`
+/// connected segments. Closed contours have `p0 == pN` (within float tolerance).
+///
+/// Use this when the consumer needs continuity along the contour (e.g. cumulative
+/// arc length for dash-pattern phase). Otherwise [`contour_segments_r8`] is simpler.
+pub fn contour_polylines_r8(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    threshold: u8,
+) -> Vec<Vec<[f32; 2]>> {
+    let segments = contour_raw_segments_r8(pixels, width, height, threshold);
+    build_polylines(merge_collinear(segments))
+}
+
+/// Marching-squares pass shared by [`contour_segments_r8`] and
+/// [`contour_polylines_r8`]. Returns the raw per-cell segments before merging.
+fn contour_raw_segments_r8(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    threshold: u8,
+) -> Vec<([f32; 2], [f32; 2])> {
     let [bx, by, bw, bh] = match pixel_bounds_r8(pixels, width, height) {
         Some(b) => b,
         None => return Vec::new(),
     };
 
-    // Extend by 1 pixel for marching squares boundary blocks.
     let px_min = (bx as i32 - 1).max(0);
     let py_min = (by as i32 - 1).max(0);
     let px_max = ((bx + bw) as i32).min(width as i32 - 1);
@@ -594,7 +622,7 @@ pub fn contour_segments_r8(
         }
     }
 
-    merge_collinear(segments)
+    segments
 }
 
 /// Compute tight pixel bounding box from a flat R8 buffer.
@@ -836,7 +864,7 @@ impl AlphaMask {
             }
         }
 
-        merge_collinear(segments)
+        simplify_segments(merge_collinear(segments))
     }
 }
 
@@ -934,15 +962,19 @@ fn merge_collinear(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32; 
     }
 
     result.extend(other);
-    simplify_segments(result)
+    result
 }
 
-/// Chain independent segments into polylines, then simplify with
-/// Ramer-Douglas-Peucker. Reduces curved contours (ellipses, polygons)
-/// from hundreds of segments to tens while preserving shape within ±1px.
-fn simplify_segments(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32; 2])> {
-    if segments.len() <= 32 {
-        return segments;
+/// Chain independent segments into polylines, then optionally simplify with
+/// Ramer-Douglas-Peucker. Reduces curved contours (ellipses, polygons) from
+/// hundreds of segments to tens while preserving shape within ±1px.
+///
+/// Returns one polyline per connected component. Closed loops have first ≈ last.
+/// RDP is skipped entirely below a segment-count threshold — small selections
+/// don't benefit from it.
+fn build_polylines(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<Vec<[f32; 2]>> {
+    if segments.is_empty() {
+        return Vec::new();
     }
 
     // Build adjacency: endpoint → list of segment indices.
@@ -1018,15 +1050,25 @@ fn simplify_segments(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32
         chains.push(chain);
     }
 
+    // Below this segment count, RDP isn't worth the cost.
+    if segments.len() <= 32 {
+        return chains;
+    }
+
     // Simplify each chain with Ramer-Douglas-Peucker (epsilon = 1.0 px).
+    chains.into_iter().map(|c| rdp_simplify(&c, 1.0)).collect()
+}
+
+/// Flat-segment view of [`build_polylines`]. Kept for callers that don't need
+/// polyline structure (e.g. older overlay code paths, tests).
+fn simplify_segments(segments: Vec<([f32; 2], [f32; 2])>) -> Vec<([f32; 2], [f32; 2])> {
+    let polylines = build_polylines(segments);
     let mut result = Vec::new();
-    for chain in &chains {
-        let simplified = rdp_simplify(chain, 1.0);
-        for w in simplified.windows(2) {
+    for poly in &polylines {
+        for w in poly.windows(2) {
             result.push((w[0], w[1]));
         }
     }
-
     result
 }
 
@@ -1483,5 +1525,103 @@ mod tests {
                 a[0], a[1], b[0], b[1]
             );
         }
+    }
+
+    // --- contour_polylines_r8 ---
+    //
+    // Regression for the marching-ants flicker at low zoom: dashed-line phase
+    // continuity across a polyline requires the contour to come back chained
+    // (one connected sequence of points), with each segment's endpoint matching
+    // the next segment's startpoint exactly. If chains break or segments come
+    // back out of order, cumulative arc length is wrong and dashes flicker.
+
+    fn rect_buffer_r8(stride: u32, rect_x: u32, rect_y: u32, rect_w: u32, rect_h: u32) -> Vec<u8> {
+        let mut buf = vec![0u8; (stride * stride) as usize];
+        for y in rect_y..rect_y + rect_h {
+            for x in rect_x..rect_x + rect_w {
+                buf[(y * stride + x) as usize] = 255;
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn polylines_empty_mask() {
+        let buf = vec![0u8; 16 * 16];
+        assert!(crate::mask::contour_polylines_r8(&buf, 16, 16, 127).is_empty());
+    }
+
+    #[test]
+    fn polylines_rect_forms_closed_loop() {
+        let buf = rect_buffer_r8(20, 5, 5, 8, 8);
+        let polylines = crate::mask::contour_polylines_r8(&buf, 20, 20, 127);
+        assert_eq!(
+            polylines.len(),
+            1,
+            "a single filled rectangle should produce one polyline, got {}",
+            polylines.len()
+        );
+        let poly = &polylines[0];
+        assert!(
+            poly.len() >= 4,
+            "expected at least 4 points, got {}",
+            poly.len()
+        );
+
+        // Closed loop: first ≈ last (within float tolerance).
+        let first = poly[0];
+        let last = *poly.last().unwrap();
+        let dx = first[0] - last[0];
+        let dy = first[1] - last[1];
+        assert!(
+            dx * dx + dy * dy < 1e-3,
+            "polyline should be a closed loop: first={:?} last={:?}",
+            first,
+            last
+        );
+    }
+
+    #[test]
+    fn polylines_segments_are_chained() {
+        // Adjacent segments within a polyline must share endpoints — that's the
+        // invariant the dash-phase math relies on.
+        let buf = rect_buffer_r8(20, 5, 5, 8, 8);
+        let polylines = crate::mask::contour_polylines_r8(&buf, 20, 20, 127);
+        for poly in &polylines {
+            for i in 1..poly.len() {
+                // The point at index i is shared between segment (i-1) and segment i,
+                // so the chain trivially links — what we're really asserting is that
+                // every consecutive pair forms a non-degenerate segment.
+                let a = poly[i - 1];
+                let b = poly[i];
+                let len_sq = (b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2);
+                assert!(len_sq > 0.0, "degenerate segment in polyline at index {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn polylines_perimeter_matches_rect_size() {
+        // Walking the polyline should accumulate to roughly the perimeter of
+        // the filled rectangle. Marching squares places contour points at cell
+        // crossings (half-pixel offsets from filled pixels), so we expect
+        // perimeter ≈ 2 * (w + h) ± a couple of pixels of corner rounding.
+        let w = 8.0;
+        let h = 8.0;
+        let buf = rect_buffer_r8(20, 5, 5, w as u32, h as u32);
+        let polylines = crate::mask::contour_polylines_r8(&buf, 20, 20, 127);
+        assert_eq!(polylines.len(), 1);
+
+        let mut arc = 0.0_f32;
+        for win in polylines[0].windows(2) {
+            let dx = win[1][0] - win[0][0];
+            let dy = win[1][1] - win[0][1];
+            arc += (dx * dx + dy * dy).sqrt();
+        }
+        let expected = 2.0 * (w + h);
+        assert!(
+            (arc - expected).abs() < 4.0,
+            "expected perimeter ≈ {expected}, got {arc}"
+        );
     }
 }

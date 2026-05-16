@@ -55,10 +55,12 @@
 
 use std::cell::RefCell;
 
+use std::sync::Arc;
+
 use darkly::brush::paint_info::PaintInformation;
 use darkly::document::{MoveTarget, SelectionMode};
 use darkly::engine::{DarklyEngine, StrokeOp};
-use darkly::gpu::context::GpuContext;
+use darkly::gpu::context::{GpuContext, GpuDevice};
 use darkly::gpu::overlay::OverlayPrimitive;
 use darkly::gpu::params::{ParamDef, ParamValue};
 use darkly::layer::LayerId;
@@ -79,7 +81,7 @@ enum Command {
 
     // Layer properties
     SetOpacity(u64, f32),
-    SetBlendMode(u64, u32),
+    SetBlendMode(u64, String),
     /// Toggle visibility on any node — layer, group, or modifier (mask).
     SetLayerVisible(u64, bool),
     SetLayerName(u64, String),
@@ -180,6 +182,16 @@ enum Command {
 
 fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
     let cmds: Vec<Command> = commands.borrow_mut().drain(..).collect();
+    // Largest backlog of `BrushStroke` ops in a single drain. High values
+    // mean the engine is falling behind input — each backed-up event will
+    // still be processed in this drain. Fed to the stroke perf summary.
+    let brush_backlog = cmds
+        .iter()
+        .filter(|c| matches!(c, Command::StrokeOp(StrokeOp::BrushStroke { .. })))
+        .count() as u32;
+    if brush_backlog > 0 {
+        engine.record_input_backlog(brush_backlog);
+    }
     for cmd in cmds {
         match cmd {
             Command::BeginStroke(id) => engine.begin_stroke(LayerId::from_ffi(id)),
@@ -187,7 +199,7 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::EndStroke => engine.end_stroke(),
 
             Command::SetOpacity(id, v) => engine.set_opacity(LayerId::from_ffi(id), v),
-            Command::SetBlendMode(id, v) => engine.set_blend_mode(LayerId::from_ffi(id), v),
+            Command::SetBlendMode(id, ref v) => engine.set_blend_mode(LayerId::from_ffi(id), v),
             Command::SetLayerVisible(id, v) => engine.set_layer_visible(LayerId::from_ffi(id), v),
             Command::SetLayerName(id, ref name) => {
                 engine.set_layer_name(LayerId::from_ffi(id), name)
@@ -305,6 +317,120 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
                 engine.pick_color(x, y);
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DarklySession — shared GPU device for multiple DarklyHandles
+// ---------------------------------------------------------------------------
+
+/// A process-level GPU session that owns one `wgpu::Instance` and one
+/// `Arc<GpuDevice>`. Hand out `DarklyHandle`s via `createHandle(...)` to
+/// attach additional canvases to the same WebGPU device — the multi-tab
+/// editor uses one session and N handles, one per open document.
+///
+/// The device is allocated lazily on the first `createHandle` call, since
+/// `request_adapter` needs a surface to pick an adapter.
+#[wasm_bindgen]
+pub struct DarklySession {
+    instance: wgpu::Instance,
+    /// `None` until the first canvas is attached; `Some` thereafter.
+    /// Single-threaded interior mutability is safe — JS calls are serial.
+    gpu: RefCell<Option<Arc<GpuDevice>>>,
+    /// Shared tool session — generic bag of per-tool state (currently
+    /// just `BrushState`, but the container has no module-specific
+    /// knowledge). Every `DarklyHandle` minted from this session is
+    /// constructed with a clone of the handle, so all engines see the
+    /// same tool state. JS-driven mutations write through here once and
+    /// every engine sees the change with no per-engine push step.
+    tool_session: darkly::tool::SharedToolSession,
+}
+
+#[wasm_bindgen]
+impl DarklySession {
+    /// Create a new session. Cheap — only allocates a `wgpu::Instance`
+    /// and an empty shared tool session seeded with a default
+    /// `BrushState`. The actual GPU device is acquired on the first
+    /// `createHandle` call.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> DarklySession {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::BROWSER_WEBGPU,
+            ..Default::default()
+        });
+        let tool_session = darkly::tool::SharedToolSession::new();
+        tool_session
+            .write()
+            .insert(darkly::brush::state::BrushState::new());
+        DarklySession {
+            instance,
+            gpu: RefCell::new(None),
+            tool_session,
+        }
+    }
+
+    /// Build a new `DarklyHandle` bound to `canvas`, sharing this session's
+    /// GPU device with every other handle from this session. The first call
+    /// allocates the device; subsequent calls reuse it.
+    #[wasm_bindgen(js_name = createHandle)]
+    pub async fn create_handle(
+        &self,
+        canvas: web_sys::HtmlCanvasElement,
+        doc_width: u32,
+        doc_height: u32,
+    ) -> DarklyHandle {
+        let initial_width = canvas.width();
+        let initial_height = canvas.height();
+
+        let surface = self
+            .instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .expect("Failed to create surface");
+
+        // Lazy device init: first handle bootstraps the adapter+device using
+        // its surface; subsequent handles reuse it.
+        let existing = self.gpu.borrow().clone();
+        let gpu = match existing {
+            Some(shared) => {
+                GpuContext::new_with_shared_device(
+                    shared,
+                    &self.instance,
+                    surface,
+                    initial_width,
+                    initial_height,
+                )
+                .await
+            }
+            None => {
+                let ctx = GpuContext::new(
+                    // wgpu::Instance is `Clone`-able cheaply (it's a handle).
+                    self.instance.clone(),
+                    surface,
+                    wgpu::Limits::downlevel_webgl2_defaults(),
+                    initial_width,
+                    initial_height,
+                )
+                .await;
+                *self.gpu.borrow_mut() = Some(ctx.shared_device());
+                ctx
+            }
+        };
+
+        DarklyHandle {
+            engine: RefCell::new(DarklyEngine::new_with_tool_session(
+                gpu,
+                self.tool_session.clone(),
+                doc_width,
+                doc_height,
+            )),
+            commands: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl Default for DarklySession {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -431,7 +557,10 @@ fn graph_result(r: Result<String, String>) -> JsValue {
 
 #[wasm_bindgen]
 impl DarklyHandle {
-    /// Create a new Darkly editor instance from an HTML canvas element.
+    /// Create a stand-alone Darkly editor instance from an HTML canvas
+    /// element. Allocates a fresh `wgpu::Instance` + device — use
+    /// `DarklySession.createHandle(canvas, w, h)` instead when you want
+    /// multiple handles to share one GPU device (the multi-tab case).
     pub async fn create(
         canvas: web_sys::HtmlCanvasElement,
         doc_width: u32,
@@ -471,8 +600,8 @@ impl DarklyHandle {
     pub fn set_opacity(&self, layer_id: f64, opacity: f32) {
         self.push(Command::SetOpacity(layer_id as u64, opacity));
     }
-    pub fn set_blend_mode(&self, layer_id: f64, mode: u32) {
-        self.push(Command::SetBlendMode(layer_id as u64, mode));
+    pub fn set_blend_mode(&self, layer_id: f64, type_id: &str) {
+        self.push(Command::SetBlendMode(layer_id as u64, type_id.into()));
     }
     pub fn set_layer_visible(&self, layer_id: f64, visible: bool) {
         self.push(Command::SetLayerVisible(layer_id as u64, visible));
@@ -533,14 +662,6 @@ impl DarklyHandle {
     }
 
     pub fn end_stroke(&self) {
-        self.push(Command::EndStroke);
-    }
-
-    // Legacy compat
-    pub fn snapshot(&self, layer_id: f64) {
-        self.push(Command::BeginStroke(layer_id as u64));
-    }
-    pub fn commit(&self) {
         self.push(Command::EndStroke);
     }
 
@@ -970,6 +1091,43 @@ impl DarklyHandle {
         }
     }
 
+    /// Like `copy`, but also captures CPU-side metadata (blend mode,
+    /// opacity, name, mask presence). Pixel bytes still flow through the
+    /// normal async readback; the JSON envelope is delivered via
+    /// `poll_copy_rich_result`. Used by the multi-tab editor to populate
+    /// the system clipboard's `web application/x-darkly-layer` MIME
+    /// alongside the standard `image/png`.
+    pub fn copy_layer_rich(&self, layer_id: f64) {
+        self.flush_if_needed();
+        self.engine
+            .borrow_mut()
+            .copy_layer_rich(LayerId::from_ffi(layer_id as u64));
+    }
+
+    /// Drain the most recent rich-copy result. Returns the JSON-serialised
+    /// `LayerClipboard`, or `null` when no rich copy is pending. Mirrors
+    /// `poll_copy_result`'s polling contract.
+    pub fn poll_copy_rich_result(&self) -> Option<String> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().poll_copy_rich_result()
+    }
+
+    /// Paste a rich layer payload (JSON envelope) as a new layer. Restores
+    /// blend mode, opacity, name, visibility, and pixel data. Returns the
+    /// new layer's id, or `-1` on parse / decode failure.
+    pub fn paste_layer_rich(&self, json: &str, active_layer_id: f64) -> f64 {
+        self.flush_if_needed();
+        let active = if active_layer_id >= 0.0 {
+            Some(LayerId::from_ffi(active_layer_id as u64))
+        } else {
+            None
+        };
+        match self.engine.borrow_mut().paste_layer_rich(json, active) {
+            Some(id) => id.to_ffi() as f64,
+            None => -1.0,
+        }
+    }
+
     pub fn paste_image(
         &self,
         width: u32,
@@ -1319,7 +1477,7 @@ impl DarklyHandle {
 
     pub fn brush_graph_active(&self) -> String {
         self.flush_if_needed();
-        serde_json::to_string(self.engine.borrow().active_brush_graph_ref())
+        serde_json::to_string(&self.engine.borrow().active_brush_graph())
             .unwrap_or_else(|_| "null".into())
     }
 
@@ -1409,6 +1567,37 @@ impl DarklyHandle {
         serde_json::to_string(&self.engine.borrow().veil_types()).unwrap_or_else(|_| "[]".into())
     }
 
+    /// Return registered tool types as JSON: `[{ type, displayName, params }, ...]`.
+    /// The UI uses `displayName` directly, so tool labels live in Rust now.
+    pub fn tool_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().tool_types()).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Return registered blend modes as JSON: `[{ type, displayName, category }, ...]`.
+    /// The layer-properties dropdown is populated entirely from this list.
+    pub fn blend_mode_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().blend_mode_types())
+            .unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Return registered modifier kinds as JSON: `[{ type, displayName }, ...]`.
+    /// UI resolves `ModifierInfo.kind` → label via this table.
+    pub fn modifier_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().modifier_types())
+            .unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Return registered layer kinds as JSON: `[{ type, displayName }, ...]`.
+    /// UI resolves a layer's `type` discriminator → label via this table.
+    pub fn layer_kind_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().layer_kind_types())
+            .unwrap_or_else(|_| "[]".into())
+    }
+
     pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> i32 {
         self.flush_if_needed();
         match self.engine.borrow().overlay_hit_test(screen_x, screen_y) {
@@ -1436,8 +1625,40 @@ impl DarklyHandle {
         let Ok(mut e) = self.engine.try_borrow_mut() else {
             return false;
         };
+
+        // Frame-level perf probe. The per-event `[stab-perf]` log captures
+        // `gpu_stroke_to` only; the full rAF frame also pays for command
+        // draining (which may process multiple BrushStroke events at high
+        // input rate) and `engine.render` (composite + veils + overlays +
+        // present). The slow-frame log fires only when a frame exceeds
+        // ~1.5× one 60Hz budget so healthy frames cost nothing.
+        let frame_start = web_time::Instant::now();
+        let drain_start = web_time::Instant::now();
         drain_commands(&self.commands, &mut e);
-        e.render(time_secs)
+        let drain_us = drain_start.elapsed().as_micros() as u64;
+
+        let render_start = web_time::Instant::now();
+        let result = e.render(time_secs);
+        let render_us = render_start.elapsed().as_micros() as u64;
+
+        let frame_us = frame_start.elapsed().as_micros() as u64;
+        // 16667 µs is one 60Hz frame. Threshold at 25 ms (~1.5×) so we
+        // surface only the frames the user actually perceives as slow.
+        if frame_us > 25_000 {
+            let p = e.last_render_phases();
+            log::warn!(
+                "[frame-perf] slow frame={:.2}ms drain={:.2}ms render={:.2}ms \
+                 [render breakdown: poll={:.2}ms thumb={:.2}ms anim={:.2}ms composite={:.2}ms]",
+                frame_us as f32 / 1000.0,
+                drain_us as f32 / 1000.0,
+                render_us as f32 / 1000.0,
+                p.poll_us as f32 / 1000.0,
+                p.thumb_us as f32 / 1000.0,
+                p.anim_us as f32 / 1000.0,
+                p.compositor_us as f32 / 1000.0,
+            );
+        }
+        result
     }
 }
 

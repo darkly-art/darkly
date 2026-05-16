@@ -20,12 +20,6 @@
     let dropPos = $state<'none' | 'above' | 'below'>('none');
     let draggable = $state(true);
 
-    const ACRONYMS: Record<string, string> = { vhs: 'VHS' };
-
-    function displayName(typeId: string): string {
-        return ACRONYMS[typeId] ?? typeId.replace(/_/g, ' ');
-    }
-
     function setActive() {
         app.selectVeil(veil.index);
     }
@@ -115,7 +109,7 @@
         <i class={veil.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
     </button>
 
-    <span class="veil-name">{displayName(veil.type)}</span>
+    <span class="veil-name">{app.veilDisplayName(veil.type)}</span>
 
     <button
         class="remove-btn"

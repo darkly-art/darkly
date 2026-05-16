@@ -153,9 +153,6 @@ impl BrushBuilder {
     /// Set a port's default value and expose it as a user-adjustable control.
     ///
     /// The port's existing metadata (label, unit, icon, range) drives the UI.
-    /// Use this for brush-specific knobs that reuse a port's built-in label.
-    /// If you need a custom label for a specific brush, fall back to
-    /// `add_user_input` + `wire`.
     fn expose_port(&mut self, node: NodeId, port: &str, value: f32) {
         self.graph.set_port_default(node, port, value).unwrap();
         self.graph.set_port_exposed(node, port, true).unwrap();
@@ -505,7 +502,7 @@ fn canvas_brush() -> Brush {
 /// that for its own `watercolor` terminal node.
 fn watercolor_brush(
     name: &str,
-    configure_circle: impl FnOnce(&mut Graph<BrushWireType>, NodeId),
+    configure: impl FnOnce(&mut Graph<BrushWireType>, NodeId, NodeId),
 ) -> Brush {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::<BrushWireType>::new();
@@ -530,19 +527,10 @@ fn watercolor_brush(
         registry.get("circle").unwrap().ports.clone(),
         vec![ParamValue::Int(0)], // overwritten by the closure if needed
     );
-    configure_circle(&mut graph, circle);
     let stamp = graph.add_node(
         "stamp",
         registry.get("stamp").unwrap().ports.clone(),
         vec![],
-    );
-    // Per-dab random rotation so the bumpy outline lands at a fresh angle
-    // every stamp — without it, every dab is identical and the bumps line
-    // up along the stroke.
-    let rand_rot = graph.add_node(
-        "random",
-        registry.get("random").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // 0 = per-dab
     );
     let watercolor = graph.add_node(
         "watercolor",
@@ -560,7 +548,6 @@ fn watercolor_brush(
         // Pressure → flow so light strokes deposit less paint, the way a
         // real brush carries less pigment with less pressure.
         (pen, "pressure", stamp, "flow"),
-        (rand_rot, "value", stamp, "rotation"),
         (stamp, "dab", watercolor, "dab"),
         (stamp, "dab_size", watercolor, "dab_size"),
         (pen, "position", watercolor, "position"),
@@ -581,6 +568,11 @@ fn watercolor_brush(
             .unwrap();
     }
 
+    // Variant-specific configuration runs last so the closure can wire
+    // additional nodes to any of the shared nodes (circle for shape
+    // params, stamp for rotation/jitter, etc.).
+    configure(&mut graph, circle, stamp);
+
     let mut metadata = BrushMetadata::from_graph(name, graph);
     metadata.category = "painting".to_string();
     Brush::without_resources(metadata)
@@ -589,19 +581,42 @@ fn watercolor_brush(
 /// Smooth watercolor: sine-harmonic dab with gentle bumps for an organic
 /// hand-painted edge.
 fn smooth_watercolor() -> Brush {
-    watercolor_brush("Smooth Watercolor", |graph, circle| {
+    watercolor_brush("Smooth Watercolor", |graph, circle, stamp| {
         graph
             .set_param(circle, 0, ParamValue::Int(0)) // 0 = Sine Harmonic
             .unwrap();
-        graph.set_port_default(circle, "amplitude", 0.1).unwrap();
+        graph.set_port_default(circle, "amplitude", 0.05).unwrap();
         graph.set_port_default(circle, "frequency", 5.0).unwrap();
         graph.set_port_default(circle, "phase", 0.0).unwrap();
+        // Per-dab random rotation so the harmonic bumps land at a fresh
+        // angle every stamp — without it, every dab is identical and the
+        // bumps line up along the stroke. (Rough watercolor doesn't need
+        // this because its per-dab seed gives a fresh noise pattern, not
+        // just a fresh rotation of the same pattern.)
+        let registry = BrushNodeRegistry::new();
+        let rand_rot = graph.add_node(
+            "random",
+            registry.get("random").unwrap().ports.clone(),
+            vec![ParamValue::Int(0)], // 0 = per-dab
+        );
+        graph
+            .connect(
+                PortRef {
+                    node: rand_rot,
+                    port: "value".into(),
+                },
+                PortRef {
+                    node: stamp,
+                    port: "rotation".into(),
+                },
+            )
+            .unwrap();
     })
 }
 
 /// Rough watercolor: Perlin-noise dab with a more chaotic, granulated edge.
 fn rough_watercolor() -> Brush {
-    watercolor_brush("Rough Watercolor", |graph, circle| {
+    watercolor_brush("Rough Watercolor", |graph, circle, _stamp| {
         graph
             .set_param(circle, 0, ParamValue::Int(1)) // 1 = Perlin Noise
             .unwrap();
@@ -610,6 +625,30 @@ fn rough_watercolor() -> Brush {
         graph.set_port_default(circle, "frequency", 12.0).unwrap();
         graph.set_port_default(circle, "persistence", 0.55).unwrap();
         graph.set_port_default(circle, "octaves", 4.0).unwrap();
+        // Per-dab random seed so every dab gets a fresh Perlin pattern —
+        // without it, every dab has the same bumpy outline and the
+        // repetition reads as a regular texture rather than the chaotic
+        // granulation this brush is meant for. The full per-dab noise
+        // reshuffle subsumes what a rotation-randomizer would add, so
+        // unlike smooth watercolor this variant doesn't wire one.
+        let registry = BrushNodeRegistry::new();
+        let rand_seed = graph.add_node(
+            "random",
+            registry.get("random").unwrap().ports.clone(),
+            vec![ParamValue::Int(0)], // 0 = per-dab
+        );
+        graph
+            .connect(
+                PortRef {
+                    node: rand_seed,
+                    port: "value".into(),
+                },
+                PortRef {
+                    node: circle,
+                    port: "seed".into(),
+                },
+            )
+            .unwrap();
     })
 }
 

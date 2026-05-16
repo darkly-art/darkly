@@ -7,10 +7,13 @@
 //! `ModifierKind::apply` for each visible modifier. The outer compositor never
 //! branches on whether a host has a mask.
 //!
-//! Per the Modularity Principle in [CLAUDE.md], each kind lives in a single
+//! Per the Modularity Principle in [AGENTS.md], each kind lives in a single
 //! file under `document/modifiers/<kind>.rs` and exports a `register()` that
 //! returns a [`ModifierRegistration`]. `build.rs` auto-discovers the directory
 //! and emits `document/modifiers/mod.rs`.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crate::coord::CanvasRect;
 use crate::document::modifiers::mask::MaskModifier;
@@ -22,6 +25,51 @@ use crate::layer::{LayerId, NodeCommon, PixelBuffer};
 /// auto-discovered by `build.rs` via the directory scan.
 pub struct ModifierRegistration {
     pub type_id: &'static str,
+    pub display_name: &'static str,
+}
+
+/// Auto-discovered modifier registry — owns the per-kind registration records
+/// and hands out `&'static ModifierRegistration` references for the dispatch
+/// surface (`Modifier::kind`) and the UI.
+pub struct ModifierRegistry {
+    entries: Vec<ModifierRegistration>,
+    by_type_id: HashMap<&'static str, usize>,
+}
+
+impl Default for ModifierRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ModifierRegistry {
+    pub fn new() -> Self {
+        let entries: Vec<ModifierRegistration> = super::modifiers::registrations();
+        let mut by_type_id = HashMap::with_capacity(entries.len());
+        for (i, reg) in entries.iter().enumerate() {
+            by_type_id.insert(reg.type_id, i);
+        }
+        ModifierRegistry {
+            entries,
+            by_type_id,
+        }
+    }
+
+    pub fn get(&'static self, type_id: &str) -> Option<&'static ModifierRegistration> {
+        self.by_type_id.get(type_id).map(|&i| &self.entries[i])
+    }
+
+    pub fn all(&'static self) -> Vec<&'static ModifierRegistration> {
+        let mut v: Vec<_> = self.entries.iter().collect();
+        v.sort_by_key(|reg| reg.type_id);
+        v
+    }
+}
+
+/// Lazily-initialized process-wide modifier registry.
+pub fn registry() -> &'static ModifierRegistry {
+    static REGISTRY: OnceLock<ModifierRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(ModifierRegistry::new)
 }
 
 /// A modifier instance attached to a host node. Carries its own id (allocated
@@ -59,12 +107,17 @@ impl Modifier {
         }
     }
 
-    /// Stable type-id string. Mirrors the `register().type_id` string for the kind.
+    /// Registration record for this modifier's kind — owns `type_id` (wire
+    /// format) and `display_name` (UI). The match dispatch references each
+    /// kind module's own `TYPE_ID` constant, so the identity string is
+    /// declared exactly once per kind.
+    pub fn kind_reg(&self) -> &'static ModifierRegistration {
+        self.kind.kind_reg()
+    }
+
+    /// Convenience for the wire format / save file — just the stable `type_id`.
     pub fn type_id(&self) -> &'static str {
-        match &self.kind {
-            ModifierKind::Mask(_) => "mask",
-            ModifierKind::Selection(_) => "selection",
-        }
+        self.kind_reg().type_id
     }
 
     pub fn is_mask(&self) -> bool {
@@ -96,5 +149,21 @@ impl ModifierKind {
     /// the given bounds. The selection is canvas-sized at offset (0, 0).
     pub fn selection_with_bounds(bounds: CanvasRect) -> Self {
         ModifierKind::Selection(SelectionModifier::new(bounds))
+    }
+
+    /// Registration record for this kind. Pulled from the modifier registry
+    /// keyed by each kind module's own `TYPE_ID` constant — no parallel
+    /// string literals.
+    pub fn kind_reg(&self) -> &'static ModifierRegistration {
+        use super::modifiers::{mask, selection};
+        match self {
+            ModifierKind::Mask(_) => registry().get(mask::TYPE_ID).unwrap(),
+            ModifierKind::Selection(_) => registry().get(selection::TYPE_ID).unwrap(),
+        }
+    }
+
+    /// Convenience for the wire format. Shorthand for `kind_reg().type_id`.
+    pub fn type_id(&self) -> &'static str {
+        self.kind_reg().type_id
     }
 }

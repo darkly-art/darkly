@@ -301,10 +301,18 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
         case KIND_DASHED_LINE: {
             let seg_dist = sdf_line_segment(screen_pos, p0, p1);
             dist = seg_dist - half_t;
-            // Dash pattern: if in gap, discard.
+            // Dash pattern: if in gap, discard. `t` and `dash_len` are in
+            // screen pixels; `dash_offset` is stored in the primitive's native
+            // coordinate space (canvas units when FLAG_CANVAS_SPACE is set, so
+            // it survives zoom changes without CPU re-upload). Convert it to
+            // screen pixels here so phase carries continuously across joints.
             if prim.dash_len > 0.0 && dist < 1.0 {
                 let t = line_param(screen_pos, p0, p1);
-                let phase = (t + prim.dash_offset + u.time * 10.0) % prim.dash_len;
+                var offset = prim.dash_offset;
+                if (prim.flags & FLAG_CANVAS_SPACE) != 0u {
+                    offset *= length(vec2f(u.fwd_row0.x, u.fwd_row1.x));
+                }
+                let phase = (t + offset + u.time * 10.0) % prim.dash_len;
                 if phase > prim.dash_len * 0.5 {
                     dist = 1.0; // in gap
                 }

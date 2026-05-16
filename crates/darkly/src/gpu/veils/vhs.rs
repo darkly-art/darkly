@@ -38,6 +38,7 @@ const PARAMS: &[ParamDef] = &[
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "vhs",
+        display_name: "VHS",
         params: PARAMS,
         create_pipeline: create_vhs_pipeline,
         from_params: |params, shared| {

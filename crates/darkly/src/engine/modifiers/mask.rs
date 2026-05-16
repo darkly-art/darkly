@@ -84,7 +84,9 @@ impl DarklyEngine {
             let rect = frame.canvas_extent;
             let mut entry = None;
             self.gpu.encode("remove-mask-save", |encoder| {
-                let snap = self.region_store.save_region(encoder, &frame, format, rect);
+                let snap =
+                    self.region_store
+                        .save_region(&self.gpu.device, encoder, &frame, format, rect);
                 entry = Some(
                     self.region_store
                         .commit_region(encoder, mask_id, &frame, &snap, rect),
@@ -149,7 +151,8 @@ impl DarklyEngine {
         let snap = if let Some(frame) = layer_frame {
             let rect = frame.canvas_extent;
             Some(self.gpu.encode_ret("apply-mask-save", |encoder| {
-                self.region_store.save_region(encoder, &frame, format, rect)
+                self.region_store
+                    .save_region(&self.gpu.device, encoder, &frame, format, rect)
             }))
         } else {
             None
@@ -171,7 +174,7 @@ impl DarklyEngine {
             let rect = frame.canvas_extent;
             Some(self.gpu.encode_ret("apply-mask-save-mask", |encoder| {
                 self.region_store
-                    .save_region(encoder, &frame, mask_format, rect)
+                    .save_region(&self.gpu.device, encoder, &frame, mask_format, rect)
             }))
         } else {
             None

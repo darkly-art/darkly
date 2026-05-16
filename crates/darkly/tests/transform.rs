@@ -144,6 +144,14 @@ fn set_floating_content_rgba(
 ) {
     let (preview_tex, preview_view) =
         make_preview_placeholder(device, target_format, canvas_w, canvas_h);
+    let preview_blend_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("test-preview-blend-uniforms"),
+        // Same size the compositor allocates — these tests don't read it
+        // back; the buffer just satisfies `TransformState`'s ownership.
+        size: 64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
     pass.set_floating_content(
         device,
         queue,
@@ -156,6 +164,7 @@ fn set_floating_content_rgba(
         preview_tex,
         preview_view,
         None,
+        preview_blend_uniform_buf,
     );
 }
 
@@ -311,6 +320,7 @@ fn transform_commit_translate_undo() {
     // Save pre-commit state.
     let mut enc = encoder(&device);
     let snap = store.save_region(
+        &device,
         &mut enc,
         &frame(&target_tex, cw, ch),
         fmt,
@@ -591,6 +601,7 @@ fn paste_commit_undo() {
     // Save pre-paste state.
     let mut enc = encoder(&device);
     let snap = store.save_region(
+        &device,
         &mut enc,
         &frame(&target_tex, cw, ch),
         fmt,
@@ -999,7 +1010,8 @@ fn cancel_floating_after_layer_grow() {
     // Floating transform setup snapshots a 100×100 region at canvas (50, 50).
     let saved_canvas_rect = CanvasRect::from_xywh(50, 50, 100, 100);
     let mut enc = encoder(&device);
-    let mut cancel_snapshot = store.save_region(&mut enc, &initial_frame, fmt, saved_canvas_rect);
+    let mut cancel_snapshot =
+        store.save_region(&device, &mut enc, &initial_frame, fmt, saved_canvas_rect);
     submit(&queue, enc);
 
     // Simulate a grow that shifts the layer's local frame: new 512×512

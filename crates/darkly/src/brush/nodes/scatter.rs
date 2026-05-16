@@ -29,6 +29,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Position to displace"),
             PortDef::input("amount_x", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Amount X")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-arrows-left-right")
@@ -36,6 +37,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Fraction of `dab_size` used as max horizontal displacement"),
             PortDef::input("amount_y", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
+                .with_natural_range(0.0, 1.0)
                 .with_label("Amount Y")
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-arrows-up-down")

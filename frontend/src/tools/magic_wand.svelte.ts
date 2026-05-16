@@ -12,16 +12,21 @@
 import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
 import { selectionMode } from './selection_helpers';
+import MagicWandOptions from '../ui/MagicWandOptions.svelte';
 
-/** Default tolerance for color matching (0–255). */
-const DEFAULT_TOLERANCE = 15;
+/** Magic-wand session state. Persists within the session; resets on reload. */
+class MagicWandSession {
+    /** Color-distance threshold for the flood fill (0 = exact match, 255 = anything). */
+    tolerance = $state(15);
+}
+export const magicWandSession = new MagicWandSession();
 
 export const magicWandTool: Tool = {
     id: 'magic_wand',
-    name: 'Magic Wand',
     faIcon: 'fa-solid fa-wand-magic-sparkles',
     group: 'select',
     hotkeyAction: 'magicWandTool',
+    optionsComponent: MagicWandOptions,
 
     onPointerDown(_ctx, e, cx, cy) {
         if (!app.handle || app.activeLayerId == null) return;
@@ -31,7 +36,7 @@ export const magicWandTool: Tool = {
             BigInt(app.activeLayerId),
             Math.round(cx),
             Math.round(cy),
-            DEFAULT_TOLERANCE,
+            magicWandSession.tolerance,
             mode,
         );
     },

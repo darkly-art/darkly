@@ -104,38 +104,67 @@ impl LaplacianStabilizer {
         }
     }
 
-    /// Find the divergence point: walk backward from tip until
-    /// the position delta between current and previous frame < epsilon.
+    /// Find the divergence point: walk backward from tip until either the
+    /// position delta between current and previous frame falls below
+    /// `DIVERGENCE_EPSILON`, or we hit the earliest index the influence model
+    /// admits a perturbation could reach.
+    ///
+    /// The walk is bounded by [`Self::max_divergence_window`] — both methods
+    /// share the same Laplacian-relaxation influence model, so the bound is
+    /// enforced by construction rather than by clamping a wider scan. See
+    /// `max_divergence_window` for the derivation.
     fn find_divergence(&self) -> Option<usize> {
         let len = self.stabilized.len();
-        if self.prev_positions.len() < len {
-            // New points were added — at minimum, the new points diverge.
-            // But we also need to check existing points that may have shifted.
-            // Walk backward from the last point that existed in prev_positions.
-            let check_from = self.prev_positions.len().saturating_sub(1);
-            for i in (0..check_from).rev() {
-                let cur = self.stabilized[i].pos;
-                let prev = self.prev_positions[i];
-                let dx = cur[0] - prev[0];
-                let dy = cur[1] - prev[1];
-                if dx * dx + dy * dy < DIVERGENCE_EPSILON * DIVERGENCE_EPSILON {
-                    return Some(i + 1);
-                }
-            }
-            return Some(0);
+        if len == 0 {
+            return None;
         }
 
-        // Same length — walk backward from tip.
-        for i in (0..len).rev() {
+        // `earliest` is the lowest index whose stabilized position could
+        // possibly differ from the previous frame given the influence radius.
+        // Walking past it is wasted work and risks reporting spurious
+        // divergence at indices the model says cannot have moved.
+        let max_back = self.max_divergence_window();
+        let earliest = len.saturating_sub(max_back + 1);
+        let eps2 = DIVERGENCE_EPSILON * DIVERGENCE_EPSILON;
+
+        // Helper: squared position delta at index `i` (always within bounds
+        // of both arrays here — callers ensure that).
+        let delta2 = |i: usize| -> f32 {
             let cur = self.stabilized[i].pos;
             let prev = self.prev_positions[i];
             let dx = cur[0] - prev[0];
             let dy = cur[1] - prev[1];
-            if dx * dx + dy * dy < DIVERGENCE_EPSILON * DIVERGENCE_EPSILON {
-                return if i + 1 < len { Some(i + 1) } else { None };
+            dx * dx + dy * dy
+        };
+
+        if self.prev_positions.len() == len {
+            // Same length — walk backward from tip to `earliest`.
+            for i in (earliest..len).rev() {
+                if delta2(i) < eps2 {
+                    return if i + 1 < len { Some(i + 1) } else { None };
+                }
             }
+            Some(earliest)
+        } else {
+            // Polyline grew (typically by exactly one). New indices
+            // `[prev_positions.len(), len-1]` are by definition new and
+            // cannot be compared. Existing indices that overlap with
+            // `prev_positions` are in `[0, overlap_end)` — walk those,
+            // descending, bounded below by `earliest`.
+            let overlap_end = self.prev_positions.len().min(len);
+            if earliest >= overlap_end {
+                // No overlap to check (e.g., first push of a stroke). The
+                // divergence index is `earliest` itself, which equals 0
+                // when there is nothing prior to compare against.
+                return Some(earliest);
+            }
+            for i in (earliest..overlap_end).rev() {
+                if delta2(i) < eps2 {
+                    return Some(i + 1);
+                }
+            }
+            Some(earliest)
         }
-        Some(0)
     }
 }
 
@@ -170,12 +199,25 @@ impl StabilizerAlgorithm for LaplacianStabilizer {
         &self.stabilized
     }
 
+    /// Conservative upper bound on `tip_vi - find_divergence().unwrap()`.
+    ///
+    /// Each `push()` re-runs `N = ceil(strength * 10)` Gauss-Seidel Laplacian
+    /// sweeps from scratch on the raw polyline. Between frames, the only
+    /// inputs that differ are the new tip and the now-interior previous tip
+    /// (formerly pinned). Both perturbations sit at indices `>= len - 2`.
+    ///
+    /// Per sweep, the *backward* influence radius of a Gauss-Seidel Laplacian
+    /// pass is exactly 1: forward in-sweep updates do not move information
+    /// backward, so a change at index `i` can only affect index `i-1` in the
+    /// *next* sweep. After `N` sweeps the backward reach is `N`. The earliest
+    /// index that can possibly differ between frames is `len - 2 - N`, so the
+    /// distance from the tip (`len - 1`) is at most `N + 1`.
     fn max_divergence_window(&self) -> usize {
         if self.strength == 0.0 {
             return 0;
         }
         let iterations = (self.strength * 10.0).ceil() as usize;
-        iterations * 10 + 5
+        iterations + 1
     }
 
     fn clear(&mut self) {
@@ -363,5 +405,55 @@ mod tests {
             high > low,
             "higher strength ({high}) should displace corner more than lower ({low})"
         );
+    }
+
+    /// `max_divergence_window` is the contract the checkpoint ring relies on
+    /// for coverage. Lock the value to the influence-radius derivation so any
+    /// future change is forced through this test (and the documentation).
+    #[test]
+    fn max_divergence_window_matches_influence_radius() {
+        // strength = 0 → pass-through, no relaxation, no divergence window.
+        assert_eq!(LaplacianStabilizer::new(0.0).max_divergence_window(), 0);
+
+        // iterations = ceil(strength * 10); window = iterations + 1.
+        for (strength, expected_iters) in [(0.1f32, 1u32), (0.25, 3), (0.5, 5), (0.8, 8), (1.0, 10)]
+        {
+            let stab = LaplacianStabilizer::new(strength);
+            assert_eq!(
+                stab.max_divergence_window(),
+                expected_iters as usize + 1,
+                "strength={strength}: window should be iterations+1"
+            );
+        }
+    }
+
+    /// Regression for the prior "find_divergence can return `Some(0)`" bug.
+    /// The detector and the bound are co-derived now; this test enforces that
+    /// `find_divergence` never returns an index further from the tip than
+    /// `max_divergence_window` indices behind it.
+    #[test]
+    fn find_divergence_respects_max_window() {
+        let mut stab = LaplacianStabilizer::new(1.0);
+        let max_back = stab.max_divergence_window();
+
+        // Build a long stroke with curvature so divergence is detected on
+        // most pushes (every interior point shifts slightly when a new tip
+        // is pinned somewhere else).
+        for i in 0..200 {
+            let t = i as f32;
+            let x = t * 4.0;
+            let y = (t * 0.15).sin() * 30.0;
+            stab.push(make_point(x, y));
+
+            let len = stab.stabilized().len();
+            let earliest = len.saturating_sub(max_back + 1);
+            if let Some(div) = stab.find_divergence() {
+                assert!(
+                    div >= earliest,
+                    "find_divergence returned {div} at len={len}, earliest allowed = {earliest} \
+                     (max_divergence_window = {max_back})"
+                );
+            }
+        }
     }
 }

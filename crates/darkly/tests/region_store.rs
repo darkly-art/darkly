@@ -68,7 +68,7 @@ fn region_store_save_restore_round_trip() {
 
     // Save region.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
     let entry = store.commit_region(
         &mut enc,
         darkly::layer::LayerId::from_ffi(1),
@@ -117,7 +117,7 @@ fn region_store_partial_rect() {
 
     // Save only inner 64×64 rect at (32, 32).
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame, fmt, cr(32, 32, 64, 64));
+    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(32, 32, 64, 64));
     let entry = store.commit_region(
         &mut enc,
         darkly::layer::LayerId::from_ffi(1),
@@ -175,7 +175,7 @@ fn region_store_redo_round_trip() {
 
     // Save red state.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
     let entry_a = store.commit_region(
         &mut enc,
         darkly::layer::LayerId::from_ffi(1),
@@ -229,7 +229,7 @@ fn region_store_ring_buffer_eviction() {
         write_texture(&queue, &tex, w, h, 4, &color);
 
         let mut enc = encoder(&device);
-        let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
+        let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
         let entry = store.commit_region(
             &mut enc,
             darkly::layer::LayerId::from_ffi(1),
@@ -273,7 +273,7 @@ fn region_store_r8_format() {
 
     // Save.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
     let entry = store.commit_region(
         &mut enc,
         darkly::layer::LayerId::from_ffi(1),
@@ -339,7 +339,7 @@ fn region_store_save_full_commit_subrect() {
 
     // Stroke begin — save the full layer.
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, w, h));
+    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, w, h));
     submit(&queue, enc);
 
     // Simulate dabs landing on the green center, turning it white.
@@ -401,7 +401,7 @@ fn region_store_commit_outside_saved_panics() {
     let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
 
     let mut enc = encoder(&device);
-    let snap = store.save_region(&mut enc, &frame, fmt, cr(0, 0, 32, 32));
+    let snap = store.save_region(&device, &mut enc, &frame, fmt, cr(0, 0, 32, 32));
     submit(&queue, enc);
 
     // Commit at a rect that is NOT contained in the saved (0,0,32,32) area.

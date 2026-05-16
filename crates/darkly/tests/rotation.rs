@@ -32,7 +32,7 @@ fn test_engine() -> DarklyEngine {
 
 fn find_node_id(engine: &DarklyEngine, type_id: &str) -> NodeId {
     engine
-        .active_brush_graph_ref()
+        .active_brush_graph()
         .nodes
         .values()
         .find(|n: &&NodeInstance<BrushWireType>| n.type_id == type_id)
@@ -55,7 +55,7 @@ fn install_bar_tip(engine: &mut DarklyEngine) -> (NodeId, u64) {
     // Add the image node first so its `resource_name` param can be set to
     // "test-bar" before any upload happens.
     let before_ids: std::collections::HashSet<u64> = engine
-        .active_brush_graph_ref()
+        .active_brush_graph()
         .nodes
         .keys()
         .map(|id| id.0)
@@ -64,7 +64,7 @@ fn install_bar_tip(engine: &mut DarklyEngine) -> (NodeId, u64) {
         .brush_graph_add_node("image")
         .expect("add image node");
     let image_id = engine
-        .active_brush_graph_ref()
+        .active_brush_graph()
         .nodes
         .keys()
         .map(|id| id.0)
@@ -287,7 +287,7 @@ fn jitter_passthrough_preserves_drawing_angle() {
     // Insert a jitter node between pen.drawing_angle and stamp.rotation
     // with amount=0 (default). Pass-through is expected.
     let before_ids: std::collections::HashSet<u64> = engine
-        .active_brush_graph_ref()
+        .active_brush_graph()
         .nodes
         .keys()
         .map(|id| id.0)
@@ -296,7 +296,7 @@ fn jitter_passthrough_preserves_drawing_angle() {
         .brush_graph_add_node("jitter")
         .expect("add jitter node");
     let jitter_id = engine
-        .active_brush_graph_ref()
+        .active_brush_graph()
         .nodes
         .keys()
         .map(|id| id.0)

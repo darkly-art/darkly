@@ -20,6 +20,7 @@ const PARAMS: &[ParamDef] = &[
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "bokeh",
+        display_name: "Bokeh",
         params: PARAMS,
         create_pipeline: create_bokeh_pipeline,
         from_params: |params, shared| {

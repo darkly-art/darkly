@@ -2,15 +2,35 @@
     import { app } from '../../state/app.svelte';
 
     let { node }: {
-        node: { id: number; opacity: number; blendMode: number };
+        node: { id: number; opacity: number; blendMode: string };
     } = $props();
 
-    const BLEND_MODES = [
-        { value: 0, label: 'Normal' },
-        { value: 1, label: 'Multiply' },
-        { value: 2, label: 'Screen' },
-        { value: 3, label: 'Overlay' },
-    ];
+    // Blend modes come from the Rust BlendModeRegistry — the dropdown
+    // (and its category-based <optgroup>s) is built entirely from that table.
+    interface BlendModeType { type: string; displayName: string; category: string; }
+    let blendModeTypes = $state<BlendModeType[]>([]);
+    $effect(() => {
+        if (!app.handle) return;
+        try {
+            blendModeTypes = JSON.parse(app.handle.blend_mode_types()) as BlendModeType[];
+        } catch {
+            blendModeTypes = [];
+        }
+    });
+
+    interface BlendModeGroup { label: string; modes: BlendModeType[]; }
+    let blendModeGroups = $derived((() => {
+        const groups: BlendModeGroup[] = [];
+        let current: BlendModeGroup | null = null;
+        for (const bm of blendModeTypes) {
+            if (!current || current.label !== bm.category) {
+                current = { label: bm.category, modes: [] };
+                groups.push(current);
+            }
+            current.modes.push(bm);
+        }
+        return groups;
+    })());
 
     function onOpacityInput(e: Event) {
         const value = parseFloat((e.target as HTMLInputElement).value);
@@ -20,7 +40,7 @@
     }
 
     function onBlendModeChange(e: Event) {
-        const value = parseInt((e.target as HTMLSelectElement).value, 10);
+        const value = (e.target as HTMLSelectElement).value;
         app.handle?.set_blend_mode(node.id, value);
         app.refreshLayerTree();
         app.requestFrame();
@@ -41,9 +61,13 @@
 
 <div class="row">
     <span class="label">Blend</span>
-    <select class="select" value={node.blendMode ?? 0} onchange={onBlendModeChange}>
-        {#each BLEND_MODES as bm (bm.value)}
-            <option value={bm.value}>{bm.label}</option>
+    <select class="select" value={node.blendMode ?? 'normal'} onchange={onBlendModeChange}>
+        {#each blendModeGroups as group (group.label)}
+            <optgroup label={group.label}>
+                {#each group.modes as bm (bm.type)}
+                    <option value={bm.type}>{bm.displayName}</option>
+                {/each}
+            </optgroup>
         {/each}
     </select>
 </div>

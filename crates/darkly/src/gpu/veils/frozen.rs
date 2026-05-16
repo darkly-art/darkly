@@ -30,6 +30,7 @@ const PARAMS: &[ParamDef] = &[
 pub fn register() -> VeilRegistration {
     VeilRegistration {
         type_id: "frozen",
+        display_name: "Frozen",
         params: PARAMS,
         create_pipeline: create_frozen_pipeline,
         from_params: |params, shared| {

@@ -9,7 +9,6 @@ let waitingForPick = false;
 
 export const colorPickerTool: Tool = {
     id: 'colorpicker',
-    name: 'Color Picker',
     faIcon: 'fa-solid fa-eye-dropper',
     group: 'paint',
     hotkeyAction: 'colorPickerTool',

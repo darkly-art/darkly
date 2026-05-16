@@ -288,6 +288,88 @@ fn transform_on_off_canvas_layer_cancel_restores_pixels() {
     );
 }
 
+/// Regression: committing a floating transform that translates content past
+/// the canvas edge must grow the target layer to fit the moved pixels,
+/// rather than clamping the affected rect to canvas bounds and silently
+/// dropping anything outside it.
+///
+/// Bug symptom before fix: a translated selection whose new bounds extend
+/// past the canvas edge would be cropped at the canvas boundary on commit —
+/// pixels beyond the edge were never written to the target layer texture.
+#[test]
+fn commit_floating_translate_past_canvas_preserves_pixels() {
+    use darkly::coord::CanvasRect;
+    use darkly::gpu::transform::affine_translate;
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    // Opaque red 8×8 block at canvas (50, 30) — fully inside the canvas.
+    let bw: u32 = 8;
+    let bh: u32 = 8;
+    let mut rgba = vec![0u8; (bw * bh * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 255;
+        px[3] = 255;
+    }
+    let red_layer = engine.paste_image(bw, bh, &rgba, 50, 30, None);
+    assert_eq!(
+        engine.layer_bounds(red_layer),
+        Some(CanvasRect::from_xywh(50, 30, bw, bh)),
+        "pasted layer should start sized to the paste"
+    );
+
+    // Select the block; transform it.
+    engine.select_rect(
+        50.0,
+        30.0,
+        bw as f32,
+        bh as f32,
+        SelectionMode::Replace,
+        false,
+        0.0,
+    );
+    let started = engine.begin_transform(red_layer);
+    assert!(
+        started,
+        "begin_transform with a selection should be synchronous"
+    );
+
+    // Translate the floating by +20 in X — transformed bounds (70, 30, 8, 8)
+    // sit entirely past the canvas right edge (canvas width = 64).
+    engine.update_floating_matrix(affine_translate(20.0, 0.0));
+    engine.commit_floating();
+
+    // Layer must have grown to contain the translated rect.
+    let bounds = engine
+        .layer_bounds(red_layer)
+        .expect("layer must still exist after commit");
+    assert!(
+        bounds.contains(CanvasRect::from_xywh(70, 30, bw, bh)),
+        "layer bounds must contain the off-canvas translated rect (70, 30, 8, 8); got {:?}",
+        bounds
+    );
+
+    // Verify the moved red is actually written into the grown texture at
+    // the right canvas-space location. This is what the bug was dropping.
+    let pixels = engine.test_readback_layer(red_layer);
+    let lw = bounds.width;
+    let lx = (70 - bounds.x0()) as u32;
+    let ly = (30 - bounds.y0()) as u32;
+    let p_idx = ((ly * lw + lx) * 4) as usize;
+    assert!(
+        pixels[p_idx] > 200,
+        "moved pixel at canvas (70, 30) should be red, got R={}",
+        pixels[p_idx]
+    );
+    assert!(
+        pixels[p_idx + 3] > 200,
+        "moved pixel at canvas (70, 30) should be opaque, got A={}",
+        pixels[p_idx + 3]
+    );
+}
+
 /// Regression for the canvas-clamping bug: pasting an image larger than
 /// the canvas must preserve the full extent on the layer, not crop to
 /// canvas dimensions.
@@ -414,6 +496,195 @@ fn paste_floating_commit_is_one_undo() {
     );
 }
 
+/// Regression: a paste smaller than canvas in any dimension produces a
+/// paste-extent layer texture smaller than the canvas. The thumbnail
+/// readback must source from the texture's actual dimensions — copying
+/// `[0, 0, canvas_w, canvas_h]` exceeds the texture and fails wgpu
+/// validation, invalidating the entire command encoder.
+#[test]
+fn thumbnail_readback_handles_layer_smaller_than_canvas() {
+    let (cw, ch) = (1920, 1080);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    // 256×256 paste — both dims smaller than canvas.
+    let pw: u32 = 256;
+    let ph: u32 = 256;
+    let mut rgba = vec![0u8; (pw * ph * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[1] = 200;
+        px[3] = 255;
+    }
+    let pasted = engine.paste_image(pw, ph, &rgba, 100, 100, None);
+
+    // Render drives `drain_dirty_thumbnail_readbacks` which encodes the
+    // copy. Pre-fix this submits an invalid CommandEncoder ("touches outside
+    // of layer-texture") and poisons the queue.
+    engine.render(0.0);
+    for _ in 0..8 {
+        engine.test_flush_readbacks();
+        if engine.test_thumbnail_cache_peek(pasted).is_some() {
+            break;
+        }
+    }
+
+    let thumb = engine
+        .test_thumbnail_cache_peek(pasted)
+        .expect("thumbnail must complete after a few flushes");
+    let any_visible = thumb.chunks_exact(4).any(|p| p[3] > 0);
+    assert!(
+        any_visible,
+        "thumbnail of a non-empty paste must contain visible pixels"
+    );
+}
+
+/// Regression: the floating preview after `paste_image_floating` must be
+/// populated immediately. Pre-fix, `set_floating_content` allocated the
+/// preview texture but never wrote into it; the host blend pass sampled
+/// from an uninitialized texture, so the paste appeared invisible until
+/// the first drag triggered `update_floating_matrix` →
+/// `update_floating_preview`.
+#[test]
+fn paste_image_floating_preview_visible_before_any_drag() {
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    // 32×32 opaque green paste centered on canvas.
+    let pw: u32 = 32;
+    let ph: u32 = 32;
+    let mut rgba = vec![0u8; (pw * ph * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[1] = 255;
+        px[3] = 255;
+    }
+    let ox = (cw as i32 - pw as i32) / 2;
+    let oy = (ch as i32 - ph as i32) / 2;
+    let _pasted = engine.paste_image_floating(pw, ph, &rgba, ox, oy, None);
+
+    // No `update_floating_matrix` call — just composite once and read the
+    // canvas back. The paste must already be visible.
+    let canvas = engine.test_readback_canvas();
+    let center_x = (cw / 2) as usize;
+    let center_y = (ch / 2) as usize;
+    let p_idx = (center_y * cw as usize + center_x) * 4;
+    assert!(
+        canvas[p_idx + 1] > 200,
+        "center pixel must be green from the paste preview, got G={}",
+        canvas[p_idx + 1]
+    );
+    assert!(
+        canvas[p_idx + 3] > 200,
+        "center pixel must be opaque, got A={}",
+        canvas[p_idx + 3]
+    );
+}
+
+/// Regression: while dragging a floating, the preview must show the
+/// transformed content at the new canvas position — not clip it to the
+/// floating's source bounding box.
+///
+/// Pre-fix, the preview texture was allocated at the live layer's
+/// dimensions (which for a paste = the source's bounding box) and reused
+/// the live layer's blend uniforms. Translating the matrix moved the
+/// transform-shader's write outside the preview texture, so the host
+/// blend pass sampled the still-empty parts of the preview at the new
+/// destination — the moved content was invisible until commit.
+#[test]
+fn floating_preview_visible_when_translation_extends_past_source_bbox() {
+    use darkly::gpu::transform::affine_translate;
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    // 8×8 opaque red paste at canvas (10, 10). Source bbox = (10, 10, 8, 8).
+    let bw: u32 = 8;
+    let bh: u32 = 8;
+    let mut rgba = vec![0u8; (bw * bh * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 255;
+        px[3] = 255;
+    }
+    let _pasted = engine.paste_image_floating(bw, bh, &rgba, 10, 10, None);
+
+    // Translate by +20 in X → transformed bounds (30, 10, 8, 8), well
+    // outside the source bbox at (10, 10, 8, 8) but still inside canvas.
+    engine.update_floating_matrix(affine_translate(20.0, 0.0));
+
+    let canvas = engine.test_readback_canvas();
+    let pixel_at = |x: u32, y: u32| {
+        let i = ((y * cw + x) * 4) as usize;
+        [canvas[i], canvas[i + 1], canvas[i + 2], canvas[i + 3]]
+    };
+
+    // Moved content must be visible at (30..38, 10..18).
+    let moved = pixel_at(34, 14);
+    assert!(
+        moved[0] > 200 && moved[3] > 200,
+        "moved pixel at canvas (34, 14) should be opaque red, got {:?}",
+        moved
+    );
+
+    // Old position must be cleared.
+    let old = pixel_at(14, 14);
+    assert!(
+        old[3] < 50,
+        "old position (14, 14) should be transparent during transform, got A={}",
+        old[3]
+    );
+}
+
+/// Regression: dragging the floating must not leave ghost copies of the
+/// content at the previous frame's destination. The canvas-aligned preview
+/// is a long-lived texture; each `update_floating_matrix` overwrites the
+/// transformed region, but pixels at the *previous* destination must be
+/// reset — otherwise the shader's "discard outside transformed bounds"
+/// leaves the old pixels in place, building a smear across the drag path.
+#[test]
+fn floating_preview_does_not_leave_ghost_pixels_when_dragged() {
+    use darkly::gpu::transform::affine_translate;
+
+    let (cw, ch) = (64, 64);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+
+    let bw: u32 = 8;
+    let bh: u32 = 8;
+    let mut rgba = vec![0u8; (bw * bh * 4) as usize];
+    for px in rgba.chunks_exact_mut(4) {
+        px[0] = 255;
+        px[3] = 255;
+    }
+    let _pasted = engine.paste_image_floating(bw, bh, &rgba, 10, 10, None);
+
+    // First drag: move to (+15, 0) → (25, 10, 8, 8).
+    engine.update_floating_matrix(affine_translate(15.0, 0.0));
+    let _ = engine.test_readback_canvas();
+
+    // Second drag: move further to (+30, 0) → (40, 10, 8, 8).
+    engine.update_floating_matrix(affine_translate(30.0, 0.0));
+    let canvas = engine.test_readback_canvas();
+
+    let pixel_at = |x: u32, y: u32| {
+        let i = ((y * cw + x) * 4) as usize;
+        canvas[i + 3]
+    };
+
+    // Current position must be visible.
+    assert!(
+        pixel_at(44, 14) > 200,
+        "current drag position (44, 14) must be opaque, got A={}",
+        pixel_at(44, 14)
+    );
+    // Previous-drag destination (25..33, 10..18) must NOT still hold pixels.
+    assert!(
+        pixel_at(29, 14) < 50,
+        "previous-drag position (29, 14) must NOT retain pixels, got A={}",
+        pixel_at(29, 14)
+    );
+}
+
 // ============================================================================
 // Lasso selection performance (regression test for scanline fill)
 // ============================================================================
@@ -501,7 +772,7 @@ fn lasso_selection_performance_and_correctness() {
 
 fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
     engine
-        .active_brush_graph_ref()
+        .active_brush_graph()
         .nodes
         .values()
         .find(|n: &&NodeInstance<BrushWireType>| n.type_id == type_id)
@@ -683,6 +954,87 @@ fn pen_input_spacing_port_controls_dab_density() {
         "expected 100% spacing to deposit noticeably less paint than 10%; \
          got dense={dense_alpha}, sparse={sparse_alpha} (sparse/dense = {:.2})",
         sparse_alpha as f64 / dense_alpha as f64
+    );
+}
+
+/// Regression: at the smallest brush sizes, `SpacingConfig::distance()`
+/// previously relied on `min_px` defaulting to 1.0 to avoid sub-pixel
+/// dab stepping. If any code path constructed a `SpacingConfig` with
+/// `min_px < 1.0` — or a future change scaled spacing without going
+/// through `SpacingConfig::distance()` — strokes with a tiny brush would
+/// emit one dab per *fractional* pixel of stroke, producing catastrophic
+/// dab counts. Guard the invariant end-to-end: a long stroke painted
+/// with the smallest brush must not place more dabs than the stroke is
+/// pixels long.
+#[test]
+fn small_brush_does_not_emit_subpixel_dab_spacing() {
+    let (w, h) = (256, 256);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Force the densest configuration the UI allows:
+    // - Spacing ratio at its 4 % floor (any lower swamps the stabilizer).
+    // - Stamp size at near-zero, so the dab is clamped to 1×1 px and
+    //   the per-iteration step would be `1 * 0.04 = 0.04 px` without
+    //   the absolute floor.
+    let pen_id = find_node_id(&engine, "pen_input");
+    engine
+        .brush_graph_set_port_default(pen_id, "spacing", 0.04)
+        .expect("spacing port must exist");
+    let stamp_id = find_node_id(&engine, "stamp");
+    engine
+        .brush_graph_set_port_default(stamp_id, "size", 0.001)
+        .expect("stamp size port must exist");
+
+    // Horizontal stroke from x=16 to x=(w-16) at y = h/2. Same shape
+    // as `paint_horizontal_stroke`, repeated here so the stroke length
+    // is explicit at the assertion site.
+    let x0 = 16.0_f32;
+    let x1 = (w as f32) - 16.0;
+    let stroke_length_px = (x1 - x0).abs();
+
+    engine.begin_stroke(layer_id);
+    let samples = 40;
+    for i in 0..samples {
+        let t = i as f32 / (samples - 1) as f32;
+        let x = x0 + t * (x1 - x0);
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y: (h / 2) as f32,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: i as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+    engine.render(0.0);
+
+    let dabs = engine.test_stroke_total_dabs();
+    // The 1 px floor caps *fresh* dab placements at one per stroke pixel.
+    // `total_dabs` also counts dabs re-placed by the tip-divergence re-render
+    // (every pen event re-renders the tip segment with proper Catmull-Rom
+    // lookahead) and any checkpoint-restore replay, so the observed total is
+    // higher than the stroke length even when the floor holds.
+    //
+    // The bound below is the gross-regression guard: if `SpacingConfig::distance()`
+    // ever returned a sub-pixel value (e.g. 0.5 px), this number would roughly
+    // double; if it returned 0.1 px, it'd grow ~10×. The companion
+    // `debug_assert!(step >= ABSOLUTE_MIN_SPACING_PX, …)` in
+    // `stroke_engine::render_from_stabilized_*` is the precise per-step guard
+    // and would trip first under cargo test (which runs with debug_assertions).
+    let max_expected = (stroke_length_px.ceil() as u64) * 4;
+    assert!(
+        dabs <= max_expected,
+        "tiny-brush stroke emitted {dabs} dabs across {stroke_length_px:.0}px \
+         of stroke (gross-regression bound {max_expected}); spacing floor \
+         appears to have been bypassed"
     );
 }
 
@@ -3312,4 +3664,82 @@ fn transform_mask_under_isolation_previews_grayscale() {
     );
 
     engine.cancel_floating();
+}
+
+// ============================================================================
+// Checkpoint ring — coverage invariant on a long stabilized stroke
+// ============================================================================
+
+/// Regression for the checkpoint ring coverage architecture.
+///
+/// Before the redesign, [`pick_slot`] (the eviction policy) destroyed the
+/// lowest-vi anchor as soon as the ring filled, and `find_divergence` could
+/// return values outside the advertised `max_divergence_window`. The two
+/// defects compounded to ~2 mid-stroke full re-render fallbacks on long
+/// high-stabilization strokes — each fallback re-renders the entire stroke
+/// instead of the `O(window/8)` slice the architecture promises.
+///
+/// This test paints a long curving stroke at full Laplacian strength and
+/// asserts that `full_rerender_events == 0`. With the redesign the
+/// coverage invariant — at least one valid slot with
+/// `vi < tip_vi − max_divergence_window` — holds after every save, so
+/// `restore_before` always finds a checkpoint.
+#[test]
+fn long_stabilized_stroke_no_fallback() {
+    let (w, h) = (512, 512);
+    let mut engine = test_engine(w, h);
+    let layer_id = engine.add_raster_layer(None);
+
+    engine.brush_load("Scatter Brush").expect("brush load");
+
+    let pen_id = find_node_id(&engine, "pen_input");
+    let stamp_id = find_node_id(&engine, "stamp");
+    // Full-strength stabilization → max_divergence_window = 11 (iterations=10
+    // + 1 from the influence-radius model). Spacing = 11 / 7 = 1.
+    engine
+        .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
+        .unwrap();
+    // Smallish dab so the bbox stays cheap.
+    engine
+        .brush_graph_set_port_default(stamp_id, "size", 0.08)
+        .unwrap();
+
+    engine.begin_stroke(layer_id);
+    // 400 samples along a slow spiral — enough to push the ring well past
+    // `2 * max_divergence_window` (the failure threshold for defect 2). The
+    // spiral exercises divergence on every event because relaxation keeps
+    // shifting interior points as the tip continues to curve.
+    let samples = 400usize;
+    let cx = (w / 2) as f32;
+    let cy = (h / 2) as f32;
+    for i in 0..samples {
+        let t = i as f32 / samples as f32;
+        let theta = t * std::f32::consts::TAU * 3.0;
+        let r = 20.0 + t * 200.0;
+        let x = cx + r * theta.cos();
+        let y = cy + r * theta.sin();
+        engine.stroke_to(StrokeOp::BrushStroke {
+            x,
+            y,
+            pressure: 1.0,
+            x_tilt: 0.0,
+            y_tilt: 0.0,
+            rotation: 0.0,
+            tangential_pressure: 0.0,
+            time_ms: i as f64 * 16.0,
+            cr: 1.0,
+            cg: 0.0,
+            cb: 0.0,
+            ca: 1.0,
+        });
+    }
+    engine.end_stroke();
+
+    assert_eq!(
+        engine.test_stroke_full_rerender_events(),
+        0,
+        "long stabilized stroke must not trigger any mid-stroke full \
+         re-render fallback — the coverage invariant guarantees \
+         `restore_before` succeeds for every reachable divergence index"
+    );
 }

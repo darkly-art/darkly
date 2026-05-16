@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 
 use crate::gpu::params::ParamValue;
-use crate::nodegraph::{ExecutionPlan, Graph, NodeId, NodeRegistration, PortDef, PortDir};
+use crate::nodegraph::{
+    ExecutionPlan, Graph, InputSlot, NodeId, NodeRegistration, PortDef, PortDir, PortRef,
+};
 
 use super::curve_math::CurveLut;
 
@@ -111,6 +113,89 @@ impl EvalContext<'_> {
         let seed = self.stroke_seed.wrapping_add(salt.wrapping_mul(0x9E3779B9));
         prng_f32(seed, index)
     }
+}
+
+/// Gather a step's connected inputs from the slot table, applying
+/// wire-boundary range remap. This is where the "everything speaks 0-1"
+/// intent in [`crate::brush::wire`] actually lives: when both ends of a
+/// wire declare a `natural_range`, the value gets affinely remapped at
+/// the boundary; otherwise it passes through raw (preserving math-node
+/// and over-drag-slider passthrough).
+fn gather_inputs(
+    slots: &[Option<ScalarValue>],
+    input_slots: &[InputSlot],
+    dest_node: NodeId,
+    node_data: &HashMap<NodeId, NodeData>,
+) -> HashMap<String, ScalarValue> {
+    let mut inputs = HashMap::with_capacity(input_slots.len());
+    for slot_info in input_slots {
+        let Some(val) = slots[slot_info.slot] else {
+            continue;
+        };
+        let remapped = remap_for_wire(
+            val,
+            &slot_info.source,
+            dest_node,
+            &slot_info.port_name,
+            node_data,
+        );
+        inputs.insert(slot_info.port_name.clone(), remapped);
+    }
+    inputs
+}
+
+/// Apply the wire-boundary remap if both ends of the wire declare a
+/// `natural_range`. Operates on the scalar-coercible variants
+/// (`Scalar`/`Int`/`Bool`); everything else (textures, colors, vectors)
+/// passes through unchanged.
+fn remap_for_wire(
+    value: ScalarValue,
+    source: &PortRef,
+    dest_node: NodeId,
+    dest_port: &str,
+    node_data: &HashMap<NodeId, NodeData>,
+) -> ScalarValue {
+    let src_range = node_data
+        .get(&source.node)
+        .and_then(|n| {
+            n.port_defs
+                .iter()
+                .find(|p| p.name == source.port && p.dir == PortDir::Output)
+        })
+        .and_then(|p| p.natural_range);
+    let dst_range = node_data
+        .get(&dest_node)
+        .and_then(|n| {
+            n.port_defs
+                .iter()
+                .find(|p| p.name == dest_port && p.dir == PortDir::Input)
+        })
+        .and_then(|p| p.natural_range);
+    let (Some(src), Some(dst)) = (src_range, dst_range) else {
+        return value;
+    };
+    match value {
+        ScalarValue::Scalar(_) | ScalarValue::Int(_) | ScalarValue::Bool(_) => {
+            ScalarValue::Scalar(remap_scalar(value.as_f32(), src, dst))
+        }
+        _ => value,
+    }
+}
+
+/// Affine remap from `src` range to `dst` range. Not clamped — consistent
+/// with the "ranges are UI hints, not enforced" contract; consumers that
+/// need a hard bound clamp inside their own evaluator.
+#[inline]
+fn remap_scalar(value: f32, src: (f32, f32), dst: (f32, f32)) -> f32 {
+    let (src_min, src_max) = src;
+    let (dst_min, dst_max) = dst;
+    let denom = src_max - src_min;
+    // Degenerate source range — collapse to dst_min rather than divide by zero.
+    if denom == 0.0 {
+        return dst_min;
+    }
+    let fraction = (value - src_min) / denom;
+    dst_min + fraction * (dst_max - dst_min)
 }
 
 /// Deterministic PRNG: hash seed + index to produce a 0-1 float.
@@ -373,13 +458,15 @@ impl BrushGraphRunner {
                 continue;
             };
 
-            // Gather connected inputs from the slot table.
-            let mut inputs = HashMap::new();
-            for (port_name, slot_idx) in &step.input_slots {
-                if let Some(val) = self.slots[*slot_idx] {
-                    inputs.insert(port_name.clone(), val);
-                }
-            }
+            // Gather connected inputs from the slot table, applying
+            // wire-boundary range remap where both source and dest ports
+            // declare a `natural_range`.
+            let inputs = gather_inputs(
+                &self.slots,
+                &step.input_slots,
+                step.node_id,
+                &self.node_data,
+            );
 
             let node = self.node_data.get(&step.node_id);
             let empty_params = Vec::new();
@@ -452,13 +539,22 @@ impl BrushGraphRunner {
                 continue;
             };
 
-            // Gather connected inputs from the slot table.
-            let mut inputs = HashMap::new();
-            for (port_name, slot_idx) in &step.input_slots {
-                if let Some(val) = self.slots[*slot_idx] {
-                    inputs.insert(port_name.clone(), val);
-                }
-            }
+            gpu.perf.record_gpu_step();
+
+            // Gather connected inputs from the slot table, applying
+            // wire-boundary range remap where both source and dest ports
+            // declare a `natural_range`. Allocates a fresh `HashMap` per
+            // step; under high dab counts the cumulative allocator +
+            // remap-lookup cost shows up in the perf summary.
+            let t_gather = web_time::Instant::now();
+            let inputs = gather_inputs(
+                &self.slots,
+                &step.input_slots,
+                step.node_id,
+                &self.node_data,
+            );
+            gpu.perf
+                .record_gather_inputs(t_gather.elapsed().as_micros() as u64);
 
             let node = self.node_data.get(&step.node_id);
             let empty_params = Vec::new();
@@ -479,10 +575,22 @@ impl BrushGraphRunner {
             // `evaluate_gpu` closure runs too and no-ops (empty default).
             // Declared-GPU nodes take the opposite path: `evaluate_cpu`
             // returns empty, `evaluate_gpu` does the work.
+            let t_cpu = web_time::Instant::now();
             let mut outputs = evaluator.evaluate_cpu(&ctx);
-            outputs.extend(f(evaluator.as_ref(), &ctx, gpu));
+            let cpu_us = t_cpu.elapsed().as_micros() as u64;
+            gpu.perf.record_evaluate_cpu_in_gpu(cpu_us);
 
-            // Write outputs to their assigned slots.
+            let t_gpu_call = web_time::Instant::now();
+            let gpu_outputs = f(evaluator.as_ref(), &ctx, gpu);
+            let gpu_call_us = t_gpu_call.elapsed().as_micros() as u64;
+            gpu.perf.record_evaluate_gpu_call(gpu_call_us);
+
+            outputs.extend(gpu_outputs);
+
+            // Write outputs to their assigned slots. Linear scan with
+            // string compare per produced output × per step × per dab —
+            // a candidate hot spot at high dab counts.
+            let t_outputs = web_time::Instant::now();
             for (port_name, value) in outputs {
                 for (name, slot_idx) in &step.output_slots {
                     if *name == port_name {
@@ -491,6 +599,8 @@ impl BrushGraphRunner {
                     }
                 }
             }
+            gpu.perf
+                .record_step_outputs(t_outputs.elapsed().as_micros() as u64);
         }
     }
 
@@ -599,7 +709,61 @@ impl BrushGraphRunner {
         self.plan.steps.iter().any(|s| {
             s.input_slots
                 .iter()
-                .any(|(name, _)| name == "brush_preview")
+                .any(|slot| slot.port_name == "brush_preview")
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remap_identity_when_ranges_match() {
+        for v in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            assert!((remap_scalar(v, (0.0, 1.0), (0.0, 1.0)) - v).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn remap_unit_to_seed_range() {
+        // 0..1 → 0..1024 — the canonical random → seed case.
+        assert!((remap_scalar(0.0, (0.0, 1.0), (0.0, 1024.0)) - 0.0).abs() < 1e-4);
+        assert!((remap_scalar(0.5, (0.0, 1.0), (0.0, 1024.0)) - 512.0).abs() < 1e-4);
+        assert!((remap_scalar(1.0, (0.0, 1.0), (0.0, 1024.0)) - 1024.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn remap_bipolar_to_seed_range() {
+        // -1..1 → 0..1024 — old random output convention into seed.
+        assert!((remap_scalar(-1.0, (-1.0, 1.0), (0.0, 1024.0)) - 0.0).abs() < 1e-4);
+        assert!((remap_scalar(0.0, (-1.0, 1.0), (0.0, 1024.0)) - 512.0).abs() < 1e-4);
+        assert!((remap_scalar(1.0, (-1.0, 1.0), (0.0, 1024.0)) - 1024.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn remap_unit_to_bipolar_radians() {
+        use std::f32::consts::TAU;
+        // 0..1 → -TAU..TAU — random → phase.
+        assert!((remap_scalar(0.0, (0.0, 1.0), (-TAU, TAU)) - (-TAU)).abs() < 1e-4);
+        assert!((remap_scalar(0.5, (0.0, 1.0), (-TAU, TAU))).abs() < 1e-4);
+        assert!((remap_scalar(1.0, (0.0, 1.0), (-TAU, TAU)) - TAU).abs() < 1e-4);
+    }
+
+    #[test]
+    fn remap_degenerate_source_collapses_to_dst_min() {
+        // Source range with zero width can't normalize — collapse cleanly
+        // rather than producing NaN.
+        assert_eq!(remap_scalar(0.5, (1.0, 1.0), (0.0, 1024.0)), 0.0);
+        assert_eq!(remap_scalar(0.5, (1.0, 1.0), (-5.0, 5.0)), -5.0);
+    }
+
+    #[test]
+    fn remap_outside_src_range_is_not_clamped() {
+        // Consistent with the "ranges are UI hints" contract — overshoot
+        // passes through. Consumers clamp inside their own evaluator if
+        // they need a hard bound.
+        let v = remap_scalar(1.5, (0.0, 1.0), (0.0, 100.0));
+        assert!((v - 150.0).abs() < 1e-4);
     }
 }

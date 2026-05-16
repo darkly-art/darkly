@@ -85,6 +85,14 @@ impl DarklyEngine {
             },
         });
 
+        // Build the preview now so the paste is visible on the first frame.
+        // Without this, `set_floating_content` allocates an empty preview
+        // texture and the host's blend pass samples uninitialized pixels
+        // until the user drags (which triggers `update_floating_matrix` →
+        // `update_floating_preview`). The paste appeared invisible until
+        // the first move.
+        self.update_floating_preview();
+
         true
     }
 
@@ -149,6 +157,10 @@ impl DarklyEngine {
                 created_layer_id: Some(new_id),
             },
         });
+
+        // Build the preview so the paste is visible on the first frame.
+        // See `paste_in_place_floating` for the full reasoning.
+        self.update_floating_preview();
 
         new_id
     }
@@ -489,23 +501,30 @@ impl DarklyEngine {
             .map(|t| t.format)
             .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
 
-        // Compute tight affected rect = union(source bounds, transformed bounds),
-        // clamped to canvas. This is in CANVAS coordinates.
-        let canvas_w = self.doc.width as i32;
-        let canvas_h = self.doc.height as i32;
+        // Compute tight affected rect = union(source bounds, transformed
+        // bounds), in CANVAS coordinates. Intentionally NOT clamped to
+        // canvas — layer textures may extend past the canvas, and content
+        // dragged past the canvas edge must survive on the layer so it
+        // reappears when moved back. We grow the target below to fit.
         let (min_x, min_y, max_x, max_y) = fc.transformed_bounds();
         let (sox, soy) = fc.source_origin;
         let src_max_x = sox + fc.source_width as i32;
         let src_max_y = soy + fc.source_height as i32;
-        let canvas_clip =
-            crate::coord::CanvasRect::from_xywh(0, 0, canvas_w as u32, canvas_h as u32);
         let affected_canvas = crate::coord::CanvasRect::from_xywh(
             min_x.min(sox),
             min_y.min(soy),
             (max_x.max(src_max_x) - min_x.min(sox)).max(0) as u32,
             (max_y.max(src_max_y) - min_y.min(soy)).max(0) as u32,
-        )
-        .intersect(canvas_clip);
+        );
+
+        // Grow the target (or its host, for mask modifiers) so the layer
+        // texture can hold any portion of the affected rect that lies
+        // outside its current bounds — including pixels past the canvas
+        // edge. Best-effort: if growth is refused (cap, or target is
+        // neither raster nor modifier with a raster host), commit falls
+        // back to the pre-grow extent and the texture-side clip below
+        // still keeps the commit consistent.
+        let _ = self.grow_node_to_fit(layer_id, affected_canvas);
 
         // Path A — paste onto a layer auto-created for this paste.
         // The layer is empty by construction, so a single LayerAddAction
@@ -537,21 +556,22 @@ impl DarklyEngine {
         }
 
         // Translate the canvas-space affected rect into the target's
-        // layer-local frame. This is the boundary that *would have* been
-        // silently wrong before — the typed API forces the conversion.
+        // layer-local frame. After grow, the post-grow extent contains
+        // `affected_canvas`; the intersect is just a safety net for the
+        // growth-refused path.
         let target_canvas_extent = self
             .compositor
             .node_texture(layer_id)
             .map(|t| t.canvas_extent());
-        let affected_canvas_rect = match (affected_canvas, target_canvas_extent) {
-            (Some(rect), Some(extent)) => match rect.intersect(extent) {
+        let affected_canvas_rect = match target_canvas_extent {
+            Some(extent) => match affected_canvas.intersect(extent) {
                 Some(c) => c,
                 None => {
                     self.compositor.clear_floating_content();
                     return;
                 }
             },
-            _ => {
+            None => {
                 self.compositor.clear_floating_content();
                 return;
             }
@@ -561,18 +581,9 @@ impl DarklyEngine {
         // floating session — `setup_transform` only copied source pixels
         // out, and the per-frame preview ran into a dedicated preview
         // texture. So `save_region` here captures the genuine pre-
-        // transform state for undo, no un-clear dance required.
-        let layer_canvas_extent = self
-            .compositor
-            .node_texture(layer_id)
-            .map(|t| t.canvas_extent());
-        let layer_canvas_extent = match layer_canvas_extent {
-            Some(e) => e,
-            None => {
-                self.compositor.clear_floating_content();
-                return;
-            }
-        };
+        // transform state for undo, no un-clear dance required. The
+        // target's texture existence was already verified above when
+        // `target_canvas_extent` was read.
         macro_rules! layer_frame {
             () => {
                 self.compositor
@@ -581,15 +592,15 @@ impl DarklyEngine {
                     .canvas_frame()
             };
         }
-        self.region_store.ensure_scratch_capacity(
-            &self.gpu.device,
-            layer_canvas_extent.width,
-            layer_canvas_extent.height,
-        );
         let commit_snap = self.gpu.encode_ret("transform-commit-save", |encoder| {
             let frame = layer_frame!();
-            self.region_store
-                .save_region(encoder, &frame, format, affected_canvas_rect)
+            self.region_store.save_region(
+                &self.gpu.device,
+                encoder,
+                &frame,
+                format,
+                affected_canvas_rect,
+            )
         });
 
         // Apply ClearShape to the live target, then run commit. Same

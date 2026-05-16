@@ -18,7 +18,7 @@ use std::sync::{Arc, OnceLock};
 use darkly::brush::compile_graph;
 use darkly::brush::dab_pool::DabTexturePool;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::BrushGpuContext;
+use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipelines::BrushPipelines;
 use darkly::brush::stroke_buffer::StrokeBuffer;
@@ -343,6 +343,7 @@ macro_rules! make_ctx {
             pre_stroke_texture: Some(_pre_stroke_texture),
             pre_stroke_bind_group: Some(_pre_stroke_bind_group),
             dab_write_canvas_bbox: None,
+            perf: BrushPerfCounters::default(),
         }
     }};
 }
@@ -738,6 +739,7 @@ fn off_canvas_strip_preserved_on_oversized_layer() {
                 pre_stroke_texture: Some(pre_stroke_texture),
                 pre_stroke_bind_group: Some(pre_stroke_bind_group),
                 dab_write_canvas_bbox: None,
+                perf: BrushPerfCounters::default(),
             }
         }};
     }

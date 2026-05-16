@@ -261,11 +261,15 @@ impl RegionStore {
     /// later [`commit_region`](Self::commit_region) commit a sub-rect of the
     /// snapshot at its own canvas position.
     ///
-    /// Callers whose translated rect may exceed the current scratch
-    /// dimensions must call
-    /// [`ensure_scratch_capacity`](Self::ensure_scratch_capacity) first.
+    /// Grows the scratch textures on demand if the translated rect exceeds
+    /// the current scratch capacity (e.g. on a paste-extent layer or a
+    /// layer that was just grown past canvas). Callers that batch many
+    /// saves at known dimensions may still pre-call
+    /// [`ensure_scratch_capacity`](Self::ensure_scratch_capacity) to avoid
+    /// the per-call branch, but it is no longer required for correctness.
     pub fn save_region(
-        &self,
+        &mut self,
+        device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         source: &CanvasFrame<'_>,
         format: wgpu::TextureFormat,
@@ -274,14 +278,7 @@ impl RegionStore {
         let layer_rect = source
             .canvas_to_layer_rect(canvas_rect)
             .expect("save_region rect must overlap the source's canvas extent");
-        debug_assert!(
-            layer_rect.x1() <= self.scratch_width && layer_rect.y1() <= self.scratch_height,
-            "save_region rect {:?} (translated to {:?}) exceeds scratch capacity ({}x{}); call ensure_scratch_capacity first",
-            canvas_rect,
-            layer_rect,
-            self.scratch_width,
-            self.scratch_height
-        );
+        self.ensure_scratch_capacity(device, layer_rect.x1(), layer_rect.y1());
         let scratch = self.scratch_for(format);
 
         encoder.copy_texture_to_texture(

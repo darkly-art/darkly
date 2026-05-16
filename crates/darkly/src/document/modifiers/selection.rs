@@ -1,7 +1,7 @@
 //! Selection modifier — global single-channel mask for which pixels are
 //! affected by edits (paint, fill, transform, clipboard).
 //!
-//! Per the Modularity Principle in [CLAUDE.md], the entire selection kind
+//! Per the Modularity Principle in [AGENTS.md], the entire selection kind
 //! lives in this file: data struct, CPU cache, construction, and the
 //! `register()` discovery hook.
 //!
@@ -21,7 +21,7 @@ use crate::layer::PixelBuffer;
 /// readback after each mutating op (combine/invert/upload). Read paths that
 /// need pixel-level access (transform source bounds, copy region masking,
 /// flood-fill intersection) consult this rather than triggering a synchronous
-/// GPU readback (forbidden by CLAUDE.md "No Blocking GPU Readbacks").
+/// GPU readback (forbidden by AGENTS.md "No Blocking GPU Readbacks").
 pub struct SelectionCpuCache {
     pub data: Option<Vec<u8>>,
 }
@@ -71,8 +71,11 @@ impl SelectionModifier {
     }
 }
 
+pub const TYPE_ID: &str = "selection";
+
 pub fn register() -> ModifierRegistration {
     ModifierRegistration {
-        type_id: "selection",
+        type_id: TYPE_ID,
+        display_name: "Selection",
     }
 }

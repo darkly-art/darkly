@@ -10,7 +10,7 @@ mod graph;
 mod layout;
 mod registration;
 
-pub use compiler::{ExecStep, ExecutionPlan};
+pub use compiler::{ExecStep, ExecutionPlan, InputSlot};
 pub use graph::{
     Connection, Graph, GraphError, NodeId, NodeInstance, PortDef, PortDir, PortRef, UnitType,
 };

@@ -2,7 +2,7 @@
 
 use super::DarklyEngine;
 use crate::document::MoveTarget;
-use crate::layer::{BlendMode, Layer, LayerId, LayerNode};
+use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
 use crate::undo::{LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAction};
 
@@ -133,8 +133,14 @@ impl DarklyEngine {
         ));
     }
 
-    pub fn set_blend_mode(&mut self, layer_id: LayerId, mode: u32) {
-        let blend_mode = BlendMode::from_u32(mode);
+    pub fn set_blend_mode(&mut self, layer_id: LayerId, type_id: &str) {
+        // Unknown blend-mode strings keep the existing mode rather than
+        // silently snapping to Normal — the UI should only ever pass a
+        // registered id, so an unknown one is a bug worth surfacing.
+        let blend_mode = match crate::gpu::blend_mode::registry().get(type_id) {
+            Some(reg) => reg,
+            None => return,
+        };
         let old_mode = match self.doc.find_node(layer_id) {
             Some(n) => n.blend().blend_mode,
             None => return,
@@ -259,18 +265,18 @@ impl DarklyEngine {
                     &self.gpu.queue,
                     layer_id,
                     r.blend.opacity,
-                    r.blend.blend_mode,
+                    r.blend.blend_mode.gpu_value,
                 );
             }
             Some(LayerNode::Group(g)) => {
                 let opacity = g.blend.opacity;
-                let blend_mode = g.blend.blend_mode;
+                let blend_mode_gpu = g.blend.blend_mode.gpu_value;
                 let isolated = self.host_renders_isolated(layer_id);
                 self.compositor.update_group_uniforms(
                     &self.gpu.queue,
                     layer_id,
                     opacity,
-                    blend_mode,
+                    blend_mode_gpu,
                     isolated,
                 );
             }
@@ -301,7 +307,7 @@ impl DarklyEngine {
                     &self.gpu.queue,
                     group_id,
                     g.blend.opacity,
-                    g.blend.blend_mode,
+                    g.blend.blend_mode.gpu_value,
                     isolated,
                 );
             }
