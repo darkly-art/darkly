@@ -247,6 +247,9 @@ impl DarklyEngine {
                     was_active, node_id, seed_x, seed_y, tolerance, mode, pixels,
                 );
             }
+            ReadbackContext::ExportImage { width, height } => {
+                self.complete_export(width, height, pixels);
+            }
             ReadbackContext::SelectionReadback => {
                 self.update_selection_overlay_from_readback(pixels);
                 // Resume deferred operations that were waiting for

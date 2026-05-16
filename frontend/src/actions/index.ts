@@ -2,12 +2,55 @@ import { actions, sites } from './registry';
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
+import { exportImage } from '../state/exportImage.svelte';
 import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { screenToCanvas } from '../canvas/coordinates';
+
+/** Hidden `<input type="file">` mounted by `App.svelte`. The `open-image`
+ *  action triggers it; the change handler routes the file through
+ *  `paste_image`. Wired by `App.svelte`'s `bind:this` so the action can
+ *  fire .click() without owning the DOM node itself. */
+let openImageInputEl: HTMLInputElement | null = null;
+
+export function setOpenImageInput(el: HTMLInputElement | null) {
+    openImageInputEl = el;
+}
+
+/** Decode an image file via the browser's native codecs and paste it as
+ *  a new raster layer. Used by both the hidden file input and any future
+ *  drag-and-drop hook. Returns the new layer id, or `-1` on decode failure. */
+export async function openImageFile(file: File): Promise<number> {
+    if (!app.handle) return -1;
+    try {
+        const bitmap = await createImageBitmap(file);
+        const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+        const ctx = canvas.getContext('2d')!;
+        ctx.drawImage(bitmap, 0, 0);
+        bitmap.close();
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const rgba = new Uint8Array(imageData.data.buffer);
+        const activeId = app.activeLayerId ?? -1;
+        const layerId = app.handle.paste_image(
+            canvas.width,
+            canvas.height,
+            rgba,
+            0,
+            0,
+            activeId,
+        );
+        app.selectLayer(layerId);
+        app.refreshLayerTree();
+        app.requestFrame();
+        return layerId;
+    } catch (e) {
+        console.error('[open-image] decode failed', e);
+        return -1;
+    }
+}
 
 function enterTransformTool() {
     if (!app.handle || !app.canvasEl) return;
@@ -254,6 +297,32 @@ export function registerActions() {
                     app.requestFrame();
                 }
             }
+        },
+    });
+
+    // -- File I/O (image only — `.darkly` save/open lands in a later phase) --
+    actions.register({
+        id: 'exportImage',
+        displayName: 'Export Image…',
+        category: 'file',
+        description: 'Export the canvas composite as PNG, JPEG, or WebP.',
+        defaultHotkey: '$mod+Shift+KeyE',
+        handler: () => {
+            if (!app.handle) return;
+            exportImage.open = true;
+        },
+    });
+    actions.register({
+        id: 'openImage',
+        displayName: 'Open Image…',
+        category: 'file',
+        description: 'Open a PNG / JPEG / WebP as a new raster layer.',
+        defaultHotkey: '$mod+KeyO',
+        handler: () => {
+            if (!openImageInputEl) return;
+            // Reset value so re-picking the same file still fires `change`.
+            openImageInputEl.value = '';
+            openImageInputEl.click();
         },
     });
 

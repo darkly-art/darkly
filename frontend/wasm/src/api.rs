@@ -1091,6 +1091,45 @@ impl DarklyHandle {
         }
     }
 
+    // --- Image export (PNG/JPEG/WebP) ---
+
+    /// Kick off an async readback of the composited canvas. The result lands
+    /// on `pending_export_result` and is drained by `poll_export_result()`
+    /// on a subsequent frame. JS handles the encoding (PNG/JPEG/WebP) via
+    /// `OffscreenCanvas` so the browser's native encoder runs off the WASM
+    /// main thread.
+    pub fn start_export(&self) {
+        self.flush_if_needed();
+        self.engine.borrow_mut().start_export();
+    }
+
+    /// Drain the most recent export result. Returns
+    /// `{ width, height, rgba: Uint8Array }` on completion or `null` while
+    /// the readback is still in flight.
+    pub fn poll_export_result(&self) -> JsValue {
+        self.flush_if_needed();
+        let Some(result) = self.engine.borrow_mut().poll_export_result() else {
+            return JsValue::NULL;
+        };
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &obj,
+            &"width".into(),
+            &JsValue::from_f64(result.width as f64),
+        )
+        .ok();
+        js_sys::Reflect::set(
+            &obj,
+            &"height".into(),
+            &JsValue::from_f64(result.height as f64),
+        )
+        .ok();
+        let rgba = js_sys::Uint8Array::new_with_length(result.rgba.len() as u32);
+        rgba.copy_from(&result.rgba);
+        js_sys::Reflect::set(&obj, &"rgba".into(), &rgba.into()).ok();
+        obj.into()
+    }
+
     /// Like `copy`, but also captures CPU-side metadata (blend mode,
     /// opacity, name, mask presence). Pixel bytes still flow through the
     /// normal async readback; the JSON envelope is delivered via

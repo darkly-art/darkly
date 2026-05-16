@@ -1,6 +1,7 @@
 mod brush_graph;
 mod brush_library;
 mod clipboard;
+mod export;
 mod floating;
 mod layers;
 mod modifiers;
@@ -9,6 +10,7 @@ mod rendering;
 pub mod types;
 mod veils;
 
+pub use export::ExportImageResult;
 pub use rendering::DEFAULT_THUMB_SIZE;
 pub use types::{
     BlendModeTypeInfo, ClipboardExport, LayerInfo, LayerKindTypeInfo, ModifierInfo,
@@ -120,6 +122,13 @@ pub(crate) enum ReadbackContext {
     },
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,
+    /// Async readback of the full composited canvas for image export
+    /// (PNG/JPEG/WebP). Result lands on `pending_export_result` and is
+    /// drained by `poll_export_result`.
+    ExportImage {
+        width: u32,
+        height: u32,
+    },
     Thumbnail {
         node_id: LayerId,
         /// Dimensions of the readback buffer in pixels — the source layout
@@ -383,6 +392,8 @@ pub struct DarklyEngine {
     pub(crate) pending_layer_clip: Option<String>,
     /// Last picked color — returned immediately while async readback is in flight.
     pub(crate) last_picked_color: [u8; 4],
+    /// Completed image-export result — drained by `poll_export_result()`.
+    pub(crate) pending_export_result: Option<ExportImageResult>,
     pub(crate) thumbnail_cache: ThumbnailCache,
     /// Monotonic counter bumped each time a thumbnail readback lands in
     /// the cache. Mirrored to a Svelte-reactive epoch in the frontend so
@@ -502,6 +513,7 @@ impl DarklyEngine {
             pending_rich_metadata: None,
             pending_layer_clip: None,
             last_picked_color: [0, 0, 0, 0],
+            pending_export_result: None,
             thumbnail_cache: ThumbnailCache::new(),
             thumbnail_version: 0,
             layer_growth_capped: false,

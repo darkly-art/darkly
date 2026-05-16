@@ -228,6 +228,18 @@ export class DarklyInstance {
         this.requestFrame();
     }
 
+    // --- Async export result callback ---
+
+    private _exportCallback:
+        | ((result: { width: number; height: number; rgba: Uint8Array }) => void)
+        | null = null;
+
+    /** Register a one-shot callback for when the async export readback completes. */
+    onExportResult(cb: (result: { width: number; height: number; rgba: Uint8Array }) => void) {
+        this._exportCallback = cb;
+        this.requestFrame();
+    }
+
     // --- Demand-driven rendering ---
 
     private _framePending = false;
@@ -280,11 +292,21 @@ export class DarklyInstance {
                 }
             }
 
+            // Check for completed async export readback.
+            if (this._exportCallback) {
+                const result = this.handle.poll_export_result();
+                if (result) {
+                    const cb = this._exportCallback;
+                    this._exportCallback = null;
+                    cb(result);
+                }
+            }
+
             // Continue animation loop only when no UI interaction is
             // monopolizing the main thread.  One-shot renders (tool
             // actions, resize, etc.) always go through — only the
             // self-scheduling continuous loop is suppressed.
-            const shouldContinue = needsMore || this._copyCallback;
+            const shouldContinue = needsMore || this._copyCallback || this._exportCallback;
             if (shouldContinue && this._interactionCount === 0) {
                 this.requestFrame();
             }

@@ -3,6 +3,7 @@
     import { settings } from '../state/settings.svelte';
     import { config, formatHotkey } from '../config/store.svelte';
     import { openCheatsheet } from './cheatsheet';
+    import { actions } from '../actions/registry';
 
     let open = $state(false);
 
@@ -18,6 +19,11 @@
         close();
     }
 
+    function runAction(id: string) {
+        actions.dispatch(id, {});
+        close();
+    }
+
     function onWindowClick(e: MouseEvent) {
         if (open && !(e.target as HTMLElement).closest('.hamburger-container')) {
             open = false;
@@ -25,6 +31,8 @@
     }
 
     const settingsHotkey = $derived(formatHotkey(config.get('hotkeys.openSettings') as string | undefined));
+    const exportHotkey = $derived(formatHotkey(config.get('hotkeys.exportImage') as string | undefined));
+    const openImageHotkey = $derived(formatHotkey(config.get('hotkeys.openImage') as string | undefined));
 </script>
 
 <svelte:window onclick={onWindowClick} />
@@ -36,6 +44,17 @@
 
     {#if open}
         <div class="menu">
+            <button class="menu-item" onclick={() => runAction('openImage')}>
+                <i class="fa-solid fa-image"></i>
+                <span>Open Image…</span>
+                {#if openImageHotkey}<span class="kbd">{openImageHotkey}</span>{/if}
+            </button>
+            <button class="menu-item" onclick={() => runAction('exportImage')}>
+                <i class="fa-solid fa-file-export"></i>
+                <span>Export Image…</span>
+                {#if exportHotkey}<span class="kbd">{exportHotkey}</span>{/if}
+            </button>
+            <div class="sep"></div>
             <button class="menu-item" onclick={openSettings}>
                 <i class="fa-solid fa-sliders"></i>
                 <span>Preferences…</span>

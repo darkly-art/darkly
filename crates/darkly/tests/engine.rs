@@ -3743,3 +3743,76 @@ fn long_stabilized_stroke_no_fallback() {
          `restore_before` succeeds for every reachable divergence index"
     );
 }
+
+// ============================================================================
+// Image export — async readback of the composited canvas
+// ============================================================================
+
+/// Verify that `start_export` → readback → `poll_export_result` produces
+/// RGBA8 pixels that match the same bytes the test-only
+/// `test_readback_canvas` returns from the composited texture. The async
+/// path is what JS uses in production; the blocking path is what tests
+/// use elsewhere — they must agree, or the production export is lying.
+#[test]
+fn export_readback_produces_rgba8_matching_composite() {
+    let (cw, ch) = (64, 48);
+    let mut engine = test_engine(cw, ch);
+    let layer = engine.add_raster_layer(None);
+
+    // Paint something distinctive so we're not comparing two empty canvases.
+    paint_at(
+        &mut engine,
+        layer,
+        (cw / 2) as f32,
+        (ch / 2) as f32,
+        1.0,
+        0.3,
+        0.0,
+    );
+
+    // Reference: the same composite path tests use elsewhere.
+    let reference = engine.test_readback_canvas();
+    assert_eq!(reference.len(), (cw * ch * 4) as usize);
+
+    // Start the export and pump the frame loop until the result lands.
+    engine.start_export();
+    let mut result = None;
+    for _ in 0..16 {
+        engine.test_flush_readbacks();
+        engine.render(0.0);
+        if let Some(r) = engine.poll_export_result() {
+            result = Some(r);
+            break;
+        }
+    }
+    let export = result.expect("export readback did not complete within 16 iterations");
+
+    assert_eq!(export.width, cw);
+    assert_eq!(export.height, ch);
+    assert_eq!(
+        export.rgba.len(),
+        (cw * ch * 4) as usize,
+        "export must be tightly packed RGBA8 with no row padding"
+    );
+    assert_eq!(
+        export.rgba, reference,
+        "async export bytes must equal the blocking composite readback — \
+         the production export path would otherwise lie about canvas contents"
+    );
+}
+
+/// A pending export readback returns `None` from `poll_export_result`
+/// until completion. The frontend's per-frame poll relies on this for
+/// "result not ready yet, try again next frame".
+#[test]
+fn poll_export_result_returns_none_before_completion() {
+    let mut engine = test_engine(8, 8);
+    let _layer = engine.add_raster_layer(None);
+
+    engine.start_export();
+    // No flush yet — the readback is queued but the GPU work isn't drained.
+    assert!(
+        engine.poll_export_result().is_none(),
+        "result must not be available before the readback completes"
+    );
+}
