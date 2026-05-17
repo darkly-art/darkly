@@ -8,6 +8,8 @@
 pub mod error;
 pub mod manifest;
 pub mod registry_io;
+#[cfg(test)]
+pub mod zip_io;
 
 #[cfg(test)]
 mod tests;
@@ -17,6 +19,6 @@ pub use manifest::{
     texture_format_from_str, texture_format_to_str, Manifest, ManifestCanvas, ManifestGroupNode,
     ManifestMaskModifier, ManifestModifier, ManifestNode, ManifestPixelRef, ManifestRasterNode,
     ManifestRequires, ManifestSelection, ManifestSelectionModifier, ManifestTree, ManifestVeil,
-    ManifestWriter, CONTAINER_VERSION, FORMAT_TAG,
+    ManifestWriter, SaveBlob, SaveBundle, CONTAINER_VERSION, FORMAT_TAG,
 };
 pub use registry_io::{deserialize_instance, serialize_instance, InstancePayload};

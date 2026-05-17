@@ -237,6 +237,20 @@ impl DarklyEngine {
         }
     }
 
+    /// User-visible document name. Backs the tab title and the Save As
+    /// picker's `suggestedName`. Persisted on disk as `manifest.name`.
+    pub fn document_name(&self) -> &str {
+        &self.doc.name
+    }
+
+    /// Rename the document. Not undoable — renaming is a metadata change
+    /// users expect to be free-standing, matching every other editor's
+    /// "title bar rename" affordance. The save flow picks the new name
+    /// up from `doc.name` the next time `start_save_document` runs.
+    pub fn set_document_name(&mut self, name: String) {
+        self.doc.name = name;
+    }
+
     pub fn set_layer_name(&mut self, layer_id: LayerId, name: &str) {
         let old_name = match self.doc.find_node(layer_id) {
             Some(n) => n.common().name.clone(),

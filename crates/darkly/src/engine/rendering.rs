@@ -250,6 +250,14 @@ impl DarklyEngine {
             ReadbackContext::ExportImage { width, height } => {
                 self.complete_export(width, height, pixels);
             }
+            ReadbackContext::SaveDocument {
+                kind,
+                key,
+                width,
+                height,
+            } => {
+                self.complete_save_readback(kind, key, width, height, pixels);
+            }
             ReadbackContext::SelectionReadback => {
                 self.update_selection_overlay_from_readback(pixels);
                 // Resume deferred operations that were waiting for

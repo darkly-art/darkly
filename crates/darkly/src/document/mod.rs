@@ -66,6 +66,13 @@ impl Entity {
 }
 
 pub struct Document {
+    /// User-visible document name. Sourced by the tab strip, used as the
+    /// default filename in the Save As picker, and serialized at the top
+    /// of `manifest.json`. Defaults to `"Untitled"` for fresh documents.
+    ///
+    /// Single source of truth — there is no JS-side parallel name map
+    /// (the engine's `document_name()` query backs the tab title).
+    pub name: String,
     pub width: u32,
     pub height: u32,
 
@@ -114,6 +121,7 @@ impl Document {
             Entity::Node(LayerNode::Group(LayerGroup::new(key, "Root".to_string())))
         });
         Document {
+            name: "Untitled".to_string(),
             width,
             height,
             entities,

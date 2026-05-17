@@ -1,16 +1,16 @@
 ![darkly](https://github.com/user-attachments/assets/31a3a6d0-b2c2-4cad-acc8-87b968f0d87b)
 
-![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)
-![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=FF3E00)
-![WebAssembly](https://img.shields.io/badge/WebAssembly-000000?style=for-the-badge&logo=WebAssembly&logoColor=white)
+[![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
+[![Patreon](https://img.shields.io/badge/Patreon-Forbidden_Rewards-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
+[![Blog](https://img.shields.io/badge/Blog-Deranged_Rants-orange?logo=substack&logoColor=white&style=for-the-badge&color=4400ff)](https://www.patreon.com/c/DarklyArt)
 
-[![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge)](https://discord.gg/kFz2FGhbpu)
-[![Patreon](https://img.shields.io/badge/Patreon-Sick_Ass_Perks-orange?logo=patreon&style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
-[![Blog](https://img.shields.io/badge/Blog-Deranged_Rants-orange?logo=substack&style=for-the-badge)](https://www.patreon.com/c/DarklyArt)
+![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=9500ff)
+![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=6914ff)
+![WebAssembly](https://img.shields.io/badge/WebAssembly-000000?style=for-the-badge&logo=WebAssembly&logoColor=4400ff)
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust. Geared towards digital artists, it's armed with special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
+[Darkly](https://darkly.art) is a GPU-native editor written in Rust. Geared towards digital painters, it's got everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
-Darkly vows to:
+Darkly pledges to:
 - Honor human imagination
 - Run offline and without a login
 - Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art

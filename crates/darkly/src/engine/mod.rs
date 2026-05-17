@@ -4,14 +4,18 @@ mod clipboard;
 mod export;
 mod floating;
 mod layers;
+mod load;
 mod modifiers;
 mod painting;
 mod rendering;
+pub mod save;
 pub mod types;
 mod veils;
 
 pub use export::ExportImageResult;
+pub use load::LoadDocument;
 pub use rendering::DEFAULT_THUMB_SIZE;
+pub use save::{SaveError, SaveJob, SaveReadbackKind};
 pub use types::{
     BlendModeTypeInfo, ClipboardExport, LayerInfo, LayerKindTypeInfo, ModifierInfo,
     ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
@@ -126,6 +130,23 @@ pub(crate) enum ReadbackContext {
     /// (PNG/JPEG/WebP). Result lands on `pending_export_result` and is
     /// drained by `poll_export_result`.
     ExportImage {
+        width: u32,
+        height: u32,
+    },
+    /// Async readback for `.darkly` save flow. One readback per pixel-bearing
+    /// entity (raster layer, mask, selection) plus one for the composite.
+    /// On completion, [`SaveJob::complete_readback`](save::SaveJob) stores
+    /// the pixels under `key`; when every blob lands, `poll_save_result`
+    /// hands back a `SaveBundle`.
+    SaveDocument {
+        kind: save::SaveReadbackKind,
+        /// For pixel-bearing readbacks (`LayerPixels`/`MaskPixels`/`SelectionMask`),
+        /// the zip-relative blob path under which the bytes are stored
+        /// (matches the corresponding [`crate::format::ManifestPixelRef::pixels`]).
+        /// Unused for `Composite`.
+        key: String,
+        /// Source texture dimensions in pixels — readback rows come back
+        /// `width × bpp` wide.
         width: u32,
         height: u32,
     },
@@ -394,6 +415,12 @@ pub struct DarklyEngine {
     pub(crate) last_picked_color: [u8; 4],
     /// Completed image-export result — drained by `poll_export_result()`.
     pub(crate) pending_export_result: Option<ExportImageResult>,
+    /// Active save job — populated by `start_save_document`, drained by
+    /// `poll_save_result` once every pixel blob and the composite have
+    /// landed. Only one save can be in flight per engine; a second
+    /// `start_save_document` while this is `Some` errors with
+    /// [`SaveError::InProgress`].
+    pub(crate) active_save_job: Option<SaveJob>,
     pub(crate) thumbnail_cache: ThumbnailCache,
     /// Monotonic counter bumped each time a thumbnail readback lands in
     /// the cache. Mirrored to a Svelte-reactive epoch in the frontend so
@@ -514,6 +541,7 @@ impl DarklyEngine {
             pending_layer_clip: None,
             last_picked_color: [0, 0, 0, 0],
             pending_export_result: None,
+            active_save_job: None,
             thumbnail_cache: ThumbnailCache::new(),
             thumbnail_version: 0,
             layer_growth_capped: false,

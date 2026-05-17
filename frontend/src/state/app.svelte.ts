@@ -27,6 +27,14 @@ export class DarklyInstance {
 
     handle = $state<DarklyHandle | null>(null);
 
+    /** Initial document name to apply once the WASM handle finishes
+     *  bootstrapping. The shell uses this to thread "Untitled N"
+     *  through the async handle-init gap — the engine itself defaults
+     *  to plain "Untitled", so without this the first read in the
+     *  tab strip would race the rename. Cleared by `createInstance`
+     *  once it's been pushed through `set_document_name`. */
+    pendingName: string | null = null;
+
     // Colors
     foreground = $state<Color>({ r: 0, g: 0, b: 0, a: 255 });
     background = $state<Color>({ r: 255, g: 255, b: 255, a: 255 });

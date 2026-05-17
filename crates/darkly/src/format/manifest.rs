@@ -232,6 +232,36 @@ pub struct ManifestPixelRef {
     pub bounds: CanvasRect,
 }
 
+/// Output of a completed save — the Rust data path's hand-off shape.
+///
+/// JS consumes this directly: PNG-encodes `composite_rgba` via
+/// `OffscreenCanvas` (and a downsampled thumbnail) and assembles the zip
+/// with `fflate`. Rust never writes the zip in production — keeping
+/// encoders off the WASM main thread and reusing the browser's native
+/// PNG path. Tests assemble the zip via [`super::zip_io::assemble_zip`].
+///
+/// Pixel blobs are *raw bytes*, format declared per-blob in
+/// [`Manifest::tree`] / [`Manifest::modifiers`] / [`Manifest::selection`].
+pub struct SaveBundle {
+    /// `manifest.json` content — pretty-printed JSON.
+    pub manifest_json: Vec<u8>,
+    pub composite_width: u32,
+    pub composite_height: u32,
+    /// Raw RGBA8 bytes of the composited canvas (one byte-per-channel,
+    /// no row padding). JS PNG-encodes this via `OffscreenCanvas`.
+    pub composite_rgba: Vec<u8>,
+    /// Per-layer / per-mask / selection raw pixel blobs, keyed by
+    /// zip-relative path matching the corresponding `ManifestPixelRef::pixels`
+    /// in the manifest.
+    pub blobs: Vec<SaveBlob>,
+}
+
+/// One named raw-pixel entry inside a [`SaveBundle`].
+pub struct SaveBlob {
+    pub path: String,
+    pub bytes: Vec<u8>,
+}
+
 /// Map a `wgpu::TextureFormat` to its wire-format slug.
 ///
 /// Closed set today: `Rgba8Unorm` ↔ `"rgba8unorm"`, `R8Unorm` ↔

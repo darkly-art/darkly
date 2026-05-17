@@ -62,6 +62,14 @@ export async function createInstance(
 
     instance.canvasEl = canvas;
     instance.handle = handle;
+    // Apply the shell's "Untitled N" suggestion if one was stashed
+    // before the async handle init. The engine's own default is
+    // plain "Untitled" — without this the first tab-strip read would
+    // race the rename.
+    if (instance.pendingName !== null) {
+        handle.set_document_name(instance.pendingName);
+        instance.pendingName = null;
+    }
     return instance;
 }
 

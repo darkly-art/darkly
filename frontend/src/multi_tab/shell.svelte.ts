@@ -17,10 +17,11 @@ class MultiTabShell {
     /** Stable id of the focused instance, or `null` when no tabs are open. */
     activeId = $state<string | null>(null);
 
-    /** Display name per tab — defaults to "Untitled N". The instance itself
-     *  has no `name` field (a Darkly instance shouldn't care what tab strip
-     *  it's in), so the shell tracks it externally, keyed by instance id. */
-    private names = $state<Record<string, string>>({});
+    /** Monotonic counter, bumped whenever any tab's name changes. Reads
+     *  in [`nameOf`] depend on it so Svelte re-derives even though the
+     *  underlying value lives on the engine (a plain WASM call, opaque
+     *  to Svelte's reactivity). */
+    private nameVersion = $state(0);
 
     private nextSerial = 1;
 
@@ -29,12 +30,32 @@ class MultiTabShell {
         return this.instances.find(i => i.id === this.activeId) ?? null;
     }
 
+    /** Tab title for `id`. Reads through the engine's `document_name()`
+     *  when the handle is ready; falls back to the pending name (set by
+     *  `open(name?)` and applied to the engine post-handle-init) or
+     *  `"Untitled"` for instances whose handles haven't bootstrapped. */
     nameOf(id: string): string {
-        return this.names[id] ?? 'Untitled';
+        // Subscribe to the version counter so Svelte re-runs on rename.
+        void this.nameVersion;
+        const inst = this.instances.find(i => i.id === id);
+        if (!inst) return 'Untitled';
+        if (inst.handle) return inst.handle.document_name();
+        return inst.pendingName ?? 'Untitled';
     }
 
+    /** Rename a tab. Persists into the engine via `set_document_name`
+     *  (queued — visible on the next render). If the instance's handle
+     *  hasn't booted yet, the name is stashed on `pendingName` for the
+     *  init path to apply. */
     setName(id: string, name: string): void {
-        this.names[id] = name;
+        const inst = this.instances.find(i => i.id === id);
+        if (!inst) return;
+        if (inst.handle) {
+            inst.handle.set_document_name(name);
+        } else {
+            inst.pendingName = name;
+        }
+        this.nameVersion++;
     }
 
     /** Add a fresh, empty `DarklyInstance` to the strip and focus it. The
@@ -44,8 +65,9 @@ class MultiTabShell {
      *  template-driven canvas creation. */
     open(name?: string): DarklyInstance {
         const inst = new DarklyInstance();
-        this.names[inst.id] = name ?? `Untitled ${this.nextSerial++}`;
+        inst.pendingName = name ?? `Untitled ${this.nextSerial++}`;
         this.instances.push(inst);
+        this.nameVersion++;
         this.focus(inst.id);
         return inst;
     }
@@ -83,7 +105,7 @@ class MultiTabShell {
         // its GPU textures to the shared device. No effect on sibling
         // instances since the device is `Arc`-shared.
         removed.handle?.free();
-        delete this.names[removed.id];
+        this.nameVersion++;
 
         if (this.activeId === id) {
             const next = this.instances[idx] ?? this.instances[idx - 1] ?? null;
