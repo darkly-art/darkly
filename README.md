@@ -176,7 +176,7 @@ While AI has been leveraged heavily for this codebase, careless vibe coding and 
 
 I (TheTechromancer) learned to code long before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The danger of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must understand how it works and its implications for the rest of the codebase.
 
-Great care is being taken to keep Darkly architecturally lean and clean. This means enforcing modularity, vigilance against duplicate/dead code, and a *shit ton* of automated tests, including a regression test for every bug. See [AGENTS.md](AGENTS.md) to see how we avoid AI slop.
+Great care is being taken to keep Darkly architecturally lean and clean. This means enforcing modularity, vigilance against duplicate/dead code, and a *shit ton* of automated tests, including a regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
 
 ## Acknowledgments
 
