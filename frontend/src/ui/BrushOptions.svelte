@@ -77,66 +77,69 @@
     {/if}
 </div>
 
-<!-- Exposed port scrubs from the brush graph -->
-{#each brushGraph.exposedPorts as port}
-    {#if port.data.kind === 'scalar'}
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div
-            class="scrub"
-            title={port.description || undefined}
-            onpointerdown={(e) => {
-                e.preventDefault();
-                const d = port.data as { kind: 'scalar'; value: number; min: number; max: number; default: number; unitType: string };
-                const startX = e.clientX;
-                const startVal = d.value;
-                const speed = exposedDragSpeed(d.min, d.max);
-                const el = e.currentTarget as HTMLElement;
-                el.setPointerCapture(e.pointerId);
-                el.classList.add('dragging');
-                const onMove = (ev: PointerEvent) => {
-                    const dx = ev.clientX - startX;
-                    const v = Math.min(d.max, Math.max(d.min, startVal + dx * speed));
-                    handleExposedPort(port.nodeId, port.portName, v);
-                };
-                const onUp = () => {
-                    el.classList.remove('dragging');
-                    el.removeEventListener('pointermove', onMove);
-                    el.removeEventListener('pointerup', onUp);
-                };
-                el.addEventListener('pointermove', onMove);
-                el.addEventListener('pointerup', onUp);
-            }}
-            ondblclick={() => {
-                const d = port.data as { kind: 'scalar'; default: number };
-                handleExposedPort(port.nodeId, port.portName, d.default);
-            }}
-        >
-            <i class="{port.icon || 'fa-solid fa-sliders'} scrub-icon"></i>
-            <div class="scrub-text">
-                <span class="scrub-label">{port.label}</span>
-                <span class="scrub-value">{formatExposedValue(port.data.value, port.data.unitType)}</span>
+<!-- Scrollable middle region: scrubs + erase toggle. The brush picker
+     (left) and the error badge + builder toggle (right) stay pinned
+     to the bar; only this strip scrolls horizontally when narrow. -->
+<div class="scrub-scroll">
+    <!-- Exposed port scrubs from the brush graph -->
+    {#each brushGraph.exposedPorts as port}
+        {#if port.data.kind === 'scalar'}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div
+                class="scrub"
+                title={port.description || undefined}
+                onpointerdown={(e) => {
+                    e.preventDefault();
+                    const d = port.data as { kind: 'scalar'; value: number; min: number; max: number; default: number; unitType: string };
+                    const startX = e.clientX;
+                    const startVal = d.value;
+                    const speed = exposedDragSpeed(d.min, d.max);
+                    const el = e.currentTarget as HTMLElement;
+                    el.setPointerCapture(e.pointerId);
+                    el.classList.add('dragging');
+                    const onMove = (ev: PointerEvent) => {
+                        const dx = ev.clientX - startX;
+                        const v = Math.min(d.max, Math.max(d.min, startVal + dx * speed));
+                        handleExposedPort(port.nodeId, port.portName, v);
+                    };
+                    const onUp = () => {
+                        el.classList.remove('dragging');
+                        el.removeEventListener('pointermove', onMove);
+                        el.removeEventListener('pointerup', onUp);
+                    };
+                    el.addEventListener('pointermove', onMove);
+                    el.addEventListener('pointerup', onUp);
+                }}
+                ondblclick={() => {
+                    const d = port.data as { kind: 'scalar'; default: number };
+                    handleExposedPort(port.nodeId, port.portName, d.default);
+                }}
+            >
+                <i class="{port.icon || 'fa-solid fa-sliders'} scrub-icon"></i>
+                <div class="scrub-text">
+                    <span class="scrub-label">{port.label}</span>
+                    <span class="scrub-value">{formatExposedValue(port.data.value, port.data.unitType)}</span>
+                </div>
             </div>
+        {/if}
+    {/each}
+
+    <!-- Erase-mode toggle. Brush-tool session state lives on the tool
+         itself; this toggle just mirrors it and pushes the engine flag. -->
+    <button
+        type="button"
+        class="scrub erase-toggle"
+        class:on={brushSession.eraseMode}
+        onclick={toggleEraseMode}
+        title="Erase mode (E)"
+    >
+        <i class="fa-solid fa-eraser scrub-icon"></i>
+        <div class="scrub-text">
+            <span class="scrub-label">Erase</span>
+            <span class="scrub-value">{brushSession.eraseMode ? 'On' : 'Off'}</span>
         </div>
-    {/if}
-{/each}
-
-<!-- Erase-mode toggle. Brush-tool session state lives on the tool
-     itself; this toggle just mirrors it and pushes the engine flag. -->
-<button
-    type="button"
-    class="scrub erase-toggle"
-    class:on={brushSession.eraseMode}
-    onclick={toggleEraseMode}
-    title="Erase mode (E)"
->
-    <i class="fa-solid fa-eraser scrub-icon"></i>
-    <div class="scrub-text">
-        <span class="scrub-label">Erase</span>
-        <span class="scrub-value">{brushSession.eraseMode ? 'On' : 'Off'}</span>
-    </div>
-</button>
-
-<div class="spacer"></div>
+    </button>
+</div>
 
 <!-- Error indicator -->
 {#if brushGraph.error}
@@ -276,10 +279,22 @@
         color: var(--text-muted);
     }
 
-    /* ── Spacer & Toggle ── */
+    /* ── Scrollable middle & right-side controls ── */
 
-    .spacer {
+    /* Takes all leftover horizontal space; scrolls when its
+     * children don't fit. `min-width: 0` is required for a flex
+     * child to be allowed to shrink below its content size — without
+     * it the parent would grow and the bar would overflow its column
+     * instead of letting this region scroll. */
+    .scrub-scroll {
         flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scrollbar-width: thin;
     }
 
     .error-badge {

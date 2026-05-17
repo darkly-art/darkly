@@ -46,6 +46,31 @@
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
+    let showLayerMenu = $state(false);
+    let layerMenuX = $state(0);
+    let layerMenuY = $state(0);
+
+    /// Walk the layer tree to determine whether `id`'s parent has a child
+    /// directly below it. `app.layerTree` is top-to-bottom (top of stack at
+    /// index 0), so "sibling below" = sibling at a higher index.
+    function siblingBelowExists(nodes: any[], id: number): boolean {
+        for (const n of nodes) {
+            if (n.id === id) return false; // root-level, handled by caller
+            if (n.children) {
+                const idx = n.children.findIndex((c: any) => c.id === id);
+                if (idx >= 0) return idx < n.children.length - 1;
+                if (siblingBelowExists(n.children, id)) return true;
+            }
+        }
+        return false;
+    }
+
+    let canMergeDownForThis = $derived.by(() => {
+        const topIdx = app.layerTree.findIndex((n: any) => n.id === layer.id);
+        if (topIdx >= 0) return topIdx < app.layerTree.length - 1;
+        return siblingBelowExists(app.layerTree, layer.id);
+    });
+
     // Chord dispatch is owned by `use:bindingSite` on each preview
     // element below — `bindingSite` intercepts modifier+click in capture
     // phase and dispatches against its named site. These onclick handlers
@@ -84,6 +109,38 @@
 
         const close = () => { showMaskMenu = false; document.removeEventListener('click', close); };
         requestAnimationFrame(() => document.addEventListener('click', close));
+    }
+
+    function onLayerContextMenu(e: MouseEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        // Select the right-clicked layer so subsequent dispatched actions
+        // that fall back to `app.activeLayerId` (e.g. when ctx.layerId
+        // isn't honoured by a particular handler) still target this layer.
+        app.selectLayer(layer.id);
+        layerMenuX = e.clientX;
+        layerMenuY = e.clientY;
+        showLayerMenu = true;
+
+        const close = () => { showLayerMenu = false; document.removeEventListener('click', close); };
+        requestAnimationFrame(() => document.addEventListener('click', close));
+    }
+
+    function menuDuplicate() {
+        actions.dispatch('duplicateLayer', { layerId: layer.id });
+        onupdate();
+    }
+
+    function menuMergeDown() {
+        if (!canMergeDownForThis) return;
+        actions.dispatch('mergeDown', { layerId: layer.id });
+        onupdate();
+    }
+
+    function menuFlatten() {
+        if (!hasMask) return;
+        actions.dispatch('flatten', { layerId: layer.id });
+        onupdate();
     }
 
     function toggleMaskEnabled() {
@@ -184,6 +241,7 @@
     class:drop-below={dropPos === 'below'}
     onclick={onLayerClick}
     ondblclick={startRename}
+    oncontextmenu={onLayerContextMenu}
     role="button"
     tabindex="-1"
     draggable={draggable ? 'true' : 'false'}
@@ -263,6 +321,20 @@
         </button>
         <button onclick={applyMask}>Apply mask</button>
         <button onclick={removeMask}>Delete mask</button>
+    </div>
+{/if}
+
+{#if showLayerMenu}
+    <div class="layer-menu" style:left="{layerMenuX}px" style:top="{layerMenuY}px">
+        <button onclick={menuDuplicate}>
+            Duplicate layer
+        </button>
+        <button onclick={menuMergeDown} disabled={!canMergeDownForThis}>
+            Merge down
+        </button>
+        {#if hasMask}
+            <button onclick={menuFlatten}>Flatten</button>
+        {/if}
     </div>
 {/if}
 
@@ -398,5 +470,44 @@
 
     .mask-menu button:hover {
         background: var(--bg-hover);
+    }
+
+    .layer-menu {
+        position: fixed;
+        z-index: 1000;
+        background: var(--bg-active);
+        border: 1px solid var(--bg-hover);
+        border-radius: 6px;
+        padding: 4px 0;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        min-width: 160px;
+    }
+
+    .layer-menu button {
+        display: block;
+        width: 100%;
+        background: none;
+        border: none;
+        color: var(--text);
+        font-size: 12px;
+        padding: 6px 16px;
+        text-align: left;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+
+    .layer-menu button:hover:not(:disabled) {
+        background: var(--bg-hover);
+    }
+
+    .layer-menu button:disabled {
+        color: var(--text-dim);
+        cursor: default;
+    }
+
+    .layer-menu-sep {
+        height: 1px;
+        background: var(--bg-hover);
+        margin: 4px 0;
     }
 </style>

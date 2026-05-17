@@ -155,17 +155,19 @@ impl DarklyEngine {
                             .node_texture(commit.layer_id)
                             .map(|t| t.canvas_frame())
                         {
+                            let mut entry = None;
                             self.gpu.encode("brush-stroke-end", |encoder| {
-                                let entry = self.region_store.commit_region(
+                                entry = Some(self.region_store.commit_region(
                                     encoder,
                                     commit.layer_id,
                                     &layer_frame,
                                     &commit.snapshot,
                                     rect,
-                                );
-                                self.undo_stack
-                                    .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
+                                ));
                             });
+                            if let Some(entry) = entry {
+                                self.push_undo(Box::new(GpuRegionAction::new(entry)));
+                            }
                         }
                     }
                     // else: textures identical, no undo entry needed.

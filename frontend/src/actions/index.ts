@@ -618,6 +618,83 @@ export function registerActions() {
         },
     });
 
+    actions.register({
+        id: 'duplicateLayer',
+        displayName: 'Duplicate Layer',
+        category: 'layers',
+        description: 'Make a copy of the active layer or group directly above it.',
+        defaultHotkey: '$mod+KeyJ',
+        accepts: ['layerId'],
+        handler: (ctx) => {
+            if (!app.handle) return;
+            const sourceId = ctx.layerId ?? app.activeLayerId;
+            if (sourceId == null) return;
+            const newId = app.handle.duplicate_node(sourceId);
+            app.refreshLayerTree();
+            if (newId) app.selectLayer(newId);
+        },
+    });
+
+    actions.register({
+        id: 'mergeDown',
+        displayName: 'Merge Down',
+        category: 'layers',
+        description: 'Merge the active layer or group into the layer below it.',
+        defaultHotkey: '$mod+KeyE',
+        accepts: ['layerId'],
+        handler: (ctx) => {
+            if (!app.handle) return;
+            const sourceId = ctx.layerId ?? app.activeLayerId;
+            if (sourceId == null) return;
+            try {
+                const newId = app.handle.merge_down(sourceId);
+                app.refreshLayerTree();
+                if (newId) app.selectLayer(newId);
+            } catch (e: any) {
+                toast.show('error', e.message ?? String(e));
+            }
+        },
+    });
+
+    actions.register({
+        id: 'flattenImage',
+        displayName: 'Flatten Image',
+        category: 'layers',
+        description: 'Composite every visible layer into a single "Background" raster; discard the rest.',
+        defaultHotkey: '$mod+Shift+KeyE',
+        handler: () => {
+            if (!app.handle) return;
+            try {
+                const newId = app.handle.flatten_image();
+                app.refreshLayerTree();
+                if (newId) app.selectLayer(newId);
+            } catch (e: any) {
+                toast.show('error', e.message ?? String(e));
+            }
+        },
+    });
+
+    actions.register({
+        id: 'flatten',
+        displayName: 'Flatten',
+        category: 'layers',
+        description:
+            'Bake modifiers into the layer (apply mask), or flatten a group into a single raster that inherits the group’s blend props.',
+        accepts: ['layerId'],
+        handler: (ctx) => {
+            if (!app.handle) return;
+            const id = ctx.layerId ?? app.activeLayerId;
+            if (id == null) return;
+            try {
+                const newId = app.handle.flatten_node(id);
+                app.refreshLayerTree();
+                if (newId) app.selectLayer(newId);
+            } catch (e: any) {
+                toast.show('error', e.message ?? String(e));
+            }
+        },
+    });
+
     // -- View --
     actions.register({
         id: 'openSettings',

@@ -1066,6 +1066,81 @@ impl DarklyHandle {
             .move_layer(LayerId::from_ffi(layer_id as u64), target)
     }
 
+    /// Deep-copy a layer or group, placing the duplicate directly above the
+    /// source. Returns the new node's id, or `0` (a null `LayerId`) if the
+    /// source id is unknown.
+    pub fn duplicate_node(&self, source_id: f64) -> f64 {
+        self.flush_if_needed();
+        let id = LayerId::from_ffi(source_id as u64);
+        self.engine
+            .borrow_mut()
+            .duplicate_node(id)
+            .map(|n| n.to_ffi() as f64)
+            .unwrap_or(0.0)
+    }
+
+    /// Merge the active layer / group into the sibling directly below it,
+    /// producing a single raster at the lower sibling's position. Returns
+    /// the merged result's id.
+    pub fn merge_down(&self, source_id: f64) -> Result<f64, JsError> {
+        self.flush_if_needed();
+        let id = LayerId::from_ffi(source_id as u64);
+        self.engine
+            .borrow_mut()
+            .merge_down(id)
+            .map(|n| n.to_ffi() as f64)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Composite every visible top-level node into a single "Background"
+    /// raster at root; everything else is discarded. Returns the result id.
+    pub fn flatten_image(&self) -> Result<f64, JsError> {
+        self.flush_if_needed();
+        self.engine
+            .borrow_mut()
+            .flatten_image()
+            .map(|n| n.to_ffi() as f64)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Flatten a single node — for a layer, applies its mask; for a group,
+    /// bakes the group's children + mask into a single raster that takes
+    /// the group's slot and inherits its blend props. Returns the resulting
+    /// raster's id (same as the input for layer-with-mask; a fresh id for
+    /// groups).
+    pub fn flatten_node(&self, node_id: f64) -> Result<f64, JsError> {
+        self.flush_if_needed();
+        let id = LayerId::from_ffi(node_id as u64);
+        self.engine
+            .borrow_mut()
+            .flatten_node(id)
+            .map(|n| n.to_ffi() as f64)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// True when `node_id` has something to flatten — a layer with a mask,
+    /// or any group. Used by the frontend to enable/disable the entry.
+    pub fn can_flatten_node(&self, node_id: f64) -> bool {
+        self.flush_if_needed();
+        let id = LayerId::from_ffi(node_id as u64);
+        self.engine.borrow().can_flatten_node(id)
+    }
+
+    /// True when `source_id` has a same-parent sibling below it — used by
+    /// the frontend to enable/disable Merge Down.
+    pub fn can_merge_down(&self, source_id: f64) -> bool {
+        self.flush_if_needed();
+        let id = LayerId::from_ffi(source_id as u64);
+        self.engine.borrow().can_merge_down(id)
+    }
+
+    /// True when the document has at least one layer — used by the
+    /// frontend to enable/disable Flatten Image.
+    pub fn can_flatten(&self) -> bool {
+        self.flush_if_needed();
+        self.engine.borrow().can_flatten()
+    }
+
     // --- Copy / Cut / Paste ---
 
     pub fn copy(&self, layer_id: f64) -> JsValue {

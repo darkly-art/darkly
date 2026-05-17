@@ -266,13 +266,16 @@ impl DarklyEngine {
 
             // Commit undo for cut.
             if let (Some(snap), Some(frame)) = (cut_snapshot, target_frame) {
+                let mut entry = None;
                 self.gpu.encode("cut-commit", |encoder| {
-                    let entry = self
-                        .region_store
-                        .commit_region(encoder, layer_id, &frame, &snap, undo_rect);
-                    self.undo_stack
-                        .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
+                    entry = Some(
+                        self.region_store
+                            .commit_region(encoder, layer_id, &frame, &snap, undo_rect),
+                    );
                 });
+                if let Some(entry) = entry {
+                    self.push_undo(Box::new(GpuRegionAction::new(entry)));
+                }
                 self.compositor.mark_node_pixels_dirty(layer_id);
             }
         } else {
@@ -492,10 +495,7 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack.push(
-            &mut self.doc,
-            Box::new(LayerAddAction::new(id, parent, pos)),
-        );
+        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
 
         id
     }

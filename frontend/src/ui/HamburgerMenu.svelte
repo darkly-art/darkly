@@ -36,6 +36,7 @@
     const saveHotkey = $derived(formatHotkey(config.get('hotkeys.saveDocument') as string | undefined));
     const saveAsHotkey = $derived(formatHotkey(config.get('hotkeys.saveDocumentAs') as string | undefined));
     const openHotkey = $derived(formatHotkey(config.get('hotkeys.open') as string | undefined));
+    const flattenHotkey = $derived(formatHotkey(config.get('hotkeys.flattenImage') as string | undefined));
 
     // Tooltip explaining why Save/Save As are disabled on Firefox.
     const noSaveTooltip =
@@ -84,6 +85,12 @@
                 <i class="fa-solid fa-file-export"></i>
                 <span>Export Image</span>
                 {#if exportHotkey}<span class="kbd">{exportHotkey}</span>{/if}
+            </button>
+            <div class="sep"></div>
+            <button class="menu-item" onclick={() => runAction('flattenImage')}>
+                <i class="fa-solid fa-layer-group"></i>
+                <span>Flatten Image</span>
+                {#if flattenHotkey}<span class="kbd">{flattenHotkey}</span>{/if}
             </button>
             <div class="sep"></div>
             <button class="menu-item" onclick={openSettings}>

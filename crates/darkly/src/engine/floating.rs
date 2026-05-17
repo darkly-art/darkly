@@ -543,10 +543,7 @@ impl DarklyEngine {
 
             let parent = self.doc.parent_of(layer_id);
             let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
-            self.undo_stack.push(
-                &mut self.doc,
-                Box::new(LayerAddAction::new(layer_id, parent, pos)),
-            );
+            self.push_undo(Box::new(LayerAddAction::new(layer_id, parent, pos)));
 
             self.compositor.mark_node_pixels_dirty(layer_id);
             self.compositor.clear_floating_content();
@@ -604,15 +601,16 @@ impl DarklyEngine {
         // Apply ClearShape to the live target, then run commit. Same
         // sequence the preview applies on every drag, but here it lands
         // on the live texture and survives the floating session.
+        let mut entry = None;
         self.gpu.encode("transform-commit", |encoder| {
             let frame = layer_frame!();
-            let entry = self.region_store.commit_region(
+            entry = Some(self.region_store.commit_region(
                 encoder,
                 layer_id,
                 &frame,
                 &commit_snap,
                 affected_canvas_rect,
-            );
+            ));
 
             if let FloatingMode::Transform {
                 ref clear_shape, ..
@@ -653,10 +651,10 @@ impl DarklyEngine {
                 fc.source_width,
                 fc.source_height,
             );
-
-            self.undo_stack
-                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
         });
+        if let Some(entry) = entry {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        }
 
         // Clean up GPU state
         self.compositor.mark_node_pixels_dirty(layer_id);

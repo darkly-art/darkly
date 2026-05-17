@@ -66,10 +66,7 @@ impl DarklyEngine {
         self.compositor.mark_node_pixels_dirty(mod_id);
         self.compositor.mark_dirty();
 
-        self.undo_stack.push(
-            &mut self.doc,
-            Box::new(ModifierAddAction::new(mod_id, host_id)),
-        );
+        self.push_undo(Box::new(ModifierAddAction::new(mod_id, host_id)));
     }
 
     /// Remove the mask modifier on a host layer or group.
@@ -116,10 +113,9 @@ impl DarklyEngine {
             actions.push(Box::new(ModifierRemoveAction::new(mask_id, host_id)));
         }
         if actions.len() == 1 {
-            self.undo_stack.push(&mut self.doc, actions.pop().unwrap());
+            self.push_undo(actions.pop().unwrap());
         } else if !actions.is_empty() {
-            self.undo_stack
-                .push(&mut self.doc, Box::new(CompoundAction::new(actions)));
+            self.push_undo(Box::new(CompoundAction::new(actions)));
         }
     }
 
@@ -215,32 +211,43 @@ impl DarklyEngine {
             });
         }
 
-        // Commit undo region for the host's pixel changes (pushed first so
-        // it pops last — restores host alpha after the modifier and its
-        // pixels have been brought back).
-        if let (Some(snap), Some(frame)) = (snap, layer_frame) {
+        // Commit both undo regions (host alpha + mask pixels) before pushing
+        // either, because the frames borrow `self.compositor` and `push_undo`
+        // needs `&mut self` total. Push order is preserved: host first so
+        // it pops last on undo.
+        let host_entry = if let (Some(snap), Some(frame)) = (snap, layer_frame) {
             let rect = frame.canvas_extent;
+            let mut entry = None;
             self.gpu.encode("apply-mask-undo", |encoder| {
-                let entry = self
-                    .region_store
-                    .commit_region(encoder, host_id, &frame, &snap, rect);
-                self.undo_stack
-                    .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
+                entry = Some(
+                    self.region_store
+                        .commit_region(encoder, host_id, &frame, &snap, rect),
+                );
             });
-        }
+            entry
+        } else {
+            None
+        };
 
-        // Commit undo region for the mask pixels (pushed second so it pops
-        // after the modifier is reattached, into the freshly-recreated
-        // mask texture).
-        if let (Some(snap), Some(frame)) = (mask_snap, mask_frame) {
+        let mask_entry = if let (Some(snap), Some(frame)) = (mask_snap, mask_frame) {
             let rect = frame.canvas_extent;
+            let mut entry = None;
             self.gpu.encode("apply-mask-undo-mask", |encoder| {
-                let entry = self
-                    .region_store
-                    .commit_region(encoder, mask_id, &frame, &snap, rect);
-                self.undo_stack
-                    .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
+                entry = Some(
+                    self.region_store
+                        .commit_region(encoder, mask_id, &frame, &snap, rect),
+                );
             });
+            entry
+        } else {
+            None
+        };
+
+        if let Some(entry) = host_entry {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        }
+        if let Some(entry) = mask_entry {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
         }
 
         if self.isolated_node == Some(mask_id) {
@@ -258,10 +265,7 @@ impl DarklyEngine {
         self.compositor.dispose_node_texture(mask_id);
         self.compositor.dispose_passthrough_mask_state(host_id);
         if detached {
-            self.undo_stack.push(
-                &mut self.doc,
-                Box::new(ModifierRemoveAction::new(mask_id, host_id)),
-            );
+            self.push_undo(Box::new(ModifierRemoveAction::new(mask_id, host_id)));
         }
     }
 

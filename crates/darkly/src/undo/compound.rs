@@ -1,5 +1,6 @@
 use super::UndoAction;
 use crate::document::Document;
+use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
@@ -43,5 +44,11 @@ impl UndoAction for CompoundAction {
         self.actions
             .iter_mut()
             .find_map(|a| a.gpu_region_entry_mut())
+    }
+
+    fn on_evict(&mut self, compositor: &mut Compositor) {
+        for action in self.actions.iter_mut() {
+            action.on_evict(compositor);
+        }
     }
 }

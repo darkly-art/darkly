@@ -20,6 +20,7 @@
         return null;
     }
 
+
     function addNormalLayer() {
         if (!app.handle) return;
         const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
@@ -71,11 +72,21 @@
             || (app.activeLayerId !== null && findNode(app.layerTree, app.activeLayerId) !== null),
     );
 
+    let canDuplicate = $derived(
+        app.activeLayerId !== null
+            && findNode(app.layerTree, app.activeLayerId) !== null,
+    );
+
     function remove() {
         // The `deleteLayer` action handles both veil-remove and layer-
         // remove (including toast on error and tree refresh). The trash
         // button just routes through it.
         actions.dispatch('deleteLayer');
+        onupdate();
+    }
+
+    function duplicate() {
+        actions.dispatch('duplicateLayer');
         onupdate();
     }
 </script>
@@ -111,6 +122,15 @@
             <i class="fa-solid fa-square mask-square"></i>
             <i class="fa-solid fa-circle mask-dot"></i>
         </span>
+    </button>
+
+    <button
+        class="footer-btn"
+        onclick={duplicate}
+        disabled={!canDuplicate}
+        title="Duplicate"
+    >
+        <i class="fa-solid fa-clone"></i>
     </button>
 
     <button
