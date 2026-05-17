@@ -18,6 +18,18 @@ pub const MAX_LAYER_DIM: u32 = 16384;
 /// reallocations regardless of dab count.
 pub const LAYER_GROWTH_CHUNK: u32 = 256;
 
+/// Read-only handle to an entity's GPU pixel storage. Returned by
+/// [`Compositor::pixel_data_for`] so callers that need to schedule a
+/// readback (today: the save pipeline) can find the texture for any
+/// pixel-bearing entity uniformly, without knowing whether it lives in
+/// the unified `node_textures` pool or the selection's ping-pong pair.
+pub struct PixelDataRef<'a> {
+    pub texture: &'a wgpu::Texture,
+    pub format: wgpu::TextureFormat,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// Outcome of a layer-grow request — distinguishes a genuine reallocation
 /// (callers must rebase stroke scratch / region store) from a no-op.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -953,6 +965,38 @@ impl Compositor {
     /// metadata. Returns `None` for groups (no pixels) and unknown ids.
     pub fn node_texture(&self, node_id: LayerId) -> Option<&LayerTexture> {
         self.node_textures.get(&node_id)
+    }
+
+    /// Return the GPU texture backing any entity's pixels — works uniformly
+    /// for raster layers, mask modifiers, AND the selection modifier.
+    ///
+    /// The selection's R8 texture lives in
+    /// [`crate::gpu::selection::SelectionState`] (ping-pong pair + dedicated
+    /// bind groups) rather than the unified `node_textures` HashMap;
+    /// `pixel_data_for` hides that asymmetry so callers (save readback,
+    /// future readers) don't need to know.
+    pub fn pixel_data_for(&self, node_id: LayerId) -> Option<PixelDataRef<'_>> {
+        if let Some(t) = self.node_textures.get(&node_id) {
+            let ext = t.layer_extent();
+            return Some(PixelDataRef {
+                texture: t.texture(),
+                format: t.format(),
+                width: ext.width,
+                height: ext.height,
+            });
+        }
+        if let Some(sel) = self.selection_state.as_ref() {
+            if sel.modifier_id == node_id {
+                let frame = sel.canvas_frame();
+                return Some(PixelDataRef {
+                    texture: frame.texture,
+                    format: wgpu::TextureFormat::R8Unorm,
+                    width: frame.canvas_extent.width,
+                    height: frame.canvas_extent.height,
+                });
+            }
+        }
+        None
     }
 
     /// Replace a node's entire texture contents with `bytes`, then mark

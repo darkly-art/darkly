@@ -16,8 +16,10 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::coord::CanvasRect;
+use crate::document::layer_kind::{IdMap, SerializedEntity};
 use crate::document::modifiers::mask::MaskModifier;
 use crate::document::modifiers::selection::SelectionModifier;
+use crate::format::error::LoadError;
 use crate::layer::{LayerId, NodeCommon, PixelBuffer};
 
 /// What each modifier module returns from its `register()` function.
@@ -26,6 +28,18 @@ use crate::layer::{LayerId, NodeCommon, PixelBuffer};
 pub struct ModifierRegistration {
     pub type_id: &'static str,
     pub display_name: &'static str,
+    /// Produce the manifest body + any pixel-blob refs. Infallible by
+    /// construction; see the analogous note on
+    /// [`crate::document::layer_kind::LayerKindRegistration::serialize`].
+    pub serialize: fn(&Modifier) -> SerializedEntity,
+    /// Reconstruct the modifier from its manifest body. `id` is the
+    /// freshly-allocated slotmap key.
+    pub deserialize: fn(body: &serde_json::Value, id: LayerId) -> Result<Modifier, LoadError>,
+    /// Rewrite every cross-reference inside this modifier from
+    /// manifest-old id to fresh slotmap id. Non-optional — same
+    /// rationale as
+    /// [`crate::document::layer_kind::LayerKindRegistration::remap_ids`].
+    pub remap_ids: fn(&mut Modifier, &IdMap),
 }
 
 /// Auto-discovered modifier registry — owns the per-kind registration records

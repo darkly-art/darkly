@@ -27,24 +27,25 @@
 //! document, replace the compositor, upload pixels, and restore veils.
 //! That phase has no fallible operations — by construction the install
 //! either completes or panics (a logic bug to fix at the source).
+//!
+//! The staging-doc construction is registry-driven: each entity's
+//! `deserialize` reconstructs its own kind from the opaque manifest
+//! body, and a second pass calls each kind's `remap_ids` to rewrite
+//! cross-references onto the fresh slotmap. The central code never
+//! branches on which kind it got.
 
 use std::collections::HashMap;
 
 use super::DarklyEngine;
-use crate::document::{layer_kind, modifier};
-use crate::document::{Document, Entity, ModifierKind};
-use crate::document::{Modifier, SelectionCpuCache, SelectionModifier};
+use crate::document::layer_kind::{self, IdMap};
+use crate::document::modifier;
+use crate::document::{Document, Entity};
 use crate::format::error::LoadError;
-use crate::format::manifest::{
-    texture_format_from_str, Manifest, ManifestModifier, ManifestNode, ManifestRequires,
-    CONTAINER_VERSION,
-};
+use crate::format::manifest::{Manifest, ManifestPixelRef, ManifestRequires};
 use crate::format::unzip::unzip_entries;
 use crate::gpu::blend_mode;
 use crate::gpu::compositor::Compositor;
-use crate::layer::{
-    BlendProps, Layer, LayerGroup, LayerId, LayerNode, NodeCommon, PixelBuffer, RasterLayer,
-};
+use crate::layer::{LayerId, LayerNode};
 
 /// Public marker re-export so the WASM bridge can name the engine-side
 /// "loaded document" capability without importing the load module directly.
@@ -112,10 +113,10 @@ fn pre_check_container_version(raw: &serde_json::Value) -> Result<(), LoadError>
         .ok_or_else(|| LoadError::CorruptManifest {
             reason: "manifest missing or malformed container_version".to_string(),
         })?;
-    if found > CONTAINER_VERSION as u64 {
+    if found > crate::format::manifest::CONTAINER_VERSION as u64 {
         return Err(LoadError::ContainerTooNew {
             found: found as u32,
-            supported: CONTAINER_VERSION,
+            supported: crate::format::manifest::CONTAINER_VERSION,
         });
     }
     Ok(())
@@ -185,197 +186,210 @@ fn pre_check_requires(engine: &DarklyEngine, requires: &ManifestRequires) -> Res
 /// `old_id → new_id` map so the loader can rewrite cross-references
 /// (children, modifiers, host) into the new slotmap.
 ///
-/// Returns [`LoadError::CorruptManifest`] when a per-variant `type_id`
-/// references something the registry doesn't know. The `requires`
-/// pre-check should have caught this earlier — reaching it here means
-/// the file's `requires` block lied (declared less than it actually
-/// uses, or was inconsistent with the body), so we treat it as
-/// corruption rather than mere absence.
-fn build_staging_document(
-    manifest: &Manifest,
-) -> Result<(Document, HashMap<u64, LayerId>), LoadError> {
+/// Three passes:
+///
+/// 1. **Allocate every entity.** Each entity's manifest body is handed
+///    to its registered `deserialize` to produce a fresh [`LayerNode`] /
+///    [`crate::document::Modifier`] with cross-refs still pointing at
+///    manifest-old ids.
+/// 2. **Remap cross-refs.** Each entity's registered `remap_ids` rewrites
+///    its cross-references using the `id_map`. Each kind owns the
+///    knowledge of which fields hold ids — a future kind that adds a
+///    private id field is forced to implement this hook by signature.
+/// 3. **Rebuild parent map.** Walk every group's `children` and every
+///    host's `modifiers`; the body's child/modifier list is the single
+///    source of truth, and the `parent` SecondaryMap is derived from it.
+fn build_staging_document(manifest: &Manifest) -> Result<(Document, IdMap), LoadError> {
     let mut doc = Document::new(manifest.canvas.width, manifest.canvas.height);
     doc.name = manifest.name.clone();
 
-    // Map manifest ids → fresh slotmap keys. The manifest's `root` maps
-    // to the new doc's auto-allocated root — we don't re-create the
-    // root entity, we reuse the one Document::new built. Every other
-    // node + modifier is allocated fresh and recorded.
-    let mut id_map: HashMap<u64, LayerId> = HashMap::with_capacity(manifest.tree.nodes.len());
+    let mut id_map: IdMap = HashMap::with_capacity(manifest.nodes.len() + manifest.modifiers.len());
+
+    // The manifest's `root` maps to the new doc's auto-allocated root —
+    // we don't re-create the root entity, we reuse the one Document::new
+    // built. Every other node + modifier is allocated fresh and
+    // recorded.
     let new_root = doc.root_id();
-    id_map.insert(manifest.tree.root, new_root);
+    id_map.insert(manifest.root, new_root);
 
-    let blend_registry = blend_mode::registry();
+    let layer_kind_registry = layer_kind::registry();
+    let modifier_registry = modifier::registry();
 
-    // First pass: insert raw entities into the slotmap (no parent links
-    // yet — the rewrite pass below patches children/modifiers/parent
-    // once the full id map is known).
-    for node in &manifest.tree.nodes {
-        if node.id() == manifest.tree.root {
+    // Pass 1a: allocate every non-root node entity.
+    for entry in &manifest.nodes {
+        if entry.id == manifest.root {
+            // Patch the auto-allocated root group with the body's
+            // fields (children/modifiers lists still carry manifest-old
+            // ids; pass 2 / 3 will rewrite them).
+            let reg = layer_kind_registry.get(&entry.type_id).ok_or_else(|| {
+                LoadError::CorruptManifest {
+                    reason: format!(
+                        "manifest root {} declares layer_kind/{} but registry is missing it \
+                         — `requires` block lies",
+                        entry.id, entry.type_id
+                    ),
+                }
+            })?;
+            let new_root_node = (reg.deserialize)(&entry.body, new_root)?;
+            if let Some(Entity::Node(slot)) = doc.entities.get_mut(new_root) {
+                *slot = new_root_node;
+            }
             continue;
         }
-        let new_id = match node {
-            ManifestNode::Raster(r) => {
-                let blend_reg = blend_registry.get(&r.blend_mode).ok_or_else(|| {
-                    LoadError::CorruptManifest {
-                        reason: format!(
-                            "node {} references undeclared blend_mode/{} \
-                                 — `requires` block lies",
-                            r.id, r.blend_mode
-                        ),
-                    }
+        let reg =
+            layer_kind_registry
+                .get(&entry.type_id)
+                .ok_or_else(|| LoadError::CorruptManifest {
+                    reason: format!(
+                        "node {} declares layer_kind/{} but registry is missing it \
+                     — `requires` block lies",
+                        entry.id, entry.type_id
+                    ),
                 })?;
-                let format = texture_format_from_str(&r.pixels.format).ok_or_else(|| {
-                    LoadError::CorruptManifest {
-                        reason: format!(
-                            "node {} uses unknown texture format '{}'",
-                            r.id, r.pixels.format
-                        ),
-                    }
-                })?;
-                doc.entities.insert_with_key(|key| {
-                    Entity::Node(LayerNode::Layer(Layer::Raster(RasterLayer {
-                        id: key,
-                        common: NodeCommon {
-                            name: r.name.clone(),
-                            visible: r.visible,
-                            locked: r.locked,
-                        },
-                        blend: BlendProps {
-                            opacity: r.opacity,
-                            blend_mode: blend_reg,
-                        },
-                        pixels: PixelBuffer::new(r.pixels.bounds, format),
-                        modifiers: Vec::new(), // filled below
-                    })))
-                })
+        // `insert_with_key` runs the constructor with the freshly-allocated
+        // key. `deserialize` is fallible — if it errors, we want to bubble
+        // up rather than leave a half-formed slotmap entry, so we use a
+        // two-step allocate-then-fill pattern via a Result-bearing temporary.
+        let mut new_id_opt: Option<LayerId> = None;
+        let mut deserialize_err: Option<LoadError> = None;
+        let new_id = doc.entities.insert_with_key(|key| {
+            new_id_opt = Some(key);
+            match (reg.deserialize)(&entry.body, key) {
+                Ok(node) => Entity::Node(node),
+                Err(e) => {
+                    deserialize_err = Some(e);
+                    // Insert a placeholder; the caller will pull this
+                    // entity right back out once we propagate the error.
+                    Entity::Node(LayerNode::Group(crate::layer::LayerGroup::new(
+                        key,
+                        String::new(),
+                    )))
+                }
             }
-            ManifestNode::Group(g) => {
-                let blend_reg = blend_registry.get(&g.blend_mode).ok_or_else(|| {
-                    LoadError::CorruptManifest {
-                        reason: format!(
-                            "group {} references undeclared blend_mode/{} \
-                                 — `requires` block lies",
-                            g.id, g.blend_mode
-                        ),
-                    }
-                })?;
-                doc.entities.insert_with_key(|key| {
-                    Entity::Node(LayerNode::Group(LayerGroup {
-                        id: key,
-                        common: NodeCommon {
-                            name: g.name.clone(),
-                            visible: g.visible,
-                            locked: g.locked,
-                        },
-                        blend: BlendProps {
-                            opacity: g.opacity,
-                            blend_mode: blend_reg,
-                        },
-                        children: Vec::new(), // filled below
-                        modifiers: Vec::new(),
-                        passthrough: g.passthrough,
-                        collapsed: g.collapsed,
-                    }))
-                })
-            }
-        };
-        id_map.insert(node.id(), new_id);
+        });
+        if let Some(e) = deserialize_err {
+            doc.entities.remove(new_id);
+            return Err(e);
+        }
+        id_map.insert(
+            entry.id,
+            new_id_opt.expect("insert_with_key always invokes closure"),
+        );
     }
 
-    for m in &manifest.modifiers {
-        let new_id = match m {
-            ManifestModifier::Mask(mask) => doc.entities.insert_with_key(|key| {
-                Entity::Modifier(Modifier {
-                    id: key,
-                    common: NodeCommon {
-                        name: mask.name.clone(),
-                        visible: mask.visible,
-                        locked: mask.locked,
-                    },
-                    kind: ModifierKind::mask_with_bounds(mask.pixels.bounds),
-                })
-            }),
-            ManifestModifier::Selection(sel) => doc.entities.insert_with_key(|key| {
-                Entity::Modifier(Modifier {
-                    id: key,
-                    common: NodeCommon {
-                        name: sel.name.clone(),
-                        visible: sel.visible,
-                        locked: sel.locked,
-                    },
-                    kind: ModifierKind::Selection(SelectionModifier {
-                        pixels: PixelBuffer::new(sel.pixels.bounds, wgpu::TextureFormat::R8Unorm),
-                        cpu_cache: SelectionCpuCache::new(),
-                        pixel_bounds: None,
-                    }),
-                })
-            }),
-        };
-        id_map.insert(m.id(), new_id);
+    // Pass 1b: allocate modifiers.
+    for entry in &manifest.modifiers {
+        let reg =
+            modifier_registry
+                .get(&entry.type_id)
+                .ok_or_else(|| LoadError::CorruptManifest {
+                    reason: format!(
+                        "modifier {} declares modifier/{} but registry is missing it \
+                     — `requires` block lies",
+                        entry.id, entry.type_id
+                    ),
+                })?;
+        let mut new_id_opt: Option<LayerId> = None;
+        let mut deserialize_err: Option<LoadError> = None;
+        let new_id = doc.entities.insert_with_key(|key| {
+            new_id_opt = Some(key);
+            match (reg.deserialize)(&entry.body, key) {
+                Ok(m) => Entity::Modifier(m),
+                Err(e) => {
+                    deserialize_err = Some(e);
+                    Entity::Modifier(crate::document::Modifier {
+                        id: key,
+                        common: crate::layer::NodeCommon::new(String::new()),
+                        kind: crate::document::ModifierKind::mask_with_bounds(
+                            crate::coord::CanvasRect::from_xywh(0, 0, 0, 0),
+                        ),
+                    })
+                }
+            }
+        });
+        if let Some(e) = deserialize_err {
+            doc.entities.remove(new_id);
+            return Err(e);
+        }
+        id_map.insert(
+            entry.id,
+            new_id_opt.expect("insert_with_key always invokes closure"),
+        );
     }
 
-    // Second pass: rewrite cross-references with the new id map and
-    // populate the parent secondary-map. Children are sorted into
-    // the parent's `children` Vec in the order they appear on the
-    // manifest (display order, bottom-to-top).
-    for node in &manifest.tree.nodes {
-        let new_id = *id_map.get(&node.id()).expect("id map miss");
-        match node {
-            ManifestNode::Raster(r) => {
-                let modifier_ids: Vec<LayerId> = r
-                    .modifiers
-                    .iter()
-                    .filter_map(|m| id_map.get(m).copied())
-                    .collect();
-                if let Some(Entity::Node(LayerNode::Layer(Layer::Raster(raster)))) =
-                    doc.entities.get_mut(new_id)
-                {
-                    raster.modifiers = modifier_ids.clone();
-                }
-                for mid in modifier_ids {
-                    doc.parent.insert(mid, new_id);
-                }
-            }
-            ManifestNode::Group(g) => {
-                let child_ids: Vec<LayerId> = g
-                    .children
-                    .iter()
-                    .filter_map(|c| id_map.get(c).copied())
-                    .collect();
-                let modifier_ids: Vec<LayerId> = g
-                    .modifiers
-                    .iter()
-                    .filter_map(|m| id_map.get(m).copied())
-                    .collect();
-                if let Some(Entity::Node(LayerNode::Group(group))) = doc.entities.get_mut(new_id) {
-                    group.children = child_ids.clone();
-                    group.modifiers = modifier_ids.clone();
-                }
-                for cid in child_ids {
-                    doc.parent.insert(cid, new_id);
-                }
-                for mid in modifier_ids {
-                    doc.parent.insert(mid, new_id);
+    // Pass 2: rewrite cross-refs. Each kind owns this via remap_ids,
+    // so no central knowledge of which fields hold ids is required.
+    let entity_ids: Vec<LayerId> = doc.entities.keys().collect();
+    for eid in entity_ids {
+        // Each closure runs on a separate borrow of the entity slot so
+        // we can call the registry dispatch (which is `&'static`)
+        // alongside.
+        let type_id = match doc.entities.get(eid) {
+            Some(Entity::Node(n)) => Some(("node", n.type_id())),
+            Some(Entity::Modifier(m)) => Some(("modifier", m.type_id())),
+            None => None,
+        };
+        match type_id {
+            Some(("node", tid)) => {
+                let reg = layer_kind_registry
+                    .get(tid)
+                    .expect("layer kind type_id passed pass 1");
+                if let Some(Entity::Node(n)) = doc.entities.get_mut(eid) {
+                    (reg.remap_ids)(n, &id_map);
                 }
             }
+            Some(("modifier", tid)) => {
+                let reg = modifier_registry
+                    .get(tid)
+                    .expect("modifier type_id passed pass 1");
+                if let Some(Entity::Modifier(m)) = doc.entities.get_mut(eid) {
+                    (reg.remap_ids)(m, &id_map);
+                }
+            }
+            _ => {}
         }
     }
 
-    // Selection modifier (if any) hooks into Document::selection rather
-    // than parent. Wire up the field if the manifest references one.
-    if manifest.selection.is_some() {
-        if let Some(sel_old_id) = manifest.modifiers.iter().find_map(|m| match m {
-            ManifestModifier::Selection(s) => Some(s.id),
-            _ => None,
-        }) {
-            if let Some(new_id) = id_map.get(&sel_old_id) {
-                doc.selection = Some(*new_id);
-            }
+    // Pass 3: rebuild the parent SecondaryMap from groups' children and
+    // hosts' modifiers. The body's lists are the single source of truth.
+    rebuild_parent_map(&mut doc);
+
+    // Selection sentinel — point `Document::selection` at the
+    // freshly-allocated id (if the manifest declared one).
+    if let Some(old_sel_id) = manifest.selection_id {
+        if let Some(new_id) = id_map.get(&old_sel_id) {
+            doc.selection = Some(*new_id);
         }
     }
 
     Ok((doc, id_map))
+}
+
+/// Walk every group node's `children` and every host node's `modifiers`,
+/// populating [`Document::parent`]. Called after pass 2 has rewritten
+/// every cross-ref to its fresh slotmap id.
+fn rebuild_parent_map(doc: &mut Document) {
+    doc.parent.clear();
+    // Snapshot all node-entity ids so we can mutate `doc.parent`
+    // without holding a borrow on `doc.entities`.
+    let node_ids: Vec<LayerId> = doc
+        .entities
+        .iter()
+        .filter_map(|(id, e)| matches!(e, Entity::Node(_)).then_some(id))
+        .collect();
+    for nid in node_ids {
+        let (children, modifiers) = match doc.entities.get(nid) {
+            Some(Entity::Node(LayerNode::Group(g))) => (g.children.clone(), g.modifiers.clone()),
+            Some(Entity::Node(n)) => (Vec::new(), n.modifiers().to_vec()),
+            _ => continue,
+        };
+        for c in children {
+            doc.parent.insert(c, nid);
+        }
+        for m in modifiers {
+            doc.parent.insert(m, nid);
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -389,7 +403,7 @@ fn install_staging(
     engine: &mut DarklyEngine,
     manifest: &Manifest,
     staging: Document,
-    id_map: HashMap<u64, LayerId>,
+    id_map: IdMap,
     entries: &HashMap<String, Vec<u8>>,
 ) {
     // Cancel any in-flight readbacks that referenced the previous
@@ -444,61 +458,87 @@ fn install_staging(
 }
 
 /// Allocate GPU textures for every loaded entity and upload the
-/// matching pixel bytes from the zip. Layers go through
-/// `ensure_raster_layer`; masks + selection go through
-/// `ensure_node_texture`. Both share the `gpu.queue.write_texture`
-/// upload path used by `paste_image`.
-///
-/// Infallible — pixel-buffer size mismatches log and continue (the
-/// surrounding load is already past every refusal check and we'd
-/// rather show a half-loaded layer than abort with a fresh
+/// matching pixel bytes from the zip. Walks each entity, reads the
+/// `pixels` ref out of the body, and routes through the appropriate
+/// allocator. Infallible — pixel-buffer size mismatches log and
+/// continue (the surrounding load is already past every refusal check
+/// and we'd rather show a half-loaded layer than abort with a fresh
 /// compositor sitting around).
 fn upload_loaded_pixels(
     engine: &mut DarklyEngine,
     manifest: &Manifest,
-    id_map: &HashMap<u64, LayerId>,
+    id_map: &IdMap,
     entries: &HashMap<String, Vec<u8>>,
 ) {
-    for node in &manifest.tree.nodes {
-        if let ManifestNode::Raster(r) = node {
-            let new_id = match id_map.get(&r.id) {
-                Some(id) => *id,
-                None => continue,
-            };
-            engine.compositor.ensure_raster_layer(
-                &engine.gpu.device,
-                &engine.gpu.queue,
-                new_id,
-                r.pixels.bounds,
-            );
-            if let Some(bytes) = entries.get(&r.pixels.pixels) {
-                upload_to_node(engine, new_id, bytes);
-            }
-        }
+    use crate::format::manifest::texture_format_from_str;
+
+    fn extract_pixel_ref(body: &serde_json::Value) -> Option<ManifestPixelRef> {
+        body.get("pixels")
+            .and_then(|v| serde_json::from_value::<ManifestPixelRef>(v.clone()).ok())
     }
 
-    for m in &manifest.modifiers {
-        match m {
-            ManifestModifier::Mask(mask) => {
-                let new_id = match id_map.get(&mask.id) {
-                    Some(id) => *id,
-                    None => continue,
-                };
+    for entry in &manifest.nodes {
+        let Some(new_id) = id_map.get(&entry.id).copied() else {
+            continue;
+        };
+        let Some(pixels) = extract_pixel_ref(&entry.body) else {
+            continue;
+        };
+        let Some(format) = texture_format_from_str(&pixels.format) else {
+            continue;
+        };
+        match format {
+            wgpu::TextureFormat::Rgba8Unorm => {
+                engine.compositor.ensure_raster_layer(
+                    &engine.gpu.device,
+                    &engine.gpu.queue,
+                    new_id,
+                    pixels.bounds,
+                );
+            }
+            _ => {
                 engine.compositor.ensure_node_texture(
                     &engine.gpu.device,
                     &engine.gpu.queue,
                     new_id,
-                    wgpu::TextureFormat::R8Unorm,
-                    mask.pixels.bounds,
+                    format,
+                    pixels.bounds,
                 );
-                if let Some(bytes) = entries.get(&mask.pixels.pixels) {
-                    upload_to_node(engine, new_id, bytes);
-                }
             }
-            ManifestModifier::Selection(_) => {
-                // Selection texture is allocated by `ensure_selection_state`
-                // below; the upload happens once that's wired up.
-            }
+        }
+        if let Some(bytes) = entries.get(&pixels.pixels) {
+            upload_to_node(engine, new_id, bytes);
+        }
+    }
+
+    // Modifiers with bodies that include a `pixels` ref go through the
+    // unified `ensure_node_texture`. The selection modifier carries
+    // a `pixels` body field too, but its R8 texture is allocated by
+    // `ensure_selection_state` below; skip the unified allocator for
+    // the selection id specifically.
+    let selection_old_id = manifest.selection_id;
+    for entry in &manifest.modifiers {
+        if Some(entry.id) == selection_old_id {
+            continue;
+        }
+        let Some(new_id) = id_map.get(&entry.id).copied() else {
+            continue;
+        };
+        let Some(pixels) = extract_pixel_ref(&entry.body) else {
+            continue;
+        };
+        let Some(format) = texture_format_from_str(&pixels.format) else {
+            continue;
+        };
+        engine.compositor.ensure_node_texture(
+            &engine.gpu.device,
+            &engine.gpu.queue,
+            new_id,
+            format,
+            pixels.bounds,
+        );
+        if let Some(bytes) = entries.get(&pixels.pixels) {
+            upload_to_node(engine, new_id, bytes);
         }
     }
 }
@@ -552,4 +592,141 @@ fn ensure_selection_state(engine: &mut DarklyEngine) {
         engine.brush_pipelines.selection_bind_group_layout(),
         &engine.paint_pipelines.selection_bind_group_layout,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::format::manifest::ManifestEntry;
+    #[allow(unused_imports)]
+    use serde_json::json;
+
+    /// `rebuild_parent_map` derives [`Document::parent`] entirely from
+    /// nodes' `children` and `modifiers` lists. A handwritten staging doc
+    /// with empty parent map must end up consistent after the rebuild.
+    #[test]
+    fn rebuild_parent_map_derives_from_children_lists() {
+        let mut doc = Document::new(8, 8);
+        let g = doc.add_group(None);
+        let l = doc.add_raster_layer(Some(g));
+        let m = doc.add_mask_modifier(l).expect("mask added");
+
+        // Wipe parent map and force a rebuild — the derived state must
+        // match the original.
+        doc.parent.clear();
+        rebuild_parent_map(&mut doc);
+
+        assert_eq!(doc.parent_of(l), Some(g));
+        assert_eq!(doc.parent_of(m), Some(l));
+        assert_eq!(doc.parent_of(g), Some(doc.root));
+    }
+
+    /// `build_staging_document` builds a Document via the layer-kind /
+    /// modifier registries — no central match on type_id. A manifest with
+    /// one of every kind round-trips through `serialize` + `deserialize`
+    /// and arrives with consistent tree + parent state.
+    #[test]
+    fn staging_document_round_trips_one_of_each_kind() {
+        // We don't go through save here — we just hand-build a manifest
+        // shape that mirrors what a real save would produce, then assert
+        // the staging doc's structure.
+        let root_id: u64 = 1;
+        let group_id: u64 = 2;
+        let raster_id: u64 = 3;
+        let mask_id: u64 = 4;
+
+        let manifest = Manifest {
+            format: crate::format::manifest::FORMAT_TAG.to_string(),
+            container_version: crate::format::manifest::CONTAINER_VERSION,
+            writer: crate::format::manifest::ManifestWriter::current(),
+            name: "Test".to_string(),
+            canvas: crate::format::manifest::ManifestCanvas {
+                width: 8,
+                height: 8,
+            },
+            requires: ManifestRequires {
+                layer_kind: vec!["group".to_string(), "raster".to_string()],
+                modifier: vec!["mask".to_string()],
+                blend_mode: vec!["normal".to_string()],
+                ..Default::default()
+            },
+            composite: "composite.png".to_string(),
+            root: root_id,
+            nodes: vec![
+                ManifestEntry {
+                    id: root_id,
+                    type_id: "group".to_string(),
+                    body: json!({
+                        "name": "Root",
+                        "visible": true,
+                        "locked": false,
+                        "opacity": 1.0,
+                        "blend_mode": "normal",
+                        "passthrough": true,
+                        "collapsed": false,
+                        "children": [group_id],
+                        "modifiers": []
+                    }),
+                },
+                ManifestEntry {
+                    id: group_id,
+                    type_id: "group".to_string(),
+                    body: json!({
+                        "name": "Group",
+                        "visible": true,
+                        "locked": false,
+                        "opacity": 1.0,
+                        "blend_mode": "normal",
+                        "passthrough": true,
+                        "collapsed": false,
+                        "children": [raster_id],
+                        "modifiers": []
+                    }),
+                },
+                ManifestEntry {
+                    id: raster_id,
+                    type_id: "raster".to_string(),
+                    body: json!({
+                        "name": "Layer",
+                        "visible": true,
+                        "locked": false,
+                        "opacity": 1.0,
+                        "blend_mode": "normal",
+                        "pixels": {
+                            "format": "rgba8unorm",
+                            "pixels": "layers/3.pixels",
+                            "bounds": { "origin": { "x": 0, "y": 0 }, "width": 8, "height": 8 }
+                        },
+                        "modifiers": [mask_id]
+                    }),
+                },
+            ],
+            modifiers: vec![ManifestEntry {
+                id: mask_id,
+                type_id: "mask".to_string(),
+                body: json!({
+                    "name": "Mask",
+                    "visible": true,
+                    "locked": false,
+                    "pixels": {
+                        "format": "r8unorm",
+                        "pixels": "layers/4.mask.pixels",
+                        "bounds": { "origin": { "x": 0, "y": 0 }, "width": 8, "height": 8 }
+                    }
+                }),
+            }],
+            selection_id: None,
+            veils: Vec::new(),
+        };
+
+        let (doc, id_map) = build_staging_document(&manifest).expect("build staging doc");
+        assert_eq!(doc.width, 8);
+        assert_eq!(doc.height, 8);
+        let new_group = *id_map.get(&group_id).expect("group remap");
+        let new_raster = *id_map.get(&raster_id).expect("raster remap");
+        let new_mask = *id_map.get(&mask_id).expect("mask remap");
+        assert_eq!(doc.parent_of(new_group), Some(doc.root_id()));
+        assert_eq!(doc.parent_of(new_raster), Some(new_group));
+        assert_eq!(doc.parent_of(new_mask), Some(new_raster));
+    }
 }
