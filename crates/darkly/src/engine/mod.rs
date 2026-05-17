@@ -140,16 +140,11 @@ pub(crate) enum ReadbackContext {
     },
     /// Async readback for `.darkly` save flow. One readback per pixel-bearing
     /// entity (raster layer, mask, selection) plus one for the composite.
-    /// On completion, [`SaveJob::complete_readback`](save::SaveJob) stores
-    /// the pixels under `key`; when every blob lands, `poll_save_result`
-    /// hands back a `SaveBundle`.
+    /// The destination (blob path or composite slot) is encoded in `kind`;
+    /// on completion, `complete_save_readback` routes the pixels accordingly.
+    /// When every blob lands, `poll_save_result` hands back a `SaveBundle`.
     SaveDocument {
         kind: save::SaveReadbackKind,
-        /// For pixel-bearing readbacks (`LayerPixels`/`MaskPixels`/`SelectionMask`),
-        /// the zip-relative blob path under which the bytes are stored
-        /// (matches the corresponding [`crate::format::ManifestPixelRef::pixels`]).
-        /// Unused for `Composite`.
-        key: String,
         /// Source texture dimensions in pixels — readback rows come back
         /// `width × bpp` wide.
         width: u32,

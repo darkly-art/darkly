@@ -2,13 +2,21 @@
 //!
 //! These are pure data structs — they round-trip through serde and never
 //! reference GPU state or registry pointers directly. The save path
-//! (Phase 3) walks the in-memory [`crate::document::Document`] and builds
-//! a [`Manifest`]; the load path (Phase 4) parses a [`Manifest`] back into
-//! a staging [`crate::document::Document`] with a fresh slotmap.
+//! walks the in-memory [`crate::document::Document`] and builds a
+//! [`Manifest`]; the load path parses a [`Manifest`] back into a staging
+//! [`crate::document::Document`] with a fresh slotmap.
 //!
 //! Identifiers on disk are plain numeric ids (`u64`), not slotmap keys —
-//! the on-load id remap (Phase 4) is what reconciles them with a fresh
+//! the on-load id remap is what reconciles them with a fresh
 //! `Document::entities`.
+//!
+//! Each entity (layer kind or modifier kind) crosses the wire as a
+//! [`ManifestEntry`] envelope: `{ id, type: <type_id>, body: <opaque value> }`.
+//! The `body` is read and written only by the kind's own registration
+//! functions; central save/load code never branches on which variant it
+//! got. Per-kind body structs (`RasterBody`, `MaskBody`, …) live inside
+//! each module under [`crate::document::layer_kinds`] /
+//! [`crate::document::modifiers`].
 
 use serde::{Deserialize, Serialize};
 
@@ -45,18 +53,39 @@ pub struct Manifest {
     /// Path inside the zip to a baked composite PNG (always written).
     /// For external interop only; the loader never reads it.
     pub composite: String,
-    /// Layer tree — list of nodes plus the root id.
-    pub tree: ManifestTree,
-    /// Modifiers attached to nodes in the tree, plus the global selection
-    /// modifier if present. Modifiers live in their own list because they
-    /// share an id space with tree nodes but aren't traversed as part of
-    /// the tree.
-    pub modifiers: Vec<ManifestModifier>,
-    /// Global selection modifier metadata, if the document had a
-    /// non-empty selection at save time.
-    pub selection: Option<ManifestSelection>,
+    /// Manifest id of the implicit root group inside [`Self::nodes`].
+    pub root: u64,
+    /// Every tree node (layers + groups) in the document, in id order.
+    /// Each entry's `body` is opaque to the central code — only the
+    /// layer kind's `serialize` / `deserialize` touch its contents.
+    pub nodes: Vec<ManifestEntry>,
+    /// Every modifier (mask, selection, future filter/transform/…),
+    /// in id order. Same envelope contract as [`Self::nodes`].
+    pub modifiers: Vec<ManifestEntry>,
+    /// Manifest id of the global selection modifier, if one exists.
+    /// The modifier itself lives in [`Self::modifiers`]; this is just a
+    /// pointer so the loader can find it without scanning the list.
+    #[serde(default)]
+    pub selection_id: Option<u64>,
     /// Veil chain in apply order.
     pub veils: Vec<ManifestVeil>,
+}
+
+/// Wire envelope for one entity (layer kind or modifier kind). The
+/// `body` is opaque to the central save/load code — only the kind's
+/// own registered `serialize` / `deserialize` functions read or write
+/// it.
+///
+/// Named `ManifestEntry` (not `ManifestEntity`) to avoid colliding
+/// with the document-side `Entity::{Node, Modifier}` enum — they're
+/// different abstractions: `Entity` is the in-doc storage
+/// discriminator; `ManifestEntry` is the wire envelope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestEntry {
+    pub id: u64,
+    #[serde(rename = "type")]
+    pub type_id: String,
+    pub body: serde_json::Value,
 }
 
 /// Tooling identifier — `name` is fixed `"darkly"`; `version` mirrors
@@ -87,11 +116,10 @@ pub struct ManifestCanvas {
 
 /// Inventory of every modular `type_id` the file uses, keyed by registry.
 ///
-/// Populated automatically by the save path (Phase 3) — walked from the
-/// document, never hand-maintained. The load path (Phase 4) diffs this
-/// against the binary's registries and refuses up-front when anything's
-/// missing, so big files get rejected in milliseconds without parsing
-/// the body.
+/// Populated automatically by the save path — walked from the document,
+/// never hand-maintained. The load path diffs this against the binary's
+/// registries and refuses up-front when anything's missing, so big files
+/// get rejected in milliseconds without parsing the body.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestRequires {
     #[serde(default)]
@@ -102,110 +130,6 @@ pub struct ManifestRequires {
     pub layer_kind: Vec<String>,
     #[serde(default)]
     pub modifier: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestTree {
-    pub root: u64,
-    pub nodes: Vec<ManifestNode>,
-}
-
-/// On-disk shape for any tree node. `kind` is the layer-kind `type_id`
-/// (`"raster"`, `"group"`), dispatched through
-/// [`crate::document::layer_kind`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ManifestNode {
-    Raster(ManifestRasterNode),
-    Group(ManifestGroupNode),
-}
-
-impl ManifestNode {
-    pub fn id(&self) -> u64 {
-        match self {
-            ManifestNode::Raster(r) => r.id,
-            ManifestNode::Group(g) => g.id,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestRasterNode {
-    pub id: u64,
-    pub name: String,
-    pub visible: bool,
-    pub locked: bool,
-    pub opacity: f32,
-    /// Blend-mode `type_id` from [`crate::gpu::blend_mode`].
-    pub blend_mode: String,
-    /// Pixel storage descriptor — bounds + format + zip-relative path.
-    pub pixels: ManifestPixelRef,
-    /// Modifier ids attached to this node, in bottom-up order. Each id
-    /// resolves to an entry in [`Manifest::modifiers`].
-    #[serde(default)]
-    pub modifiers: Vec<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestGroupNode {
-    pub id: u64,
-    pub name: String,
-    pub visible: bool,
-    pub locked: bool,
-    pub opacity: f32,
-    pub blend_mode: String,
-    pub passthrough: bool,
-    pub collapsed: bool,
-    /// Child node ids in display order (bottom-to-top).
-    pub children: Vec<u64>,
-    #[serde(default)]
-    pub modifiers: Vec<u64>,
-}
-
-/// On-disk shape for any modifier. `kind` is the modifier-kind `type_id`
-/// (`"mask"`, `"selection"`, …), dispatched through
-/// [`crate::document::modifier`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ManifestModifier {
-    Mask(ManifestMaskModifier),
-    Selection(ManifestSelectionModifier),
-}
-
-impl ManifestModifier {
-    pub fn id(&self) -> u64 {
-        match self {
-            ManifestModifier::Mask(m) => m.id,
-            ManifestModifier::Selection(s) => s.id,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestMaskModifier {
-    pub id: u64,
-    /// Host node id — the layer or group this mask multiplies into.
-    pub host: u64,
-    pub name: String,
-    pub visible: bool,
-    pub locked: bool,
-    pub pixels: ManifestPixelRef,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestSelectionModifier {
-    pub id: u64,
-    pub name: String,
-    pub visible: bool,
-    pub locked: bool,
-    pub pixels: ManifestPixelRef,
-}
-
-/// Schema for [`Manifest::selection`] — a compact descriptor for the
-/// global selection mask if non-empty at save time.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ManifestSelection {
-    pub pixels: ManifestPixelRef,
 }
 
 /// On-disk shape for a veil chain entry. The body is the canonical
@@ -240,8 +164,8 @@ pub struct ManifestPixelRef {
 /// encoders off the WASM main thread and reusing the browser's native
 /// PNG path. Tests assemble the zip via [`super::zip_io::assemble_zip`].
 ///
-/// Pixel blobs are *raw bytes*, format declared per-blob in
-/// [`Manifest::tree`] / [`Manifest::modifiers`] / [`Manifest::selection`].
+/// Pixel blobs are *raw bytes*, format declared per-blob in each entity's
+/// body inside [`Manifest::nodes`] / [`Manifest::modifiers`].
 pub struct SaveBundle {
     /// `manifest.json` content — pretty-printed JSON.
     pub manifest_json: Vec<u8>,
@@ -265,13 +189,16 @@ pub struct SaveBlob {
 /// Map a `wgpu::TextureFormat` to its wire-format slug.
 ///
 /// Closed set today: `Rgba8Unorm` ↔ `"rgba8unorm"`, `R8Unorm` ↔
-/// `"r8unorm"`. Anything else returns `None` — we don't write unknown
-/// formats so an unknown one on save is a programming error.
-pub fn texture_format_to_str(format: wgpu::TextureFormat) -> Option<&'static str> {
+/// `"r8unorm"`. Panics on anything else — the compositor allocates
+/// only representable formats (raster textures are always `Rgba8Unorm`,
+/// mask/selection textures are always `R8Unorm`), so an unknown format
+/// reaching this function is a programming error, not a save-time
+/// concern. Adding a new on-GPU format requires extending this map.
+pub fn texture_format_to_str(format: wgpu::TextureFormat) -> &'static str {
     match format {
-        wgpu::TextureFormat::Rgba8Unorm => Some("rgba8unorm"),
-        wgpu::TextureFormat::R8Unorm => Some("r8unorm"),
-        _ => None,
+        wgpu::TextureFormat::Rgba8Unorm => "rgba8unorm",
+        wgpu::TextureFormat::R8Unorm => "r8unorm",
+        other => panic!("texture_format_to_str: unrepresentable format {other:?}"),
     }
 }
 
@@ -291,58 +218,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_node_uses_kind_tag() {
-        let node = ManifestNode::Raster(ManifestRasterNode {
-            id: 1,
-            name: "Sketch".into(),
-            visible: true,
-            locked: false,
-            opacity: 0.8,
-            blend_mode: "multiply".into(),
-            pixels: ManifestPixelRef {
-                format: "rgba8unorm".into(),
-                pixels: "layers/0.pixels".into(),
-                bounds: CanvasRect::from_xywh(0, 0, 2048, 2048),
-            },
-            modifiers: vec![3],
-        });
-        let json = serde_json::to_value(&node).unwrap();
-        assert_eq!(json["kind"], "raster");
-        let back: ManifestNode = serde_json::from_value(json).unwrap();
-        assert_eq!(back, node);
-    }
-
-    #[test]
-    fn manifest_modifier_uses_kind_tag() {
-        let m = ManifestModifier::Mask(ManifestMaskModifier {
-            id: 3,
-            host: 1,
-            name: "Mask 1".into(),
-            visible: true,
-            locked: false,
-            pixels: ManifestPixelRef {
-                format: "r8unorm".into(),
-                pixels: "layers/0.mask.pixels".into(),
-                bounds: CanvasRect::from_xywh(0, 0, 2048, 2048),
-            },
-        });
-        let json = serde_json::to_value(&m).unwrap();
-        assert_eq!(json["kind"], "mask");
-        let back: ManifestModifier = serde_json::from_value(json).unwrap();
-        assert_eq!(back, m);
-    }
-
-    #[test]
     fn texture_format_slug_round_trip() {
         for fmt in [
             wgpu::TextureFormat::Rgba8Unorm,
             wgpu::TextureFormat::R8Unorm,
         ] {
-            let slug = texture_format_to_str(fmt).unwrap();
+            let slug = texture_format_to_str(fmt);
             assert_eq!(texture_format_from_str(slug), Some(fmt));
         }
         assert!(texture_format_from_str("future_format").is_none());
-        assert!(texture_format_to_str(wgpu::TextureFormat::Rgba16Float).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "unrepresentable format")]
+    fn texture_format_to_str_panics_on_unknown() {
+        let _ = texture_format_to_str(wgpu::TextureFormat::Rgba16Float);
     }
 
     #[test]
@@ -363,23 +253,24 @@ mod tests {
                 modifier: vec!["mask".into()],
             },
             composite: "composite.png".into(),
-            tree: ManifestTree {
-                root: 0,
-                nodes: vec![ManifestNode::Group(ManifestGroupNode {
-                    id: 0,
-                    name: "Root".into(),
-                    visible: true,
-                    locked: false,
-                    opacity: 1.0,
-                    blend_mode: "normal".into(),
-                    passthrough: true,
-                    collapsed: false,
-                    children: vec![],
-                    modifiers: vec![],
-                })],
-            },
+            root: 0,
+            nodes: vec![ManifestEntry {
+                id: 0,
+                type_id: "group".into(),
+                body: serde_json::json!({
+                    "name": "Root",
+                    "visible": true,
+                    "locked": false,
+                    "opacity": 1.0,
+                    "blend_mode": "normal",
+                    "passthrough": true,
+                    "collapsed": false,
+                    "children": [],
+                    "modifiers": [],
+                }),
+            }],
             modifiers: vec![],
-            selection: None,
+            selection_id: None,
             veils: vec![ManifestVeil {
                 instance: InstancePayload::new(
                     "noise",

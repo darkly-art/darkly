@@ -11,22 +11,24 @@
 //! over the next few frames without affecting (or being affected by)
 //! the in-flight save.
 //!
-//! See [the plan's Save flow section](../../../../darkly-file-format-plan.md#save-flow)
-//! for the concurrent-edit rationale.
+//! The build is registry-driven: each entity's `serialize` returns its
+//! own opaque body plus a list of [`PixelBlobSpec`]s. Save never branches
+//! on layer kind or modifier kind — the same loop handles raster, mask,
+//! selection, and any future kind that registers itself.
 
 use std::collections::{HashMap, HashSet};
 
 use super::{DarklyEngine, ReadbackContext};
-use crate::document::{Modifier, ModifierKind};
+use crate::document::layer_kind::{self, PixelBlobSpec};
+use crate::document::modifier;
+use crate::document::Entity;
 use crate::format::manifest::{
-    texture_format_to_str, Manifest, ManifestCanvas, ManifestGroupNode, ManifestMaskModifier,
-    ManifestModifier, ManifestNode, ManifestPixelRef, ManifestRasterNode, ManifestRequires,
-    ManifestSelection, ManifestSelectionModifier, ManifestTree, ManifestVeil, ManifestWriter,
+    Manifest, ManifestCanvas, ManifestEntry, ManifestRequires, ManifestVeil, ManifestWriter,
     SaveBlob, SaveBundle, CONTAINER_VERSION, FORMAT_TAG,
 };
 use crate::format::registry_io::InstancePayload;
 use crate::gpu::readback;
-use crate::layer::{Layer, LayerId, LayerNode};
+use crate::layer::LayerId;
 
 /// Errors `start_save_document` can return synchronously.
 #[derive(Debug)]
@@ -35,20 +37,12 @@ pub enum SaveError {
     /// `poll_save_result` to return `Some` before kicking off another.
     /// The UI disables the Save action for that tab during a save.
     InProgress,
-    /// A pixel-bearing entity referenced a texture format the on-disk
-    /// schema doesn't yet name (see [`texture_format_to_str`]). New
-    /// formats need a string variant added to that map first — this
-    /// guards against silently dropping pixels on disk.
-    UnsupportedTextureFormat(wgpu::TextureFormat),
 }
 
 impl std::fmt::Display for SaveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SaveError::InProgress => write!(f, "a save is already in flight"),
-            SaveError::UnsupportedTextureFormat(fmt) => {
-                write!(f, "save: no wire-format slug for {fmt:?}")
-            }
         }
     }
 }
@@ -57,13 +51,16 @@ impl std::error::Error for SaveError {}
 
 /// Which kind of texture a pending [`ReadbackContext::SaveDocument`]
 /// readback is sourced from. Drives how the completed pixels are
-/// stitched into the [`SaveJob`]: per-blob bytes for everything pixel-bearing,
-/// `(width, height, rgba)` for the composite.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+/// stitched into the [`SaveJob`]: per-blob bytes for pixel-bearing
+/// entities (raster/mask/selection all flow through the same arm), a
+/// `(width, height, rgba)` triple for the composite.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveReadbackKind {
-    LayerPixels,
-    MaskPixels,
-    SelectionMask,
+    /// One pixel-bearing entity's bytes — stored under `key` (the zip-relative
+    /// blob path matching the entity's [`crate::format::manifest::ManifestPixelRef::pixels`]).
+    BlobBytes { key: String },
+    /// The whole composited canvas — stored as the bundle's
+    /// `(composite_width, composite_height, composite_rgba)`.
     Composite,
 }
 
@@ -84,8 +81,8 @@ pub struct SaveJob {
     #[allow(dead_code)] // held purely to keep textures alive across readbacks
     pinned_textures: Vec<wgpu::Texture>,
     /// Zip-relative blob path → completed bytes. `None` while the
-    /// readback is in flight; populated by `complete_readback` as each
-    /// `LayerPixels` / `MaskPixels` / `SelectionMask` readback lands.
+    /// readback is in flight; populated by `complete_save_readback` as
+    /// each pixel readback lands.
     pending_blobs: HashMap<String, Option<Vec<u8>>>,
     /// Composite readback result. `None` until the `Composite` arm
     /// fires.
@@ -110,7 +107,7 @@ impl DarklyEngine {
             return Err(SaveError::InProgress);
         }
 
-        let manifest = build_manifest(self)?;
+        let (manifest, pixel_blobs) = build_manifest(self);
 
         // Force an offscreen composite so the composite texture is fresh,
         // even when this engine is headless (no surface present has run
@@ -124,64 +121,12 @@ impl DarklyEngine {
         let mut pinned_textures = Vec::new();
         let mut pending_blobs: HashMap<String, Option<Vec<u8>>> = HashMap::new();
 
-        // Walk the manifest's tree + modifiers + selection and queue a
-        // readback per pixel-bearing entry. We walk the *manifest* (not
-        // the live document) so the id mapping inside the manifest stays
-        // authoritative — the readback `key` matches the
-        // `ManifestPixelRef::pixels` path the load path will look up.
-        for node in &manifest.tree.nodes {
-            if let ManifestNode::Raster(r) = node {
-                let live_id = LayerId::from_ffi(r.id);
-                queue_pixel_readback(
-                    self,
-                    live_id,
-                    &r.pixels,
-                    SaveReadbackKind::LayerPixels,
-                    &mut pinned_textures,
-                    &mut pending_blobs,
-                )?;
-            }
-        }
-        for m in &manifest.modifiers {
-            match m {
-                ManifestModifier::Mask(mask) => {
-                    let live_id = LayerId::from_ffi(mask.id);
-                    queue_pixel_readback(
-                        self,
-                        live_id,
-                        &mask.pixels,
-                        SaveReadbackKind::MaskPixels,
-                        &mut pinned_textures,
-                        &mut pending_blobs,
-                    )?;
-                }
-                ManifestModifier::Selection(sel) => {
-                    let live_id = LayerId::from_ffi(sel.id);
-                    queue_pixel_readback(
-                        self,
-                        live_id,
-                        &sel.pixels,
-                        SaveReadbackKind::SelectionMask,
-                        &mut pinned_textures,
-                        &mut pending_blobs,
-                    )?;
-                }
-            }
-        }
-        if let Some(sel) = manifest.selection.as_ref() {
-            // The selection modifier id is stored in
-            // `Document::selection`; the manifest references the same
-            // texture, so we look it up the same way.
-            if let Some(id) = self.doc.selection_id() {
-                queue_pixel_readback(
-                    self,
-                    id,
-                    &sel.pixels,
-                    SaveReadbackKind::SelectionMask,
-                    &mut pinned_textures,
-                    &mut pending_blobs,
-                )?;
-            }
+        // Walk the per-entity pixel-blob declarations the registry-driven
+        // serializers produced and queue one readback per blob. No
+        // kind discrimination: `pixel_data_for` returns the right texture
+        // for rasters, masks, AND the selection.
+        for spec in pixel_blobs {
+            queue_pixel_readback(self, &spec, &mut pinned_textures, &mut pending_blobs);
         }
 
         // Composite readback. We pin the composite texture so a later
@@ -201,7 +146,6 @@ impl DarklyEngine {
                 request,
                 ReadbackContext::SaveDocument {
                     kind: SaveReadbackKind::Composite,
-                    key: String::new(),
                     width: canvas_w,
                     height: canvas_h,
                 },
@@ -263,7 +207,6 @@ impl DarklyEngine {
     pub(crate) fn complete_save_readback(
         &mut self,
         kind: SaveReadbackKind,
-        key: String,
         width: u32,
         height: u32,
         mut pixels: Vec<u8>,
@@ -276,9 +219,7 @@ impl DarklyEngine {
                 pixels.truncate((width * height * 4) as usize);
                 job.composite = Some((width, height, pixels));
             }
-            SaveReadbackKind::LayerPixels
-            | SaveReadbackKind::MaskPixels
-            | SaveReadbackKind::SelectionMask => {
+            SaveReadbackKind::BlobBytes { key } => {
                 if let Some(slot) = job.pending_blobs.get_mut(&key) {
                     *slot = Some(pixels);
                 }
@@ -287,52 +228,58 @@ impl DarklyEngine {
     }
 }
 
-/// Walk the live document and produce a [`Manifest`] capturing every
-/// piece of state that survives save: tree, modifiers, selection,
-/// veils. Synchronous — runs as part of `start_save_document`'s
+/// Walk the live document via the layer-kind / modifier registries and
+/// produce a [`Manifest`] capturing every piece of state that survives
+/// save: tree, modifiers, selection, veils. Also returns the
+/// per-entity pixel-blob declarations the save flow uses to queue
+/// readbacks. Synchronous — runs as part of `start_save_document`'s
 /// prelude.
-fn build_manifest(engine: &DarklyEngine) -> Result<Manifest, SaveError> {
+fn build_manifest(engine: &DarklyEngine) -> (Manifest, Vec<PixelBlobSpec>) {
     let doc = &engine.doc;
-    let mut nodes: Vec<ManifestNode> = Vec::new();
-    let mut modifiers: Vec<ManifestModifier> = Vec::new();
-    let mut selection: Option<ManifestSelection> = None;
+    let mut nodes: Vec<ManifestEntry> = Vec::new();
+    let mut modifiers: Vec<ManifestEntry> = Vec::new();
+    let mut blobs: Vec<PixelBlobSpec> = Vec::new();
 
-    // Walk every entity (slotmap-backed, so iteration is stable within
-    // this snapshot but the order is implementation-defined; we sort by
-    // id below for bit-stable output).
-    for (id, entity) in doc.entities.iter() {
+    let layer_kind_registry = layer_kind::registry();
+    let modifier_registry = modifier::registry();
+
+    for (_id, entity) in doc.entities.iter() {
         match entity {
-            crate::document::Entity::Node(node) => {
-                let manifest_node = build_manifest_node(id, node)?;
-                nodes.push(manifest_node);
+            Entity::Node(node) => {
+                let reg = layer_kind_registry
+                    .get(node.type_id())
+                    .expect("layer kind registration missing for type_id from doc");
+                let serialized = (reg.serialize)(node);
+                nodes.push(ManifestEntry {
+                    id: node.id().to_ffi(),
+                    type_id: reg.type_id.to_string(),
+                    body: serialized.body,
+                });
+                blobs.extend(serialized.pixel_blobs);
             }
-            crate::document::Entity::Modifier(modifier) => {
-                let host = doc.parent_of(id).map(LayerId::to_ffi);
-                let manifest_modifier = build_manifest_modifier(id, modifier, host)?;
-
-                if doc.selection_id() == Some(id) {
-                    // The global selection modifier appears at both
-                    // [`Manifest::modifiers`] (for the entity entry) and
-                    // [`Manifest::selection`] (so the loader can find it
-                    // without scanning).
-                    selection = Some(ManifestSelection {
-                        pixels: pixels_ref_for(modifier, &blob_path_for(id, modifier))?,
-                    });
-                }
-
-                modifiers.push(manifest_modifier);
+            Entity::Modifier(m) => {
+                let reg = modifier_registry
+                    .get(m.type_id())
+                    .expect("modifier registration missing for type_id from doc");
+                let serialized = (reg.serialize)(m);
+                modifiers.push(ManifestEntry {
+                    id: m.id.to_ffi(),
+                    type_id: reg.type_id.to_string(),
+                    body: serialized.body,
+                });
+                blobs.extend(serialized.pixel_blobs);
             }
         }
     }
 
     // Stable order for diffability + reliable id remap during load.
-    nodes.sort_by_key(ManifestNode::id);
-    modifiers.sort_by_key(ManifestModifier::id);
+    nodes.sort_by_key(|e| e.id);
+    modifiers.sort_by_key(|e| e.id);
 
     let veils = build_manifest_veils(engine);
     let requires = requires_from_doc(engine);
 
-    Ok(Manifest {
+    let manifest = Manifest {
         format: FORMAT_TAG.to_string(),
         container_version: CONTAINER_VERSION,
         writer: ManifestWriter::current(),
@@ -343,101 +290,13 @@ fn build_manifest(engine: &DarklyEngine) -> Result<Manifest, SaveError> {
         },
         requires,
         composite: "composite.png".to_string(),
-        tree: ManifestTree {
-            root: doc.root_id().to_ffi(),
-            nodes,
-        },
+        root: doc.root_id().to_ffi(),
+        nodes,
         modifiers,
-        selection,
+        selection_id: doc.selection_id().map(LayerId::to_ffi),
         veils,
-    })
-}
-
-fn build_manifest_node(id: LayerId, node: &LayerNode) -> Result<ManifestNode, SaveError> {
-    match node {
-        LayerNode::Layer(Layer::Raster(r)) => Ok(ManifestNode::Raster(ManifestRasterNode {
-            id: id.to_ffi(),
-            name: r.common.name.clone(),
-            visible: r.common.visible,
-            locked: r.common.locked,
-            opacity: r.blend.opacity,
-            blend_mode: r.blend.blend_mode.type_id.to_string(),
-            pixels: ManifestPixelRef {
-                format: format_slug(r.pixels.format)?,
-                pixels: format!("layers/{}.pixels", id.to_ffi()),
-                bounds: r.pixels.bounds,
-            },
-            modifiers: r.modifiers.iter().map(|mid| mid.to_ffi()).collect(),
-        })),
-        LayerNode::Group(g) => Ok(ManifestNode::Group(ManifestGroupNode {
-            id: id.to_ffi(),
-            name: g.common.name.clone(),
-            visible: g.common.visible,
-            locked: g.common.locked,
-            opacity: g.blend.opacity,
-            blend_mode: g.blend.blend_mode.type_id.to_string(),
-            passthrough: g.passthrough,
-            collapsed: g.collapsed,
-            children: g.children.iter().map(|cid| cid.to_ffi()).collect(),
-            modifiers: g.modifiers.iter().map(|mid| mid.to_ffi()).collect(),
-        })),
-    }
-}
-
-fn build_manifest_modifier(
-    id: LayerId,
-    modifier: &Modifier,
-    host: Option<u64>,
-) -> Result<ManifestModifier, SaveError> {
-    match &modifier.kind {
-        ModifierKind::Mask(m) => Ok(ManifestModifier::Mask(ManifestMaskModifier {
-            id: id.to_ffi(),
-            host: host.unwrap_or(0),
-            name: modifier.common.name.clone(),
-            visible: modifier.common.visible,
-            locked: modifier.common.locked,
-            pixels: ManifestPixelRef {
-                format: format_slug(m.pixels.format)?,
-                pixels: format!("layers/{}.mask.pixels", id.to_ffi()),
-                bounds: m.pixels.bounds,
-            },
-        })),
-        ModifierKind::Selection(s) => Ok(ManifestModifier::Selection(ManifestSelectionModifier {
-            id: id.to_ffi(),
-            name: modifier.common.name.clone(),
-            visible: modifier.common.visible,
-            locked: modifier.common.locked,
-            pixels: ManifestPixelRef {
-                format: format_slug(s.pixels.format)?,
-                pixels: "selection.pixels".to_string(),
-                bounds: s.pixels.bounds,
-            },
-        })),
-    }
-}
-
-fn blob_path_for(id: LayerId, modifier: &Modifier) -> String {
-    match &modifier.kind {
-        ModifierKind::Mask(_) => format!("layers/{}.mask.pixels", id.to_ffi()),
-        ModifierKind::Selection(_) => "selection.pixels".to_string(),
-    }
-}
-
-fn pixels_ref_for(modifier: &Modifier, blob_path: &str) -> Result<ManifestPixelRef, SaveError> {
-    let buf = modifier
-        .pixels()
-        .expect("modifier pixels() should be Some for save");
-    Ok(ManifestPixelRef {
-        format: format_slug(buf.format)?,
-        pixels: blob_path.to_string(),
-        bounds: buf.bounds,
-    })
-}
-
-fn format_slug(format: wgpu::TextureFormat) -> Result<String, SaveError> {
-    texture_format_to_str(format)
-        .map(str::to_string)
-        .ok_or(SaveError::UnsupportedTextureFormat(format))
+    };
+    (manifest, blobs)
 }
 
 fn build_manifest_veils(engine: &DarklyEngine) -> Vec<ManifestVeil> {
@@ -471,11 +330,11 @@ pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
 
     for entity in engine.doc.entities.values() {
         match entity {
-            crate::document::Entity::Node(node) => {
+            Entity::Node(node) => {
                 layer_kinds.insert(node.type_id().to_string());
                 blend_modes.insert(node.blend().blend_mode.type_id.to_string());
             }
-            crate::document::Entity::Modifier(m) => {
+            Entity::Modifier(m) => {
                 modifier_kinds.insert(m.type_id().to_string());
             }
         }
@@ -512,47 +371,24 @@ pub fn requires_from_doc(engine: &DarklyEngine) -> ManifestRequires {
 /// has nothing to save.
 fn queue_pixel_readback(
     engine: &mut DarklyEngine,
-    id: LayerId,
-    pixels: &ManifestPixelRef,
-    kind: SaveReadbackKind,
+    spec: &PixelBlobSpec,
     pinned: &mut Vec<wgpu::Texture>,
     blobs: &mut HashMap<String, Option<Vec<u8>>>,
-) -> Result<(), SaveError> {
-    let key = pixels.pixels.clone();
-
-    // Mask and layer textures resolve through the unified node-texture
-    // pool. Selection lives in its own SelectionState — handle below.
-    let (texture, format, width, height) = match kind {
-        SaveReadbackKind::SelectionMask => match engine.compositor.selection_state() {
-            Some(sel) => {
-                let frame = sel.canvas_frame();
-                (
-                    frame.texture.clone(),
-                    wgpu::TextureFormat::R8Unorm,
-                    frame.canvas_extent.width,
-                    frame.canvas_extent.height,
-                )
-            }
-            None => return Ok(()),
-        },
-        SaveReadbackKind::LayerPixels | SaveReadbackKind::MaskPixels => {
-            match engine.compositor.node_texture(id) {
-                Some(t) => {
-                    let ext = t.layer_extent();
-                    (t.texture().clone(), t.format(), ext.width, ext.height)
-                }
-                None => return Ok(()),
-            }
-        }
-        SaveReadbackKind::Composite => unreachable!("composite queued via dedicated path"),
+) {
+    let Some(data) = engine.compositor.pixel_data_for(spec.source_node_id) else {
+        return;
     };
+
+    let texture = data.texture.clone();
+    let format = data.format;
+    let width = data.width;
+    let height = data.height;
+    let key = spec.blob_key.clone();
 
     pinned.push(texture.clone());
     blobs.insert(key.clone(), None);
 
     engine.gpu.encode("save-pixel-readback", |encoder| {
-        // Readback covers the texture's full layer-local extent — `width`
-        // and `height` came from the texture's own dimensions above.
         let request = readback::request_readback(
             &engine.gpu.device,
             encoder,
@@ -563,15 +399,12 @@ fn queue_pixel_readback(
         engine.readbacks.submit(
             request,
             ReadbackContext::SaveDocument {
-                kind,
-                key,
+                kind: SaveReadbackKind::BlobBytes { key },
                 width,
                 height,
             },
         );
     });
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -708,10 +541,9 @@ mod tests {
         let manifest: Manifest = serde_json::from_slice(&bundle.manifest_json).unwrap();
 
         let raster_count = manifest
-            .tree
             .nodes
             .iter()
-            .filter(|n| matches!(n, ManifestNode::Raster(_)))
+            .filter(|e| e.type_id == "raster")
             .count();
         assert_eq!(
             raster_count, 1,

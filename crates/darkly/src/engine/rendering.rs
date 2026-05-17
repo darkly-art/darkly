@@ -255,11 +255,10 @@ impl DarklyEngine {
             }
             ReadbackContext::SaveDocument {
                 kind,
-                key,
                 width,
                 height,
             } => {
-                self.complete_save_readback(kind, key, width, height, pixels);
+                self.complete_save_readback(kind, width, height, pixels);
             }
             ReadbackContext::SelectionReadback => {
                 self.update_selection_overlay_from_readback(pixels);

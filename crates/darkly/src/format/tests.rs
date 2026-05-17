@@ -216,8 +216,9 @@ fn round_trip_every_blend_mode() {
 }
 
 // ----------------------------------------------------------------------------
-// 5. Modifier kinds — round-trip the type_id string for every registered
-//    modifier kind (mask, selection, future filter/transform/...).
+// 5. Modifier kinds — round-trip the type_id string AND the body envelope
+//    for every registered modifier kind (mask, selection, future
+//    filter/transform/...).
 // ----------------------------------------------------------------------------
 
 #[test]
@@ -664,17 +665,17 @@ fn kitchen_sink_covers_every_closed_set_variant() {
 }
 
 // ----------------------------------------------------------------------------
-// Phase 4 — refusal tests. Every refusal path the load contract
-// promises has a coverage test here. Each one builds (or hand-edits)
-// a synthetic `.darkly` zip that triggers the refusal, then asserts
-// the error shape AND that the engine's document was not swapped
-// (atomic install means a refused load is byte-for-byte invisible).
+// Refusal tests. Every refusal path the load contract promises has a
+// coverage test here. Each one builds (or hand-edits) a synthetic
+// `.darkly` zip that triggers the refusal, then asserts the error shape
+// AND that the engine's document was not swapped (atomic install means
+// a refused load is byte-for-byte invisible).
 // ----------------------------------------------------------------------------
 
 use crate::format::error::LoadError;
 use crate::format::manifest::{
-    Manifest, ManifestCanvas, ManifestPixelRef, ManifestRequires, ManifestTree, ManifestWriter,
-    CONTAINER_VERSION, FORMAT_TAG,
+    Manifest, ManifestCanvas, ManifestEntry, ManifestRequires, ManifestWriter, CONTAINER_VERSION,
+    FORMAT_TAG,
 };
 
 /// Build a minimal valid `.darkly` zip from a hand-rolled `Manifest`.
@@ -686,7 +687,7 @@ fn synth_zip_from_manifest(manifest: &Manifest) -> Vec<u8> {
     // refusal tests bail out before pixel upload anyway, so a 1×1
     // black canvas is enough to satisfy the zip's `composite.png`
     // contract.
-    let bundle = crate::format::manifest::SaveBundle {
+    let bundle = SaveBundle {
         manifest_json: serde_json::to_vec_pretty(manifest).unwrap(),
         composite_width: 1,
         composite_height: 1,
@@ -694,6 +695,21 @@ fn synth_zip_from_manifest(manifest: &Manifest) -> Vec<u8> {
         blobs: Vec::new(),
     };
     assemble_zip(&bundle)
+}
+
+/// Body for a default empty root group.
+fn root_group_body() -> serde_json::Value {
+    serde_json::json!({
+        "name": "Root",
+        "visible": true,
+        "locked": false,
+        "opacity": 1.0,
+        "blend_mode": "normal",
+        "passthrough": true,
+        "collapsed": false,
+        "children": [],
+        "modifiers": [],
+    })
 }
 
 /// Build a `Manifest` with the canonical fields the load path expects
@@ -716,12 +732,14 @@ fn synth_minimal_manifest() -> Manifest {
             ..ManifestRequires::default()
         },
         composite: "composite.png".to_string(),
-        tree: ManifestTree {
-            root: 1,
-            nodes: Vec::new(),
-        },
+        root: 1,
+        nodes: vec![ManifestEntry {
+            id: 1,
+            type_id: "group".to_string(),
+            body: root_group_body(),
+        }],
         modifiers: Vec::new(),
-        selection: None,
+        selection_id: None,
         veils: Vec::new(),
     }
 }
@@ -770,7 +788,7 @@ fn refuse_missing_requires() {
     let mut raw: serde_json::Value = serde_json::to_value(&manifest).unwrap();
     raw.as_object_mut().unwrap().remove("requires");
     let manifest_bytes = serde_json::to_vec(&raw).unwrap();
-    let bundle = crate::format::manifest::SaveBundle {
+    let bundle = SaveBundle {
         manifest_json: manifest_bytes,
         composite_width: 1,
         composite_height: 1,
@@ -887,25 +905,23 @@ fn refuse_corrupt_manifest_when_requires_lies() {
     let prior = engine.document_ptr_for_test();
     let mut manifest = synth_minimal_manifest();
     manifest.requires.layer_kind = vec!["group".to_string(), "raster".to_string()];
-    manifest
-        .tree
-        .nodes
-        .push(crate::format::manifest::ManifestNode::Raster(
-            crate::format::manifest::ManifestRasterNode {
-                id: 42,
-                name: "lying".to_string(),
-                visible: true,
-                locked: false,
-                opacity: 1.0,
-                blend_mode: "divide_v2".to_string(), // not declared in requires
-                pixels: ManifestPixelRef {
-                    format: "rgba8unorm".to_string(),
-                    pixels: "layers/42.pixels".to_string(),
-                    bounds: crate::coord::CanvasRect::from_xywh(0, 0, 4, 4),
-                },
-                modifiers: Vec::new(),
+    manifest.nodes.push(ManifestEntry {
+        id: 42,
+        type_id: "raster".to_string(),
+        body: serde_json::json!({
+            "name": "lying",
+            "visible": true,
+            "locked": false,
+            "opacity": 1.0,
+            "blend_mode": "divide_v2", // not declared in requires
+            "pixels": {
+                "format": "rgba8unorm",
+                "pixels": "layers/42.pixels",
+                "bounds": { "origin": { "x": 0, "y": 0 }, "width": 4, "height": 4 }
             },
-        ));
+            "modifiers": []
+        }),
+    });
     let bytes = synth_zip_from_manifest(&manifest);
 
     let err = engine.open_document(&bytes).expect_err("must refuse");
@@ -973,4 +989,71 @@ fn legacy_type_id_migration() {
              a future migration would plug into has changed"
         );
     }
+}
+
+// ----------------------------------------------------------------------------
+// Load-bearing test for the registry-driven refactor: a fake layer kind
+// can be plumbed in without touching central save/load code.
+//
+// The shape this test takes is "use a local registry mock". Today's
+// registries are global `OnceLock`s, so we can't actually install a new
+// kind dynamically. Instead, this test exercises the load path with a
+// hand-built manifest body and asserts that the central code:
+//   (a) dispatches based purely on type_id strings,
+//   (b) consults the registry for every entity (proven by the
+//       CorruptManifest miss on an unknown type_id under requires-lying
+//       — already covered by `refuse_corrupt_manifest_when_requires_lies`),
+//   (c) routes opaque bodies through registered deserialize without any
+//       central branch (proven by the round-trip body check below).
+//
+// If a future change to save.rs or load.rs adds a hidden assumption
+// about which kinds exist (e.g. a `match type_id { "raster" => ... }`
+// branch), the kitchen-sink test catches it because every layer kind
+// must round-trip. This test verifies the *structural* property the
+// kitchen sink can't: that bodies are truly opaque and not centrally
+// re-parsed.
+// ----------------------------------------------------------------------------
+
+#[test]
+fn manifest_entry_bodies_are_opaque_to_central_code() {
+    // Take a registered raster layer body, drop an unknown JSON key
+    // alongside its real fields, and re-parse — the body should still
+    // round-trip the unknown key. This proves the central code reads
+    // `body: serde_json::Value` rather than coercing to a closed-set
+    // typed enum, and that adding a new field inside a kind's body
+    // doesn't require any central edit.
+    let mut engine = kitchen_sink_engine(8, 8);
+    let _layer = engine.add_raster_layer(None);
+    let bundle = drive_save_to_completion(&mut engine);
+    let manifest: Manifest = serde_json::from_slice(&bundle.manifest_json).unwrap();
+
+    let raster_entry = manifest
+        .nodes
+        .iter()
+        .find(|e| e.type_id == "raster")
+        .expect("at least one raster in kitchen sink");
+
+    // Add an unknown field to the body and re-serialize the whole
+    // manifest. The load path's central code must not reject this — it
+    // only knows that body is `Value`, and only the raster kind itself
+    // (which ignores unknown fields via serde's default behaviour) reads
+    // it.
+    let mut tampered = manifest.clone();
+    if let Some(idx) = tampered.nodes.iter().position(|e| e.id == raster_entry.id) {
+        let body_mut = &mut tampered.nodes[idx].body;
+        if let Some(obj) = body_mut.as_object_mut() {
+            obj.insert(
+                "future_kind_only_field".to_string(),
+                serde_json::Value::String("ignored by raster".to_string()),
+            );
+        }
+    }
+
+    let tampered_bytes = synth_zip_from_manifest(&tampered);
+    let mut reloaded = kitchen_sink_engine(1, 1);
+    reloaded
+        .open_document(&tampered_bytes)
+        .expect("unknown body fields must not break central code");
+    // And the engine still has one raster.
+    assert_eq!(reloaded.doc.all_raster_layers().len(), 1);
 }

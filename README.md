@@ -20,29 +20,126 @@
 **Try the demo [here](https://demo.darkly.art).**
 
 > [!IMPORTANT]
-> **Darkly is in beta**! Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
+> **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
 ## Kickstarter
 
 We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most, and help us rescue our friends and colleagues from the iron grip of Adobe!
 
-## Standard Paint Features
+## Feature Roadmap
 
-### Brush Engine
+These are features that are valuable or essential to digital art workflows. They're subject to change, but we'll keep them up-to-date so everyone can see the progress.
 
-- Node-based and infinitely customizable
-- Smooth and satisfying stroke stabilization
-- Lots of brush presets:
-    - Pencils, Charcoal
-    - Watercolor
-    - Oils
-    - Liquify
+### Painting & brush engine
+- [x] Brush tool, eraser, fill (flood), gradient (linear), color picker (eyedropper)
+- [x] 13 built‑in brushes; node‑graph brush editor with live preview
+- [x] 23 brush nodes (pen input, stamps, curves, scatter, watercolor, liquify, texture overlay, …)
+- [x] Pressure / tilt / spacing / distance / angle inputs
+- [x] Laplacian stabilizer
+- [ ] Smudge / blend / blur tool
+- [ ] Clone / stamp tool
+- [ ] Dodge / burn
 
-## Unique Darkly Features
+### Color picking & swatches
+- [x] HSV picker, foreground/background swatches
+- [x] Eyedropper (async GPU readback)
+- [ ] Recent colors
+- [ ] Saved swatches / palettes
+- [ ] Palette file import (.aco, .gpl)
+- [ ] Color harmonies
 
-### Veils
+### Layers
+- [x] Raster layers + groups, drag‑reorder, visibility, lock, opacity, name, collapse, passthrough
+- [x] 16 blend modes (Normal → Luminosity, Krita‑compatible)
+- [x] Layer masks (one per host)
+- [ ] Duplicate layer / group
+- [ ] Merge down
+- [ ] Flatten image
+- [ ] Clipping mask
+- [ ] Adjustment layers
+- [ ] Group blend mode / opacity (groups don't carry BlendProps yet)
 
-### Voids
+### Selection
+- [x] Rect, ellipse, lasso, magic wand
+- [ ] Polygon
+- [x] Replace / Add / Subtract / Intersect modes
+- [ ] Feather + antialias
+- [ ] Invert (boolean op exists)
+- [ ] Select All / Deselect / Invert as menu+hotkey actions
+- [ ] Grow / Shrink / Border / Smooth as discrete commands
+- [ ] Stroke selection (paint along marching ants)
+- [ ] Save / load selection to channel
+
+### Color adjustments
+- [ ] Invert colors
+- [ ] Hue / Saturation / Lightness
+- [ ] Brightness / Contrast
+- [ ] Levels
+- [ ] Curves
+- [ ] Color balance
+- [ ] Channel mixer
+- [ ] Desaturate
+- [ ] Threshold
+- [ ] Posterize
+- [ ] Gradient map
+
+### Transform & canvas
+- [x] Affine transform tool (translate / scale / rotate via floating content)
+- [x] Engine‑level canvas resize
+- [ ] Crop tool / crop to selection
+- [ ] Trim to content / autocrop
+- [ ] Flip canvas H / V
+- [ ] Rotate canvas 90° CW / CCW / 180°
+- [ ] Flip layer / selection H / V
+- [ ] Perspective, skew, free distort
+- [ ] Warp / mesh transform
+
+### View
+- [x] Pan / zoom / rotate view
+- [ ] Fit to screen
+- [ ] 100% / zoom presets
+- [ ] Pixel grid toggle
+- [ ] Symmetry / mirror painting (X, Y, radial)
+- [ ] Reference image panel
+- [ ] Rulers, guides, snapping
+- [ ] Navigator / overview window
+- [ ] Palette Popup
+
+### File I/O
+- [x] Clipboard copy / cut / paste (PNG via browser clipboard)
+- [x] Brush export / import (binary bundle)
+- [ ] Export to PNG / JPEG / WebP file
+- [ ] Open image from file
+- [ ] Save / Open native `.darkly` document
+- [ ] PSD / XCF import
+- [ ] SVG export
+- [ ] Recent files
+
+### Undo & history
+- [x] Undo / redo (configurable depth, defaults 100)
+- [x] Coalesced property edits, GPU region snapshots, compound actions
+- [ ] History panel UI
+- [ ] Branched history
+
+### Brush settings & config
+- [x] Config schema with 8 sections, typed widgets, hotkey capture
+- [x] Krita / Photoshop / GIMP hotkey presets
+- [x] Settings modal, theme system
+- [ ] Per‑brush preset save/load UI
+- [ ] Brush size / hardness sliders in main UI
+- [ ] Brush dynamics / stabilization settings panel
+
+### Text & vector
+- [ ] Text tool / text layers
+- [ ] Vector shapes
+- [ ] Bézier paths
+
+### Misc
+- [x] Hotkey system + searchable cheatsheet (80+ rebindable actions)
+- [x] Floating layers (transient paste / transform)
+- [ ] Autosave + crash recovery
+- [ ] Animation timeline / onion skin
+- [ ] File browser
 
 ## Getting started
 
@@ -73,45 +170,13 @@ chromium --enable-features=Vulkan --enable-unsafe-webgpu
 
 You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Graphics Feature Status. On macOS and Windows this is generally not needed (Metal and D3D12 are used by default).
 
-## Website & docs
+## Use of AI
 
-The `website/` workspace contains the splash page and markdown docs (Astro + Starlight). It shares design tokens with the frontend via the `@darkly/styles` workspace package, so one edit in `shared/styles/` propagates to both surfaces.
+While AI has been leveraged heavily for this codebase, careless vibe coding and AI slop is **strictly forbidden**.
 
-```sh
-# Dev server with hot reload (http://localhost:4321)
-npm --prefix website run dev
+I (TheTechromancer) learned to code long before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The danger of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must understand how it works and its implications for the rest of the codebase.
 
-# Production build - also builds the frontend and mounts it at /demo/
-npm --prefix website run build
-
-# Preview the built site locally
-npm --prefix website run preview
-
-# Site-only build (skip the frontend WASM rebuild)
-npm --prefix website run build:site-only
-```
-
-Routes:
-
-- `/` - splash page (`website/src/pages/index.astro`)
-- `/guides/*` - docs (`website/src/content/docs/guides/`)
-- `/demo/` - the live WebGPU app, populated by `npm run build`
-
-Adding a doc page: drop a `.md` file under `website/src/content/docs/guides/` - it's auto-picked up by the sidebar.
-
-## Adding veils
-
-Darkly uses auto-discovery: drop a `.rs` file in `crates/darkly/src/gpu/veils/` and export a `pub fn register()`. The build script generates `mod.rs` automatically. No other files need to be touched.
-
-See `veils/pixelate.rs` for the pattern. The same auto-discovery pattern applies to `tools/`, `brush/nodes/`, `brush/stabilizers/`, `config/sections/`, and `config/presets/` - see [crates/darkly/build.rs](crates/darkly/build.rs).
-
-## License
-
-Darkly is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later). You can use, fork, modify, and self-host Darkly freely. If you distribute it or run a modified version as a network service, you must make your source available under the AGPL.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup and conventions.
+Great care is being taken to keep Darkly architecturally lean and clean. This means enforcing modularity, vigilance against duplicate/dead code, and a *shit ton* of automated tests, including a regression test for every bug. See [AGENTS.md](AGENTS.md) to see how we avoid AI slop.
 
 ## Acknowledgments
 
