@@ -3,6 +3,7 @@
     import RightSidebar from './ui/RightSidebar.svelte';
     import ToolOptionsBar from './ui/ToolOptionsBar.svelte';
     import Toast from './ui/Toast.svelte';
+    import LoadErrorToast from './ui/LoadErrorToast.svelte';
     import PresetPicker from './ui/PresetPicker.svelte';
     import SettingsModal from './ui/settings/SettingsModal.svelte';
     import ExportImageModal from './ui/ExportImageModal.svelte';
@@ -47,6 +48,7 @@
     <RightSidebar />
 </div>
 <Toast />
+<LoadErrorToast />
 <PresetPicker />
 <SettingsModal />
 <ExportImageModal />

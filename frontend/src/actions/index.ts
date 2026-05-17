@@ -3,12 +3,16 @@ import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
 import { exportImage } from '../state/exportImage.svelte';
+import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { screenToCanvas } from '../canvas/coordinates';
+import { pickOpenFile } from '../storage/fileHandle';
+import { saveDocument } from '../storage/saveDocument';
+import { shell } from '../multi_tab/shell.svelte';
 
 /** Hidden `<input type="file">` mounted by `App.svelte`. The `open-image`
  *  action triggers it; the change handler routes the file through
@@ -18,6 +22,49 @@ let openImageInputEl: HTMLInputElement | null = null;
 
 export function setOpenImageInput(el: HTMLInputElement | null) {
     openImageInputEl = el;
+}
+
+/** Open a `.darkly` document in a new tab. Picks the file via the FS
+ *  Access API (so the returned handle can be cached for subsequent
+ *  Ctrl+S writes) or the hidden-input fallback for Firefox. On
+ *  load-refusal, the structured error payload from
+ *  `LoadError::to_json()` populates the `LoadErrorToast` banner and
+ *  the failed tab is rolled back so the user is left with their
+ *  previous focus.
+ *
+ *  Exported so the hidden file input in `App.svelte` can route a
+ *  drag-dropped `.darkly` through the same code path. */
+export async function openDocumentFlow(): Promise<void> {
+    const picked = await pickOpenFile();
+    if (!picked) return;
+
+    // Per the plan: opens land in a new tab so the previously-active
+    // doc + its undo stack are untouched. Tab name reflects the file
+    // name (the engine's `set_document_name` is overwritten by the
+    // loaded manifest below; the shell's pendingName is just the
+    // initial display before handle bootstrap finishes).
+    const tabName = picked.name.replace(/\.darkly$/i, '') || 'Untitled';
+    const inst = shell.open(tabName);
+    inst.fileHandle = picked.handle;
+
+    inst.onHandleReady = (handle) => {
+        try {
+            handle.open_document(picked.bytes);
+            // Tab strip reads through `handle.document_name()` (which
+            // the loader populated from `manifest.name`), but the
+            // shell's `nameVersion` doesn't bump on its own — nudge
+            // it so the strip re-derives.
+            shell.setName(inst.id, handle.document_name());
+            app.refreshLayerTree();
+            app.refreshVeilList();
+            app.requestFrame();
+        } catch (e) {
+            loadError.show(parseLoadErrorMessage(e));
+            // Roll back the failed tab so the user is left with the
+            // previously-focused doc.
+            shell.close(inst.id);
+        }
+    };
 }
 
 /** Decode an image file via the browser's native codecs and paste it as
@@ -300,7 +347,41 @@ export function registerActions() {
         },
     });
 
-    // -- File I/O (image only — `.darkly` save/open lands in a later phase) --
+    // -- File I/O --
+    actions.register({
+        id: 'saveDocument',
+        displayName: 'Save',
+        category: 'file',
+        description:
+            'Save the current document as a `.darkly` file. ' +
+            'Re-saves to the same file after the first Save As; otherwise prompts.',
+        defaultHotkey: '$mod+KeyS',
+        handler: () => {
+            if (!app.handle) return;
+            void saveDocument({ forceAs: false });
+        },
+    });
+    actions.register({
+        id: 'saveDocumentAs',
+        displayName: 'Save As',
+        category: 'file',
+        description: 'Save the current document to a new `.darkly` file.',
+        defaultHotkey: '$mod+Shift+KeyS',
+        handler: () => {
+            if (!app.handle) return;
+            void saveDocument({ forceAs: true });
+        },
+    });
+    actions.register({
+        id: 'openDocument',
+        displayName: 'Open',
+        category: 'file',
+        description: 'Open a `.darkly` document in a new tab.',
+        defaultHotkey: '$mod+Shift+KeyO',
+        handler: () => {
+            void openDocumentFlow();
+        },
+    });
     actions.register({
         id: 'exportImage',
         displayName: 'Export Image…',

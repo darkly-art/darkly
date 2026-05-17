@@ -1,5 +1,6 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
+import type { SaveBundle } from '../storage/saveDocument';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -34,6 +35,18 @@ export class DarklyInstance {
      *  tab strip would race the rename. Cleared by `createInstance`
      *  once it's been pushed through `set_document_name`. */
     pendingName: string | null = null;
+
+    /** Per-tab cached `.darkly` file handle from the FS Access API.
+     *  Set after a successful Save As or after opening a file via
+     *  `showOpenFilePicker`; subsequent Ctrl+S writes back to the same
+     *  file with no picker prompt. Session-only — handles are not
+     *  persisted across page reloads in v1 (see plan's "Out of scope"). */
+    fileHandle = $state<FileSystemFileHandle | null>(null);
+
+    /** One-shot hook fired by `createInstance` once `handle` is set.
+     *  Used by the Open Document flow to load a `.darkly` payload
+     *  into a freshly-opened tab. Cleared after firing. */
+    onHandleReady: ((handle: DarklyHandle) => void) | null = null;
 
     // Colors
     foreground = $state<Color>({ r: 0, g: 0, b: 0, a: 255 });
@@ -248,6 +261,19 @@ export class DarklyInstance {
         this.requestFrame();
     }
 
+    // --- Async save result callback ---
+
+    private _saveCallback: ((bundle: SaveBundle) => void) | null = null;
+
+    /** Register a one-shot callback for when the async `.darkly` save
+     *  readback completes (manifest JSON + composite RGBA + per-blob
+     *  bytes arrive together). The caller PNG-encodes the composite +
+     *  thumbnail and assembles the zip; see `storage/saveDocument.ts`. */
+    onSaveResult(cb: (bundle: SaveBundle) => void) {
+        this._saveCallback = cb;
+        this.requestFrame();
+    }
+
     // --- Demand-driven rendering ---
 
     private _framePending = false;
@@ -310,11 +336,25 @@ export class DarklyInstance {
                 }
             }
 
+            // Check for completed async `.darkly` save readbacks.
+            if (this._saveCallback) {
+                const bundle = this.handle.poll_save_result();
+                if (bundle) {
+                    const cb = this._saveCallback;
+                    this._saveCallback = null;
+                    cb(bundle);
+                }
+            }
+
             // Continue animation loop only when no UI interaction is
             // monopolizing the main thread.  One-shot renders (tool
             // actions, resize, etc.) always go through — only the
             // self-scheduling continuous loop is suppressed.
-            const shouldContinue = needsMore || this._copyCallback || this._exportCallback;
+            const shouldContinue =
+                needsMore ||
+                this._copyCallback ||
+                this._exportCallback ||
+                this._saveCallback;
             if (shouldContinue && this._interactionCount === 0) {
                 this.requestFrame();
             }

@@ -70,10 +70,12 @@
         canvas.height = Math.round(rect.height * dpr);
 
         try {
-            // Track whether we created the handle here (so we know to seed a
-            // default background layer). When the multi-tab shell pre-builds
-            // the handle, the seed has already happened — skip it.
-            const freshlyCreated = !providedInstance || !providedInstance.handle;
+            // Whether we should seed a default background layer. Fresh
+            // tabs need one; tabs whose handle was pre-built (e.g. the
+            // Open Document flow that loads a `.darkly` into a fresh
+            // instance) already have the loaded doc's layers and must
+            // not get an extra bg layer on top.
+            const seedBackground = !providedInstance || !providedInstance.handle;
 
             let handle;
             if (providedInstance && providedInstance.handle) {
@@ -89,7 +91,7 @@
                 await ensureProcessInit();
                 const docW = config.get('canvas.width') as number;
                 const docH = config.get('canvas.height') as number;
-                await createInstance(canvas, docW, docH, providedInstance);
+                await createInstance(canvas, docW, docH, providedInstance, { seedBackground });
                 handle = providedInstance.handle!;
             } else {
                 // Single-instance path: existing initEditor creates an
@@ -112,12 +114,6 @@
             // Push the initial UI theme colors so preset-thumbnail bakes
             // match the user's current theme from frame one.
             theme.pushToWasm();
-
-            if (freshlyCreated) {
-                const bg = handle.add_raster_layer(-1);
-                handle.fill_background(bg);
-                inst.selectLayer(bg);
-            }
 
             // Observe element resizes to keep GPU surface in sync
             const ro = new ResizeObserver(() => syncCanvasSize());

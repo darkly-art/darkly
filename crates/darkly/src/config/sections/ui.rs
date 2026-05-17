@@ -3,14 +3,13 @@ use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHi
 const THEME_OPTIONS: &[(&str, &str)] = &[
     ("dark", "Dark"),
     ("light", "Light"),
-    ("system", "Follow system"),
 ];
 
 const PREFS: &[Pref] = &[
     Pref {
         key: "ui.theme",
         display_name: "Theme",
-        description: Some("Dark, light, or follow the operating system."),
+        description: Some("Dark or light."),
         kind: PrefKind::Enum {
             options: THEME_OPTIONS,
         },

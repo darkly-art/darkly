@@ -31,12 +31,29 @@ export async function ensureProcessInit(): Promise<void> {
     processInitialized = true;
 }
 
+/** Options for {@link createInstance}. */
+export interface CreateInstanceOptions {
+    /** Seed a fresh document with a single white background layer (the
+     *  default for "new tab" flows). Done **before** the handle is
+     *  published to `instance.handle`, so any `$effect` that watches
+     *  `app.handle` sees a fully-bootstrapped engine — no
+     *  refresh-after-mutation race for consumers like `LayerPanel`. */
+    seedBackground?: boolean;
+}
+
 /** Create + initialise a `DarklyInstance` bound to `canvas`. Constructs a
  *  fresh `DarklyHandle` via the shared `DarklySession`, populates registry
- *  display-name maps, and runs idempotent action/hotkey registration. The
- *  caller may pass a pre-allocated instance (the multi-tab shell does this
- *  so the instance shows up in the tab strip before its async handle is
- *  ready); otherwise a new one is constructed.
+ *  display-name maps, optionally seeds the default background layer, and
+ *  runs idempotent action/hotkey registration. The caller may pass a
+ *  pre-allocated instance (the multi-tab shell does this so the instance
+ *  shows up in the tab strip before its async handle is ready);
+ *  otherwise a new one is constructed.
+ *
+ *  **Publish order matters**: `instance.handle = handle` is the *last*
+ *  thing that happens before `onHandleReady` fires. Every bootstrap
+ *  mutation — registry load, name application, optional bg seed —
+ *  completes first, so reactive consumers that subscribe on handle
+ *  becoming non-null read a fully-initialised engine.
  *
  *  Does NOT touch `setActiveInstance` — the caller decides focus. */
 export async function createInstance(
@@ -44,6 +61,7 @@ export async function createInstance(
     docWidth: number,
     docHeight: number,
     instance: DarklyInstance = new DarklyInstance(),
+    options: CreateInstanceOptions = {},
 ): Promise<DarklyInstance> {
     await ensureProcessInit();
 
@@ -60,8 +78,6 @@ export async function createInstance(
     registerHotkeys();
     rebuildClickIndex();
 
-    instance.canvasEl = canvas;
-    instance.handle = handle;
     // Apply the shell's "Untitled N" suggestion if one was stashed
     // before the async handle init. The engine's own default is
     // plain "Untitled" — without this the first tab-strip read would
@@ -69,6 +85,29 @@ export async function createInstance(
     if (instance.pendingName !== null) {
         handle.set_document_name(instance.pendingName);
         instance.pendingName = null;
+    }
+
+    // Seed the default background layer for fresh docs. Done before
+    // publishing the handle so any reactive consumer that fires on
+    // `app.handle` becoming truthy reads a doc that already has its
+    // bg layer — eliminates the "refresh after mutation" race the
+    // LayerPanel would otherwise hit.
+    if (options.seedBackground) {
+        const bg = handle.add_raster_layer(-1);
+        handle.fill_background(bg);
+        instance.activeLayerId = bg;
+    }
+
+    instance.canvasEl = canvas;
+    instance.handle = handle;
+
+    // Fire the one-shot `onHandleReady` hook (used by the Open
+    // Document flow to load a `.darkly` payload into a freshly-opened
+    // tab once its async handle bootstrap completes).
+    if (instance.onHandleReady) {
+        const cb = instance.onHandleReady;
+        instance.onHandleReady = null;
+        cb(handle);
     }
     return instance;
 }
@@ -86,7 +125,9 @@ export async function initEditor(canvas: HTMLCanvasElement): Promise<DarklyHandl
 
     const docWidth = config.get('canvas.width') as number;
     const docHeight = config.get('canvas.height') as number;
-    const instance = await createInstance(canvas, docWidth, docHeight);
+    const instance = await createInstance(canvas, docWidth, docHeight, new DarklyInstance(), {
+        seedBackground: true,
+    });
     setActiveInstance(instance);
     theme.pushToWasm();
     return instance.handle!;

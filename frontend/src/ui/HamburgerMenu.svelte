@@ -4,6 +4,7 @@
     import { config, formatHotkey } from '../config/store.svelte';
     import { openCheatsheet } from './cheatsheet';
     import { actions } from '../actions/registry';
+    import { canSave } from '../storage/fileHandle';
 
     let open = $state(false);
 
@@ -33,6 +34,13 @@
     const settingsHotkey = $derived(formatHotkey(config.get('hotkeys.openSettings') as string | undefined));
     const exportHotkey = $derived(formatHotkey(config.get('hotkeys.exportImage') as string | undefined));
     const openImageHotkey = $derived(formatHotkey(config.get('hotkeys.openImage') as string | undefined));
+    const saveHotkey = $derived(formatHotkey(config.get('hotkeys.saveDocument') as string | undefined));
+    const saveAsHotkey = $derived(formatHotkey(config.get('hotkeys.saveDocumentAs') as string | undefined));
+    const openHotkey = $derived(formatHotkey(config.get('hotkeys.openDocument') as string | undefined));
+
+    // Tooltip explaining why Save/Save As are disabled on Firefox.
+    const noSaveTooltip =
+        "Filesystem save isn't supported in this browser — try Chrome, Edge, or Safari.";
 </script>
 
 <svelte:window onclick={onWindowClick} />
@@ -44,20 +52,49 @@
 
     {#if open}
         <div class="menu">
+            <button
+                class="menu-item"
+                onclick={() => runAction('openDocument')}
+            >
+                <i class="fa-solid fa-folder-open"></i>
+                <span>Open</span>
+                {#if openHotkey}<span class="kbd">{openHotkey}</span>{/if}
+            </button>
+            <button
+                class="menu-item"
+                disabled={!canSave}
+                title={canSave ? undefined : noSaveTooltip}
+                onclick={() => runAction('saveDocument')}
+            >
+                <i class="fa-solid fa-floppy-disk"></i>
+                <span>Save</span>
+                {#if saveHotkey}<span class="kbd">{saveHotkey}</span>{/if}
+            </button>
+            <button
+                class="menu-item"
+                disabled={!canSave}
+                title={canSave ? undefined : noSaveTooltip}
+                onclick={() => runAction('saveDocumentAs')}
+            >
+                <i class="fa-solid fa-floppy-disk"></i>
+                <span>Save As</span>
+                {#if saveAsHotkey}<span class="kbd">{saveAsHotkey}</span>{/if}
+            </button>
+            <div class="sep"></div>
             <button class="menu-item" onclick={() => runAction('openImage')}>
                 <i class="fa-solid fa-image"></i>
-                <span>Open Image…</span>
+                <span>Open Image</span>
                 {#if openImageHotkey}<span class="kbd">{openImageHotkey}</span>{/if}
             </button>
             <button class="menu-item" onclick={() => runAction('exportImage')}>
                 <i class="fa-solid fa-file-export"></i>
-                <span>Export Image…</span>
+                <span>Export Image</span>
                 {#if exportHotkey}<span class="kbd">{exportHotkey}</span>{/if}
             </button>
             <div class="sep"></div>
             <button class="menu-item" onclick={openSettings}>
-                <i class="fa-solid fa-sliders"></i>
-                <span>Preferences…</span>
+                <i class="fa-solid fa-gear"></i>
+                <span>Settings</span>
                 {#if settingsHotkey}<span class="kbd">{settingsHotkey}</span>{/if}
             </button>
             <button class="menu-item" onclick={() => { openCheatsheet(); close(); }}>
@@ -78,11 +115,6 @@
                         class:active={theme.preference === 'light'}
                         onclick={() => setTheme('light')}
                     >Light</button>
-                    <button
-                        class="theme-btn"
-                        class:active={theme.preference === 'system'}
-                        onclick={() => setTheme('system')}
-                    >Auto</button>
                 </div>
             </div>
         </div>
@@ -141,7 +173,11 @@
         text-align: left;
         cursor: pointer;
     }
-    .menu-item:hover { background: var(--bg-hover); }
+    .menu-item:hover:not(:disabled) { background: var(--bg-hover); }
+    .menu-item:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
     .menu-item i { width: 14px; color: var(--text-muted); }
     .kbd {
         margin-left: auto;
