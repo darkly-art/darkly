@@ -390,17 +390,14 @@ impl<'a> BrushGpuContext<'a> {
         half_h: f32,
     ) -> Option<DabFootprint> {
         let pt = self.paint_target.as_ref()?;
-        let pt_offset_x = pt.offset_x;
-        let pt_offset_y = pt.offset_y;
-        let pt_width = pt.width;
-        let pt_height = pt.height;
+        let pt_canvas = pt.canvas_extent();
 
         let unclipped_x0 = position[0] - half_w;
         let unclipped_y0 = position[1] - half_h;
-        let layer_x0 = pt_offset_x as f32;
-        let layer_y0 = pt_offset_y as f32;
-        let layer_x1 = layer_x0 + pt_width as f32;
-        let layer_y1 = layer_y0 + pt_height as f32;
+        let layer_x0 = pt_canvas.x0() as f32;
+        let layer_y0 = pt_canvas.y0() as f32;
+        let layer_x1 = layer_x0 + pt_canvas.width as f32;
+        let layer_y1 = layer_y0 + pt_canvas.height as f32;
         let x0 = unclipped_x0.max(layer_x0);
         let y0 = unclipped_y0.max(layer_y0);
         let x1 = (position[0] + half_w).min(layer_x1);
@@ -436,13 +433,13 @@ impl<'a> BrushGpuContext<'a> {
         // The read mirror is filled from the stroke scratch, which is
         // layer-sized and indexed in layer-local pixels — translate
         // before issuing the copy.
-        let copy_local_x = (copy_canvas_x - pt_offset_x) as u32;
-        let copy_local_y = (copy_canvas_y - pt_offset_y) as u32;
+        let copy_local_x = (copy_canvas_x - pt_canvas.x0()) as u32;
+        let copy_local_y = (copy_canvas_y - pt_canvas.y0()) as u32;
         self.sync_scratch_read_mirror(copy_local_x, copy_local_y, copy_w, copy_h);
 
         Some(DabFootprint {
-            layer_offset: [pt_offset_x, pt_offset_y],
-            layer_size: [pt_width, pt_height],
+            layer_offset: [pt_canvas.x0(), pt_canvas.y0()],
+            layer_size: [pt_canvas.width, pt_canvas.height],
             unclipped_origin: [unclipped_x0, unclipped_y0],
             origin: [x0, y0],
             size: [quad_w, quad_h],

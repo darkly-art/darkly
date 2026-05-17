@@ -57,7 +57,7 @@ impl DarklyEngine {
         // (RGBA8) and mask modifier (R8) targets resolve through the same
         // call. Caller's id alone selects the surface; format follows.
         let format = match self.compositor.node_texture(layer_id) {
-            Some(t) => t.format,
+            Some(t) => t.format(),
             None => return,
         };
 
@@ -156,7 +156,7 @@ impl DarklyEngine {
             );
 
             // Get texture references before entering the encode closure.
-            let layer_tex = &self.compositor.node_texture(layer_id).unwrap().texture;
+            let layer_tex = self.compositor.node_texture(layer_id).unwrap().texture();
             let selection_state = self
                 .compositor
                 .selection_state()
@@ -216,17 +216,13 @@ impl DarklyEngine {
                 // 3. Multiply staging alpha by cropped selection: staging.a *= sel.
                 //    RGB stays unchanged — straight-alpha convention (see
                 //    compositing-lessons-learned.md §1).
-                let staging_target = GpuPaintTarget {
-                    texture: &staging_tex,
-                    view: &staging_view,
+                let staging_target = GpuPaintTarget::from_canvas_texture(
+                    &staging_tex,
+                    &staging_view,
                     format,
-                    width: rw,
-                    height: rh,
-                    offset_x: 0,
-                    offset_y: 0,
-                    canvas_width: rw,
-                    canvas_height: rh,
-                };
+                    rw,
+                    rh,
+                );
                 staging_target.multiply_alpha_by_mask(
                     encoder,
                     &self.paint_pipelines,
@@ -256,7 +252,7 @@ impl DarklyEngine {
                     encoder,
                     &staging_tex,
                     format,
-                    [0, 0, rw, rh],
+                    crate::coord::LayerRect::from_xywh(0, 0, rw, rh),
                 );
                 self.readbacks.submit(
                     request,
@@ -281,15 +277,30 @@ impl DarklyEngine {
             }
         } else {
             // --- No selection: direct readback ---
-            let texture = self
-                .compositor
-                .node_texture(layer_id)
-                .map(|t| &t.texture)
-                .expect("node texture missing for copy");
+            // `region` is in canvas coordinates; the layer texture may sit at
+            // a non-zero canvas offset, so translate to texture-local before
+            // handing to wgpu. Layers disjoint from the requested region
+            // (extremely unusual without selection) yield nothing.
+            let (texture, layer_rect) = {
+                let layer_tex = self
+                    .compositor
+                    .node_texture(layer_id)
+                    .expect("node texture missing for copy");
+                let canvas_rect = crate::coord::CanvasRect::from_xywh(rx as i32, ry as i32, rw, rh);
+                match layer_tex.canvas_to_layer_rect(canvas_rect) {
+                    Some(lr) => (layer_tex.texture(), lr),
+                    None => return,
+                }
+            };
 
             self.gpu.encode("copy-readback", |encoder| {
-                let request =
-                    readback::request_readback(&self.gpu.device, encoder, texture, format, region);
+                let request = readback::request_readback(
+                    &self.gpu.device,
+                    encoder,
+                    texture,
+                    format,
+                    layer_rect,
+                );
                 self.readbacks.submit(
                     request,
                     ReadbackContext::Copy {
@@ -353,7 +364,7 @@ impl DarklyEngine {
         let is_r8 = self
             .compositor
             .node_texture(node_id)
-            .map(|t| t.format == wgpu::TextureFormat::R8Unorm)
+            .map(|t| t.format() == wgpu::TextureFormat::R8Unorm)
             .unwrap_or(false);
         let rgba = if is_r8 {
             // R8 readback → convert to grayscale RGBA: [v, v, v, 255]

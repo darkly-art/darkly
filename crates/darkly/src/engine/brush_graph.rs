@@ -673,7 +673,7 @@ impl DarklyEngine {
             &mut encoder,
             texture,
             wgpu::TextureFormat::Rgba8Unorm,
-            [0, 0, width, height],
+            crate::coord::LayerRect::from_xywh(0, 0, width, height),
         );
         self.gpu.queue.submit([encoder.finish()]);
         self.readbacks.submit(request, context);

@@ -135,7 +135,7 @@ pub fn readback_texture(
         &mut encoder,
         texture,
         format,
-        [0, 0, width, height],
+        crate::coord::LayerRect::from_xywh(0, 0, width, height),
     );
     queue.submit([encoder.finish()]);
     request.blocking_read(device)

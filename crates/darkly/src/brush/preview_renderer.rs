@@ -153,17 +153,13 @@ impl BrushPreviewRenderer {
                 ..Default::default()
             });
         }
-        let paint_target = crate::gpu::paint_target::GpuPaintTarget {
-            texture: &target.layer_texture,
-            view: &target.layer_view,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+        let paint_target = crate::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+            &target.layer_texture,
+            &target.layer_view,
+            wgpu::TextureFormat::Rgba8Unorm,
             width,
             height,
-            offset_x: 0,
-            offset_y: 0,
-            canvas_width: width,
-            canvas_height: height,
-        };
+        );
         target
             .stroke_buffer
             .save_pre_stroke(device, &mut encoder, pipelines, &paint_target);

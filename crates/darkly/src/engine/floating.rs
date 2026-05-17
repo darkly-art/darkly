@@ -272,7 +272,7 @@ impl DarklyEngine {
         let format = self
             .compositor
             .node_texture(node_id)
-            .map(|t| t.format)
+            .map(|t| t.format())
             .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
@@ -329,17 +329,13 @@ impl DarklyEngine {
 
             if let Some(sel_bg) = &cropped_sel_bg {
                 if let Some(source_tex) = self.compositor.transform_source_texture() {
-                    let target = GpuPaintTarget {
-                        texture: source_tex.0,
-                        view: source_tex.1,
+                    let target = GpuPaintTarget::from_canvas_texture(
+                        source_tex.0,
+                        source_tex.1,
                         format,
-                        width: source_width,
-                        height: source_height,
-                        offset_x: 0,
-                        offset_y: 0,
-                        canvas_width: source_width,
-                        canvas_height: source_height,
-                    };
+                        source_width,
+                        source_height,
+                    );
                     self.gpu.encode("transform-sel-mask", |encoder| {
                         target.multiply_by_mask(
                             encoder,
@@ -498,7 +494,7 @@ impl DarklyEngine {
         let format = self
             .compositor
             .node_texture(layer_id)
-            .map(|t| t.format)
+            .map(|t| t.format())
             .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
 
         // Compute tight affected rect = union(source bounds, transformed
@@ -629,13 +625,11 @@ impl DarklyEngine {
                 if let Some(target) = target {
                     match clear_shape {
                         ClearShape::Rect(rect) => {
-                            let canvas_rect =
-                                [rect.x0(), rect.y0(), rect.width as i32, rect.height as i32];
                             target.clear_rect(
                                 encoder,
                                 &self.paint_pipelines,
                                 &self.gpu.queue,
-                                canvas_rect,
+                                *rect,
                             );
                         }
                         ClearShape::Selection { mask_bind_group } => {

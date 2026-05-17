@@ -64,12 +64,15 @@ impl DarklyEngine {
 
         let texture = self.compositor.composited_texture();
         self.gpu.encode("pick-color", |encoder| {
+            // Composited texture is canvas-aligned: canvas coords == texture
+            // coords here, so a single-pixel layer rect at (px, py) names the
+            // same pixel either way.
             let request = readback::request_readback(
                 &self.gpu.device,
                 encoder,
                 texture,
                 wgpu::TextureFormat::Rgba8Unorm,
-                [px, py, 1, 1],
+                crate::coord::LayerRect::from_xywh(px, py, 1, 1),
             );
             self.readbacks.submit(request, ReadbackContext::ColorPick);
         });
@@ -110,19 +113,16 @@ impl DarklyEngine {
             return;
         }
 
-        let (texture, format, tex_w, tex_h) = match self.compositor.node_texture(node_id) {
-            Some(t) => (&t.texture, t.format, t.width, t.height),
+        let (texture, format, layer_rect) = match self.compositor.node_texture(node_id) {
+            Some(t) => (t.texture(), t.format(), t.layer_extent()),
             None => return,
         };
+        let tex_w = layer_rect.width;
+        let tex_h = layer_rect.height;
 
         self.gpu.encode("thumb-readback", |encoder| {
-            let request = readback::request_readback(
-                &self.gpu.device,
-                encoder,
-                texture,
-                format,
-                [0, 0, tex_w, tex_h],
-            );
+            let request =
+                readback::request_readback(&self.gpu.device, encoder, texture, format, layer_rect);
             self.readbacks.submit(
                 request,
                 ReadbackContext::Thumbnail {
@@ -215,14 +215,11 @@ impl DarklyEngine {
         match ctx {
             ReadbackContext::FloodFill {
                 node_id,
-                seed_x,
-                seed_y,
+                seed_canvas,
                 color,
                 tolerance,
                 extent,
-            } => {
-                self.complete_flood_fill(node_id, seed_x, seed_y, color, tolerance, extent, pixels)
-            }
+            } => self.complete_flood_fill(node_id, seed_canvas, color, tolerance, extent, pixels),
             ReadbackContext::ColorPick => {
                 if pixels.len() >= 4 {
                     self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
@@ -238,14 +235,19 @@ impl DarklyEngine {
             ReadbackContext::MagicWand {
                 was_active,
                 node_id,
-                seed_x,
-                seed_y,
+                seed_canvas,
                 tolerance,
                 mode,
                 extent,
             } => {
                 self.complete_magic_wand(
-                    was_active, node_id, seed_x, seed_y, tolerance, mode, extent, pixels,
+                    was_active,
+                    node_id,
+                    seed_canvas,
+                    tolerance,
+                    mode,
+                    extent,
+                    pixels,
                 );
             }
             ReadbackContext::ExportImage { width, height } => {
@@ -284,7 +286,7 @@ impl DarklyEngine {
                 let is_r8 = self
                     .compositor
                     .node_texture(node_id)
-                    .map(|t| t.format == wgpu::TextureFormat::R8Unorm)
+                    .map(|t| t.format() == wgpu::TextureFormat::R8Unorm)
                     .unwrap_or(false);
                 let thumb = if is_r8 {
                     generate_mask_thumbnail_from_pixels(

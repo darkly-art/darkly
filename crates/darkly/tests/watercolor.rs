@@ -145,17 +145,13 @@ fn harness(initial: &[u8], size: f32, deposit: f32, wetness: f32) -> Harness {
         &pipelines,
     );
 
-    let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget {
-        texture: &layer_texture,
-        view: &layer_view,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        width: CANVAS,
-        height: CANVAS,
-        offset_x: 0,
-        offset_y: 0,
-        canvas_width: CANVAS,
-        canvas_height: CANVAS,
-    };
+    let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+        &layer_texture,
+        &layer_view,
+        wgpu::TextureFormat::Rgba8Unorm,
+        CANVAS,
+        CANVAS,
+    );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("watercolor-test-pre-stroke-init"),
     });
@@ -194,17 +190,13 @@ fn harness_image_tip(initial: &[u8], size: f32, deposit: f32, wetness: f32) -> H
         dab_pool.bind_group_layout(),
         &pipelines,
     );
-    let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget {
-        texture: &layer_texture,
-        view: &layer_view,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        width: CANVAS,
-        height: CANVAS,
-        offset_x: 0,
-        offset_y: 0,
-        canvas_width: CANVAS,
-        canvas_height: CANVAS,
-    };
+    let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+        &layer_texture,
+        &layer_view,
+        wgpu::TextureFormat::Rgba8Unorm,
+        CANVAS,
+        CANVAS,
+    );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("watercolor-test-pre-stroke-init"),
     });
@@ -322,17 +314,15 @@ macro_rules! make_ctx {
             scratch: Some(_scratch),
             canvas_width: CANVAS,
             canvas_height: CANVAS,
-            paint_target: Some(darkly::gpu::paint_target::GpuPaintTarget {
-                texture: &$h.layer_texture,
-                view: &$h.layer_view,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                width: CANVAS,
-                height: CANVAS,
-                offset_x: 0,
-                offset_y: 0,
-                canvas_width: CANVAS,
-                canvas_height: CANVAS,
-            }),
+            paint_target: Some(
+                darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+                    &$h.layer_texture,
+                    &$h.layer_view,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    CANVAS,
+                    CANVAS,
+                ),
+            ),
             selection_bind_group: $h.pipelines.default_selection_bind_group(),
             preview_target_view: None,
             resource_handles: $resources,
@@ -685,17 +675,14 @@ fn off_canvas_strip_preserved_on_oversized_layer() {
         &device,
         &mut enc,
         &pipelines,
-        &darkly::gpu::paint_target::GpuPaintTarget {
-            texture: &layer_texture,
-            view: &layer_view,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            width: layer_w,
-            height: layer_h,
-            offset_x: 0,
-            offset_y: 0,
-            canvas_width: CANVAS,
-            canvas_height: CANVAS,
-        },
+        &darkly::gpu::paint_target::GpuPaintTarget::from_extent(
+            &layer_texture,
+            &layer_view,
+            wgpu::TextureFormat::Rgba8Unorm,
+            darkly::coord::CanvasRect::from_xywh(0, 0, layer_w, layer_h),
+            CANVAS,
+            CANVAS,
+        ),
     );
     queue.submit([enc.finish()]);
 
@@ -718,17 +705,14 @@ fn off_canvas_strip_preserved_on_oversized_layer() {
                 scratch: Some(scratch),
                 canvas_width: CANVAS,
                 canvas_height: CANVAS,
-                paint_target: Some(darkly::gpu::paint_target::GpuPaintTarget {
-                    texture: &layer_texture,
-                    view: &layer_view,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    width: layer_w,
-                    height: layer_h,
-                    offset_x: 0,
-                    offset_y: 0,
-                    canvas_width: CANVAS,
-                    canvas_height: CANVAS,
-                }),
+                paint_target: Some(darkly::gpu::paint_target::GpuPaintTarget::from_extent(
+                    &layer_texture,
+                    &layer_view,
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    darkly::coord::CanvasRect::from_xywh(0, 0, layer_w, layer_h),
+                    CANVAS,
+                    CANVAS,
+                )),
                 selection_bind_group: pipelines.default_selection_bind_group(),
                 preview_target_view: None,
                 resource_handles: &resources,

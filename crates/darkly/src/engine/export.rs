@@ -44,7 +44,7 @@ impl DarklyEngine {
                 encoder,
                 texture,
                 wgpu::TextureFormat::Rgba8Unorm,
-                [0, 0, width, height],
+                crate::coord::LayerRect::from_xywh(0, 0, width, height),
             );
             self.readbacks
                 .submit(request, ReadbackContext::ExportImage { width, height });

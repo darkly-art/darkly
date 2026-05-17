@@ -94,6 +94,9 @@ jobs:
       - name: npm ci
         working-directory: frontend
         run: npm ci
+      - name: vitest
+        working-directory: frontend
+        run: npm test
       - name: vite build (includes wasm:build + svelte-check via tsc)
         working-directory: frontend
         run: npm run build

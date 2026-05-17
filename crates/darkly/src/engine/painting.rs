@@ -159,7 +159,7 @@ impl DarklyEngine {
             }
             self.gpu.queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &layer_tex.texture,
+                    texture: layer_tex.texture(),
                     mip_level: 0,
                     origin: wgpu::Origin3d {
                         x: dst_x,
@@ -251,7 +251,7 @@ impl DarklyEngine {
             // `self.compositor.node_texture(...)` borrows only that sub-field,
             // so split borrowing of `region_store` works.
             let (frame, format) = match self.compositor.node_texture(layer_id) {
-                Some(t) => (t.canvas_frame(), t.format),
+                Some(t) => (t.canvas_frame(), t.format()),
                 None => return,
             };
 
@@ -306,7 +306,12 @@ impl DarklyEngine {
                 a,
                 tolerance,
             } => {
-                self.gpu_flood_fill(layer_id, x as i32, y as i32, [r, g, b, a], tolerance);
+                self.gpu_flood_fill(
+                    layer_id,
+                    crate::coord::CanvasPoint::new(x as i32, y as i32),
+                    [r, g, b, a],
+                    tolerance,
+                );
             }
             StrokeOp::BrushStroke {
                 x,
@@ -676,10 +681,11 @@ impl DarklyEngine {
                 // layer's bounds. For paste-extent layers larger than the
                 // canvas this means dabs landing on off-canvas pixels are
                 // saved/restored correctly on undo.
+                let layer_extent = layer_tex.layer_extent();
                 let stroke_buffer = StrokeBuffer::new(
                     &self.gpu.device,
-                    layer_tex.width,
-                    layer_tex.height,
+                    layer_extent.width,
+                    layer_extent.height,
                     self.dab_pool.bind_group_layout(),
                     &self.brush_pipelines,
                 );
@@ -1022,7 +1028,7 @@ impl DarklyEngine {
             // field level, leaving `&mut self.dab_pool` free.
             let layer_tex = self.compositor.node_texture(layer_id);
             if let Some(layer_tex) = layer_tex {
-                let canvas_view = &layer_tex.view;
+                let canvas_view = layer_tex.view();
                 let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
                 let mut gpu_ctx = BrushGpuContext {
                     encoder: self.gpu.device.create_command_encoder(
@@ -1082,8 +1088,7 @@ impl DarklyEngine {
     fn gpu_flood_fill(
         &mut self,
         layer_id: LayerId,
-        seed_x: i32,
-        seed_y: i32,
+        seed_canvas: crate::coord::CanvasPoint,
         color: [u8; 4],
         tolerance: u8,
     ) {
@@ -1105,8 +1110,7 @@ impl DarklyEngine {
             request,
             ReadbackContext::FloodFill {
                 node_id: layer_id,
-                seed_x,
-                seed_y,
+                seed_canvas,
                 color,
                 tolerance,
                 extent,
@@ -1121,14 +1125,13 @@ impl DarklyEngine {
     pub(crate) fn complete_flood_fill(
         &mut self,
         layer_id: LayerId,
-        seed_x: i32,
-        seed_y: i32,
+        seed_canvas: crate::coord::CanvasPoint,
         color: [u8; 4],
         tolerance: u8,
         extent: flood_fill::LayerFloodFillExtent,
         pixels: Vec<u8>,
     ) {
-        let fill_mask = extent.flood_fill_to_canvas_mask(&pixels, seed_x, seed_y, tolerance);
+        let fill_mask = extent.flood_fill_to_canvas_mask(&pixels, seed_canvas, tolerance);
         let canvas_w = extent.canvas_width;
         let canvas_h = extent.canvas_height;
 
@@ -1166,7 +1169,7 @@ impl DarklyEngine {
                 encoder,
                 &self.paint_pipelines,
                 &self.gpu.queue,
-                [0, 0, canvas_w as i32, canvas_h as i32],
+                crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
                 color,
                 &mask_bind_group,
             );
@@ -1394,7 +1397,7 @@ impl DarklyEngine {
                 let layer_extent = self
                     .compositor
                     .node_texture(layer_id)
-                    .map(|t| (&t.view, t.canvas_extent()));
+                    .map(|t| (t.view(), t.canvas_extent()));
                 if let Some((current_view, layer_canvas_extent)) = layer_extent {
                     let scratch_view = self.region_store.scratch_view(snap.format);
                     self.diff_rect.request(
@@ -1424,7 +1427,7 @@ impl DarklyEngine {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         let format = match self.paint_target(layer_id) {
-            Some(t) => t.format,
+            Some(t) => t.format(),
             None => return,
         };
         let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
@@ -1478,7 +1481,7 @@ impl DarklyEngine {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         let format = match self.paint_target(layer_id) {
-            Some(t) => t.format,
+            Some(t) => t.format(),
             None => return,
         };
         let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
@@ -1508,7 +1511,7 @@ impl DarklyEngine {
                 encoder,
                 &self.paint_pipelines,
                 &self.gpu.queue,
-                [0, 0, canvas_w as i32, canvas_h as i32],
+                crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h),
             );
         });
 

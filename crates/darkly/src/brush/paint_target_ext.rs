@@ -95,17 +95,19 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         opacity: f32,
         blend_mode: u32,
     ) {
-        let layer_w = self.width as f32;
-        let layer_h = self.height as f32;
-        let layer_off_x = self.offset_x as f32;
-        let layer_off_y = self.offset_y as f32;
+        let canvas_ext = self.canvas_extent();
+        let layer_w = canvas_ext.width as f32;
+        let layer_h = canvas_ext.height as f32;
+        let layer_off_x = canvas_ext.x0() as f32;
+        let layer_off_y = canvas_ext.y0() as f32;
+        let (cw, ch) = self.canvas_size();
 
         let uniforms = CompositeUniforms {
             origin: [layer_off_x, layer_off_y],
             size: [layer_w, layer_h],
             target_offset: [layer_off_x, layer_off_y],
             target_size: [layer_w, layer_h],
-            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            canvas_size: [cw as f32, ch as f32],
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
             blend_mode,
@@ -118,7 +120,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("paint-target-commit-brush-dab"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: self.view,
+                view: self.view(),
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -129,7 +131,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
             ..Default::default()
         });
         pass.set_viewport(0.0, 0.0, layer_w, layer_h, 0.0, 1.0);
-        pass.set_pipeline(brush_pipelines.composite_pipeline(self.format));
+        pass.set_pipeline(brush_pipelines.composite_pipeline(self.format()));
         pass.set_bind_group(0, &brush_pipelines.composite_uniform_bind_group, &[offset]);
         pass.set_bind_group(1, scratch_bg, &[]);
         pass.set_bind_group(2, selection_bg, &[]);
@@ -145,11 +147,12 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         snapshot_view: &wgpu::TextureView,
         snapshot_texture: &wgpu::Texture,
     ) {
-        if self.format != wgpu::TextureFormat::R8Unorm {
+        let extent = self.layer_extent();
+        if self.format() != wgpu::TextureFormat::R8Unorm {
             // Same-format hardware copy — fast path for raster layers.
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: self.texture,
+                    texture: self.texture(),
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
@@ -161,8 +164,8 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::Extent3d {
-                    width: self.width,
-                    height: self.height,
+                    width: extent.width,
+                    height: extent.height,
                     depth_or_array_layers: 1,
                 },
             );
@@ -171,7 +174,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
 
         // R8 source → RGBA8 destination via broadcast render pass.
         let _ = snapshot_texture; // referenced only on the same-format path
-        let source_bg = brush_pipelines.create_blit_source_bind_group(device, self.view);
+        let source_bg = brush_pipelines.create_blit_source_bind_group(device, self.view());
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("paint-target-save-pre-stroke-r8"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -185,7 +188,14 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
             })],
             ..Default::default()
         });
-        pass.set_viewport(0.0, 0.0, self.width as f32, self.height as f32, 0.0, 1.0);
+        pass.set_viewport(
+            0.0,
+            0.0,
+            extent.width as f32,
+            extent.height as f32,
+            0.0,
+            1.0,
+        );
         pass.set_pipeline(brush_pipelines.mask_blit_pipeline());
         pass.set_bind_group(0, &source_bg, &[]);
         pass.draw(0..3, 0..1);
@@ -199,7 +209,8 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         scratch_view: &wgpu::TextureView,
         scratch_texture: &wgpu::Texture,
     ) {
-        if self.format != wgpu::TextureFormat::R8Unorm {
+        let extent = self.layer_extent();
+        if self.format() != wgpu::TextureFormat::R8Unorm {
             // Same-format hardware copy — preserves today's path for layers.
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -209,14 +220,14 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::TexelCopyTextureInfo {
-                    texture: self.texture,
+                    texture: self.texture(),
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
                 wgpu::Extent3d {
-                    width: self.width,
-                    height: self.height,
+                    width: extent.width,
+                    height: extent.height,
                     depth_or_array_layers: 1,
                 },
             );
@@ -230,7 +241,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("paint-target-commit-scratch-blit-r8"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: self.view,
+                view: self.view(),
                 resolve_target: None,
                 depth_slice: None,
                 ops: wgpu::Operations {
@@ -240,7 +251,14 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
             })],
             ..Default::default()
         });
-        pass.set_viewport(0.0, 0.0, self.width as f32, self.height as f32, 0.0, 1.0);
+        pass.set_viewport(
+            0.0,
+            0.0,
+            extent.width as f32,
+            extent.height as f32,
+            0.0,
+            1.0,
+        );
         pass.set_pipeline(brush_pipelines.scratch_blit_r8_pipeline());
         pass.set_bind_group(0, &source_bg, &[]);
         pass.draw(0..3, 0..1);

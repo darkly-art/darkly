@@ -2441,7 +2441,12 @@ fn engine_magic_wand_on_mask_reads_mask_not_layer() {
     // Pre-fix the wand would read from the layer (transparent everywhere)
     // and select the full canvas regardless of mask state — fixed by
     // dispatching format from the active node id.
-    engine.select_magic_wand(mask_id, 4, (h / 2) as i32, 0, SelectionMode::Replace);
+    engine.select_magic_wand(
+        mask_id,
+        darkly::coord::CanvasPoint::new(4, (h / 2) as i32),
+        0,
+        SelectionMode::Replace,
+    );
     engine.test_flush_readbacks();
 
     let cache = engine
@@ -2505,7 +2510,12 @@ fn engine_magic_wand_on_paste_extent_layer_translates_coords() {
 
     // Magic wand seeded at canvas (32, 32) — the visible center of the red
     // block. Tolerance 0 ⇒ flood fill picks up only the connected red pixels.
-    engine.select_magic_wand(pasted, 32, 32, 0, SelectionMode::Replace);
+    engine.select_magic_wand(
+        pasted,
+        darkly::coord::CanvasPoint::new(32, 32),
+        0,
+        SelectionMode::Replace,
+    );
     engine.test_flush_readbacks();
 
     let cache = engine

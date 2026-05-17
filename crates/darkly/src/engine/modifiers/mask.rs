@@ -193,7 +193,7 @@ impl DarklyEngine {
             });
             self.paint_pipelines.create_selection_bind_group(
                 &self.gpu.device,
-                &mask_tex.view,
+                mask_tex.view(),
                 &sampler,
             )
         });
@@ -371,7 +371,7 @@ impl DarklyEngine {
         if Some(id) == self.selection_modifier_id() {
             self.compositor.selection_state().map(|s| s.texture())
         } else {
-            self.compositor.node_texture(id).map(|t| &t.texture)
+            self.compositor.node_texture(id).map(|t| t.texture())
         }
     }
 }

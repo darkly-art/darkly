@@ -1077,23 +1077,20 @@ fn cancel_floating_after_layer_grow() {
     // canvas position (not the wrong layer-local origin).
     let pipelines = PaintPipelines::new(&device, &queue);
     let new_view = new_tex.create_view(&wgpu::TextureViewDescriptor::default());
-    let target = GpuPaintTarget {
-        texture: &new_tex,
-        view: &new_view,
-        format: fmt,
-        width: new_w,
-        height: new_h,
-        offset_x: -256,
-        offset_y: -256,
-        canvas_width: new_w,
-        canvas_height: new_h,
-    };
+    let target = GpuPaintTarget::from_extent(
+        &new_tex,
+        &new_view,
+        fmt,
+        CanvasRect::from_xywh(-256, -256, new_w, new_h),
+        new_w,
+        new_h,
+    );
     let mut enc = encoder(&device);
     target.fill_rect(
         &mut enc,
         &pipelines,
         &queue,
-        [50, 50, 100, 100],
+        CanvasRect::from_xywh(50, 50, 100, 100),
         [0, 255, 0, 255],
     );
     submit(&queue, enc);

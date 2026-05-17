@@ -280,14 +280,17 @@ pub struct LayerFloodFillExtent {
 
 impl LayerFloodFillExtent {
     pub fn from_target(target: &GpuPaintTarget<'_>) -> Self {
+        let canvas_extent = target.canvas_extent();
+        let layer_extent = target.layer_extent();
+        let (canvas_w, canvas_h) = target.canvas_size();
         Self {
-            offset_x: target.offset_x,
-            offset_y: target.offset_y,
-            width: target.width,
-            height: target.height,
-            canvas_width: target.canvas_width,
-            canvas_height: target.canvas_height,
-            format: target.format,
+            offset_x: canvas_extent.x0(),
+            offset_y: canvas_extent.y0(),
+            width: layer_extent.width,
+            height: layer_extent.height,
+            canvas_width: canvas_w,
+            canvas_height: canvas_h,
+            format: target.format(),
         }
     }
 
@@ -295,22 +298,21 @@ impl LayerFloodFillExtent {
     /// resulting layer-local mask into a canvas-aligned R8 mask sized
     /// `canvas_width × canvas_height`.
     ///
-    /// `seed_canvas_x` / `seed_canvas_y` are in canvas pixel coordinates (the
-    /// click point). The seed is translated to texture-local coords before
-    /// the scanline fill runs; pixels outside the layer's canvas footprint
-    /// stay 0 in the output (the layer has no data there).
+    /// `seed_canvas` is the click point in canvas coordinates. The seed is
+    /// translated to texture-local coords before the scanline fill runs;
+    /// pixels outside the layer's canvas footprint stay 0 in the output (the
+    /// layer has no data there).
     ///
     /// Format dispatch matches the texture's own format — RGBA reads four
     /// bytes per pixel, R8 reads one.
     pub fn flood_fill_to_canvas_mask(
         &self,
         pixels: &[u8],
-        seed_canvas_x: i32,
-        seed_canvas_y: i32,
+        seed_canvas: crate::coord::CanvasPoint,
         tolerance: u8,
     ) -> Vec<u8> {
-        let layer_seed_x = seed_canvas_x - self.offset_x;
-        let layer_seed_y = seed_canvas_y - self.offset_y;
+        let layer_seed_x = seed_canvas.x - self.offset_x;
+        let layer_seed_y = seed_canvas.y - self.offset_y;
 
         let layer_mask = match self.format {
             wgpu::TextureFormat::R8Unorm => flood_fill_r8(
@@ -370,12 +372,14 @@ pub fn request_layer_flood_fill_readback(
     target: &GpuPaintTarget<'_>,
 ) -> (ReadbackRequest, LayerFloodFillExtent) {
     let extent = LayerFloodFillExtent::from_target(target);
+    // Texture-local rect spanning the entire layer — the canvas↔texture
+    // translation happens later, in `flood_fill_to_canvas_mask`.
     let request = readback::request_readback(
         device,
         encoder,
-        target.texture,
-        target.format,
-        [0, 0, extent.width, extent.height],
+        target.texture(),
+        target.format(),
+        target.layer_extent(),
     );
     (request, extent)
 }

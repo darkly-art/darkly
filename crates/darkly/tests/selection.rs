@@ -114,17 +114,7 @@ fn gpu_gradient_with_selection() {
     });
     let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
 
-    let target = GpuPaintTarget {
-        texture: &tex,
-        view: &view,
-        format: fmt,
-        width: w,
-        height: h,
-        offset_x: 0,
-        offset_y: 0,
-        canvas_width: w,
-        canvas_height: h,
-    };
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
     let mut enc = encoder(&device);
     target.linear_gradient(
         &mut enc,
@@ -190,17 +180,7 @@ fn gpu_clear_selection_contents() {
     });
     let sel_bg = pipelines.create_selection_bind_group(&device, &sel_view, &sampler);
 
-    let target = GpuPaintTarget {
-        texture: &tex,
-        view: &view,
-        format: fmt,
-        width: w,
-        height: h,
-        offset_x: 0,
-        offset_y: 0,
-        canvas_width: w,
-        canvas_height: h,
-    };
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
 
     // Erase within selection.
     let mut enc = encoder(&device);
@@ -260,17 +240,7 @@ fn gpu_clear_selection_undo() {
     submit(&queue, enc);
 
     // Erase within selection.
-    let target = GpuPaintTarget {
-        texture: &tex,
-        view: &view,
-        format: fmt,
-        width: w,
-        height: h,
-        offset_x: 0,
-        offset_y: 0,
-        canvas_width: w,
-        canvas_height: h,
-    };
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
     let mut enc = encoder(&device);
     target.erase_with_selection(&mut enc, &pipelines, &queue, &sel_bg);
     submit(&queue, enc);
@@ -340,23 +310,13 @@ fn gpu_flood_fill_respects_selection() {
     let mask_bg =
         pipelines.upload_r8_bind_group(&device, &queue, w, h, &combined, "test-fill-sel-mask");
 
-    let target = GpuPaintTarget {
-        texture: &tex,
-        view: &view,
-        format: fmt,
-        width: w,
-        height: h,
-        offset_x: 0,
-        offset_y: 0,
-        canvas_width: w,
-        canvas_height: h,
-    };
+    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
     let mut enc = encoder(&device);
     target.fill_rect_with_selection(
         &mut enc,
         &pipelines,
         &queue,
-        [0, 0, w as i32, h as i32],
+        CanvasRect::from_xywh(0, 0, w, h),
         [0, 0, 255, 255],
         &mask_bg,
     );
