@@ -57,6 +57,7 @@
                 inst.handle?.set_view_transform(
                     inst.panX * dpr2, inst.panY * dpr2,
                     inst.zoom, inst.rotation,
+                    inst.mirrorH,
                     w, h,
                 );
                 inst.requestFrame();
@@ -336,7 +337,7 @@
     });
 
     // Dismiss tool overlay when the active layer changes.
-    let prevLayerId = inst.activeLayerId;
+    let prevLayerId: number | null = null;
     $effect(() => {
         const id = inst.activeLayerId;
         if (id !== prevLayerId) {
@@ -355,6 +356,7 @@
             inst.handle.set_view_transform(
                 inst.panX * dpr, inst.panY * dpr,
                 inst.zoom, inst.rotation,
+                inst.mirrorH,
                 canvas.width, canvas.height,
             );
             inst.requestFrame();

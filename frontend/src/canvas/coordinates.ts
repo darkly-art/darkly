@@ -31,8 +31,11 @@ export function canvasToScreen(
     const cos_r = Math.cos(app.rotation);
     const sin_r = Math.sin(app.rotation);
 
-    const dx = cx - (config.get('canvas.width') as number) / 2;
+    let dx = cx - (config.get('canvas.width') as number) / 2;
     const dy = cy - (config.get('canvas.height') as number) / 2;
+
+    // Mirror is a scale(-1, 1) in canvas-centered space, before zoom/rotate.
+    if (app.mirrorH) dx = -dx;
 
     const buf_x = app.zoom * (cos_r * dx + sin_r * dy)
                   + canvasEl.width / 2 + app.panX * dpr;
@@ -77,12 +80,20 @@ export function screenToCanvas(
     const sy = canvasEl.height / 2 + app.panY * dpr;
 
     // Inverse matrix coefficients (same as view.rs)
-    const m00 = cos_r * inv_zoom;
+    let m00 = cos_r * inv_zoom;
     const m01 = sin_r * inv_zoom;
-    const m10 = -sin_r * inv_zoom;
+    let m10 = -sin_r * inv_zoom;
     const m11 = cos_r * inv_zoom;
-    const tx = cx - m00 * sx - m10 * sy;
+    let tx = cx - m00 * sx - m10 * sy;
     const ty = cy - m01 * sx - m11 * sy;
+
+    // Horizontal mirror: reflect the screen→canvas X output around `cx`.
+    // Matches the matrix branch in `gpu/view.rs::from_pan_zoom_rotate`.
+    if (app.mirrorH) {
+        m00 = -m00;
+        m10 = -m10;
+        tx = canvas_w - tx;
+    }
 
     return {
         x: m00 * buf_x + m10 * buf_y + tx,

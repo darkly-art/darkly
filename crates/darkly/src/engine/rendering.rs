@@ -21,6 +21,7 @@ impl DarklyEngine {
         pan_y: f32,
         zoom: f32,
         rotation: f32,
+        mirror_h: bool,
         screen_w: f32,
         screen_h: f32,
     ) {
@@ -29,6 +30,7 @@ impl DarklyEngine {
             pan_y,
             zoom,
             rotation,
+            mirror_h,
             screen_w,
             screen_h,
             self.doc.width as f32,

@@ -28,7 +28,7 @@ We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz
 
 ## Feature Roadmap
 
-These are features that are valuable or essential to digital art workflows. They're subject to change, but we'll keep them up-to-date so everyone can see the progress.
+These are features that are helpful or essential to digital art workflows. They're subject to change, and feel free to suggest new ones. They are always kept up-to-date so everyone can see the progress.
 
 ### Painting & brush engine
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker (eyedropper)
@@ -96,24 +96,21 @@ These are features that are valuable or essential to digital art workflows. They
 
 ### View
 - [x] Pan / zoom / rotate view
+- [x] Mirror view
 - [ ] Fit to screen
 - [ ] 100% / zoom presets
-- [ ] Pixel grid toggle
 - [ ] Symmetry / mirror painting (X, Y, radial)
-- [ ] Reference image panel
-- [ ] Rulers, guides, snapping
 - [ ] Navigator / overview window
 - [ ] Palette Popup
 
 ### File I/O
 - [x] Clipboard copy / cut / paste (PNG via browser clipboard)
 - [x] Brush export / import (binary bundle)
-- [ ] Export to PNG / JPEG / WebP file
-- [ ] Open image from file
-- [ ] Save / Open native `.darkly` document
-- [ ] PSD / XCF import
-- [ ] SVG export
+- [x] Export to PNG / JPEG / WebP file
+- [x] Open image from file
+- [x] Save / Open native `.darkly` document
 - [ ] Recent files
+- [ ] PSD / XCF / KRA import
 
 ### Undo & history
 - [x] Undo / redo (configurable depth, defaults 100)
@@ -126,8 +123,6 @@ These are features that are valuable or essential to digital art workflows. They
 - [x] Krita / Photoshop / GIMP hotkey presets
 - [x] Settings modal, theme system
 - [ ] Per‑brush preset save/load UI
-- [ ] Brush size / hardness sliders in main UI
-- [ ] Brush dynamics / stabilization settings panel
 
 ### Text & vector
 - [ ] Text tool / text layers
@@ -172,11 +167,11 @@ You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Gr
 
 ## Use of AI
 
-While AI has been leveraged heavily for this codebase, careless vibe coding and AI slop is **strictly forbidden**.
+It's okay to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
 
-I (TheTechromancer) learned to code long before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The danger of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must understand how it works and its implications for the rest of the codebase.
+I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The danger of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must understand the changes, their reasons, and their long-term implications for the rest of the codebase.
 
-Great care is being taken to keep Darkly architecturally lean and clean. This means enforcing modularity, vigilance against duplicate/dead code, and a *shit ton* of automated tests, including a regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
+Great care is being taken to keep Darkly architecturally lean and clean. This means enforcing modularity, vigilance against duplicate/dead code, and a *shit ton* of automated tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
 
 ## Acknowledgments
 
