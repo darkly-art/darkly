@@ -107,8 +107,12 @@ pub(crate) enum ReadbackContext {
         seed_y: i32,
         color: [u8; 4],
         tolerance: u8,
-        canvas_w: u32,
-        canvas_h: u32,
+        /// Snapshot of the target's coordinate frame at request time. Carries
+        /// the texture offset/size + canvas size + format the completion
+        /// handler needs to translate `seed_*` from canvas coords to texture
+        /// coords and project the resulting mask back into a canvas-aligned
+        /// R8 buffer. See `crate::gpu::flood_fill::LayerFloodFillExtent`.
+        extent: crate::gpu::flood_fill::LayerFloodFillExtent,
     },
     ColorPick,
     Copy {
@@ -123,6 +127,8 @@ pub(crate) enum ReadbackContext {
         seed_y: i32,
         tolerance: u8,
         mode: crate::document::SelectionMode,
+        /// See `FloodFill::extent` — same coordinate-frame snapshot.
+        extent: crate::gpu::flood_fill::LayerFloodFillExtent,
     },
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,

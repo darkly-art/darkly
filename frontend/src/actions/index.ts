@@ -206,11 +206,12 @@ function enterTransformTool() {
 
 export function registerActions() {
     // -- Binding sites --
-    sites.register({ name: 'keyboard',     provides: ['layerId'] });
-    sites.register({ name: 'layerEye',     provides: ['layerId'] });
-    sites.register({ name: 'layerThumb',   provides: ['layerId'] });
-    sites.register({ name: 'maskThumb',    provides: ['layerId', 'maskIndex'] });
-    sites.register({ name: 'canvas',       provides: ['x', 'y'] });
+    sites.register({ name: 'keyboard',   provides: ['layerId'], displayName: 'Anywhere' });
+    sites.register({ name: 'layerEye',   provides: ['layerId'], displayName: 'Layer Eye' });
+    sites.register({ name: 'layerThumb', provides: ['layerId'], displayName: 'Layer Thumbnail' });
+    sites.register({ name: 'maskThumb',  provides: ['layerId', 'maskIndex'], displayName: 'Mask Thumbnail' });
+    sites.register({ name: 'canvas',     provides: ['x', 'y'], displayName: 'Canvas' });
+    sites.register({ name: 'layerPanel', provides: ['layerId'], displayName: 'Layer Panel' });
 
     // -- Edit --
     actions.register({
@@ -584,6 +585,36 @@ export function registerActions() {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.handle) return;
             toggleIsolation(layerId);
+        },
+    });
+
+    actions.register({
+        id: 'deleteLayer',
+        displayName: 'Delete Layer',
+        category: 'layers',
+        description: 'Delete the active layer (or remove the active veil).',
+        // Krita-style global default. Photoshop / GIMP presets override
+        // this to `layerPanel:Delete` (panel-scoped) — see presets/.
+        defaultHotkey: 'Shift+Delete',
+        accepts: ['layerId'],
+        handler: (ctx) => {
+            if (!app.handle) return;
+            // Veil takes priority: the trash button on the layer panel
+            // doubles as veil-remove when a veil is active, so the
+            // keyboard shortcut should too.
+            if (app.activeVeilIndex !== null) {
+                app.removeVeil(app.activeVeilIndex);
+                return;
+            }
+            const layerId = ctx.layerId ?? app.activeLayerId;
+            if (layerId == null) return;
+            try {
+                app.handle.remove_layer(layerId);
+                app.clearSelection();
+                app.refreshLayerTree();
+            } catch (e: any) {
+                toast.show('error', e.message ?? String(e));
+            }
         },
     });
 

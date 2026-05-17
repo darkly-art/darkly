@@ -1,7 +1,8 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import { getNodeThumbnail, THUMB_SIZE } from './thumbnails';
-    import { dispatchClick } from '../../actions/triggers';
+    import { actions } from '../../actions/registry';
+    import { bindingSite } from '../../actions/binding_site';
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
 
@@ -42,20 +43,14 @@
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
-    // Sub-region click handlers fire site-specific bindings only — no
-    // cross-site fallback. Modifier+click on the group's mask thumb
-    // dispatches with the mask's id so `isolateLayer` solos the mask, not
-    // the group.
+    // Chord dispatch is owned by `use:bindingSite` on each preview element
+    // below — `bindingSite` intercepts modifier+click in capture phase
+    // and dispatches against its named site. These onclick handlers are
+    // the no-chord fallback.
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchClick('layerEye', e, { layerId: group.id })) {
-            onupdate();
-            return;
-        }
-        if (app.handle) {
-            app.handle.set_layer_visible(group.id, !group.visible);
-            onupdate();
-        }
+        actions.dispatch('toggleVisibility', { layerId: group.id });
+        onupdate();
     }
 
     function toggleCollapsed(e: MouseEvent) {
@@ -87,11 +82,6 @@
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
-        if (maskModifier !== null
-            && dispatchClick('maskThumb', e, { layerId: maskModifier.id })) {
-            onupdate();
-            return;
-        }
         if (maskModifier === null) return;
         // Activating the mask = setting the active node id to the modifier's
         // id. There is no separate "edit mask" redirect.
@@ -204,6 +194,7 @@
         <button
             class="vis-btn"
             class:hidden={!group.visible}
+            use:bindingSite={{ name: 'layerEye', ctx: () => ({ layerId: group.id }) }}
             onclick={toggleVisibility}
             onpointerdown={(e: PointerEvent) => { e.stopPropagation(); }}
             title="Toggle visibility"
@@ -241,6 +232,7 @@
                 width={THUMB_SIZE}
                 height={THUMB_SIZE}
                 draggable="false"
+                use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: maskModifier!.id }) }}
                 onclick={clickMaskThumb}
                 oncontextmenu={onMaskContextMenu}
             />

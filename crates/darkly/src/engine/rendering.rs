@@ -219,11 +219,10 @@ impl DarklyEngine {
                 seed_y,
                 color,
                 tolerance,
-                canvas_w,
-                canvas_h,
-            } => self.complete_flood_fill(
-                node_id, seed_x, seed_y, color, tolerance, canvas_w, canvas_h, pixels,
-            ),
+                extent,
+            } => {
+                self.complete_flood_fill(node_id, seed_x, seed_y, color, tolerance, extent, pixels)
+            }
             ReadbackContext::ColorPick => {
                 if pixels.len() >= 4 {
                     self.last_picked_color = [pixels[0], pixels[1], pixels[2], pixels[3]];
@@ -243,9 +242,10 @@ impl DarklyEngine {
                 seed_y,
                 tolerance,
                 mode,
+                extent,
             } => {
                 self.complete_magic_wand(
-                    was_active, node_id, seed_x, seed_y, tolerance, mode, pixels,
+                    was_active, node_id, seed_x, seed_y, tolerance, mode, extent, pixels,
                 );
             }
             ReadbackContext::ExportImage { width, height } => {

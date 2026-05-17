@@ -1,8 +1,8 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
-    import { toast } from '../../state/toast.svelte';
     import NewLayerMenu from './NewLayerMenu.svelte';
     import VeilPickerModal from '../veils/VeilPickerModal.svelte';
+    import { actions } from '../../actions/registry';
 
     let { onupdate }: { onupdate: () => void } = $props();
 
@@ -72,21 +72,11 @@
     );
 
     function remove() {
-        if (!app.handle) return;
-        if (app.activeVeilIndex !== null) {
-            app.removeVeil(app.activeVeilIndex);
-            onupdate();
-            return;
-        }
-        if (app.activeLayerId !== null) {
-            try {
-                app.handle.remove_layer(app.activeLayerId);
-                app.clearSelection();
-                onupdate();
-            } catch (e: any) {
-                toast.show('error', e.message ?? String(e));
-            }
-        }
+        // The `deleteLayer` action handles both veil-remove and layer-
+        // remove (including toast on error and tree refresh). The trash
+        // button just routes through it.
+        actions.dispatch('deleteLayer');
+        onupdate();
     }
 </script>
 

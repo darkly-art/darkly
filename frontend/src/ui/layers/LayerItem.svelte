@@ -1,7 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import { getNodeThumbnail, THUMB_SIZE } from './thumbnails';
-    import { dispatchClick } from '../../actions/triggers';
+    import { bindingSite } from '../../actions/binding_site';
     import { actions } from '../../actions/registry';
 
     interface Modifier {
@@ -46,46 +46,32 @@
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
-    // Each click handler dispatches against its own site only — no
-    // cross-site fallback. Bindings on a thumbnail receive that
-    // thumbnail's node id (host for `layerThumb`, mask modifier for
-    // `maskThumb`), so `isolateLayer` resolves correctly without the
-    // dispatcher having to know which kind it's looking at.
+    // Chord dispatch is owned by `use:bindingSite` on each preview
+    // element below — `bindingSite` intercepts modifier+click in capture
+    // phase and dispatches against its named site. These onclick handlers
+    // are the no-chord fallback (plain click → select / toggle visibility).
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchClick('layerEye', e, { layerId: layer.id })) {
-            onupdate();
-            return;
-        }
         actions.dispatch('toggleVisibility', { layerId: layer.id });
         onupdate();
     }
 
     function onLayerClick() {
-        // The layer-item body has no bindings — modifier+click is reserved
-        // for the previews. Plain click selects.
+        // The layer-item body has no chord bindings — modifier+click is
+        // reserved for the previews. Plain click selects.
         app.selectLayer(layer.id);
     }
 
     function clickLayerThumb(e: MouseEvent) {
         e.stopPropagation();
-        if (dispatchClick('layerThumb', e, { layerId: layer.id })) {
-            onupdate();
-            return;
-        }
         app.selectLayer(layer.id);
     }
 
     function clickMaskThumb(e: MouseEvent) {
         e.stopPropagation();
-        if (maskModifier !== null
-            && dispatchClick('maskThumb', e, { layerId: maskModifier.id })) {
-            onupdate();
-            return;
-        }
-        // Default: plain click activates the mask modifier as the paint
-        // target — the active node id IS the modifier id.
         if (maskModifier === null) return;
+        // Activating the mask = setting the active node id to the modifier's
+        // id. There is no separate "edit mask" redirect.
         app.selectLayer(maskModifier.id);
     }
 
@@ -211,6 +197,7 @@
     <button
         class="vis-btn"
         class:hidden={!layer.visible}
+        use:bindingSite={{ name: 'layerEye', ctx: () => ({ layerId: layer.id }) }}
         onclick={toggleVisibility}
         onpointerdown={(e: PointerEvent) => { e.stopPropagation(); draggable = false; }}
         onpointerup={() => { draggable = true; }}
@@ -230,6 +217,7 @@
             width={THUMB_SIZE}
             height={THUMB_SIZE}
             draggable="false"
+            use:bindingSite={{ name: 'layerThumb', ctx: () => ({ layerId: layer.id }) }}
             onclick={clickLayerThumb}
         />
     {/if}
@@ -245,6 +233,7 @@
             width={THUMB_SIZE}
             height={THUMB_SIZE}
             draggable="false"
+            use:bindingSite={{ name: 'maskThumb', ctx: () => ({ layerId: maskModifier!.id }) }}
             onclick={clickMaskThumb}
             oncontextmenu={onMaskContextMenu}
         />

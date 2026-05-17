@@ -10,7 +10,6 @@ use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
 use crate::gpu::flood_fill;
 use crate::gpu::paint_target::GpuPaintTarget;
-use crate::gpu::readback;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
@@ -307,15 +306,7 @@ impl DarklyEngine {
                 a,
                 tolerance,
             } => {
-                self.gpu_flood_fill(
-                    layer_id,
-                    x as i32,
-                    y as i32,
-                    [r, g, b, a],
-                    tolerance,
-                    canvas_w,
-                    canvas_h,
-                );
+                self.gpu_flood_fill(layer_id, x as i32, y as i32, [r, g, b, a], tolerance);
             }
             StrokeOp::BrushStroke {
                 x,
@@ -1095,15 +1086,11 @@ impl DarklyEngine {
         seed_y: i32,
         color: [u8; 4],
         tolerance: u8,
-        canvas_w: u32,
-        canvas_h: u32,
     ) {
         let pt = match self.paint_target(layer_id) {
             Some(t) => t,
             None => return,
         };
-        let texture = pt.texture;
-        let format = pt.format;
 
         let mut encoder = self
             .gpu
@@ -1111,13 +1098,8 @@ impl DarklyEngine {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("flood-fill-readback"),
             });
-        let request = readback::request_readback(
-            &self.gpu.device,
-            &mut encoder,
-            texture,
-            format,
-            [0, 0, canvas_w, canvas_h],
-        );
+        let (request, extent) =
+            flood_fill::request_layer_flood_fill_readback(&self.gpu.device, &mut encoder, &pt);
         self.gpu.queue.submit([encoder.finish()]);
         self.readbacks.submit(
             request,
@@ -1127,8 +1109,7 @@ impl DarklyEngine {
                 seed_y,
                 color,
                 tolerance,
-                canvas_w,
-                canvas_h,
+                extent,
             },
         );
     }
@@ -1144,23 +1125,12 @@ impl DarklyEngine {
         seed_y: i32,
         color: [u8; 4],
         tolerance: u8,
-        canvas_w: u32,
-        canvas_h: u32,
+        extent: flood_fill::LayerFloodFillExtent,
         pixels: Vec<u8>,
     ) {
-        let format = self
-            .compositor
-            .node_texture(layer_id)
-            .map(|t| t.format)
-            .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
-        let fill_mask = match format {
-            wgpu::TextureFormat::R8Unorm => {
-                flood_fill::flood_fill_r8(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
-            }
-            _ => {
-                flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
-            }
-        };
+        let fill_mask = extent.flood_fill_to_canvas_mask(&pixels, seed_x, seed_y, tolerance);
+        let canvas_w = extent.canvas_width;
+        let canvas_h = extent.canvas_height;
 
         // 2. Combine fill mask with active selection (if any), then upload.
         let effective_mask = if self.has_selection() {
