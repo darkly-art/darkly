@@ -182,7 +182,7 @@ Every system must be implemented properly. No hacks, no hardcoding, no shortcuts
 
 **Every bug is a signal that something nearby is awkward or overcomplicated.** Before patching, ask: "is this an elegant solution?" If the answer is no, the bug is telling you the code wants to be restructured — propose a refactor instead of layering a fix on top. The cleanest fix is often the one that makes the bug impossible to express, not the one that handles it.
 
-**Keep the README "Features & Roadmap" checklist in sync with the codebase.** When you ship, remove, or rename a user-visible feature (one with a button and, where appropriate, a hotkey in the frontend) in the same change update the checklist in `README.md` — flip `[ ]` to `[x]`, drop it from the relevant Tier section, or add a new line. A Rust helper without a frontend surface does not count as shipped.
+**Keep the README "Features & Roadmap" checklist in sync with the codebase.** When you ship, remove, or rename a user-visible feature (one with a button and, where appropriate, a hotkey in the frontend) in the same change update the checklist in `README.md` — flip `[ ]` to `[x]`, or add a new line. A Rust helper without a frontend surface does not count as shipped.
 
 ## No Migrations / No Backwards Compatibility (pre-release)
 
