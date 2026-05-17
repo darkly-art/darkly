@@ -296,9 +296,8 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
                 screen_w,
                 screen_h,
             } => {
-                engine.set_view_transform(
-                    pan_x, pan_y, zoom, rotation, mirror_h, screen_w, screen_h,
-                );
+                engine
+                    .set_view_transform(pan_x, pan_y, zoom, rotation, mirror_h, screen_w, screen_h);
             }
             Command::Resize(w, h) => engine.resize(w, h),
 

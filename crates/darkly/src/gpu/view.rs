@@ -133,16 +133,18 @@ mod tests {
         let sh = 600.0;
         let cw = 400.0;
         let ch = 300.0;
-        let unmirrored = ViewTransform::from_pan_zoom_rotate(
-            pan_x, pan_y, zoom, rot, false, sw, sh, cw, ch,
-        );
-        let mirrored = ViewTransform::from_pan_zoom_rotate(
-            pan_x, pan_y, zoom, rot, true, sw, sh, cw, ch,
-        );
+        let unmirrored =
+            ViewTransform::from_pan_zoom_rotate(pan_x, pan_y, zoom, rot, false, sw, sh, cw, ch);
+        let mirrored =
+            ViewTransform::from_pan_zoom_rotate(pan_x, pan_y, zoom, rot, true, sw, sh, cw, ch);
         for &(x, y) in &[(123.0, 88.0), (600.0, 450.0), (0.0, 0.0), (sw, sh)] {
             let (ux, uy) = unmirrored.screen_to_canvas(x, y);
             let (mx, my) = mirrored.screen_to_canvas(x, y);
-            assert!(approx(ux + mx, cw), "x={x} y={y}: ux+mx={} (want {cw})", ux + mx);
+            assert!(
+                approx(ux + mx, cw),
+                "x={x} y={y}: ux+mx={} (want {cw})",
+                ux + mx
+            );
             assert!(approx(uy, my), "x={x} y={y}: uy={uy} my={my}");
         }
     }
