@@ -8,25 +8,35 @@ use crate::gpu::atlas::{CanvasFrame, LayerTexture};
 
 /// A GPU texture you can paint on. Lightweight handle — no owned GPU state.
 ///
-/// Brush coordinates are passed in **canvas space**. Vertex-stage NDC mapping
-/// uses the target's pixel dimensions (`width`, `height`) and canvas-space
-/// offset (`offset_x`, `offset_y`). Fragment-stage selection sampling uses the
-/// document `canvas_size` so off-canvas pixels sample outside the selection
-/// texture and clamp/wrap correctly.
+/// All coordinate-bearing fields are private. Callers go through the typed
+/// accessors ([`canvas_extent`], [`layer_extent`], [`canvas_size`]) so the
+/// canvas/layer-local distinction lives in the type system rather than in
+/// convention.
+///
+/// Brush coordinates are passed in **canvas space**. Vertex-stage NDC
+/// mapping uses the target's pixel dimensions ([`layer_extent`]) and
+/// canvas-space offset ([`canvas_extent`]). Fragment-stage selection
+/// sampling uses the document canvas size ([`canvas_size`]) so off-canvas
+/// pixels sample outside the selection texture and clamp/wrap correctly.
+///
+/// [`canvas_extent`]: GpuPaintTarget::canvas_extent
+/// [`layer_extent`]: GpuPaintTarget::layer_extent
+/// [`canvas_size`]: GpuPaintTarget::canvas_size
 #[derive(Copy, Clone)]
 pub struct GpuPaintTarget<'a> {
-    pub texture: &'a wgpu::Texture,
-    pub view: &'a wgpu::TextureView,
-    pub format: wgpu::TextureFormat,
-    /// Texture pixel dimensions.
-    pub width: u32,
-    pub height: u32,
-    /// Canvas-space offset of pixel (0, 0).
-    pub offset_x: i32,
-    pub offset_y: i32,
+    texture: &'a wgpu::Texture,
+    view: &'a wgpu::TextureView,
+    format: wgpu::TextureFormat,
+    /// Texture pixel dimensions. Exposed via [`layer_extent`](Self::layer_extent).
+    width: u32,
+    height: u32,
+    /// Canvas-space offset of pixel (0, 0). Exposed via [`canvas_extent`](Self::canvas_extent).
+    offset_x: i32,
+    offset_y: i32,
     /// Document canvas size — used for fragment-stage selection UV.
-    pub canvas_width: u32,
-    pub canvas_height: u32,
+    /// Exposed via [`canvas_size`](Self::canvas_size).
+    canvas_width: u32,
+    canvas_height: u32,
 }
 
 impl<'a> GpuPaintTarget<'a> {
@@ -35,29 +45,104 @@ impl<'a> GpuPaintTarget<'a> {
     /// Replaces `from_layer` / `from_mask` — callers no longer dispatch on
     /// node kind, only on the texture they hand in.
     pub fn from_node(tex: &'a LayerTexture, canvas_width: u32, canvas_height: u32) -> Self {
+        let extent = tex.canvas_extent();
         GpuPaintTarget {
-            texture: &tex.texture,
-            view: &tex.view,
-            format: tex.format,
-            width: tex.width,
-            height: tex.height,
-            offset_x: tex.offset_x,
-            offset_y: tex.offset_y,
+            texture: tex.texture(),
+            view: tex.view(),
+            format: tex.format(),
+            width: extent.width,
+            height: extent.height,
+            offset_x: extent.origin.x,
+            offset_y: extent.origin.y,
             canvas_width,
             canvas_height,
         }
+    }
+
+    /// Wrap a canvas-aligned texture (e.g. the floating preview, the selection
+    /// mask) as a paint target. The target's extent matches the canvas: origin
+    /// `(0, 0)`, size `(canvas_width, canvas_height)`.
+    ///
+    /// Use [`from_node`](Self::from_node) for layer textures, which may be
+    /// offset or larger than canvas.
+    pub fn from_canvas_texture(
+        texture: &'a wgpu::Texture,
+        view: &'a wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) -> Self {
+        Self::from_extent(
+            texture,
+            view,
+            format,
+            CanvasRect::from_xywh(0, 0, canvas_width, canvas_height),
+            canvas_width,
+            canvas_height,
+        )
+    }
+
+    /// Wrap a texture sitting at an explicit canvas extent. Lower-level
+    /// constructor used by the test helpers and the paste-extent
+    /// allocation path; production layer code prefers
+    /// [`from_node`](Self::from_node).
+    pub fn from_extent(
+        texture: &'a wgpu::Texture,
+        view: &'a wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        canvas_extent: CanvasRect,
+        canvas_width: u32,
+        canvas_height: u32,
+    ) -> Self {
+        GpuPaintTarget {
+            texture,
+            view,
+            format,
+            width: canvas_extent.width,
+            height: canvas_extent.height,
+            offset_x: canvas_extent.x0(),
+            offset_y: canvas_extent.y0(),
+            canvas_width,
+            canvas_height,
+        }
+    }
+
+    // ----- Typed accessors -----
+
+    pub fn texture(&self) -> &'a wgpu::Texture {
+        self.texture
+    }
+
+    pub fn view(&self) -> &'a wgpu::TextureView {
+        self.view
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
+
+    /// Texture-local extent — always at origin (0, 0).
+    pub fn layer_extent(&self) -> crate::coord::LayerRect {
+        crate::coord::LayerRect::from_xywh(0, 0, self.width, self.height)
+    }
+
+    /// Canvas-space rect this target occupies.
+    pub fn canvas_extent(&self) -> CanvasRect {
+        CanvasRect::from_xywh(self.offset_x, self.offset_y, self.width, self.height)
+    }
+
+    /// Document canvas dimensions in pixels — used to compute fragment-stage
+    /// selection UV. Distinct from the target's own extent: paste-extent
+    /// and grown layers occupy a `canvas_extent` different from `canvas_size`.
+    pub fn canvas_size(&self) -> (u32, u32) {
+        (self.canvas_width, self.canvas_height)
     }
 
     /// Borrow this target as a `CanvasFrame` for region-store APIs.
     pub fn canvas_frame(&self) -> CanvasFrame<'a> {
         CanvasFrame {
             texture: self.texture,
-            canvas_extent: CanvasRect::from_xywh(
-                self.offset_x,
-                self.offset_y,
-                self.width,
-                self.height,
-            ),
+            canvas_extent: self.canvas_extent(),
         }
     }
 
@@ -135,14 +220,14 @@ impl<'a> GpuPaintTarget<'a> {
     }
 
     /// Fill a canvas-space rect with a solid color via alpha-over blending.
-    /// `rect` is `[x, y, w, h]` in canvas pixel coordinates — origin may be
-    /// negative on paste-extent layers; size must be non-negative.
+    /// `rect` is in canvas pixel coordinates — origin may be negative on
+    /// paste-extent layers.
     pub fn fill_rect(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
-        rect: [i32; 4],
+        rect: CanvasRect,
         color: [u8; 4],
     ) {
         self.fill_rect_inner(encoder, pipelines, queue, rect, color, None);
@@ -156,7 +241,7 @@ impl<'a> GpuPaintTarget<'a> {
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
-        rect: [i32; 4],
+        rect: CanvasRect,
         color: [u8; 4],
         selection_bind_group: &wgpu::BindGroup,
     ) {
@@ -363,16 +448,15 @@ impl<'a> GpuPaintTarget<'a> {
     }
 
     /// Clear a canvas-space rect to transparent (RGBA) or full reveal (R8).
-    /// `rect` is `[x, y, w, h]` in canvas pixel coordinates — origin may be
-    /// negative on paste-extent layers; size must be non-negative.
+    /// `rect` is in canvas pixel coordinates — origin may be negative on
+    /// paste-extent layers.
     pub fn clear_rect(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
-        rect: [i32; 4],
+        rect: CanvasRect,
     ) {
-        let [x, y, w, h] = rect;
         let pipeline = pipelines.clear_pipeline(self.format);
 
         let color = match self.format {
@@ -381,8 +465,8 @@ impl<'a> GpuPaintTarget<'a> {
         };
 
         let uniforms = PaintUniforms {
-            origin: [x as f32, y as f32],
-            size: [w.max(0) as f32, h.max(0) as f32],
+            origin: [rect.x0() as f32, rect.y0() as f32],
+            size: [rect.width as f32, rect.height as f32],
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
@@ -460,16 +544,15 @@ impl<'a> GpuPaintTarget<'a> {
         encoder: &mut wgpu::CommandEncoder,
         pipelines: &PaintPipelines,
         queue: &wgpu::Queue,
-        rect: [i32; 4],
+        rect: CanvasRect,
         color: [u8; 4],
         selection: Option<&wgpu::BindGroup>,
     ) {
-        let [x, y, w, h] = rect;
         let pipeline = pipelines.composite_pipeline(self.format);
 
         let uniforms = PaintUniforms {
-            origin: [x as f32, y as f32],
-            size: [w.max(0) as f32, h.max(0) as f32],
+            origin: [rect.x0() as f32, rect.y0() as f32],
+            size: [rect.width as f32, rect.height as f32],
             target_offset: [self.offset_x as f32, self.offset_y as f32],
             target_size: [self.width as f32, self.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],

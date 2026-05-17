@@ -4,23 +4,40 @@ use crate::coord::{CanvasPoint, CanvasRect, LayerPoint, LayerRect};
 /// One Rgba8Unorm texture per layer, sized to the layer's pixel bounds —
 /// which default to canvas dimensions but may be larger when content
 /// extends past the canvas (e.g. paste of an oversized image).
+///
+/// ## Coordinate-space discipline
+///
+/// All coordinate-bearing fields are private. Callers go through the typed
+/// accessors ([`canvas_extent`], [`layer_extent`], [`canvas_to_layer*`],
+/// [`layer_to_canvas*`]) so the canvas/layer-local distinction lives in the
+/// type system rather than in convention. See module docs of
+/// [`crate::coord`] and the project's CLAUDE.md for the rule: every
+/// coordinate at every interface names its space; only the texture itself
+/// translates between them.
+///
+/// [`canvas_extent`]: LayerTexture::canvas_extent
+/// [`layer_extent`]: LayerTexture::layer_extent
+/// [`canvas_to_layer*`]: LayerTexture::canvas_to_layer
+/// [`layer_to_canvas*`]: LayerTexture::layer_to_canvas
 pub struct LayerTexture {
-    pub texture: wgpu::Texture,
-    pub view: wgpu::TextureView,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
     /// Texture dimensions in pixels. Mirrors the size used at allocation
     /// so callers don't need to reach into the wgpu::Texture descriptor.
-    pub width: u32,
-    pub height: u32,
+    /// Exposed via [`layer_extent`](Self::layer_extent).
+    width: u32,
+    height: u32,
     /// Canvas-space offset of the texture's (0,0) pixel. Default (0,0) for
     /// canvas-aligned layers; non-zero for layers whose bounds extend past
     /// or are placed inside canvas (e.g. paste of an oversized image).
-    pub offset_x: i32,
-    pub offset_y: i32,
-    /// Texture format. Tracked here so format-driven dispatch (R8 vs RGBA
-    /// paint pipelines, transform pipelines) doesn't have to reach into
-    /// `texture.format()` and matches what the document-side `PixelBuffer`
-    /// records.
-    pub format: wgpu::TextureFormat,
+    /// Exposed via [`canvas_extent`](Self::canvas_extent).
+    offset_x: i32,
+    offset_y: i32,
+    /// Texture format. Exposed via [`format`](Self::format) so format-driven
+    /// dispatch (R8 vs RGBA paint pipelines, transform pipelines) doesn't
+    /// have to reach into `texture.format()`; matches what the document-side
+    /// `PixelBuffer` records.
+    format: wgpu::TextureFormat,
 }
 
 impl LayerTexture {
@@ -143,7 +160,33 @@ impl LayerTexture {
         }
     }
 
-    /// Canvas-space rect this texture occupies.
+    // ----- Typed accessors -----
+
+    /// Borrow the underlying GPU texture. Use this when handing the texture
+    /// to a wgpu API; do not reach for coordinate information through it.
+    pub fn texture(&self) -> &wgpu::Texture {
+        &self.texture
+    }
+
+    /// Borrow the texture's default view.
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
+    pub fn format(&self) -> wgpu::TextureFormat {
+        self.format
+    }
+
+    /// Texture-local extent — always at origin `(0, 0)` with the texture's
+    /// pixel dimensions. Use this when iterating over the texture in its own
+    /// coordinate frame or when handing dimensions to wgpu (which speaks in
+    /// texture pixels, not canvas pixels).
+    pub fn layer_extent(&self) -> LayerRect {
+        LayerRect::from_xywh(0, 0, self.width, self.height)
+    }
+
+    /// Canvas-space rect this texture occupies. The origin may be negative
+    /// for paste-extent layers or layers grown leftward / upward of canvas.
     pub fn canvas_extent(&self) -> CanvasRect {
         CanvasRect::from_xywh(self.offset_x, self.offset_y, self.width, self.height)
     }

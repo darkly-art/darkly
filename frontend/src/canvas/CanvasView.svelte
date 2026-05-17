@@ -10,6 +10,7 @@
     import { toast } from '../state/toast.svelte';
     import { theme } from '../state/theme.svelte';
     import { dispatchDrag } from '../actions/triggers';
+    import { bindingSite } from '../actions/binding_site';
     import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails';
 
@@ -373,9 +374,18 @@
 />
 
 <div class="canvas-container">
+    <!-- `canvas` is a binding site for keyboard scope only — its mouse/drag
+         pipeline (nav → tool-claim → chord → tool default) is ordered
+         inside `onPointerDown`, so `mouse: false` keeps `bindingSite` from
+         duplicating that dispatch. -->
     <canvas
         bind:this={canvas}
         style:cursor={inst.toolCursor ?? nav.cursor}
+        use:bindingSite={{
+            name: 'canvas',
+            ctx: () => ({ x: 0, y: 0 }),
+            mouse: false,
+        }}
         onpointerdown={onPointerDown}
         onpointermove={onPointerMove}
         onpointerup={onPointerUp}

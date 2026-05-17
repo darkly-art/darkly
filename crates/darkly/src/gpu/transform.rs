@@ -578,9 +578,10 @@ impl TransformPass {
         preview_mask_bind_group: Option<wgpu::BindGroup>,
         preview_blend_uniform_buf: wgpu::Buffer,
     ) {
-        let layer_texture = &layer.texture;
-        let layer_offset = (layer.offset_x, layer.offset_y);
-        let layer_dims = (layer.width, layer.height);
+        let layer_texture = layer.texture();
+        let layer_canvas = layer.canvas_extent();
+        let layer_offset = (layer_canvas.x0(), layer_canvas.y0());
+        let layer_dims = (layer_canvas.width, layer_canvas.height);
         let is_r8 = target_format == wgpu::TextureFormat::R8Unorm;
 
         let source_texture = device.create_texture(&wgpu::TextureDescriptor {

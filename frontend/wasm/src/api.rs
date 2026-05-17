@@ -271,8 +271,7 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             } => {
                 engine.select_magic_wand(
                     LayerId::from_ffi(layer_id),
-                    seed_x,
-                    seed_y,
+                    darkly::coord::CanvasPoint::new(seed_x, seed_y),
                     tolerance,
                     mode,
                 );

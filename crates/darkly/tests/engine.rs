@@ -2441,7 +2441,12 @@ fn engine_magic_wand_on_mask_reads_mask_not_layer() {
     // Pre-fix the wand would read from the layer (transparent everywhere)
     // and select the full canvas regardless of mask state — fixed by
     // dispatching format from the active node id.
-    engine.select_magic_wand(mask_id, 4, (h / 2) as i32, 0, SelectionMode::Replace);
+    engine.select_magic_wand(
+        mask_id,
+        darkly::coord::CanvasPoint::new(4, (h / 2) as i32),
+        0,
+        SelectionMode::Replace,
+    );
     engine.test_flush_readbacks();
 
     let cache = engine
@@ -2458,6 +2463,189 @@ fn engine_magic_wand_on_mask_reads_mask_not_layer() {
         "right (mask=0) half must NOT be selected — pre-fix the magic wand \
          flood-filled the empty RGBA layer instead of the mask, producing a \
          full-canvas selection; got {outside}"
+    );
+}
+
+/// Regression: the flood-fill primitive shared by magic wand and the paint-
+/// bucket tool must translate the click coordinate from canvas space into the
+/// layer texture's own coordinate frame, and project the resulting mask back
+/// into canvas space. Pre-fix both code paths hardcoded the readback rect to
+/// `[0, 0, canvas_w, canvas_h]` and treated the seed plus the resulting fill
+/// mask as if they were canvas-aligned — but the layer texture can sit at a
+/// non-zero canvas offset (paste-extent layers, or layers grown leftward /
+/// upward by `ensure_layer_covers_dab`). The result: the seed sampled the
+/// wrong texture pixel, the produced mask was layer-local but applied as
+/// canvas-aligned, and the selection (or paint deposit) landed shifted from
+/// where the user clicked.
+#[test]
+fn engine_magic_wand_on_paste_extent_layer_translates_coords() {
+    use darkly::coord::CanvasRect;
+
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Paste a 96×96 image at canvas (-32, -32). The texture covers canvas
+    // (-32, -32) to (64, 64), so the visible canvas region (0..64, 0..64)
+    // lives in the texture's bottom-right.
+    //
+    // Image content: transparent everywhere except an opaque-red 32×32 block
+    // at texture (48..80, 48..80) — which projects onto canvas (16..48, 16..48).
+    let pw: u32 = 96;
+    let ph: u32 = 96;
+    let mut rgba = vec![0u8; (pw * ph * 4) as usize];
+    for ty in 48..80u32 {
+        for tx in 48..80u32 {
+            let i = ((ty * pw + tx) * 4) as usize;
+            rgba[i] = 255;
+            rgba[i + 3] = 255;
+        }
+    }
+    let pasted = engine.paste_image(pw, ph, &rgba, -32, -32, None);
+
+    assert_eq!(
+        engine.layer_bounds(pasted),
+        Some(CanvasRect::from_xywh(-32, -32, pw, ph)),
+        "paste layer must sit at canvas offset (-32, -32) with the full 96×96 extent"
+    );
+
+    // Magic wand seeded at canvas (32, 32) — the visible center of the red
+    // block. Tolerance 0 ⇒ flood fill picks up only the connected red pixels.
+    engine.select_magic_wand(
+        pasted,
+        darkly::coord::CanvasPoint::new(32, 32),
+        0,
+        SelectionMode::Replace,
+    );
+    engine.test_flush_readbacks();
+
+    let cache = engine
+        .test_selection_cpu_cache()
+        .expect("magic wand must populate the selection cpu cache");
+
+    // Center of the visible red block: must be selected.
+    let inside = cache[(32u32 * cw + 32u32) as usize];
+    assert!(
+        inside > 200,
+        "seed pixel inside the visible red block must be selected; got {inside}"
+    );
+
+    // Canvas (0, 0): visible canvas is transparent here, outside the red
+    // region ⇒ must NOT be selected. Pre-fix the seed at canvas (32, 32)
+    // landed inside an off-canvas transparent region of the texture (because
+    // the readback was canvas-rect-anchored rather than texture-anchored), and
+    // the resulting full-canvas flood mask got applied with its origin
+    // sheared into this corner.
+    let outside_tl = cache[0];
+    assert_eq!(
+        outside_tl, 0,
+        "transparent top-left canvas pixel must NOT be selected; got {outside_tl}. \
+         Pre-fix the readback rect was hardcoded to the canvas extent, so the seed \
+         sampled the wrong texture pixel and the resulting mask got shifted onto \
+         the wrong canvas region."
+    );
+
+    // Canvas (16, 16): on the boundary of the visible red block — should be
+    // selected (top-left corner of the red region).
+    let red_corner = cache[(16u32 * cw + 16u32) as usize];
+    assert!(
+        red_corner > 200,
+        "top-left corner of the visible red block (canvas 16,16) must be selected; \
+         got {red_corner}"
+    );
+
+    // Canvas (48, 48): just outside the red block on the bottom-right ⇒ must
+    // NOT be selected.
+    let outside_br = cache[(48u32 * cw + 48u32) as usize];
+    assert_eq!(
+        outside_br, 0,
+        "canvas pixel just past the bottom-right edge of the red block must NOT \
+         be selected; got {outside_br}"
+    );
+}
+
+/// Regression: same coordinate bug as `engine_magic_wand_on_paste_extent_layer_translates_coords`,
+/// for the paint-bucket / `StrokeOp::FloodFill` path. Pre-fix the seed sampled
+/// the wrong texture pixel and the deposited fill color landed shifted from
+/// where the user clicked.
+#[test]
+fn engine_flood_fill_on_paste_extent_layer_translates_coords() {
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Same paste-extent layer as the magic-wand regression: 96×96 image at
+    // canvas (-32, -32), with an opaque-red 32×32 block at texture
+    // (48..80, 48..80) ⇒ visible at canvas (16..48, 16..48).
+    let pw: u32 = 96;
+    let ph: u32 = 96;
+    let mut rgba = vec![0u8; (pw * ph * 4) as usize];
+    for ty in 48..80u32 {
+        for tx in 48..80u32 {
+            let i = ((ty * pw + tx) * 4) as usize;
+            rgba[i] = 255;
+            rgba[i + 3] = 255;
+        }
+    }
+    let pasted = engine.paste_image(pw, ph, &rgba, -32, -32, None);
+
+    // Bucket-fill at canvas (32, 32) — center of the visible red block.
+    // Tolerance 0 ⇒ only the contiguous red region should change.
+    engine.begin_stroke(pasted);
+    engine.stroke_to(StrokeOp::FloodFill {
+        x: 32.0,
+        y: 32.0,
+        r: 0,
+        g: 255,
+        b: 0,
+        a: 255,
+        tolerance: 0,
+    });
+    engine.end_stroke();
+    engine.test_flush_readbacks();
+    engine.render(0.0);
+
+    // Read the raw layer texture (96×96, in layer-local coords) and assert
+    // the fill landed in the right place.
+    let pixels = engine.test_readback_layer(pasted);
+
+    // Center of the (formerly red) block, texture (64, 64) = canvas (32, 32):
+    // must now be opaque green.
+    let center_idx = ((64u32 * pw + 64u32) * 4) as usize;
+    assert!(
+        pixels[center_idx] < 50 && pixels[center_idx + 1] > 200 && pixels[center_idx + 3] > 200,
+        "center of the red block (canvas 32,32 = texture 64,64) must be replaced \
+         with opaque green; got rgba=({}, {}, {}, {})",
+        pixels[center_idx],
+        pixels[center_idx + 1],
+        pixels[center_idx + 2],
+        pixels[center_idx + 3]
+    );
+
+    // Texture (40, 40) = canvas (8, 8). On-canvas, outside the red block, so
+    // it started transparent. Pre-fix the upload mask was canvas-rect-aliased
+    // — the seed read a transparent pixel from the wrong place, the resulting
+    // mask covered "everything except the visible red corner of the readback
+    // buffer", and the fill_rect deposited green here. Post-fix the mask is
+    // properly layer-translated and this pixel stays transparent.
+    let stray_idx = ((40u32 * pw + 40u32) * 4) as usize;
+    assert_eq!(
+        pixels[stray_idx + 3],
+        0,
+        "texture (40,40) = canvas (8,8) was transparent and disconnected from the \
+         red block; it must remain transparent. Pre-fix the bucket fill leaked \
+         green here because the readback rect was canvas-anchored rather than \
+         texture-anchored. Got rgba=({}, {}, {}, {})",
+        pixels[stray_idx],
+        pixels[stray_idx + 1],
+        pixels[stray_idx + 2],
+        pixels[stray_idx + 3]
+    );
+
+    // Texture (0, 0) = canvas (-32, -32). Fully off-canvas — must remain
+    // transparent regardless of fix (the fill_rect is canvas-clipped).
+    assert_eq!(
+        pixels[3], 0,
+        "off-canvas texture corner must stay transparent; got alpha={}",
+        pixels[3]
     );
 }
 

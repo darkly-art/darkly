@@ -4,8 +4,29 @@
 //! Produces an R8 mask suitable for uploading as a GPU texture.
 //!
 //! Flow: readback layer → CPU scanline fill → upload mask → GPU stamp.
+//!
+//! ## Layer-aware orchestration ([`LayerFloodFillExtent`])
+//!
+//! Magic wand and the paint-bucket fill tool both flood-fill a layer from a
+//! canvas-space seed and consume the result as a canvas-aligned mask. The
+//! GPU layer texture, however, is **not** in general canvas-aligned: it can
+//! sit at a non-zero canvas offset and be larger or smaller than the canvas
+//! (paste-extent layers, leftward-grown layers from `ensure_layer_covers_dab`,
+//! masks parented to off-canvas raster layers).
+//!
+//! [`request_layer_flood_fill_readback`] + [`LayerFloodFillExtent`] are the
+//! single place that owns the canvas↔texture translation:
+//! the readback samples the texture's full extent, the canvas-space seed is
+//! translated to texture-local coords for the scanline fill, and the
+//! resulting layer-local mask is projected back into a canvas-aligned R8
+//! buffer. Both call sites consume the same `extent.flood_fill_to_canvas_mask`
+//! helper so the math lives once. **Do not** call `request_readback` with a
+//! canvas-rect from a flood-fill call site — go through this helper.
 
 use std::collections::VecDeque;
+
+use crate::gpu::paint_target::GpuPaintTarget;
+use crate::gpu::readback::{self, ReadbackRequest};
 
 /// Scanline flood fill on flat RGBA pixel data.
 ///
@@ -228,6 +249,139 @@ fn fill_span(mask: &mut [u8], width: u32, start: i32, end: i32, y: i32) {
     for x in start..end {
         mask[row_offset + x as usize] = 255;
     }
+}
+
+// ---------------------------------------------------------------------------
+// Layer-aware flood-fill orchestration
+// ---------------------------------------------------------------------------
+
+/// Snapshot of a paint target's coordinate frame, captured at flood-fill
+/// request time and carried through the async readback round-trip.
+///
+/// Owns no GPU resources — pure metadata. Pairs with the readback request
+/// returned by [`request_layer_flood_fill_readback`]: the request reads the
+/// texture's full extent (`width × height` pixels starting at texture-local
+/// (0,0)), and this struct provides the canvas↔texture translation on the
+/// other side so callers receive a canvas-aligned R8 mask without re-deriving
+/// the layer offset.
+#[derive(Copy, Clone)]
+pub struct LayerFloodFillExtent {
+    /// Canvas-space offset of the texture's (0, 0) pixel.
+    pub offset_x: i32,
+    pub offset_y: i32,
+    /// Texture pixel dimensions — the size of the readback buffer.
+    pub width: u32,
+    pub height: u32,
+    /// Document canvas dimensions — the size of the produced mask.
+    pub canvas_width: u32,
+    pub canvas_height: u32,
+    pub format: wgpu::TextureFormat,
+}
+
+impl LayerFloodFillExtent {
+    pub fn from_target(target: &GpuPaintTarget<'_>) -> Self {
+        let canvas_extent = target.canvas_extent();
+        let layer_extent = target.layer_extent();
+        let (canvas_w, canvas_h) = target.canvas_size();
+        Self {
+            offset_x: canvas_extent.x0(),
+            offset_y: canvas_extent.y0(),
+            width: layer_extent.width,
+            height: layer_extent.height,
+            canvas_width: canvas_w,
+            canvas_height: canvas_h,
+            format: target.format(),
+        }
+    }
+
+    /// Run the CPU scanline fill on the texture-extent buffer and project the
+    /// resulting layer-local mask into a canvas-aligned R8 mask sized
+    /// `canvas_width × canvas_height`.
+    ///
+    /// `seed_canvas` is the click point in canvas coordinates. The seed is
+    /// translated to texture-local coords before the scanline fill runs;
+    /// pixels outside the layer's canvas footprint stay 0 in the output (the
+    /// layer has no data there).
+    ///
+    /// Format dispatch matches the texture's own format — RGBA reads four
+    /// bytes per pixel, R8 reads one.
+    pub fn flood_fill_to_canvas_mask(
+        &self,
+        pixels: &[u8],
+        seed_canvas: crate::coord::CanvasPoint,
+        tolerance: u8,
+    ) -> Vec<u8> {
+        let layer_seed_x = seed_canvas.x - self.offset_x;
+        let layer_seed_y = seed_canvas.y - self.offset_y;
+
+        let layer_mask = match self.format {
+            wgpu::TextureFormat::R8Unorm => flood_fill_r8(
+                pixels,
+                self.width,
+                self.height,
+                layer_seed_x,
+                layer_seed_y,
+                tolerance,
+            ),
+            _ => flood_fill_rgba(
+                pixels,
+                self.width,
+                self.height,
+                layer_seed_x,
+                layer_seed_y,
+                tolerance,
+            ),
+        };
+
+        let cw = self.canvas_width as usize;
+        let ch = self.canvas_height as usize;
+        let mut canvas_mask = vec![0u8; cw * ch];
+
+        let x0 = self.offset_x.max(0);
+        let y0 = self.offset_y.max(0);
+        let x1 = (self.offset_x + self.width as i32).min(self.canvas_width as i32);
+        let y1 = (self.offset_y + self.height as i32).min(self.canvas_height as i32);
+        if x0 >= x1 || y0 >= y1 {
+            return canvas_mask;
+        }
+
+        let stride = self.width as usize;
+        for cy in y0..y1 {
+            let ty = (cy - self.offset_y) as usize;
+            let src_row = ty * stride;
+            let dst_row = (cy as usize) * cw;
+            for cx in x0..x1 {
+                let tx = (cx - self.offset_x) as usize;
+                canvas_mask[dst_row + cx as usize] = layer_mask[src_row + tx];
+            }
+        }
+
+        canvas_mask
+    }
+}
+
+/// Encode a readback of a layer's full texture extent and return the request
+/// paired with the extent snapshot the completion handler needs.
+///
+/// Single source of truth for the readback rect used by magic wand and the
+/// paint-bucket flood fill. The rect is the texture's own dimensions, NOT
+/// the canvas — see the module docs for why.
+pub fn request_layer_flood_fill_readback(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    target: &GpuPaintTarget<'_>,
+) -> (ReadbackRequest, LayerFloodFillExtent) {
+    let extent = LayerFloodFillExtent::from_target(target);
+    // Texture-local rect spanning the entire layer — the canvas↔texture
+    // translation happens later, in `flood_fill_to_canvas_mask`.
+    let request = readback::request_readback(
+        device,
+        encoder,
+        target.texture(),
+        target.format(),
+        target.layer_extent(),
+    );
+    (request, extent)
 }
 
 #[cfg(test)]

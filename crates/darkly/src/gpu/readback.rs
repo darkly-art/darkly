@@ -38,17 +38,29 @@ pub struct ReadbackRequest {
 
 /// Encode a `copy_texture_to_buffer` command for a texture region.
 ///
+/// The `rect` is **texture-local** ([`LayerRect`]): `(0, 0)` is the top-left
+/// of the texture, regardless of where the texture sits in canvas space. This
+/// is enforced by the type — callers can't accidentally pass a canvas rect
+/// (which may have a negative origin, or extend past the texture). Translate
+/// canvas → layer via [`LayerTexture::canvas_to_layer_rect`] before calling.
+///
 /// After this, the caller must:
 /// 1. `queue.submit([encoder.finish()])`
 /// 2. Pass the request to [`ReadbackScheduler::submit`].
+///
+/// [`LayerRect`]: crate::coord::LayerRect
+/// [`LayerTexture::canvas_to_layer_rect`]: crate::gpu::atlas::LayerTexture::canvas_to_layer_rect
 pub fn request_readback(
     device: &wgpu::Device,
     encoder: &mut wgpu::CommandEncoder,
     texture: &wgpu::Texture,
     format: wgpu::TextureFormat,
-    rect: [u32; 4],
+    rect: crate::coord::LayerRect,
 ) -> ReadbackRequest {
-    let [x, y, w, h] = rect;
+    let x = rect.x0();
+    let y = rect.y0();
+    let w = rect.width;
+    let h = rect.height;
     let bpp = format.block_copy_size(None).unwrap_or(1);
     let unpadded_row_bytes = w * bpp;
     let padded_row_bytes = unpadded_row_bytes.div_ceil(COPY_ROW_ALIGNMENT) * COPY_ROW_ALIGNMENT;

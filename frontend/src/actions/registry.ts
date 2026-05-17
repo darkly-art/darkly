@@ -13,10 +13,13 @@ export interface ActionRegistration {
     requires?: string[];
     accepts?: string[];
     type?: ActionType;
-    /** Default keyboard trigger (tinykeys notation, e.g. "$mod+KeyZ").
-     *  Used when no `hotkeys.<id>` setting is present. Empty/undefined =
+    /** Default keyboard trigger(s) in tinykeys notation, optionally prefixed
+     *  by a binding site: `"$mod+KeyZ"` (global) or `"layerPanel:Delete"`
+     *  (fires only when a `layerPanel` binding site is the active site).
+     *  Used when no `hotkeys.<id>` setting is present. Pass an array when
+     *  one action wants to be bound to multiple chords. Empty/undefined =
      *  no keyboard trigger by default. */
-    defaultHotkey?: string;
+    defaultHotkey?: string | string[];
     /** Default mouse trigger(s) ("<site>:<chord>", e.g. "layerEye:alt+click").
      *  Used when no `mouseclicks.<id>` setting is present. Pass an array
      *  when one action wants the same chord to fire from multiple sites
@@ -36,6 +39,9 @@ export interface ActionRegistration {
 export interface BindingSiteRegistration {
     name: string;
     provides: string[];
+    /** Human-readable label shown in the cheatsheet scope chip and the
+     *  settings UI's site dropdown. Defaults to a title-cased `name`. */
+    displayName?: string;
 }
 
 /** Check if an action's hard requirements are satisfied by a set of provided keys. */

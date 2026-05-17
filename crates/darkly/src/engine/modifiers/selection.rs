@@ -17,7 +17,7 @@
 use super::super::{DarklyEngine, ReadbackContext};
 use crate::coord::CanvasRect;
 use crate::document::SelectionMode;
-use crate::gpu::flood_fill;
+use crate::gpu::flood_fill::{self, LayerFloodFillExtent};
 use crate::gpu::overlay::{OverlayPrimitive, FLAG_CANVAS_SPACE, KIND_DASHED_LINE};
 use crate::gpu::readback;
 use crate::gpu::selection::CombineMode;
@@ -241,16 +241,13 @@ impl DarklyEngine {
     pub fn select_magic_wand(
         &mut self,
         layer_id: LayerId,
-        seed_x: i32,
-        seed_y: i32,
+        seed_canvas: crate::coord::CanvasPoint,
         tolerance: u8,
         mode: SelectionMode,
     ) {
         if self.paint_target(layer_id).is_none() {
             return;
         }
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
 
         let was_active = self.has_selection();
         // Magic wand operates on full-canvas data — reserve full-canvas undo rect.
@@ -258,31 +255,24 @@ impl DarklyEngine {
         self.save_selection_for_undo(rect);
 
         let pt = self.paint_target(layer_id).unwrap();
-        let texture = pt.texture;
-        let format = pt.format;
         let mut encoder = self
             .gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("magic-wand-readback"),
             });
-        let request = readback::request_readback(
-            &self.gpu.device,
-            &mut encoder,
-            texture,
-            format,
-            [0, 0, canvas_w, canvas_h],
-        );
+        let (request, extent) =
+            flood_fill::request_layer_flood_fill_readback(&self.gpu.device, &mut encoder, &pt);
         self.gpu.queue.submit([encoder.finish()]);
         self.readbacks.submit(
             request,
             ReadbackContext::MagicWand {
                 was_active,
                 node_id: layer_id,
-                seed_x,
-                seed_y,
+                seed_canvas,
                 tolerance,
                 mode,
+                extent,
             },
         );
     }
@@ -290,30 +280,14 @@ impl DarklyEngine {
     pub(crate) fn complete_magic_wand(
         &mut self,
         was_active: bool,
-        node_id: LayerId,
-        seed_x: i32,
-        seed_y: i32,
+        _node_id: LayerId,
+        seed_canvas: crate::coord::CanvasPoint,
         tolerance: u8,
         mode: SelectionMode,
+        extent: LayerFloodFillExtent,
         pixels: Vec<u8>,
     ) {
-        let canvas_w = self.doc.width;
-        let canvas_h = self.doc.height;
-
-        let format = self
-            .compositor
-            .node_texture(node_id)
-            .map(|t| t.format)
-            .unwrap_or(wgpu::TextureFormat::Rgba8Unorm);
-        let fill_mask = match format {
-            wgpu::TextureFormat::R8Unorm => {
-                flood_fill::flood_fill_r8(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
-            }
-            _ => {
-                flood_fill::flood_fill_rgba(&pixels, canvas_w, canvas_h, seed_x, seed_y, tolerance)
-            }
-        };
-
+        let fill_mask = extent.flood_fill_to_canvas_mask(&pixels, seed_canvas, tolerance);
         self.apply_selection_full(fill_mask, mode, was_active);
     }
 
@@ -644,12 +618,14 @@ impl DarklyEngine {
             None => return,
         };
         self.gpu.encode("sel-readback", |encoder| {
+            // Selection texture is canvas-aligned: canvas coords == layer
+            // coords here.
             let request = readback::request_readback(
                 &self.gpu.device,
                 encoder,
                 texture,
                 wgpu::TextureFormat::R8Unorm,
-                [0, 0, w, h],
+                crate::coord::LayerRect::from_xywh(0, 0, w, h),
             );
             self.readbacks
                 .submit(request, ReadbackContext::SelectionReadback);

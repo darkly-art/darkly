@@ -195,7 +195,7 @@ impl DarklyEngine {
                 encoder,
                 &composite_tex,
                 wgpu::TextureFormat::Rgba8Unorm,
-                [0, 0, canvas_w, canvas_h],
+                crate::coord::LayerRect::from_xywh(0, 0, canvas_w, canvas_h),
             );
             self.readbacks.submit(
                 request,
@@ -537,7 +537,10 @@ fn queue_pixel_readback(
         },
         SaveReadbackKind::LayerPixels | SaveReadbackKind::MaskPixels => {
             match engine.compositor.node_texture(id) {
-                Some(t) => (t.texture.clone(), t.format, t.width, t.height),
+                Some(t) => {
+                    let ext = t.layer_extent();
+                    (t.texture().clone(), t.format(), ext.width, ext.height)
+                }
                 None => return Ok(()),
             }
         }
@@ -548,12 +551,14 @@ fn queue_pixel_readback(
     blobs.insert(key.clone(), None);
 
     engine.gpu.encode("save-pixel-readback", |encoder| {
+        // Readback covers the texture's full layer-local extent — `width`
+        // and `height` came from the texture's own dimensions above.
         let request = readback::request_readback(
             &engine.gpu.device,
             encoder,
             &texture,
             format,
-            [0, 0, width, height],
+            crate::coord::LayerRect::from_xywh(0, 0, width, height),
         );
         engine.readbacks.submit(
             request,

@@ -10,9 +10,17 @@
     const hotkeyKey = $derived(`hotkeys.${action.id}`);
     const mouseKey = $derived(`mouseclicks.${action.id}`);
 
+    /** Default expressed as a single string for the row (settings UI
+     *  edits one binding per action, not the full array). */
+    const defaultHotkeyStr = $derived.by(() => {
+        const d = action.defaultHotkey;
+        if (!d) return '';
+        return typeof d === 'string' ? d : (d[0] ?? '');
+    });
+
     const hotkeyValue = $derived.by(() => {
         const v = config.get(hotkeyKey);
-        return typeof v === 'string' ? v : (action.defaultHotkey ?? '');
+        return typeof v === 'string' ? v : defaultHotkeyStr;
     });
 
     const mouseValue = $derived.by(() => {
@@ -44,6 +52,7 @@
             <HotkeyCapture
                 prefKey={hotkeyKey}
                 value={hotkeyValue}
+                {action}
                 onchange={setHotkey}
             />
             <button
@@ -52,7 +61,7 @@
                 class:visible={hotkeyOverridden}
                 disabled={!hotkeyOverridden}
                 onclick={resetHotkey}
-                title="Reset to default ({formatHotkey(action.defaultHotkey ?? '') ?? 'unbound'})"
+                title="Reset to default ({formatHotkey(defaultHotkeyStr) ?? 'unbound'})"
             >
                 <i class="fa-solid fa-rotate-left"></i>
             </button>

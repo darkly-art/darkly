@@ -103,12 +103,16 @@ pub(crate) struct PendingUndoCommit {
 pub(crate) enum ReadbackContext {
     FloodFill {
         node_id: LayerId,
-        seed_x: i32,
-        seed_y: i32,
+        seed_canvas: crate::coord::CanvasPoint,
         color: [u8; 4],
         tolerance: u8,
-        canvas_w: u32,
-        canvas_h: u32,
+        /// Snapshot of the target's coordinate frame at request time. Carries
+        /// the texture offset/size + canvas size + format the completion
+        /// handler needs to translate `seed_canvas` from canvas coords to
+        /// texture coords and project the resulting mask back into a
+        /// canvas-aligned R8 buffer. See
+        /// `crate::gpu::flood_fill::LayerFloodFillExtent`.
+        extent: crate::gpu::flood_fill::LayerFloodFillExtent,
     },
     ColorPick,
     Copy {
@@ -119,10 +123,11 @@ pub(crate) enum ReadbackContext {
     MagicWand {
         was_active: bool,
         node_id: LayerId,
-        seed_x: i32,
-        seed_y: i32,
+        seed_canvas: crate::coord::CanvasPoint,
         tolerance: u8,
         mode: crate::document::SelectionMode,
+        /// See `FloodFill::extent` — same coordinate-frame snapshot.
+        extent: crate::gpu::flood_fill::LayerFloodFillExtent,
     },
     /// Async readback of the selection GPU texture for CPU cache update.
     SelectionReadback,
@@ -657,13 +662,14 @@ impl DarklyEngine {
             .compositor
             .node_texture(node_id)
             .expect("node texture not found");
+        let ext = tex.layer_extent();
         crate::gpu::test_utils::readback_texture(
             &self.gpu.device,
             &self.gpu.queue,
-            &tex.texture,
-            tex.format,
-            tex.width,
-            tex.height,
+            tex.texture(),
+            tex.format(),
+            ext.width,
+            ext.height,
         )
     }
 
@@ -710,13 +716,14 @@ impl DarklyEngine {
             .compositor
             .node_texture(mask_id)
             .expect("mask texture not found");
+        let ext = tex.layer_extent();
         crate::gpu::test_utils::readback_texture(
             &self.gpu.device,
             &self.gpu.queue,
-            &tex.texture,
-            tex.format,
-            tex.width,
-            tex.height,
+            tex.texture(),
+            tex.format(),
+            ext.width,
+            ext.height,
         )
     }
 

@@ -692,7 +692,7 @@ impl Compositor {
         new_extent: CanvasRect,
     ) {
         let (current, format) = match self.node_textures.get(&node_id) {
-            Some(t) => (t.canvas_extent(), t.format),
+            Some(t) => (t.canvas_extent(), t.format()),
             None => return,
         };
         if current == new_extent {
@@ -715,13 +715,13 @@ impl Compositor {
         let copy_dst_y = (current.origin.y - new_extent.origin.y) as u32;
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &old_tex.texture,
+                texture: old_tex.texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyTextureInfo {
-                texture: &new_tex.texture,
+                texture: new_tex.texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d {
                     x: copy_dst_x,
@@ -742,7 +742,7 @@ impl Compositor {
         // If this node has a cached mask bind group, rebuild it against the
         // freshly-allocated view. The blend stage holds no other reference.
         if self.mask_bind_groups.contains_key(&node_id) {
-            let view = &self.node_textures[&node_id].view;
+            let view = self.node_textures[&node_id].view();
             let mask_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&format!("mask-bg-{node_id:?}")),
                 layout: &self.blend_pipelines.mask_bind_group_layout,
@@ -902,8 +902,8 @@ impl Compositor {
     /// Request async content bounds computation for a layer.
     /// Results arrive on the next frame — retrieve via [`content_bounds`].
     /// Bounds are returned in **layer-local** pixel coords (top-left of the
-    /// layer texture is `(0, 0)`). Translate to canvas coords by adding
-    /// the layer's offset (`layer_texture(id).offset_x/y`).
+    /// layer texture is `(0, 0)`). Translate to canvas coords with the
+    /// layer's [`LayerTexture::layer_to_canvas_rect`].
     pub fn request_content_bounds(
         &mut self,
         device: &wgpu::Device,
@@ -917,9 +917,16 @@ impl Compositor {
         else {
             return;
         };
-        let r_channel = tex.format == wgpu::TextureFormat::R8Unorm;
+        let r_channel = tex.format() == wgpu::TextureFormat::R8Unorm;
+        let extent = tex.layer_extent();
         self.content_bounds.request(
-            device, queue, &tex.view, tex.width, tex.height, r_channel, node_id,
+            device,
+            queue,
+            tex.view(),
+            extent.width,
+            extent.height,
+            r_channel,
+            node_id,
         );
     }
 
@@ -974,14 +981,15 @@ impl Compositor {
         let Some(tex) = self.node_textures.get(&node_id) else {
             return false;
         };
-        let bpp = tex.format.block_copy_size(None).unwrap_or(1);
-        let expected = (tex.width * tex.height * bpp) as usize;
+        let bpp = tex.format().block_copy_size(None).unwrap_or(1);
+        let layer_extent = tex.layer_extent();
+        let expected = (layer_extent.width * layer_extent.height * bpp) as usize;
         if bytes.len() < expected {
             return false;
         }
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &tex.texture,
+                texture: tex.texture(),
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -989,12 +997,12 @@ impl Compositor {
             &bytes[..expected],
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(tex.width * bpp),
+                bytes_per_row: Some(layer_extent.width * bpp),
                 rows_per_image: None,
             },
             wgpu::Extent3d {
-                width: tex.width,
-                height: tex.height,
+                width: layer_extent.width,
+                height: layer_extent.height,
                 depth_or_array_layers: 1,
             },
         );
@@ -1022,7 +1030,7 @@ impl Compositor {
                     layout: &self.blend_pipelines.mask_bind_group_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&mask_tex.view),
+                        resource: wgpu::BindingResource::TextureView(mask_tex.view()),
                     }],
                 });
                 self.node_textures.insert(node_id, mask_tex);
@@ -1262,13 +1270,14 @@ impl Compositor {
             Some(t) => t,
             None => return,
         };
+        let canvas_extent = tex.canvas_extent();
         let uniforms = BlendUniforms {
             opacity,
             blend_mode: blend_mode_gpu,
             isolated: isolated as u32,
             _pad1: 0.0,
-            layer_offset: [tex.offset_x as f32, tex.offset_y as f32],
-            layer_size: [tex.width as f32, tex.height as f32],
+            layer_offset: [canvas_extent.x0() as f32, canvas_extent.y0() as f32],
+            layer_size: [canvas_extent.width as f32, canvas_extent.height as f32],
             canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
             _pad2: [0.0, 0.0],
         };
@@ -1507,7 +1516,10 @@ impl Compositor {
     /// floating creates the layer before its texture).
     fn target_format_and_dims(&self, target_layer: LayerId) -> (wgpu::TextureFormat, u32, u32) {
         match self.node_textures.get(&target_layer) {
-            Some(t) => (t.format, t.width, t.height),
+            Some(t) => {
+                let ext = t.layer_extent();
+                (t.format(), ext.width, ext.height)
+            }
             None => (
                 wgpu::TextureFormat::Rgba8Unorm,
                 self.canvas_width,
@@ -1569,7 +1581,7 @@ impl Compositor {
             Some(t) => t,
             None => return,
         };
-        let target_format = layer.format;
+        let target_format = layer.format();
         let (preview_texture, preview_view, preview_mask_bg, preview_blend_uniform_buf) =
             self.allocate_preview_resources(device, target_format);
         // Re-borrow `layer` after `allocate_preview_resources` — the helper
@@ -1670,25 +1682,22 @@ impl Compositor {
         //    `grow_node_to_fit` preserves them on the live texture.
         let canvas_rect =
             crate::coord::CanvasRect::from_xywh(0, 0, self.canvas_width, self.canvas_height);
-        let live_canvas_extent = crate::coord::CanvasRect::from_xywh(
-            live.offset_x,
-            live.offset_y,
-            live.width,
-            live.height,
-        );
+        let live_canvas_extent = live.canvas_extent();
         if let Some(visible) = live_canvas_extent.intersect(canvas_rect) {
-            // visible is in canvas coords; positive by construction.
-            let src_x = (visible.x0() - live.offset_x) as u32;
-            let src_y = (visible.y0() - live.offset_y) as u32;
+            // Translate the visible canvas slice into the live texture's
+            // layer-local coordinate frame for the GPU copy origin.
+            let visible_layer = live
+                .canvas_to_layer_rect(visible)
+                .expect("intersect with live's extent yields a layer-local rect");
             let dst_x = visible.x0() as u32;
             let dst_y = visible.y0() as u32;
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
-                    texture: &live.texture,
+                    texture: live.texture(),
                     mip_level: 0,
                     origin: wgpu::Origin3d {
-                        x: src_x,
-                        y: src_y,
+                        x: visible_layer.x0(),
+                        y: visible_layer.y0(),
                         z: 0,
                     },
                     aspect: wgpu::TextureAspect::All,
@@ -1716,21 +1725,16 @@ impl Compositor {
         //    shader composites over the existing pixels). The preview is
         //    canvas-aligned, so the paint target reports canvas dims/offset.
         if let Some(cs) = clear_shape {
-            let preview_target = crate::gpu::paint_target::GpuPaintTarget {
-                texture: &state.preview_texture,
-                view: &state.preview_view,
-                format: state.target_format,
-                width: self.canvas_width,
-                height: self.canvas_height,
-                offset_x: 0,
-                offset_y: 0,
-                canvas_width: self.canvas_width,
-                canvas_height: self.canvas_height,
-            };
+            let preview_target = crate::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+                &state.preview_texture,
+                &state.preview_view,
+                state.target_format,
+                self.canvas_width,
+                self.canvas_height,
+            );
             match cs {
                 crate::gpu::transform::ClearShape::Rect(rect) => {
-                    let canvas_rect = [rect.x0(), rect.y0(), rect.width as i32, rect.height as i32];
-                    preview_target.clear_rect(&mut encoder, paint_pipelines, queue, canvas_rect);
+                    preview_target.clear_rect(&mut encoder, paint_pipelines, queue, *rect);
                 }
                 crate::gpu::transform::ClearShape::Selection { mask_bind_group } => {
                     preview_target.erase_with_selection(
@@ -1775,21 +1779,22 @@ impl Compositor {
             None => return,
         };
 
+        let live_extent = live.canvas_extent();
         self.transform_pass.update_uniforms(
             queue,
             matrix,
             source_origin,
             source_width,
             source_height,
-            (live.offset_x, live.offset_y),
-            live.width,
-            live.height,
+            (live_extent.x0(), live_extent.y0()),
+            live_extent.width,
+            live_extent.height,
             self.canvas_width,
             self.canvas_height,
         );
 
         self.transform_pass
-            .render_commit(device, encoder, &live.texture, &live.view);
+            .render_commit(device, encoder, live.texture(), live.view());
     }
 
     /// Remove floating content GPU state.
@@ -2127,7 +2132,7 @@ impl Compositor {
                     let layer_view = match active_floating {
                         Some(s) => &s.preview_view,
                         None => match self.node_textures.get(&raster.id) {
-                            Some(t) => &t.view,
+                            Some(t) => t.view(),
                             None => continue,
                         },
                     };

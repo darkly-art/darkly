@@ -4,8 +4,8 @@
  * action registry + active preset (and current theme) at open time; re-open
  * to see updates.
  */
-import { actions } from '../actions/registry';
-import { effectiveHotkey } from '../config/hotkeys.svelte';
+import { actions, sites } from '../actions/registry';
+import { effectiveHotkey, parseBinding } from '../config/hotkeys.svelte';
 import { formatHotkey } from '../config/store.svelte';
 import { theme } from '../state/theme.svelte';
 
@@ -33,7 +33,17 @@ function esc(s: string): string {
 interface Row {
     name: string;
     description: string;
-    hotkey: string;
+    chord: string;
+    /** Display label of the binding site, or `''` for global bindings. */
+    scope: string;
+}
+
+function titleCase(s: string): string {
+    return s.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase()).trim();
+}
+
+function siteLabel(name: string): string {
+    return sites.get(name)?.displayName ?? titleCase(name);
 }
 
 function buildSections(): string {
@@ -47,10 +57,12 @@ function buildSections(): string {
         for (const a of list) {
             const raw = effectiveHotkey(a.id);
             if (!raw) continue;
+            const { site, chord } = parseBinding(raw);
             rows.push({
                 name: a.displayName,
                 description: a.description ?? '',
-                hotkey: formatHotkey(raw) ?? raw,
+                chord: formatHotkey(chord) ?? chord,
+                scope: site ? siteLabel(site) : '',
             });
         }
         if (rows.length === 0) continue;
@@ -58,9 +70,12 @@ function buildSections(): string {
 
         html += `<section style="--cat:${color}"><h2>${esc(categoryLabel(cat))}</h2><table><tbody>`;
         for (const r of rows) {
-            const search = `${r.name} ${r.description} ${r.hotkey}`.toLowerCase();
+            const search = `${r.name} ${r.description} ${r.chord} ${r.scope}`.toLowerCase();
             const desc = r.description ? `<div class="desc">${esc(r.description)}</div>` : '';
-            html += `<tr data-search="${esc(search)}"><td class="action"><div class="name">${esc(r.name)}</div>${desc}</td><td class="shortcut"><kbd>${esc(r.hotkey)}</kbd></td></tr>`;
+            const scopeChip = r.scope
+                ? ` <span class="scope">${esc(r.scope)}</span>`
+                : '';
+            html += `<tr data-search="${esc(search)}"><td class="action"><div class="name">${esc(r.name)}</div>${desc}</td><td class="shortcut"><kbd>${esc(r.chord)}</kbd>${scopeChip}</td></tr>`;
         }
         html += `</tbody></table></section>`;
     }
@@ -177,6 +192,20 @@ kbd {
     color: var(--text);
     line-height: 1.2;
 }
+.scope {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    background: var(--bg-raised);
+    border: 1px solid var(--bg-hover);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    vertical-align: middle;
+}
 [hidden] { display: none !important; }
 @media print {
     @page { margin: 12mm; }
@@ -199,6 +228,11 @@ kbd {
         background: #ffffff !important;
         border-color: #000000 !important;
         color: #000000 !important;
+    }
+    .scope {
+        background: #ffffff !important;
+        border-color: #888888 !important;
+        color: #444444 !important;
     }
 }
 `;

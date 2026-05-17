@@ -67,8 +67,9 @@ impl BrushNodeEvaluator for PreviewTerminalEvaluator {
         let Some(pt) = gpu.paint_target.as_ref() else {
             return vec![];
         };
-        let target_w = pt.width as f32;
-        let target_h = pt.height as f32;
+        let pt_ext = pt.layer_extent();
+        let target_w = pt_ext.width as f32;
+        let target_h = pt_ext.height as f32;
         if target_w <= 0.0 || target_h <= 0.0 {
             return vec![];
         }

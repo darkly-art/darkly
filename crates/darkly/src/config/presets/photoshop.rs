@@ -16,6 +16,10 @@ pub fn register() -> Preset {
             // Photoshop has no keyboard shortcut for isolate-layer; the
             // action is reachable only via alt+click on a thumbnail.
             ("isolateLayer", ""),
+            // Photoshop: Delete deletes the active layer when the Layers
+            // panel has focus. Scoped to `layerPanel` so it coexists with
+            // the global `Delete` → clearSelectionContents binding.
+            ("deleteLayer", "layerPanel:Delete"),
         ],
         // No preset-specific mouse overrides for isolation: the action's
         // defaults (`layerThumb:alt+click` and `maskThumb:alt+click`)
