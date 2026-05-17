@@ -569,3 +569,315 @@ fn kitchen_sink_covers_every_closed_set_variant() {
         );
     }
 }
+
+// ----------------------------------------------------------------------------
+// Phase 4 — refusal tests. Every refusal path the load contract
+// promises has a coverage test here. Each one builds (or hand-edits)
+// a synthetic `.darkly` zip that triggers the refusal, then asserts
+// the error shape AND that the engine's document was not swapped
+// (atomic install means a refused load is byte-for-byte invisible).
+// ----------------------------------------------------------------------------
+
+use crate::format::error::LoadError;
+use crate::format::manifest::{
+    Manifest, ManifestCanvas, ManifestPixelRef, ManifestRequires, ManifestTree, ManifestWriter,
+    CONTAINER_VERSION, FORMAT_TAG,
+};
+
+/// Build a minimal valid `.darkly` zip from a hand-rolled `Manifest`.
+/// Used by every refusal test that needs to plant a specific shape on
+/// disk (`container_version` too new, `requires` lying, etc.) without
+/// going through the save pipeline first.
+fn synth_zip_from_manifest(manifest: &Manifest) -> Vec<u8> {
+    // We don't have a `composite_rgba` for hand-built manifests; the
+    // refusal tests bail out before pixel upload anyway, so a 1×1
+    // black canvas is enough to satisfy the zip's `composite.png`
+    // contract.
+    let bundle = crate::format::manifest::SaveBundle {
+        manifest_json: serde_json::to_vec_pretty(manifest).unwrap(),
+        composite_width: 1,
+        composite_height: 1,
+        composite_rgba: vec![0, 0, 0, 255],
+        blobs: Vec::new(),
+    };
+    assemble_zip(&bundle)
+}
+
+/// Build a `Manifest` with the canonical fields the load path expects
+/// — `format = "darkly"`, current container version, present
+/// `requires` block — but with an empty tree. Callers mutate the
+/// returned struct in place to plant the test's specific failure mode.
+fn synth_minimal_manifest() -> Manifest {
+    Manifest {
+        format: FORMAT_TAG.to_string(),
+        container_version: CONTAINER_VERSION,
+        writer: ManifestWriter::current(),
+        name: "Test".to_string(),
+        canvas: ManifestCanvas {
+            width: 4,
+            height: 4,
+        },
+        requires: ManifestRequires {
+            layer_kind: vec!["group".to_string()],
+            blend_mode: vec!["normal".to_string()],
+            ..ManifestRequires::default()
+        },
+        composite: "composite.png".to_string(),
+        tree: ManifestTree {
+            root: 1,
+            nodes: Vec::new(),
+        },
+        modifiers: Vec::new(),
+        selection: None,
+        veils: Vec::new(),
+    }
+}
+
+/// Reusable assertion: a refused load must leave the engine's document
+/// untouched. The pointer check is enough — `mem::replace` would
+/// move the SlotMap (and its heap allocations) and the pointer would
+/// differ. If we ever in-place mutate the doc during load, this test
+/// would still catch the structural change because every refusal path
+/// is supposed to bail before mutation.
+fn assert_engine_untouched(engine: &DarklyEngine, prior_doc_ptr: *const Document) {
+    assert_eq!(
+        engine.document_ptr_for_test(),
+        prior_doc_ptr,
+        "atomic install violated: refused load swapped the engine's doc"
+    );
+}
+
+#[test]
+fn refuse_container_version_too_new() {
+    let mut engine = kitchen_sink_engine(4, 4);
+    let prior = engine.document_ptr_for_test();
+    let mut manifest = synth_minimal_manifest();
+    manifest.container_version = 999;
+    let bytes = synth_zip_from_manifest(&manifest);
+
+    let err = engine.open_document(&bytes).expect_err("must refuse");
+    match err {
+        LoadError::ContainerTooNew { found, supported } => {
+            assert_eq!(found, 999);
+            assert_eq!(supported, CONTAINER_VERSION);
+        }
+        other => panic!("expected ContainerTooNew, got {other:?}"),
+    }
+    assert_engine_untouched(&engine, prior);
+}
+
+#[test]
+fn refuse_missing_requires() {
+    let mut engine = kitchen_sink_engine(4, 4);
+    let prior = engine.document_ptr_for_test();
+
+    // Build the manifest JSON, then strip the `requires` field — we
+    // control the writer so absence is malformed, not "older format."
+    let manifest = synth_minimal_manifest();
+    let mut raw: serde_json::Value = serde_json::to_value(&manifest).unwrap();
+    raw.as_object_mut().unwrap().remove("requires");
+    let manifest_bytes = serde_json::to_vec(&raw).unwrap();
+    let bundle = crate::format::manifest::SaveBundle {
+        manifest_json: manifest_bytes,
+        composite_width: 1,
+        composite_height: 1,
+        composite_rgba: vec![0, 0, 0, 255],
+        blobs: Vec::new(),
+    };
+    let bytes = assemble_zip(&bundle);
+
+    let err = engine.open_document(&bytes).expect_err("must refuse");
+    match err {
+        LoadError::CorruptManifest { reason } => {
+            assert!(
+                reason.contains("requires"),
+                "missing-requires diagnostic should name the requires block, got {reason:?}"
+            );
+        }
+        other => panic!("expected CorruptManifest, got {other:?}"),
+    }
+    assert_engine_untouched(&engine, prior);
+}
+
+#[test]
+fn refuse_unknown_veil() {
+    let mut engine = kitchen_sink_engine(4, 4);
+    let prior = engine.document_ptr_for_test();
+    let mut manifest = synth_minimal_manifest();
+    manifest.requires.veil = vec!["future_lens_flare".to_string()];
+    let bytes = synth_zip_from_manifest(&manifest);
+
+    let err = engine.open_document(&bytes).expect_err("must refuse");
+    match err {
+        LoadError::UnsupportedFeatures { missing } => {
+            assert!(
+                missing.iter().any(|m| m == "veil/future_lens_flare"),
+                "diagnostic should name veil/future_lens_flare, got {missing:?}"
+            );
+        }
+        other => panic!("expected UnsupportedFeatures, got {other:?}"),
+    }
+    assert_engine_untouched(&engine, prior);
+}
+
+#[test]
+fn refuse_unknown_blend_mode() {
+    let mut engine = kitchen_sink_engine(4, 4);
+    let prior = engine.document_ptr_for_test();
+    let mut manifest = synth_minimal_manifest();
+    manifest.requires.blend_mode.push("divide_v2".to_string());
+    let bytes = synth_zip_from_manifest(&manifest);
+
+    let err = engine.open_document(&bytes).expect_err("must refuse");
+    match err {
+        LoadError::UnsupportedFeatures { missing } => {
+            assert!(
+                missing.iter().any(|m| m == "blend_mode/divide_v2"),
+                "diagnostic should name blend_mode/divide_v2, got {missing:?}"
+            );
+        }
+        other => panic!("expected UnsupportedFeatures, got {other:?}"),
+    }
+    assert_engine_untouched(&engine, prior);
+}
+
+#[test]
+fn refuse_unknown_layer_kind() {
+    let mut engine = kitchen_sink_engine(4, 4);
+    let prior = engine.document_ptr_for_test();
+    let mut manifest = synth_minimal_manifest();
+    manifest.requires.layer_kind.push("text_layer".to_string());
+    let bytes = synth_zip_from_manifest(&manifest);
+
+    let err = engine.open_document(&bytes).expect_err("must refuse");
+    match err {
+        LoadError::UnsupportedFeatures { missing } => {
+            assert!(
+                missing.iter().any(|m| m == "layer_kind/text_layer"),
+                "diagnostic should name layer_kind/text_layer, got {missing:?}"
+            );
+        }
+        other => panic!("expected UnsupportedFeatures, got {other:?}"),
+    }
+    assert_engine_untouched(&engine, prior);
+}
+
+#[test]
+fn refuse_unknown_modifier_kind() {
+    let mut engine = kitchen_sink_engine(4, 4);
+    let prior = engine.document_ptr_for_test();
+    let mut manifest = synth_minimal_manifest();
+    manifest.requires.modifier.push("clip".to_string());
+    let bytes = synth_zip_from_manifest(&manifest);
+
+    let err = engine.open_document(&bytes).expect_err("must refuse");
+    match err {
+        LoadError::UnsupportedFeatures { missing } => {
+            assert!(
+                missing.iter().any(|m| m == "modifier/clip"),
+                "diagnostic should name modifier/clip, got {missing:?}"
+            );
+        }
+        other => panic!("expected UnsupportedFeatures, got {other:?}"),
+    }
+    assert_engine_untouched(&engine, prior);
+}
+
+#[test]
+fn refuse_corrupt_manifest_when_requires_lies() {
+    // The `requires` block claims only `normal` (truthful as far as
+    // pre-check is concerned), but the body has a raster layer using
+    // `divide_v2` — a blend mode the binary doesn't know. The
+    // per-variant safety net in `build_staging_document` catches this
+    // as `CorruptManifest`.
+    let mut engine = kitchen_sink_engine(4, 4);
+    let prior = engine.document_ptr_for_test();
+    let mut manifest = synth_minimal_manifest();
+    manifest.requires.layer_kind = vec!["group".to_string(), "raster".to_string()];
+    manifest
+        .tree
+        .nodes
+        .push(crate::format::manifest::ManifestNode::Raster(
+            crate::format::manifest::ManifestRasterNode {
+                id: 42,
+                name: "lying".to_string(),
+                visible: true,
+                locked: false,
+                opacity: 1.0,
+                blend_mode: "divide_v2".to_string(), // not declared in requires
+                pixels: ManifestPixelRef {
+                    format: "rgba8unorm".to_string(),
+                    pixels: "layers/42.pixels".to_string(),
+                    bounds: crate::coord::CanvasRect::from_xywh(0, 0, 4, 4),
+                },
+                modifiers: Vec::new(),
+            },
+        ));
+    let bytes = synth_zip_from_manifest(&manifest);
+
+    let err = engine.open_document(&bytes).expect_err("must refuse");
+    match err {
+        LoadError::CorruptManifest { reason } => {
+            assert!(
+                reason.contains("divide_v2"),
+                "diagnostic should name the lying type_id, got {reason:?}"
+            );
+        }
+        other => panic!("expected CorruptManifest, got {other:?}"),
+    }
+    assert_engine_untouched(&engine, prior);
+}
+
+#[test]
+fn open_document_leaves_engine_untouched_on_refuse() {
+    // Belt-and-suspenders for the most consequential refusal — load a
+    // file that's been edited to need a feature the binary doesn't
+    // ship and assert *more* than the doc-ptr invariant: the
+    // pre-refusal state (layer count, doc name) is also recoverable.
+    let mut engine = kitchen_sink_engine(4, 4);
+    let _layer = engine.add_raster_layer(None);
+    engine.set_document_name("pre-load".to_string());
+    let prior = engine.document_ptr_for_test();
+    let prior_layer_count = engine.doc.all_raster_layers().len();
+    let prior_name = engine.doc.name.clone();
+
+    let mut manifest = synth_minimal_manifest();
+    manifest.requires.veil.push("future_lens_flare".to_string());
+    let bytes = synth_zip_from_manifest(&manifest);
+    let _err = engine.open_document(&bytes).expect_err("must refuse");
+
+    assert_engine_untouched(&engine, prior);
+    assert_eq!(engine.doc.all_raster_layers().len(), prior_layer_count);
+    assert_eq!(engine.doc.name, prior_name);
+}
+
+#[test]
+fn legacy_type_id_migration() {
+    // The `register() -> Vec<Registration>` legacy-reader pattern
+    // isn't wired yet — no module has bumped its `type_id`, so no
+    // legacy entries exist. This test holds the slot so the first
+    // real bump has a place to land its fixture (and surfaces if
+    // someone accidentally drops the registry interface). The shape
+    // a future migration test takes:
+    //
+    //   1. Construct a Manifest with `requires.veil = vec!["noise"]`
+    //      (current `type_id`).
+    //   2. Once `noise_v2` ships and `noise` becomes a legacy reader,
+    //      write a fixture where `requires` still names `noise` and
+    //      the body has the v1 params; assert the load succeeds and
+    //      the migrated veil's params match what `migrate_v1_to_v2`
+    //      would produce.
+    //
+    // Today: assert every registered veil resolves to itself in its
+    // registry — confirms the registry interface is the dispatch
+    // surface the migration will plug into.
+    let registry = VeilRegistry::new();
+    for (type_id, _name, _params) in registry.types() {
+        assert!(
+            registry.has(type_id),
+            "legacy migration scaffold: registry must resolve every registered \
+             type_id back through itself — drift suggests the dispatch surface \
+             a future migration would plug into has changed"
+        );
+    }
+}

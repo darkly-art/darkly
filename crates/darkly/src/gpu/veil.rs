@@ -123,6 +123,13 @@ impl VeilRegistry {
         self.entries.get(type_id).map(|e| e.params).unwrap_or(&[])
     }
 
+    /// True when this registry knows the given `type_id`. Used by the
+    /// `.darkly` load pre-check to refuse files that name veils the
+    /// binary doesn't ship — see [`crate::format::error::LoadError`].
+    pub fn has(&self, type_id: &str) -> bool {
+        self.entries.contains_key(type_id)
+    }
+
     /// Get the human-friendly display name for a veil type, falling back to
     /// the `type_id` literal when the type is unknown.
     pub fn display_name(&self, type_id: &str) -> &'static str {

@@ -92,6 +92,58 @@ impl From<serde_json::Error> for LoadError {
     }
 }
 
+impl LoadError {
+    /// Stable wire shape for the JS-side UI. The UI's `LoadErrorToast`
+    /// switches on `kind` to format the precise diagnostic — "please
+    /// update Darkly" for `containerTooNew` / `unsupportedFeatures`,
+    /// "this file is malformed" for `corruptManifest`, raw message for
+    /// `io` / `zip` / `json`.
+    ///
+    /// Returned via the WASM bridge as a JSON string inside the
+    /// `JsError` payload (rather than serde-deriving on the enum
+    /// itself — `std::io::Error` doesn't serialize and we'd rather
+    /// keep the structured payload narrowly scoped to the UI contract).
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        match self {
+            LoadError::ContainerTooNew { found, supported } => json!({
+                "kind": "containerTooNew",
+                "found": found,
+                "supported": supported,
+                "message": self.to_string(),
+            }),
+            LoadError::UnsupportedFeatures { missing } => json!({
+                "kind": "unsupportedFeatures",
+                "missing": missing,
+                "message": self.to_string(),
+            }),
+            LoadError::CorruptManifest { reason } => json!({
+                "kind": "corruptManifest",
+                "reason": reason,
+                "message": self.to_string(),
+            }),
+            LoadError::UnknownTypeId { kind, id } => json!({
+                "kind": "unknownTypeId",
+                "registry": kind,
+                "id": id,
+                "message": self.to_string(),
+            }),
+            LoadError::Io(e) => json!({
+                "kind": "io",
+                "message": e.to_string(),
+            }),
+            LoadError::Zip(msg) => json!({
+                "kind": "zip",
+                "message": msg,
+            }),
+            LoadError::Json(msg) => json!({
+                "kind": "json",
+                "message": msg,
+            }),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

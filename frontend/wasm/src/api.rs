@@ -1215,16 +1215,27 @@ impl DarklyHandle {
         obj.into()
     }
 
-    /// Load a `.darkly` zip into this engine. Replaces document +
-    /// compositor state with the file's contents and clears the undo
-    /// stack. Minimal Phase 3 behaviour — Phase 4 adds the `requires`
-    /// pre-check and the precise-diagnostic refusal paths.
+    /// Load a `.darkly` zip into this engine. All-or-nothing: any
+    /// refusal path leaves the engine byte-for-byte untouched. On
+    /// failure the rejected error carries a structured JSON payload
+    /// (`{ kind, ... }`) that the UI's `LoadErrorToast` consumes
+    /// directly. JS-side use:
+    ///
+    /// ```js
+    /// try { handle.open_document(bytes); }
+    /// catch (e) {
+    ///     const err = JSON.parse(e.message);
+    ///     // err = { kind: "unsupportedFeatures", missing: [...], message }
+    /// }
+    /// ```
     pub fn open_document(&self, bytes: &[u8]) -> Result<(), JsError> {
         self.flush_if_needed();
-        self.engine
-            .borrow_mut()
-            .open_document(bytes)
-            .map_err(|e| JsError::new(&e.to_string()))
+        self.engine.borrow_mut().open_document(bytes).map_err(|e| {
+            // The structured payload is what the UI toast switches on;
+            // the throwable message is its JSON serialization so the JS
+            // catch handler can `JSON.parse` it.
+            JsError::new(&e.to_json().to_string())
+        })
     }
 
     /// Like `copy`, but also captures CPU-side metadata (blend mode,

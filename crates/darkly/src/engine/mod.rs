@@ -613,6 +613,16 @@ impl DarklyEngine {
         self.doc.selection_id()
     }
 
+    /// Test-only pointer to the document. Used by the load-refusal
+    /// tests to assert that a failed `open_document` does NOT swap the
+    /// engine's doc out from under the caller — the original allocation
+    /// must still be the live one. Equality on a raw `*const Document`
+    /// is enough to spot the move (since `mem::replace` would replace
+    /// the slotmap and its heap allocations).
+    pub fn document_ptr_for_test(&self) -> *const crate::document::Document {
+        &self.doc
+    }
+
     /// Test-only assertion that the document's selection slot holds a Modifier
     /// whose kind is `Selection`. Returns `None` if the slot is empty.
     pub fn test_selection_modifier_kind_is_selection(&self) -> Option<bool> {

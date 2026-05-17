@@ -8,6 +8,7 @@
 pub mod error;
 pub mod manifest;
 pub mod registry_io;
+pub mod unzip;
 #[cfg(test)]
 pub mod zip_io;
 
