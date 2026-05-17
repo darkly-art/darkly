@@ -1,10 +1,10 @@
 /**
  * Reactive UI theme state.
  *
- * Owns the `dark` | `light` | `system` choice, applies it to the document
- * body, and keeps WASM in sync with the colors used for baking preset
- * thumbnails — so the brush picker grid looks consistent regardless of the
- * paint color the user is currently painting with.
+ * Owns the `dark` | `light` choice, applies it to the document body, and
+ * keeps WASM in sync with the colors used for baking preset thumbnails —
+ * so the brush picker grid looks consistent regardless of the paint color
+ * the user is currently painting with.
  *
  * Persistence flows through the unified config store (`ui.theme`) rather
  * than direct localStorage, so the Settings modal's Theme widget and the
@@ -14,7 +14,7 @@ import { app } from './app.svelte';
 import { config } from '../config/store.svelte';
 
 export type ThemeName = 'dark' | 'light';
-export type ThemePreference = ThemeName | 'system';
+export type ThemePreference = ThemeName;
 
 /** Linear RGBA colors used by the live preview and preset thumbnails.
  *  Pure black/white for maximum contrast and to match each theme's
@@ -29,11 +29,6 @@ const PREVIEW_COLORS: Record<ThemeName, { fg: Float32Array; bg: Float32Array }> 
         bg: new Float32Array([1.0, 1.0, 1.0, 1.0]),
     },
 };
-
-function systemTheme(): ThemeName {
-    if (typeof window === 'undefined' || !window.matchMedia) return 'dark';
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
 
 /** Read `--canvas-bg` from the active theme and return it as an RGBA
  *  Float32Array in 0..1 sRGB space (matching the convention used by
@@ -87,18 +82,14 @@ class ThemeState {
     /** The concrete theme actually applied to the document. */
     current = $state<ThemeName>('dark');
 
-    #mql: MediaQueryList | null = null;
-
     /** Sync from config. Called once on init and again whenever `ui.theme` changes. */
     syncFromConfig() {
         const raw = config.get('ui.theme');
-        const pref: ThemePreference =
-            raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'dark';
+        const pref: ThemePreference = raw === 'light' ? 'light' : 'dark';
         this.preference = pref;
-        this.current = pref === 'system' ? systemTheme() : pref;
+        this.current = pref;
         this.#applyToDom();
         this.pushToWasm();
-        this.#ensureMqlListener();
     }
 
     /** User action: change the theme preference, persist it through config. */
@@ -124,18 +115,6 @@ class ThemeState {
         if (typeof document === 'undefined') return;
         document.body.classList.remove('dark', 'light');
         document.body.classList.add(this.current);
-    }
-
-    #ensureMqlListener() {
-        if (this.#mql !== null || typeof window === 'undefined' || !window.matchMedia) return;
-        this.#mql = window.matchMedia('(prefers-color-scheme: dark)');
-        this.#mql.addEventListener('change', () => {
-            if (this.preference === 'system') {
-                this.current = systemTheme();
-                this.#applyToDom();
-                this.pushToWasm();
-            }
-        });
     }
 }
 

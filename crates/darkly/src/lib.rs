@@ -4,6 +4,7 @@ pub mod config;
 pub mod coord;
 pub mod document;
 pub mod engine;
+pub mod format;
 pub mod gpu;
 pub mod layer;
 pub mod mask;

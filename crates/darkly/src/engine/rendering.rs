@@ -161,7 +161,8 @@ impl DarklyEngine {
                                     &commit.snapshot,
                                     rect,
                                 );
-                                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                                self.undo_stack
+                                    .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
                             });
                         }
                     }
@@ -246,6 +247,17 @@ impl DarklyEngine {
                 self.complete_magic_wand(
                     was_active, node_id, seed_x, seed_y, tolerance, mode, pixels,
                 );
+            }
+            ReadbackContext::ExportImage { width, height } => {
+                self.complete_export(width, height, pixels);
+            }
+            ReadbackContext::SaveDocument {
+                kind,
+                key,
+                width,
+                height,
+            } => {
+                self.complete_save_readback(kind, key, width, height, pixels);
             }
             ReadbackContext::SelectionReadback => {
                 self.update_selection_overlay_from_readback(pixels);

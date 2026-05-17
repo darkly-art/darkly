@@ -10,6 +10,7 @@
     import { toast } from '../state/toast.svelte';
     import { theme } from '../state/theme.svelte';
     import { dispatchDrag } from '../actions/triggers';
+    import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
@@ -70,10 +71,21 @@
         canvas.height = Math.round(rect.height * dpr);
 
         try {
-            // Track whether we created the handle here (so we know to seed a
-            // default background layer). When the multi-tab shell pre-builds
-            // the handle, the seed has already happened — skip it.
-            const freshlyCreated = !providedInstance || !providedInstance.handle;
+            // Whether we should seed a default background layer. Fresh
+            // tabs need one; tabs whose handle was pre-built already
+            // have the loaded doc's layers and must not get an extra
+            // bg layer on top.
+            //
+            // An `onHandleReady` callback also signals "I'll provide
+            // content the moment the handle is alive" — that's the
+            // Open flow seeding either an `open_document(bytes)` or a
+            // `paste_image(...)` of the picked file. Skipping the bg
+            // seed in that case avoids the wasted allocation that
+            // `open_document` would immediately replace, and keeps the
+            // canvas free of an unwanted "Layer 1" under an opened PNG.
+            const seedBackground =
+                (!providedInstance || !providedInstance.handle)
+                && !providedInstance?.onHandleReady;
 
             let handle;
             if (providedInstance && providedInstance.handle) {
@@ -87,9 +99,14 @@
                 // requires WASM+config to be initialised, so prime that
                 // first.
                 await ensureProcessInit();
-                const docW = config.get('canvas.width') as number;
-                const docH = config.get('canvas.height') as number;
-                await createInstance(canvas, docW, docH, providedInstance);
+                // Per-tab dim override (`shell.open(name, {w,h})`) wins
+                // over the global default — the Open flow for images
+                // sizes the canvas to the file's intrinsic dimensions.
+                const dims = providedInstance.pendingDims;
+                const docW = dims?.width ?? (config.get('canvas.width') as number);
+                const docH = dims?.height ?? (config.get('canvas.height') as number);
+                providedInstance.pendingDims = null;
+                await createInstance(canvas, docW, docH, providedInstance, { seedBackground });
                 handle = providedInstance.handle!;
             } else {
                 // Single-instance path: existing initEditor creates an
@@ -112,12 +129,6 @@
             // Push the initial UI theme colors so preset-thumbnail bakes
             // match the user's current theme from frame one.
             theme.pushToWasm();
-
-            if (freshlyCreated) {
-                const bg = handle.add_raster_layer(-1);
-                handle.fill_background(bg);
-                inst.selectLayer(bg);
-            }
 
             // Observe element resizes to keep GPU surface in sync
             const ro = new ResizeObserver(() => syncCanvasSize());
@@ -274,6 +285,26 @@
         inst.requestFrame();
     }
 
+    // `dragover` MUST preventDefault for a subsequent `drop` to fire —
+    // browser default is "block the drop, fall back to navigation".
+    function onCanvasDragOver(e: DragEvent) {
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+    }
+
+    // Single-file drop. Routes by content: `.darkly` opens as a new
+    // tab (mirrors the Open action), image pastes as a layer in the
+    // current tab (the gesture says "I want this here"). Multi-file
+    // is intentionally not supported in v1 — too many ambiguous
+    // semantics (open all? merge into one doc? layer-import all?).
+    function onCanvasDrop(e: DragEvent) {
+        const file = e.dataTransfer?.files?.[0];
+        if (!file) return;
+        e.preventDefault();
+        void handleDroppedFile(file);
+    }
+
     const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);
 
     function onKeyDown(e: KeyboardEvent) {
@@ -350,6 +381,8 @@
         onpointerup={onPointerUp}
         onpointercancel={onPointerCancel}
         onpointerleave={onPointerLeave}
+        ondragover={onCanvasDragOver}
+        ondrop={onCanvasDrop}
         onwheel={(e: WheelEvent) => { nav.onWheel(e, canvas); inst.requestFrame(); }}
     ></canvas>
 </div>

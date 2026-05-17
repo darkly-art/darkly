@@ -178,6 +178,9 @@ enum Command {
 
     // Color pick (pointer-frequency, starts async readback)
     PickColor(f32, f32),
+
+    // Document name (queued — rename is fire-and-forget)
+    SetDocumentName(String),
 }
 
 fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
@@ -316,6 +319,8 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::PickColor(x, y) => {
                 engine.pick_color(x, y);
             }
+
+            Command::SetDocumentName(name) => engine.set_document_name(name),
         }
     }
 }
@@ -1089,6 +1094,156 @@ impl DarklyHandle {
             Some(export) => serde_wasm_bindgen::to_value(&export).unwrap_or(JsValue::NULL),
             None => JsValue::NULL,
         }
+    }
+
+    // --- Image export (PNG/JPEG/WebP) ---
+
+    /// Kick off an async readback of the composited canvas. The result lands
+    /// on `pending_export_result` and is drained by `poll_export_result()`
+    /// on a subsequent frame. JS handles the encoding (PNG/JPEG/WebP) via
+    /// `OffscreenCanvas` so the browser's native encoder runs off the WASM
+    /// main thread.
+    pub fn start_export(&self) {
+        self.flush_if_needed();
+        self.engine.borrow_mut().start_export();
+    }
+
+    /// Drain the most recent export result. Returns
+    /// `{ width, height, rgba: Uint8Array }` on completion or `null` while
+    /// the readback is still in flight.
+    pub fn poll_export_result(&self) -> JsValue {
+        self.flush_if_needed();
+        let Some(result) = self.engine.borrow_mut().poll_export_result() else {
+            return JsValue::NULL;
+        };
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(
+            &obj,
+            &"width".into(),
+            &JsValue::from_f64(result.width as f64),
+        )
+        .ok();
+        js_sys::Reflect::set(
+            &obj,
+            &"height".into(),
+            &JsValue::from_f64(result.height as f64),
+        )
+        .ok();
+        let rgba = js_sys::Uint8Array::new_with_length(result.rgba.len() as u32);
+        rgba.copy_from(&result.rgba);
+        js_sys::Reflect::set(&obj, &"rgba".into(), &rgba.into()).ok();
+        obj.into()
+    }
+
+    // --- Document name ---
+
+    /// User-visible document name. Backs the tab title, shown in the
+    /// Save As picker as `suggestedName`, and serialized as
+    /// `manifest.name` inside the `.darkly` container.
+    pub fn document_name(&self) -> String {
+        self.flush_if_needed();
+        self.engine.borrow().document_name().to_string()
+    }
+
+    /// Rename the document. Not undoable — matches every other editor's
+    /// title-bar rename affordance. Subsequent saves write the new name
+    /// into `manifest.name`.
+    pub fn set_document_name(&self, name: &str) {
+        self.push(Command::SetDocumentName(name.to_string()));
+    }
+
+    /// True when the document has unsaved changes — set sticky by any
+    /// undoable mutation, cleared only by a successful save or load.
+    /// Consulted by the close-tab modal and the `beforeunload` handler.
+    pub fn is_dirty(&self) -> bool {
+        self.flush_if_needed();
+        self.engine.borrow().is_dirty()
+    }
+
+    // --- Native save / open (.darkly container) ---
+
+    /// Kick off a `.darkly` save. Builds the manifest synchronously,
+    /// pins every source texture, queues all readbacks. Returns
+    /// immediately; the result lands on `poll_save_result()` once every
+    /// pixel readback completes.
+    ///
+    /// Returns a string error when a save is already in flight on this
+    /// engine — the UI disables the Save action for the tab while a
+    /// save is active so this is an exceptional path.
+    pub fn start_save_document(&self) -> Result<(), JsError> {
+        self.flush_if_needed();
+        self.engine
+            .borrow_mut()
+            .start_save_document()
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Drain the most recent save result. Returns a
+    /// `{ manifestJson: Uint8Array, compositeWidth, compositeHeight,
+    ///    compositeRgba: Uint8Array, blobs: [{ path, bytes: Uint8Array }] }`
+    /// object on completion or `null` while readbacks are in flight.
+    ///
+    /// JS-side `saveDocument.ts` (Phase 5) PNG-encodes the composite,
+    /// generates the thumbnail, assembles the zip via `fflate`, and
+    /// writes through the active tab's file handle.
+    pub fn poll_save_result(&self) -> JsValue {
+        self.flush_if_needed();
+        let Some(bundle) = self.engine.borrow_mut().poll_save_result() else {
+            return JsValue::NULL;
+        };
+        let obj = js_sys::Object::new();
+        let manifest = js_sys::Uint8Array::new_with_length(bundle.manifest_json.len() as u32);
+        manifest.copy_from(&bundle.manifest_json);
+        js_sys::Reflect::set(&obj, &"manifestJson".into(), &manifest.into()).ok();
+        js_sys::Reflect::set(
+            &obj,
+            &"compositeWidth".into(),
+            &JsValue::from_f64(bundle.composite_width as f64),
+        )
+        .ok();
+        js_sys::Reflect::set(
+            &obj,
+            &"compositeHeight".into(),
+            &JsValue::from_f64(bundle.composite_height as f64),
+        )
+        .ok();
+        let composite = js_sys::Uint8Array::new_with_length(bundle.composite_rgba.len() as u32);
+        composite.copy_from(&bundle.composite_rgba);
+        js_sys::Reflect::set(&obj, &"compositeRgba".into(), &composite.into()).ok();
+        let blobs = js_sys::Array::new();
+        for blob in &bundle.blobs {
+            let entry = js_sys::Object::new();
+            js_sys::Reflect::set(&entry, &"path".into(), &JsValue::from_str(&blob.path)).ok();
+            let bytes = js_sys::Uint8Array::new_with_length(blob.bytes.len() as u32);
+            bytes.copy_from(&blob.bytes);
+            js_sys::Reflect::set(&entry, &"bytes".into(), &bytes.into()).ok();
+            blobs.push(&entry);
+        }
+        js_sys::Reflect::set(&obj, &"blobs".into(), &blobs.into()).ok();
+        obj.into()
+    }
+
+    /// Load a `.darkly` zip into this engine. All-or-nothing: any
+    /// refusal path leaves the engine byte-for-byte untouched. On
+    /// failure the rejected error carries a structured JSON payload
+    /// (`{ kind, ... }`) that the UI's `LoadErrorToast` consumes
+    /// directly. JS-side use:
+    ///
+    /// ```js
+    /// try { handle.open_document(bytes); }
+    /// catch (e) {
+    ///     const err = JSON.parse(e.message);
+    ///     // err = { kind: "unsupportedFeatures", missing: [...], message }
+    /// }
+    /// ```
+    pub fn open_document(&self, bytes: &[u8]) -> Result<(), JsError> {
+        self.flush_if_needed();
+        self.engine.borrow_mut().open_document(bytes).map_err(|e| {
+            // The structured payload is what the UI toast switches on;
+            // the throwable message is its JSON serialization so the JS
+            // catch handler can `JSON.parse` it.
+            JsError::new(&e.to_json().to_string())
+        })
     }
 
     /// Like `copy`, but also captures CPU-side metadata (blend mode,

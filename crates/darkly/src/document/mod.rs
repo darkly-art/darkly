@@ -66,8 +66,24 @@ impl Entity {
 }
 
 pub struct Document {
+    /// User-visible document name. Sourced by the tab strip, used as the
+    /// default filename in the Save As picker, and serialized at the top
+    /// of `manifest.json`. Defaults to `"Untitled"` for fresh documents.
+    ///
+    /// Single source of truth — there is no JS-side parallel name map
+    /// (the engine's `document_name()` query backs the tab title).
+    pub name: String,
     pub width: u32,
     pub height: u32,
+
+    /// Sticky "has unsaved changes" bit. Set at the [`UndoStack::push`]
+    /// chokepoint — any new undoable mutation flips it true. Cleared
+    /// only by a successful save (`poll_save_result`) or a load
+    /// (`open_document` installs a fresh staging doc with `dirty = false`).
+    /// Not undoable on purpose: an undo back to the original state
+    /// shouldn't pretend the work was never done. Not serialized — the
+    /// flag describes editor session state, not file content.
+    pub dirty: bool,
 
     /// Single shared slot store for every layer, group, and modifier in this
     /// document. Lookups are O(1); generational keys mean stale ids return
@@ -114,8 +130,10 @@ impl Document {
             Entity::Node(LayerNode::Group(LayerGroup::new(key, "Root".to_string())))
         });
         Document {
+            name: "Untitled".to_string(),
             width,
             height,
+            dirty: false,
             entities,
             parent: SecondaryMap::new(),
             root,

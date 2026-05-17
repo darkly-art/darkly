@@ -59,7 +59,7 @@ pub enum ParamDef {
 /// fall through to `Float`. Putting `Float` first would silently coerce
 /// every `Int(n)` into `Float(n as f32)` on round-trip and break enum
 /// param matching (`match Some(ParamValue::Int(v))` would fall through).
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 pub enum ParamValue {
     Bool(bool),

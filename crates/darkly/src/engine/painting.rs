@@ -93,7 +93,8 @@ impl DarklyEngine {
                 &commit.snapshot,
                 rect,
             );
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            self.undo_stack
+                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
         });
     }
 
@@ -127,7 +128,8 @@ impl DarklyEngine {
             let entry =
                 self.region_store
                     .commit_region(encoder, layer_id, &layer_frame, &snap, rect);
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            self.undo_stack
+                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
         });
 
         let decoded = image::load_from_memory(IMAGE_BYTES)
@@ -1226,7 +1228,8 @@ impl DarklyEngine {
             let entry =
                 self.region_store
                     .commit_region(encoder, layer_id, &layer_frame, &snap, rect);
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            self.undo_stack
+                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
         });
 
         self.compositor.mark_node_pixels_dirty(layer_id);
@@ -1494,7 +1497,8 @@ impl DarklyEngine {
             let entry = self
                 .region_store
                 .commit_region(encoder, layer_id, &frame, &snap, rect);
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            self.undo_stack
+                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
         });
         self.compositor.mark_node_pixels_dirty(layer_id);
     }
@@ -1544,7 +1548,8 @@ impl DarklyEngine {
             let entry = self
                 .region_store
                 .commit_region(encoder, layer_id, &frame, &snap, rect);
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            self.undo_stack
+                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
         });
         self.compositor.mark_node_pixels_dirty(layer_id);
     }

@@ -66,8 +66,10 @@ impl DarklyEngine {
         self.compositor.mark_node_pixels_dirty(mod_id);
         self.compositor.mark_dirty();
 
-        self.undo_stack
-            .push(Box::new(ModifierAddAction::new(mod_id, host_id)));
+        self.undo_stack.push(
+            &mut self.doc,
+            Box::new(ModifierAddAction::new(mod_id, host_id)),
+        );
     }
 
     /// Remove the mask modifier on a host layer or group.
@@ -114,9 +116,10 @@ impl DarklyEngine {
             actions.push(Box::new(ModifierRemoveAction::new(mask_id, host_id)));
         }
         if actions.len() == 1 {
-            self.undo_stack.push(actions.pop().unwrap());
+            self.undo_stack.push(&mut self.doc, actions.pop().unwrap());
         } else if !actions.is_empty() {
-            self.undo_stack.push(Box::new(CompoundAction::new(actions)));
+            self.undo_stack
+                .push(&mut self.doc, Box::new(CompoundAction::new(actions)));
         }
     }
 
@@ -221,7 +224,8 @@ impl DarklyEngine {
                 let entry = self
                     .region_store
                     .commit_region(encoder, host_id, &frame, &snap, rect);
-                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                self.undo_stack
+                    .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
             });
         }
 
@@ -234,7 +238,8 @@ impl DarklyEngine {
                 let entry = self
                     .region_store
                     .commit_region(encoder, mask_id, &frame, &snap, rect);
-                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                self.undo_stack
+                    .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
             });
         }
 
@@ -253,8 +258,10 @@ impl DarklyEngine {
         self.compositor.dispose_node_texture(mask_id);
         self.compositor.dispose_passthrough_mask_state(host_id);
         if detached {
-            self.undo_stack
-                .push(Box::new(ModifierRemoveAction::new(mask_id, host_id)));
+            self.undo_stack.push(
+                &mut self.doc,
+                Box::new(ModifierRemoveAction::new(mask_id, host_id)),
+            );
         }
     }
 
