@@ -143,6 +143,8 @@ export class DarklyInstance {
     panY = $state(0);
     zoom = $state(1.0);
     rotation = $state(0);   // radians
+    // Fresh-eyes horizontal flip. Session-only; resets on reload.
+    mirrorH = $state(false);
 
     // Tool cursor — when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);

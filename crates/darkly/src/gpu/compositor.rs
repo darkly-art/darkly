@@ -1972,7 +1972,7 @@ impl Compositor {
         let cw = self.canvas_width;
         let ch = self.canvas_height;
         let identity = ViewTransform::from_pan_zoom_rotate(
-            0.0, 0.0, 1.0, 0.0, cw as f32, ch as f32, cw as f32, ch as f32,
+            0.0, 0.0, 1.0, 0.0, false, cw as f32, ch as f32, cw as f32, ch as f32,
         );
         self.update_view_transform(queue, &identity);
 

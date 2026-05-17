@@ -28,18 +28,9 @@
             ? app.veilList.find((v: { index: number }) => v.index === app.activeVeilIndex) ?? null
             : null,
     );
-
-    let title = $derived(
-        activeVeil ? `Veil — ${activeVeil.type}`
-            : activeLayer ? activeLayer.name ?? 'Properties'
-            : 'Properties',
-    );
 </script>
 
 <div class="panel">
-    <!-- <div class="panel-header">
-        <span class="panel-title">{title} Properties</span>
-    </div> -->
     <div class="panel-body">
         {#if activeVeil}
             <VeilProperties veil={activeVeil} />
@@ -60,23 +51,6 @@
         flex-direction: column;
         border-top: 1px solid var(--bg-hover);
         flex-shrink: 0;
-    }
-
-    .panel-header {
-        padding: 10px 12px;
-        background: var(--bg-hover);
-    }
-
-    .panel-title {
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-        color: var(--text);
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        display: block;
     }
 
     .panel-body {

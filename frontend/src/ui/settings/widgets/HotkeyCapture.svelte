@@ -15,7 +15,10 @@
     };
     let { prefKey, value, onchange, action }: Props = $props();
 
-    const parts = $derived.by(() => parseBinding(value));
+    // `value` can briefly be undefined when the settings modal opens before
+    // the config store is ready — `config.get` returns undefined in that
+    // window. Treat it as unbound rather than letting parseBinding crash.
+    const parts = $derived.by(() => parseBinding(value ?? ''));
 
     /** Sites whose `provides` is a superset of `action.requires` — only those
      *  can supply the context this action needs. `keyboard` is excluded

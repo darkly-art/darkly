@@ -628,6 +628,18 @@ export function registerActions() {
         handler: () => { settings.open = true; },
     });
 
+    actions.register({
+        id: 'mirrorViewH',
+        displayName: 'Mirror View',
+        category: 'view',
+        description: 'Flip the canvas horizontally for fresh-eyes review. View-only — the document is unchanged.',
+        defaultHotkey: 'KeyM',
+        handler: () => {
+            app.mirrorH = !app.mirrorH;
+            app.requestFrame();
+        },
+    });
+
     // -- Brush parameters (size hotkeys + shift+drag scrub) --
     registerBrushParamActions();
 
