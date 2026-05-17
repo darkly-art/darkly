@@ -40,6 +40,44 @@ fn alpha_at(pixels: &[u8], w: u32, x: u32, y: u32) -> u8 {
     pixels[((y * w + x) * 4 + 3) as usize]
 }
 
+/// Paint a black dab onto a host's mask modifier — R8 value drops toward 0
+/// where the brush lands, leaving the rest of the mask at its prior value
+/// (255 for a freshly-added, all-reveal mask).
+fn paint_mask_dot(engine: &mut DarklyEngine, host_id: LayerId, x: f32, y: f32) {
+    let mask_id = engine
+        .host_mask_id(host_id)
+        .expect("paint_mask_dot requires the host to have a mask modifier");
+    engine.begin_stroke(mask_id);
+    engine.stroke_to(StrokeOp::BrushStroke {
+        x,
+        y,
+        pressure: 1.0,
+        x_tilt: 0.0,
+        y_tilt: 0.0,
+        rotation: 0.0,
+        tangential_pressure: 0.0,
+        time_ms: 0.0,
+        cr: 0.0,
+        cg: 0.0,
+        cb: 0.0,
+        ca: 1.0,
+    });
+    engine.end_stroke();
+    engine.render(0.0);
+}
+
+/// True iff `group_id` appears as a direct child of the document root in
+/// the engine's published layer tree. Lets group-presence be checked from
+/// integration tests without leaking `pub(crate)` doc internals.
+fn group_at_root(engine: &DarklyEngine, group_id: LayerId) -> bool {
+    use darkly::engine::LayerInfo;
+    let target = group_id.to_ffi() as f64;
+    engine
+        .layer_tree()
+        .iter()
+        .any(|info| matches!(info, LayerInfo::Group { id, .. } if *id == target))
+}
+
 // ============================================================================
 // Duplicate
 // ============================================================================
@@ -257,4 +295,94 @@ fn flatten_node_on_group_produces_raster_at_groups_slot() {
     let pixels = engine.test_readback_layer(result);
     assert!(alpha_at(&pixels, w, 16, 32) > 0, "child_a's dot present");
     assert!(alpha_at(&pixels, w, 48, 32) > 0, "child_b's dot present");
+}
+
+#[test]
+fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
+    // Tree under test:
+    //   Group (with mask, dab at 8,8)
+    //     ├─ child_a (with mask, dab at 16,16; red dot at 16,32)
+    //     └─ child_b (green dot at 48,32)
+    //
+    // Flattening the group must consume every child and every mask. Undo
+    // must put all of it back — tree shape, both masks, and every pixel
+    // byte-for-byte.
+    let (w, h) = (64u32, 64u32);
+    let mut engine = test_engine(w, h);
+
+    let group = engine.add_group(None);
+    let child_a = engine.add_raster_layer(Some(group));
+    paint_dot(&mut engine, child_a, 16.0, 32.0, [1.0, 0.0, 0.0]);
+    engine.add_mask(child_a);
+    paint_mask_dot(&mut engine, child_a, 16.0, 16.0);
+
+    let child_b = engine.add_raster_layer(Some(group));
+    paint_dot(&mut engine, child_b, 48.0, 32.0, [0.0, 1.0, 0.0]);
+
+    engine.add_mask(group);
+    paint_mask_dot(&mut engine, group, 8.0, 8.0);
+
+    // Snapshot every pixel buffer we expect to survive the round-trip.
+    let child_a_pixels_before = engine.test_readback_layer(child_a);
+    let child_b_pixels_before = engine.test_readback_layer(child_b);
+    let child_a_mask_before = engine.test_readback_mask(child_a);
+    let group_mask_before = engine.test_readback_mask(group);
+
+    // --- Forward ---
+    let result = engine
+        .flatten_node(group)
+        .expect("group flatten succeeded");
+    assert!(engine.has_layer(result), "result raster attached");
+    assert!(!group_at_root(&engine, group), "group consumed by flatten");
+    // Result composite must reflect both children — proof the bake actually
+    // walked the subtree, rather than emitting an empty placeholder.
+    let result_pixels = engine.test_readback_layer(result);
+    assert!(
+        alpha_at(&result_pixels, w, 16, 32) > 0,
+        "child_a's dot baked into result"
+    );
+    assert!(
+        alpha_at(&result_pixels, w, 48, 32) > 0,
+        "child_b's dot baked into result"
+    );
+
+    // --- Undo ---
+    engine.undo();
+
+    // Tree shape: group is back at root, both children attached under it,
+    // result raster gone, both masks reattached.
+    assert!(group_at_root(&engine, group), "group reattached at root");
+    assert!(engine.has_layer(child_a), "child_a reattached");
+    assert!(engine.has_layer(child_b), "child_b reattached");
+    assert!(!engine.has_layer(result), "result detached on undo");
+    assert!(
+        engine.host_mask_id(group).is_some(),
+        "group's mask restored"
+    );
+    assert!(
+        engine.host_mask_id(child_a).is_some(),
+        "child_a's mask restored"
+    );
+
+    // Pixel content: every snapshot matches byte-for-byte.
+    assert_eq!(
+        engine.test_readback_layer(child_a),
+        child_a_pixels_before,
+        "child_a layer pixels survive flatten+undo byte-for-byte"
+    );
+    assert_eq!(
+        engine.test_readback_layer(child_b),
+        child_b_pixels_before,
+        "child_b layer pixels survive flatten+undo byte-for-byte"
+    );
+    assert_eq!(
+        engine.test_readback_mask(child_a),
+        child_a_mask_before,
+        "child_a mask pixels survive flatten+undo byte-for-byte"
+    );
+    assert_eq!(
+        engine.test_readback_mask(group),
+        group_mask_before,
+        "group mask pixels survive flatten+undo byte-for-byte"
+    );
 }
