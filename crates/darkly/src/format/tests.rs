@@ -513,6 +513,34 @@ fn round_trip_kitchen_sink_document() {
     );
 }
 
+/// Loading a `.darkly` into a dirty engine clears the dirty flag — the
+/// loaded contents are the new "matches disk" baseline. The fresh
+/// staging doc constructed in `build_staging_document` starts with
+/// `dirty: false`, and the atomic swap installs it as-is.
+#[test]
+fn dirty_flag_cleared_by_open() {
+    let (canvas_w, canvas_h) = (32u32, 32u32);
+
+    let mut original = kitchen_sink_engine(canvas_w, canvas_h);
+    populate_kitchen_sink(&mut original);
+    let bundle = drive_save_to_completion(&mut original);
+    let zip_bytes = assemble_zip(&bundle);
+
+    let mut reloaded = kitchen_sink_engine(canvas_w, canvas_h);
+    // Make the target engine dirty so we can prove load clears it
+    // (rather than starting from a doc that was already clean).
+    let _layer = reloaded.add_raster_layer(None);
+    assert!(reloaded.is_dirty(), "setup must produce a dirty engine");
+
+    reloaded
+        .open_document(&zip_bytes)
+        .expect("kitchen-sink reload happy path");
+    assert!(
+        !reloaded.is_dirty(),
+        "successful open_document must install a clean doc"
+    );
+}
+
 /// Runtime guard that the kitchen sink actually instantiates every
 /// closed-set variant in every registry. Adding a new blend mode /
 /// layer kind / modifier kind without extending `populate_kitchen_sink`

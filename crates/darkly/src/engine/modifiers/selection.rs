@@ -600,8 +600,10 @@ impl DarklyEngine {
             let entry = self
                 .region_store
                 .commit_region(encoder, modifier_id, &frame, &snap, rect);
-            self.undo_stack
-                .push(Box::new(SelectionAction::new(was_active, entry)));
+            self.undo_stack.push(
+                &mut self.doc,
+                Box::new(SelectionAction::new(was_active, entry)),
+            );
         });
     }
 

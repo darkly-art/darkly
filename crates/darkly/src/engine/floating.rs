@@ -547,8 +547,10 @@ impl DarklyEngine {
 
             let parent = self.doc.parent_of(layer_id);
             let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
-            self.undo_stack
-                .push(Box::new(LayerAddAction::new(layer_id, parent, pos)));
+            self.undo_stack.push(
+                &mut self.doc,
+                Box::new(LayerAddAction::new(layer_id, parent, pos)),
+            );
 
             self.compositor.mark_node_pixels_dirty(layer_id);
             self.compositor.clear_floating_content();
@@ -658,7 +660,8 @@ impl DarklyEngine {
                 fc.source_height,
             );
 
-            self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+            self.undo_stack
+                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
         });
 
         // Clean up GPU state

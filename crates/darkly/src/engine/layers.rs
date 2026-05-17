@@ -21,8 +21,10 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack
-            .push(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.undo_stack.push(
+            &mut self.doc,
+            Box::new(LayerAddAction::new(id, parent, pos)),
+        );
 
         id
     }
@@ -32,8 +34,10 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack
-            .push(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.undo_stack.push(
+            &mut self.doc,
+            Box::new(LayerAddAction::new(id, parent, pos)),
+        );
 
         id
     }
@@ -83,8 +87,10 @@ impl DarklyEngine {
             // keeps the layer's metadata for undo; pixel data does not
             // survive (see Compositor::dispose_layer).
             self.compositor.dispose_layer(layer_id);
-            self.undo_stack
-                .push(Box::new(LayerRemoveAction::new(layer_id, parent, pos)));
+            self.undo_stack.push(
+                &mut self.doc,
+                Box::new(LayerRemoveAction::new(layer_id, parent, pos)),
+            );
         }
 
         self.compositor.mark_dirty();
@@ -105,9 +111,12 @@ impl DarklyEngine {
 
         self.compositor.mark_dirty();
 
-        self.undo_stack.push(Box::new(LayerMoveAction::new(
-            layer_id, old_parent, old_pos, new_parent, new_pos,
-        )));
+        self.undo_stack.push(
+            &mut self.doc,
+            Box::new(LayerMoveAction::new(
+                layer_id, old_parent, old_pos, new_parent, new_pos,
+            )),
+        );
     }
 
     // --- Layer properties ---
@@ -126,11 +135,14 @@ impl DarklyEngine {
         self.refresh_blend_uniforms(layer_id);
         self.compositor.mark_dirty();
 
-        self.undo_stack.coalesce_property(PropertyAction::new(
-            layer_id,
-            Property::Opacity(old_opacity),
-            Property::Opacity(opacity),
-        ));
+        self.undo_stack.coalesce_property(
+            &mut self.doc,
+            PropertyAction::new(
+                layer_id,
+                Property::Opacity(old_opacity),
+                Property::Opacity(opacity),
+            ),
+        );
     }
 
     pub fn set_blend_mode(&mut self, layer_id: LayerId, type_id: &str) {
@@ -154,44 +166,58 @@ impl DarklyEngine {
         self.refresh_blend_uniforms(layer_id);
         self.compositor.mark_dirty();
 
-        self.undo_stack.push(Box::new(PropertyAction::new(
-            layer_id,
-            Property::BlendMode(old_mode),
-            Property::BlendMode(blend_mode),
-        )));
+        self.undo_stack.push(
+            &mut self.doc,
+            Box::new(PropertyAction::new(
+                layer_id,
+                Property::BlendMode(old_mode),
+                Property::BlendMode(blend_mode),
+            )),
+        );
     }
 
     /// Set the `visible` flag on any node — layer, group, or modifier.
     /// Works uniformly across kinds because they all carry [`NodeCommon`].
     pub fn set_layer_visible(&mut self, node_id: LayerId, visible: bool) {
         // Try layers/groups first; fall through to modifiers.
-        if let Some(node) = self.doc.find_node_mut(node_id) {
+        let old_visible = if let Some(node) = self.doc.find_node_mut(node_id) {
             let old = node.common().visible;
             node.common_mut().visible = visible;
-            self.compositor.mark_dirty();
-            self.undo_stack
-                .push(Box::new(crate::undo::NodeVisibleAction::new(node_id, old)));
+            Some(old)
         } else if let Some(modifier) = self.doc.find_modifier_mut(node_id) {
             let old = modifier.common.visible;
             modifier.common.visible = visible;
+            Some(old)
+        } else {
+            None
+        };
+        if let Some(old) = old_visible {
             self.compositor.mark_dirty();
-            self.undo_stack
-                .push(Box::new(crate::undo::NodeVisibleAction::new(node_id, old)));
+            self.undo_stack.push(
+                &mut self.doc,
+                Box::new(crate::undo::NodeVisibleAction::new(node_id, old)),
+            );
         }
     }
 
     /// Set the `locked` flag on any node — layer, group, or modifier.
     pub fn set_node_locked(&mut self, node_id: LayerId, locked: bool) {
-        if let Some(node) = self.doc.find_node_mut(node_id) {
+        let old_locked = if let Some(node) = self.doc.find_node_mut(node_id) {
             let old = node.common().locked;
             node.common_mut().locked = locked;
-            self.undo_stack
-                .push(Box::new(crate::undo::NodeLockedAction::new(node_id, old)));
+            Some(old)
         } else if let Some(modifier) = self.doc.find_modifier_mut(node_id) {
             let old = modifier.common.locked;
             modifier.common.locked = locked;
-            self.undo_stack
-                .push(Box::new(crate::undo::NodeLockedAction::new(node_id, old)));
+            Some(old)
+        } else {
+            None
+        };
+        if let Some(old) = old_locked {
+            self.undo_stack.push(
+                &mut self.doc,
+                Box::new(crate::undo::NodeLockedAction::new(node_id, old)),
+            );
         }
     }
 
@@ -243,6 +269,15 @@ impl DarklyEngine {
         &self.doc.name
     }
 
+    /// True when the document has unsaved changes. Set sticky at the
+    /// [`crate::undo::UndoStack::push`] chokepoint; cleared on a
+    /// successful save (`poll_save_result`) or load (`open_document`
+    /// installs a fresh `dirty = false` doc). UI close-tab and
+    /// `beforeunload` flows consult this to decide whether to prompt.
+    pub fn is_dirty(&self) -> bool {
+        self.doc.dirty
+    }
+
     /// Rename the document. Not undoable — renaming is a metadata change
     /// users expect to be free-standing, matching every other editor's
     /// "title bar rename" affordance. The save flow picks the new name
@@ -262,11 +297,14 @@ impl DarklyEngine {
             return;
         }
 
-        self.undo_stack.push(Box::new(PropertyAction::new(
-            layer_id,
-            Property::Name(old_name),
-            Property::Name(name.to_string()),
-        )));
+        self.undo_stack.push(
+            &mut self.doc,
+            Box::new(PropertyAction::new(
+                layer_id,
+                Property::Name(old_name),
+                Property::Name(name.to_string()),
+            )),
+        );
     }
 
     /// Push the current opacity/blend_mode of a layer or group into the
@@ -327,10 +365,13 @@ impl DarklyEngine {
             }
         }
         self.compositor.mark_dirty();
-        self.undo_stack.push(Box::new(PropertyAction::new(
-            group_id,
-            Property::Passthrough(old),
-            Property::Passthrough(passthrough),
-        )));
+        self.undo_stack.push(
+            &mut self.doc,
+            Box::new(PropertyAction::new(
+                group_id,
+                Property::Passthrough(old),
+                Property::Passthrough(passthrough),
+            )),
+        );
     }
 }

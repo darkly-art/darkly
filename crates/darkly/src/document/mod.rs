@@ -76,6 +76,15 @@ pub struct Document {
     pub width: u32,
     pub height: u32,
 
+    /// Sticky "has unsaved changes" bit. Set at the [`UndoStack::push`]
+    /// chokepoint — any new undoable mutation flips it true. Cleared
+    /// only by a successful save (`poll_save_result`) or a load
+    /// (`open_document` installs a fresh staging doc with `dirty = false`).
+    /// Not undoable on purpose: an undo back to the original state
+    /// shouldn't pretend the work was never done. Not serialized — the
+    /// flag describes editor session state, not file content.
+    pub dirty: bool,
+
     /// Single shared slot store for every layer, group, and modifier in this
     /// document. Lookups are O(1); generational keys mean stale ids return
     /// `None` instead of aliasing onto a recycled slot.
@@ -124,6 +133,7 @@ impl Document {
             name: "Untitled".to_string(),
             width,
             height,
+            dirty: false,
             entities,
             parent: SecondaryMap::new(),
             root,

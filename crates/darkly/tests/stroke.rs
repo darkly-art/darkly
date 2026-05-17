@@ -584,7 +584,7 @@ fn gpu_region_action_undo_stack() {
         cr(22, 22, 20, 20),
     );
     submit(&queue, enc);
-    undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+    undo_stack.push(&mut doc, Box::new(GpuRegionAction::new(entry)));
 
     assert!(undo_stack.can_undo());
     assert!(!undo_stack.can_redo());
@@ -700,14 +700,17 @@ fn gpu_cpu_undo_interleaved() {
         cr(25, 25, 14, 14),
     );
     submit(&queue, enc);
-    undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+    undo_stack.push(&mut doc, Box::new(GpuRegionAction::new(entry)));
 
     // Step 2: CPU property change (opacity).
-    undo_stack.push(Box::new(PropertyAction::new(
-        layer_id,
-        Property::Opacity(1.0),
-        Property::Opacity(0.5),
-    )));
+    undo_stack.push(
+        &mut doc,
+        Box::new(PropertyAction::new(
+            layer_id,
+            Property::Opacity(1.0),
+            Property::Opacity(0.5),
+        )),
+    );
     if let Some(Layer::Raster(r)) = doc.layer_mut(layer_id) {
         r.blend.opacity = 0.5;
     }

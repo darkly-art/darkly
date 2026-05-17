@@ -221,6 +221,13 @@ impl DarklyEngine {
     /// Drain a completed save. Returns `None` while any readback is
     /// still in flight; returns `Some(SaveBundle)` once every pixel
     /// blob and the composite have landed.
+    ///
+    /// A successful drain also clears the [`Document::dirty`] flag — the
+    /// bundle handoff is the moment the document's contents are no
+    /// longer "unsaved." Edits queued between `start_save_document` and
+    /// this drain are intentionally lost from the dirty flag's POV: the
+    /// snapshot built at submit time is what's leaving the engine, so
+    /// the document on disk matches the snapshot we just sealed.
     pub fn poll_save_result(&mut self) -> Option<SaveBundle> {
         let job = self.active_save_job.as_ref()?;
         if !job.is_complete() {
@@ -239,6 +246,7 @@ impl DarklyEngine {
             .collect();
         // Stable ordering for tests + bit-stable output.
         blobs.sort_by(|a, b| a.path.cmp(&b.path));
+        self.doc.dirty = false;
         Some(SaveBundle {
             manifest_json,
             composite_width,
@@ -635,6 +643,35 @@ mod tests {
             requires.blend_mode.iter().any(|m| m == "normal"),
             "requires.blend_mode should list normal (got {:?})",
             requires.blend_mode
+        );
+    }
+
+    /// Successful save clears the sticky [`crate::document::Document::dirty`]
+    /// bit. This is the "file matches disk now" handoff — anything the user
+    /// did between `start_save_document` and the drain is intentionally not
+    /// re-dirty: the snapshot the bundle holds *is* the file we just wrote.
+    #[test]
+    fn dirty_flag_cleared_by_save() {
+        let mut engine = headless_engine(32, 32);
+        // add_raster_layer pushes to undo, which flips dirty.
+        let _layer = engine.add_raster_layer(None);
+        assert!(engine.is_dirty(), "add_raster_layer must flip dirty");
+
+        engine.start_save_document().expect("save kicks off");
+        // Drive readbacks to completion.
+        let mut bundle = None;
+        for _ in 0..16 {
+            engine.test_flush_readbacks();
+            engine.render(0.0);
+            if let Some(b) = engine.poll_save_result() {
+                bundle = Some(b);
+                break;
+            }
+        }
+        bundle.expect("save should complete within 16 frames");
+        assert!(
+            !engine.is_dirty(),
+            "successful save must clear dirty — bundle handoff matches disk"
         );
     }
 

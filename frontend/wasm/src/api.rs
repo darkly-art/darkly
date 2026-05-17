@@ -1152,6 +1152,14 @@ impl DarklyHandle {
         self.push(Command::SetDocumentName(name.to_string()));
     }
 
+    /// True when the document has unsaved changes — set sticky by any
+    /// undoable mutation, cleared only by a successful save or load.
+    /// Consulted by the close-tab modal and the `beforeunload` handler.
+    pub fn is_dirty(&self) -> bool {
+        self.flush_if_needed();
+        self.engine.borrow().is_dirty()
+    }
+
     // --- Native save / open (.darkly container) ---
 
     /// Kick off a `.darkly` save. Builds the manifest synchronously,

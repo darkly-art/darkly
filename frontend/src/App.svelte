@@ -7,9 +7,11 @@
     import PresetPicker from './ui/PresetPicker.svelte';
     import SettingsModal from './ui/settings/SettingsModal.svelte';
     import ExportImageModal from './ui/ExportImageModal.svelte';
+    import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
     import TabStrip from './multi_tab/TabStrip.svelte';
     import CanvasStack from './multi_tab/CanvasStack.svelte';
     import { shell } from './multi_tab/shell.svelte';
+    import { anyTabDirty } from './multi_tab/closeGuard.svelte';
     import { setOpenImageInput, openImageFile } from './actions';
     // Register all tools
     import './tools/index';
@@ -36,7 +38,19 @@
         // Clear so re-picking the same file still fires `change`.
         input.value = '';
     }
+
+    // Browser-level "you have unsaved changes" prompt on reload / tab
+    // close / navigation away. Browsers ignore custom messages — setting
+    // `returnValue` to any non-empty string triggers their native prompt.
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+        if (anyTabDirty()) {
+            e.preventDefault();
+            e.returnValue = '';
+        }
+    }
 </script>
+
+<svelte:window onbeforeunload={onBeforeUnload} />
 
 <div class="app-layout">
     <LeftSidebar />
@@ -52,6 +66,7 @@
 <PresetPicker />
 <SettingsModal />
 <ExportImageModal />
+<ConfirmDiscardModal />
 <input
     bind:this={openImageInputEl}
     type="file"

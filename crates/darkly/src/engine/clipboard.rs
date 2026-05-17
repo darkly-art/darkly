@@ -274,7 +274,8 @@ impl DarklyEngine {
                     let entry = self
                         .region_store
                         .commit_region(encoder, layer_id, &frame, &snap, undo_rect);
-                    self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                    self.undo_stack
+                        .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
                 });
                 self.compositor.mark_node_pixels_dirty(layer_id);
             }
@@ -499,8 +500,10 @@ impl DarklyEngine {
 
         let parent = self.doc.parent_of(id);
         let pos = self.doc.position_in_parent(id).unwrap_or(0);
-        self.undo_stack
-            .push(Box::new(LayerAddAction::new(id, parent, pos)));
+        self.undo_stack.push(
+            &mut self.doc,
+            Box::new(LayerAddAction::new(id, parent, pos)),
+        );
 
         id
     }

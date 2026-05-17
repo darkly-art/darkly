@@ -1,6 +1,7 @@
 <script lang="ts">
     import { tick } from 'svelte';
     import { shell } from './shell.svelte';
+    import { closeGuard } from './closeGuard.svelte';
 
     /** Id of the tab currently being inline-renamed, or null when no edit
      *  is in progress. Local state — only one rename can be active at a
@@ -224,7 +225,7 @@
                 if (!isEditing) shell.focus(inst.id);
             }}
             ondblclick={() => startRename(inst.id)}
-            onauxclick={(e) => { if (e.button === 1) { e.preventDefault(); shell.close(inst.id); } }}
+            onauxclick={(e) => { if (e.button === 1) { e.preventDefault(); closeGuard.guardedClose(inst.id); } }}
         >
             {#if isEditing}
                 <input
@@ -243,7 +244,7 @@
                     class="close"
                     tabindex="-1"
                     aria-label="Close tab"
-                    onclick={(e) => { e.stopPropagation(); shell.close(inst.id); }}
+                    onclick={(e) => { e.stopPropagation(); closeGuard.guardedClose(inst.id); }}
                 >×</button>
             {/if}
         </div>

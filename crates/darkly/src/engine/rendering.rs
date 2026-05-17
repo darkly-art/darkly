@@ -161,7 +161,8 @@ impl DarklyEngine {
                                     &commit.snapshot,
                                     rect,
                                 );
-                                self.undo_stack.push(Box::new(GpuRegionAction::new(entry)));
+                                self.undo_stack
+                                    .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
                             });
                         }
                     }

@@ -74,7 +74,14 @@ impl UndoStack {
     }
 
     /// Push a completed action. Clears redo history.
-    pub fn push(&mut self, action: Box<dyn UndoAction>) {
+    ///
+    /// Takes `&mut Document` so the chokepoint can set the sticky
+    /// `Document::dirty` flag — every undoable mutation funnels through
+    /// here, which makes this the only place dirty-tracking has to live.
+    /// Undo/redo deliberately don't touch the flag (an undo back to the
+    /// original state still leaves the doc "dirty" from the user's POV).
+    pub fn push(&mut self, doc: &mut Document, action: Box<dyn UndoAction>) {
+        doc.dirty = true;
         self.redo_steps.clear();
         self.undo_steps.push(action);
 
@@ -88,13 +95,18 @@ impl UndoStack {
     /// If the top of the stack is a `PropertyAction` on the same layer and same
     /// property kind, update its `new_value` instead of pushing a new entry.
     /// This collapses rapid slider drags into a single undo step.
-    pub fn coalesce_property(&mut self, action: PropertyAction) {
+    ///
+    /// Marks the document dirty whether the action coalesces or pushes
+    /// fresh — coalescing means the user did something mid-drag, which
+    /// is just as much "unsaved work" as a brand-new action.
+    pub fn coalesce_property(&mut self, doc: &mut Document, action: PropertyAction) {
+        doc.dirty = true;
         if let Some(top) = self.undo_steps.last_mut() {
             if top.try_coalesce_property(&action) {
                 return;
             }
         }
-        self.push(Box::new(action));
+        self.push(doc, Box::new(action));
     }
 
     /// Undo the most recent action. Returns affected tile coords per layer.
@@ -159,7 +171,7 @@ mod tests {
         // Record the add as undoable.
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
-        undo.push(Box::new(LayerAddAction::new(id, parent, pos)));
+        undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
 
         assert_eq!(doc.flat_layers().len(), 1);
 
@@ -183,7 +195,10 @@ mod tests {
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
         let node = doc.detach_for_undo(id).unwrap();
-        undo.push(Box::new(LayerRemoveAction::new(node, parent, pos)));
+        undo.push(
+            &mut doc,
+            Box::new(LayerRemoveAction::new(node, parent, pos)),
+        );
 
         assert_eq!(doc.flat_layers().len(), 0);
 
@@ -216,9 +231,12 @@ mod tests {
         let new_parent = doc.parent_of(l1);
         let new_pos = doc.position_in_parent(l1).unwrap();
 
-        undo.push(Box::new(LayerMoveAction::new(
-            l1, old_parent, old_pos, new_parent, new_pos,
-        )));
+        undo.push(
+            &mut doc,
+            Box::new(LayerMoveAction::new(
+                l1, old_parent, old_pos, new_parent, new_pos,
+            )),
+        );
 
         let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
         assert_eq!(flat, vec![l2, l3, l1]);
@@ -244,11 +262,14 @@ mod tests {
         let id = doc.add_raster_layer(None);
 
         // Change opacity.
-        undo.push(Box::new(PropertyAction::new(
-            id,
-            Property::Opacity(1.0),
-            Property::Opacity(0.5),
-        )));
+        undo.push(
+            &mut doc,
+            Box::new(PropertyAction::new(
+                id,
+                Property::Opacity(1.0),
+                Property::Opacity(0.5),
+            )),
+        );
         if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
             r.blend.opacity = 0.5;
         }
@@ -285,11 +306,10 @@ mod tests {
             if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
                 r.blend.opacity = new_val;
             }
-            undo.coalesce_property(PropertyAction::new(
-                id,
-                Property::Opacity(old_val),
-                Property::Opacity(new_val),
-            ));
+            undo.coalesce_property(
+                &mut doc,
+                PropertyAction::new(id, Property::Opacity(old_val), Property::Opacity(new_val)),
+            );
         }
 
         // Should be exactly 1 undo step, not 4.
@@ -328,6 +348,77 @@ mod tests {
     }
 
     #[test]
+    fn dirty_flag_set_by_undo_push() {
+        // The single test that proves the chokepoint works — `push` is
+        // the one place dirty-tracking lives, so a passing push must
+        // flip the bit and every higher-level mutation is wired up by
+        // construction.
+        let mut doc = Document::new(64, 64);
+        let mut undo = UndoStack::new(50);
+        assert!(!doc.dirty, "fresh doc starts clean");
+
+        let id = doc.add_raster_layer(None);
+        let parent = doc.parent_of(id);
+        let pos = doc.position_in_parent(id).unwrap();
+        undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        assert!(doc.dirty, "push must flip dirty");
+    }
+
+    #[test]
+    fn dirty_flag_set_by_coalesce_property() {
+        // Slider drags go through `coalesce_property` rather than
+        // `push`. The chokepoint flips dirty in both — a mid-drag
+        // coalesce is just as much "unsaved work" as a fresh push.
+        use super::property::Property;
+
+        let mut doc = Document::new(64, 64);
+        let mut undo = UndoStack::new(50);
+        let id = doc.add_raster_layer(None);
+        doc.dirty = false; // reset after the add_raster_layer setup
+
+        undo.coalesce_property(
+            &mut doc,
+            PropertyAction::new(id, Property::Opacity(1.0), Property::Opacity(0.5)),
+        );
+        assert!(doc.dirty, "first coalesce push flips dirty");
+
+        doc.dirty = false;
+        undo.coalesce_property(
+            &mut doc,
+            PropertyAction::new(id, Property::Opacity(0.5), Property::Opacity(0.3)),
+        );
+        assert!(
+            doc.dirty,
+            "subsequent coalesce (merging into existing step) still flips dirty"
+        );
+    }
+
+    #[test]
+    fn dirty_flag_sticky_through_undo_redo() {
+        // Sticky semantics: undoing back to the original state must
+        // *not* clear dirty. The user worked, then undid; from a
+        // "should this prompt before close?" POV the file is still
+        // different from the last saved state.
+        let mut doc = Document::new(64, 64);
+        let mut undo = UndoStack::new(50);
+
+        let id = doc.add_raster_layer(None);
+        let parent = doc.parent_of(id);
+        let pos = doc.position_in_parent(id).unwrap();
+        undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        assert!(doc.dirty);
+
+        undo.undo(&mut doc);
+        assert!(
+            doc.dirty,
+            "undo back to original state must NOT clear dirty"
+        );
+
+        undo.redo(&mut doc);
+        assert!(doc.dirty, "redo also leaves dirty set");
+    }
+
+    #[test]
     fn undo_add_raster_layer_with_anchor_restores_position() {
         // Adding a layer with an anchor lands it above the anchor; undo +
         // redo must replay it back to the same anchored slot, not to the top
@@ -342,7 +433,7 @@ mod tests {
         let new_id = doc.add_raster_layer(Some(l1));
         let parent = doc.parent_of(new_id);
         let pos = doc.position_in_parent(new_id).unwrap();
-        undo.push(Box::new(LayerAddAction::new(new_id, parent, pos)));
+        undo.push(&mut doc, Box::new(LayerAddAction::new(new_id, parent, pos)));
 
         let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
         assert_eq!(flat, vec![l1, new_id, l2]);
