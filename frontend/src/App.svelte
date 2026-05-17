@@ -12,7 +12,6 @@
     import CanvasStack from './multi_tab/CanvasStack.svelte';
     import { shell } from './multi_tab/shell.svelte';
     import { anyTabDirty } from './multi_tab/closeGuard.svelte';
-    import { setOpenImageInput, openImageFile } from './actions';
     // Register all tools
     import './tools/index';
 
@@ -22,22 +21,6 @@
     // they mount — `onMount` would be too late and the proxy would resolve
     // to `null`, throwing on any method call.
     if (shell.instances.length === 0) shell.open();
-
-    let openImageInputEl: HTMLInputElement | undefined = $state();
-
-    // Register the hidden file input with the open-image action.
-    $effect(() => {
-        setOpenImageInput(openImageInputEl ?? null);
-        return () => setOpenImageInput(null);
-    });
-
-    async function onOpenImageChange(e: Event) {
-        const input = e.currentTarget as HTMLInputElement;
-        const file = input.files?.[0];
-        if (file) await openImageFile(file);
-        // Clear so re-picking the same file still fires `change`.
-        input.value = '';
-    }
 
     // Browser-level "you have unsaved changes" prompt on reload / tab
     // close / navigation away. Browsers ignore custom messages — setting
@@ -67,13 +50,6 @@
 <SettingsModal />
 <ExportImageModal />
 <ConfirmDiscardModal />
-<input
-    bind:this={openImageInputEl}
-    type="file"
-    accept="image/*"
-    class="hidden-file-input"
-    onchange={onOpenImageChange}
-/>
 
 <style>
     .app-layout {
@@ -89,13 +65,5 @@
         flex: 1;
         min-width: 0;
         overflow: hidden;
-    }
-
-    .hidden-file-input {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        opacity: 0;
-        pointer-events: none;
     }
 </style>

@@ -62,10 +62,17 @@ class MultiTabShell {
      *  instance's WASM handle is allocated lazily — it's set up when the
      *  per-tab `<CanvasView {instance}/>` mounts and bootstraps the canvas.
      *  This keeps tab open instant (no await) and matches Svelte's
-     *  template-driven canvas creation. */
-    open(name?: string): DarklyInstance {
+     *  template-driven canvas creation.
+     *
+     *  `dims` overrides the global `canvas.width/height` config defaults
+     *  for this tab only — used by the Open flow when the source file
+     *  has its own intrinsic dimensions (a `.png` opens as a new tab
+     *  sized to the image; a `.darkly` ignores this and lets the
+     *  loader's internal resize take over). */
+    open(name?: string, dims?: { width: number; height: number }): DarklyInstance {
         const inst = new DarklyInstance();
         inst.pendingName = name ?? `Untitled ${this.nextSerial++}`;
+        if (dims) inst.pendingDims = dims;
         this.instances.push(inst);
         this.nameVersion++;
         this.focus(inst.id);

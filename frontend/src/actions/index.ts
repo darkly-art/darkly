@@ -4,49 +4,71 @@ import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
 import { exportImage } from '../state/exportImage.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
+import { toast } from '../state/toast.svelte';
 import { toolRegistry } from '../tools/registry';
 import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard } from '../clipboard';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
 import { screenToCanvas } from '../canvas/coordinates';
-import { pickOpenFile } from '../storage/fileHandle';
+import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
+import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
 import { shell } from '../multi_tab/shell.svelte';
 
-/** Hidden `<input type="file">` mounted by `App.svelte`. The `open-image`
- *  action triggers it; the change handler routes the file through
- *  `paste_image`. Wired by `App.svelte`'s `bind:this` so the action can
- *  fire .click() without owning the DOM node itself. */
-let openImageInputEl: HTMLInputElement | null = null;
-
-export function setOpenImageInput(el: HTMLInputElement | null) {
-    openImageInputEl = el;
+/** Strip the file extension from a picker-supplied name so we can use
+ *  it as a tab title. Matches the basename-only convention already used
+ *  by Save As (which seeds `set_document_name` from the chosen filename
+ *  minus `.darkly`). */
+function tabNameFromFile(fileName: string): string {
+    const stripped = fileName.replace(/\.[^./]+$/, '');
+    return stripped || 'Untitled';
 }
 
-/** Open a `.darkly` document in a new tab. Picks the file via the FS
- *  Access API (so the returned handle can be cached for subsequent
- *  Ctrl+S writes) or the hidden-input fallback for Firefox. On
- *  load-refusal, the structured error payload from
- *  `LoadError::to_json()` populates the `LoadErrorToast` banner and
- *  the failed tab is rolled back so the user is left with their
- *  previous focus.
+/** Unified Open. Pick any supported file, sniff its kind, and route to
+ *  the matching loader. Every Open lands in a new tab — image-as-layer
+ *  in the current doc is the drag-drop gesture (`CanvasView`'s drop
+ *  handler) or the clipboard paste, not this action.
  *
- *  Exported so the hidden file input in `App.svelte` can route a
- *  drag-dropped `.darkly` through the same code path. */
-export async function openDocumentFlow(): Promise<void> {
+ *  Exported so the canvas drop handler can re-enter this flow when the
+ *  user drags a `.darkly` (drop bypasses the picker but routes to the
+ *  same loader). */
+export async function openFlow(): Promise<void> {
     const picked = await pickOpenFile();
     if (!picked) return;
+    await routePickedFile(picked);
+}
 
+/** Dispatch a picked / dropped file to the right loader. Centralises
+ *  the magic-byte sniff so the picker and the drop handler share one
+ *  branch table. */
+async function routePickedFile(picked: OpenedFile): Promise<void> {
+    const kind = detectKind(picked.bytes);
+    if (kind === 'darkly') {
+        openDarklyAsTab(picked);
+        return;
+    }
+    if (isImageKind(kind)) {
+        await openImageAsTab(picked, kind);
+        return;
+    }
+    toast.show('error', `Unsupported file type: ${picked.name}`);
+}
+
+/** Open a `.darkly` archive in a new tab. The engine's
+ *  `open_document(bytes)` is all-or-nothing — a refused load is
+ *  surfaced through `LoadErrorToast` and the failed tab is rolled
+ *  back so the user is left with their previous focus. Exposed so
+ *  the canvas drop handler can route a dropped `.darkly` through the
+ *  same path the picker uses. */
+export function openDarklyAsTab(picked: OpenedFile): void {
     // Per the plan: opens land in a new tab so the previously-active
     // doc + its undo stack are untouched. Tab name reflects the file
     // name (the engine's `set_document_name` is overwritten by the
     // loaded manifest below; the shell's pendingName is just the
     // initial display before handle bootstrap finishes).
-    const tabName = picked.name.replace(/\.darkly$/i, '') || 'Untitled';
-    const inst = shell.open(tabName);
+    const inst = shell.open(tabNameFromFile(picked.name));
     inst.fileHandle = picked.handle;
-
     inst.onHandleReady = (handle) => {
         try {
             handle.open_document(picked.bytes);
@@ -60,17 +82,56 @@ export async function openDocumentFlow(): Promise<void> {
             app.requestFrame();
         } catch (e) {
             loadError.show(parseLoadErrorMessage(e));
-            // Roll back the failed tab so the user is left with the
-            // previously-focused doc.
             shell.close(inst.id);
         }
     };
 }
 
-/** Decode an image file via the browser's native codecs and paste it as
- *  a new raster layer. Used by both the hidden file input and any future
- *  drag-and-drop hook. Returns the new layer id, or `-1` on decode failure. */
-export async function openImageFile(file: File): Promise<number> {
+/** Open a PNG / JPEG / WebP in a new tab sized to the image's
+ *  intrinsic dimensions, with the image as the single raster layer.
+ *  No file handle is cached on the new tab — re-saving the image as
+ *  `.darkly` is a Save As, not a write-back to the source PNG. */
+async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void> {
+    let bitmap: ImageBitmap;
+    try {
+        bitmap = await createImageBitmap(new Blob([picked.bytes]));
+    } catch (e) {
+        toast.show('error', `Failed to decode ${kind.toUpperCase()}: ${picked.name}`);
+        console.error('[open] image decode failed', e);
+        return;
+    }
+    const { width, height } = bitmap;
+
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+        bitmap.close();
+        toast.show('error', '2D canvas context unavailable');
+        return;
+    }
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const rgba = new Uint8Array(ctx.getImageData(0, 0, width, height).data.buffer);
+
+    const inst = shell.open(tabNameFromFile(picked.name), { width, height });
+    inst.onHandleReady = (handle) => {
+        // Pass anchor = -1 (no specific layer) — the new tab has no
+        // bg seed (the `onHandleReady` presence suppresses it), so
+        // paste lands at the bottom of root, which is the only sensible
+        // position for the doc's first layer.
+        handle.paste_image(width, height, rgba, 0, 0, -1);
+        app.refreshLayerTree();
+        app.requestFrame();
+    };
+}
+
+/** Decode an image file and paste it as a new raster layer in the
+ *  CURRENT document. Used by the canvas drag-drop handler — drop is
+ *  the explicit "user wants this image in this doc" gesture (Open from
+ *  the menu / Ctrl+O always lands a new tab instead).
+ *
+ *  Returns the new layer id, or `-1` on decode failure. */
+export async function pasteImageIntoCurrent(file: File): Promise<number> {
     if (!app.handle) return -1;
     try {
         const bitmap = await createImageBitmap(file);
@@ -94,9 +155,33 @@ export async function openImageFile(file: File): Promise<number> {
         app.requestFrame();
         return layerId;
     } catch (e) {
-        console.error('[open-image] decode failed', e);
+        toast.show('error', `Failed to decode dropped image: ${file.name}`);
+        console.error('[drop] image decode failed', e);
         return -1;
     }
+}
+
+/** Route a dropped file (from `CanvasView`'s `ondrop` handler) through
+ *  the same kind-sniff the Open action uses:
+ *    - `.darkly` → open as a new tab (mirrors Ctrl+O on a `.darkly`).
+ *    - image → paste into the current tab as a raster layer.
+ *    - anything else → toast, no-op.
+ *
+ *  Drag-drop deliberately diverges from the picker for images: a drop
+ *  onto the canvas is the explicit "I want this here" gesture, while
+ *  the Open action is the explicit "open as a document" gesture. */
+export async function handleDroppedFile(file: File): Promise<void> {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const kind = detectKind(bytes);
+    if (kind === 'darkly') {
+        openDarklyAsTab({ bytes, name: file.name, handle: null });
+        return;
+    }
+    if (isImageKind(kind)) {
+        await pasteImageIntoCurrent(file);
+        return;
+    }
+    toast.show('error', `Unsupported file type: ${file.name}`);
 }
 
 function enterTransformTool() {
@@ -373,13 +458,14 @@ export function registerActions() {
         },
     });
     actions.register({
-        id: 'openDocument',
+        id: 'open',
         displayName: 'Open',
         category: 'file',
-        description: 'Open a `.darkly` document in a new tab.',
-        defaultHotkey: '$mod+Shift+KeyO',
+        description:
+            'Open a `.darkly` document or image (PNG / JPEG / WebP) in a new tab.',
+        defaultHotkey: '$mod+KeyO',
         handler: () => {
-            void openDocumentFlow();
+            void openFlow();
         },
     });
     actions.register({
@@ -393,20 +479,6 @@ export function registerActions() {
             exportImage.open = true;
         },
     });
-    actions.register({
-        id: 'openImage',
-        displayName: 'Open Image…',
-        category: 'file',
-        description: 'Open a PNG / JPEG / WebP as a new raster layer.',
-        defaultHotkey: '$mod+KeyO',
-        handler: () => {
-            if (!openImageInputEl) return;
-            // Reset value so re-picking the same file still fires `change`.
-            openImageInputEl.value = '';
-            openImageInputEl.click();
-        },
-    });
-
     // -- Floating content / transform --
     actions.register({
         id: 'commitFloating',

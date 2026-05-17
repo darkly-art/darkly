@@ -31,7 +31,6 @@
 use std::collections::HashMap;
 
 use super::DarklyEngine;
-use crate::coord::CanvasRect;
 use crate::document::{layer_kind, modifier};
 use crate::document::{Document, Entity, ModifierKind};
 use crate::document::{Modifier, SelectionCpuCache, SelectionModifier};
@@ -473,13 +472,7 @@ fn upload_loaded_pixels(
                 r.pixels.bounds,
             );
             if let Some(bytes) = entries.get(&r.pixels.pixels) {
-                upload_pixels(
-                    engine,
-                    new_id,
-                    wgpu::TextureFormat::Rgba8Unorm,
-                    r.pixels.bounds,
-                    bytes,
-                );
+                upload_to_node(engine, new_id, bytes);
             }
         }
     }
@@ -499,13 +492,7 @@ fn upload_loaded_pixels(
                     mask.pixels.bounds,
                 );
                 if let Some(bytes) = entries.get(&mask.pixels.pixels) {
-                    upload_pixels(
-                        engine,
-                        new_id,
-                        wgpu::TextureFormat::R8Unorm,
-                        mask.pixels.bounds,
-                        bytes,
-                    );
+                    upload_to_node(engine, new_id, bytes);
                 }
             }
             ManifestModifier::Selection(_) => {
@@ -516,48 +503,18 @@ fn upload_loaded_pixels(
     }
 }
 
-/// Upload raw pixel bytes into a node's GPU texture. Mirrors the
-/// `paste_image` upload path — `write_texture` + the explicit row
-/// stride matching `bounds.width * bpp`.
-fn upload_pixels(
-    engine: &DarklyEngine,
-    node_id: LayerId,
-    format: wgpu::TextureFormat,
-    bounds: CanvasRect,
-    bytes: &[u8],
-) {
-    let Some(layer_tex) = engine.compositor.node_texture(node_id) else {
-        return;
-    };
-    let bpp = format.block_copy_size(None).unwrap_or(1);
-    let expected = (bounds.width * bounds.height * bpp) as usize;
-    if bytes.len() < expected {
-        log::error!(
-            "load: pixel buffer too small for node {:?}: {} < {expected}",
-            node_id.to_ffi(),
-            bytes.len()
-        );
-        return;
+/// Thin wrapper that routes through `Compositor::upload_node_pixels`
+/// (which atomically writes + dirty-marks). A `false` return means the
+/// node has no texture or the buffer is short — log and continue
+/// (the load is past every refusal gate; half a layer beats aborting
+/// with a fresh compositor sitting around).
+fn upload_to_node(engine: &mut DarklyEngine, node_id: LayerId, bytes: &[u8]) {
+    let ok = engine
+        .compositor
+        .upload_node_pixels(&engine.gpu.queue, node_id, bytes);
+    if !ok {
+        log::error!("load: pixel upload failed for node {:?}", node_id.to_ffi());
     }
-    engine.gpu.queue.write_texture(
-        wgpu::TexelCopyTextureInfo {
-            texture: &layer_tex.texture,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        &bytes[..expected],
-        wgpu::TexelCopyBufferLayout {
-            offset: 0,
-            bytes_per_row: Some(bounds.width * bpp),
-            rows_per_image: None,
-        },
-        wgpu::Extent3d {
-            width: bounds.width,
-            height: bounds.height,
-            depth_or_array_layers: 1,
-        },
-    );
 }
 
 /// Rebuild the veil chain from `manifest.veils`. The `requires`

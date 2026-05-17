@@ -33,10 +33,9 @@
 
     const settingsHotkey = $derived(formatHotkey(config.get('hotkeys.openSettings') as string | undefined));
     const exportHotkey = $derived(formatHotkey(config.get('hotkeys.exportImage') as string | undefined));
-    const openImageHotkey = $derived(formatHotkey(config.get('hotkeys.openImage') as string | undefined));
     const saveHotkey = $derived(formatHotkey(config.get('hotkeys.saveDocument') as string | undefined));
     const saveAsHotkey = $derived(formatHotkey(config.get('hotkeys.saveDocumentAs') as string | undefined));
-    const openHotkey = $derived(formatHotkey(config.get('hotkeys.openDocument') as string | undefined));
+    const openHotkey = $derived(formatHotkey(config.get('hotkeys.open') as string | undefined));
 
     // Tooltip explaining why Save/Save As are disabled on Firefox.
     const noSaveTooltip =
@@ -54,7 +53,7 @@
         <div class="menu">
             <button
                 class="menu-item"
-                onclick={() => runAction('openDocument')}
+                onclick={() => runAction('open')}
             >
                 <i class="fa-solid fa-folder-open"></i>
                 <span>Open</span>
@@ -81,11 +80,6 @@
                 {#if saveAsHotkey}<span class="kbd">{saveAsHotkey}</span>{/if}
             </button>
             <div class="sep"></div>
-            <button class="menu-item" onclick={() => runAction('openImage')}>
-                <i class="fa-solid fa-image"></i>
-                <span>Open Image</span>
-                {#if openImageHotkey}<span class="kbd">{openImageHotkey}</span>{/if}
-            </button>
             <button class="menu-item" onclick={() => runAction('exportImage')}>
                 <i class="fa-solid fa-file-export"></i>
                 <span>Export Image</span>

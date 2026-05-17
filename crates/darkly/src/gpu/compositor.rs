@@ -948,6 +948,60 @@ impl Compositor {
         self.node_textures.get(&node_id)
     }
 
+    /// Replace a node's entire texture contents with `bytes`, then mark
+    /// the node's pixels dirty so the next render's
+    /// `drain_dirty_thumbnail_readbacks` queues a fresh thumbnail.
+    ///
+    /// The single right way to upload pixels to a node — every paint
+    /// site has historically had to remember to call
+    /// `mark_node_pixels_dirty` after `queue.write_texture`. Centralising
+    /// the pair makes the bug "load uploaded pixels but no thumbnails
+    /// appeared until the first edit" impossible to express by
+    /// construction: callers can't write without dirtying.
+    ///
+    /// `bytes` must exactly fill the texture (`width * height * bpp` of
+    /// the texture's format). Returns `false` when the node has no
+    /// texture (groups, unknown ids) or `bytes` is short — caller can
+    /// log/ignore as appropriate. Production callers (paste, load)
+    /// treat both as "silently skip"; the engine has already passed
+    /// every validation gate by the time it reaches here.
+    pub fn upload_node_pixels(
+        &mut self,
+        queue: &wgpu::Queue,
+        node_id: LayerId,
+        bytes: &[u8],
+    ) -> bool {
+        let Some(tex) = self.node_textures.get(&node_id) else {
+            return false;
+        };
+        let bpp = tex.format.block_copy_size(None).unwrap_or(1);
+        let expected = (tex.width * tex.height * bpp) as usize;
+        if bytes.len() < expected {
+            return false;
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes[..expected],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(tex.width * bpp),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: tex.width,
+                height: tex.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.mark_node_pixels_dirty(node_id);
+        true
+    }
+
     /// Allocate or replace a node's GPU texture. Format-driven — `R8Unorm`
     /// allocates a mask-style (white-fill) texture; `Rgba8Unorm` allocates a
     /// raster-style (zero-fill) texture. Existing texture for the same id is

@@ -513,6 +513,71 @@ fn round_trip_kitchen_sink_document() {
     );
 }
 
+/// Regression: after `open_document`, the layer panel must show
+/// thumbnails immediately — not wait until the user's first edit.
+///
+/// The bug was that `engine/load.rs::upload_pixels` wrote bytes via
+/// `queue.write_texture` but never called `mark_node_pixels_dirty`, so
+/// the per-frame `drain_dirty_thumbnail_readbacks` saw an empty set
+/// and no thumbnail readbacks queued. Every paint path marks dirty
+/// after writing; the load path was the one outlier. Fix lives in
+/// `Compositor::upload_node_pixels` — a single helper that writes
+/// AND marks dirty in one step, so the next call site that uploads
+/// pixels can't forget.
+#[test]
+fn loaded_thumbnails_populate_without_a_first_edit() {
+    use crate::engine::DEFAULT_THUMB_SIZE;
+
+    let (canvas_w, canvas_h) = (16u32, 16u32);
+
+    // Build a doc with a layer of bright pixels so the thumbnail has
+    // non-zero content to read back.
+    let mut source = kitchen_sink_engine(canvas_w, canvas_h);
+    let red: Vec<u8> = (0..canvas_w * canvas_h)
+        .flat_map(|_| [255u8, 0, 0, 255])
+        .collect();
+    source.paste_image(canvas_w, canvas_h, &red, 0, 0, None);
+    let bundle = drive_save_to_completion(&mut source);
+    let zip_bytes = assemble_zip(&bundle);
+
+    let mut reloaded = kitchen_sink_engine(canvas_w, canvas_h);
+    reloaded
+        .open_document(&zip_bytes)
+        .expect("reload happy path");
+
+    // Drive the render loop long enough for the dirty-mark to drain
+    // into a queued readback and that readback to complete.
+    for _ in 0..16 {
+        reloaded.test_flush_readbacks();
+        reloaded.render(0.0);
+    }
+
+    // The reloaded doc's raster layers should each have a non-zero
+    // thumbnail cached. We check at least one — the kitchen-sink + the
+    // pasted red layer together guarantee one filled raster, while
+    // empty-pixel layers stay zero (correctly).
+    let raster_ids: Vec<crate::layer::LayerId> = reloaded
+        .doc
+        .all_raster_layers()
+        .iter()
+        .map(|r| r.id)
+        .collect();
+    assert!(
+        !raster_ids.is_empty(),
+        "reloaded doc must have raster layers"
+    );
+
+    let any_non_zero = raster_ids.iter().any(|id| {
+        let thumb = reloaded.node_thumbnail(*id, DEFAULT_THUMB_SIZE, DEFAULT_THUMB_SIZE);
+        thumb.iter().any(|&b| b != 0)
+    });
+    assert!(
+        any_non_zero,
+        "no loaded raster has a non-zero thumbnail — \
+         load path forgot to mark_node_pixels_dirty after upload"
+    );
+}
+
 /// Loading a `.darkly` into a dirty engine clears the dirty flag — the
 /// loaded contents are the new "matches disk" baseline. The fresh
 /// staging doc constructed in `build_staging_document` starts with

@@ -466,32 +466,13 @@ impl DarklyEngine {
         self.compositor
             .ensure_raster_layer(&self.gpu.device, &self.gpu.queue, id, layer_bounds);
 
-        // Upload the entire RGBA buffer to the layer texture — its bounds
-        // exactly match the paste extent so no per-row copy or clipping is
-        // needed.
-        if let Some(layer_tex) = self.compositor.node_texture(id) {
-            self.gpu.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &layer_tex.texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(width * 4),
-                    rows_per_image: None,
-                },
-                wgpu::Extent3d {
-                    width,
-                    height,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-
-        self.compositor.mark_node_pixels_dirty(id);
+        // Single helper writes the bytes AND marks the node's pixels
+        // dirty so the next render queues a thumbnail readback —
+        // forgetting the dirty mark was the bug that left
+        // `open_document`-loaded layers without thumbnails until the
+        // user's first edit.
+        self.compositor
+            .upload_node_pixels(&self.gpu.queue, id, rgba);
 
         // Position above active layer if specified.
         if let Some(active_id) = active_layer_id {

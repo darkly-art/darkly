@@ -36,6 +36,14 @@ export class DarklyInstance {
      *  once it's been pushed through `set_document_name`. */
     pendingName: string | null = null;
 
+    /** Initial canvas dimensions for this tab. When non-null, override
+     *  the global `config.get('canvas.width' | 'canvas.height')` that
+     *  fresh tabs default to. Set by `shell.open(name, dims)` for
+     *  Opens-as-new-tab where the content has its own intrinsic size
+     *  (e.g. opening a PNG: canvas matches the image). Consumed once
+     *  by `CanvasView.onMount`. */
+    pendingDims: { width: number; height: number } | null = null;
+
     /** Per-tab cached `.darkly` file handle from the FS Access API.
      *  Set after a successful Save As or after opening a file via
      *  `showOpenFilePicker`; subsequent Ctrl+S writes back to the same

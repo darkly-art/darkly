@@ -26,15 +26,39 @@ export const canSave: boolean =
     typeof globalThis !== 'undefined' &&
     typeof (globalThis as { showSaveFilePicker?: unknown }).showSaveFilePicker === 'function';
 
-/** File picker filter — `application/x-darkly` is the MIME we register
- *  with the OS so the .darkly extension lights up in the picker's
- *  "Darkly Document" filter. */
-const DARKLY_TYPES = [
+/** Save picker filter — only `.darkly` writes back out today. */
+const SAVE_TYPES = [
     {
         description: 'Darkly Document',
         accept: { 'application/x-darkly': ['.darkly'] as readonly string[] },
     },
 ];
+
+/** Open picker filter — accepts any file the unified Open flow knows
+ *  how to ingest. Documents and raster images share one picker; the
+ *  caller's `detectKind(bytes)` routes by magic-byte sniff (see
+ *  `actions/index.ts::openFlow`). Two entries appear in the picker's
+ *  filter dropdown so the user can narrow to one type if they want. */
+const OPEN_TYPES = [
+    {
+        description: 'Darkly Document',
+        accept: { 'application/x-darkly': ['.darkly'] as readonly string[] },
+    },
+    {
+        description: 'Image',
+        accept: {
+            'image/png': ['.png'] as readonly string[],
+            'image/jpeg': ['.jpg', '.jpeg'] as readonly string[],
+            'image/webp': ['.webp'] as readonly string[],
+        },
+    },
+];
+
+/** `accept` string for the hidden-input fallback (Firefox / browsers
+ *  without `showOpenFilePicker`). Mirrors `OPEN_TYPES` above. */
+const OPEN_ACCEPT =
+    '.darkly,.png,.jpg,.jpeg,.webp,' +
+    'application/x-darkly,image/png,image/jpeg,image/webp';
 
 /** Result of a successful open — bytes always; handle only when the
  *  browser supports the FS Access API (so subsequent Ctrl+S can write
@@ -62,11 +86,11 @@ export async function pickSaveFile(
             globalThis as {
                 showSaveFilePicker: (opts: {
                     suggestedName?: string;
-                    types?: typeof DARKLY_TYPES;
+                    types?: typeof SAVE_TYPES;
                 }) => Promise<FileSystemFileHandle>;
             }
         ).showSaveFilePicker;
-        return await api({ suggestedName, types: DARKLY_TYPES });
+        return await api({ suggestedName, types: SAVE_TYPES });
     } catch (e) {
         if ((e as { name?: string })?.name === 'AbortError') return null;
         throw e;
@@ -94,7 +118,7 @@ export async function pickOpenFile(): Promise<OpenedFile | null> {
     const fsApi = (
         globalThis as {
             showOpenFilePicker?: (opts: {
-                types?: typeof DARKLY_TYPES;
+                types?: typeof OPEN_TYPES;
                 multiple?: boolean;
             }) => Promise<FileSystemFileHandle[]>;
         }
@@ -102,7 +126,7 @@ export async function pickOpenFile(): Promise<OpenedFile | null> {
 
     if (typeof fsApi === 'function') {
         try {
-            const [handle] = await fsApi({ types: DARKLY_TYPES, multiple: false });
+            const [handle] = await fsApi({ types: OPEN_TYPES, multiple: false });
             const file = await handle.getFile();
             const bytes = new Uint8Array(await file.arrayBuffer());
             return { bytes, name: file.name, handle };
@@ -122,7 +146,7 @@ async function pickViaHiddenInput(): Promise<OpenedFile | null> {
     return await new Promise(resolve => {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = '.darkly,application/x-darkly';
+        input.accept = OPEN_ACCEPT;
         input.style.position = 'absolute';
         input.style.width = '1px';
         input.style.height = '1px';
