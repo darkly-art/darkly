@@ -60,10 +60,9 @@ impl DarklyEngine {
             }
         }
 
-        // Fresh mask texture (and possibly a selection-seeded copy on top) —
-        // queue a thumbnail readback so the panel's mask thumbnail appears
-        // immediately rather than waiting for the next paint stroke.
-        self.compositor.mark_node_pixels_dirty(mod_id);
+        // ensure_node_texture (fresh allocation) and clone_modifier_pixels
+        // (selection-seeded copy, when present) already mark the modifier
+        // dirty per the write-site invariant.
         self.compositor.mark_dirty();
 
         self.push_undo(Box::new(ModifierAddAction::new(mod_id, host_id)));
@@ -334,7 +333,12 @@ impl DarklyEngine {
     /// or mask, in either direction. This is the §4a unification: the kind-
     /// specific bridge ops (`selection_to_mask`, `mask_to_selection`) now
     /// delegate to one function instead of duplicating the encode dance.
-    pub(crate) fn clone_modifier_pixels(&self, src_id: LayerId, dst_id: LayerId) {
+    ///
+    /// Marks `dst_id` thumbnail-dirty before returning per the write-site
+    /// invariant — callers don't need to. For the selection modifier (which
+    /// doesn't surface in the layer panel), the mark is a no-op: the drain
+    /// only readbacks ids present in `compositor.node_textures`.
+    pub(crate) fn clone_modifier_pixels(&mut self, src_id: LayerId, dst_id: LayerId) {
         let canvas_w = self.doc.width;
         let canvas_h = self.doc.height;
         let src_tex = match self.modifier_texture(src_id) {
@@ -366,6 +370,7 @@ impl DarklyEngine {
                 },
             );
         });
+        self.compositor.mark_node_pixels_dirty(dst_id);
     }
 
     /// Resolve the GPU texture for any pixel-bearing modifier id. The

@@ -677,6 +677,11 @@ impl Compositor {
             },
         );
         self.node_textures.insert(layer_id, layer_tex);
+        // A freshly-allocated layer still needs a thumbnail slot — without
+        // this, an empty new layer renders as "no thumbnail" in the panel
+        // until the user paints. Part of the "any write/alloc to a node
+        // texture marks it dirty" invariant; see `mark_node_pixels_dirty`.
+        self.mark_node_pixels_dirty(layer_id);
     }
 
     /// Resize a layer's GPU texture to the given canvas-space extent.
@@ -766,6 +771,9 @@ impl Compositor {
             self.mask_bind_groups.insert(node_id, mask_bg);
         }
 
+        // Resize rewrites the texture; thumbnail must reflect the new
+        // extent + transferred pixels.
+        self.mark_node_pixels_dirty(node_id);
         self.mark_dirty();
     }
 
@@ -885,6 +893,24 @@ impl Compositor {
     /// Mark that a node's pixels changed. Records the node id in the
     /// per-frame dirty set the engine drains to auto-queue thumbnail
     /// readbacks, then implies `mark_dirty()`.
+    ///
+    /// # Write-site invariant
+    ///
+    /// Every function that *takes a `LayerId` and either allocates or
+    /// writes that node's GPU texture* must call this method before
+    /// returning. The mark is the write-site's responsibility, **never**
+    /// the caller's — otherwise the same bug (a freshly-written node with
+    /// no thumbnail until a separate edit fires the mark) keeps coming
+    /// back the next time someone adds a feature and forgets the call.
+    ///
+    /// Concretely this applies to:
+    /// `ensure_raster_layer`, `ensure_node_texture`, `resize_node_texture`,
+    /// `upload_node_pixels`, `bake_subtree_to_layer`, and the engine-level
+    /// helpers `clone_node_pixels` / `clone_modifier_pixels`. Higher-level
+    /// engine ops (paint stroke end, fill, paste, …) that drive these
+    /// through raw `wgpu::CommandEncoder` writes still need an explicit
+    /// mark inside the public-facing function that takes the id — the
+    /// invariant is "if your signature carries a LayerId, you mark it".
     pub fn mark_node_pixels_dirty(&mut self, node_id: LayerId) {
         self.dirty_node_pixels.insert(node_id);
         self.mark_dirty();
@@ -1079,6 +1105,10 @@ impl Compositor {
                 });
                 self.node_textures.insert(node_id, mask_tex);
                 self.mask_bind_groups.insert(node_id, mask_bg);
+                // Fresh mask texture (typically all-white reveal); its
+                // thumbnail must materialize without callers having to
+                // remember a mark — see `mark_node_pixels_dirty` invariant.
+                self.mark_node_pixels_dirty(node_id);
                 // PassthroughMaskState is a per-host-group resource (the
                 // snapshot is sized to the parent accumulator). It's not
                 // owned by the mask texture itself, so creation lives behind
@@ -1088,6 +1118,7 @@ impl Compositor {
                 // not by mask modifier id.
             }
             wgpu::TextureFormat::Rgba8Unorm => {
+                // ensure_raster_layer marks dirty itself.
                 self.ensure_raster_layer(device, queue, node_id, bounds);
             }
             other => panic!("ensure_node_texture: unsupported format {other:?}"),

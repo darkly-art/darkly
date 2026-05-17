@@ -210,8 +210,9 @@ impl DarklyEngine {
             );
             self.compositor
                 .ensure_passthrough_mask_state(&self.gpu.device, dst_host);
+            // clone_modifier_pixels marks `new_mod_id` dirty internally per
+            // the write-site invariant.
             self.clone_modifier_pixels(src_mod_id, new_mod_id);
-            self.compositor.mark_node_pixels_dirty(new_mod_id);
         }
     }
 }

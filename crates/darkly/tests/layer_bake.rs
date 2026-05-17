@@ -249,6 +249,41 @@ fn flatten_undo_restores_original_tree() {
 }
 
 // ============================================================================
+// Thumbnail auto-queue regression
+// ============================================================================
+//
+// Protects the "every write-site marks its node thumbnail-dirty" invariant
+// (see `Compositor::mark_node_pixels_dirty` docs). Without that, a fresh
+// duplicate appears in the panel as a thumbnail-less row until the user
+// makes their first edit — the original bug this refactor was written to
+// kill, recurring "the fourth or fifth time" in the codebase's history.
+
+#[test]
+fn duplicate_marks_new_layer_thumbnail_dirty() {
+    let (w, h) = (64, 64);
+    let mut engine = test_engine(w, h);
+    let layer_a = engine.add_raster_layer(None);
+    paint_dot(&mut engine, layer_a, 32.0, 32.0, [1.0, 0.0, 0.0]);
+    engine.render(0.0);
+    engine.test_flush_readbacks(); // Settle any startup readbacks.
+
+    let layer_b = engine.duplicate_node(layer_a).expect("duplicate");
+
+    // `render` drains the dirty set into a readback request; the flush
+    // forces the async readback to land in `thumbnail_cache` deterministically.
+    engine.render(0.016);
+    engine.test_flush_readbacks();
+
+    let bytes = engine
+        .test_thumbnail_cache_peek(layer_b)
+        .expect("duplicate must have queued a thumbnail readback automatically");
+    assert!(
+        bytes.iter().any(|&v| v != 0),
+        "duplicated layer's thumbnail must contain non-zero pixels without a manual edit"
+    );
+}
+
+// ============================================================================
 // Flatten Node (per-layer / per-group)
 // ============================================================================
 
@@ -329,9 +364,7 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
     let group_mask_before = engine.test_readback_mask(group);
 
     // --- Forward ---
-    let result = engine
-        .flatten_node(group)
-        .expect("group flatten succeeded");
+    let result = engine.flatten_node(group).expect("group flatten succeeded");
     assert!(engine.has_layer(result), "result raster attached");
     assert!(!group_at_root(&engine, group), "group consumed by flatten");
     // Result composite must reflect both children — proof the bake actually
