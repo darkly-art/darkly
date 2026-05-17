@@ -8,6 +8,9 @@
 ![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=6914ff)
 ![WebAssembly](https://img.shields.io/badge/WebAssembly-000000?style=for-the-badge&logo=WebAssembly&logoColor=4400ff)
 
+> [!IMPORTANT]
+> **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
+
 [Darkly](https://darkly.art) is a GPU-native editor written in Rust. Geared towards digital painters, it's got everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
 ### Darkly pledges to:
@@ -18,9 +21,6 @@
 - ☮️ Stay free and open source forever
 
 **Try the demo [here](https://demo.darkly.art).**
-
-> [!IMPORTANT]
-> **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
 ## Kickstarter
 
