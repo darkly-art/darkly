@@ -10,7 +10,6 @@
  */
 
 import { app } from '../state/app.svelte';
-import { config } from '../config/store.svelte';
 
 /**
  * Convert canvas coordinates to screen CSS coordinates (relative to the
@@ -31,8 +30,8 @@ export function canvasToScreen(
     const cos_r = Math.cos(app.rotation);
     const sin_r = Math.sin(app.rotation);
 
-    let dx = cx - (config.get('canvas.width') as number) / 2;
-    const dy = cy - (config.get('canvas.height') as number) / 2;
+    let dx = cx - app.docW / 2;
+    const dy = cy - app.docH / 2;
 
     // Mirror is a scale(-1, 1) in canvas-centered space, before zoom/rotate.
     if (app.mirrorH) dx = -dx;
@@ -70,8 +69,8 @@ export function screenToCanvas(
     const sin_r = Math.sin(app.rotation);
     const inv_zoom = 1.0 / app.zoom;
 
-    const canvas_w = config.get('canvas.width') as number;
-    const canvas_h = config.get('canvas.height') as number;
+    const canvas_w = app.docW;
+    const canvas_h = app.docH;
     const cx = canvas_w / 2;
     const cy = canvas_h / 2;
 

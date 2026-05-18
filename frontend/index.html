@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Darkly</title>
+    <link rel="icon" type="image/png" href="./darkly-favicon.png" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         html, body { margin: 0; background: #000; color: #666; }
@@ -13,14 +14,26 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font: 14px system-ui, -apple-system, sans-serif;
-            letter-spacing: 0.08em;
+            padding: 2rem;
+            box-sizing: border-box;
+        }
+        #boot-splash img {
+            max-width: min(60vw, 600px);
+            max-height: 50vh;
+            width: auto;
+            height: auto;
+            opacity: 0.9;
+            animation: boot-pulse 1.6s ease-in-out infinite;
+        }
+        @keyframes boot-pulse {
+            0%, 100% { opacity: 0.55; }
+            50%      { opacity: 1; }
         }
     </style>
 </head>
 <body class="dark">
     <div id="app">
-        <div id="boot-splash">loading darkly…</div>
+        <div id="boot-splash"><img src="./darkly-banner.png" alt="Darkly" /></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
 </body>

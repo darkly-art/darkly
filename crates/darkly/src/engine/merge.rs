@@ -19,6 +19,13 @@ impl DarklyEngine {
     /// (the layer below) is locked. Either side may be a group; both are
     /// flattened into the result.
     pub fn merge_down(&mut self, source_id: LayerId) -> Result<LayerId, String> {
+        // Source itself is consumed (tombstoned) by the merge — locking it
+        // protects it from being destroyed. Target is overwritten with the
+        // merged pixels; locking it protects its content. Both ends checked
+        // before any tree resolution so the error message is precise.
+        if !self.doc.is_node_editable(source_id) {
+            return Err("Source layer is locked".into());
+        }
         // Resolve target: the sibling at (source_position - 1) in the same
         // parent. If source is at position 0 (or has no parent), fail.
         let parent = self.doc.parent_of(source_id);
@@ -32,12 +39,8 @@ impl DarklyEngine {
         let parent_id = parent.ok_or("Layer has no parent")?;
         let target_id = self.doc.children_of(parent_id)[pos - 1];
 
-        // Locked target → refuse (Photoshop convention — can't modify a
-        // locked layer's pixels).
-        if let Some(t) = self.doc.find_node(target_id) {
-            if t.common().locked {
-                return Err("Target layer is locked".into());
-            }
+        if !self.doc.is_node_editable(target_id) {
+            return Err("Target layer is locked".into());
         }
 
         // Snapshot target's properties to inherit on the result (Photoshop

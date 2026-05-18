@@ -22,9 +22,33 @@
 
 **Try the demo [here](https://demo.darkly.art).**
 
+![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)
+
 ## Kickstarter
 
 We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most, and help us rescue our friends and colleagues from the iron grip of Adobe!
+
+## Unique Darkly Features
+
+In addition to the usual paint features, Darkly has some entropic tools to help with artistic exploration.
+
+### Node-Based Brush Engine
+
+Darkly is the first paint program to feature a GPU-native, node-based brush system. There is no separate engine for smudging, cloning, stamping, etc. -- they all live in a unified engine. This enables infinite customizability, mixing and matching of brush features, and making custom brushes on-the-fly.
+
+![brush-engine-screenshot](https://github.com/user-attachments/assets/25df27eb-1e98-42eb-bd8e-dbba8bcb5cd9)
+
+### Veils
+
+Veils are a special type of layer that sits atop the whole viewport. They are visible only to the artist. By bleeding or obfuscating the canvas during painting, they can alter the mood, and help counteract age-old human tendencies like art fatigue, artist's block, destructive self-criticism, and premature fixation on detail.
+
+Craft your art through a pane of rainy glass, frozen crystal, or retro VHS.
+
+Basically, veils give you permission to be messy, and have some happy accidents along the way.
+
+### Voids
+
+Speaking of happy accidents, 
 
 ## Feature Roadmap
 
@@ -54,7 +78,7 @@ These are features that are helpful or essential to digital art workflows. They'
 - [x] Layer masks (one per host)
 - [x] Duplicate layer / group
 - [x] Merge down
-- [x] Flatten image
+- [ ] Flatten image
 - [ ] Clipping mask
 - [ ] Adjustment layers
 - [ ] Group blend mode / opacity (groups don't carry BlendProps yet)
@@ -169,9 +193,9 @@ You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Gr
 
 It's okay to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
 
-I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The danger of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must understand the changes, their reasons, and their long-term implications for the rest of the codebase.
+I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The danger of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must first understand the changes and their long-term implications for the codebase.
 
-Great care is being taken to keep Darkly architecturally lean and clean. This means enforcing modularity, vigilance against duplicate/dead code, and a *shit ton* of automated tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
+Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, constant vigilance  against duplicate/dead code, and a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
 
 ## Acknowledgments
 
@@ -185,7 +209,7 @@ Darkly stands on the shoulders of giants. Two programs in particular have influe
 
 Several of Darkly's veil shaders are ports or adaptations of work originally published on [Shadertoy](https://www.shadertoy.com/). The originals are exquisite; please go see them in their native habitat!
 
-- **Bokeh** - based on [ldG3W3](https://www.shadertoy.com/view/ldG3W3) by [Dave Hoskins](https://www.shadertoy.com/user/Dave_Hoskins).
+- **Lens Blur** - based on [ldG3W3](https://www.shadertoy.com/view/ldG3W3) by [Dave Hoskins](https://www.shadertoy.com/user/Dave_Hoskins).
 - **Kuwahara** - based on [mlffWf](https://www.shadertoy.com/view/mlffWf) by [p4vv37](https://www.shadertoy.com/user/p4vv37), with technique notes from [Acerola / Garrett Gunnell](https://github.com/GarrettGunnell/Post-Processing/tree/main/Assets/Kuwahara%20Filter).
 - **Rainy glass** - ported from "Heartfelt" ([ltffzl](https://www.shadertoy.com/view/ltffzl)) by [Martijn Steinrucken / BigWIngs](https://www.shadertoy.com/user/BigWIngs). Licensed CC BY-NC-SA 3.0.
 - **VHS** - ported from [XtBXDt](https://www.shadertoy.com/view/XtBXDt) by [FMS_Cat](https://www.shadertoy.com/user/FMS_Cat).

@@ -199,6 +199,13 @@ impl DarklyEngine {
     // All stroke ops go through GPU render passes.
 
     pub fn begin_stroke(&mut self, layer_id: LayerId) {
+        if !self.doc.is_node_editable(layer_id) {
+            // Leave `active_stroke_layer` cleared so every queued stroke_to
+            // for this gesture no-ops uniformly — matches the "node missing"
+            // path and avoids partial-stroke state.
+            self.active_stroke_layer = None;
+            return;
+        }
         self.auto_commit_floating();
         self.active_stroke_layer = Some(layer_id);
         // Reset the per-stroke perf accumulator. Emitted at `end_stroke`.
@@ -231,6 +238,12 @@ impl DarklyEngine {
 
     /// GPU paint path for all stroke operations.
     fn gpu_stroke_to(&mut self, layer_id: LayerId, op: StrokeOp) {
+        // Defensive: `begin_stroke` already gates on the lock, but stroke
+        // ops can arrive from other paths (e.g. flood-fill StrokeOp routed
+        // directly). One predicate at the choke point covers all of them.
+        if !self.doc.is_node_editable(layer_id) {
+            return;
+        }
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
 

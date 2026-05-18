@@ -40,8 +40,8 @@
      *  a drag or stay a plain click/dblclick. */
     let pending: { id: string; index: number; startX: number; pointerId: number; target: HTMLElement } | null = null;
     const DRAG_THRESHOLD = 4;
-    /** Matches `.tab-strip { gap: 2px }`. */
-    const TAB_GAP = 2;
+    /** Matches `.tab-strip { gap: 0 }`. */
+    const TAB_GAP = 0;
     const SETTLE_MS = 180;
     /** Suppress the click event that pointerup fires after a drag, so
      *  dropping a tab doesn't also focus/activate it. */
@@ -265,8 +265,8 @@
         background: var(--bg-elevated, var(--bg-base));
         border-bottom: 1px solid var(--border);
         height: 32px;
-        padding: 0 4px;
-        gap: 2px;
+        padding: 0;
+        gap: 0;
         user-select: none;
         flex: 0 0 auto;
         overflow-x: auto;
@@ -287,7 +287,7 @@
         padding: 0 8px 0 12px;
         background: transparent;
         border: none;
-        border-radius: 6px 6px 0 0;
+        border-radius: 0;
         color: var(--fg-muted);
         font-size: 12px;
         cursor: pointer;

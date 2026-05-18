@@ -99,6 +99,8 @@ export async function createInstance(
     }
 
     instance.canvasEl = canvas;
+    instance.docW = docWidth;
+    instance.docH = docHeight;
     instance.handle = handle;
 
     // Fire the one-shot `onHandleReady` hook (used by the Open

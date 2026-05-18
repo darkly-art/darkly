@@ -317,6 +317,10 @@ pub fn compile_from_json(json: &str) -> Result<eval::BrushGraphRunner, String> {
 /// momentary parameter adjustments. Generalizes per-port pinning so adding
 /// a new exposed scrub (opacity hotkey, hardness hotkey, …) requires no
 /// changes here.
+///
+/// Ports flagged with [`crate::nodegraph::PortDef::persist_in_thumbnail`]
+/// are exempt — orientation knobs (rotation, phase) visibly change the
+/// dab itself, so the icon should reflect them.
 pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) {
     let registry = BrushNodeRegistry::new();
     let mut resets: Vec<(crate::nodegraph::NodeId, String, f32)> = Vec::new();
@@ -325,7 +329,10 @@ pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) 
             continue;
         };
         for port in &reg.ports {
-            if port.exposed && port.dir == crate::nodegraph::PortDir::Input {
+            if port.exposed
+                && port.dir == crate::nodegraph::PortDir::Input
+                && !port.persist_in_thumbnail
+            {
                 resets.push((*id, port.name.clone(), port.default));
             }
         }

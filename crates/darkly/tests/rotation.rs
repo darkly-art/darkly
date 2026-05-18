@@ -307,7 +307,7 @@ fn jitter_passthrough_preserves_drawing_angle() {
         .brush_graph_connect(pen_id.0, "drawing_angle", jitter_id, "input")
         .unwrap();
     engine
-        .brush_graph_connect(jitter_id, "value", stamp_id.0, "rotation")
+        .brush_graph_connect(jitter_id, "value", stamp_id.0, "rotation_input")
         .unwrap();
 
     engine.begin_stroke(layer_id);
@@ -360,7 +360,7 @@ fn drawing_angle_wire_rotates_brush_to_face_stroke() {
         .unwrap();
 
     engine
-        .brush_graph_connect(pen_id.0, "drawing_angle", stamp_id.0, "rotation")
+        .brush_graph_connect(pen_id.0, "drawing_angle", stamp_id.0, "rotation_input")
         .unwrap();
 
     // Downward stroke: `drawing_angle = atan2(dy, dx) = π/2` for pure

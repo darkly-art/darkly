@@ -11,12 +11,19 @@
     let { layer, depth = 0, onupdate }: {
         layer: {
             type: string; id: number; name: string; visible: boolean; locked?: boolean;
+            // Mirrors `Document::is_node_editable` — false when this node OR
+            // any ancestor is locked. `locked` is the node's own flag (drives
+            // the icon); `editable` is the effective form (drives interaction
+            // gates: rename, drag, mask/layer menu mutations).
+            editable?: boolean;
             opacity?: number; blendMode?: string;
             modifiers?: Modifier[];
         };
         depth?: number;
         onupdate: () => void;
     } = $props();
+
+    let editable = $derived(layer.editable !== false);
 
     // The mask modifier (if any) is one of the host's modifiers. The model
     // permits N; the UI exposes one.
@@ -78,6 +85,12 @@
     function toggleVisibility(e: MouseEvent) {
         e.stopPropagation();
         actions.dispatch('toggleVisibility', { layerId: layer.id });
+        onupdate();
+    }
+
+    function toggleLock(e: MouseEvent) {
+        e.stopPropagation();
+        actions.dispatch('toggleLock', { layerId: layer.id });
         onupdate();
     }
 
@@ -175,6 +188,7 @@
 
     function startRename() {
         if (layer.type !== 'raster') return;
+        if (!editable) return;
         editing = true;
         requestAnimationFrame(() => editInput?.focus());
     }
@@ -244,7 +258,7 @@
     oncontextmenu={onLayerContextMenu}
     role="button"
     tabindex="-1"
-    draggable={draggable ? 'true' : 'false'}
+    draggable={draggable && editable ? 'true' : 'false'}
     ondragstart={onDragStart}
     ondragover={onDragOver}
     ondragleave={onDragLeave}
@@ -309,6 +323,19 @@
     {:else}
         <span class="layer-name">{layer.name}</span>
     {/if}
+
+    <button
+        class="lock-btn"
+        class:locked={layer.locked}
+        use:bindingSite={{ name: 'layerLock', ctx: () => ({ layerId: layer.id }) }}
+        onclick={toggleLock}
+        onpointerdown={(e: PointerEvent) => { e.stopPropagation(); draggable = false; }}
+        onpointerup={() => { draggable = true; }}
+        onpointerleave={() => { draggable = true; }}
+        title={layer.locked ? 'Unlock layer' : 'Lock layer'}
+    >
+        <i class={layer.locked ? 'fa-solid fa-lock' : 'fa-solid fa-lock-open'}></i>
+    </button>
 </div>
 
 {#if showMaskMenu}
@@ -319,21 +346,23 @@
         <button onclick={toggleShowMask}>
             {isMaskIsolated ? 'Hide mask' : 'Show mask'}
         </button>
-        <button onclick={applyMask}>Apply mask</button>
-        <button onclick={removeMask}>Delete mask</button>
+        <button onclick={applyMask} disabled={!editable}>Apply mask</button>
+        <button onclick={removeMask} disabled={!editable}>Delete mask</button>
     </div>
 {/if}
 
 {#if showLayerMenu}
     <div class="layer-menu" style:left="{layerMenuX}px" style:top="{layerMenuY}px">
+        <!-- Duplicate is a read-of-source / create-new-layer op; it does
+             not mutate the locked layer, so it stays enabled. -->
         <button onclick={menuDuplicate}>
             Duplicate layer
         </button>
-        <button onclick={menuMergeDown} disabled={!canMergeDownForThis}>
+        <button onclick={menuMergeDown} disabled={!canMergeDownForThis || !editable}>
             Merge down
         </button>
         {#if hasMask}
-            <button onclick={menuFlatten}>Flatten</button>
+            <button onclick={menuFlatten} disabled={!editable}>Flatten</button>
         {/if}
     </div>
 {/if}
@@ -403,6 +432,24 @@
     }
     .vis-btn:hover { color: var(--text); }
     .vis-btn.hidden { color: var(--text-dim); }
+
+    .lock-btn {
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        color: var(--text-dim);
+        cursor: pointer;
+        font-size: 12px;
+        flex-shrink: 0;
+        border-radius: 4px;
+        transition: color 0.1s;
+    }
+    .lock-btn:hover { color: var(--text); }
+    .lock-btn.locked { color: var(--text); }
 
     .thumb {
         width: 32px;

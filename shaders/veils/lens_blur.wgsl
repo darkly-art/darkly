@@ -1,4 +1,4 @@
-// Bokeh blur post-processing veil.
+// Lens blur post-processing veil.
 // Golden-angle spiral disk blur with exponential brightness accumulation —
 // bright pixels form characteristic circular bokeh highlights.
 // Based on Shadertoy bokeh techniques by Dave Hoskins et al.
@@ -33,7 +33,7 @@ struct Params {
 const GA_COS: f32 = -0.7374;
 const GA_SIN: f32 = 0.6755;
 
-@fragment fn fs_bokeh(in: VertexOutput) -> @location(0) vec4f {
+@fragment fn fs_lens_blur(in: VertexOutput) -> @location(0) vec4f {
     let resolution = vec2f(params.resolution_x, params.resolution_y);
     let aspect = resolution.x / resolution.y;
     let px = params.radius / resolution.y;

@@ -4,7 +4,9 @@ use super::DarklyEngine;
 use crate::document::MoveTarget;
 use crate::layer::{Layer, LayerId, LayerNode};
 use crate::undo::property::Property;
-use crate::undo::{LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAction};
+use crate::undo::{
+    CompoundAction, LayerAddAction, LayerMoveAction, LayerRemoveAction, PropertyAction, UndoAction,
+};
 
 impl DarklyEngine {
     // --- Layer CRUD ---
@@ -68,6 +70,9 @@ impl DarklyEngine {
     }
 
     pub fn remove_layer(&mut self, layer_id: LayerId) -> Result<(), String> {
+        if !self.doc.is_node_editable(layer_id) {
+            return Err("Layer is locked".into());
+        }
         if self.doc.node_count() <= 1 {
             return Err("Cannot delete the last layer".into());
         }
@@ -89,6 +94,9 @@ impl DarklyEngine {
     }
 
     pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
+        if !self.doc.is_node_editable(layer_id) {
+            return;
+        }
         let old_parent = self.doc.parent_of(layer_id);
         let old_pos = match self.doc.position_in_parent(layer_id) {
             Some(p) => p,
@@ -110,6 +118,9 @@ impl DarklyEngine {
     // --- Layer properties ---
 
     pub fn set_opacity(&mut self, layer_id: LayerId, opacity: f32) {
+        if !self.doc.is_node_editable(layer_id) {
+            return;
+        }
         let old_opacity = match self.doc.find_node(layer_id) {
             Some(n) => n.blend().opacity,
             None => return,
@@ -131,6 +142,9 @@ impl DarklyEngine {
     }
 
     pub fn set_blend_mode(&mut self, layer_id: LayerId, type_id: &str) {
+        if !self.doc.is_node_editable(layer_id) {
+            return;
+        }
         // Unknown blend-mode strings keep the existing mode rather than
         // silently snapping to Normal — the UI should only ever pass a
         // registered id, so an unknown one is a bug worth surfacing.
@@ -142,20 +156,49 @@ impl DarklyEngine {
             Some(n) => n.blend().blend_mode,
             None => return,
         };
+        // Picking a blend mode on a passthrough group implicitly switches it
+        // to isolated — passthrough ignores the group's blend mode, so the
+        // user's choice would have no visible effect otherwise.
+        let was_passthrough = matches!(
+            self.doc.find_node(layer_id),
+            Some(LayerNode::Group(g)) if g.passthrough,
+        );
         if let Some(node) = self.doc.find_node_mut(layer_id) {
             node.blend_mut().blend_mode = blend_mode;
+            if was_passthrough {
+                if let LayerNode::Group(g) = node {
+                    g.passthrough = false;
+                }
+            }
         } else {
             return;
         }
 
+        if was_passthrough {
+            self.compositor
+                .ensure_group_state(&self.gpu.device, &self.gpu.queue, layer_id);
+        }
         self.refresh_blend_uniforms(layer_id);
         self.compositor.mark_dirty();
 
-        self.push_undo(Box::new(PropertyAction::new(
+        let blend_action: Box<dyn UndoAction> = Box::new(PropertyAction::new(
             layer_id,
             Property::BlendMode(old_mode),
             Property::BlendMode(blend_mode),
-        )));
+        ));
+        if was_passthrough {
+            let passthrough_action: Box<dyn UndoAction> = Box::new(PropertyAction::new(
+                layer_id,
+                Property::Passthrough(true),
+                Property::Passthrough(false),
+            ));
+            self.push_undo(Box::new(CompoundAction::new(vec![
+                blend_action,
+                passthrough_action,
+            ])));
+        } else {
+            self.push_undo(blend_action);
+        }
     }
 
     /// Set the `visible` flag on any node — layer, group, or modifier.
@@ -245,6 +288,14 @@ impl DarklyEngine {
         &self.doc.name
     }
 
+    /// Current document canvas dimensions in pixels. Read by the WASM
+    /// bridge so the JS coord transforms can mirror the actual per-doc
+    /// size (rather than the global `canvas.width` config default, which
+    /// only seeds new docs).
+    pub fn canvas_dimensions(&self) -> (u32, u32) {
+        (self.doc.width, self.doc.height)
+    }
+
     /// True when the document has unsaved changes. Set sticky at the
     /// [`crate::undo::UndoStack::push`] chokepoint; cleared on a
     /// successful save (`poll_save_result`) or load (`open_document`
@@ -263,6 +314,9 @@ impl DarklyEngine {
     }
 
     pub fn set_layer_name(&mut self, layer_id: LayerId, name: &str) {
+        if !self.doc.is_node_editable(layer_id) {
+            return;
+        }
         let old_name = match self.doc.find_node(layer_id) {
             Some(n) => n.common().name.clone(),
             None => return,
@@ -316,6 +370,9 @@ impl DarklyEngine {
     }
 
     pub fn set_group_passthrough(&mut self, group_id: LayerId, passthrough: bool) {
+        if !self.doc.is_node_editable(group_id) {
+            return;
+        }
         let old = match self.doc.find_node(group_id) {
             Some(LayerNode::Group(g)) => g.passthrough,
             _ => return,

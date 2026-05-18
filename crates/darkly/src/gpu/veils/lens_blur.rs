@@ -19,10 +19,10 @@ const PARAMS: &[ParamDef] = &[
 
 pub fn register() -> VeilRegistration {
     VeilRegistration {
-        type_id: "bokeh",
-        display_name: "Bokeh",
+        type_id: "lens_blur",
+        display_name: "Lens Blur",
         params: PARAMS,
-        create_pipeline: create_bokeh_pipeline,
+        create_pipeline: create_lens_blur_pipeline,
         from_params: |params, shared| {
             let radius = match params.first() {
                 Some(ParamValue::Float(v)) => *v,
@@ -32,14 +32,14 @@ pub fn register() -> VeilRegistration {
                 Some(ParamValue::Float(v)) => *v,
                 _ => 0.1,
             };
-            Box::new(Bokeh::new(radius, threshold, shared))
+            Box::new(LensBlur::new(radius, threshold, shared))
         },
     }
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct BokehUniforms {
+struct LensBlurUniforms {
     radius: f32,
     threshold: f32,
     resolution_x: f32,
@@ -47,15 +47,15 @@ struct BokehUniforms {
 }
 
 #[derive(Clone, Debug)]
-pub struct Bokeh {
+pub struct LensBlur {
     pub radius: f32,
     pub threshold: f32,
     shared: Arc<EffectPipeline>,
 }
 
-impl Bokeh {
+impl LensBlur {
     pub fn new(radius: f32, threshold: f32, shared: Arc<EffectPipeline>) -> Self {
-        Bokeh {
+        LensBlur {
             radius: radius.max(0.1),
             threshold: threshold.max(0.01),
             shared,
@@ -63,9 +63,9 @@ impl Bokeh {
     }
 }
 
-impl Veil for Bokeh {
+impl Veil for LensBlur {
     fn type_id(&self) -> &'static str {
-        "bokeh"
+        "lens_blur"
     }
 
     fn clone_boxed(&self) -> Box<dyn Veil> {
@@ -88,15 +88,15 @@ impl Veil for Bokeh {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = BokehUniforms {
+        let uniforms = LensBlurUniforms {
             radius: self.radius,
             threshold: self.threshold,
             resolution_x: render_width as f32,
             resolution_y: render_height as f32,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("bokeh-uniforms"),
-            size: std::mem::size_of::<BokehUniforms>() as u64,
+            label: Some("lens-blur-uniforms"),
+            size: std::mem::size_of::<LensBlurUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -105,7 +105,7 @@ impl Veil for Bokeh {
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("bokeh-bg-{i}")),
+                label: Some(&format!("lens-blur-bg-{i}")),
                 layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -141,7 +141,7 @@ impl Veil for Bokeh {
         dst_view: &wgpu::TextureView,
     ) {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("bokeh"),
+            label: Some("lens-blur"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: dst_view,
                 resolve_target: None,
@@ -159,9 +159,12 @@ impl Veil for Bokeh {
     }
 }
 
-fn create_bokeh_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
+fn create_lens_blur_pipeline(
+    device: &wgpu::Device,
+    _format: wgpu::TextureFormat,
+) -> EffectPipeline {
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("bokeh-bgl"),
+        label: Some("lens-blur-bgl"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -193,20 +196,20 @@ fn create_bokeh_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) ->
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("bokeh-pipeline-layout"),
+        label: Some("lens-blur-pipeline-layout"),
         bind_group_layouts: &[&bind_group_layout],
         immediate_size: 0,
     });
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("bokeh-shader"),
+        label: Some("lens-blur-shader"),
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/bokeh.wgsl").into(),
+            include_str!("../../../../../shaders/veils/lens_blur.wgsl").into(),
         ),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("bokeh-pipeline"),
+        label: Some("lens-blur-pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -216,7 +219,7 @@ fn create_bokeh_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) ->
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_bokeh"),
+            entry_point: Some("fs_lens_blur"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 blend: None,

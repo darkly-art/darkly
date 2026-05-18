@@ -47,10 +47,22 @@
             && layer.modifiers.some((m: any) => m.kind === 'mask');
     }
 
+    // Effective editability of the active layer — mirrors the engine's
+    // `is_node_editable` (locked node OR any ancestor locked → not editable).
+    // Used to grey out destructive footer actions so users don't get the
+    // "drag the slider, nothing happens" feedback loop.
+    let activeEditable = $derived.by(() => {
+        if (app.activeLayerId === null) return true;
+        const layer = findNode(app.layerTree, app.activeLayerId);
+        return layer ? layer.editable !== false : true;
+    });
+
     let canAddMask = $derived.by(() => {
         if (!app.handle || app.activeLayerId === null) return false;
         const layer = findNode(app.layerTree, app.activeLayerId);
-        return (layer?.type === 'raster' || layer?.type === 'group') && !hostHasMask(layer);
+        return (layer?.type === 'raster' || layer?.type === 'group')
+            && !hostHasMask(layer)
+            && layer.editable !== false;
     });
 
     function addMask() {
@@ -136,7 +148,7 @@
     <button
         class="footer-btn danger"
         onclick={remove}
-        disabled={!canDelete}
+        disabled={!canDelete || (app.activeVeilIndex === null && !activeEditable)}
         title="Delete"
     >
         <i class="fa-solid fa-trash"></i>

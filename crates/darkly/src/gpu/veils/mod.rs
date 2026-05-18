@@ -2,9 +2,9 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::gpu::veil::VeilRegistration`.
 
-pub mod bokeh;
 pub mod frozen;
 pub mod kuwahara;
+pub mod lens_blur;
 pub mod monochrome;
 pub mod noise;
 pub mod pixelate;
@@ -17,9 +17,9 @@ use crate::gpu::veil::VeilRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<VeilRegistration> {
     vec![
-        bokeh::register(),
         frozen::register(),
         kuwahara::register(),
+        lens_blur::register(),
         monochrome::register(),
         noise::register(),
         pixelate::register(),
