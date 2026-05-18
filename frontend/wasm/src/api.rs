@@ -1224,6 +1224,17 @@ impl DarklyHandle {
         self.engine.borrow().document_name().to_string()
     }
 
+    /// Current document canvas dimensions as `[width, height]` in pixels.
+    /// The JS side caches this on `DarklyInstance` so canvas↔screen
+    /// transforms recenter around the actual doc — calling this every
+    /// frame would alias the RefCell borrow that `render()` holds
+    /// (see `coordinates.ts` for the re-entrancy rationale).
+    pub fn canvas_dimensions(&self) -> Box<[u32]> {
+        self.flush_if_needed();
+        let (w, h) = self.engine.borrow().canvas_dimensions();
+        vec![w, h].into_boxed_slice()
+    }
+
     /// Rename the document. Not undoable — matches every other editor's
     /// title-bar rename affordance. Subsequent saves write the new name
     /// into `manifest.name`.

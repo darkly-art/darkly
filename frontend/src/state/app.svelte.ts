@@ -146,6 +146,15 @@ export class DarklyInstance {
     // Fresh-eyes horizontal flip. Session-only; resets on reload.
     mirrorH = $state(false);
 
+    /** Mirror of the engine's document dimensions, set at handle creation
+     *  and on `open_document`. JS coord transforms (`canvasToScreen` /
+     *  `screenToCanvas`) recenter around these — reading the engine
+     *  per-frame would alias the RefCell borrow held by `render()`. The
+     *  Rust side stays the source of truth; this is a read-only cache
+     *  kept in sync at the same join points that already mutate the doc. */
+    docW = $state(1);
+    docH = $state(1);
+
     // Tool cursor — when non-null, overrides nav cursor on the canvas element.
     toolCursor = $state<string | null>(null);
 

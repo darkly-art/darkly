@@ -288,6 +288,14 @@ impl DarklyEngine {
         &self.doc.name
     }
 
+    /// Current document canvas dimensions in pixels. Read by the WASM
+    /// bridge so the JS coord transforms can mirror the actual per-doc
+    /// size (rather than the global `canvas.width` config default, which
+    /// only seeds new docs).
+    pub fn canvas_dimensions(&self) -> (u32, u32) {
+        (self.doc.width, self.doc.height)
+    }
+
     /// True when the document has unsaved changes. Set sticky at the
     /// [`crate::undo::UndoStack::push`] chokepoint; cleared on a
     /// successful save (`poll_save_result`) or load (`open_document`

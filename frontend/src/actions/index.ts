@@ -77,6 +77,12 @@ export function openDarklyAsTab(picked: OpenedFile): void {
             // shell's `nameVersion` doesn't bump on its own — nudge
             // it so the strip re-derives.
             shell.setName(inst.id, handle.document_name());
+            // The loaded manifest's dimensions override whatever the tab
+            // was seeded with; refresh the JS mirror so coord transforms
+            // recenter around the real canvas size.
+            const dims = handle.canvas_dimensions();
+            inst.docW = dims[0];
+            inst.docH = dims[1];
             app.refreshLayerTree();
             app.refreshVeilList();
             app.requestFrame();
@@ -385,10 +391,8 @@ export function registerActions() {
                     }
                 }
 
-                const docW = config.get('canvas.width') as number;
-                const docH = config.get('canvas.height') as number;
-                const ox = Math.round((docW - clip.width) / 2);
-                const oy = Math.round((docH - clip.height) / 2);
+                const ox = Math.round((app.docW - clip.width) / 2);
+                const oy = Math.round((app.docH - clip.height) / 2);
                 const activeId = app.activeLayerId ?? -1;
                 const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
                 if (activateTransform) {

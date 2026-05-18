@@ -22,9 +22,33 @@
 
 **Try the demo [here](https://demo.darkly.art).**
 
+![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)
+
 ## Kickstarter
 
 We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most, and help us rescue our friends and colleagues from the iron grip of Adobe!
+
+## Unique Darkly Features
+
+In addition to the usual paint features, Darkly has some entropic tools to help with artistic exploration.
+
+### Node-Based Brush Engine
+
+Darkly is the first paint program to feature a GPU-native, node-based brush system. There is no separate engine for smudging, cloning, stamping, etc. -- they all live in a unified engine. This enables infinite customizability, mixing and matching of brush features, and making custom brushes on-the-fly.
+
+![brush-engine-screenshot](https://github.com/user-attachments/assets/25df27eb-1e98-42eb-bd8e-dbba8bcb5cd9)
+
+### Veils
+
+Veils are a special type of layer that sits atop the whole viewport. They are visible only to the artist. By bleeding or obfuscating the canvas during painting, they can alter the mood, and help counteract age-old human tendencies like art fatigue, artist's block, destructive self-criticism, and premature fixation on detail.
+
+Craft your art through a pane of rainy glass, frozen crystal, or retro VHS.
+
+Basically, veils give you permission to be messy, and have some happy accidents along the way.
+
+### Voids
+
+Speaking of happy accidents, 
 
 ## Feature Roadmap
 

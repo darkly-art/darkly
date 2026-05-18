@@ -136,11 +136,12 @@
             const ro = new ResizeObserver(() => syncCanvasSize());
             ro.observe(canvas);
 
-            // Fit canvas to view: scale down if needed, but never scale up
+            // Fit canvas to view: scale down if needed, but never scale up.
+            // Uses the just-set per-instance dims so a tab opened from a
+            // non-default-sized image fits to its own canvas, not the
+            // global config default.
             const dprRect = { w: canvas.width, h: canvas.height };
-            const docW = config.get('canvas.width') as number;
-            const docH = config.get('canvas.height') as number;
-            const fitZoom = Math.min(dprRect.w / docW, dprRect.h / docH, 1);
+            const fitZoom = Math.min(dprRect.w / inst.docW, dprRect.h / inst.docH, 1);
             inst.zoom = fitZoom;
 
             // Kick the first frame
