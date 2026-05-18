@@ -84,17 +84,19 @@ impl DarklyEngine {
             None => return,
         };
 
+        let mut entry = None;
         self.gpu.encode("brush-stroke-end-flush", |encoder| {
-            let entry = self.region_store.commit_region(
+            entry = Some(self.region_store.commit_region(
                 encoder,
                 commit.layer_id,
                 &layer_frame,
                 &commit.snapshot,
                 rect,
-            );
-            self.undo_stack
-                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
+            ));
         });
+        if let Some(entry) = entry {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        }
     }
 
     // --- Painting ---
@@ -116,6 +118,7 @@ impl DarklyEngine {
         let layer_frame = layer_tex.canvas_frame();
 
         // Save current state to scratch for undo.
+        let mut entry = None;
         self.gpu.encode("fill-background-save", |encoder| {
             let snap = self.region_store.save_region(
                 &self.gpu.device,
@@ -124,12 +127,15 @@ impl DarklyEngine {
                 format,
                 rect,
             );
-            let entry =
-                self.region_store
-                    .commit_region(encoder, layer_id, &layer_frame, &snap, rect);
-            self.undo_stack
-                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
+            entry =
+                Some(
+                    self.region_store
+                        .commit_region(encoder, layer_id, &layer_frame, &snap, rect),
+                );
         });
+        if let Some(entry) = entry {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        }
 
         let decoded = image::load_from_memory(IMAGE_BYTES)
             .expect("failed to decode embedded background image")
@@ -1197,13 +1203,17 @@ impl DarklyEngine {
             }
         };
         let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
+        let mut entry = None;
         self.gpu.encode("flood-fill-undo", |encoder| {
-            let entry =
-                self.region_store
-                    .commit_region(encoder, layer_id, &layer_frame, &snap, rect);
-            self.undo_stack
-                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
+            entry =
+                Some(
+                    self.region_store
+                        .commit_region(encoder, layer_id, &layer_frame, &snap, rect),
+                );
         });
+        if let Some(entry) = entry {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        }
 
         self.compositor.mark_node_pixels_dirty(layer_id);
     }
@@ -1465,14 +1475,17 @@ impl DarklyEngine {
         });
 
         // Commit for undo.
+        let mut entry = None;
         self.gpu.encode("clear-sel-commit", |encoder| {
             let frame = pt_for!().canvas_frame();
-            let entry = self
-                .region_store
-                .commit_region(encoder, layer_id, &frame, &snap, rect);
-            self.undo_stack
-                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
+            entry = Some(
+                self.region_store
+                    .commit_region(encoder, layer_id, &frame, &snap, rect),
+            );
         });
+        if let Some(entry) = entry {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        }
         self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
@@ -1516,14 +1529,17 @@ impl DarklyEngine {
         });
 
         // Commit for undo.
+        let mut entry = None;
         self.gpu.encode("clear-layer-commit", |encoder| {
             let frame = pt_for!().canvas_frame();
-            let entry = self
-                .region_store
-                .commit_region(encoder, layer_id, &frame, &snap, rect);
-            self.undo_stack
-                .push(&mut self.doc, Box::new(GpuRegionAction::new(entry)));
+            entry = Some(
+                self.region_store
+                    .commit_region(encoder, layer_id, &frame, &snap, rect),
+            );
         });
+        if let Some(entry) = entry {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        }
         self.compositor.mark_node_pixels_dirty(layer_id);
     }
 

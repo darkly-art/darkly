@@ -1,15 +1,20 @@
+mod bake_common;
 mod brush_graph;
 mod brush_library;
 mod clipboard;
+mod duplicate;
 mod export;
+mod flatten;
 mod floating;
 mod layers;
 mod load;
+mod merge;
 mod modifiers;
 mod painting;
 mod rendering;
 pub mod save;
 pub mod types;
+mod undo_dispatch;
 mod veils;
 
 pub use export::ExportImageResult;

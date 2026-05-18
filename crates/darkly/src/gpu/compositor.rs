@@ -677,6 +677,11 @@ impl Compositor {
             },
         );
         self.node_textures.insert(layer_id, layer_tex);
+        // A freshly-allocated layer still needs a thumbnail slot — without
+        // this, an empty new layer renders as "no thumbnail" in the panel
+        // until the user paints. Part of the "any write/alloc to a node
+        // texture marks it dirty" invariant; see `mark_node_pixels_dirty`.
+        self.mark_node_pixels_dirty(layer_id);
     }
 
     /// Resize a layer's GPU texture to the given canvas-space extent.
@@ -766,6 +771,9 @@ impl Compositor {
             self.mask_bind_groups.insert(node_id, mask_bg);
         }
 
+        // Resize rewrites the texture; thumbnail must reflect the new
+        // extent + transferred pixels.
+        self.mark_node_pixels_dirty(node_id);
         self.mark_dirty();
     }
 
@@ -885,6 +893,24 @@ impl Compositor {
     /// Mark that a node's pixels changed. Records the node id in the
     /// per-frame dirty set the engine drains to auto-queue thumbnail
     /// readbacks, then implies `mark_dirty()`.
+    ///
+    /// # Write-site invariant
+    ///
+    /// Every function that *takes a `LayerId` and either allocates or
+    /// writes that node's GPU texture* must call this method before
+    /// returning. The mark is the write-site's responsibility, **never**
+    /// the caller's — otherwise the same bug (a freshly-written node with
+    /// no thumbnail until a separate edit fires the mark) keeps coming
+    /// back the next time someone adds a feature and forgets the call.
+    ///
+    /// Concretely this applies to:
+    /// `ensure_raster_layer`, `ensure_node_texture`, `resize_node_texture`,
+    /// `upload_node_pixels`, `bake_subtree_to_layer`, and the engine-level
+    /// helpers `clone_node_pixels` / `clone_modifier_pixels`. Higher-level
+    /// engine ops (paint stroke end, fill, paste, …) that drive these
+    /// through raw `wgpu::CommandEncoder` writes still need an explicit
+    /// mark inside the public-facing function that takes the id — the
+    /// invariant is "if your signature carries a LayerId, you mark it".
     pub fn mark_node_pixels_dirty(&mut self, node_id: LayerId) {
         self.dirty_node_pixels.insert(node_id);
         self.mark_dirty();
@@ -1079,6 +1105,10 @@ impl Compositor {
                 });
                 self.node_textures.insert(node_id, mask_tex);
                 self.mask_bind_groups.insert(node_id, mask_bg);
+                // Fresh mask texture (typically all-white reveal); its
+                // thumbnail must materialize without callers having to
+                // remember a mark — see `mark_node_pixels_dirty` invariant.
+                self.mark_node_pixels_dirty(node_id);
                 // PassthroughMaskState is a per-host-group resource (the
                 // snapshot is sized to the parent accumulator). It's not
                 // owned by the mask texture itself, so creation lives behind
@@ -1088,6 +1118,7 @@ impl Compositor {
                 // not by mask modifier id.
             }
             wgpu::TextureFormat::Rgba8Unorm => {
+                // ensure_raster_layer marks dirty itself.
                 self.ensure_raster_layer(device, queue, node_id, bounds);
             }
             other => panic!("ensure_node_texture: unsupported format {other:?}"),
@@ -1924,6 +1955,122 @@ impl Compositor {
             &self.present_cache_bind_group,
             &self.tool_overlay,
         );
+    }
+
+    /// Composite a flat list of source node ids into a target raster layer's
+    /// texture, on the GPU, in one submit. Used by Merge Down and Flatten
+    /// Image: both operations consume some sources, allocate a destination
+    /// raster, and need the destination to hold the baked composite of the
+    /// sources under their normal blend modes.
+    ///
+    /// `source_ids` is bottom-to-top order. Each source may be a raster, a
+    /// non-passthrough group (its `composite_cache` must already be current),
+    /// or a passthrough group (children inlined). The destination's GPU
+    /// texture must already exist and be canvas-sized (the engine allocates
+    /// it via `ensure_raster_layer` before calling).
+    ///
+    /// The bake runs through a transient `GroupState` keyed by slotmap's
+    /// null `LayerId` so it doesn't collide with any real group. After
+    /// composing, the final accum is `copy_texture_to_texture`'d into the
+    /// destination's GPU texture — no CPU readback.
+    pub fn bake_subtree_to_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        doc: &mut Document,
+        source_ids: &[LayerId],
+        dest_layer_id: LayerId,
+    ) {
+        if !self.node_textures.contains_key(&dest_layer_id) {
+            debug_assert!(false, "bake_subtree_to_layer: dest texture missing");
+            return;
+        }
+
+        // Session isolation should not filter the bake — it represents
+        // "what would these layers look like, composited as-is". Save and
+        // restore around the compose walk.
+        let saved_isolation = self.isolated_node.take();
+
+        // Sentinel parent id — slotmap's null key never collides with a
+        // minted LayerId, so we can stash a transient GroupState here.
+        let bake_parent = LayerId::from_ffi(0);
+        if !self.group_state.contains_key(&bake_parent) {
+            let gs = Self::create_group_state(
+                device,
+                queue,
+                self.padded_width,
+                self.padded_height,
+                bake_parent,
+            );
+            self.group_state.insert(bake_parent, gs);
+        }
+
+        let scissor = (0u32, 0u32, self.canvas_width, self.canvas_height);
+
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("bake-subtree"),
+        });
+
+        // Clear the bake accum so the composite starts from transparent.
+        {
+            let gs = self.group_state.get_mut(&bake_parent).unwrap();
+            gs.current_accum = 0;
+            gs.cache_valid_through = None;
+            let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear-bake-accum"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &gs.accum.views[0],
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+
+        // Composite the sources into the bake accum. `compose_children`
+        // handles rasters, groups (recursing through `compose_group` which
+        // updates each group's own composite_cache), and passthrough groups.
+        self.compose_children(&mut encoder, device, doc, bake_parent, source_ids, scissor);
+
+        // Copy the final accum into the destination layer's texture.
+        let gs = self
+            .group_state
+            .get(&bake_parent)
+            .expect("bake group state allocated above");
+        let src_accum = gs.current_accum;
+        let dest_tex = self
+            .node_textures
+            .get(&dest_layer_id)
+            .expect("dest texture presence checked above");
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &gs.accum.textures[src_accum],
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: dest_tex.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: self.canvas_width,
+                height: self.canvas_height,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit(std::iter::once(encoder.finish()));
+
+        self.isolated_node = saved_isolation;
+        self.mark_node_pixels_dirty(dest_layer_id);
+        self.mark_dirty();
     }
 
     /// Composite layer tree to offscreen target. GPU textures are authoritative —

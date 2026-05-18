@@ -52,9 +52,9 @@ These are features that are helpful or essential to digital art workflows. They'
 - [x] Raster layers + groups, drag‑reorder, visibility, lock, opacity, name, collapse, passthrough
 - [x] 16 blend modes (Normal → Luminosity, Krita‑compatible)
 - [x] Layer masks (one per host)
-- [ ] Duplicate layer / group
-- [ ] Merge down
-- [ ] Flatten image
+- [x] Duplicate layer / group
+- [x] Merge down
+- [x] Flatten image
 - [ ] Clipping mask
 - [ ] Adjustment layers
 - [ ] Group blend mode / opacity (groups don't carry BlendProps yet)

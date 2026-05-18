@@ -570,15 +570,17 @@ impl DarklyEngine {
             Some(s) => s.canvas_frame(),
             None => return,
         };
+        let mut entry = None;
         self.gpu.encode("sel-undo-commit", |encoder| {
-            let entry = self
-                .region_store
-                .commit_region(encoder, modifier_id, &frame, &snap, rect);
-            self.undo_stack.push(
-                &mut self.doc,
-                Box::new(SelectionAction::new(was_active, entry)),
-            );
+            entry =
+                Some(
+                    self.region_store
+                        .commit_region(encoder, modifier_id, &frame, &snap, rect),
+                );
         });
+        if let Some(entry) = entry {
+            self.push_undo(Box::new(SelectionAction::new(was_active, entry)));
+        }
     }
 
     /// Full-canvas undo rect — used when post-op extent isn't known up-front.

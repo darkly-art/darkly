@@ -43,6 +43,30 @@
     let maskMenuX = $state(0);
     let maskMenuY = $state(0);
 
+    let showLayerMenu = $state(false);
+    let layerMenuX = $state(0);
+    let layerMenuY = $state(0);
+
+    /// Same predicate as LayerItem — kept colocated rather than pulled into
+    /// a shared helper for one walk's worth of code.
+    function siblingBelowExists(nodes: any[], id: number): boolean {
+        for (const n of nodes) {
+            if (n.id === id) return false;
+            if (n.children) {
+                const idx = n.children.findIndex((c: any) => c.id === id);
+                if (idx >= 0) return idx < n.children.length - 1;
+                if (siblingBelowExists(n.children, id)) return true;
+            }
+        }
+        return false;
+    }
+
+    let canMergeDownForThis = $derived.by(() => {
+        const topIdx = app.layerTree.findIndex((n: any) => n.id === group.id);
+        if (topIdx >= 0) return topIdx < app.layerTree.length - 1;
+        return siblingBelowExists(app.layerTree, group.id);
+    });
+
     // Chord dispatch is owned by `use:bindingSite` on each preview element
     // below — `bindingSite` intercepts modifier+click in capture phase
     // and dispatches against its named site. These onclick handlers are
@@ -96,6 +120,33 @@
         showMaskMenu = true;
         const close = () => { showMaskMenu = false; document.removeEventListener('click', close); };
         requestAnimationFrame(() => document.addEventListener('click', close));
+    }
+
+    function onLayerContextMenu(e: MouseEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        app.selectLayer(group.id);
+        layerMenuX = e.clientX;
+        layerMenuY = e.clientY;
+        showLayerMenu = true;
+        const close = () => { showLayerMenu = false; document.removeEventListener('click', close); };
+        requestAnimationFrame(() => document.addEventListener('click', close));
+    }
+
+    function menuDuplicate() {
+        actions.dispatch('duplicateLayer', { layerId: group.id });
+        onupdate();
+    }
+
+    function menuMergeDown() {
+        if (!canMergeDownForThis) return;
+        actions.dispatch('mergeDown', { layerId: group.id });
+        onupdate();
+    }
+
+    function menuFlatten() {
+        actions.dispatch('flatten', { layerId: group.id });
+        onupdate();
     }
 
     function toggleMaskEnabled() {
@@ -181,6 +232,7 @@
         class:drop-into={dropPos === 'into'}
         onclick={onLayerClick}
         ondblclick={startRename}
+        oncontextmenu={onLayerContextMenu}
         role="button"
         tabindex="-1"
         draggable="true"
@@ -248,6 +300,16 @@
             {isMaskIsolated ? 'Hide mask' : 'Show mask'}
         </button>
         <button onclick={removeMask}>Delete mask</button>
+    </div>
+{/if}
+
+{#if showLayerMenu}
+    <div class="layer-menu" style:left="{layerMenuX}px" style:top="{layerMenuY}px">
+        <button onclick={menuDuplicate}>Duplicate group</button>
+        <button onclick={menuMergeDown} disabled={!canMergeDownForThis}>
+            Merge down
+        </button>
+        <button onclick={menuFlatten}>Flatten</button>
     </div>
 {/if}
 
@@ -414,4 +476,32 @@
         white-space: nowrap;
     }
     .mask-menu button:hover { background: var(--bg-hover); }
+
+    .layer-menu {
+        position: fixed;
+        z-index: 1000;
+        background: var(--bg-active);
+        border: 1px solid var(--bg-hover);
+        border-radius: 6px;
+        padding: 4px 0;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+        min-width: 160px;
+    }
+    .layer-menu button {
+        display: block;
+        width: 100%;
+        background: none;
+        border: none;
+        color: var(--text);
+        font-size: 12px;
+        padding: 6px 16px;
+        text-align: left;
+        cursor: pointer;
+        white-space: nowrap;
+    }
+    .layer-menu button:hover:not(:disabled) { background: var(--bg-hover); }
+    .layer-menu button:disabled {
+        color: var(--text-dim);
+        cursor: default;
+    }
 </style>

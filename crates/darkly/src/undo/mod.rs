@@ -7,12 +7,16 @@ mod selection;
 
 pub use compound::CompoundAction;
 pub use gpu_region::GpuRegionAction;
-pub use layer::{LayerAddAction, LayerMoveAction, LayerRemoveAction};
+pub use layer::{
+    BakeLayersAction, BakeSourceSlot, DuplicateAction, LayerAddAction, LayerMoveAction,
+    LayerRemoveAction,
+};
 pub use modifier::{ModifierAddAction, ModifierRemoveAction, NodeLockedAction, NodeVisibleAction};
 pub use property::PropertyAction;
 pub use selection::SelectionAction;
 
 use crate::document::Document;
+use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
@@ -56,6 +60,12 @@ pub trait UndoAction {
     fn swap_selection_active(&mut self, _current_active: bool) -> Option<bool> {
         None
     }
+
+    /// Called when this action is permanently dropped from both undo and redo
+    /// stacks (max_steps overflow or redo-history clear on a fresh push, or
+    /// teardown). Owners of tombstoned GPU textures dispose them here so the
+    /// compositor's `node_textures` pool never outlives its owning action.
+    fn on_evict(&mut self, _compositor: &mut Compositor) {}
 }
 
 pub struct UndoStack {
@@ -80,15 +90,28 @@ impl UndoStack {
     /// here, which makes this the only place dirty-tracking has to live.
     /// Undo/redo deliberately don't touch the flag (an undo back to the
     /// original state still leaves the doc "dirty" from the user's POV).
-    pub fn push(&mut self, doc: &mut Document, action: Box<dyn UndoAction>) {
+    ///
+    /// Returns every action that leaves the stack as a result of this push:
+    /// the entire previous redo history (cleared because a fresh action
+    /// invalidates it) plus any actions evicted by the `max_steps` cap. The
+    /// caller is responsible for invoking `on_evict` on each — typically
+    /// through [`crate::engine::DarklyEngine::push_undo`], which threads the
+    /// compositor in.
+    #[must_use = "evicted actions must have on_evict called to release tombstones"]
+    pub fn push(
+        &mut self,
+        doc: &mut Document,
+        action: Box<dyn UndoAction>,
+    ) -> Vec<Box<dyn UndoAction>> {
         doc.dirty = true;
-        self.redo_steps.clear();
+        let mut evicted: Vec<Box<dyn UndoAction>> = self.redo_steps.drain(..).collect();
         self.undo_steps.push(action);
 
         if self.undo_steps.len() > self.max_steps {
             let remove = self.undo_steps.len() - self.max_steps;
-            self.undo_steps.drain(0..remove);
+            evicted.extend(self.undo_steps.drain(0..remove));
         }
+        evicted
     }
 
     /// Try to coalesce a `PropertyAction` with the most recent undo step.
@@ -99,14 +122,31 @@ impl UndoStack {
     /// Marks the document dirty whether the action coalesces or pushes
     /// fresh — coalescing means the user did something mid-drag, which
     /// is just as much "unsaved work" as a brand-new action.
-    pub fn coalesce_property(&mut self, doc: &mut Document, action: PropertyAction) {
+    ///
+    /// Returns evicted actions like [`Self::push`] — empty when the action
+    /// coalesces into the existing top step (no stack change).
+    #[must_use = "evicted actions must have on_evict called to release tombstones"]
+    pub fn coalesce_property(
+        &mut self,
+        doc: &mut Document,
+        action: PropertyAction,
+    ) -> Vec<Box<dyn UndoAction>> {
         doc.dirty = true;
         if let Some(top) = self.undo_steps.last_mut() {
             if top.try_coalesce_property(&action) {
-                return;
+                return Vec::new();
             }
         }
-        self.push(doc, Box::new(action));
+        self.push(doc, Box::new(action))
+    }
+
+    /// Drain both stacks for teardown. Caller must run `on_evict` on every
+    /// returned action so tombstoned textures release.
+    #[must_use = "drained actions must have on_evict called to release tombstones"]
+    pub fn drain_all(&mut self) -> Vec<Box<dyn UndoAction>> {
+        let mut all: Vec<Box<dyn UndoAction>> = self.undo_steps.drain(..).collect();
+        all.append(&mut self.redo_steps);
+        all
     }
 
     /// Undo the most recent action. Returns affected tile coords per layer.
@@ -171,7 +211,7 @@ mod tests {
         // Record the add as undoable.
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
-        undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
 
         assert_eq!(doc.flat_layers().len(), 1);
 
@@ -195,7 +235,7 @@ mod tests {
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
         let node = doc.detach_for_undo(id).unwrap();
-        undo.push(
+        let _ = undo.push(
             &mut doc,
             Box::new(LayerRemoveAction::new(node, parent, pos)),
         );
@@ -231,7 +271,7 @@ mod tests {
         let new_parent = doc.parent_of(l1);
         let new_pos = doc.position_in_parent(l1).unwrap();
 
-        undo.push(
+        let _ = undo.push(
             &mut doc,
             Box::new(LayerMoveAction::new(
                 l1, old_parent, old_pos, new_parent, new_pos,
@@ -262,7 +302,7 @@ mod tests {
         let id = doc.add_raster_layer(None);
 
         // Change opacity.
-        undo.push(
+        let _ = undo.push(
             &mut doc,
             Box::new(PropertyAction::new(
                 id,
@@ -306,7 +346,7 @@ mod tests {
             if let Some(Layer::Raster(r)) = doc.layer_mut(id) {
                 r.blend.opacity = new_val;
             }
-            undo.coalesce_property(
+            let _ = undo.coalesce_property(
                 &mut doc,
                 PropertyAction::new(id, Property::Opacity(old_val), Property::Opacity(new_val)),
             );
@@ -360,7 +400,7 @@ mod tests {
         let id = doc.add_raster_layer(None);
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
-        undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
         assert!(doc.dirty, "push must flip dirty");
     }
 
@@ -376,14 +416,14 @@ mod tests {
         let id = doc.add_raster_layer(None);
         doc.dirty = false; // reset after the add_raster_layer setup
 
-        undo.coalesce_property(
+        let _ = undo.coalesce_property(
             &mut doc,
             PropertyAction::new(id, Property::Opacity(1.0), Property::Opacity(0.5)),
         );
         assert!(doc.dirty, "first coalesce push flips dirty");
 
         doc.dirty = false;
-        undo.coalesce_property(
+        let _ = undo.coalesce_property(
             &mut doc,
             PropertyAction::new(id, Property::Opacity(0.5), Property::Opacity(0.3)),
         );
@@ -405,7 +445,7 @@ mod tests {
         let id = doc.add_raster_layer(None);
         let parent = doc.parent_of(id);
         let pos = doc.position_in_parent(id).unwrap();
-        undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
+        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(id, parent, pos)));
         assert!(doc.dirty);
 
         undo.undo(&mut doc);
@@ -433,7 +473,7 @@ mod tests {
         let new_id = doc.add_raster_layer(Some(l1));
         let parent = doc.parent_of(new_id);
         let pos = doc.position_in_parent(new_id).unwrap();
-        undo.push(&mut doc, Box::new(LayerAddAction::new(new_id, parent, pos)));
+        let _ = undo.push(&mut doc, Box::new(LayerAddAction::new(new_id, parent, pos)));
 
         let flat: Vec<_> = doc.flat_layers().iter().map(|l| l.id()).collect();
         assert_eq!(flat, vec![l1, new_id, l2]);
