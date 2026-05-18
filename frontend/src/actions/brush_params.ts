@@ -1,7 +1,7 @@
 import { actions } from './registry';
 import { app } from '../state/app.svelte';
 import { brushGraph, exposedDragSpeed } from '../state/brush_graph.svelte';
-import { pushHoverOverlay, cursorPose } from '../tools/brush.svelte';
+import { pushHoverOverlay, cursorPose, refreshHoverOverlay } from '../tools/brush.svelte';
 
 /** Map of semantic role → which exposed port adjusts it.
  *
@@ -42,7 +42,10 @@ function commit(nodeId: number, portName: string, value: number) {
     brushGraph.setExposedPortValue(nodeId, portName, value);
 }
 
-/** Discrete step in the given direction (used by `[` / `]` hotkeys). */
+/** Discrete step in the given direction (used by `[` / `]` hotkeys).
+ *  After committing, refresh the on-canvas hover overlay so the brush
+ *  cursor preview reflects the new value immediately — without this
+ *  the circle stays at the old size until the user moves the pointer. */
 function adjustBrushParam(role: Role, dir: 1 | -1): void {
     const found = findScalarPort(role);
     if (!found) return;
@@ -52,6 +55,7 @@ function adjustBrushParam(role: Role, dir: 1 | -1): void {
             ? data.value * Math.pow(spec.step, dir)
             : data.value + spec.step * dir;
     commit(port.nodeId, port.portName, clamp(next, data.min, data.max));
+    if (app.handle) refreshHoverOverlay(app.handle);
 }
 
 /** Set an absolute value (used by drag scrubs). */

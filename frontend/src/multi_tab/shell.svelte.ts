@@ -1,4 +1,5 @@
 import { DarklyInstance, setActiveInstance } from '../state/app.svelte';
+import { brushGraph } from '../state/brush_graph.svelte';
 
 /**
  * Optional multi-tab layer. Owns a collection of `DarklyInstance`s and
@@ -85,6 +86,11 @@ class MultiTabShell {
         if (!this.instances.some(i => i.id === id)) return;
         this.activeId = id;
         setActiveInstance(this.active);
+        // The brushGraph singleton caches the focused engine's graph /
+        // exposed ports. Without this resync, preview consumers' $effects
+        // (keyed on brushGraph.graph) wouldn't re-fire on tab switch and
+        // their previews would freeze until the user picked a brush.
+        brushGraph.syncFromActiveEngine();
     }
 
     /** Move the tab with `id` to position `toIndex` in `instances`.

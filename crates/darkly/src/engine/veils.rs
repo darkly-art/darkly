@@ -50,6 +50,50 @@ impl DarklyEngine {
         chain.update_veil(&self.gpu.device, &self.gpu.queue, index, new_veil);
     }
 
+    /// Seed a fresh document with the starter set of veils, all hidden so
+    /// they show up in the panel for users to enable. Push order is
+    /// bottom-up (render order); `veil_list()` reverses for the UI, so the
+    /// last-pushed veil sits at the top of the panel.
+    pub(crate) fn add_default_veils(&mut self) {
+        // Production sizes the veil chain to the surface on first resize,
+        // but `add_veil` needs non-zero viewport now or `ensure_textures`
+        // no-ops and the next call unwraps on `views`. Seed to canvas
+        // dimensions — the surface-driven resize cascades through
+        // `recreate_resources` later.
+        self.compositor.veil_chain_mut().resize(
+            &self.gpu.device,
+            &self.gpu.queue,
+            self.doc.width,
+            self.doc.height,
+        );
+
+        self.add_veil_with_overrides("rainy_glass", &[(2, ParamValue::Float(180.0))]);
+        self.add_veil_with_overrides("noise", &[(0, ParamValue::Float(0.05))]);
+        self.add_veil_with_overrides("lens_blur", &[(0, ParamValue::Float(0.25))]);
+        self.add_veil_with_overrides("vhs", &[]);
+
+        let count = self.compositor.veil_chain().count();
+        for i in 0..count {
+            self.set_veil_visible(i, false);
+        }
+    }
+
+    /// Build a parameter vector from the type's registered defaults with
+    /// specific indices overridden, then add the veil.
+    fn add_veil_with_overrides(&mut self, type_id: &str, overrides: &[(usize, ParamValue)]) {
+        let mut params: Vec<ParamValue> = self
+            .veil_param_defs(type_id)
+            .iter()
+            .map(ParamDef::default_value)
+            .collect();
+        for (i, value) in overrides {
+            if let Some(slot) = params.get_mut(*i) {
+                *slot = value.clone();
+            }
+        }
+        self.add_veil(type_id, &params);
+    }
+
     // --- Queries ---
 
     pub fn layer_tree(&self) -> Vec<LayerInfo> {

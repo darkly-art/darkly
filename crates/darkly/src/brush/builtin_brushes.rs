@@ -408,13 +408,15 @@ fn textured_ink() -> Brush {
     b.add_image("ink_dry.png");
     b.wire(b.pen, "pressure", b.stamp, "size_input");
     b.wire(b.pen, "pressure", b.stamp, "flow");
-    // random.value is in -1..1; stamp.rotation wants radians. Scale by π
-    // so rotation jitters across a full turn (-π..π).
+    // random.value is in -1..1; stamp.rotation_input wants radians. Scale
+    // by π so rotation jitters across a full turn (-π..π). Dynamic signal
+    // → `rotation_input`; `rotation` is reserved for the user's static
+    // offset knob.
     let rand_rot = b.add_random(0);
     let scale_rot = b.add_multiply();
     b.set_port(scale_rot, "b", std::f32::consts::PI);
     b.wire(rand_rot, "value", scale_rot, "a");
-    b.wire(scale_rot, "result", b.stamp, "rotation");
+    b.wire(scale_rot, "result", b.stamp, "rotation_input");
     b.wire(b.paint_color, "color", b.stamp, "color");
 
     let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");
@@ -609,7 +611,7 @@ fn smooth_watercolor() -> Brush {
                 },
                 PortRef {
                     node: stamp,
-                    port: "rotation".into(),
+                    port: "rotation_input".into(),
                 },
             )
             .unwrap();

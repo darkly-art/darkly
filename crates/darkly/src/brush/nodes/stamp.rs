@@ -79,7 +79,6 @@ pub fn register() -> BrushNodeRegistration {
                 .with_label("Rotation")
                 .with_unit(UnitType::Degrees)
                 .with_icon("fa-solid fa-rotate")
-                .exposed()
                 // Orientation is part of brush identity (a 45° nib is a
                 // different-looking brush), so the thumbnail tracks the
                 // user's value instead of being reset to 0.

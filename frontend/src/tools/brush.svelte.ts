@@ -70,6 +70,14 @@ export function cursorPose(e: PointerEvent): PenPose {
     };
 }
 
+/** Last hover pose+position pushed to the overlay. Cached so non-event
+ *  callers (the `[` / `]` size hotkeys) can re-push at the same spot
+ *  after mutating the graph — otherwise the on-canvas circle stays at
+ *  the old size until the user wiggles the pointer. Cleared on stroke
+ *  start, pointer-leave, and tool deactivate, so it only exists while
+ *  a hover preview is actually visible. */
+let lastHover: { cx: number; cy: number; pose: PenPose } | null = null;
+
 /** Refresh the on-canvas brush cursor preview at `(cx, cy)` using the
  *  given pose. Exported so non-brush callers (e.g. the shift+drag size
  *  scrub, which uses `FULL_PRESS_POSE` so the circle shows the brush's
@@ -87,6 +95,7 @@ export function pushHoverOverlay(handle: any, pose: PenPose, cx: number, cy: num
     if (!info) {
         handle.clear_overlay();
         app.toolCursor = null;
+        lastHover = null;
         return;
     }
     app.toolCursor = 'none';
@@ -99,6 +108,23 @@ export function pushHoverOverlay(handle: any, pose: PenPose, cx: number, cy: num
             { modeParam: previewStrength(info.halfExtent), rotation: info.rotation },
         ),
     ]);
+    lastHover = { cx, cy, pose };
+}
+
+/** Re-push the hover overlay at the last known hover position. No-op
+ *  if the pointer isn't currently hovering the canvas (no cached
+ *  pose). Used by hotkey-driven brush-param changes so the on-canvas
+ *  preview reflects the new value without requiring pointer motion. */
+export function refreshHoverOverlay(handle: any) {
+    if (!lastHover) return;
+    pushHoverOverlay(handle, lastHover.pose, lastHover.cx, lastHover.cy);
+}
+
+/** Drop the cached hover. Called whenever the overlay is cleared
+ *  (stroke start, pointer leave, tool deactivate) so a stale position
+ *  can't resurrect the preview. */
+function clearHover() {
+    lastHover = null;
 }
 
 export const MIN_SIZE = 1;
@@ -165,6 +191,7 @@ export const brushTool: Tool = {
         // direct WASM call) doesn't inherit our erase state.
         ctx.handle.set_brush_blend_mode(0);
         app.toolCursor = null;
+        clearHover();
     },
 
     onPointerDown(ctx, e, cx, cy) {
@@ -175,6 +202,7 @@ export const brushTool: Tool = {
         // the canvas directly; a ghost at the cursor would just clutter.
         ctx.handle.clear_overlay();
         ctx.handle.clear_brush_preview_pose();
+        clearHover();
         ctx.handle.begin_stroke(layerId);
         ctx.handle.stroke_to('brush_stroke', brushStrokeParams(e, cx, cy));
     },
@@ -197,5 +225,6 @@ export const brushTool: Tool = {
         // linger at the last-seen edge position.
         ctx.handle.clear_overlay();
         ctx.handle.clear_brush_preview_pose();
+        clearHover();
     },
 };

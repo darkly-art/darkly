@@ -169,9 +169,9 @@ You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Gr
 
 It's okay to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
 
-I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The danger of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must understand the changes, their reasons, and their long-term implications for the rest of the codebase.
+I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The danger of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must first understand the changes and their long-term implications for the codebase.
 
-Great care is being taken to keep Darkly architecturally lean and clean. This means enforcing modularity, vigilance against duplicate/dead code, and a *shit ton* of automated tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
+Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, constant vigilance  against duplicate/dead code, and a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
 
 ## Acknowledgments
 
