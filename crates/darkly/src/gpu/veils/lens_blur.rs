@@ -159,7 +159,10 @@ impl Veil for LensBlur {
     }
 }
 
-fn create_lens_blur_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
+fn create_lens_blur_pipeline(
+    device: &wgpu::Device,
+    _format: wgpu::TextureFormat,
+) -> EffectPipeline {
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("lens-blur-bgl"),
         entries: &[
