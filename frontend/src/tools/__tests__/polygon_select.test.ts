@@ -15,8 +15,15 @@ vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 // Module under test — imported after the mock is registered.
 import { polygonSelectTool } from '../polygon_select.svelte';
 
-function pointerDown(x: number, y: number, opts: Partial<PointerEventInit> = {}): PointerEvent {
-    return new PointerEvent('pointerdown', { clientX: x, clientY: y, detail: 1, ...opts });
+let clock = 0;
+function pointerDown(x: number, y: number, dtMs = 1000): PointerEvent {
+    // Manual timestamp control — the tool detects double-click via
+    // `e.timeStamp` deltas, not `e.detail` (which the canvas's
+    // preventDefault suppresses).
+    clock += dtMs;
+    const e = new PointerEvent('pointerdown', { clientX: x, clientY: y });
+    Object.defineProperty(e, 'timeStamp', { value: clock, configurable: true });
+    return e;
 }
 function keyEvent(key: string, mods: { shiftKey?: boolean; altKey?: boolean } = {}): KeyboardEvent {
     return new KeyboardEvent('keydown', { key, ...mods });
@@ -29,8 +36,12 @@ function reset() {
     // Escape clears any in-progress polygon without committing — guarantees
     // each test starts with an empty module-level vertex buffer.
     polygonSelectTool.onKeyDown?.(keyEvent('Escape'));
+    // Then run an explicit Escape again to clear the now-empty buffer state
+    // (the first Escape may have committed to clear_selection if the buffer
+    // was already empty), and zero out the spies one more time.
     handle.clear_selection.mockClear();
     handle.clear_overlay.mockClear();
+    clock = 0;
 }
 
 describe('polygonSelectTool', () => {
@@ -64,8 +75,8 @@ describe('polygonSelectTool', () => {
         polygonSelectTool.onPointerDown(ctx, pointerDown(0, 0), 0, 0);
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 0), 10, 0);
         polygonSelectTool.onPointerDown(ctx, pointerDown(10, 10), 10, 10);
-        // Second click of a double-click — detail=2.
-        polygonSelectTool.onPointerDown(ctx, pointerDown(10, 10, { detail: 2 }), 10, 10);
+        // Second click of a double-click — small dt, same position.
+        polygonSelectTool.onPointerDown(ctx, pointerDown(10, 10, 50), 10, 10);
         expect(handle.select_lasso).toHaveBeenCalledTimes(1);
         expect(handle.select_lasso.mock.calls[0][0]).toEqual([[0, 0], [10, 0], [10, 10]]);
     });

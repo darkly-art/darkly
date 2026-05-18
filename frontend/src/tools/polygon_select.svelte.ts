@@ -28,11 +28,20 @@ import {
 
 let points: [number, number][] = [];
 let cursor: [number, number] | null = null;
+let lastClickTime = 0;
+let lastClickPos: [number, number] | null = null;
 
 /** Snap zone radius in buffer pixels — matches Krita's 10px screen-space
  *  threshold (kis_tool_polyline_base.cpp:26). Converted to canvas-space
  *  per use via `/ app.zoom`, so the on-screen hit-target stays constant. */
 const SNAP_RADIUS_BUFFER_PX = 10;
+
+/** Double-click detection thresholds. Detected manually rather than via
+ *  `PointerEvent.detail`: the canvas's pointerdown handler calls
+ *  `e.preventDefault()`, which suppresses the browser's click-count
+ *  tracking on pointer events. */
+const DBLCLICK_MS = 400;
+const DBLCLICK_RADIUS_BUFFER_PX = 6;
 
 function snapRadiusCanvas(): number {
     return SNAP_RADIUS_BUFFER_PX / app.zoom;
@@ -67,9 +76,20 @@ function pushPreviewOverlay() {
     app.handle.set_overlay(prims);
 }
 
+function isDoubleClick(cx: number, cy: number, now: number): boolean {
+    if (lastClickPos === null) return false;
+    if (now - lastClickTime > DBLCLICK_MS) return false;
+    const dx = cx - lastClickPos[0];
+    const dy = cy - lastClickPos[1];
+    const r = DBLCLICK_RADIUS_BUFFER_PX / app.zoom;
+    return dx * dx + dy * dy <= r * r;
+}
+
 function clearState() {
     points = [];
     cursor = null;
+    lastClickTime = 0;
+    lastClickPos = null;
     app.handle?.clear_overlay();
 }
 
@@ -94,10 +114,11 @@ export const polygonSelectTool: Tool = {
 
     onPointerDown(_ctx, e, cx, cy) {
         cursor = [cx, cy];
+        const now = e.timeStamp;
 
         // Double-click closes (the first click of the pair already added a
         // vertex on the prior pointerdown).
-        if (e.detail >= 2 && points.length >= 3) {
+        if (points.length >= 3 && isDoubleClick(cx, cy, now)) {
             commit(e);
             return;
         }
@@ -109,6 +130,8 @@ export const polygonSelectTool: Tool = {
         }
 
         points.push([cx, cy]);
+        lastClickTime = now;
+        lastClickPos = [cx, cy];
         pushPreviewOverlay();
     },
 
