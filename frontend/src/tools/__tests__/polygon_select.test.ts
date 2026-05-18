@@ -3,13 +3,19 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mock the app module before importing the tool, so the tool's
 // `import { app } from '../state/app.svelte'` resolves to our fake.
 // Avoids pulling in the Svelte runtime ($state runes) for unit tests.
-const handle = {
-    select_lasso: vi.fn(),
-    clear_selection: vi.fn(),
-    set_overlay: vi.fn(),
-    clear_overlay: vi.fn(),
-};
-const fakeApp = { handle, zoom: 1.0 };
+//
+// `vi.mock` is hoisted above any top-level `const` — `vi.hoisted` is the
+// supported escape hatch to declare spies that the mock factory and the
+// tests can both reference.
+const { handle, fakeApp } = vi.hoisted(() => {
+    const handle = {
+        select_lasso: vi.fn(),
+        clear_selection: vi.fn(),
+        set_overlay: vi.fn(),
+        clear_overlay: vi.fn(),
+    };
+    return { handle, fakeApp: { handle, zoom: 1.0 } };
+});
 vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 
 // Module under test — imported after the mock is registered.
