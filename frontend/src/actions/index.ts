@@ -516,6 +516,7 @@ export function registerActions() {
         rectSelectTool: 'KeyR',
         ellipseSelectTool: 'Shift+KeyR',
         lassoSelectTool: 'KeyL',
+        polygonSelectTool: 'Shift+KeyL',
         magicWandTool: 'KeyW',
         transformTool: 'KeyT',
     };
