@@ -13,6 +13,10 @@
     let { group, depth = 0, onupdate }: {
         group: {
             type: 'group'; id: number; name: string; visible: boolean;
+            locked?: boolean;
+            // See LayerItem — `locked` is the node's own flag, `editable`
+            // is the effective (ancestor-aware) form used to gate edits.
+            editable?: boolean;
             collapsed: boolean; passthrough: boolean; opacity: number;
             blendMode: string; children: any[];
             modifiers?: Modifier[];
@@ -20,6 +24,8 @@
         depth?: number;
         onupdate: () => void;
     } = $props();
+
+    let editable = $derived(group.editable !== false);
 
     let maskModifier = $derived<Modifier | null>(
         group.modifiers?.find((m) => m.kind === 'mask') ?? null,
@@ -77,6 +83,12 @@
         onupdate();
     }
 
+    function toggleLock(e: MouseEvent) {
+        e.stopPropagation();
+        actions.dispatch('toggleLock', { layerId: group.id });
+        onupdate();
+    }
+
     function toggleCollapsed(e: MouseEvent) {
         e.stopPropagation();
         if (app.handle) {
@@ -92,6 +104,7 @@
     }
 
     function startRename() {
+        if (!editable) return;
         editing = true;
         requestAnimationFrame(() => editInput?.focus());
     }
@@ -235,7 +248,7 @@
         oncontextmenu={onLayerContextMenu}
         role="button"
         tabindex="-1"
-        draggable="true"
+        draggable={editable ? 'true' : 'false'}
         ondragstart={onDragStart}
         ondragover={onDragOver}
         ondragleave={onDragLeave}
@@ -289,6 +302,17 @@
                 oncontextmenu={onMaskContextMenu}
             />
         {/if}
+
+        <button
+            class="lock-btn"
+            class:locked={group.locked}
+            use:bindingSite={{ name: 'layerLock', ctx: () => ({ layerId: group.id }) }}
+            onclick={toggleLock}
+            onpointerdown={(e: PointerEvent) => { e.stopPropagation(); }}
+            title={group.locked ? 'Unlock group' : 'Lock group'}
+        >
+            <i class={group.locked ? 'fa-solid fa-lock' : 'fa-solid fa-lock-open'}></i>
+        </button>
     </div>
 
 {#if showMaskMenu}
@@ -299,17 +323,18 @@
         <button onclick={toggleShowMask}>
             {isMaskIsolated ? 'Hide mask' : 'Show mask'}
         </button>
-        <button onclick={removeMask}>Delete mask</button>
+        <button onclick={removeMask} disabled={!editable}>Delete mask</button>
     </div>
 {/if}
 
 {#if showLayerMenu}
     <div class="layer-menu" style:left="{layerMenuX}px" style:top="{layerMenuY}px">
+        <!-- Duplicate doesn't mutate the locked node — allowed. -->
         <button onclick={menuDuplicate}>Duplicate group</button>
-        <button onclick={menuMergeDown} disabled={!canMergeDownForThis}>
+        <button onclick={menuMergeDown} disabled={!canMergeDownForThis || !editable}>
             Merge down
         </button>
-        <button onclick={menuFlatten}>Flatten</button>
+        <button onclick={menuFlatten} disabled={!editable}>Flatten</button>
     </div>
 {/if}
 
@@ -411,6 +436,24 @@
     }
     .vis-btn:hover { color: var(--text); }
     .vis-btn.hidden { color: var(--text-dim); }
+
+    .lock-btn {
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        color: var(--text-dim);
+        cursor: pointer;
+        font-size: 12px;
+        flex-shrink: 0;
+        border-radius: 4px;
+        transition: color 0.1s;
+    }
+    .lock-btn:hover { color: var(--text); }
+    .lock-btn.locked { color: var(--text); }
 
     .folder-icon {
         color: var(--text-muted);

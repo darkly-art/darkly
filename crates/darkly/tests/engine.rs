@@ -3033,6 +3033,64 @@ fn passthrough_group_with_visible_mask_applies_via_snapshot_lerp() {
     );
 }
 
+/// Changing a passthrough group's blend mode must implicitly switch it to
+/// isolated — passthrough ignores the group blend mode, so the user's
+/// choice would have no visible effect otherwise. Both fields ride a single
+/// undo step so one Ctrl-Z restores the original state.
+#[test]
+fn set_blend_mode_on_passthrough_group_disables_passthrough() {
+    use darkly::engine::types::LayerInfo;
+
+    let mut engine = test_engine(64, 64);
+    let group_id = engine.add_group(None);
+    engine.set_group_passthrough(group_id, true);
+
+    let group_view = |e: &DarklyEngine| -> (bool, &'static str) {
+        for node in e.layer_tree() {
+            if let LayerInfo::Group {
+                id,
+                passthrough,
+                blend_mode,
+                ..
+            } = node
+            {
+                if id as u64 == group_id.to_ffi() {
+                    return (passthrough, blend_mode);
+                }
+            }
+        }
+        panic!("group not found in layer tree");
+    };
+
+    assert_eq!(group_view(&engine), (true, "normal"));
+
+    engine.set_blend_mode(group_id, "multiply");
+    assert_eq!(
+        group_view(&engine),
+        (false, "multiply"),
+        "blend-mode change on a passthrough group must clear passthrough"
+    );
+
+    // One undo must restore both fields together.
+    engine.undo();
+    assert_eq!(
+        group_view(&engine),
+        (true, "normal"),
+        "single undo must restore both passthrough and blend mode"
+    );
+
+    // Redo replays the bundled change.
+    engine.redo();
+    assert_eq!(group_view(&engine), (false, "multiply"));
+
+    // A non-passthrough group keeps its passthrough flag untouched when the
+    // blend mode changes — the auto-disable only fires when something has
+    // to change.
+    engine.set_group_passthrough(group_id, false);
+    engine.set_blend_mode(group_id, "screen");
+    assert_eq!(group_view(&engine), (false, "screen"));
+}
+
 /// Type-system check: the `LayerNode` enum must contain ONLY `Layer` and
 /// `Group`. Modifiers are not LayerNodes — they're reachable only through
 /// their host's `modifiers` field. An exhaustive match (without a wildcard
@@ -4003,4 +4061,90 @@ fn poll_export_result_returns_none_before_completion() {
         engine.poll_export_result().is_none(),
         "result must not be available before the readback completes"
     );
+}
+
+/// Regression: locking a layer must block all subsequent mutations to it
+/// (paint, rename, opacity, blend mode, delete, move). Originally only the
+/// UI lock icon was wired — the engine accepted brush strokes against
+/// locked layers because `Document::is_node_editable` did not exist.
+#[test]
+fn locked_layer_rejects_modifications() {
+    let (w, h) = (64, 64);
+    let mut engine = test_engine(w, h);
+    // Keep two layers so `remove_layer`'s "last layer" guard never short-
+    // circuits the lock check.
+    let other = engine.add_raster_layer(None);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Paint once unlocked so we have a baseline pixel set to compare against.
+    paint_at(&mut engine, layer_id, 32.0, 32.0, 1.0, 0.0, 0.0);
+    let baseline = engine.test_readback_layer(layer_id);
+    assert!(
+        alpha_at(&baseline, w, 32, 32) > 0,
+        "unlocked paint must land on the layer"
+    );
+
+    // Lock and capture the old metadata so we can prove the setters no-op.
+    let old_name = "before-lock";
+    engine.set_layer_name(layer_id, old_name);
+    engine.set_opacity(layer_id, 0.5);
+    engine.set_node_locked(layer_id, true);
+
+    // 1. Paint is blocked: pixels must be byte-identical to baseline.
+    paint_at(&mut engine, layer_id, 10.0, 10.0, 0.0, 1.0, 0.0);
+    let after_paint = engine.test_readback_layer(layer_id);
+    assert_eq!(
+        baseline, after_paint,
+        "locked layer must not accept any paint"
+    );
+
+    // 2. Property mutations are blocked. Read back through `layer_tree`,
+    //    which is the same serialized view the UI sees, so we know what
+    //    actually reaches users.
+    engine.set_layer_name(layer_id, "should-be-ignored");
+    engine.set_opacity(layer_id, 1.0);
+    engine.set_blend_mode(layer_id, "multiply");
+    let tree = engine.layer_tree();
+    let info = tree
+        .iter()
+        .find_map(|n| match n {
+            darkly::engine::types::LayerInfo::Raster {
+                id,
+                name,
+                opacity,
+                blend_mode,
+                ..
+            } if *id == layer_id.to_ffi() as f64 => Some((name.clone(), *opacity, *blend_mode)),
+            _ => None,
+        })
+        .expect("layer in tree");
+    assert_eq!(info.0, old_name, "rename must be rejected when locked");
+    assert!(
+        (info.1 - 0.5).abs() < 1e-6,
+        "opacity change must be rejected when locked"
+    );
+    assert_eq!(
+        info.2, "normal",
+        "blend mode change must be rejected when locked"
+    );
+
+    // 3. Delete is rejected (other layer keeps it from being the "last").
+    assert!(
+        engine.remove_layer(layer_id).is_err(),
+        "remove_layer must error when locked"
+    );
+    assert!(engine.has_layer(layer_id), "locked layer must still exist");
+
+    // 4. Unlock and confirm paint flows again — proves the guard is the
+    //    lock predicate and not some unrelated side-effect.
+    engine.set_node_locked(layer_id, false);
+    paint_at(&mut engine, layer_id, 10.0, 10.0, 0.0, 1.0, 0.0);
+    let after_unlock = engine.test_readback_layer(layer_id);
+    assert!(
+        alpha_at(&after_unlock, w, 10, 10) > 0,
+        "paint must land again after unlock"
+    );
+
+    // Keep `other` referenced so the compiler doesn't warn about it.
+    let _ = other;
 }

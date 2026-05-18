@@ -163,6 +163,22 @@ pub struct PortDef<W: WireKind> {
     /// a hint but the wire-side semantics are passthrough.
     #[serde(default)]
     pub natural_range: Option<(f32, f32)>,
+    /// Mark this exposed port as part of the brush's *identity* so its
+    /// user-set value persists into the dab thumbnail render.
+    ///
+    /// By default `crate::brush::reset_exposed_scrubs` resets every
+    /// exposed input back to its registration default before rendering
+    /// the dab thumbnail — the icon represents brush shape/texture, not
+    /// the user's working size/opacity/flow knobs. That policy is wrong
+    /// for orientation knobs (rotation, phase): a calligraphy nib at
+    /// 45° *is* a different-looking brush, and the icon should reflect
+    /// that.
+    ///
+    /// When this flag is set: (1) the reset skips this port, and (2)
+    /// scrubbing this port bumps the topology version so the dab
+    /// thumbnail re-renders, not just the editor preview.
+    #[serde(default)]
+    pub persist_in_thumbnail: bool,
 }
 
 impl<W: WireKind> PortDef<W> {
@@ -183,6 +199,7 @@ impl<W: WireKind> PortDef<W> {
             visible_when: None,
             step: 0.0,
             natural_range: None,
+            persist_in_thumbnail: false,
         }
     }
 
@@ -203,6 +220,7 @@ impl<W: WireKind> PortDef<W> {
             visible_when: None,
             step: 0.0,
             natural_range: None,
+            persist_in_thumbnail: false,
         }
     }
 
@@ -286,6 +304,17 @@ impl<W: WireKind> PortDef<W> {
     /// (size, position, time) rather than part of the brush's identity.
     pub fn with_preview_value(mut self, value: f32) -> Self {
         self.preview_value = Some(value);
+        self
+    }
+
+    /// Mark this exposed port as part of the brush's identity — its
+    /// user-set value persists into the dab thumbnail, and scrubs of
+    /// it rebake the thumbnail. See [`PortDef::persist_in_thumbnail`]
+    /// for the contract. Use for orientation knobs (rotation, phase)
+    /// that visibly change the dab; don't use for magnitude knobs
+    /// (size, opacity, flow) where the icon should stay normalized.
+    pub fn persist_in_thumbnail(mut self) -> Self {
+        self.persist_in_thumbnail = true;
         self
     }
 

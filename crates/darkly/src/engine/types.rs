@@ -14,6 +14,12 @@ pub enum LayerInfo {
         name: String,
         visible: bool,
         locked: bool,
+        /// Effective editability — `false` when this node *or any ancestor*
+        /// carries `locked = true`. Mirrors `Document::is_node_editable`;
+        /// the UI consumes this directly to grey out controls so the
+        /// inheritance rule lives in one place (the document predicate)
+        /// rather than being recomputed by every Svelte component.
+        editable: bool,
         opacity: f32,
         /// Stable `type_id` from the blend-mode registry (snake_case, e.g.
         /// `"normal"`, `"color_burn"`). Resolve to a display label via the
@@ -30,6 +36,7 @@ pub enum LayerInfo {
         name: String,
         visible: bool,
         locked: bool,
+        editable: bool,
         collapsed: bool,
         passthrough: bool,
         opacity: f32,
@@ -51,6 +58,9 @@ pub struct ModifierInfo {
     pub name: String,
     pub visible: bool,
     pub locked: bool,
+    /// See [`LayerInfo::Raster::editable`] — a modifier is editable when
+    /// neither it nor its host (nor any ancestor of the host) is locked.
+    pub editable: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -298,6 +308,7 @@ pub(crate) fn node_to_layer_info(
 ) -> Option<LayerInfo> {
     use crate::layer::{Layer, LayerNode};
     let node = doc.find_node(node_id)?;
+    let editable = doc.is_node_editable(node_id);
     let info = match node {
         LayerNode::Layer(layer) => match layer {
             Layer::Raster(r) => LayerInfo::Raster {
@@ -305,12 +316,13 @@ pub(crate) fn node_to_layer_info(
                 name: r.common.name.clone(),
                 visible: r.common.visible,
                 locked: r.common.locked,
+                editable,
                 opacity: r.blend.opacity,
                 blend_mode: r.blend.blend_mode.type_id,
                 modifiers: r
                     .modifiers
                     .iter()
-                    .filter_map(|mid| doc.find_modifier(*mid).map(modifier_to_info))
+                    .filter_map(|mid| doc.find_modifier(*mid).map(|m| modifier_to_info(doc, m)))
                     .collect(),
                 bounds: r.pixels.bounds,
             },
@@ -320,6 +332,7 @@ pub(crate) fn node_to_layer_info(
             name: g.common.name.clone(),
             visible: g.common.visible,
             locked: g.common.locked,
+            editable,
             collapsed: g.collapsed,
             passthrough: g.passthrough,
             opacity: g.blend.opacity,
@@ -327,7 +340,7 @@ pub(crate) fn node_to_layer_info(
             modifiers: g
                 .modifiers
                 .iter()
-                .filter_map(|mid| doc.find_modifier(*mid).map(modifier_to_info))
+                .filter_map(|mid| doc.find_modifier(*mid).map(|m| modifier_to_info(doc, m)))
                 .collect(),
             children: g
                 .children
@@ -340,12 +353,16 @@ pub(crate) fn node_to_layer_info(
     Some(info)
 }
 
-pub(crate) fn modifier_to_info(modifier: &crate::document::Modifier) -> ModifierInfo {
+pub(crate) fn modifier_to_info(
+    doc: &crate::document::Document,
+    modifier: &crate::document::Modifier,
+) -> ModifierInfo {
     ModifierInfo {
         id: modifier.id.to_ffi() as f64,
         kind: modifier.type_id(),
         name: modifier.common.name.clone(),
         visible: modifier.common.visible,
         locked: modifier.common.locked,
+        editable: doc.is_node_editable(modifier.id),
     }
 }

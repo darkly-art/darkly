@@ -2,8 +2,13 @@
     import { app } from '../../state/app.svelte';
 
     let { node }: {
-        node: { id: number; opacity: number; blendMode: string };
+        node: { id: number; opacity: number; blendMode: string; editable?: boolean };
     } = $props();
+
+    // Mirror the engine's `is_node_editable` predicate — when false, both
+    // setters no-op, so the controls would be drag-but-nothing-happens.
+    // Disabling here keeps the UI honest about what's settable.
+    let editable = $derived(node.editable !== false);
 
     // Blend modes come from the Rust BlendModeRegistry — the dropdown
     // (and its category-based <optgroup>s) is built entirely from that table.
@@ -47,21 +52,14 @@
     }
 </script>
 
-<div class="row">
-    <span class="label">Opacity</span>
-    <input
-        type="range"
-        class="slider"
-        min="0" max="1" step="0.01"
-        value={node.opacity}
-        oninput={onOpacityInput}
-    />
-    <span class="value">{Math.round((node.opacity ?? 1) * 100)}%</span>
-</div>
-
-<div class="row">
+<div class="row" class:disabled={!editable}>
     <span class="label">Blend</span>
-    <select class="select" value={node.blendMode ?? 'normal'} onchange={onBlendModeChange}>
+    <select
+        class="select"
+        value={node.blendMode ?? 'normal'}
+        onchange={onBlendModeChange}
+        disabled={!editable}
+    >
         {#each blendModeGroups as group (group.label)}
             <optgroup label={group.label}>
                 {#each group.modes as bm (bm.type)}
@@ -70,6 +68,19 @@
             </optgroup>
         {/each}
     </select>
+</div>
+
+<div class="row" class:disabled={!editable}>
+    <span class="label">Opacity</span>
+    <input
+        type="range"
+        class="slider"
+        min="0" max="1" step="0.01"
+        value={node.opacity}
+        oninput={onOpacityInput}
+        disabled={!editable}
+    />
+    <span class="value">{Math.round((node.opacity ?? 1) * 100)}%</span>
 </div>
 
 <style>
@@ -114,5 +125,16 @@
 
     .select:focus {
         border-color: var(--accent);
+    }
+
+    .row.disabled .label,
+    .row.disabled .value {
+        color: var(--text-dim);
+    }
+
+    .select:disabled,
+    .slider:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
     }
 </style>

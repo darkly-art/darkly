@@ -62,16 +62,30 @@ pub fn register() -> BrushNodeRegistration {
                 .with_preview_value(0.1)
                 .with_description("Overall brush size"),
             // No `natural_range`: radians are a unit, not a normalized
-            // signal. Wiring `pen.drawing_angle` (also radians) here is
-            // a unit-preserving identity wire — both ports speak the
-            // same language, so the value passes through raw.
+            // signal. Wiring `pen.tilt_direction`, `pen.drawing_angle`,
+            // or `pen.rotation` here is a unit-preserving identity wire
+            // — both ports speak the same language, so the value passes
+            // through raw and sums with the user's `rotation` offset.
+            PortDef::input("rotation_input", BrushWireType::Scalar)
+                .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
+                .with_label("Rotation Input")
+                .with_unit(UnitType::Degrees)
+                .with_icon("fa-solid fa-rotate")
+                .with_description(
+                    "Per-dab rotation, summed with `rotation`. Wire `pen.tilt_direction`, `pen.drawing_angle`, or `pen.rotation` so the brush follows the pen.",
+                ),
             PortDef::input("rotation", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_label("Rotation")
                 .with_unit(UnitType::Degrees)
                 .with_icon("fa-solid fa-rotate")
+                .exposed()
+                // Orientation is part of brush identity (a 45° nib is a
+                // different-looking brush), so the thumbnail tracks the
+                // user's value instead of being reset to 0.
+                .persist_in_thumbnail()
                 .with_description(
-                    "Brush rotation. Connect Pen Input's drawing angle here to rotate the brush along the stroke direction; add an offset by routing through an Add node.",
+                    "Static rotation offset, summed with `rotation_input`. Expose this as a knob for the user; route dynamic signals (tilt, drawing angle, barrel) into `rotation_input` instead.",
                 ),
             PortDef::input("mirror_x", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
@@ -147,7 +161,8 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
 
     let size_input = ctx.input_f32("size_input");
     let size = ctx.input_f32("size");
-    let rotation_input = ctx.input_f32("rotation");
+    let rotation = ctx.input_f32("rotation");
+    let rotation_input = ctx.input_f32("rotation_input");
     let mirror_x_input = ctx.input_f32("mirror_x");
     let mirror_y_input = ctx.input_f32("mirror_y");
     let ratio = ctx.input_f32("ratio").max(0.01);
@@ -171,7 +186,7 @@ fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
         ratio,
         flow,
         color,
-        rotation_rad: rotation_input,
+        rotation_rad: rotation + rotation_input,
         mirror_x: if mirror_x_input > 0.5 { 1.0 } else { 0.0 },
         mirror_y: if mirror_y_input > 0.5 { 1.0 } else { 0.0 },
         application_int,

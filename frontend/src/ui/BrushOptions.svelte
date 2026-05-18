@@ -251,7 +251,7 @@
          * border-radius is preserved (border-image flattens corners). */
         background:
             linear-gradient(var(--bg), var(--bg)) padding-box,
-            linear-gradient(to right, var(--accent), var(--bg)) border-box;
+            linear-gradient(to right, var(--thumb-bg), var(--bg)) border-box;
         border: 3px solid transparent;
         border-radius: 6px;
         color: var(--text);

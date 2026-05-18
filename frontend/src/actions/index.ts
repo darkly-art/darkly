@@ -570,6 +570,21 @@ export function registerActions() {
     });
 
     actions.register({
+        id: 'toggleLock',
+        displayName: 'Toggle Layer Lock',
+        category: 'layers',
+        accepts: ['layerId'],
+        handler: (ctx) => {
+            const layerId = ctx.layerId ?? app.activeLayerId;
+            if (layerId == null || !app.handle) return;
+            const layer = findLayer(app.layerTree, layerId);
+            if (layer) {
+                app.handle.set_node_locked(layerId, !layer.locked);
+            }
+        },
+    });
+
+    actions.register({
         id: 'isolateLayer',
         displayName: 'Isolate Layer',
         category: 'layers',
@@ -648,24 +663,6 @@ export function registerActions() {
             if (sourceId == null) return;
             try {
                 const newId = app.handle.merge_down(sourceId);
-                app.refreshLayerTree();
-                if (newId) app.selectLayer(newId);
-            } catch (e: any) {
-                toast.show('error', e.message ?? String(e));
-            }
-        },
-    });
-
-    actions.register({
-        id: 'flattenImage',
-        displayName: 'Flatten Image',
-        category: 'layers',
-        description: 'Composite every visible layer into a single "Background" raster; discard the rest.',
-        defaultHotkey: '$mod+Shift+KeyE',
-        handler: () => {
-            if (!app.handle) return;
-            try {
-                const newId = app.handle.flatten_image();
                 app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } catch (e: any) {

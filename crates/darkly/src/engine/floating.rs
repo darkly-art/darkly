@@ -49,6 +49,9 @@ impl DarklyEngine {
     /// Paste from the internal clipboard as floating content on the current
     /// layer/mask. Returns true if floating content was created.
     pub fn paste_in_place_floating(&mut self, layer_id: LayerId) -> bool {
+        if !self.doc.is_node_editable(layer_id) {
+            return false;
+        }
         // Auto-commit any existing floating content first.
         self.auto_commit_floating();
 
@@ -175,6 +178,9 @@ impl DarklyEngine {
     /// Otherwise, an async compute is dispatched and the transform completes
     /// on the next frame via `poll_pending`.
     pub fn begin_transform(&mut self, layer_id: LayerId) -> bool {
+        if !self.doc.is_node_editable(layer_id) {
+            return false;
+        }
         self.auto_commit_floating();
 
         // Active node may be either a raster layer or a mask modifier — both
@@ -489,6 +495,14 @@ impl DarklyEngine {
         };
 
         let layer_id = fc.target_layer;
+        // The target can become locked after `begin_transform` / paste — fall
+        // back to cancel-equivalent behavior (drop float state, no write to
+        // the layer). The float is already taken out of `self.floating` above.
+        if !self.doc.is_node_editable(layer_id) {
+            self.compositor.clear_floating_content();
+            self.compositor.mark_dirty();
+            return;
+        }
         // Format comes from the unified node-texture pool. Both raster layer
         // (RGBA8) and mask modifier (R8) targets resolve through the same call.
         let format = self

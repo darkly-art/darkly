@@ -122,6 +122,9 @@ impl DarklyEngine {
     /// Errors when the source isn't a flattenable shape (e.g. a raster with
     /// no modifiers — flattening would be a no-op).
     pub fn flatten_node(&mut self, node_id: LayerId) -> Result<LayerId, String> {
+        if !self.doc.is_node_editable(node_id) {
+            return Err("Layer is locked".into());
+        }
         match self.doc.find_node(node_id) {
             Some(LayerNode::Layer(_)) => {
                 if self.doc.mask_modifier_id(node_id).is_some() {

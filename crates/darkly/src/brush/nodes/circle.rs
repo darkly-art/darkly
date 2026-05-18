@@ -86,14 +86,29 @@ pub fn register() -> BrushNodeRegistration {
                      shape fails to close.",
                 ),
             // No `natural_range`: radians are a unit, not a normalized
-            // signal. `pen.drawing_angle → phase` is a unit-preserving
-            // identity wire; users wanting `random → phase` to span a
-            // full revolution must pre-scale through `multiply`.
+            // signal. `pen.tilt_direction → phase_input` is a unit-
+            // preserving identity wire — values pass through raw and
+            // sum with the user's `phase` offset. Users wanting
+            // `random → phase_input` to span a full revolution must
+            // pre-scale through `multiply`.
+            PortDef::input("phase_input", BrushWireType::Scalar)
+                .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
+                .with_label("Phase Input")
+                .with_unit(UnitType::Degrees)
+                .with_description(
+                    "Per-dab phase, summed with `phase`. Wire `pen.tilt_direction` or `pen.drawing_angle` so the shape rotates with the pen.",
+                ),
             PortDef::input("phase", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                 .with_label("Phase")
                 .with_unit(UnitType::Degrees)
-                .with_description("Rotation of the shape around its own centre."),
+                // Orientation is part of shape identity (same rationale
+                // as `stamp.rotation`); if the user exposes this knob,
+                // the dab thumbnail should follow it.
+                .persist_in_thumbnail()
+                .with_description(
+                    "Static rotation of the shape around its own centre, summed with `phase_input`. Route dynamic signals (tilt, drawing angle) into `phase_input` instead.",
+                ),
             PortDef::input("persistence", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
                 .with_natural_range(0.0, 1.0)
@@ -178,7 +193,7 @@ impl ShapeParams {
             // wired-in modulator (curve, pen pressure) bypasses the slider
             // and would otherwise put a seam in the rendered shape.
             frequency: ctx.input_f32("frequency").round().max(1.0),
-            phase: ctx.input_f32("phase"),
+            phase: ctx.input_f32("phase") + ctx.input_f32("phase_input"),
             persistence: ctx.input_f32("persistence").clamp(0.0, 1.0),
             seed: ctx.input_f32("seed"),
             octaves: (ctx.input_f32("octaves").round() as u32).clamp(1, 6),

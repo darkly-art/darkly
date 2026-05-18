@@ -24,6 +24,11 @@ enum ChangeKind {
     /// flags, non-exposed port defaults, brush load/reset/clear. Bumps
     /// both `brush_graph_version` and `brush_topology_version`.
     Topology,
+    /// Exposed-port scrub on a port marked `persist_in_thumbnail` — its
+    /// value bleeds through to the dab thumbnail render, so both
+    /// version counters need to bump to invalidate both preview caches.
+    /// Used for orientation knobs like `stamp.rotation`.
+    ThumbnailRelevantScrub,
     /// User-facing exposed-port scrub on a port the editor preview
     /// pipeline actually reads (size, opacity, hardness, …). Bumps only
     /// `brush_graph_version` — the dab thumbnail render neutralises
@@ -342,7 +347,9 @@ impl DarklyEngine {
         // `ChangeKind` doc above for the full rule. PreviewIrrelevantScrub
         // bumps nothing: the rendered preview output can't have changed.
         match kind {
-            ChangeKind::Topology => self.bump_brush_topology_version(),
+            ChangeKind::Topology | ChangeKind::ThumbnailRelevantScrub => {
+                self.bump_brush_topology_version()
+            }
             ChangeKind::ScrubOnly => self.bump_brush_graph_version(),
             ChangeKind::PreviewIrrelevantScrub => {}
         }
@@ -996,10 +1003,10 @@ impl DarklyEngine {
             }
         };
 
-        // Look up UnitType + preview_value from the registration. Both
-        // come from the same port lookup so we don't pay for it twice;
-        // `preview_value` decides whether this scrub can affect the
-        // editor preview's rendered output (see `ChangeKind` docs).
+        // Look up UnitType + preview_value + persist_in_thumbnail from
+        // the registration. One port lookup pays for all three flags;
+        // they determine whether this scrub affects the editor preview
+        // and/or the dab thumbnail (see `ChangeKind` docs).
         let registry = BrushNodeRegistry::new();
         let port_meta = registry.get(&type_id).and_then(|r| {
             r.ports
@@ -1008,6 +1015,7 @@ impl DarklyEngine {
         });
         let unit_type = port_meta.map_or(UnitType::default(), |rp| rp.unit_type);
         let preview_irrelevant = port_meta.is_some_and(|rp| rp.preview_value.is_some());
+        let thumbnail_relevant = port_meta.is_some_and(|rp| rp.persist_in_thumbnail);
 
         let port_value = unit_type.from_display(display_value);
 
@@ -1020,6 +1028,8 @@ impl DarklyEngine {
             .map_err(|e| format!("{e}"))?;
         let kind = if preview_irrelevant {
             ChangeKind::PreviewIrrelevantScrub
+        } else if thumbnail_relevant {
+            ChangeKind::ThumbnailRelevantScrub
         } else {
             ChangeKind::ScrubOnly
         };

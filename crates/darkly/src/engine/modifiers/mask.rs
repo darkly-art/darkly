@@ -17,6 +17,9 @@ impl DarklyEngine {
     /// texture in the unified node-texture pool. If a selection is active,
     /// the mask is seeded from the selection (one-click "selection → mask").
     pub fn add_mask(&mut self, host_id: LayerId) {
+        if !self.doc.is_node_editable(host_id) {
+            return;
+        }
         // UI invariant: at most one mask per host. The model supports N; we
         // refuse here so that `add_mask_modifier` doesn't silently create a
         // second one.
@@ -70,6 +73,9 @@ impl DarklyEngine {
 
     /// Remove the mask modifier on a host layer or group.
     pub fn remove_mask(&mut self, host_id: LayerId) {
+        if !self.doc.is_node_editable(host_id) {
+            return;
+        }
         let mask_id = match self.doc.mask_modifier_id(host_id) {
             Some(id) => id,
             None => return,
@@ -122,6 +128,9 @@ impl DarklyEngine {
     /// Mask-specific — not generalized to "bake any modifier" because that has
     /// no kind-uniform meaning.
     pub fn apply_mask(&mut self, host_id: LayerId) {
+        if !self.doc.is_node_editable(host_id) {
+            return;
+        }
         // apply_mask is raster-only — groups have no pixel data to bake into.
         let host_is_raster = matches!(
             self.doc.find_node(host_id),
@@ -272,6 +281,9 @@ impl DarklyEngine {
     /// if absent). Equivalent to `AddMask` followed by `copy_selection_into_mask`,
     /// but kept as a separate WASM API command for UX clarity.
     pub fn selection_to_mask(&mut self, host_id: LayerId) {
+        if !self.doc.is_node_editable(host_id) {
+            return;
+        }
         // Add mask if not already present (idempotent on the second call).
         let already_had_mask = self.doc.has_mask(host_id);
 

@@ -203,6 +203,33 @@ impl Document {
         matches!(self.entities.get(id), Some(Entity::Modifier(_)))
     }
 
+    /// True when `id` may be mutated by the user.
+    ///
+    /// `false` when the node itself or any ancestor (host for a modifier;
+    /// parent group for a layer/group, walked to the root) carries
+    /// `locked = true`. Mirrors Krita's `KisBaseNode::isEditable` — locks
+    /// cascade down the tree so locking a group also protects its contents.
+    ///
+    /// Unknown ids return `true`; the caller's existing "node not found"
+    /// path handles them. The lock check is *policy*; this predicate is the
+    /// single source of truth for "may this be modified?" and is called
+    /// from every mutating engine entry point.
+    pub fn is_node_editable(&self, id: LayerId) -> bool {
+        let mut cur = id;
+        loop {
+            match self.entities.get(cur) {
+                Some(Entity::Node(n)) if n.common().locked => return false,
+                Some(Entity::Modifier(m)) if m.common.locked => return false,
+                Some(_) => {}
+                None => return true,
+            }
+            match self.parent.get(cur) {
+                Some(&p) if p != cur => cur = p,
+                _ => return true,
+            }
+        }
+    }
+
     /// Pixel-buffer accessor that works for any pixel-bearing entity — raster
     /// layers and pixel-storing modifiers (today: masks, selection). Returns
     /// `None` for groups, pure-effect modifiers, or unknown ids.

@@ -442,6 +442,9 @@ impl DarklyEngine {
     /// Returns `None` immediately; result available via `poll_copy_result()`.
     pub fn cut(&mut self, layer_id: LayerId) -> Option<ClipboardExport> {
         self.doc.layer(layer_id)?;
+        if !self.doc.is_node_editable(layer_id) {
+            return None;
+        }
 
         if self.has_selection() && self.selection_cpu_cache().is_none() {
             self.pending_copy = Some(PendingCopy {

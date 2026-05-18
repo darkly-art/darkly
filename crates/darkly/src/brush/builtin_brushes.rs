@@ -386,7 +386,9 @@ fn calligraphy() -> Brush {
     let mut b = BrushBuilder::new();
     b.add_image("calligraphy.png");
     b.wire(b.pen, "pressure", b.stamp, "size_input");
-    b.wire(b.pen, "tilt_direction", b.stamp, "rotation");
+    // Tilt drives per-stroke orientation; the always-exposed `rotation`
+    // knob biases the nib angle on top.
+    b.wire(b.pen, "tilt_direction", b.stamp, "rotation_input");
     b.wire(b.paint_color, "color", b.stamp, "color");
     b.set_stabilize(0.6);
     // Tighter spacing than the 10% default — calligraphic strokes need
