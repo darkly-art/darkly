@@ -27,6 +27,7 @@ pub struct RenderCheckpoint {
     pub accumulated_distance: f32,
     pub leftover_distance: f32,
     pub last_dab_size: [f32; 2],
+    pub last_dab_pos: Option<[f32; 2]>,
     pub dab_count: u32,
 }
 
@@ -58,6 +59,11 @@ pub struct StrokeEngine {
     leftover_distance: f32,
     /// Dab size [w, h] from the last evaluated dab (for spacing).
     last_dab_size: [f32; 2],
+    /// Position of the most recently *emitted* dab — source-of-truth for
+    /// `PaintInformation.motion` (per-dab delta, populated in `place_dab`).
+    /// Distinct from `last_point` which tracks the previous stabilized
+    /// *event*. Reset to `None` at stroke start and on full re-render.
+    last_dab_pos: Option<[f32; 2]>,
     /// Running dab index within the stroke.
     dab_count: u32,
 
@@ -94,6 +100,7 @@ impl StrokeEngine {
             accumulated_distance: 0.0,
             leftover_distance: 0.0,
             last_dab_size: [d, d],
+            last_dab_pos: None,
             dab_count: 0,
             stroke_seed,
         }
@@ -135,6 +142,7 @@ impl StrokeEngine {
             accumulated_distance: self.accumulated_distance,
             leftover_distance: self.leftover_distance,
             last_dab_size: self.last_dab_size,
+            last_dab_pos: self.last_dab_pos,
             dab_count: self.dab_count,
         }
     }
@@ -145,6 +153,7 @@ impl StrokeEngine {
         self.accumulated_distance = checkpoint.accumulated_distance;
         self.leftover_distance = checkpoint.leftover_distance;
         self.last_dab_size = checkpoint.last_dab_size;
+        self.last_dab_pos = checkpoint.last_dab_pos;
         self.dab_count = checkpoint.dab_count;
     }
 
@@ -158,8 +167,18 @@ impl StrokeEngine {
         self.leftover_distance = 0.0;
         let d = Self::default_diameter();
         self.last_dab_size = [d, d];
+        self.last_dab_pos = None;
         self.dab_count = 0;
         self.save_points.clear();
+    }
+
+    /// Compute the per-dab motion vector for a dab about to be placed at
+    /// `pos`, and advance the last-dab-position tracker. Thin wrapper over
+    /// the free function so the motion contract can be unit-tested without
+    /// constructing a full `StrokeEngine` (which would require a runner +
+    /// stabilizer + GPU).
+    fn next_dab_motion(&mut self, pos: [f32; 2]) -> [f32; 2] {
+        advance_dab_motion(&mut self.last_dab_pos, pos)
     }
 
     /// Render dabs along the stabilized polyline starting from `start_vector_index`.
@@ -310,6 +329,10 @@ impl StrokeEngine {
         let t_dab = web_time::Instant::now();
         let mut dab_info = *info;
         dab_info.fade = (dab_info.distance / FADE_DISTANCE_PX).min(1.0);
+        // Motion is a per-dab quantity — the previous-dab → this-dab delta.
+        // Interpolators leave it zero (they have no view of dab order); we
+        // fill it here so smudge sees the correct smear-sample offset.
+        dab_info.motion = self.next_dab_motion(dab_info.pos);
 
         // CPU graph eval — `execute_cpu` and the bookkeeping that frames it.
         // Bucketed separately from `execute_gpu` because the CPU path runs
@@ -398,6 +421,7 @@ impl StrokeEngine {
                 accumulated_distance: 0.0,
                 leftover_distance: 0.0,
                 last_dab_size: [0.0, 0.0],
+                last_dab_pos: None,
                 dab_count: 0,
             },
         );
@@ -500,5 +524,65 @@ impl StrokeEngine {
     /// Number of dabs placed so far.
     pub fn dab_count(&self) -> u32 {
         self.dab_count
+    }
+}
+
+/// Per-dab motion: delta from the previous emitted dab. `tracker` is the
+/// position of the most recently emitted dab, or `None` at stroke start /
+/// after a rewind. Returns `[0, 0]` when there is no previous dab — that's
+/// the contract smudge relies on (zero motion → identity smear write).
+fn advance_dab_motion(tracker: &mut Option<[f32; 2]>, pos: [f32; 2]) -> [f32; 2] {
+    let motion = match *tracker {
+        Some(prev) => [pos[0] - prev[0], pos[1] - prev[1]],
+        None => [0.0, 0.0],
+    };
+    *tracker = Some(pos);
+    motion
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: per-dab motion must be the previous-dab → this-dab delta,
+    /// not the segment delta. The old bug carried `PaintInformation.motion`
+    /// from `derive_sensors` (event-to-event) through to every interpolated
+    /// dab in the segment, so a 100px segment with 20 dabs at 5px spacing
+    /// would seed `motion=[100,0]` for every dab — wrong for smudge. After
+    /// the fix, each dab sees its own ~5px step.
+    #[test]
+    fn motion_is_per_dab_delta_not_segment_delta() {
+        let mut tracker: Option<[f32; 2]> = None;
+
+        // First dab — no prior dab, motion must be zero.
+        assert_eq!(advance_dab_motion(&mut tracker, [0.0, 0.0]), [0.0, 0.0]);
+
+        // 20 dabs at 5px spacing along x — each motion must be ~5px, not 100px.
+        for i in 1..=20 {
+            let pos = [i as f32 * 5.0, 0.0];
+            let m = advance_dab_motion(&mut tracker, pos);
+            assert!(
+                (m[0] - 5.0).abs() < 1e-6 && m[1].abs() < 1e-6,
+                "dab {i}: expected ~[5,0], got {m:?} (regression: per-segment motion leaking through)"
+            );
+        }
+    }
+
+    #[test]
+    fn motion_resets_to_zero_after_rewind() {
+        let mut tracker: Option<[f32; 2]> = None;
+        advance_dab_motion(&mut tracker, [10.0, 10.0]);
+        advance_dab_motion(&mut tracker, [20.0, 10.0]);
+        // Simulate `reset_render_state` clearing the tracker.
+        tracker = None;
+        assert_eq!(advance_dab_motion(&mut tracker, [100.0, 100.0]), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn motion_diagonal_step() {
+        let mut tracker: Option<[f32; 2]> = None;
+        advance_dab_motion(&mut tracker, [10.0, 20.0]);
+        let m = advance_dab_motion(&mut tracker, [13.0, 24.0]);
+        assert!((m[0] - 3.0).abs() < 1e-6 && (m[1] - 4.0).abs() < 1e-6);
     }
 }
