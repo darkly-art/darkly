@@ -64,7 +64,7 @@ These are features that are helpful or essential to digital art workflows. They'
     - [x] Liquify
     - [x] Watercolor
     - [ ] Clone
-    - [ ] Smudge
+    - [x] Smudge
     - [ ] Blur
     - [ ] Dodge/burn
     - [ ] Pencil / Charcoal

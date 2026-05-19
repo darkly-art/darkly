@@ -48,6 +48,19 @@
         brushSession.eraseMode = !brushSession.eraseMode;
         app.handle?.set_brush_blend_mode(brushSession.eraseMode ? 1 : 0);
     }
+
+    // Brushes whose terminal doesn't honor `gpu.blend_mode` (smudge,
+    // liquify, watercolor) report `supportsErase = false`. Reactively
+    // force erase-mode off when the user switches to one of them so the
+    // session flag and the engine flag don't drift out of sync with the
+    // hidden toggle. Re-runs on every graph change because both reads
+    // are $state-tracked.
+    $effect(() => {
+        if (!brushGraph.supportsErase && brushSession.eraseMode) {
+            brushSession.eraseMode = false;
+            app.handle?.set_brush_blend_mode(0);
+        }
+    });
 </script>
 
 <svelte:window onclick={handleClickOutside} />
@@ -125,20 +138,26 @@
     {/each}
 
     <!-- Erase-mode toggle. Brush-tool session state lives on the tool
-         itself; this toggle just mirrors it and pushes the engine flag. -->
-    <button
-        type="button"
-        class="scrub erase-toggle"
-        class:on={brushSession.eraseMode}
-        onclick={toggleEraseMode}
-        title="Erase mode (E)"
-    >
-        <i class="fa-solid fa-eraser scrub-icon"></i>
-        <div class="scrub-text">
-            <span class="scrub-label">Erase</span>
-            <span class="scrub-value">{brushSession.eraseMode ? 'On' : 'Off'}</span>
-        </div>
-    </button>
+         itself; this toggle just mirrors it and pushes the engine flag.
+         Hidden for brushes whose terminal opts out of erase (smudge,
+         liquify, watercolor) via `supports_erase = false` on its node
+         registration — for those brushes flipping `gpu.blend_mode`
+         would do nothing, so the toggle would be a lie. -->
+    {#if brushGraph.supportsErase}
+        <button
+            type="button"
+            class="scrub erase-toggle"
+            class:on={brushSession.eraseMode}
+            onclick={toggleEraseMode}
+            title="Erase mode (E)"
+        >
+            <i class="fa-solid fa-eraser scrub-icon"></i>
+            <div class="scrub-text">
+                <span class="scrub-label">Erase</span>
+                <span class="scrub-value">{brushSession.eraseMode ? 'On' : 'Off'}</span>
+            </div>
+        </button>
+    {/if}
 </div>
 
 <!-- Error indicator -->

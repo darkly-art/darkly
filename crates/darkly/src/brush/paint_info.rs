@@ -39,9 +39,12 @@ pub struct PaintInformation {
     /// Drawing angle in radians (direction of pen travel, 0 = right).
     pub drawing_angle: f32,
     /// Per-dab motion vector in canvas pixels — the position delta from the
-    /// previous stabilized sample into this one. All dabs in a segment carry
-    /// the segment's motion, not a per-dab tangent. Warp brushes (liquify,
-    /// smudge) read this to push pixels along the pen's direction of travel.
+    /// previous *emitted dab* into this one. Populated by the stroke engine
+    /// at dab-emission time (`StrokeEngine::place_dab`); interpolators and
+    /// `derive_sensors` leave it zero because at their layer there is no
+    /// previous-dab to delta against. Smudge depends on per-dab magnitude
+    /// (the smear sample offset = previous dab position); liquify uses
+    /// `drawing_angle` only and is indifferent to magnitude.
     pub motion: [f32; 2],
     /// Combined tilt magnitude (0-1), derived from x_tilt and y_tilt.
     pub tilt_magnitude: f32,
@@ -78,11 +81,12 @@ impl PaintInformation {
     /// Tilt-derived sensors (`tilt_magnitude`, `tilt_direction`) always
     /// fill — they depend only on this sample.
     ///
-    /// Segment-derived sensors (`drawing_angle`, `motion`, `distance`,
-    /// `speed`) fill only when `prev` is present. `segment_length` is the
-    /// arc length between prev and this sample — use the chord length for
-    /// straight paths (preview) or the Catmull-Rom arc length for smoothed
-    /// strokes.
+    /// Segment-derived sensors (`drawing_angle`, `distance`, `speed`) fill
+    /// only when `prev` is present. `segment_length` is the arc length
+    /// between prev and this sample — use the chord length for straight
+    /// paths (preview) or the Catmull-Rom arc length for smoothed strokes.
+    /// `motion` is NOT filled here — it's a per-dab quantity owned by
+    /// `StrokeEngine::place_dab`.
     pub fn derive_sensors(&mut self, prev: Option<&Self>, segment_length: f32) {
         self.tilt_magnitude = (self.x_tilt * self.x_tilt + self.y_tilt * self.y_tilt)
             .sqrt()
@@ -96,7 +100,6 @@ impl PaintInformation {
         let dx = self.pos[0] - prev.pos[0];
         let dy = self.pos[1] - prev.pos[1];
         self.drawing_angle = dy.atan2(dx);
-        self.motion = [dx, dy];
         self.distance = prev.distance + segment_length;
 
         let dt = self.time - prev.time;

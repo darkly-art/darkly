@@ -23,10 +23,9 @@ pub fn lerp_paint_info(a: &PaintInformation, b: &PaintInformation, t: f32) -> Pa
         speed: lerp(a.speed, b.speed, t),
         distance: lerp(a.distance, b.distance, t),
         drawing_angle: lerp_angle(a.drawing_angle, b.drawing_angle, t),
-        // Motion is a per-segment quantity — all dabs in a segment push in the
-        // same direction, so we carry b's motion verbatim rather than blending
-        // with the previous segment's.
-        motion: b.motion,
+        // Motion is filled by `StrokeEngine::place_dab` from the previous-dab
+        // delta — interpolators have no view of dab order, so they leave it zero.
+        motion: [0.0, 0.0],
         tilt_magnitude: lerp(a.tilt_magnitude, b.tilt_magnitude, t),
         tilt_direction: lerp_angle(a.tilt_direction, b.tilt_direction, t),
         // Index is not meaningful for interpolated points — use b's index.
@@ -144,8 +143,8 @@ pub fn catmull_rom_paint_info(
             p3.drawing_angle,
             t,
         ),
-        // Same rationale as the lerp path: motion is per-segment, not per-dab.
-        motion: p2.motion,
+        // Same as the lerp path: motion is filled per-dab by `place_dab`.
+        motion: [0.0, 0.0],
         tilt_magnitude: catmull_rom(
             p0.tilt_magnitude,
             p1.tilt_magnitude,
@@ -258,6 +257,41 @@ impl<'a> CatmullRomSegment<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: interpolators must NOT carry `motion` from either
+    /// endpoint. `PaintInformation.motion` is per-dab and owned by
+    /// `StrokeEngine::place_dab`; interpolation runs before dab order is
+    /// known, so propagating it would re-introduce the segment-level
+    /// motion bug that broke smudge sampling.
+    #[test]
+    fn lerp_leaves_motion_zero() {
+        let a = PaintInformation {
+            motion: [99.0, 99.0],
+            ..Default::default()
+        };
+        let b = PaintInformation {
+            motion: [42.0, -7.0],
+            ..Default::default()
+        };
+        let mid = lerp_paint_info(&a, &b, 0.5);
+        assert_eq!(mid.motion, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn catmull_rom_leaves_motion_zero() {
+        let p = |m: [f32; 2]| PaintInformation {
+            motion: m,
+            ..Default::default()
+        };
+        let out = catmull_rom_paint_info(
+            &p([1.0, 1.0]),
+            &p([2.0, 2.0]),
+            &p([3.0, 3.0]),
+            &p([4.0, 4.0]),
+            0.5,
+        );
+        assert_eq!(out.motion, [0.0, 0.0]);
+    }
 
     #[test]
     fn lerp_midpoint() {

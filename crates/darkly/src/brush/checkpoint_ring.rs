@@ -58,6 +58,7 @@ impl CheckpointSlot {
                 accumulated_distance: 0.0,
                 leftover_distance: 0.0,
                 last_dab_size: [0.0, 0.0],
+                last_dab_pos: None,
                 dab_count: 0,
             },
             valid: false,

@@ -567,6 +567,13 @@ export function registerActions() {
             if (app.activeToolId !== 'brush') {
                 app.activeToolId = 'brush';
             }
+            // No-op when the active brush's terminal opts out of erase
+            // (smudge, liquify, watercolor). Same reason the BrushOptions
+            // toggle is hidden — flipping `gpu.blend_mode` would do
+            // nothing, so the hotkey should match the visible UI.
+            if (!brushGraph.supportsErase) {
+                return;
+            }
             brushSession.eraseMode = !brushSession.eraseMode;
             app.handle?.set_brush_blend_mode(brushSession.eraseMode ? 1 : 0);
         },

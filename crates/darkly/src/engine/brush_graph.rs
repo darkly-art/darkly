@@ -50,6 +50,39 @@ impl DarklyEngine {
         registry.types().cloned().collect()
     }
 
+    /// Does the active brush graph's terminal honor erase mode?
+    ///
+    /// The brush "supports erase" iff every output-category node in the
+    /// active graph's evaluator returns `supports_erase() = true`. The
+    /// signal lives on the evaluator trait (not on `NodeRegistration`)
+    /// because only output terminals care — non-terminal evaluators
+    /// never see `gpu.blend_mode` and inherit the default `true`.
+    ///
+    /// Used by the brush-tool options bar to hide the erase button for
+    /// terminals where flipping `gpu.blend_mode` would do nothing (smudge,
+    /// liquify, watercolor).
+    pub fn active_brush_supports_erase(&self) -> bool {
+        let graph = self.active_brush_graph();
+        let registry = BrushNodeRegistry::new();
+        let evaluators = crate::brush::default_evaluators();
+        for node in graph.nodes.values() {
+            let Some(reg) = registry.get(&node.type_id) else {
+                continue;
+            };
+            if reg.category != "output" {
+                continue;
+            }
+            if let Some(ev) = evaluators.get(&node.type_id) {
+                if !ev.supports_erase() {
+                    return false;
+                }
+            }
+        }
+        // No output node, or every output supports erase → keep the
+        // toggle visible.
+        true
+    }
+
     /// Return a clone of the default brush graph.
     pub fn default_brush_graph(&self) -> Graph<BrushWireType> {
         crate::brush::default_graph()

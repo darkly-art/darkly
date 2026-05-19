@@ -283,6 +283,18 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// committed state is a function of the scratch, which already
     /// reflects all per-dab CPU input resolution.
     fn commit(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
+
+    /// Does this terminal honor `BrushGpuContext::blend_mode` (paint vs.
+    /// erase)? Default `true` — most terminals do, and non-terminal
+    /// nodes never see blend_mode so the value is unread for them.
+    /// Output terminals that ignore the flag (liquify, watercolor,
+    /// smudge — erase semantics don't apply to warp/smear) override to
+    /// `false` so the brush-tool UI can hide the erase toggle.
+    /// `active_brush_supports_erase` ANDs across each output node's
+    /// flag to decide whether the active brush supports erase at all.
+    fn supports_erase(&self) -> bool {
+        true
+    }
 }
 
 // ── Graph runner ────────────────────────────────────────────────────

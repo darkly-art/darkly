@@ -154,6 +154,14 @@ class BrushGraphState {
     /** Ports exposed in the brush properties panel. */
     exposedPorts = $state<ExposedPortInfo[]>([]);
 
+    /** Does the active brush's terminal honor erase (paint vs. erase) mode?
+     *  Refreshed from `app.handle.brush_active_supports_erase()` whenever
+     *  the graph topology changes. Signal lives on the brush evaluator
+     *  trait — only output terminals override; non-terminal evaluators
+     *  inherit `true`. False for smudge/liquify/watercolor; the brush-tool
+     *  options bar hides the erase toggle in that case. */
+    supportsErase = $state(true);
+
     /**
      * Last topology version we observed from the engine. The engine bumps
      * this only on structural changes — exposed-port scrubs don't advance
@@ -186,11 +194,21 @@ class BrushGraphState {
                         }
                     }
                     this.refreshExposedPorts();
+                    this.refreshSupportsErase();
                 }
             } catch {
                 // Parse failed — leave current state.
             }
         }
+    }
+
+    /** Query Rust for whether the active brush's terminal supports erase
+     *  mode. Cheap (a single WASM borrow + graph walk); we call this on
+     *  every topology change rather than per-render so the `$state` field
+     *  drives reactive consumers. */
+    private refreshSupportsErase() {
+        if (!app.handle) return;
+        this.supportsErase = app.handle.brush_active_supports_erase();
     }
 
     /**
@@ -237,6 +255,7 @@ class BrushGraphState {
         if (!app.handle) return;
         this.fetchGraph();
         this.refreshExposedPorts();
+        this.refreshSupportsErase();
         this.snapshotTopologyVersion();
     }
 
@@ -265,6 +284,7 @@ class BrushGraphState {
             // default graph as a degenerate fallback.
             this.fetchGraph();
             this.refreshExposedPorts();
+            this.refreshSupportsErase();
             this.snapshotTopologyVersion();
         }
     }
@@ -276,6 +296,7 @@ class BrushGraphState {
         this.nodePositions = {};
         this.fetchGraph();
         this.refreshExposedPorts();
+        this.refreshSupportsErase();
         this.error = null;
         this.activeBrush = null;
         this.snapshotTopologyVersion();
@@ -339,6 +360,7 @@ class BrushGraphState {
         this.nodePositions = {};
         this.fetchGraph();
         this.refreshExposedPorts();
+        this.refreshSupportsErase();
         this.error = null;
         // brush_load is a Topology change — snapshot here so the next
         // exposed-port scrub doesn't see a delta and clear `activeBrush`.

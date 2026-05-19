@@ -26,6 +26,7 @@ pub fn all() -> Vec<Brush> {
         canvas_brush(),
         smooth_watercolor(),
         rough_watercolor(),
+        smudge_brush(),
         liquify_push(),
     ]
 }
@@ -654,6 +655,92 @@ fn rough_watercolor() -> Brush {
             )
             .unwrap();
     })
+}
+
+/// Smudge brush. Drags canvas pixels along the stroke — at each dab, the
+/// `smudge` terminal samples the scratch at `position − motion` and stamps
+/// it back through the brush mask. Built directly (not via `BrushBuilder`)
+/// because the standard builder pre-wires `color_output`; smudge has its
+/// own terminal node with its own lifecycle.
+fn smudge_brush() -> Brush {
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let circle = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // 0 = Sine Harmonic; amplitude 0 → plain disc
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        registry.get("stamp").unwrap().ports.clone(),
+        vec![],
+    );
+    let smudge = graph.add_node(
+        "smudge",
+        registry.get("smudge").unwrap().ports.clone(),
+        vec![],
+    );
+
+    // Stabilization on by default — smudge strokes read better when the
+    // path is smooth. 40% is enough to take the edge off without lag.
+    graph.set_port_default(pen, "stabilize", 0.4).unwrap();
+    graph.set_port_exposed(pen, "stabilize", true).unwrap();
+
+    // Tighten spacing well below the paint default. The smear is per-dab,
+    // so the visible drag is dab-density-bound; the liquify-style 4% gives
+    // a continuous trail. The port floor is also 4%.
+    graph.set_port_default(pen, "spacing", 0.04).unwrap();
+
+    // Sharper-than-typical tip. With a softened mask, the read at
+    // `canvas_pos − motion` lands in the falloff ring and smears canvas
+    // pixels into the "outside" of the brush footprint on each dab,
+    // producing halo trails. Krita's stock smudge presets use sharper
+    // edges for the same reason. Exposed so the user can dial it back
+    // toward soft if they want the halo trail as an effect.
+    graph.set_port_default(circle, "softness", 0.4).unwrap();
+    graph.set_port_exposed(circle, "softness", true).unwrap();
+
+    let wires = [
+        (circle, "texture", stamp, "tip"),
+        (paint_color, "color", stamp, "color"),
+        // Pressure shapes the dab — heavier press = larger, fuller smear.
+        (pen, "pressure", stamp, "flow"),
+        (pen, "pressure", stamp, "size_input"),
+        (stamp, "dab", smudge, "dab"),
+        (stamp, "dab_size", smudge, "dab_size"),
+        (pen, "position", smudge, "position"),
+        (pen, "motion", smudge, "motion"),
+        (stamp, "preview", smudge, "brush_preview"),
+    ];
+    for (from_node, from_port, to_node, to_port) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    let mut metadata = BrushMetadata::from_graph("Smudge", graph);
+    metadata.category = "painting".to_string();
+    Brush::without_resources(metadata)
 }
 
 /// Liquify warp brush. Pushes pixels along pen motion with a radial

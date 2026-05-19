@@ -389,45 +389,85 @@ impl<'a> BrushGpuContext<'a> {
         half_w: f32,
         half_h: f32,
     ) -> Option<DabFootprint> {
+        self.prepare_dab_canvas_copy_split(position, half_w, half_h, half_w, half_h)
+    }
+
+    /// Generalization of [`Self::prepare_dab_canvas_copy`] that lets callers
+    /// pass distinct write and read half-extents. The write region is the
+    /// dab footprint (`position ± write_half`); the read region is the
+    /// scratch-mirror snapshot footprint (`position ± read_half`). Read
+    /// must be at least as large as write, but a brush that samples the
+    /// scratch at an offset (smudge: per-dab `−motion`; clone: a stroke-
+    /// scoped anchor) sizes the read region wider so the offset sample
+    /// always lies inside the snapshot.
+    ///
+    /// The returned `DabFootprint`'s `origin/size` describe the write
+    /// region (so the brush's render-pass viewport covers exactly the
+    /// dab footprint); `copy_canvas_origin/copy_local_origin/copy_size`
+    /// describe the (larger) read region, matching the read-mirror copy
+    /// just issued.
+    pub fn prepare_dab_canvas_copy_split(
+        &mut self,
+        position: [f32; 2],
+        write_half_w: f32,
+        write_half_h: f32,
+        read_half_w: f32,
+        read_half_h: f32,
+    ) -> Option<DabFootprint> {
+        debug_assert!(
+            read_half_w >= write_half_w && read_half_h >= write_half_h,
+            "read region must enclose write region",
+        );
         let pt = self.paint_target.as_ref()?;
         let pt_canvas = pt.canvas_extent();
 
-        let unclipped_x0 = position[0] - half_w;
-        let unclipped_y0 = position[1] - half_h;
         let layer_x0 = pt_canvas.x0() as f32;
         let layer_y0 = pt_canvas.y0() as f32;
         let layer_x1 = layer_x0 + pt_canvas.width as f32;
         let layer_y1 = layer_y0 + pt_canvas.height as f32;
-        let x0 = unclipped_x0.max(layer_x0);
-        let y0 = unclipped_y0.max(layer_y0);
-        let x1 = (position[0] + half_w).min(layer_x1);
-        let y1 = (position[1] + half_h).min(layer_y1);
 
-        let quad_w = x1 - x0;
-        let quad_h = y1 - y0;
+        // Write region (the dab footprint that the brush draws into).
+        let unclipped_write_x0 = position[0] - write_half_w;
+        let unclipped_write_y0 = position[1] - write_half_h;
+        let write_x0 = unclipped_write_x0.max(layer_x0);
+        let write_y0 = unclipped_write_y0.max(layer_y0);
+        let write_x1 = (position[0] + write_half_w).min(layer_x1);
+        let write_y1 = (position[1] + write_half_h).min(layer_y1);
+        let quad_w = write_x1 - write_x0;
+        let quad_h = write_y1 - write_y0;
         if quad_w <= 0.0 || quad_h <= 0.0 {
             return None;
         }
 
+        // Read region (the scratch snapshot the brush samples from).
+        let read_x0 = (position[0] - read_half_w).max(layer_x0);
+        let read_y0 = (position[1] - read_half_h).max(layer_y0);
+        let read_x1 = (position[0] + read_half_w).min(layer_x1);
+        let read_y1 = (position[1] + read_half_h).min(layer_y1);
+
         // Floor-then-ceil so every fragment in the quad has a valid
         // scratch read mirror texel to read. `i32` keeps negative origins
         // (paste-extent layers, leftward-grown layers) representable.
-        let copy_canvas_x = x0.floor() as i32;
-        let copy_canvas_y = y0.floor() as i32;
-        let copy_w = (x1.ceil() as i32 - copy_canvas_x) as u32;
-        let copy_h = (y1.ceil() as i32 - copy_canvas_y) as u32;
+        let copy_canvas_x = read_x0.floor() as i32;
+        let copy_canvas_y = read_y0.floor() as i32;
+        let copy_w = (read_x1.ceil() as i32 - copy_canvas_x) as u32;
+        let copy_h = (read_y1.ceil() as i32 - copy_canvas_y) as u32;
         if copy_w == 0 || copy_h == 0 {
             return None;
         }
 
-        // Canvas coords are stable across mid-stroke layer growth
-        // (Storage Frame Rule), so the bbox stored here remains valid
-        // regardless of subsequent grow_layer events.
+        // Save-point bbox tracks the write region — that's the only
+        // damage to scratch. Canvas coords are stable across mid-stroke
+        // layer growth (Storage Frame Rule).
+        let write_bbox_x = write_x0.floor() as i32;
+        let write_bbox_y = write_y0.floor() as i32;
+        let write_bbox_w = (write_x1.ceil() as i32 - write_bbox_x) as u32;
+        let write_bbox_h = (write_y1.ceil() as i32 - write_bbox_y) as u32;
         self.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            copy_canvas_x,
-            copy_canvas_y,
-            copy_w,
-            copy_h,
+            write_bbox_x,
+            write_bbox_y,
+            write_bbox_w,
+            write_bbox_h,
         ));
 
         // The read mirror is filled from the stroke scratch, which is
@@ -440,8 +480,8 @@ impl<'a> BrushGpuContext<'a> {
         Some(DabFootprint {
             layer_offset: [pt_canvas.x0(), pt_canvas.y0()],
             layer_size: [pt_canvas.width, pt_canvas.height],
-            unclipped_origin: [unclipped_x0, unclipped_y0],
-            origin: [x0, y0],
+            unclipped_origin: [unclipped_write_x0, unclipped_write_y0],
+            origin: [write_x0, write_y0],
             size: [quad_w, quad_h],
             copy_canvas_origin: [copy_canvas_x, copy_canvas_y],
             copy_local_origin: [copy_local_x, copy_local_y],
