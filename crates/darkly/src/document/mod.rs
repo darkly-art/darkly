@@ -8,6 +8,8 @@ pub use modifier::{Modifier, ModifierKind, ModifierRegistration, ModifierRegistr
 pub use modifiers::mask::MaskModifier;
 pub use modifiers::selection::{SelectionCpuCache, SelectionModifier};
 
+use std::collections::HashMap;
+
 use slotmap::{SecondaryMap, SlotMap};
 
 use crate::coord::CanvasRect;
@@ -110,14 +112,19 @@ pub struct Document {
     /// toggling whether ops respect the selection.
     pub selection: Option<LayerId>,
 
-    /// Monotonic counters for default display names — "Layer 1", "Layer 2",
-    /// etc. Per-kind so renumbering is independent. They survive deletes
+    /// Monotonic per-base-name counters for default display names. A fresh
+    /// add yields `"{base} 1"`, `"{base} 2"`, … keyed by whatever base label
+    /// the caller passes ([`Self::next_name`]). Counters survive deletes
     /// within a session (the next add doesn't reuse a freed number, just
     /// like Photoshop and Krita), giving stable, readable labels even
     /// after heavy churn.
-    next_raster_number: u32,
-    next_group_number: u32,
-    next_mask_number: u32,
+    ///
+    /// One uniform mechanism across every kind that lays down a layer or
+    /// modifier — raster, group, mask, void (per void-type), and any future
+    /// kind. The base label is the caller's responsibility: hardcoded for
+    /// fixed kinds (`"Layer"`, `"Group"`, `"Mask"`), registry-resolved for
+    /// dynamic ones (the void's display name, e.g. `"Noise"`).
+    name_counters: HashMap<String, u32>,
 }
 
 impl Document {
@@ -138,10 +145,20 @@ impl Document {
             parent: SecondaryMap::new(),
             root,
             selection: None,
-            next_raster_number: 1,
-            next_group_number: 1,
-            next_mask_number: 1,
+            name_counters: HashMap::new(),
         }
+    }
+
+    /// Produce the next default display name for a given base label,
+    /// bumping the per-base counter. `next_name("Layer")` yields
+    /// `"Layer 1"`, then `"Layer 2"`, …; `next_name("Noise")` runs an
+    /// independent sequence. The single chokepoint for default naming
+    /// across every add-* path.
+    fn next_name(&mut self, base: &str) -> String {
+        let counter = self.name_counters.entry(base.to_string()).or_insert(1);
+        let name = format!("{base} {counter}");
+        *counter += 1;
+        name
     }
 
     /// Id of the implicit root group. Replaces the old `ROOT_ID` constant.
@@ -442,8 +459,7 @@ impl Document {
     /// [`Document::resolve_anchor_target`].
     pub fn add_raster_layer(&mut self, anchor: Option<LayerId>) -> LayerId {
         let bounds = CanvasRect::from_xywh(0, 0, self.width, self.height);
-        let name = format!("Layer {}", self.next_raster_number);
-        self.next_raster_number += 1;
+        let name = self.next_name("Layer");
         let id = self.entities.insert_with_key(|key| {
             Entity::Node(LayerNode::Layer(Layer::Raster(RasterLayer::new(
                 key, bounds, name,
@@ -454,11 +470,60 @@ impl Document {
         id
     }
 
+    /// Add a new void (procedural) layer. Carries no pixel buffer — the
+    /// compositor regenerates content each frame from `void_type` + `params`.
+    /// Caller is responsible for ensuring `void_type` is a registered void
+    /// kind and `params` matches its schema; the engine wrapper does that.
+    ///
+    /// `display_label` is the registry's `display_name` for the void type
+    /// (e.g. `"Noise"`) — used as the default layer name so the panel shows
+    /// `"Noise 1"`, `"Noise 2"`, … rather than a generic `"Void N"`. The
+    /// label is the doc's only knowledge of the registry; the registry
+    /// itself lives on the compositor (GPU-coupled) so it can't be
+    /// dereferenced here.
+    pub fn add_void_layer(
+        &mut self,
+        void_type: String,
+        display_label: &str,
+        params: Vec<crate::gpu::params::ParamValue>,
+        anchor: Option<LayerId>,
+    ) -> LayerId {
+        let name = self.next_name(display_label);
+        let id = self.entities.insert_with_key(|key| {
+            Entity::Node(LayerNode::Layer(Layer::Void(VoidLayer::new(
+                key, name, void_type, params,
+            ))))
+        });
+        let target = self.resolve_anchor_target(anchor);
+        self.attach_at_target(id, target);
+        id
+    }
+
+    /// Iterate every void layer in the tree, regardless of visibility. Used
+    /// for GPU sync — same shape as [`Self::all_raster_layers`].
+    pub fn all_void_layers(&self) -> Vec<&VoidLayer> {
+        let mut out = Vec::new();
+        self.collect_void_layers(self.root, &mut out);
+        out
+    }
+
+    fn collect_void_layers<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a VoidLayer>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            match self.find_node(child_id) {
+                Some(LayerNode::Layer(Layer::Void(v))) => out.push(v),
+                Some(LayerNode::Group(_)) => self.collect_void_layers(child_id, out),
+                _ => {}
+            }
+        }
+    }
+
     /// Add a new empty group; positioning follows the same rules as
     /// [`Document::add_raster_layer`].
     pub fn add_group(&mut self, anchor: Option<LayerId>) -> LayerId {
-        let name = format!("Group {}", self.next_group_number);
-        self.next_group_number += 1;
+        let name = self.next_name("Group");
         let id = self
             .entities
             .insert_with_key(|key| Entity::Node(LayerNode::Group(LayerGroup::new(key, name))));
@@ -476,8 +541,7 @@ impl Document {
     /// check [`Document::has_mask`] before adding.
     pub fn add_mask_modifier(&mut self, host_id: LayerId) -> Option<LayerId> {
         let bounds = self.host_default_bounds(host_id)?;
-        let name = format!("Mask {}", self.next_mask_number);
-        self.next_mask_number += 1;
+        let name = self.next_name("Mask");
         let id = self.entities.insert_with_key(|key| {
             Entity::Modifier(Modifier {
                 id: key,
@@ -765,7 +829,11 @@ impl Document {
     fn host_default_bounds(&self, host_id: LayerId) -> Option<CanvasRect> {
         match self.find_node(host_id)? {
             LayerNode::Layer(Layer::Raster(r)) => Some(r.pixels.bounds),
-            LayerNode::Group(_) => Some(CanvasRect::from_xywh(0, 0, self.width, self.height)),
+            // Voids and groups have no pixel buffer — masks on them default
+            // to the full canvas, matching how group masks already behave.
+            LayerNode::Layer(Layer::Void(_)) | LayerNode::Group(_) => {
+                Some(CanvasRect::from_xywh(0, 0, self.width, self.height))
+            }
         }
     }
 }

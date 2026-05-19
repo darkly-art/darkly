@@ -1,6 +1,6 @@
 <script lang="ts">
     let { onpick, onclose }: {
-        onpick: (kind: 'layer' | 'group' | 'veil') => void;
+        onpick: (kind: 'layer' | 'group' | 'veil' | 'void') => void;
         onclose: () => void;
     } = $props();
 
@@ -30,6 +30,10 @@
     <button class="item" role="menuitem" onclick={() => onpick('veil')}>
         <i class="fa-solid fa-wand-magic-sparkles"></i>
         <span>Veil</span>
+    </button>
+    <button class="item" role="menuitem" onclick={() => onpick('void')}>
+        <i class="fa-solid fa-cloud-sun"></i>
+        <span>Void</span>
     </button>
 </div>
 

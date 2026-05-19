@@ -2,12 +2,14 @@
     import { app } from '../../state/app.svelte';
     import NewLayerMenu from './NewLayerMenu.svelte';
     import VeilPickerModal from '../veils/VeilPickerModal.svelte';
+    import VoidPickerModal from '../voids/VoidPickerModal.svelte';
     import { actions } from '../../actions/registry';
 
     let { onupdate }: { onupdate: () => void } = $props();
 
     let menuOpen = $state(false);
     let pickerOpen = $state(false);
+    let voidPickerOpen = $state(false);
 
     function findNode(nodes: any[], id: number): any | null {
         for (const n of nodes) {
@@ -35,11 +37,12 @@
         onupdate();
     }
 
-    function pick(kind: 'layer' | 'group' | 'veil') {
+    function pick(kind: 'layer' | 'group' | 'veil' | 'void') {
         menuOpen = false;
         if (kind === 'layer') addNormalLayer();
         else if (kind === 'group') addGroup();
-        else pickerOpen = true;
+        else if (kind === 'veil') pickerOpen = true;
+        else voidPickerOpen = true;
     }
 
     function hostHasMask(layer: any): boolean {
@@ -60,7 +63,7 @@
     let canAddMask = $derived.by(() => {
         if (!app.handle || app.activeLayerId === null) return false;
         const layer = findNode(app.layerTree, app.activeLayerId);
-        return (layer?.type === 'raster' || layer?.type === 'group')
+        return (layer?.type === 'raster' || layer?.type === 'group' || layer?.type === 'void')
             && !hostHasMask(layer)
             && layer.editable !== false;
     });
@@ -157,6 +160,10 @@
 
 {#if pickerOpen}
     <VeilPickerModal onclose={() => { pickerOpen = false; onupdate(); }} />
+{/if}
+
+{#if voidPickerOpen}
+    <VoidPickerModal onclose={() => { voidPickerOpen = false; onupdate(); }} />
 {/if}
 
 <style>

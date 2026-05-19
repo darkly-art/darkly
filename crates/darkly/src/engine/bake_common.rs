@@ -44,6 +44,20 @@ impl DarklyEngine {
                     }
                 }
             }
+            LayerNode::Layer(Layer::Void(_)) => {
+                // Voids hold no pixel data of their own — the procedural
+                // texture is GPU-regenerable from params, so bake collection
+                // skips the void itself. Modifier pixels (e.g. a mask
+                // attached to the void) still need to participate.
+                let mods = node.modifiers().to_vec();
+                for m_id in mods {
+                    if let Some(m) = self.doc.find_modifier(m_id) {
+                        if m.pixels().is_some() {
+                            out.push(m_id);
+                        }
+                    }
+                }
+            }
             LayerNode::Group(g) => {
                 let mods = g.modifiers.clone();
                 let children = g.children.clone();

@@ -1,7 +1,8 @@
 use super::UndoAction;
 use crate::document::Document;
 use crate::gpu::blend_mode::BlendModeRegistration;
-use crate::layer::{LayerId, LayerNode};
+use crate::gpu::params::ParamValue;
+use crate::layer::{Layer, LayerId, LayerNode};
 use std::collections::{HashMap, HashSet};
 
 /// A layer property value that can be saved and restored.
@@ -15,6 +16,13 @@ pub enum Property {
     Name(String),
     Passthrough(bool),
     Collapsed(bool),
+    /// Full parameter vector of a void layer. Same shape the wire format
+    /// uses; replaces in bulk because a void's params are dependent on its
+    /// `void_type` and only meaningful as a complete schema-aligned vector.
+    /// Coalescing on the `same_kind` discriminant collapses a slider drag
+    /// (multiple `VoidParams` edits in a row) into one undo step, matching
+    /// how opacity behaves.
+    VoidParams(Vec<ParamValue>),
 }
 
 impl Property {
@@ -42,6 +50,11 @@ impl Property {
             Property::Collapsed(v) => {
                 if let LayerNode::Group(g) = node {
                     g.collapsed = *v;
+                }
+            }
+            Property::VoidParams(values) => {
+                if let LayerNode::Layer(Layer::Void(v)) = node {
+                    v.params = values.clone();
                 }
             }
         }

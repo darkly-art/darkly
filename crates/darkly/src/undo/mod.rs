@@ -354,12 +354,7 @@ mod tests {
 
         // Should be exactly 1 undo step, not 4.
         assert!(undo.can_undo());
-        assert_eq!(
-            doc.layer(id).map(|l| match l {
-                Layer::Raster(r) => r.blend.opacity,
-            }),
-            Some(0.3),
-        );
+        assert_eq!(doc.layer(id).map(|l| l.blend().opacity), Some(0.3),);
 
         // Single undo should restore original opacity (1.0), not 0.5.
         undo.undo(&mut doc);

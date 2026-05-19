@@ -7,6 +7,8 @@ fn main() {
 
     generate_registry(&src.join("gpu/veils"), "crate::gpu::veil::VeilRegistration");
 
+    generate_registry(&src.join("gpu/voids"), "crate::gpu::void::VoidRegistration");
+
     generate_registry(&src.join("tools"), "crate::tool::ToolRegistration");
 
     generate_registry(

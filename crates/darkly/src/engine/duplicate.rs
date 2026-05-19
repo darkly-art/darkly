@@ -146,6 +146,46 @@ impl DarklyEngine {
 
                 Some(new_id)
             }
+            LayerNode::Layer(Layer::Void(v)) => {
+                let void_type = v.void_type.clone();
+                let params = v.params.clone();
+                // The duplicated layer's name is overwritten with the
+                // source's `"… copy"` below; the display_label here only
+                // primes the per-type counter so a later fresh-add picks up
+                // a non-colliding number.
+                let display_label = self
+                    .compositor
+                    .void_registry()
+                    .display_name(&void_type)
+                    .to_string();
+                let new_id = self
+                    .doc
+                    .add_void_layer(void_type, &display_label, params, anchor);
+
+                let new_name = if is_root {
+                    format!("{common_name} copy")
+                } else {
+                    common_name
+                };
+                if let Some(LayerNode::Layer(Layer::Void(nv))) = self.doc.find_node_mut(new_id) {
+                    nv.common.name = new_name;
+                    nv.common.visible = common_visible;
+                    nv.common.locked = common_locked;
+                    nv.blend.opacity = blend_opacity;
+                    nv.blend.blend_mode = blend_mode_reg;
+                }
+                // The compositor void cache + texture are allocated lazily by
+                // `sync_compositor_layers` (or directly by `add_void_layer`
+                // on the engine side); duplication doesn't need a manual
+                // `ensure_*` call because there are no pixels to copy — the
+                // procedural output is identical from identical params.
+                self.refresh_blend_uniforms(new_id);
+
+                // Voids can carry mask modifiers like any other host.
+                self.clone_modifiers(source_id, new_id);
+
+                Some(new_id)
+            }
         }
     }
 

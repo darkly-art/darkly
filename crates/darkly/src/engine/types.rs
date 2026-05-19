@@ -30,6 +30,25 @@ pub enum LayerInfo {
         /// Pixel-space bounds of the layer's GPU texture in canvas coords.
         bounds: crate::coord::CanvasRect,
     },
+    /// Void (procedural-content) layer. Carries no pixel buffer — its
+    /// content is generated from `voidType` + `params` each frame.
+    #[serde(rename_all = "camelCase")]
+    Void {
+        id: f64,
+        name: String,
+        visible: bool,
+        locked: bool,
+        editable: bool,
+        opacity: f32,
+        blend_mode: &'static str,
+        modifiers: Vec<ModifierInfo>,
+        /// Stable `type_id` from the void registry — UI resolves to a
+        /// display label via `void_types()`.
+        void_type: String,
+        /// Param schema + current values, in the order the void's
+        /// `ParamDef` slice declares them. Same shape the veil panel uses.
+        params: Vec<ParamInfo>,
+    },
     #[serde(rename_all = "camelCase")]
     Group {
         id: f64,
@@ -304,6 +323,7 @@ pub struct ClipboardExport {
 
 pub(crate) fn node_to_layer_info(
     doc: &crate::document::Document,
+    void_registry: &crate::gpu::void::VoidRegistry,
     node_id: crate::layer::LayerId,
 ) -> Option<LayerInfo> {
     use crate::layer::{Layer, LayerNode};
@@ -326,6 +346,30 @@ pub(crate) fn node_to_layer_info(
                     .collect(),
                 bounds: r.pixels.bounds,
             },
+            Layer::Void(v) => {
+                let param_defs = void_registry.param_defs(&v.void_type);
+                let params = param_defs
+                    .iter()
+                    .enumerate()
+                    .map(|(j, def)| ParamInfo::from_def(def, v.params.get(j)))
+                    .collect();
+                LayerInfo::Void {
+                    id: v.id.to_ffi() as f64,
+                    name: v.common.name.clone(),
+                    visible: v.common.visible,
+                    locked: v.common.locked,
+                    editable,
+                    opacity: v.blend.opacity,
+                    blend_mode: v.blend.blend_mode.type_id,
+                    modifiers: v
+                        .modifiers
+                        .iter()
+                        .filter_map(|mid| doc.find_modifier(*mid).map(|m| modifier_to_info(doc, m)))
+                        .collect(),
+                    void_type: v.void_type.clone(),
+                    params,
+                }
+            }
         },
         LayerNode::Group(g) => LayerInfo::Group {
             id: g.id.to_ffi() as f64,
@@ -346,7 +390,7 @@ pub(crate) fn node_to_layer_info(
                 .children
                 .iter()
                 .rev()
-                .filter_map(|cid| node_to_layer_info(doc, *cid))
+                .filter_map(|cid| node_to_layer_info(doc, void_registry, *cid))
                 .collect(),
         },
     };

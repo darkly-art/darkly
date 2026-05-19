@@ -1,5 +1,6 @@
 use crate::coord::CanvasRect;
 use crate::gpu::blend_mode::{self, BlendModeRegistration};
+use crate::gpu::params::ParamValue;
 
 slotmap::new_key_type! {
     /// Unique identifier for any node, group, or modifier in a [`Document`].
@@ -127,6 +128,42 @@ impl RasterLayer {
     }
 }
 
+/// A void (procedural) layer. Generates its pixels from a GPU shader instead
+/// of storing them — see [`crate::gpu::void::Void`] for the trait + registry,
+/// and the README's "Voids" section for the user-facing concept.
+///
+/// Void state is exactly: a [`crate::gpu::void::VoidRegistration::type_id`]
+/// string identifying which procedural kind to run, plus the parameter
+/// values for that kind. There is no pixel buffer — the compositor allocates
+/// a derived texture on demand and re-renders it from these inputs.
+pub struct VoidLayer {
+    pub id: LayerId,
+    pub common: NodeCommon,
+    pub blend: BlendProps,
+    /// Which void type from [`crate::gpu::void::VoidRegistry`] this layer
+    /// runs. Stable string id (e.g. `"noise"`), not a registration pointer:
+    /// the registry is a process-global and the document must survive
+    /// serialization without holding live pointers.
+    pub void_type: String,
+    /// Parameter values matching the void type's
+    /// [`crate::gpu::void::ParamDef`] schema, in order.
+    pub params: Vec<ParamValue>,
+    pub modifiers: Vec<LayerId>,
+}
+
+impl VoidLayer {
+    pub fn new(id: LayerId, name: String, void_type: String, params: Vec<ParamValue>) -> Self {
+        VoidLayer {
+            id,
+            common: NodeCommon::new(name),
+            blend: BlendProps::new(),
+            void_type,
+            params,
+            modifiers: Vec::new(),
+        }
+    }
+}
+
 pub struct LayerGroup {
     pub id: LayerId,
     pub common: NodeCommon,
@@ -222,6 +259,7 @@ impl LayerNode {
     pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
             LayerNode::Layer(Layer::Raster(r)) => Some(&r.pixels),
+            LayerNode::Layer(Layer::Void(_)) => None,
             LayerNode::Group(_) => None,
         }
     }
@@ -229,6 +267,7 @@ impl LayerNode {
     pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
             LayerNode::Layer(Layer::Raster(r)) => Some(&mut r.pixels),
+            LayerNode::Layer(Layer::Void(_)) => None,
             LayerNode::Group(_) => None,
         }
     }
@@ -248,9 +287,10 @@ impl LayerNode {
     /// keep in sync with the registration files.
     pub fn kind(&self) -> &'static crate::document::LayerKindRegistration {
         use crate::document::layer_kind::registry;
-        use crate::document::layer_kinds::{group, raster};
+        use crate::document::layer_kinds::{group, raster, void};
         match self {
             LayerNode::Layer(Layer::Raster(_)) => registry().get(raster::TYPE_ID).unwrap(),
+            LayerNode::Layer(Layer::Void(_)) => registry().get(void::TYPE_ID).unwrap(),
             LayerNode::Group(_) => registry().get(group::TYPE_ID).unwrap(),
         }
     }
@@ -264,60 +304,72 @@ impl LayerNode {
 
 pub enum Layer {
     Raster(RasterLayer),
+    Void(VoidLayer),
 }
 
 impl Layer {
     pub fn id(&self) -> LayerId {
         match self {
             Layer::Raster(r) => r.id,
+            Layer::Void(v) => v.id,
         }
     }
 
     pub fn common(&self) -> &NodeCommon {
         match self {
             Layer::Raster(r) => &r.common,
+            Layer::Void(v) => &v.common,
         }
     }
 
     pub fn common_mut(&mut self) -> &mut NodeCommon {
         match self {
             Layer::Raster(r) => &mut r.common,
+            Layer::Void(v) => &mut v.common,
         }
     }
 
     pub fn blend(&self) -> &BlendProps {
         match self {
             Layer::Raster(r) => &r.blend,
+            Layer::Void(v) => &v.blend,
         }
     }
 
     pub fn blend_mut(&mut self) -> &mut BlendProps {
         match self {
             Layer::Raster(r) => &mut r.blend,
+            Layer::Void(v) => &mut v.blend,
         }
     }
 
     pub fn modifiers(&self) -> &[LayerId] {
         match self {
             Layer::Raster(r) => &r.modifiers,
+            Layer::Void(v) => &v.modifiers,
         }
     }
 
     pub fn modifiers_mut(&mut self) -> &mut Vec<LayerId> {
         match self {
             Layer::Raster(r) => &mut r.modifiers,
+            Layer::Void(v) => &mut v.modifiers,
         }
     }
 
-    pub fn pixels(&self) -> &PixelBuffer {
+    /// Pixel buffer for this layer, if any. Void layers have no pixels —
+    /// their content is regenerated from `params` each frame.
+    pub fn pixels(&self) -> Option<&PixelBuffer> {
         match self {
-            Layer::Raster(r) => &r.pixels,
+            Layer::Raster(r) => Some(&r.pixels),
+            Layer::Void(_) => None,
         }
     }
 
-    pub fn pixels_mut(&mut self) -> &mut PixelBuffer {
+    pub fn pixels_mut(&mut self) -> Option<&mut PixelBuffer> {
         match self {
-            Layer::Raster(r) => &mut r.pixels,
+            Layer::Raster(r) => Some(&mut r.pixels),
+            Layer::Void(_) => None,
         }
     }
 

@@ -1058,6 +1058,39 @@ impl DarklyHandle {
         self.engine.borrow_mut().add_group(anchor).to_ffi() as f64
     }
 
+    /// Add a void layer. Returns the new layer id, or -1 if `void_type` is
+    /// not a registered void kind. `params` is a JS object of
+    /// `{ name: value, ... }` matching the void type's `ParamDef` schema —
+    /// same marshalling pattern as `add_veil`.
+    pub fn add_void_layer(&self, void_type: &str, params: JsValue, anchor_id: f64) -> f64 {
+        self.flush_if_needed();
+        let anchor = (anchor_id >= 0.0).then(|| LayerId::from_ffi(anchor_id as u64));
+        let mut e = self.engine.borrow_mut();
+        let defs = e.void_param_defs(void_type);
+        let pv = js_to_param_values(&params, defs);
+        match e.add_void_layer(void_type, pv, anchor) {
+            Some(id) => id.to_ffi() as f64,
+            None => -1.0,
+        }
+    }
+
+    /// Replace the parameter values on a void layer. `params` is a JS object
+    /// of `{ name: value, ... }` matching the layer's current `voidType`'s
+    /// schema. Coalesces with prior `VoidParams` undo entries so a slider
+    /// drag is one step.
+    pub fn update_void_params(&self, layer_id: f64, params: JsValue) {
+        self.flush_if_needed();
+        let id = LayerId::from_ffi(layer_id as u64);
+        let mut e = self.engine.borrow_mut();
+        let type_id = match e.void_layer_type(id) {
+            Some(t) => t,
+            None => return,
+        };
+        let defs = e.void_param_defs(&type_id);
+        let pv = js_to_param_values(&params, defs);
+        e.update_void_params(id, pv);
+    }
+
     pub fn remove_layer(&self, layer_id: f64) -> Result<(), JsError> {
         self.flush_if_needed();
         self.engine
@@ -1825,6 +1858,14 @@ impl DarklyHandle {
     pub fn veil_types(&self) -> String {
         self.flush_if_needed();
         serde_json::to_string(&self.engine.borrow().veil_types()).unwrap_or_else(|_| "[]".into())
+    }
+
+    /// Return registered void types as JSON. Same shape as `veil_types()` —
+    /// `[{ type, displayName, params }, ...]` — so the void picker can reuse
+    /// the veil-picker modal logic.
+    pub fn void_types(&self) -> String {
+        self.flush_if_needed();
+        serde_json::to_string(&self.engine.borrow().void_types()).unwrap_or_else(|_| "[]".into())
     }
 
     /// Return registered tool types as JSON: `[{ type, displayName, params }, ...]`.

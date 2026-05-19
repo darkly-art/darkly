@@ -4,6 +4,7 @@
 
 pub mod group;
 pub mod raster;
+pub mod void;
 
 use crate::document::layer_kind::LayerKindRegistration;
 
@@ -12,5 +13,6 @@ pub fn registrations() -> Vec<LayerKindRegistration> {
     vec![
         group::register(),
         raster::register(),
+        void::register(),
     ]
 }

@@ -3,9 +3,12 @@ use crate::document::Document;
 use crate::gpu::atlas::LayerTexture;
 use crate::gpu::blend::BlendPipelines;
 use crate::gpu::content_bounds::ContentBoundsPass;
+use crate::gpu::effect::EffectCache;
 use crate::gpu::overlay::{OverlayPrimitive, ToolOverlay};
+use crate::gpu::params::ParamValue;
 use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
+use crate::gpu::void::{Void, VoidRegistry};
 use crate::layer::{Layer, LayerId, LayerNode};
 use std::collections::{HashMap, HashSet};
 
@@ -83,6 +86,36 @@ struct GroupState {
     /// Uniform buffer holding opacity, blend_mode, isolated for blending
     /// this group's result into its parent.
     uniform_buf: wgpu::Buffer,
+}
+
+/// Pre-built GPU objects for a void layer.
+///
+/// A void carries no stored pixels — its texture is GPU-regenerable from
+/// `(void_type, params)`. The compositor renders that texture into the
+/// existing `node_textures` pool on demand and then blends it through the
+/// same pipeline raster layers use, so blend modes / masks / opacity all
+/// work for voids without any per-kind branching at composite time.
+///
+/// `dirty` is the regenerate gate: flipped true when the void is first
+/// allocated, when params change, or when an animated tick writes a fresh
+/// time uniform. The render path clears it after re-rendering once.
+struct VoidLayerCache {
+    /// The procedural-content trait object. Owned here (one per layer)
+    /// because animation mutates its `time` field.
+    void: Box<dyn Void>,
+    /// Per-instance GPU resources for the void's own pipeline (uniform
+    /// buffer + bind groups built off the registry's shared pipeline).
+    cache: EffectCache,
+    /// Uniform buffer for compositing this void's output through the
+    /// standard raster blend pipeline. Same shape as
+    /// [`RasterLayerCache::uniform_buf`].
+    blend_uniform_buf: wgpu::Buffer,
+    opacity: f32,
+    blend_mode: u32,
+    isolated: bool,
+    /// True when the procedural texture is stale and needs to be re-rendered
+    /// before the next blend. Cleared by `encode_void_to_texture`.
+    dirty: bool,
 }
 
 /// Pre-built GPU objects for a raster layer.
@@ -205,6 +238,15 @@ pub struct Compositor {
     padded_height: u32,
 
     veil_chain: VeilChain,
+
+    /// Lazily-pipeline-cached registry of every void type built into the
+    /// binary. Engine queries this for `void_types()` and `add_void_layer`
+    /// goes through it to build the per-instance trait object.
+    void_registry: VoidRegistry,
+    /// Per-void-layer GPU state. Keyed by the document's
+    /// [`LayerId`] — voids live in the regular layer tree, so the same id
+    /// space resolves both the document-side `VoidLayer` and the GPU cache.
+    void_layers: HashMap<LayerId, VoidLayerCache>,
 
     // --- Floating Content Transform ---
     transform_pass: crate::gpu::transform::TransformPass,
@@ -617,6 +659,8 @@ impl Compositor {
             padded_width: padded_w,
             padded_height: padded_h,
             veil_chain,
+            void_registry: VoidRegistry::new(),
+            void_layers: HashMap::new(),
             transform_pass,
             isolated_node: None,
             selection_state: None,
@@ -1221,6 +1265,220 @@ impl Compositor {
     /// detached".
     pub fn dispose_layer(&mut self, layer_id: LayerId) {
         self.dispose_node_texture(layer_id);
+        // A void layer carries an extra per-instance trait object + cache
+        // outside the `raster_cache`/`node_textures` pools; drop it alongside.
+        self.void_layers.remove(&layer_id);
+    }
+
+    /// Read-only access to the void registry — lets the engine answer
+    /// `void_types()` / `void_param_defs()` queries without exposing a
+    /// mutable handle.
+    pub fn void_registry(&self) -> &VoidRegistry {
+        &self.void_registry
+    }
+
+    /// Mutable access to the void registry. Engine callers go through this
+    /// to instantiate a void (the registry lazy-caches the per-type
+    /// pipeline, so creation needs `&mut`).
+    pub fn void_registry_mut(&mut self) -> &mut VoidRegistry {
+        &mut self.void_registry
+    }
+
+    /// Allocate the per-instance GPU state for a new void layer:
+    /// procedural texture in [`Self::node_textures`], blend uniforms, and the
+    /// trait object + cache in [`Self::void_layers`]. Idempotent — calling
+    /// twice for the same id is a no-op.
+    ///
+    /// The procedural texture is full-canvas-sized [`wgpu::TextureFormat::Rgba8Unorm`],
+    /// matching the raster path so the compositor's blend pipeline can
+    /// sample it without any kind-specific branch.
+    pub fn ensure_void_layer(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        void_type: &str,
+        params: &[ParamValue],
+    ) {
+        if self.void_layers.contains_key(&layer_id) {
+            return;
+        }
+        // Canvas-sized texture so the procedural output composites against
+        // the same coordinate system as raster layers.
+        let bounds = CanvasRect::from_xywh(0, 0, self.canvas_width, self.canvas_height);
+        let layer_tex = LayerTexture::with_bounds(device, bounds);
+
+        // Build the per-instance trait object via the registry. The registry
+        // lazy-builds the shared pipeline on the first call for a given type.
+        let format = layer_tex.format();
+        let void = self
+            .void_registry
+            .create_void(void_type, params, device, format);
+        let cache = void.create_cache(
+            device,
+            queue,
+            layer_tex.view(),
+            &self.sampler,
+            self.canvas_width,
+            self.canvas_height,
+        );
+
+        // Blend uniforms for compositing the void's texture through the
+        // standard raster blend pipeline. Same layout as `BlendUniforms`
+        // for raster layers; the shader doesn't care which kind sourced it.
+        let normal = crate::gpu::blend_mode::registry().default().gpu_value;
+        let uniforms = BlendUniforms {
+            opacity: 1.0,
+            blend_mode: normal,
+            isolated: 0,
+            _pad1: 0.0,
+            layer_offset: [bounds.origin.x as f32, bounds.origin.y as f32],
+            layer_size: [bounds.width as f32, bounds.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            _pad2: [0.0, 0.0],
+        };
+        let blend_uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(&format!("void-blend-uniforms-{layer_id:?}")),
+            size: std::mem::size_of::<BlendUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&blend_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+
+        self.node_textures.insert(layer_id, layer_tex);
+        self.void_layers.insert(
+            layer_id,
+            VoidLayerCache {
+                void,
+                cache,
+                blend_uniform_buf,
+                opacity: 1.0,
+                blend_mode: normal,
+                isolated: false,
+                dirty: true,
+            },
+        );
+        self.mark_dirty();
+    }
+
+    /// Replace a void's procedural inputs. Builds a fresh trait object +
+    /// cache from the new params and marks the texture dirty so the next
+    /// frame re-renders. The blend uniforms (opacity/mode/etc.) are
+    /// untouched — only the procedural side changes.
+    pub fn update_void_layer_params(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        void_type: &str,
+        params: &[ParamValue],
+    ) {
+        if !self.void_layers.contains_key(&layer_id) {
+            return;
+        }
+        let tex_view = match self.node_textures.get(&layer_id) {
+            Some(t) => t.view().clone(),
+            None => return,
+        };
+        let format = self.node_textures[&layer_id].format();
+        let void = self
+            .void_registry
+            .create_void(void_type, params, device, format);
+        let cache = void.create_cache(
+            device,
+            queue,
+            &tex_view,
+            &self.sampler,
+            self.canvas_width,
+            self.canvas_height,
+        );
+        let entry = self.void_layers.get_mut(&layer_id).unwrap();
+        entry.void = void;
+        entry.cache = cache;
+        entry.dirty = true;
+        self.mark_dirty();
+    }
+
+    /// Update a void's blend uniforms. Mirrors
+    /// [`Self::update_raster_uniforms_full`] — same `BlendUniforms` layout,
+    /// same shader path.
+    pub fn update_void_uniforms_full(
+        &mut self,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        opacity: f32,
+        blend_mode_gpu: u32,
+        isolated: bool,
+    ) {
+        let canvas_extent = match self.node_textures.get(&layer_id) {
+            Some(t) => t.canvas_extent(),
+            None => return,
+        };
+        let uniforms = BlendUniforms {
+            opacity,
+            blend_mode: blend_mode_gpu,
+            isolated: isolated as u32,
+            _pad1: 0.0,
+            layer_offset: [canvas_extent.x0() as f32, canvas_extent.y0() as f32],
+            layer_size: [canvas_extent.width as f32, canvas_extent.height as f32],
+            canvas_size: [self.canvas_width as f32, self.canvas_height as f32],
+            _pad2: [0.0, 0.0],
+        };
+        let entry = match self.void_layers.get_mut(&layer_id) {
+            Some(e) => e,
+            None => return,
+        };
+        queue.write_buffer(&entry.blend_uniform_buf, 0, bytemuck::bytes_of(&uniforms));
+        entry.opacity = opacity;
+        entry.blend_mode = blend_mode_gpu;
+        entry.isolated = isolated;
+    }
+
+    /// True when any allocated void reports `needs_animation()`. Folded into
+    /// the compositor's overall `needs_animation()` so the rAF loop keeps
+    /// ticking while animated voids exist.
+    fn any_void_needs_animation(&self) -> bool {
+        self.void_layers.values().any(|v| v.void.needs_animation())
+    }
+
+    /// Advance every animated void by `dt`. Called by `update_animations`
+    /// at the cadence set by `animation.void_divisor`. Each animated void
+    /// writes a fresh time uniform and flags its texture dirty so the next
+    /// frame re-renders it through `encode_dirty_void_textures`.
+    fn tick_voids(&mut self, queue: &wgpu::Queue, dt: f32) {
+        for entry in self.void_layers.values_mut() {
+            if entry.void.needs_animation() {
+                entry.void.update_time(queue, &entry.cache, dt);
+                entry.dirty = true;
+            }
+        }
+    }
+
+    /// Re-render every dirty void's procedural texture. Runs at the top of
+    /// the compositor's encode pass so the subsequent blend in
+    /// `compose_children` samples up-to-date pixels.
+    fn encode_dirty_void_textures(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        // Two-phase: collect ids of dirty voids, then drop the mutable
+        // borrow and re-acquire per-entry. Keeps the loop body short and
+        // avoids borrowing `self.void_layers` and `self.node_textures` at
+        // the same time.
+        let dirty: Vec<LayerId> = self
+            .void_layers
+            .iter()
+            .filter_map(|(id, e)| if e.dirty { Some(*id) } else { None })
+            .collect();
+        for id in dirty {
+            let dst_view = match self.node_textures.get(&id) {
+                Some(t) => t.view(),
+                None => continue,
+            };
+            let entry = match self.void_layers.get_mut(&id) {
+                Some(e) => e,
+                None => continue,
+            };
+            entry.void.encode(encoder, &entry.cache, dst_view);
+            entry.dirty = false;
+        }
     }
 
     /// Total number of node textures (raster layers + mask modifiers)
@@ -1263,6 +1521,7 @@ impl Compositor {
 
         let veil_divisor = crate::config::get_i64("animation.veil_divisor") as u64;
         let overlay_divisor = crate::config::get_i64("animation.overlay_divisor") as u64;
+        let void_divisor = crate::config::get_i64("animation.void_divisor") as u64;
 
         let veil_fires = veil_divisor > 0
             && self.veil_chain.needs_animation()
@@ -1271,6 +1530,15 @@ impl Compositor {
         let overlay_fires = overlay_divisor > 0
             && self.tool_overlay.needs_animation()
             && self.frame_count.is_multiple_of(overlay_divisor);
+
+        // Voids piggyback on the same master clock as veils and the tool
+        // overlay — using a parallel integer divisor keeps tick alignment so
+        // an animated void never forces a frame the other systems wouldn't
+        // already produce, matching the `gpu-lessons-learned.md` master-
+        // clock principle.
+        let void_fires = void_divisor > 0
+            && self.any_void_needs_animation()
+            && self.frame_count.is_multiple_of(void_divisor);
 
         if veil_fires {
             self.veil_chain
@@ -1281,14 +1549,24 @@ impl Compositor {
             self.tool_overlay.advance_time(dt * overlay_divisor as f32);
         }
 
+        if void_fires {
+            self.tick_voids(queue, dt * void_divisor as f32);
+            // Re-render needed: voids are document-side content, so they
+            // require a full composite, not just a re-present.
+            self.needs_composite = true;
+        }
+
         if veil_fires || overlay_fires {
             self.needs_present = true;
         }
     }
 
-    /// Returns true if any animations need continuous frames (veils or overlay).
+    /// Returns true if any animations need continuous frames (veils, overlay,
+    /// or any animated void layer).
     pub fn needs_animation(&self) -> bool {
-        self.tool_overlay.needs_animation() || self.veil_chain.needs_animation()
+        self.tool_overlay.needs_animation()
+            || self.veil_chain.needs_animation()
+            || self.any_void_needs_animation()
     }
 
     /// Update the view transform uniform buffer. The compositor owns the
@@ -2091,6 +2369,10 @@ impl Compositor {
             label: Some("composite"),
         });
 
+        // Regenerate any dirty void textures before the tree walk so the
+        // downstream blend pass samples up-to-date pixels.
+        self.encode_dirty_void_textures(&mut encoder);
+
         let root_id = self.root_id;
         self.compose_group(&mut encoder, device, doc, root_id, scissor);
 
@@ -2380,6 +2662,59 @@ impl Compositor {
                     // above — no separate render pass needed. The host's
                     // regular blend renders the preview when this raster
                     // (or its mask) is the floating target.
+                }
+
+                LayerNode::Layer(Layer::Void(void)) => {
+                    // Voids reuse the raster blend path entirely — their
+                    // procedural texture lives in `node_textures` keyed by
+                    // layer id (allocated by `ensure_void_layer` and refreshed
+                    // by `encode_dirty_void_textures` before the tree walk),
+                    // and their blend uniforms are the same `BlendUniforms`
+                    // shape every raster uses.
+                    let layer_view = match self.node_textures.get(&void.id) {
+                        Some(t) => t.view(),
+                        None => continue,
+                    };
+                    let uniform_buf_ptr = match self.void_layers.get(&void.id) {
+                        Some(c) => &c.blend_uniform_buf,
+                        None => continue,
+                    };
+
+                    let gs = self.group_state.get_mut(&parent_group).unwrap();
+                    let src = gs.current_accum;
+                    let dst = 1 - src;
+                    gs.current_accum = dst;
+
+                    let bind_group = self.create_blend_bind_group(
+                        device,
+                        &self.group_state[&parent_group].accum.views[src],
+                        layer_view,
+                        uniform_buf_ptr,
+                        "blend-void",
+                    );
+
+                    {
+                        let gs = &self.group_state[&parent_group];
+                        let mask_bg = self.effective_mask_bind_group(doc, void.id);
+                        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("blend-void"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: &gs.accum.views[dst],
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            ..Default::default()
+                        });
+                        rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
+                        rpass.set_pipeline(self.blend_pipelines.pipeline());
+                        rpass.set_bind_group(0, &bind_group, &[]);
+                        rpass.set_bind_group(1, mask_bg, &[]);
+                        rpass.draw(0..3, 0..1);
+                    }
                 }
 
                 LayerNode::Group(g) => {

@@ -3112,6 +3112,7 @@ fn layer_node_tree_admits_only_layer_and_group_variants() {
         // §1 invariant: modifiers are NOT LayerNodes.
         match node {
             LayerNode::Layer(Layer::Raster(_)) => {}
+            LayerNode::Layer(Layer::Void(_)) => {}
             LayerNode::Group(_) => {}
         }
     }

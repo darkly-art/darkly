@@ -22,6 +22,17 @@ const PREFS: &[Pref] = &[
         default: PrefDefault::Int(4),
         widget: WidgetHint::Auto,
     },
+    Pref {
+        key: "animation.void_divisor",
+        display_name: "Void animation divisor",
+        description: Some(
+            "How often animated void layers re-render, as a fraction of the master frame rate. \
+             Voids piggyback on the same clock as veils so ticks line up.",
+        ),
+        kind: PrefKind::Int { min: 1, max: 16 },
+        default: PrefDefault::Int(2),
+        widget: WidgetHint::Auto,
+    },
 ];
 
 pub fn register() -> SchemaSection {

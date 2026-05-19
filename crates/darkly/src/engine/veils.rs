@@ -101,7 +101,7 @@ impl DarklyEngine {
             .children_of(self.doc.root_id())
             .iter()
             .rev()
-            .filter_map(|id| node_to_layer_info(&self.doc, *id))
+            .filter_map(|id| node_to_layer_info(&self.doc, self.compositor.void_registry(), *id))
             .collect()
     }
 
@@ -147,6 +147,41 @@ impl DarklyEngine {
     /// Get the parameter definitions for a veil type.
     pub fn veil_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
         self.compositor.veil_chain().registry().param_defs(type_id)
+    }
+
+    /// Return all registered void types with their parameter definitions.
+    /// Same shape as `veil_types()` — the UI consumes both through the
+    /// shared `VeilTypeInfo` struct (renamed `VoidTypeInfo` would just be a
+    /// type alias; reusing the existing one keeps the JSON identical and
+    /// the frontend's render code generic).
+    pub fn void_types(&self) -> Vec<VeilTypeInfo> {
+        self.compositor
+            .void_registry()
+            .types()
+            .into_iter()
+            .map(|(type_id, display_name, defs)| VeilTypeInfo {
+                type_id,
+                display_name,
+                params: defs.iter().map(|d| ParamInfo::from_def(d, None)).collect(),
+            })
+            .collect()
+    }
+
+    /// Get the parameter definitions for a void type.
+    pub fn void_param_defs(&self, type_id: &str) -> &'static [ParamDef] {
+        self.compositor.void_registry().param_defs(type_id)
+    }
+
+    /// Resolve a layer id to its void type, if the layer is a void.
+    /// Helper for the WASM bridge so callers don't need to import the layer
+    /// enum to query the active void's schema.
+    pub fn void_layer_type(&self, layer_id: crate::layer::LayerId) -> Option<String> {
+        match self.doc.find_node(layer_id)? {
+            crate::layer::LayerNode::Layer(crate::layer::Layer::Void(v)) => {
+                Some(v.void_type.clone())
+            }
+            _ => None,
+        }
     }
 
     /// Return all registered tool types with display name and parameter definitions.

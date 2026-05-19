@@ -38,6 +38,79 @@ impl DarklyEngine {
         id
     }
 
+    /// Add a new void (procedural) layer. `params` is matched against the
+    /// void type's `ParamDef` schema by index — callers that don't have a
+    /// hand-rolled slice should use the type's defaults via
+    /// `void_param_defs(type).iter().map(ParamDef::default_value)`.
+    ///
+    /// Returns `None` if `void_type` is not a registered void kind. (We
+    /// surface this rather than silently fall back, matching how
+    /// `set_blend_mode` rejects unknown blend ids.)
+    pub fn add_void_layer(
+        &mut self,
+        void_type: &str,
+        params: Vec<crate::gpu::params::ParamValue>,
+        anchor: Option<LayerId>,
+    ) -> Option<LayerId> {
+        if !self.compositor.void_registry().has(void_type) {
+            return None;
+        }
+        // Default-name the layer after the void's display label so the
+        // panel reads "Noise 1" / "Noise 2" rather than a generic "Void N".
+        let display_label = self.compositor.void_registry().display_name(void_type);
+        let id =
+            self.doc
+                .add_void_layer(void_type.to_string(), display_label, params.clone(), anchor);
+        self.compositor.ensure_void_layer(
+            &self.gpu.device,
+            &self.gpu.queue,
+            id,
+            void_type,
+            &params,
+        );
+        self.compositor.mark_dirty();
+
+        let parent = self.doc.parent_of(id);
+        let pos = self.doc.position_in_parent(id).unwrap_or(0);
+        self.push_undo(Box::new(LayerAddAction::new(id, parent, pos)));
+
+        Some(id)
+    }
+
+    /// Replace a void layer's parameter values. Coalesces with prior
+    /// `VoidParams` edits on the same layer so a slider drag is one undo
+    /// step, mirroring how `set_opacity` already behaves.
+    pub fn update_void_params(
+        &mut self,
+        layer_id: LayerId,
+        new_params: Vec<crate::gpu::params::ParamValue>,
+    ) {
+        if !self.doc.is_node_editable(layer_id) {
+            return;
+        }
+        let (old_params, void_type) = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Void(v))) => (v.params.clone(), v.void_type.clone()),
+            _ => return,
+        };
+        if let Some(LayerNode::Layer(Layer::Void(v))) = self.doc.find_node_mut(layer_id) {
+            v.params = new_params.clone();
+        }
+        self.compositor.update_void_layer_params(
+            &self.gpu.device,
+            &self.gpu.queue,
+            layer_id,
+            &void_type,
+            &new_params,
+        );
+        self.compositor.mark_dirty();
+
+        self.coalesce_property_undo(PropertyAction::new(
+            layer_id,
+            Property::VoidParams(old_params),
+            Property::VoidParams(new_params),
+        ));
+    }
+
     pub fn has_layer(&self, layer_id: LayerId) -> bool {
         // "Has" means linked into the tree — not just sitting orphaned in the
         // document's slotmap waiting on an undo reattach. Detached-for-undo
@@ -51,6 +124,9 @@ impl DarklyEngine {
     pub fn layer_bounds(&self, layer_id: LayerId) -> Option<crate::coord::CanvasRect> {
         match self.doc.layer(layer_id)? {
             Layer::Raster(r) => Some(r.pixels.bounds),
+            // Voids store no pixels — their "bounds" concept is the canvas
+            // itself, which callers can ask for directly via `canvas_dimensions`.
+            Layer::Void(_) => None,
         }
     }
 
@@ -345,6 +421,18 @@ impl DarklyEngine {
                     layer_id,
                     r.blend.opacity,
                     r.blend.blend_mode.gpu_value,
+                );
+            }
+            Some(LayerNode::Layer(Layer::Void(v))) => {
+                let opacity = v.blend.opacity;
+                let blend_mode_gpu = v.blend.blend_mode.gpu_value;
+                let isolated = self.host_renders_isolated(layer_id);
+                self.compositor.update_void_uniforms_full(
+                    &self.gpu.queue,
+                    layer_id,
+                    opacity,
+                    blend_mode_gpu,
+                    isolated,
                 );
             }
             Some(LayerNode::Group(g)) => {
