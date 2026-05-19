@@ -1,5 +1,8 @@
 import { actions } from './registry';
 import { config } from '../config/store.svelte';
+import { buildChordIndex, resolveChord, type ChordEntry } from './hotkey_resolve';
+import { app } from '../state/app.svelte';
+import { toolRegistry } from '../tools/registry';
 
 /** Derive a canonical chord from a MouseEvent's modifier state.
  *  Format: sorted modifiers joined with '+', then the interaction type.
@@ -72,27 +75,29 @@ export function effectiveMouseClick(actionId: string): string {
 }
 
 /**
- * `(site, chord) -> actionId` lookup table built from the action registry +
+ * `chord → ordered ChordEntry[]` lookup table built from the action registry +
  * any `mouseclicks.<id>` overrides in config. Rebuilt via `rebuildClickIndex`
  * at startup and on every config change.
  *
  * The index covers both click chords (`click`, `alt+doubleClick`, …) and
  * drag chords (`drag`, `shift+drag`, `alt+rightDrag`, …). The chord vocabularies
  * are non-overlapping so a single map is sufficient.
+ *
+ * Resolution: at dispatch time, `resolveChord` filters entries by the click
+ * site (passed by the caller) and the active tool's group, picking the most
+ * specific match. See `hotkey_resolve.ts` for the binding-string grammar.
  */
-let clickIndex: Map<string, string> = new Map();
+let clickIndex: Map<string, ChordEntry[]> = new Map();
 
 export function rebuildClickIndex() {
-    const next = new Map<string, string>();
-    for (const action of actions.all()) {
-        for (const trigger of effectiveMouseClicks(action.id)) {
-            // Last-wins on conflicts; the Settings UI's hotkey tab will surface
-            // these as warnings via the same conflict-detection pattern keyboard
-            // hotkeys use.
-            next.set(trigger, action.id);
-        }
-    }
-    clickIndex = next;
+    clickIndex = buildChordIndex(
+        actions.all().map(a => ({ actionId: a.id, bindings: effectiveMouseClicks(a.id) })),
+    );
+}
+
+/** Active tool's `group` (e.g. `"paint"`, `"select"`), or `null` if no tool. */
+function activeToolGroup(): string | null {
+    return toolRegistry.get(app.activeToolId)?.group ?? null;
 }
 
 /** Look up a click on `(site, e)` and dispatch the bound action if any.
@@ -104,9 +109,11 @@ export function dispatchClick(
 ): boolean {
     const chord = chordName(e);
     if (chord === 'click') return false; // plain click = component default
-    const actionId = clickIndex.get(`${site}:${chord}`);
-    if (!actionId) return false;
-    actions.dispatch(actionId, ctx);
+    const entries = clickIndex.get(chord);
+    if (!entries) return false;
+    const resolved = resolveChord(entries, [{ name: site }], activeToolGroup());
+    if (!resolved) return false;
+    actions.dispatch(resolved.entry.actionId, ctx);
     return true;
 }
 
@@ -127,8 +134,11 @@ export function dispatchDrag(
     ctx: Record<string, any>,
 ): boolean {
     const chord = dragChord(e);
-    const actionId = clickIndex.get(`${site}:${chord}`);
-    if (!actionId) return false;
+    const entries = clickIndex.get(chord);
+    if (!entries) return false;
+    const resolved = resolveChord(entries, [{ name: site }], activeToolGroup());
+    if (!resolved) return false;
+    const actionId = resolved.entry.actionId;
 
     const target = e.currentTarget as Element | null;
     target?.setPointerCapture?.(e.pointerId);

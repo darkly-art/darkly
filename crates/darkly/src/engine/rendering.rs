@@ -307,24 +307,25 @@ impl DarklyEngine {
             ReadbackContext::BrushEditorPreview {
                 width,
                 height,
-                target_width,
-                target_height,
                 graph_version,
             } => {
                 // Drop stale results — if the graph has changed since
                 // this render was issued, a fresher render has already
                 // been queued and will supersede this one.
                 if graph_version == self.brush_graph_version() {
+                    let (tw, th) = super::brush_library::BRUSH_THUMBNAIL_SIZE;
                     let framed = frame_stroke_thumbnail(
                         &pixels,
                         width,
                         height,
-                        target_width,
-                        target_height,
+                        tw,
+                        th,
                         self.preview_theme_bg,
                     );
-                    self.brush_editor_preview_cache = Some(framed);
-                    self.brush_editor_preview_cache_size = Some((target_width, target_height));
+                    let png_bytes = encode_rgba_as_png(&framed, tw, th);
+                    if !png_bytes.is_empty() {
+                        self.brush_editor_preview_cache = Some(png_bytes);
+                    }
                 }
             }
             ReadbackContext::BrushThumbnailForSave {

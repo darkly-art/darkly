@@ -25,6 +25,7 @@ export const magicWandTool: Tool = {
     id: 'magic_wand',
     faIcon: 'fa-solid fa-wand-magic-sparkles',
     group: 'select',
+    cluster: 'select',
     hotkeyAction: 'magicWandTool',
     optionsComponent: MagicWandOptions,
 

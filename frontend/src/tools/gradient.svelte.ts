@@ -91,6 +91,7 @@ export const gradientTool: Tool = {
     id: 'gradient',
     iconSvg: GRADIENT_ICON_SVG,
     group: 'paint',
+    cluster: 'fill',
     hotkeyAction: 'gradientTool',
 
     onActivate(ctx) {

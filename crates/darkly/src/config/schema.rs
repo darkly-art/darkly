@@ -108,8 +108,19 @@ pub enum PresetValue {
 /// At apply time, the structured facets are flattened to a key/value map
 /// and bulk-written into the user's settings:
 /// - `hotkeys[i] = (actionId, key)` -> `hotkeys.<actionId> = key`
-/// - `mouse_clicks[i] = (actionId, "<site>:<chord>")` -> `mouseclicks.<actionId> = "<site>:<chord>"`
+/// - `mouse_clicks[i] = (actionId, "[<site>][@<toolGroup>]:<chord>")` ->
+///   `mouseclicks.<actionId> = "[<site>][@<toolGroup>]:<chord>"`
 /// - `settings[i] = (key, PresetValue)` -> stored as-is (key already namespaced)
+///
+/// Binding-string grammar (frontend-side parsing in `actions/hotkey_resolve.ts`):
+///   * `"<chord>"`                       — global; fires regardless of site/tool.
+///   * `"<site>:<chord>"`                — fires only at the given binding site.
+///   * `"<site>@<toolGroup>:<chord>"`    — fires only at the site AND when the
+///     active tool's group matches (e.g. `"canvas@paint:shift+drag"` for
+///     brush-size scrub, so it doesn't steal shift+drag from selection tools).
+///   * `"@<toolGroup>:<chord>"`          — global wrt site, but only when the
+///     given tool group is active (use sparingly; mostly for keyboard hotkeys
+///     that depend on tool context).
 ///
 /// Empty string values are meaningful: they mean "no binding" — use them to
 /// suppress an action's default trigger under a particular preset (e.g.

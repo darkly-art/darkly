@@ -9,7 +9,7 @@ export interface ToolContext {
 
 export interface Tool {
     readonly id: string;
-    /** Font Awesome icon class (e.g. 'fa-solid fa-paintbrush'). Optional —
+    /** Font Awesome icon class (e.g. 'fa-solid fa-paint-brush'). Optional —
      *  if a tool provides {@link iconSvg} that takes precedence. */
     readonly faIcon?: string;
     /** Inline SVG markup, used when no Font Awesome glyph fits. Authors are
@@ -18,6 +18,11 @@ export interface Tool {
     readonly iconSvg?: string;
     /** Tool group for toolbar visual separation (e.g. 'paint', 'select'). */
     readonly group: string;
+
+    /** Optional cluster id this tool belongs to. Tools sharing a cluster are
+     *  hidden behind a single flyout button in the toolbar. The cluster
+     *  metadata (icon, default sub-tool, order) lives in {@link ToolCluster}. */
+    readonly cluster?: string;
 
     /** Key name in HotkeyMap that activates this tool (e.g. 'brushTool').
      *  Used by hotkey registration to wire up tool switching automatically. */
@@ -82,3 +87,43 @@ class ToolRegistry {
 }
 
 export const toolRegistry = new ToolRegistry();
+
+/**
+ * A cluster bundles multiple tools behind a single flyout button in the
+ * toolbar (e.g. selection tools, fill tools). The cluster button always
+ * mirrors *some* member tool's icon — never owns one of its own. Specifically:
+ * the currently-active member when one is active in this cluster, otherwise
+ * the default member. The cluster is a routing concept, not a visual identity.
+ */
+export interface ToolCluster {
+    readonly id: string;
+    /** Tool ids in display order (top-to-bottom in the flyout). */
+    readonly toolIds: readonly string[];
+    /** Activated when the cluster button is clicked with no prior selection.
+     *  Also supplies the cluster button's icon when no member is active. */
+    readonly defaultToolId: string;
+    /** Human label for tooltips. */
+    readonly displayName: string;
+}
+
+class ToolClusterRegistry {
+    private clusters = new Map<string, ToolCluster>();
+    private order: string[] = [];
+
+    register(cluster: ToolCluster) {
+        if (!this.clusters.has(cluster.id)) {
+            this.order.push(cluster.id);
+        }
+        this.clusters.set(cluster.id, cluster);
+    }
+
+    get(id: string): ToolCluster | undefined {
+        return this.clusters.get(id);
+    }
+
+    all(): ToolCluster[] {
+        return this.order.map(id => this.clusters.get(id)!);
+    }
+}
+
+export const toolClusterRegistry = new ToolClusterRegistry();

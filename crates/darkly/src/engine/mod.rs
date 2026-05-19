@@ -170,17 +170,13 @@ pub(crate) enum ReadbackContext {
     /// caches the bytes on the engine so the next `brush_editor_preview()`
     /// call returns them synchronously.
     ///
-    /// `width`/`height` are the source render dimensions (the layout of
-    /// the readback bytes, always `BRUSH_STROKE_RENDER_SIZE`).
-    /// `target_width`/`target_height` are the caller-requested cache
-    /// dimensions; the framer crops the painted region from the source
-    /// and resizes to the target, so the cache always matches what the
-    /// frontend asked for.
+    /// `width`/`height` are the source render dimensions (the layout of the
+    /// readback bytes, always `BRUSH_STROKE_RENDER_SIZE`). The framer crops
+    /// the painted region and resizes to the canonical `BRUSH_THUMBNAIL_SIZE`
+    /// before PNG-encoding — same shape as `BrushThumbnailForSave`.
     BrushEditorPreview {
         width: u32,
         height: u32,
-        target_width: u32,
-        target_height: u32,
         /// Graph version at the time the render was issued — used to skip
         /// caching stale results if another render has superseded this one.
         graph_version: u64,
@@ -326,13 +322,12 @@ pub struct DarklyEngine {
     /// Renderer for the Krita-style S-curve preview shown in the brush
     /// editor widget. Reused across calls; holds its own scratch target.
     pub(crate) brush_preview_renderer: BrushPreviewRenderer,
-    /// Cached RGBA bytes of the most recently-completed editor preview.
+    /// Cached PNG bytes of the most recently-completed editor preview.
     /// `brush_editor_preview()` returns this synchronously; it's refreshed
-    /// asynchronously via `ReadbackContext::BrushEditorPreview`.
+    /// asynchronously via `ReadbackContext::BrushEditorPreview`. The frontend
+    /// uses the bytes directly as a `Blob` URL — same shape as
+    /// `active_dab_preview_cache`. Always framed to `BRUSH_THUMBNAIL_SIZE`.
     pub(crate) brush_editor_preview_cache: Option<Vec<u8>>,
-    /// Dimensions of the bytes in `brush_editor_preview_cache`. Cleared
-    /// alongside the cache on invalidation.
-    pub(crate) brush_editor_preview_cache_size: Option<(u32, u32)>,
     // `brush_graph_version` and `brush_topology_version` moved into the
     // shared `BrushState` (looked up via `tool_session`). The per-engine
     // `last_rendered_*` cursors below stay per-engine because they track
@@ -514,7 +509,6 @@ impl DarklyEngine {
             last_preview_pose: None,
             brush_preview_renderer: BrushPreviewRenderer::new(),
             brush_editor_preview_cache: None,
-            brush_editor_preview_cache_size: None,
             last_rendered_preview_version: 0,
             active_dab_preview_cache: None,
             last_rendered_dab_topology_version: 0,

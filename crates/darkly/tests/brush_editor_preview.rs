@@ -150,6 +150,16 @@ fn renderer_reuses_target_across_renders_of_same_size() {
     assert_eq!(first_ptr, second_ptr);
 }
 
+/// Decode a `brush_editor_preview()` PNG to raw RGBA bytes plus its
+/// canonical `BRUSH_THUMBNAIL_SIZE` dimensions — same shape the frontend
+/// receives via the `Blob` URL path.
+fn decode_preview_png(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
+    let img = image::load_from_memory(png_bytes).expect("valid PNG bytes");
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    (w, h, rgba.into_raw())
+}
+
 #[test]
 fn engine_brush_editor_preview_caches_after_readback() {
     use darkly::engine::DarklyEngine;
@@ -159,13 +169,10 @@ fn engine_brush_editor_preview_caches_after_readback() {
     let gpu = GpuContext::new_headless(device, queue);
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
-    let width: u32 = 320;
-    let height: u32 = 120;
-
     // First call: cache empty, kicks off a readback, returns an empty Vec
     // — the frontend uses that as a "no fresh bytes" signal so it
     // preserves whatever was last shown rather than flashing transparent.
-    let first = engine.brush_editor_preview(width, height);
+    let first = engine.brush_editor_preview();
     assert!(
         first.is_empty(),
         "cache miss should return empty Vec, got {} bytes",
@@ -176,11 +183,23 @@ fn engine_brush_editor_preview_caches_after_readback() {
     // event loop polling the ReadbackScheduler via the render loop).
     engine.test_flush_readbacks();
 
-    // Second call: cache now populated with the real pixels. A non-trivial
-    // fraction of pixels should be non-zero (the stroke deposited ink).
-    let second = engine.brush_editor_preview(width, height);
-    assert_eq!(second.len(), (width * height * 4) as usize);
-    let non_zero_pixels = second
+    // Second call: cache now populated with PNG bytes — same shape as
+    // `brush_active_dab_preview` / `brush_thumbnail`.
+    let second = engine.brush_editor_preview();
+    assert!(
+        !second.is_empty(),
+        "post-readback call should return cached PNG bytes"
+    );
+    assert_eq!(
+        &second[..8],
+        &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        "cache should hold PNG-encoded bytes"
+    );
+
+    // Decode and verify the stroke deposited ink.
+    let (w, h, pixels) = decode_preview_png(&second);
+    assert!(w > 0 && h > 0, "decoded preview has positive dimensions");
+    let non_zero_pixels = pixels
         .chunks_exact(4)
         .filter(|px| px[0] > 0 || px[1] > 0 || px[2] > 0)
         .count();
@@ -200,13 +219,13 @@ fn engine_brush_editor_preview_skips_unchanged_graph() {
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
     // Prime the cache.
-    let _ = engine.brush_editor_preview(320, 120);
+    let _ = engine.brush_editor_preview();
     engine.test_flush_readbacks();
-    let first = engine.brush_editor_preview(320, 120);
+    let first = engine.brush_editor_preview();
 
     // Without touching the graph, a second call returns the same cache
     // and does not queue another readback.
-    let second = engine.brush_editor_preview(320, 120);
+    let second = engine.brush_editor_preview();
     assert_eq!(first, second);
 }
 
@@ -221,25 +240,26 @@ fn set_preview_theme_invalidates_cache() {
 
     // Prime the cache with the default (dark) theme: white on dark.
     engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.02, 0.02, 0.02, 1.0]);
-    let _ = engine.brush_editor_preview(320, 120);
+    let _ = engine.brush_editor_preview();
     engine.test_flush_readbacks();
-    let dark_pixels = engine.brush_editor_preview(320, 120);
+    let dark_png = engine.brush_editor_preview();
 
     // Switch to the light theme: black on light. Cache should invalidate
     // and the next readback should produce distinctly different pixels.
     engine.set_preview_theme([0.0, 0.0, 0.0, 1.0], [0.9, 0.9, 0.9, 1.0]);
-    let after_change = engine.brush_editor_preview(320, 120);
-    // Pre-readback call returns the zero placeholder (cache was invalidated).
-    assert!(after_change.iter().all(|&b| b == 0));
+    let after_change = engine.brush_editor_preview();
+    // Pre-readback call returns an empty Vec (cache was invalidated).
+    assert!(after_change.is_empty());
 
     engine.test_flush_readbacks();
-    let light_pixels = engine.brush_editor_preview(320, 120);
+    let light_png = engine.brush_editor_preview();
 
     assert_ne!(
-        dark_pixels, light_pixels,
-        "theme change must produce new preview pixels"
+        dark_png, light_png,
+        "theme change must produce new preview bytes"
     );
     // Sanity-check: the light-theme preview has bright bg pixels.
+    let (_, _, light_pixels) = decode_preview_png(&light_png);
     let mut bright_bg = 0;
     for chunk in light_pixels.chunks_exact(4) {
         if chunk[0] > 200 && chunk[1] > 200 && chunk[2] > 200 {
@@ -319,13 +339,11 @@ fn hard_round_endpoint_dabs_not_clipped_against_cache_border() {
         .brush_load("Hard Round")
         .expect("Hard Round built-in");
 
-    let width: u32 = 320;
-    let height: u32 = 120;
-
     // Prime + flush + read.
-    let _ = engine.brush_editor_preview(width, height);
+    let _ = engine.brush_editor_preview();
     engine.test_flush_readbacks();
-    let pixels = engine.brush_editor_preview(width, height);
+    let png = engine.brush_editor_preview();
+    let (width, height, pixels) = decode_preview_png(&png);
     assert_eq!(pixels.len(), (width * height * 4) as usize);
 
     // bg is black; mark anything noticeably brighter as stroke.
@@ -382,7 +400,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 
     // Prime the editor preview cache and let the readback land so the
     // version counter is at its post-init steady state.
-    let _ = engine.brush_editor_preview(320, 120);
+    let _ = engine.brush_editor_preview();
     engine.test_flush_readbacks();
     let v_before_stabilize = engine.brush_graph_version();
 

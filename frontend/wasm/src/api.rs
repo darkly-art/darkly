@@ -919,18 +919,18 @@ impl DarklyHandle {
     }
 
     /// Full-stroke brush editor preview — renders an S-curve sample stroke
-    /// into an offscreen texture and returns the RGBA bytes. First call
-    /// returns a zero-filled placeholder while the async readback is in
-    /// flight; subsequent calls return the cached bytes, refreshed on a
-    /// later frame once the readback completes.
+    /// at the canonical `BRUSH_THUMBNAIL_SIZE` and returns PNG bytes. First
+    /// call returns an empty Vec while the async readback is in flight;
+    /// subsequent calls return the cached PNG, refreshed on a later frame
+    /// once the readback completes. Frontend scales via CSS.
     ///
     /// Uses the theme colors stored via `set_preview_theme` — the editor
-    /// preview visually matches the brush picker's thumbnails so
-    /// users can scan across both without chromatic surprises. Same shape
-    /// as `layer_thumbnail`: no promises, no async JS boundary plumbing.
-    pub fn brush_editor_preview(&self, width: u32, height: u32) -> Vec<u8> {
+    /// preview visually matches the brush picker's thumbnails so users can
+    /// scan across both without chromatic surprises. Same shape as
+    /// `brush_active_dab_preview`: no promises, no async JS boundary plumbing.
+    pub fn brush_editor_preview(&self) -> Vec<u8> {
         self.flush_if_needed();
-        self.engine.borrow_mut().brush_editor_preview(width, height)
+        self.engine.borrow_mut().brush_editor_preview()
     }
 
     /// Render a single-dab preview of the active brush — the small

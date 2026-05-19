@@ -12,6 +12,7 @@ export const fillTool: Tool = {
     id: 'fill',
     faIcon: 'fa-solid fa-fill-drip',
     group: 'paint',
+    cluster: 'fill',
     hotkeyAction: 'fillTool',
 
     onPointerDown(ctx, e, cx, cy) {

@@ -6,7 +6,9 @@
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=9500ff)
 ![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=6914ff)
+![TypeScript](https://img.shields.io/badge/TypeScript-000000?style=for-the-badge&logo=typescript&logoColor=6914ff)
 ![WebAssembly](https://img.shields.io/badge/WebAssembly-000000?style=for-the-badge&logo=WebAssembly&logoColor=4400ff)
+![WebGPU](https://img.shields.io/badge/WebGPU-000000?style=for-the-badge&logo=webgpu&logoColor=4400ff)
 
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
@@ -34,17 +36,13 @@ In addition to the usual paint features, Darkly has some entropic tools to help 
 
 ### Node-Based Brush Engine
 
-Darkly is the first paint program to feature a GPU-native, node-based brush system. There is no separate engine for smudging, cloning, stamping, etc. -- they all live in a unified engine. This enables infinite customizability, mixing and matching of brush features, and making custom brushes on-the-fly.
+![brush-engine-screenshot](https://github.com/user-attachments/assets/28baa4dc-9cf1-4d9f-b1e3-4ccbe5943171)
 
-![brush-engine-screenshot](https://github.com/user-attachments/assets/25df27eb-1e98-42eb-bd8e-dbba8bcb5cd9)
+Darkly features a unified node-based brush system. Every brush type -- clone, liquify, watercolor, etc. -- all live in a single engine. This enables infinite customizability, mixing and matching of brush features, and making custom brushes on-the-fly.
 
 ### Veils
 
-Veils are a special type of layer that sits atop the whole viewport. They are visible only to the artist. By bleeding or obfuscating the canvas during painting, they can alter the mood, and help counteract age-old human tendencies like art fatigue, artist's block, destructive self-criticism, and premature fixation on detail.
-
-Craft your art through a pane of rainy glass, frozen crystal, or retro VHS.
-
-Basically, veils give you permission to be messy, and have some happy accidents along the way.
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They are a special type of layer that sits atop the whole viewport, visible only to the artist. By partially obscuring the canvas during painting, they can alter the mood, and invite happy accidents. They can also help to counteract age-old human tendencies like art fatigue, artist's block, destructive self-criticism, and premature fixation on detail. Basically, veils give you permission to be wild and messy.
 
 ### Voids
 
@@ -55,14 +53,22 @@ Speaking of happy accidents,
 These are features that are helpful or essential to digital art workflows. They're subject to change, and feel free to suggest new ones. They are always kept up-to-date so everyone can see the progress.
 
 ### Painting & brush engine
+- [x] Node-based brush engine
+- Brushes
+    - [x] Simple round
+    - [x] Calligraphy
+    - [x] Ink pen
+    - [x] Liquify
+    - [x] Watercolor
+    - [ ] Clone
+    - [ ] Smudge
+    - [ ] Blur
+    - [ ] Dodge/burn
+    - [ ] Pencil / Charcoal
+    - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker (eyedropper)
-- [x] 13 built‑in brushes; node‑graph brush editor with live preview
-- [x] 23 brush nodes (pen input, stamps, curves, scatter, watercolor, liquify, texture overlay, …)
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
-- [ ] Smudge / blend / blur tool
-- [ ] Clone / stamp tool
-- [ ] Dodge / burn
 
 ### Color picking & swatches
 - [x] HSV picker, foreground/background swatches
@@ -192,9 +198,13 @@ You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Gr
 
 It's okay to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
 
-I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The danger of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must first understand the changes and their long-term implications for the codebase.
+I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The [danger](https://www.reddit.com/r/vibecoding/comments/1su03dk/vibe_coded_for_6_months_my_codebase_is_a_disaster/) of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must first understand the changes and their long-term implications for the codebase.
 
-Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, constant vigilance  against duplicate/dead code, and a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
+Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, guarding vigilantly against duplicate/dead code, and writing a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
+
+Note that while we allow AI for coding, we are unlikely to accept any PR implementing generative AI in Darkly itself.
+
+For details on Darkly's stance on AI, see [this blog post]().
 
 ## Acknowledgments
 

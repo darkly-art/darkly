@@ -163,7 +163,7 @@ export const brushTool: Tool = {
     get faIcon() {
         return brushSession.eraseMode
             ? 'fa-solid fa-eraser'
-            : 'fa-solid fa-paintbrush';
+            : 'fa-solid fa-paint-brush';
     },
     group: 'paint',
     hotkeyAction: 'brushTool',

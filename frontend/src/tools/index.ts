@@ -1,4 +1,4 @@
-import { toolRegistry } from './registry';
+import { toolRegistry, toolClusterRegistry } from './registry';
 import { brushTool } from './brush.svelte';
 import { fillTool } from './fill.svelte';
 import { gradientTool } from './gradient.svelte';
@@ -20,3 +20,20 @@ toolRegistry.register(lassoSelectTool);
 toolRegistry.register(polygonSelectTool);
 toolRegistry.register(magicWandTool);
 toolRegistry.register(transformTool);
+
+// Cluster buttons mirror their default tool's icon (rect_select's dashed
+// square for selection; fill's bucket for fill) — the cluster owns no
+// independent icon, only routing. See `ToolCluster.svelte`.
+toolClusterRegistry.register({
+    id: 'select',
+    toolIds: ['rect_select', 'ellipse_select', 'lasso_select', 'magic_wand'],
+    defaultToolId: 'rect_select',
+    displayName: 'Selection',
+});
+
+toolClusterRegistry.register({
+    id: 'fill',
+    toolIds: ['fill', 'gradient'],
+    defaultToolId: 'fill',
+    displayName: 'Fill',
+});

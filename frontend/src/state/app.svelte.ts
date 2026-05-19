@@ -63,6 +63,12 @@ export class DarklyInstance {
     // Active tool
     activeToolId = $state<string>('brush');
 
+    /** Last activated sub-tool per cluster id. Lets a cluster button restore
+     *  the user's previous choice on click (e.g. "the last selection tool I
+     *  used was lasso"). Populated by a $effect in LeftSidebar that watches
+     *  activeToolId. */
+    lastToolByCluster = $state<Record<string, string>>({});
+
     // Registry-backed display-name lookups. Each map is populated once at
     // startup from the matching `*_types()` WASM query (see `loadRegistries`).
     // Per-instance payloads (LayerInfo, VeilInfo, ModifierInfo, etc.) carry

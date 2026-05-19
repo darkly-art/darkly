@@ -3,11 +3,12 @@
     import { app } from '../../state/app.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import { theme } from '../../state/theme.svelte';
-    import { rgbaToDataUrl } from '../layers/thumbnails';
     import { SignalCompressor } from '../../lib/signal_compressor';
 
     interface Props {
-        /** Target render / display dimensions, in CSS pixels. */
+        /** Display dimensions, in CSS pixels. The PNG itself is rendered
+         *  at a fixed engine-side size (`BRUSH_THUMBNAIL_SIZE`) and scaled
+         *  by the browser to fit — same shape as `BrushDabView`. */
         width: number;
         height: number;
     }
@@ -18,30 +19,9 @@
     const REFRESH_MS = 100;
 
     let dataUrl = $state('');
-    /** Dimensions of the bytes that produced `dataUrl`. Kept separate from
-     *  the current `width`/`height` so mid-resize we keep showing the last
-     *  successful frame (at its native size) instead of flashing empty.
-     *  Initialised to 0 — the `<img>` only renders once `dataUrl` is set,
-     *  and `refresh()` writes real values before that happens. */
-    let imgW = $state(0);
-    let imgH = $state(0);
-    /**
-     * Bytes of the last accepted readback, used to skip redundant
-     * data-URL encodes — the WASM call returns a fresh buffer every time
-     * even when the underlying cache hasn't changed.
-     */
-    let lastHash = 0;
-
-    function hashRgba(bytes: Uint8Array): number {
-        // Sample a sparse grid — full-buffer hashing here costs more than the
-        // data-URL encode we're trying to skip.
-        let h = 2166136261 >>> 0;
-        const step = Math.max(1, Math.floor(bytes.length / 256));
-        for (let i = 0; i < bytes.length; i += step) {
-            h = ((h ^ bytes[i]) * 16777619) >>> 0;
-        }
-        return h;
-    }
+    /** Byte length that produced `dataUrl` — skips redundant Blob/URL
+     *  churn when WASM hands back the same PNG (cache hit). */
+    let lastLen = 0;
 
     /**
      * Budget of animation frames during which we actively poll WASM for
@@ -55,26 +35,20 @@
 
     function refresh() {
         if (!app.handle) return;
-        const w = width;
-        const h = height;
-        const rgba = app.handle.brush_editor_preview(w, h);
-        if (!rgba || rgba.length === 0) return;
-        // Guard against a readback that still holds the previous size —
-        // during a resize burst the cached bytes can lag one frame behind.
-        if (rgba.length !== w * h * 4) return;
-        const hh = hashRgba(rgba);
-        if (hh !== lastHash || dataUrl === '' || imgW !== w || imgH !== h) {
-            lastHash = hh;
-            imgW = w;
-            imgH = h;
-            dataUrl = rgbaToDataUrl(rgba, w, h);
-        }
+        const bytes = app.handle.brush_editor_preview();
+        if (!bytes || bytes.length === 0) return;
+        if (bytes.length === lastLen && dataUrl) return;
+        const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });
+        const next = URL.createObjectURL(blob);
+        if (dataUrl) URL.revokeObjectURL(dataUrl);
+        dataUrl = next;
+        lastLen = bytes.length;
     }
 
     const compressor = new SignalCompressor(REFRESH_MS, () => {
         refresh();
         // After issuing a render request, poll for the async readback to
-        // land. The first refresh() returns the prior cache (or zeros);
+        // land. The first refresh() returns the prior cache (or empty);
         // subsequent frames see the new pixels once the scheduler
         // processes them in DarklyEngine::poll_pending.
         framesRemaining = POLL_FRAMES_PER_REQUEST;
@@ -100,30 +74,30 @@
         scheduleFrame();
     }
 
-    // Reactive trigger: graph snapshot, brush, theme, or size changes all
-    // invalidate the preview. The compressor debounces bursts (slider
-    // drags, resize scrubs) into at most one fire per REFRESH_MS.
+    // Reactive trigger: graph snapshot, brush, or theme changes invalidate
+    // the preview. The compressor debounces bursts (slider drags) into at
+    // most one fire per REFRESH_MS. Display dimensions (`width`/`height`)
+    // are intentionally NOT tracked — the engine renders at a fixed
+    // canonical size and CSS scales, so resizing the dock should not
+    // retrigger a render.
     $effect(() => {
-        // Track dependencies — field reads establish the subscription;
-        // actual values are consumed inside `refresh()` below.
         void brushGraph.graph;
         void brushGraph.activeBrush;
         void theme.current;
         void app.handle;
-        void width;
-        void height;
         untrack(() => compressor.request());
     });
 
     onDestroy(() => {
         compressor.cancel();
         if (rafHandle) cancelAnimationFrame(rafHandle);
+        if (dataUrl) URL.revokeObjectURL(dataUrl);
     });
 </script>
 
 <div class="brush-preview" style="--preview-w: {width}px; --preview-h: {height}px">
     {#if dataUrl}
-        <img class="preview-img" src={dataUrl} alt="Brush preview" width={imgW} height={imgH} />
+        <img class="preview-img" src={dataUrl} alt="Brush preview" />
     {:else}
         <div class="preview-placeholder"></div>
     {/if}

@@ -3,6 +3,7 @@ import { config } from './store.svelte';
 import { actions } from '../actions/registry';
 import { app } from '../state/app.svelte';
 import { activeSiteChain } from '../actions/active_site';
+import { toolRegistry } from '../tools/registry';
 import {
     parseBinding,
     buildChordIndex,
@@ -77,7 +78,8 @@ export function registerHotkeys() {
             if (tag === 'TEXTAREA' || tag === 'SELECT') return;
 
             const chain = activeSiteChain();
-            const resolved = resolveChord(entries, chain);
+            const toolGroup = toolRegistry.get(app.activeToolId)?.group ?? null;
+            const resolved = resolveChord(entries, chain, toolGroup);
             if (!resolved) return;
             e.preventDefault();
             const ctx = resolved.site

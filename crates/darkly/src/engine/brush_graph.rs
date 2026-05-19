@@ -381,13 +381,16 @@ impl DarklyEngine {
     }
 
     /// Render a full-stroke brush editor preview and return the most recent
-    /// cached bytes synchronously. The pixels update on a later frame once
-    /// the async readback completes — same shape as `layer_thumbnail`.
+    /// cached PNG bytes synchronously. The pixels update on a later frame
+    /// once the async readback completes — same shape as
+    /// `brush_active_dab_preview`. Always framed to `BRUSH_THUMBNAIL_SIZE`;
+    /// the frontend scales the result via CSS to whatever display size it
+    /// needs.
     ///
     /// Uses the theme colors stored via `set_preview_theme`, not the user's
     /// active paint color — keeps the editor preview visually consistent
     /// with the brush picker's brush thumbnails.
-    pub fn brush_editor_preview(&mut self, width: u32, height: u32) -> Vec<u8> {
+    pub fn brush_editor_preview(&mut self) -> Vec<u8> {
         // Guard against painting while a real stroke is in flight — the
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
@@ -395,15 +398,10 @@ impl DarklyEngine {
         let in_stroke = self.brush_stroke_engine.is_some();
 
         // Caller's frontend treats an empty Vec as "no fresh bytes
-        // available" and skips the data-URL update — preserving whatever
-        // was last shown. A zero-filled buffer of the requested size
-        // would *also* parse cleanly and render as a transparent image,
-        // wiping the visible preview. So: return whatever cached bytes
-        // we have for *this exact size*, or empty if none.
-        let cached = self
-            .brush_editor_preview_cache
-            .clone()
-            .filter(|_| self.brush_editor_preview_cache_size == Some((width, height)));
+        // available" and skips the image update — preserving whatever was
+        // last shown. A zero-filled buffer would *also* parse cleanly and
+        // render as a transparent image, wiping the visible preview.
+        let cached = self.brush_editor_preview_cache.clone();
 
         // Skip work when nothing has changed and the cache is good. Also
         // skip if a real stroke is in progress — return the most recent
@@ -412,7 +410,7 @@ impl DarklyEngine {
         let current_graph_version = self.brush_graph_version();
         let nothing_to_do = in_stroke
             || (self.last_rendered_preview_version == current_graph_version
-                && self.brush_editor_preview_cache_size == Some((width, height)));
+                && self.brush_editor_preview_cache.is_some());
         if nothing_to_do {
             return cached.unwrap_or_default();
         }
@@ -454,8 +452,6 @@ impl DarklyEngine {
             ReadbackContext::BrushEditorPreview {
                 width: rw,
                 height: rh,
-                target_width: width,
-                target_height: height,
                 graph_version: current_graph_version,
             },
         );
@@ -472,7 +468,6 @@ impl DarklyEngine {
     /// signal.
     pub fn invalidate_brush_editor_preview(&mut self) {
         self.brush_editor_preview_cache = None;
-        self.brush_editor_preview_cache_size = None;
         self.active_dab_preview_cache = None;
         // Theme changes alter rendered colors → both editor preview and
         // dab thumbnail need to re-render and discard any in-flight
