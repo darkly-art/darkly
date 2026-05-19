@@ -426,6 +426,23 @@ fn populate_kitchen_sink(engine: &mut DarklyEngine) {
         let defaults = defaults_of(schema);
         engine.add_veil(type_id, &defaults);
     }
+
+    // One of every void type — adds a void layer at root for each
+    // registered void kind, with schema defaults. Closes the kitchen-sink
+    // assertion that every layer_kind has a representative in the saved
+    // doc; without this, `layer_kind/void` would never participate in the
+    // save round-trip test.
+    let void_types: Vec<(&'static str, &'static [ParamDef])> = engine
+        .compositor
+        .void_registry()
+        .types()
+        .into_iter()
+        .map(|(id, _name, params)| (id, params))
+        .collect();
+    for (type_id, schema) in void_types {
+        let defaults = defaults_of(schema);
+        engine.add_void_layer(type_id, defaults, None);
+    }
 }
 
 /// Pump the engine until a save completes. Caps iterations so a stuck

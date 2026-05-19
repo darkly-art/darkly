@@ -531,7 +531,13 @@ impl DarklyEngine {
         // is in flight; pinning at copy time matches user intent and keeps
         // the snapshot independent of whatever happens before completion.
         let meta = {
-            let Layer::Raster(layer) = self.doc.layer(layer_id)?;
+            // Rich copy is a pixel-readback path — only meaningful for raster
+            // layers. Voids regenerate from params, so there's nothing to read
+            // back; cross-tab clipboard for voids would need its own JSON path
+            // (out of scope for this change).
+            let Layer::Raster(layer) = self.doc.layer(layer_id)? else {
+                return None;
+            };
             let mask = layer.modifiers.iter().find_map(|mid| {
                 let m = self.doc.find_modifier(*mid)?;
                 if !m.is_mask() {

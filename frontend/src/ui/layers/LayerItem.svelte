@@ -292,6 +292,14 @@
             use:bindingSite={{ name: 'layerThumb', ctx: () => ({ layerId: layer.id }) }}
             onclick={clickLayerThumb}
         />
+    {:else if layer.type === 'void'}
+        <span
+            class="thumb void-thumb"
+            class:thumb-active={isActive && !isEditingMask}
+            title="Void layer"
+        >
+            <i class="fa-solid fa-galaxy"></i>
+        </span>
     {/if}
 
     {#if hasMask && maskThumb}
@@ -464,6 +472,18 @@
 
     .thumb-active {
         border-color: var(--accent);
+    }
+
+    .void-thumb {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        color: var(--text-muted);
+        cursor: default;
+    }
+    .void-thumb.thumb-active {
+        color: var(--accent);
     }
 
     .mask-disabled {

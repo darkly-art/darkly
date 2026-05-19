@@ -657,6 +657,48 @@ impl DarklyEngine {
             );
         }
 
+        // --- Void layers: ensure the procedural texture + per-instance cache ---
+        // Void state is regenerable from `(void_type, params)`, so on load
+        // (or after `Compositor::recreate_resources`) we walk the doc and
+        // rebuild any missing GPU caches. `ensure_void_layer` is idempotent.
+        struct VoidInfo {
+            id: LayerId,
+            void_type: String,
+            params: Vec<crate::gpu::params::ParamValue>,
+            opacity: f32,
+            blend_mode_gpu: u32,
+            isolated: bool,
+        }
+        let void_infos: Vec<VoidInfo> = self
+            .doc
+            .all_void_layers()
+            .into_iter()
+            .map(|v| VoidInfo {
+                id: v.id,
+                void_type: v.void_type.clone(),
+                params: v.params.clone(),
+                opacity: v.blend.opacity,
+                blend_mode_gpu: v.blend.blend_mode.gpu_value,
+                isolated: isolated_host(v.id),
+            })
+            .collect();
+        for info in &void_infos {
+            self.compositor.ensure_void_layer(
+                &self.gpu.device,
+                &self.gpu.queue,
+                info.id,
+                &info.void_type,
+                &info.params,
+            );
+            self.compositor.update_void_uniforms_full(
+                &self.gpu.queue,
+                info.id,
+                info.opacity,
+                info.blend_mode_gpu,
+                info.isolated,
+            );
+        }
+
         // --- Mask modifiers: ensure the R8 GPU texture for any host with a mask ---
         // Also ensures the per-host passthrough snapshot+lerp resource so the
         // group composite branch can engage on the next frame; both are

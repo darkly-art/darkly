@@ -59,21 +59,25 @@ fn all_wgsl_shaders_compile() {
         }
 
         // Prepend any preamble whose symbols are referenced by this shader.
+        // A preamble that exports multiple helpers (e.g. `lib/fbm.wgsl` ships
+        // `fbm`, `fbm_warp`, `fbm_warp_offset`, etc.) might be referenced by
+        // any of its names — collect them all and match against the union.
         let mut full_source = String::new();
         for (_, preamble_src) in &preambles {
-            // Extract the function name from the preamble (first `fn <name>` line).
-            if let Some(fn_name) = preamble_src.lines().find_map(|line| {
-                let line = line.trim();
-                if line.starts_with("fn ") {
-                    line.strip_prefix("fn ")?.split('(').next()
-                } else {
-                    None
-                }
-            }) {
-                if source.contains(fn_name) {
-                    full_source.push_str(preamble_src);
-                    full_source.push('\n');
-                }
+            let fn_names: Vec<&str> = preamble_src
+                .lines()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    if line.starts_with("fn ") {
+                        line.strip_prefix("fn ")?.split('(').next()
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if fn_names.iter().any(|n| source.contains(n)) {
+                full_source.push_str(preamble_src);
+                full_source.push('\n');
             }
         }
         full_source.push_str(&source);

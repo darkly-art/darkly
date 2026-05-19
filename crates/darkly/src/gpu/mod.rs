@@ -45,3 +45,5 @@ pub mod veil;
 pub mod veil_chain;
 pub mod veils;
 pub mod view;
+pub mod void;
+pub mod voids;

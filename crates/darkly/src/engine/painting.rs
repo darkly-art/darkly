@@ -104,6 +104,9 @@ impl DarklyEngine {
     /// Fill the layer with the default background image, centered and clipped
     /// to the canvas. The image is baked into the binary at build time.
     pub fn fill_background(&mut self, layer_id: LayerId) {
+        if !self.is_node_paintable(layer_id) {
+            return;
+        }
         const IMAGE_BYTES: &[u8] = include_bytes!("../../resources/backgrounds/quiet-night.jpg");
 
         let canvas_w = self.compositor.canvas_width();
@@ -196,6 +199,9 @@ impl DarklyEngine {
     /// chosen background color. Pushes a `GpuRegionAction` for undo, matching
     /// `fill_background`'s pattern.
     pub fn fill_background_color(&mut self, layer_id: LayerId, color: [u8; 4]) {
+        if !self.is_node_paintable(layer_id) {
+            return;
+        }
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
@@ -244,7 +250,7 @@ impl DarklyEngine {
     // All stroke ops go through GPU render passes.
 
     pub fn begin_stroke(&mut self, layer_id: LayerId) {
-        if !self.doc.is_node_editable(layer_id) {
+        if !self.doc.is_node_editable(layer_id) || !self.is_node_paintable(layer_id) {
             // Leave `active_stroke_layer` cleared so every queued stroke_to
             // for this gesture no-ops uniformly — matches the "node missing"
             // path and avoids partial-stroke state.
@@ -256,6 +262,16 @@ impl DarklyEngine {
         // Reset the per-stroke perf accumulator. Emitted at `end_stroke`.
         self.stroke_perf = super::perf::StrokePerfStats::default();
         // GPU setup is deferred to first stroke_to (lazy init).
+    }
+
+    /// True when paint operations have somewhere to land. Raster layers and
+    /// mask modifiers carry a CPU-authoritative pixel buffer; groups and
+    /// voids don't, so paint there would either be a no-op or — for voids —
+    /// scribble onto a procedural texture that the compositor immediately
+    /// regenerates from params on the next dirty tick. Funnel every stroke
+    /// entry point through this predicate so the rejection is uniform.
+    pub fn is_node_paintable(&self, layer_id: LayerId) -> bool {
+        self.doc.pixel_buffer(layer_id).is_some()
     }
 
     /// Feed the largest BrushStroke backlog the WASM bridge saw in its most
@@ -283,10 +299,10 @@ impl DarklyEngine {
 
     /// GPU paint path for all stroke operations.
     fn gpu_stroke_to(&mut self, layer_id: LayerId, op: StrokeOp) {
-        // Defensive: `begin_stroke` already gates on the lock, but stroke
-        // ops can arrive from other paths (e.g. flood-fill StrokeOp routed
-        // directly). One predicate at the choke point covers all of them.
-        if !self.doc.is_node_editable(layer_id) {
+        // Defensive: `begin_stroke` already gates on the lock and paintability,
+        // but stroke ops can arrive from other paths (e.g. flood-fill StrokeOp
+        // routed directly). One predicate at the choke point covers all of them.
+        if !self.doc.is_node_editable(layer_id) || !self.is_node_paintable(layer_id) {
             return;
         }
         let canvas_w = self.compositor.canvas_width();

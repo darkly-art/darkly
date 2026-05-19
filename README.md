@@ -13,7 +13,7 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust. Geared towards digital painters, it's got everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
+[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital artists. It has everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
 ### Darkly pledges to:
 
@@ -34,16 +34,27 @@ We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz
 
 In addition to the usual paint features, Darkly has some entropic tools to help with artistic exploration.
 
-
 ### Veils
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They are a special type of layer that sits overtop the viewport, and is visible only to the artist. By placing the canvas behind a strange or mesmerizing filter, they invite **happy accidents**, and help to counteract human tendencies like artist's block, art fatigue, destructive self-criticism, and premature fixation on detail.
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By placing your art behind a strange or mysterious filter, they let you look on it with different eyes, inviting you to see something that wasn't there before.
 
-Basically, veils give you permission to be messy.
+Examples of Veils include lens blur, retro VHS, ice crystal, and rainy glass. By non-destructively hiding detail, these help counteract age-old human tendencies like art fatigue (losing objectivity because you stared at it for too long), destructive self-criticism, and premature fixation on detail.
+
+Veils live in their own group at the top of the layer stack, but within that you can mix, match, and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.
+
+You may use them differently, or not at all. But basically they give you permission to be messy, and have some happy accidents along the way.
 
 ### Voids
 
-Speaking of happy accidents, 
+Speaking of happy accidents, let's talk about ***entropy***. Entropy is an age-old tool, used even by traditional artists like Bob Ross, who when painting a mountain, would use the natural entropy of the canvas to create rocky textures in the snow.
+
+Voids are the natural compliment to Veils. Like Veils, they are a special type of layer that adds entropy to your art. However, Voids live inside the layer stack, and can be placed over or underneath any of your other layers.
+
+"Noise", the de-facto Void, can generate infinite combinations of entropy that look like clouds, water, lightning, and everything in between. It's a great tool when you're stuck, or just want to brainstorm.
+
+Voids have another use, which is that they can be a window to somewhere else. For example, you can use the `screenshare` void to open a portal to another app on your computer (a 3D software, movie, or video game), which will appear as its own layer, updating in real time. This is great for hybrid workflows, and situations where you want to try out different lighting or camera angles, without having to render and paste it over and over.
+
+Voids are also a natural integration point other art programs like Blender, which will have a native Void in the future 🧡
 
 ### Node-Based Brush Engine
 
@@ -87,6 +98,7 @@ These are features that are helpful or essential to digital art workflows. They'
 - [x] Layer masks (one per host)
 - [x] Duplicate layer / group
 - [x] Merge down
+- [x] Void layers (domain‑warped FBM noise)
 - [ ] Flatten image
 - [ ] Clipping mask
 - [ ] Adjustment layers
@@ -217,6 +229,8 @@ Darkly stands on the shoulders of giants. Two programs in particular have influe
 **[GIMP](https://www.gimp.org/)** ([source](https://github.com/GNOME/gimp)) - originally written by **Spencer Kimball** and **Peter Mattis** in 1995, and maintained today by **Michael Natterer** and **Jehan Pagès**, with decades of contributions from a community far too large to list here (see the upstream [`AUTHORS`](https://github.com/GNOME/gimp/blob/master/AUTHORS) file).
 
 **[Krita](https://krita.org/)** ([source](https://github.com/KDE/krita)) - led by **Halla Rempt**, with core contributions over the years from **Dmitry Kazakov**, **Cyrille Berger**, **Sven Langkamp**, **Wolthera van Hövell tot Westerflier**, **L. E. Segovia**, **Scott Petrovic**, and many more (see the upstream [`developers.txt`](https://github.com/KDE/krita/blob/master/krita/data/aboutdata/developers.txt)).
+
+While Darkly's architecture is fundamentally different, it was really insightful to see how these tools tackled many of the same hard problems, and their unique and smart approaches that made them pillars of open source!
 
 ### Veils
 

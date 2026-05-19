@@ -76,6 +76,7 @@ export class DarklyInstance {
     // through these maps — there is no second copy of the display string.
     toolDisplayNames = $state<Record<string, string>>({});
     veilDisplayNames = $state<Record<string, string>>({});
+    voidDisplayNames = $state<Record<string, string>>({});
     blendModeDisplayNames = $state<Record<string, string>>({});
     modifierDisplayNames = $state<Record<string, string>>({});
     layerKindDisplayNames = $state<Record<string, string>>({});
@@ -85,6 +86,9 @@ export class DarklyInstance {
     }
     veilDisplayName(id: string): string {
         return this.veilDisplayNames[id] ?? id;
+    }
+    voidDisplayName(id: string): string {
+        return this.voidDisplayNames[id] ?? id;
     }
     blendModeDisplayName(id: string): string {
         return this.blendModeDisplayNames[id] ?? id;
@@ -101,6 +105,7 @@ export class DarklyInstance {
      *  and before `this.handle` is set, so the maps are ready by the time any
      *  UI mounts. */
     loadRegistries(handle: { tool_types(): string; veil_types(): string;
+        void_types(): string;
         blend_mode_types(): string; modifier_types(): string;
         layer_kind_types(): string }) {
         const buildMap = (json: string): Record<string, string> => {
@@ -115,6 +120,7 @@ export class DarklyInstance {
         };
         this.toolDisplayNames = buildMap(handle.tool_types());
         this.veilDisplayNames = buildMap(handle.veil_types());
+        this.voidDisplayNames = buildMap(handle.void_types());
         this.blendModeDisplayNames = buildMap(handle.blend_mode_types());
         this.modifierDisplayNames = buildMap(handle.modifier_types());
         this.layerKindDisplayNames = buildMap(handle.layer_kind_types());
