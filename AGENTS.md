@@ -206,4 +206,9 @@ cargo test --workspace --exclude darkly-wasm -- --test-threads=1
 # `vite build` only transpiles — `tsc --noEmit` is the actual TS gate.
 (cd frontend && npx tsc --noEmit)
 (cd frontend && npm run build)
+# Vitest runs in the node environment by default — DOM globals like
+# `KeyboardEvent` / `PointerEvent` are not defined. Use plain object
+# fakes (`{ key, shiftKey } as KeyboardEvent`) or opt a test file into
+# jsdom via `// @vitest-environment jsdom`.
+(cd frontend && npm test)
 ```

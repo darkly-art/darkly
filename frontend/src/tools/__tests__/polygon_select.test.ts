@@ -21,18 +21,18 @@ vi.mock('../../state/app.svelte', () => ({ app: fakeApp }));
 // Module under test — imported after the mock is registered.
 import { polygonSelectTool } from '../polygon_select.svelte';
 
+// Plain-object event fakes — vitest's default node env has no DOM globals
+// (`PointerEvent` / `KeyboardEvent`), and we only read a handful of fields.
 let clock = 0;
-function pointerDown(x: number, y: number, dtMs = 1000): PointerEvent {
+function pointerDown(_x: number, _y: number, dtMs = 1000): PointerEvent {
     // Manual timestamp control — the tool detects double-click via
     // `e.timeStamp` deltas, not `e.detail` (which the canvas's
     // preventDefault suppresses).
     clock += dtMs;
-    const e = new PointerEvent('pointerdown', { clientX: x, clientY: y });
-    Object.defineProperty(e, 'timeStamp', { value: clock, configurable: true });
-    return e;
+    return { timeStamp: clock, shiftKey: false, altKey: false } as unknown as PointerEvent;
 }
 function keyEvent(key: string, mods: { shiftKey?: boolean; altKey?: boolean } = {}): KeyboardEvent {
-    return new KeyboardEvent('keydown', { key, ...mods });
+    return { key, shiftKey: !!mods.shiftKey, altKey: !!mods.altKey } as unknown as KeyboardEvent;
 }
 // Minimal ToolContext stub — the polygon tool never reads any of these.
 const ctx = {} as any;
