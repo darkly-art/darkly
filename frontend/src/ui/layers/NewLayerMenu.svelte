@@ -28,11 +28,12 @@
         <span>Layer Group</span>
     </button>
     <button class="item" role="menuitem" onclick={() => onpick('veil')}>
-        <i class="fa-solid fa-wand-magic-sparkles"></i>
+        <!-- <i class="fa-solid fa-fire-flame-curved"></i> -->
+         <i class="fa-solid fa-eclipse"></i>
         <span>Veil</span>
     </button>
     <button class="item" role="menuitem" onclick={() => onpick('void')}>
-        <i class="fa-solid fa-cloud-sun"></i>
+        <i class="fa-solid fa-galaxy"></i>
         <span>Void</span>
     </button>
 </div>

@@ -298,7 +298,7 @@
             class:thumb-active={isActive && !isEditingMask}
             title="Void layer"
         >
-            <i class="fa-solid fa-cloud-sun"></i>
+            <i class="fa-solid fa-galaxy"></i>
         </span>
     {/if}
 

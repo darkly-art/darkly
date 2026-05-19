@@ -109,6 +109,14 @@
         <i class={veil.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
     </button>
 
+    <span
+        class="thumb veil-thumb"
+        class:thumb-active={isActive}
+        title="Veil"
+    >
+        <i class="fa-solid fa-eclipse"></i>
+    </span>
+
     <span class="veil-name">{app.veilDisplayName(veil.type)}</span>
 
     <button
@@ -176,6 +184,31 @@
     }
     .vis-btn:hover { color: var(--text); }
     .vis-btn.hidden { color: var(--text-dim); }
+
+    .thumb {
+        width: 32px;
+        height: 32px;
+        border: 2px solid var(--text-dim);
+        border-radius: 4px;
+        flex-shrink: 0;
+        background: var(--thumb-bg);
+    }
+
+    .thumb-active {
+        border-color: var(--accent);
+    }
+
+    .veil-thumb {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 14px;
+        color: var(--text-muted);
+        cursor: default;
+    }
+    .veil-thumb.thumb-active {
+        color: var(--accent);
+    }
 
     .veil-name {
         flex: 1;
