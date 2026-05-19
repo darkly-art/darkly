@@ -26,7 +26,7 @@ toolRegistry.register(transformTool);
 // independent icon, only routing. See `ToolCluster.svelte`.
 toolClusterRegistry.register({
     id: 'select',
-    toolIds: ['rect_select', 'ellipse_select', 'lasso_select', 'magic_wand'],
+    toolIds: ['rect_select', 'ellipse_select', 'lasso_select', 'polygon_select', 'magic_wand'],
     defaultToolId: 'rect_select',
     displayName: 'Selection',
 });

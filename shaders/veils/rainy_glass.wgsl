@@ -177,15 +177,15 @@ fn sample_fog(uv: vec2f, radius: f32, aspect: f32) -> vec3f {
 }
 
 @fragment fn fs_rainy_glass(in: VertexOutput) -> @location(0) vec4f {
-    let dim_scale = max(params.resolution_x, params.resolution_y);
     let aspect = params.resolution_x / params.resolution_y;
     let dir = params.direction;
 
-    // Map UVs to centered coordinates normalized by the larger dimension,
-    // so the drop density stays stable regardless of aspect ratio.
+    // Normalize by height so drop size is fixed relative to screen height
+    // regardless of aspect ratio — wider windows fit more drops across,
+    // narrower windows fit fewer, but each drop stays the same size.
     // Then rotate into rain-space so the pattern falls in the
     // configured direction.
-    var uv = (in.uv - 0.5) * vec2f(params.resolution_x / dim_scale, params.resolution_y / dim_scale) / params.scale;
+    var uv = (in.uv - 0.5) * vec2f(aspect, 1.0) / params.scale;
     uv = rotate2d(uv, dir);
 
     let UV = in.uv;

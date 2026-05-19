@@ -191,6 +191,51 @@ impl DarklyEngine {
         self.compositor.mark_node_pixels_dirty(layer_id);
     }
 
+    /// Fill the layer with a solid RGBA color, clipped to the canvas. Used by
+    /// the "New Document" flow to seed a fresh raster layer with the user's
+    /// chosen background color. Pushes a `GpuRegionAction` for undo, matching
+    /// `fill_background`'s pattern.
+    pub fn fill_background_color(&mut self, layer_id: LayerId, color: [u8; 4]) {
+        let canvas_w = self.compositor.canvas_width();
+        let canvas_h = self.compositor.canvas_height();
+        let rect = crate::coord::CanvasRect::from_xywh(0, 0, canvas_w, canvas_h);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+
+        let layer_tex = match self.compositor.node_texture(layer_id) {
+            Some(t) => t,
+            None => return,
+        };
+        let layer_frame = layer_tex.canvas_frame();
+
+        let mut entry = None;
+        self.gpu.encode("fill-background-color", |encoder| {
+            let snap = self.region_store.save_region(
+                &self.gpu.device,
+                encoder,
+                &layer_frame,
+                format,
+                rect,
+            );
+            if let Some(target) = self
+                .compositor
+                .node_texture(layer_id)
+                .map(|t| GpuPaintTarget::from_node(t, canvas_w, canvas_h))
+            {
+                target.fill_rect(encoder, &self.paint_pipelines, &self.gpu.queue, rect, color);
+            }
+            entry =
+                Some(
+                    self.region_store
+                        .commit_region(encoder, layer_id, &layer_frame, &snap, rect),
+                );
+        });
+        if let Some(entry) = entry {
+            self.push_undo(Box::new(GpuRegionAction::new(entry)));
+        }
+
+        self.compositor.mark_node_pixels_dirty(layer_id);
+    }
+
     // --- Stroke lifecycle ---
     // The active node id directly identifies the paint target — for a mask
     // modifier id, paint goes to the mask's R8 PixelBuffer; for a raster id,

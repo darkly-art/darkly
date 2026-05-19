@@ -104,8 +104,9 @@ function commit(e: MouseEvent | PointerEvent | KeyboardEvent) {
 
 export const polygonSelectTool: Tool = {
     id: 'polygon_select',
-    faIcon: 'fa-solid fa-vector-square',
+    faIcon: 'fa-solid fa-draw-polygon',
     group: 'select',
+    cluster: 'select',
     hotkeyAction: 'polygonSelectTool',
 
     onDeactivate() {

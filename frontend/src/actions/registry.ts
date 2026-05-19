@@ -3,7 +3,7 @@ export type ActionType = 'instant' | 'hold';
 
 export type ActionCategory =
     | 'edit' | 'tools' | 'selection' | 'brush'
-    | 'layers' | 'view' | 'colors' | 'transform';
+    | 'layers' | 'view' | 'colors' | 'transform' | 'file';
 
 export interface ActionRegistration {
     id: string;

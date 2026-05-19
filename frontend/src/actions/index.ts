@@ -2,6 +2,7 @@ import { actions, sites } from './registry';
 import { app } from '../state/app.svelte';
 import { config } from '../config/store.svelte';
 import { settings } from '../state/settings.svelte';
+import { newDocument } from '../state/newDocument.svelte';
 import { exportImage } from '../state/exportImage.svelte';
 import { loadError, parseLoadErrorMessage } from '../state/loadError.svelte';
 import { toast } from '../state/toast.svelte';
@@ -460,6 +461,19 @@ export function registerActions() {
         handler: () => {
             if (!app.handle) return;
             void saveDocument({ forceAs: true });
+        },
+    });
+    actions.register({
+        id: 'newDocument',
+        displayName: 'New',
+        category: 'file',
+        description:
+            'Open a fresh document in a new tab. Prompts for canvas size and background color.',
+        // No default hotkey — `$mod+KeyN` is reserved by every major browser
+        // for "new window" and cannot be intercepted by the page. Users can
+        // still bind it via the Hotkeys tab if their browser/OS allows.
+        handler: () => {
+            newDocument.open = true;
         },
     });
     actions.register({

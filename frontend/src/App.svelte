@@ -7,6 +7,7 @@
     import PresetPicker from './ui/PresetPicker.svelte';
     import SettingsModal from './ui/settings/SettingsModal.svelte';
     import ExportImageModal from './ui/ExportImageModal.svelte';
+    import NewDocumentModal from './ui/NewDocumentModal.svelte';
     import ConfirmDiscardModal from './ui/ConfirmDiscardModal.svelte';
     import TabStrip from './multi_tab/TabStrip.svelte';
     import CanvasStack from './multi_tab/CanvasStack.svelte';
@@ -49,6 +50,7 @@
 <PresetPicker />
 <SettingsModal />
 <ExportImageModal />
+<NewDocumentModal />
 <ConfirmDiscardModal />
 
 <style>

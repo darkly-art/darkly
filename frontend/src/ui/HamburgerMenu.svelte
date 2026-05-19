@@ -31,6 +31,7 @@
         }
     }
 
+    const newDocHotkey = $derived(formatHotkey(config.get('hotkeys.newDocument') as string | undefined));
     const settingsHotkey = $derived(formatHotkey(config.get('hotkeys.openSettings') as string | undefined));
     const exportHotkey = $derived(formatHotkey(config.get('hotkeys.exportImage') as string | undefined));
     const saveHotkey = $derived(formatHotkey(config.get('hotkeys.saveDocument') as string | undefined));
@@ -51,6 +52,14 @@
 
     {#if open}
         <div class="menu">
+            <button
+                class="menu-item"
+                onclick={() => runAction('newDocument')}
+            >
+                <i class="fa-solid fa-file"></i>
+                <span>New</span>
+                {#if newDocHotkey}<span class="kbd">{newDocHotkey}</span>{/if}
+            </button>
             <button
                 class="menu-item"
                 onclick={() => runAction('open')}
@@ -86,14 +95,14 @@
                 {#if exportHotkey}<span class="kbd">{exportHotkey}</span>{/if}
             </button>
             <div class="sep"></div>
+            <button class="menu-item" onclick={() => { openCheatsheet(); close(); }}>
+                <i class="fa-solid fa-keyboard"></i>
+                <span>Hotkey Cheat Sheet</span>
+            </button>
             <button class="menu-item" onclick={openSettings}>
                 <i class="fa-solid fa-gear"></i>
                 <span>Settings</span>
                 {#if settingsHotkey}<span class="kbd">{settingsHotkey}</span>{/if}
-            </button>
-            <button class="menu-item" onclick={() => { openCheatsheet(); close(); }}>
-                <i class="fa-solid fa-keyboard"></i>
-                <span>Hotkey Cheat Sheet</span>
             </button>
             <div class="sep"></div>
             <div class="menu-section">

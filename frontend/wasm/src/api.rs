@@ -102,6 +102,7 @@ enum Command {
 
     // Painting
     FillBackground(u64),
+    FillBackgroundColor(u64, [u8; 4]),
 
     // Selection
     SelectRect {
@@ -232,6 +233,9 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             }
 
             Command::FillBackground(id) => engine.fill_background(LayerId::from_ffi(id)),
+            Command::FillBackgroundColor(id, c) => {
+                engine.fill_background_color(LayerId::from_ffi(id), c)
+            }
 
             Command::SelectRect {
                 x,
@@ -652,6 +656,17 @@ impl DarklyHandle {
 
     pub fn fill_background(&self, layer_id: f64) {
         self.push(Command::FillBackground(layer_id as u64));
+    }
+
+    /// Fill `layer_id` with a solid RGBA color. Used by the "New Document"
+    /// flow to seed a fresh raster layer with the user's chosen color.
+    pub fn fill_background_color(&self, layer_id: f64, color: &[u8]) {
+        if color.len() < 4 {
+            log::error!("fill_background_color: color must be 4 bytes (RGBA)");
+            return;
+        }
+        let c = [color[0], color[1], color[2], color[3]];
+        self.push(Command::FillBackgroundColor(layer_id as u64, c));
     }
 
     // --- Stroke lifecycle ---

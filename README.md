@@ -34,19 +34,22 @@ We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz
 
 In addition to the usual paint features, Darkly has some entropic tools to help with artistic exploration.
 
+
+### Veils
+
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They are a special type of layer that sits overtop the viewport, and is visible only to the artist. By placing the canvas behind a strange or mesmerizing filter, they invite **happy accidents**, and help to counteract human tendencies like artist's block, art fatigue, destructive self-criticism, and premature fixation on detail.
+
+Basically, veils give you permission to be messy.
+
+### Voids
+
+Speaking of happy accidents, 
+
 ### Node-Based Brush Engine
 
 ![brush-engine-screenshot](https://github.com/user-attachments/assets/28baa4dc-9cf1-4d9f-b1e3-4ccbe5943171)
 
 Darkly features a unified node-based brush system. Every brush type -- clone, liquify, watercolor, etc. -- all live in a single engine. This enables infinite customizability, mixing and matching of brush features, and making custom brushes on-the-fly.
-
-### Veils
-
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They are a special type of layer that sits atop the whole viewport, visible only to the artist. By partially obscuring the canvas during painting, they can alter the mood, and invite happy accidents. They can also help to counteract age-old human tendencies like art fatigue, artist's block, destructive self-criticism, and premature fixation on detail. Basically, veils give you permission to be wild and messy.
-
-### Voids
-
-Speaking of happy accidents, 
 
 ## Feature Roadmap
 
@@ -133,6 +136,7 @@ These are features that are helpful or essential to digital art workflows. They'
 - [ ] Palette Popup
 
 ### File I/O
+- [x] New document (custom canvas size + background color)
 - [x] Clipboard copy / cut / paste (PNG via browser clipboard)
 - [x] Brush export / import (binary bundle)
 - [x] Export to PNG / JPEG / WebP file
@@ -216,7 +220,7 @@ Darkly stands on the shoulders of giants. Two programs in particular have influe
 
 ### Veils
 
-Several of Darkly's veil shaders are ports or adaptations of work originally published on [Shadertoy](https://www.shadertoy.com/). The originals are exquisite; please go see them in their native habitat!
+Several of Darkly's veil shaders are ports or adaptations of work originally published on [Shadertoy](https://www.shadertoy.com/). I suck at shader code and these are true artists. Please go see them in their native habitat!
 
 - **Lens Blur** - based on [ldG3W3](https://www.shadertoy.com/view/ldG3W3) by [Dave Hoskins](https://www.shadertoy.com/user/Dave_Hoskins).
 - **Kuwahara** - based on [mlffWf](https://www.shadertoy.com/view/mlffWf) by [p4vv37](https://www.shadertoy.com/user/p4vv37), with technique notes from [Acerola / Garrett Gunnell](https://github.com/GarrettGunnell/Post-Processing/tree/main/Assets/Kuwahara%20Filter).

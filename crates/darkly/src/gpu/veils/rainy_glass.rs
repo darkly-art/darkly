@@ -31,7 +31,7 @@ const PARAMS: &[ParamDef] = &[
         name: "scale",
         min: 0.1,
         max: 5.0,
-        default: 0.8,
+        default: 1.4,
     },
 ];
 
@@ -60,7 +60,7 @@ pub fn register() -> VeilRegistration {
             };
             let scale = match params.get(4) {
                 Some(ParamValue::Float(v)) => *v,
-                _ => 0.8,
+                _ => 1.4,
             };
             Box::new(RainyGlass::new(
                 speed,
