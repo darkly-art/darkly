@@ -1753,6 +1753,14 @@ impl DarklyHandle {
         self.engine.borrow().brush_topology_version() as f64
     }
 
+    /// Does the active brush's terminal honor erase mode? `false` for
+    /// brushes whose output node declares `supports_erase = false` in
+    /// its registration (smudge, liquify, watercolor). The UI uses this
+    /// to hide the brush-tool erase toggle.
+    pub fn brush_active_supports_erase(&self) -> bool {
+        self.engine.borrow().active_brush_supports_erase()
+    }
+
     pub fn brush_graph_validate(&self, json: &str) -> JsValue {
         self.flush_if_needed();
         match self.engine.borrow().validate_brush_graph(json) {

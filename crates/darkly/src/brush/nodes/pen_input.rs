@@ -101,7 +101,7 @@ pub fn register() -> BrushNodeRegistration {
             // stroke (dab density along the path) and a spacing scrub
             // *should* re-render the preview.
             PortDef::input("spacing", BrushWireType::Scalar)
-                .with_range(0.04, 1.0, 0.10)
+                .with_range(0.01, 1.0, 0.10)
                 .with_natural_range(0.04, 1.0)
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-grip-lines-vertical")

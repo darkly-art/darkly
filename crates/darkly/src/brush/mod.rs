@@ -136,6 +136,7 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
         "watercolor".into(),
         Box::new(nodes::watercolor::WatercolorEvaluator),
     );
+    map.insert("smudge".into(), Box::new(nodes::smudge::SmudgeEvaluator));
     // Internal terminal used by per-node preview pipeline. Not exposed to the
     // frontend palette (filtered by `category == "internal"`).
     map.insert(

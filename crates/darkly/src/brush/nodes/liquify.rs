@@ -101,6 +101,12 @@ pub fn register() -> BrushNodeRegistration {
 pub struct LiquifyEvaluator;
 
 impl BrushNodeEvaluator for LiquifyEvaluator {
+    /// Liquify warps pixels; `gpu.blend_mode` (paint/erase) has no
+    /// meaning here. The brush-tool UI hides the erase toggle.
+    fn supports_erase(&self) -> bool {
+        false
+    }
+
     /// Publish `dab_size` so the stroke engine can space dabs along the
     /// path. `size = 1.0` maps to diameter `DAB_REFERENCE_SIZE`; larger values
     /// allow brushes wider than that for full-canvas warp effects.

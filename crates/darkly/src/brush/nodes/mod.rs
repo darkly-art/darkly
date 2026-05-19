@@ -19,6 +19,7 @@ pub mod preview_terminal;
 pub mod random;
 pub mod remap;
 pub mod scatter;
+pub mod smudge;
 pub mod split_vec2;
 pub mod stamp;
 pub mod texture_overlay;
@@ -46,6 +47,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         random::register(),
         remap::register(),
         scatter::register(),
+        smudge::register(),
         split_vec2::register(),
         stamp::register(),
         texture_overlay::register(),

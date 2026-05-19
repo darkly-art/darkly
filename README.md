@@ -34,14 +34,6 @@ We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz
 
 In addition to the usual paint features, Darkly has some entropic tools to help with artistic exploration.
 
-<<<<<<< HEAD
-=======
-### Node-Based Brush Engine
-
-Darkly is the first paint program to feature a GPU-native, node-based brush system. There is no separate engine for smudging, cloning, stamping, etc. -- they all live in a unified engine. This enables infinite customizability, mixing and matching of brush features, and making custom brushes on-the-fly.
-
-![brush-engine-screenshot](https://github.com/user-attachments/assets/28baa4dc-9cf1-4d9f-b1e3-4ccbe5943171)
->>>>>>> 187f3ee (readme)
 
 ### Veils
 
@@ -72,7 +64,7 @@ These are features that are helpful or essential to digital art workflows. They'
     - [x] Liquify
     - [x] Watercolor
     - [ ] Clone
-    - [ ] Smudge
+    - [x] Smudge
     - [ ] Blur
     - [ ] Dodge/burn
     - [ ] Pencil / Charcoal

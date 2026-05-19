@@ -175,6 +175,34 @@ pub struct WatercolorCompositeUniforms {
     pub apply_selection: u32,  // 1 = modulate fg by selection, 0 = ignore (commit pass)
 }
 
+/// Uniform data for the smudge compositing shader.
+///
+/// Per-fragment, smudge reads the scratch read mirror twice — once at
+/// `canvas_pos − motion` (the smear sample, the pixel that was under the
+/// brush at the previous dab) and once at `canvas_pos` (the current
+/// background, so source-over is correct where the dab mask falls off).
+/// The read region is sized to cover the union of both, so `copy_origin`
+/// here is *not* `floor(origin)` (as it is for watercolor's composite —
+/// where the read region equals the write region) and must be carried
+/// explicitly.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SmudgeCompositeUniforms {
+    pub origin: [f32; 2],        // write quad top-left in canvas pixels
+    pub size: [f32; 2],          // write quad size in canvas pixels
+    pub target_offset: [f32; 2], // canvas-space offset of render target's (0,0) pixel
+    pub target_size: [f32; 2],   // render target pixel dimensions (vertex NDC)
+    pub canvas_size: [f32; 2],   // document canvas dimensions (fragment selection UV)
+    pub uv_min: [f32; 2],        // min UV in dab texture
+    pub uv_max: [f32; 2],        // max UV in dab texture
+    pub motion: [f32; 2],        // per-dab delta from previous sample (canvas pixels)
+    pub copy_origin: [f32; 2],   // canvas-space top-left of the scratch-mirror snapshot
+    pub rate: f32,               // smudge rate (0 = dry, 1 = full smear)
+    pub stroke_opacity: f32,     // per-stroke opacity cap (1.0 = no cap)
+    pub apply_selection: u32,    // 1 = modulate by selection, 0 = ignore
+    pub _pad: u32,
+}
+
 /// Uniform data for the dab compositing shader.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -333,6 +361,15 @@ pub struct BrushPipelines {
     watercolor_composite_uniform_ring: DynamicUniformRing,
     pub(crate) watercolor_composite_uniform_bind_group: wgpu::BindGroup,
 
+    /// Smudge composite pipeline. Single pass per dab — reads the
+    /// scratch read mirror twice (smear sample at `canvas_pos − motion`,
+    /// background at `canvas_pos`), blends, writes back to scratch.
+    /// Reuses `canvas_copy_bgl` for the mirror binding (no pickup
+    /// texture; no extra binding needed).
+    smudge_composite_pipeline: wgpu::RenderPipeline,
+    smudge_composite_uniform_ring: DynamicUniformRing,
+    pub(crate) smudge_composite_uniform_bind_group: wgpu::BindGroup,
+
     /// 1x1 white selection texture — bound when no selection is active.
     pub(crate) default_selection_bind_group: wgpu::BindGroup,
     pub(crate) selection_bgl: wgpu::BindGroupLayout,
@@ -435,6 +472,13 @@ impl BrushPipelines {
                     .into(),
                 ),
             });
+
+        let smudge_composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("brush-smudge-composite"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/brush/smudge.wgsl").into(),
+            ),
+        });
 
         let mask_blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("brush-mask-blit"),
@@ -616,6 +660,18 @@ impl BrushPipelines {
                 immediate_size: 0,
             });
 
+        // Smudge composite: group(0) = uniforms, group(1) = dab,
+        //                   group(2) = selection,
+        //                   group(3) = scratch read mirror (texture+sampler).
+        // Same layout shape as the standard composite — the shader uses the
+        // brush-agnostic `canvas_copy_bgl` for the mirror; no pickup binding.
+        let smudge_composite_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("brush-smudge-composite-layout"),
+                bind_group_layouts: &[&uniform_bgl, dab_bgl, &selection_bgl, &canvas_copy_bgl],
+                immediate_size: 0,
+            });
+
         // Mask blit: group(0) = source texture+sampler. No uniforms — the
         // shader is a fullscreen triangle that always covers the whole
         // destination viewport.
@@ -776,6 +832,26 @@ impl BrushPipelines {
                         buffer: &watercolor_composite_uniform_ring.buffer,
                         offset: 0,
                         size: Some(watercolor_composite_uniform_ring.binding_size()),
+                    }),
+                }],
+            });
+
+        let smudge_composite_uniform_ring = DynamicUniformRing::new(
+            device,
+            "brush-smudge-composite-uniforms",
+            std::mem::size_of::<SmudgeCompositeUniforms>() as u64,
+            min_align,
+        );
+        let smudge_composite_uniform_bind_group =
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("brush-smudge-composite-uniform-bg"),
+                layout: &uniform_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &smudge_composite_uniform_ring.buffer,
+                        offset: 0,
+                        size: Some(smudge_composite_uniform_ring.binding_size()),
                     }),
                 }],
             });
@@ -1198,6 +1274,40 @@ impl BrushPipelines {
                 cache: None,
             });
 
+        // Smudge composite: REPLACE blend. The fragment writes the
+        // blended pixel directly; where mask=0 the blend collapses to
+        // `mix(bg, src, 0) = bg`, preserving the LoadOp::Load scratch
+        // content. Always targets RGBA8 stroke scratch.
+        let smudge_composite_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("brush-smudge-composite"),
+                layout: Some(&smudge_composite_layout),
+                vertex: wgpu::VertexState {
+                    module: &smudge_composite_shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &smudge_composite_shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+
         Self {
             circle_pipeline,
             stamp_pipeline,
@@ -1229,6 +1339,9 @@ impl BrushPipelines {
             watercolor_composite_pipeline,
             watercolor_composite_uniform_ring,
             watercolor_composite_uniform_bind_group,
+            smudge_composite_pipeline,
+            smudge_composite_uniform_ring,
+            smudge_composite_uniform_bind_group,
             default_selection_bind_group,
             selection_bgl,
             canvas_copy_bgl,
@@ -1334,6 +1447,14 @@ impl BrushPipelines {
     /// group(2) = selection, group(3) = sources (canvas_copy + pickup).
     pub fn watercolor_composite_pipeline(&self) -> &wgpu::RenderPipeline {
         &self.watercolor_composite_pipeline
+    }
+
+    /// Smudge composite pipeline. Targets RGBA8 stroke scratch.
+    /// Bound resources: group(0) = smudge composite uniforms, group(1) =
+    /// dab, group(2) = selection, group(3) = scratch read mirror
+    /// (texture+sampler via `canvas_copy_bgl`).
+    pub fn smudge_composite_pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.smudge_composite_pipeline
     }
 
     pub fn selection_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
@@ -1443,6 +1564,17 @@ impl BrushPipelines {
             .write(queue, bytemuck::bytes_of(uniforms))
     }
 
+    /// Write smudge composite uniforms to the next ring slot.
+    /// Returns the dynamic byte offset for `set_bind_group`.
+    pub fn write_smudge_composite_uniforms(
+        &self,
+        queue: &wgpu::Queue,
+        uniforms: &SmudgeCompositeUniforms,
+    ) -> u32 {
+        self.smudge_composite_uniform_ring
+            .write(queue, bytemuck::bytes_of(uniforms))
+    }
+
     /// True if any ring is close to capacity.  The caller should flush
     /// the current encoder, reset rings, and create a fresh encoder.
     pub fn rings_nearly_full(&self) -> bool {
@@ -1454,6 +1586,7 @@ impl BrushPipelines {
             || self.liquify_uniform_ring.nearly_full()
             || self.watercolor_pickup_uniform_ring.nearly_full()
             || self.watercolor_composite_uniform_ring.nearly_full()
+            || self.smudge_composite_uniform_ring.nearly_full()
     }
 
     /// Reset all uniform rings for a new frame.
@@ -1466,5 +1599,6 @@ impl BrushPipelines {
         self.liquify_uniform_ring.reset();
         self.watercolor_pickup_uniform_ring.reset();
         self.watercolor_composite_uniform_ring.reset();
+        self.smudge_composite_uniform_ring.reset();
     }
 }

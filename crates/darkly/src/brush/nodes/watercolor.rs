@@ -103,6 +103,12 @@ pub fn register() -> BrushNodeRegistration {
 pub struct WatercolorEvaluator;
 
 impl BrushNodeEvaluator for WatercolorEvaluator {
+    /// Watercolor commits ignore `gpu.blend_mode` — erase on a wet smudge
+    /// brush isn't meaningful. The brush-tool UI hides the erase toggle.
+    fn supports_erase(&self) -> bool {
+        false
+    }
+
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         // GPU node — CPU evaluation is a no-op.
         vec![]
