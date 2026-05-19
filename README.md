@@ -84,8 +84,7 @@ These are features that are helpful or essential to digital art workflows. They'
 - [ ] Group blend mode / opacity (groups don't carry BlendProps yet)
 
 ### Selection
-- [x] Rect, ellipse, lasso, magic wand
-- [ ] Polygon
+- [x] Rect, ellipse, lasso, polygon, magic wand
 - [x] Replace / Add / Subtract / Intersect modes
 - [ ] Feather + antialias
 - [ ] Invert (boolean op exists)

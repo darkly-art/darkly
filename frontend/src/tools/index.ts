@@ -6,6 +6,7 @@ import { colorPickerTool } from './colorpicker.svelte';
 import { rectSelectTool } from './rect_select.svelte';
 import { ellipseSelectTool } from './ellipse_select.svelte';
 import { lassoSelectTool } from './lasso_select.svelte';
+import { polygonSelectTool } from './polygon_select.svelte';
 import { magicWandTool } from './magic_wand.svelte';
 import { transformTool } from './transform.svelte';
 
@@ -16,5 +17,6 @@ toolRegistry.register(colorPickerTool);
 toolRegistry.register(rectSelectTool);
 toolRegistry.register(ellipseSelectTool);
 toolRegistry.register(lassoSelectTool);
+toolRegistry.register(polygonSelectTool);
 toolRegistry.register(magicWandTool);
 toolRegistry.register(transformTool);
