@@ -35,7 +35,7 @@ struct Params {
 @group(0) @binding(1) var t_sampler: sampler;
 @group(0) @binding(2) var<uniform> params: Params;
 
-@fragment fn fs_kuwahara(in: VertexOutput) -> @location(0) vec4f {
+@fragment fn fs_painting(in: VertexOutput) -> @location(0) vec4f {
     let uv = in.uv;
     let kernel_radius = params.kernel_size;
     let texel = 1.0 / params.resolution;

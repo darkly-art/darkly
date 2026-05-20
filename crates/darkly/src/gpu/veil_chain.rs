@@ -48,7 +48,7 @@ pub struct VeilChain {
     blit_bind_groups: Option<[wgpu::BindGroup; 2]>,
     /// Multi-tap soft-downscale pipeline used to feed reduced-resolution
     /// veils. Single-tap bilinear aliases hard on filters whose output is
-    /// sensitive to small input differences (Kuwahara especially), so we
+    /// sensitive to small input differences (Painting especially), so we
     /// use a dedicated 4-tap filter sized by screen-space derivatives.
     /// Created lazily on first scaled veil.
     downscale_pipeline: Option<EffectPipeline>,

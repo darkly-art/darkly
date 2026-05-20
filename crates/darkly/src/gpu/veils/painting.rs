@@ -1,3 +1,6 @@
+// User-facing "Painting" veil. The underlying algorithm is the
+// generalized Kuwahara filter — see shader header for prior-art credit.
+
 use crate::gpu::effect::{EffectCache, EffectPipeline};
 use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
@@ -6,7 +9,7 @@ const PARAMS: &[ParamDef] = &[
     ParamDef::Int {
         name: "kernel_size",
         min: 1,
-        max: 12,
+        max: 7,
         default: 6,
     },
     ParamDef::Float {
@@ -25,10 +28,10 @@ const PARAMS: &[ParamDef] = &[
 
 pub fn register() -> VeilRegistration {
     VeilRegistration {
-        type_id: "kuwahara",
-        display_name: "Kuwahara",
+        type_id: "painting",
+        display_name: "Painting",
         params: PARAMS,
-        create_pipeline: create_kuwahara_pipeline,
+        create_pipeline: create_painting_pipeline,
         from_params: |params, shared| {
             let kernel_size = match params.first() {
                 Some(ParamValue::Int(v)) => *v,
@@ -42,16 +45,16 @@ pub fn register() -> VeilRegistration {
                 Some(ParamValue::Float(v)) => *v,
                 _ => 100.0,
             };
-            Box::new(Kuwahara::new(kernel_size, sharpness, hardness, shared))
+            Box::new(Painting::new(kernel_size, sharpness, hardness, shared))
         },
     }
 }
 
-/// GPU uniforms for the Kuwahara shader.
+/// GPU uniforms for the Painting shader.
 /// Layout must match the WGSL `Params` struct exactly.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct KuwaharaUniforms {
+struct PaintingUniforms {
     kernel_size: i32,
     sharpness: f32,
     hardness: f32,
@@ -61,21 +64,21 @@ struct KuwaharaUniforms {
 }
 
 #[derive(Clone, Debug)]
-pub struct Kuwahara {
+pub struct Painting {
     pub kernel_size: i32,
     pub sharpness: f32,
     pub hardness: f32,
     shared: Arc<EffectPipeline>,
 }
 
-impl Kuwahara {
+impl Painting {
     pub fn new(
         kernel_size: i32,
         sharpness: f32,
         hardness: f32,
         shared: Arc<EffectPipeline>,
     ) -> Self {
-        Kuwahara {
+        Painting {
             kernel_size: kernel_size.max(1),
             sharpness,
             hardness,
@@ -84,9 +87,9 @@ impl Kuwahara {
     }
 }
 
-impl Veil for Kuwahara {
+impl Veil for Painting {
     fn type_id(&self) -> &'static str {
-        "kuwahara"
+        "painting"
     }
 
     fn clone_boxed(&self) -> Box<dyn Veil> {
@@ -117,7 +120,7 @@ impl Veil for Kuwahara {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = KuwaharaUniforms {
+        let uniforms = PaintingUniforms {
             kernel_size: self.kernel_size,
             sharpness: self.sharpness,
             hardness: self.hardness,
@@ -126,8 +129,8 @@ impl Veil for Kuwahara {
             resolution_y: render_height as f32,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("kuwahara-uniforms"),
-            size: std::mem::size_of::<KuwaharaUniforms>() as u64,
+            label: Some("painting-uniforms"),
+            size: std::mem::size_of::<PaintingUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -136,7 +139,7 @@ impl Veil for Kuwahara {
         let layout = &self.shared.bind_group_layout;
         let bind_groups: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("kuwahara-bg-{i}")),
+                label: Some(&format!("painting-bg-{i}")),
                 layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -172,7 +175,7 @@ impl Veil for Kuwahara {
         dst_view: &wgpu::TextureView,
     ) {
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("kuwahara"),
+            label: Some("painting"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: dst_view,
                 resolve_target: None,
@@ -190,9 +193,9 @@ impl Veil for Kuwahara {
     }
 }
 
-fn create_kuwahara_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
+fn create_painting_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("kuwahara-bgl"),
+        label: Some("painting-bgl"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -224,20 +227,20 @@ fn create_kuwahara_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat)
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("kuwahara-pipeline-layout"),
+        label: Some("painting-pipeline-layout"),
         bind_group_layouts: &[&bind_group_layout],
         immediate_size: 0,
     });
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("kuwahara-shader"),
+        label: Some("painting-shader"),
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/kuwahara.wgsl").into(),
+            include_str!("../../../../../shaders/veils/painting.wgsl").into(),
         ),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("kuwahara-pipeline"),
+        label: Some("painting-pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
@@ -247,7 +250,7 @@ fn create_kuwahara_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat)
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_kuwahara"),
+            entry_point: Some("fs_painting"),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 blend: None,

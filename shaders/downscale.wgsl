@@ -1,7 +1,7 @@
 // Multi-tap soft downscale used by the veil chain when a veil renders at
 // reduced resolution. Replaces the single-tap bilinear blit, which acts as
 // a fixed 2×2 box filter regardless of the downscale ratio and aliases
-// hard for filters (like Kuwahara) whose output is hypersensitive to
+// hard for filters (like Painting) whose output is hypersensitive to
 // small input differences.
 //
 // Each output pixel takes 4 bilinear taps positioned at the corners of
