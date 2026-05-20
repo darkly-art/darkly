@@ -1505,23 +1505,33 @@ impl Compositor {
         entry.isolated = isolated;
     }
 
-    /// True when any allocated void reports `needs_animation()`. Folded into
-    /// the compositor's overall `needs_animation()` so the rAF loop keeps
-    /// ticking while animated voids exist.
-    fn any_void_needs_animation(&self) -> bool {
-        self.void_layers.values().any(|v| v.void.needs_animation())
+    /// True when any allocated void reports `needs_animation()` AND its
+    /// layer is effectively visible in `doc`. Folded into the compositor's
+    /// overall `needs_animation()` so the rAF loop keeps ticking while
+    /// animated voids exist — but a hidden layer's animation contribution
+    /// is dropped at the same point the compositor's tree walk would drop
+    /// the layer's output (see `compose_children`'s `node.visible()` skip).
+    fn any_void_needs_animation(&self, doc: &Document) -> bool {
+        self.void_layers
+            .iter()
+            .any(|(id, v)| v.void.needs_animation() && doc.effective_visible(*id))
     }
 
-    /// Advance every animated void by `dt`. Called by `update_animations`
-    /// at the cadence set by `animation.void_divisor`. Each animated void
-    /// writes a fresh time uniform and flags its texture dirty so the next
-    /// frame re-renders it through `encode_dirty_void_textures`.
-    fn tick_voids(&mut self, queue: &wgpu::Queue, dt: f32) {
-        for entry in self.void_layers.values_mut() {
-            if entry.void.needs_animation() {
-                entry.void.update_time(queue, &entry.cache, dt);
-                entry.dirty = true;
+    /// Advance every effectively-visible animated void by `dt`. Called by
+    /// `update_animations` at the cadence set by `animation.void_divisor`.
+    /// Visibility is queried per-void the same way the main composite walk
+    /// queries it — no precomputed "hidden voids" set; the doc is the
+    /// authoritative tree.
+    fn tick_voids(&mut self, queue: &wgpu::Queue, dt: f32, doc: &Document) {
+        for (id, entry) in self.void_layers.iter_mut() {
+            if !entry.void.needs_animation() {
+                continue;
             }
+            if !doc.effective_visible(*id) {
+                continue;
+            }
+            entry.void.update_time(queue, &entry.cache, dt);
+            entry.dirty = true;
         }
     }
 
@@ -1589,7 +1599,12 @@ impl Compositor {
     ///
     /// Integer divisors guarantee alignment — a divisor-4 tick always coincides
     /// with a divisor-2 tick, so systems never force extra frame renders.
-    pub fn update_animations(&mut self, queue: &wgpu::Queue, wall_time: f32) {
+    ///
+    /// `doc` is borrowed to consult layer visibility — animation work for an
+    /// effectively-hidden layer (self or any ancestor hidden) is skipped at
+    /// exactly the point the compositor's tree walk would drop the layer's
+    /// composited output.
+    pub fn update_animations(&mut self, queue: &wgpu::Queue, wall_time: f32, doc: &Document) {
         let dt = if self.last_wall_time > 0.0 {
             (wall_time - self.last_wall_time).max(0.0)
         } else {
@@ -1620,7 +1635,7 @@ impl Compositor {
         // already produce, matching the `gpu-lessons-learned.md` master-
         // clock principle.
         let void_fires = void_divisor > 0
-            && self.any_void_needs_animation()
+            && self.any_void_needs_animation(doc)
             && self.frame_count.is_multiple_of(void_divisor);
 
         if veil_fires {
@@ -1633,7 +1648,7 @@ impl Compositor {
         }
 
         if void_fires {
-            self.tick_voids(queue, dt * void_divisor as f32);
+            self.tick_voids(queue, dt * void_divisor as f32, doc);
             // Re-render needed: voids are document-side content, so they
             // require a full composite, not just a re-present.
             self.needs_composite = true;
@@ -1645,11 +1660,12 @@ impl Compositor {
     }
 
     /// Returns true if any animations need continuous frames (veils, overlay,
-    /// or any animated void layer).
-    pub fn needs_animation(&self) -> bool {
+    /// or any effectively-visible animated layer). `doc` is consulted for
+    /// per-layer visibility — same contract as [`Self::update_animations`].
+    pub fn needs_animation(&self, doc: &Document) -> bool {
         self.tool_overlay.needs_animation()
             || self.veil_chain.needs_animation()
-            || self.any_void_needs_animation()
+            || self.any_void_needs_animation(doc)
     }
 
     /// Update the view transform uniform buffer. The compositor owns the

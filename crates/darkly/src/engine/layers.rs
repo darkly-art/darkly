@@ -127,6 +127,18 @@ impl DarklyEngine {
         layer_id: LayerId,
         source: crate::gpu::void::ExternalImageSource,
     ) {
+        // Visibility gate: a hidden layer (or any hidden ancestor) means the
+        // composited output ignores this layer entirely, so the canvas blit
+        // upstream of us plus this GPU copy plus the void's encode pass plus
+        // the compositor recomposite would all be pure waste. The
+        // authoritative answer lives in the doc — `effective_visible` walks
+        // ancestors. The JS-side `CameraSource.tick()` also short-circuits
+        // on visibility, but this guard is the canonical correctness one:
+        // any future caller (tests, a different frontend, IPC) gets the
+        // same behaviour without needing to remember the JS optimization.
+        if !self.doc.effective_visible(layer_id) {
+            return;
+        }
         self.compositor.upload_void_external_image(
             &self.gpu.device,
             &self.gpu.queue,

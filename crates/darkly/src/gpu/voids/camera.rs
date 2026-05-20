@@ -345,7 +345,9 @@ impl Void for Camera {
         // Without it, the void would only re-render on param changes, and
         // live webcam frames would freeze on the first one we uploaded.
         // When frozen, the last frame is held forever — no animation
-        // needed, so we stop keeping the rAF loop alive.
+        // needed, so we stop keeping the rAF loop alive. The visibility
+        // half of the gate (don't animate a hidden layer) is the engine's
+        // job; this method only knows about kind-specific state.
         !self.freeze
     }
 
@@ -395,7 +397,9 @@ impl Void for Camera {
 
     fn wants_external_input(&self) -> bool {
         // While frozen, refuse new frames so the displayed image is whatever
-        // was in the aux texture at the moment freeze was toggled on.
+        // was in the aux texture at the moment freeze was toggled on. The
+        // visibility half of the gate (don't upload to a hidden layer) is
+        // the engine's job at the `upload_void_external_image` boundary.
         !self.freeze
     }
 

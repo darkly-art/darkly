@@ -1,7 +1,10 @@
 //! Rendering, view transform, thumbnails, undo/redo, and async readback polling.
 
 use super::{DarklyEngine, ReadbackContext};
+use crate::gpu::atlas::CanvasFrame;
+use crate::gpu::context::GpuContext;
 use crate::gpu::readback;
+use crate::gpu::region_store::{RegionStore, UndoRegionEntry};
 use crate::gpu::view::ViewTransform;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
@@ -467,7 +470,7 @@ impl DarklyEngine {
 
         let t_anim = web_time::Instant::now();
         self.compositor
-            .update_animations(&self.gpu.queue, time_secs);
+            .update_animations(&self.gpu.queue, time_secs, &self.doc);
         let anim_us = t_anim.elapsed().as_micros() as u64;
 
         let t_comp = web_time::Instant::now();
@@ -488,7 +491,7 @@ impl DarklyEngine {
         };
 
         // Keep requesting frames while async operations are in flight.
-        self.compositor.needs_animation()
+        self.compositor.needs_animation(&self.doc)
             || self.readbacks.has_pending()
             || self.compositor.has_pending_content_bounds()
             || self.diff_rect.is_pending()
@@ -556,16 +559,11 @@ impl DarklyEngine {
                 .node_texture(node_id)
                 .map(|t| t.canvas_frame());
             if let Some(frame) = frame {
-                self.gpu.encode(
-                    match direction {
-                        UndoDirection::Undo => "undo-restore",
-                        UndoDirection::Redo => "redo-restore",
-                    },
-                    |encoder| {
-                        let swapped = self.region_store.restore_region(encoder, entry, &frame);
-                        *entry = swapped;
-                    },
-                );
+                let label = match direction {
+                    UndoDirection::Undo => "undo-restore",
+                    UndoDirection::Redo => "redo-restore",
+                };
+                restore_gpu_region(&self.gpu, &mut self.region_store, entry, &frame, label);
                 // Restored pixels — refresh the panel thumbnail.
                 self.compositor.mark_node_pixels_dirty(node_id);
             }
@@ -579,16 +577,11 @@ impl DarklyEngine {
             if let Some(entry) = action.selection_region_entry_mut() {
                 let frame = self.compositor.selection_state().map(|s| s.canvas_frame());
                 if let Some(frame) = frame {
-                    self.gpu.encode(
-                        match direction {
-                            UndoDirection::Undo => "undo-sel-restore",
-                            UndoDirection::Redo => "redo-sel-restore",
-                        },
-                        |encoder| {
-                            let swapped = self.region_store.restore_region(encoder, entry, &frame);
-                            *entry = swapped;
-                        },
-                    );
+                    let label = match direction {
+                        UndoDirection::Undo => "undo-sel-restore",
+                        UndoDirection::Redo => "redo-sel-restore",
+                    };
+                    restore_gpu_region(&self.gpu, &mut self.region_store, entry, &frame, label);
                 }
             }
 
@@ -779,6 +772,27 @@ impl DarklyEngine {
 enum UndoDirection {
     Undo,
     Redo,
+}
+
+/// Encode a region restore into `frame` and swap the produced redo-side
+/// entry back into `*entry`. Shared by the layer-pixels and selection
+/// branches of `apply_undo` — only the frame source (node texture vs
+/// selection state) and the post-restore side effects differ between
+/// callers. Kept as a free function so the caller can hold a
+/// `CanvasFrame<'_>` borrowed from `self.compositor` while passing
+/// `&mut self.region_store` — field-level borrow splitting that a
+/// `&mut self` method couldn't express.
+fn restore_gpu_region(
+    gpu: &GpuContext,
+    region_store: &mut RegionStore,
+    entry: &mut UndoRegionEntry,
+    frame: &CanvasFrame<'_>,
+    label: &str,
+) {
+    gpu.encode(label, |encoder| {
+        let swapped = region_store.restore_region(encoder, entry, frame);
+        *entry = swapped;
+    });
 }
 
 // ---------------------------------------------------------------------------

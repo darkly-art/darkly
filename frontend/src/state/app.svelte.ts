@@ -281,9 +281,20 @@ export class DarklyInstance {
      *  `$state` inside an effect-tracked code path causes Svelte to loop
      *  the enclosing effect into the infinite-update guard. */
     private reconcileCameraSources(tree: any[]) {
-        const desired = new Map<number, { frozen: boolean; frameDivisor: number }>();
-        const walk = (nodes: any[]) => {
+        const desired = new Map<
+            number,
+            { frozen: boolean; frameDivisor: number; visible: boolean }
+        >();
+        // Thread `parentVisible` through the walk: a camera void is
+        // effectively visible only if every ancestor up to the root is
+        // visible, matching the compositor's nested-visibility semantics
+        // (see `Doc::effective_visible`). The eye on the camera's own row
+        // is necessary but not sufficient — hiding the parent group must
+        // also halt uploads.
+        const walk = (nodes: any[], parentVisible: boolean) => {
             for (const n of nodes) {
+                const selfVisible = n?.visible !== false; // default true
+                const effectiveVisible = parentVisible && selfVisible;
                 // `type` (not `kind`) is the serde variant tag on `LayerInfo`
                 // — set by `#[serde(tag = "type")]` in engine/types.rs. The
                 // word `kind` is also used on the inner `ParamInfo`, which
@@ -306,12 +317,12 @@ export class DarklyInstance {
                               ? divisorParam.default
                               : 4;
                     const frameDivisor = Math.max(1, Math.floor(rawDivisor));
-                    desired.set(n.id, { frozen, frameDivisor });
+                    desired.set(n.id, { frozen, frameDivisor, visible: effectiveVisible });
                 }
-                if (Array.isArray(n?.children)) walk(n.children);
+                if (Array.isArray(n?.children)) walk(n.children, effectiveVisible);
             }
         };
-        walk(tree);
+        walk(tree, true);
 
         // Stop sources for layers that disappeared or that are now frozen.
         for (const id of [...this.cameraSources.keys()]) {
@@ -331,12 +342,16 @@ export class DarklyInstance {
             }
         }
 
-        // Push the latest `frame_divisor` value into every live source so
-        // slider changes take effect without restarting the MediaStream.
+        // Push the latest `frame_divisor` and effective-visibility into
+        // every live source. Slider / eye-toggle / parent-hide changes
+        // take effect on the next rAF without restarting the MediaStream.
         // Done after start so a freshly-started source picks up the user's
-        // current value rather than the constructor default.
-        for (const [id, { frameDivisor }] of desired) {
-            this.cameraSources.get(id)?.setFrameDivisor(frameDivisor);
+        // current values rather than the constructor defaults.
+        for (const [id, { frameDivisor, visible }] of desired) {
+            const src = this.cameraSources.get(id);
+            if (!src) continue;
+            src.setFrameDivisor(frameDivisor);
+            src.setVisible(visible);
         }
 
         // Drop session-started ids whose layer is gone so a future undo

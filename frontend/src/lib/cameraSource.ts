@@ -53,6 +53,14 @@ export class CameraSource {
      *  lands on a frame the compositor was going to re-render anyway. */
     private frameDivisor = 4;
 
+    /** Effective visibility (self + every ancestor visible) for the void's
+     *  layer. Pushed in by the layer-tree reconciler. When false, `tick()`
+     *  short-circuits — no canvas blit, no WASM call, no GPU work. The Rust
+     *  side also gates `wants_external_input` on its own visibility flag, so
+     *  this is the JS-local optimization (skip the `drawImage` and the
+     *  bridge call) and Rust is the canonical correctness guard. */
+    private visible = true;
+
     /** 2D-context-backed canvas we blit the video frame into each tick.
      *  Required because Firefox's WebGPU rejects `HTMLVideoElement` as a
      *  `copyExternalImageToTexture` source, and some Chromium configs
@@ -161,6 +169,7 @@ export class CameraSource {
      *  `divisor=4` will fire on the same rAF as a veil with `divisor=4`,
      *  not one rAF off. */
     tick(frameCount: number): void {
+        if (!this.visible) return;
         if (frameCount % this.frameDivisor !== 0) return;
         if (!this.video || !this.canvas || !this.ctx || this.stopped || !this.hasFrame) return;
         const vw = this.video.videoWidth;
@@ -180,6 +189,13 @@ export class CameraSource {
      *  current divisor, so a slider change takes effect on the next rAF. */
     setFrameDivisor(n: number): void {
         this.frameDivisor = Math.max(1, Math.floor(n));
+    }
+
+    /** Update the effective-visibility flag. Called by the layer-tree
+     *  reconciler whenever any node on the path from root to this camera
+     *  void changes its eye state. */
+    setVisible(visible: boolean): void {
+        this.visible = visible;
     }
 
     /** Stop the MediaStream, free the video element, and mark this source

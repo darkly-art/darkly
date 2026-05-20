@@ -90,7 +90,9 @@ pub trait Void: std::fmt::Debug {
     /// Whether this void uses time-based animation. When true (and visible),
     /// the compositor calls [`Self::update_time`] each frame the
     /// `animation.void_divisor` master clock fires, and keeps the canvas
-    /// re-presenting.
+    /// re-presenting. The visibility half of that gate is enforced by the
+    /// engine, not the void — voids don't store layer visibility (the doc
+    /// does).
     fn needs_animation(&self) -> bool {
         false
     }
