@@ -93,6 +93,13 @@ impl Veil for Kuwahara {
         Box::new(self.clone())
     }
 
+    fn perf_scale_factor(&self) -> f32 {
+        // O(kernel²) samples per pixel — at default kernel_size=6 that's 169
+        // texture taps. Painterly output is inherently smooth/blurry, so the
+        // bilinear upscale is visually free.
+        0.7
+    }
+
     fn param_values(&self) -> Vec<ParamValue> {
         vec![
             ParamValue::Int(self.kernel_size),

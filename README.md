@@ -15,6 +15,8 @@
 
 [Darkly](https://darkly.art) is a GPU-native editor written in Rust. Geared towards digital painters, it's got everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
+[![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)](https://demo.darkly.art)
+
 ### Darkly pledges to:
 
 - 🛐 Honor human imagination
@@ -23,8 +25,6 @@
 - ☮️ Stay free and open source forever
 
 **Try the demo [here](https://demo.darkly.art).**
-
-![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)
 
 ## Kickstarter
 

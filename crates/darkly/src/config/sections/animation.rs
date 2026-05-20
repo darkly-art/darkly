@@ -7,8 +7,7 @@ const PREFS: &[Pref] = &[
         key: "animation.veil_divisor",
         display_name: "Veil animation divisor",
         description: Some(
-            "How often animated veils tick, as a fraction of the master frame rate.\
-             1 = every frame, 2 = every other, 4 = every fourth.",
+            "How often animated veils tick, as a fraction of the master frame rate. 1 = every frame, 2 = every other, 4 = every fourth.",
         ),
         kind: PrefKind::Int { min: 1, max: 16 },
         default: PrefDefault::Int(2),

@@ -4,6 +4,11 @@
 // Based on work by Acerola, ported from Shadertoy GLSL to WGSL.
 //   https://www.youtube.com/watch?v=LDhN-JK3U9g
 //   https://github.com/GarrettGunnell/Post-Processing/tree/main/Assets/Kuwahara%20Filter
+//
+// We specialize on the 4 axis-aligned (cardinal) sectors. The reference
+// implementation computes 8 sectors per sample (cardinal + 45°-rotated
+// diagonals) but blends only the first 4, so the diagonal weights and
+// accumulators were pure waste — this version drops them.
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -30,104 +35,94 @@ struct Params {
 @group(0) @binding(1) var t_sampler: sampler;
 @group(0) @binding(2) var<uniform> params: Params;
 
-// Number of sectors for the generalized Kuwahara weighting.
-// 8 polynomial weights are computed per sample; the final blend
-// uses the first N sectors. N=4 gives a good quality/speed tradeoff.
-const N: i32 = 4;
-
 @fragment fn fs_kuwahara(in: VertexOutput) -> @location(0) vec4f {
     let uv = in.uv;
     let kernel_radius = params.kernel_size;
     let texel = 1.0 / params.resolution;
+    let inv_r = 1.0 / f32(kernel_radius);
 
-    let zeta = 2.0 / f32(kernel_radius);
-    // eta = 0 for the generalized polynomial weights (zeroCross term omitted).
-    let eta = 0.0;
+    let zeta = 2.0 * inv_r;
+    // eta = 0 for the generalized polynomial weights (zeroCross term omitted),
+    // so the polynomial inputs reduce to plain `zeta` — hoisted out of the loop.
 
-    // Per-sector accumulators: mean (rgb + weight sum in w) and squared mean.
-    var m: array<vec4f, 8>;
-    var s: array<vec3f, 8>;
-    for (var k = 0; k < 8; k++) {
-        m[k] = vec4f(0.0);
-        s[k] = vec3f(0.0);
-    }
+    // Per-sector accumulators for the 4 cardinal sectors:
+    // mean (rgb + weight sum in w) and squared mean (rgb).
+    var m0 = vec4f(0.0);
+    var m1 = vec4f(0.0);
+    var m2 = vec4f(0.0);
+    var m3 = vec4f(0.0);
+    var s0 = vec3f(0.0);
+    var s1 = vec3f(0.0);
+    var s2 = vec3f(0.0);
+    var s3 = vec3f(0.0);
 
     for (var y = -kernel_radius; y <= kernel_radius; y++) {
         for (var x = -kernel_radius; x <= kernel_radius; x++) {
-            let v_orig = vec2f(f32(x), f32(y)) / f32(kernel_radius);
-            let c = clamp(
-                textureSampleLevel(t_input, t_sampler, uv + vec2f(f32(x), f32(y)) * texel, 0.0).rgb,
-                vec3f(0.0),
-                vec3f(1.0),
-            );
-
-            var sum = 0.0;
-            var w: array<f32, 8>;
+            let v = vec2f(f32(x), f32(y)) * inv_r;
+            // Rgba8Unorm already guarantees [0,1] — no clamp needed.
+            let c = textureSampleLevel(t_input, t_sampler, uv + vec2f(f32(x), f32(y)) * texel, 0.0).rgb;
 
             // Polynomial weights for the 4 axis-aligned sectors.
-            let vxx = zeta - eta * v_orig.x * v_orig.x;
-            let vyy = zeta - eta * v_orig.y * v_orig.y;
+            let zy_pos = max(0.0, v.y + zeta);
+            let zx_neg = max(0.0,-v.x + zeta);
+            let zy_neg = max(0.0,-v.y + zeta);
+            let zx_pos = max(0.0, v.x + zeta);
 
-            var z = max(0.0, v_orig.y + vxx);
-            w[0] = z * z;
-            sum += w[0];
+            let w0 = zy_pos * zy_pos;
+            let w1 = zx_neg * zx_neg;
+            let w2 = zy_neg * zy_neg;
+            let w3 = zx_pos * zx_pos;
+            // `sum` normalizes each sample's polynomial weights so its total
+            // contribution across sectors equals the Gaussian envelope. The
+            // 8-sector reference summed all 8 weights; with 4 cardinal
+            // sectors we sum only those four (which still gives a smooth
+            // Gaussian spatial fall-off).
+            let inv_sum = 1.0 / (w0 + w1 + w2 + w3);
 
-            z = max(0.0, -v_orig.x + vyy);
-            w[2] = z * z;
-            sum += w[2];
+            let g = exp(-3.125 * dot(v, v)) * inv_sum;
+            let cc = c * c;
 
-            z = max(0.0, -v_orig.y + vxx);
-            w[4] = z * z;
-            sum += w[4];
+            let wg0 = w0 * g;
+            let wg1 = w1 * g;
+            let wg2 = w2 * g;
+            let wg3 = w3 * g;
 
-            z = max(0.0, v_orig.x + vyy);
-            w[6] = z * z;
-            sum += w[6];
-
-            // Rotate 45° for the 4 diagonal sectors.
-            let r2 = sqrt(2.0) / 2.0;
-            let v_rot = r2 * vec2f(v_orig.x - v_orig.y, v_orig.x + v_orig.y);
-            let vxx2 = zeta - eta * v_rot.x * v_rot.x;
-            let vyy2 = zeta - eta * v_rot.y * v_rot.y;
-
-            z = max(0.0, v_rot.y + vxx2);
-            w[1] = z * z;
-            sum += w[1];
-
-            z = max(0.0, -v_rot.x + vyy2);
-            w[3] = z * z;
-            sum += w[3];
-
-            z = max(0.0, -v_rot.y + vxx2);
-            w[5] = z * z;
-            sum += w[5];
-
-            z = max(0.0, v_rot.x + vyy2);
-            w[7] = z * z;
-            sum += w[7];
-
-            // Gaussian envelope weighted by polynomial sector membership.
-            let g = exp(-3.125 * dot(v_orig, v_orig)) / sum;
-
-            for (var k = 0; k < 8; k++) {
-                let wk = w[k] * g;
-                m[k] += vec4f(c * wk, wk);
-                s[k] += c * c * wk;
-            }
+            m0 += vec4f(c * wg0, wg0);
+            m1 += vec4f(c * wg1, wg1);
+            m2 += vec4f(c * wg2, wg2);
+            m3 += vec4f(c * wg3, wg3);
+            s0 += cc * wg0;
+            s1 += cc * wg1;
+            s2 += cc * wg2;
+            s3 += cc * wg3;
         }
     }
 
     // Blend sector means weighted by inverse variance.
+    let h_pow = 0.5 * params.sharpness;
+    let h_scale = params.hardness * 1000.0;
+
     var out = vec4f(0.0);
-    for (var k = 0; k < N; k++) {
-        m[k] = vec4f(m[k].rgb / m[k].w, m[k].w);
-        s[k] = abs(s[k] / m[k].w - m[k].rgb * m[k].rgb);
 
-        let sigma2 = s[k].r + s[k].g + s[k].b;
-        let w = 1.0 / (1.0 + pow(params.hardness * 1000.0 * sigma2, 0.5 * params.sharpness));
+    let mean0 = m0.rgb / m0.w;
+    let var0 = abs(s0 / m0.w - mean0 * mean0);
+    let bw0 = 1.0 / (1.0 + pow(h_scale * (var0.r + var0.g + var0.b), h_pow));
+    out += vec4f(mean0 * bw0, bw0);
 
-        out += vec4f(m[k].rgb * w, w);
-    }
+    let mean1 = m1.rgb / m1.w;
+    let var1 = abs(s1 / m1.w - mean1 * mean1);
+    let bw1 = 1.0 / (1.0 + pow(h_scale * (var1.r + var1.g + var1.b), h_pow));
+    out += vec4f(mean1 * bw1, bw1);
 
-    return clamp(out / out.w, vec4f(0.0), vec4f(1.0));
+    let mean2 = m2.rgb / m2.w;
+    let var2 = abs(s2 / m2.w - mean2 * mean2);
+    let bw2 = 1.0 / (1.0 + pow(h_scale * (var2.r + var2.g + var2.b), h_pow));
+    out += vec4f(mean2 * bw2, bw2);
+
+    let mean3 = m3.rgb / m3.w;
+    let var3 = abs(s3 / m3.w - mean3 * mean3);
+    let bw3 = 1.0 / (1.0 + pow(h_scale * (var3.r + var3.g + var3.b), h_pow));
+    out += vec4f(mean3 * bw3, bw3);
+
+    return vec4f(out.rgb / out.w, 1.0);
 }
