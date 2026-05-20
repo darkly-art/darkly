@@ -1569,6 +1569,18 @@ impl Compositor {
         self.canvas_height
     }
 
+    /// Master rAF tick counter. Advances exactly once per `update_animations`
+    /// call (i.e. once per `engine.render`), starting at 0. This is the same
+    /// counter every divisor-throttled subsystem inside the compositor checks
+    /// (`veil_divisor`, `overlay_divisor`, `void_divisor` — see
+    /// [`Self::update_animations`]), so any JS-side throttle that uses
+    /// `frame_count % divisor == 0` automatically aligns with all of them.
+    /// Exposed so the WASM bridge can hand it to the frontend (e.g. the
+    /// camera void's upload throttle).
+    pub fn frame_count(&self) -> u64 {
+        self.frame_count
+    }
+
     /// Unified frame scheduler. Called once per rAF tick.
     ///
     /// Systems fire at fractional rates of the master clock (rAF rate):

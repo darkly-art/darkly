@@ -1079,11 +1079,14 @@ impl DarklyHandle {
     /// the current `<video>` frame blitted into it via `drawImage`; we then
     /// copy that canvas into the void's GPU texture.
     ///
-    /// Why a canvas and not the `<video>` directly? Chromium's
-    /// `copyExternalImageToTexture` from an `HTMLVideoElement` silently
-    /// no-ops in some configurations (texture stays zero). The canvas blit
-    /// path is the well-tested route used by the official WebGPU samples
-    /// and stays GPU-side in modern Chromium (no CPU readback).
+    /// Why a canvas and not the `<video>` directly? `GPUCopyExternalImage`
+    /// nominally accepts `HTMLVideoElement` per the spec, but Firefox's
+    /// WebGPU implementation rejects it (only the canvas-family + ImageBitmap
+    /// + HTMLImageElement source types are accepted today), and some
+    /// Chromium configurations silently no-op the path (texture stays zero).
+    /// Blitting through a canvas first is the cross-browser route used by
+    /// the official WebGPU samples and stays GPU-side in modern Chromium
+    /// (no CPU readback).
     ///
     /// Direct mutation (not queued) because the canvas reflects the current
     /// frame at the moment of call; queueing would defer the texture copy
@@ -1724,6 +1727,20 @@ impl DarklyHandle {
     /// to Svelte).
     pub fn thumbnail_version(&self) -> u32 {
         self.engine.borrow().thumbnail_version()
+    }
+
+    /// Master rAF tick counter from the compositor. JS frontend reads this
+    /// once per rAF and hands it to subsystems that throttle on a divisor
+    /// (currently: the camera void's upload throttle in `CameraSource`).
+    /// Aligning JS divisors against the same counter the compositor uses
+    /// guarantees a JS `divisor=N` fires on the same rAF as a Rust
+    /// `divisor=N` (veil, overlay, void animation), so a throttled camera
+    /// upload coincides with a frame the compositor was already going to
+    /// render anyway. Returned as `f64` because `wasm_bindgen` can't expose
+    /// `u64` directly — values up to 2^53 round-trip exactly, more than
+    /// enough for ~3 million years at 60Hz.
+    pub fn frame_count(&self) -> f64 {
+        self.engine.borrow().frame_count() as f64
     }
 
     /// Engine-side thumbnail dimension used by the auto-queue path. The

@@ -3,10 +3,16 @@
  *
  * Owns one `<video>` element backed by `getUserMedia({ video: true })`, and
  * exposes a `tick()` method that hands the live frame to the WASM bridge.
- * The WebGPU backend's `copy_external_image_to_texture` consumes an
- * `HTMLVideoElement` directly, so there's no per-frame ImageBitmap or
- * canvas allocation in the hot path — once the stream is running, each
- * `tick()` is one `queue.copy_external_image_to_texture` and that's it.
+ * Each tick blits the video into a backing `OffscreenCanvas` via
+ * `drawImage`, then passes that canvas to `copy_external_image_to_texture`.
+ *
+ * Why the canvas hop? The WebGPU spec's `GPUCopyExternalImage.source` lists
+ * `HTMLVideoElement`, but Firefox's WebGPU rejects it at runtime (only
+ * canvas-family + ImageBitmap + HTMLImageElement sources are accepted), and
+ * some Chromium configurations silently no-op the video-direct path
+ * (texture stays zero). The canvas route is the cross-browser path used by
+ * the official WebGPU samples; the `drawImage` stays GPU-side in modern
+ * Chromium (no CPU readback).
  *
  * Permission UX: we delegate entirely to the browser. `getUserMedia`'s
  * native prompt includes a device picker on Chromium when multiple cameras
@@ -31,12 +37,27 @@ export class CameraSource {
      *  confirming a decoded frame is available. Gates the first upload. */
     private hasFrame = false;
 
+    /** How many `tick()` calls to skip between actual uploads. Mirrors the
+     *  `frame_divisor` param on the Rust-side `Camera` void; the value is
+     *  pushed in by the layer-tree reconciler whenever the user adjusts the
+     *  slider. 1 = upload every rAF, 4 = upload every 4th rAF (~15fps at
+     *  60Hz; the default), etc. Higher values save the per-frame canvas
+     *  blit, GPU copy, void shader pass, and full compositor re-encode.
+     *
+     *  The gate is `frameCount % frameDivisor === 0`, where `frameCount` is
+     *  the canonical master counter from the compositor (`handle.frame_count`).
+     *  This is the same counter the Rust-side veil / overlay / void
+     *  animation divisors gate against (see
+     *  `Compositor::update_animations`), so a camera `divisor=N` fires on
+     *  the exact rAF a veil `divisor=N` fires on — the throttled upload
+     *  lands on a frame the compositor was going to re-render anyway. */
+    private frameDivisor = 4;
+
     /** 2D-context-backed canvas we blit the video frame into each tick.
-     *  We could pass `<video>` directly to `copyExternalImageToTexture`, but
-     *  some Chromium configurations silently no-op that path (texture stays
-     *  black). Blitting through a canvas first is the reliably-working route
-     *  for video → WebGPU and is what the official samples do. The blit
-     *  itself stays GPU-side in modern Chromium (no CPU readback). */
+     *  Required because Firefox's WebGPU rejects `HTMLVideoElement` as a
+     *  `copyExternalImageToTexture` source, and some Chromium configs
+     *  silently no-op the video-direct path. The blit itself stays GPU-side
+     *  in modern Chromium. */
     private canvas: OffscreenCanvas | null = null;
     private ctx: OffscreenCanvasRenderingContext2D | null = null;
 
@@ -131,8 +152,16 @@ export class CameraSource {
     }
 
     /** Push the current frame into the void's input texture. Cheap when the
-     *  video isn't ready yet (no-op) — safe to call every animation frame. */
-    tick(): void {
+     *  video isn't ready yet (no-op) — safe to call every animation frame.
+     *
+     *  `frameCount` is the canonical master tick from the compositor (see
+     *  `DarklyHandle.frame_count`). Using it directly — rather than a
+     *  per-source rolling counter — keeps the gate phase-locked with every
+     *  other divisor-throttled system in the engine: a camera with
+     *  `divisor=4` will fire on the same rAF as a veil with `divisor=4`,
+     *  not one rAF off. */
+    tick(frameCount: number): void {
+        if (frameCount % this.frameDivisor !== 0) return;
         if (!this.video || !this.canvas || !this.ctx || this.stopped || !this.hasFrame) return;
         const vw = this.video.videoWidth;
         const vh = this.video.videoHeight;
@@ -143,6 +172,14 @@ export class CameraSource {
         }
         this.ctx.drawImage(this.video, 0, 0, vw, vh);
         this.handle.upload_void_external_image(this.layerId, this.canvas);
+    }
+
+    /** Update the upload throttle. Called by the layer-tree reconciler when
+     *  the user adjusts the `frame_divisor` param. No counter to reset —
+     *  the gate is a pure function of the shared master counter and the
+     *  current divisor, so a slider change takes effect on the next rAF. */
+    setFrameDivisor(n: number): void {
+        this.frameDivisor = Math.max(1, Math.floor(n));
     }
 
     /** Stop the MediaStream, free the video element, and mark this source

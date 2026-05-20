@@ -281,7 +281,7 @@ export class DarklyInstance {
      *  `$state` inside an effect-tracked code path causes Svelte to loop
      *  the enclosing effect into the infinite-update guard. */
     private reconcileCameraSources(tree: any[]) {
-        const desired = new Map<number, boolean>(); // layerId → frozen
+        const desired = new Map<number, { frozen: boolean; frameDivisor: number }>();
         const walk = (nodes: any[]) => {
             for (const n of nodes) {
                 // `type` (not `kind`) is the serde variant tag on `LayerInfo`
@@ -289,13 +289,24 @@ export class DarklyInstance {
                 // word `kind` is also used on the inner `ParamInfo`, which
                 // is what we confused them for earlier.
                 if (n?.type === 'void' && n?.voidType === 'camera') {
-                    const freezeParam = (n.params ?? []).find(
-                        (p: any) => p?.name === 'freeze',
-                    );
+                    const params = (n.params ?? []) as Array<{
+                        name: string;
+                        value?: unknown;
+                        default?: unknown;
+                    }>;
+                    const freezeParam = params.find((p) => p?.name === 'freeze');
                     const frozen =
                         freezeParam?.value === true ||
                         (freezeParam?.value === undefined && freezeParam?.default === true);
-                    desired.set(n.id, frozen);
+                    const divisorParam = params.find((p) => p?.name === 'frame_divisor');
+                    const rawDivisor =
+                        typeof divisorParam?.value === 'number'
+                            ? divisorParam.value
+                            : typeof divisorParam?.default === 'number'
+                              ? divisorParam.default
+                              : 4;
+                    const frameDivisor = Math.max(1, Math.floor(rawDivisor));
+                    desired.set(n.id, { frozen, frameDivisor });
                 }
                 if (Array.isArray(n?.children)) walk(n.children);
             }
@@ -304,8 +315,8 @@ export class DarklyInstance {
 
         // Stop sources for layers that disappeared or that are now frozen.
         for (const id of [...this.cameraSources.keys()]) {
-            const frozen = desired.get(id);
-            if (frozen === undefined || frozen === true) {
+            const entry = desired.get(id);
+            if (entry === undefined || entry.frozen) {
                 this.stopCameraVoid(id);
             }
         }
@@ -314,10 +325,18 @@ export class DarklyInstance {
         // silently re-enable the camera — the user must explicitly opt in
         // (via the picker for new layers, or the Resume button in
         // VoidProperties for loaded layers).
-        for (const [id, frozen] of desired) {
+        for (const [id, { frozen }] of desired) {
             if (!frozen && this.cameraSessionStarted.has(id) && !this.cameraSources.has(id)) {
                 this.startCameraVoid(id);
             }
+        }
+
+        // Push the latest `frame_divisor` value into every live source so
+        // slider changes take effect without restarting the MediaStream.
+        // Done after start so a freshly-started source picks up the user's
+        // current value rather than the constructor default.
+        for (const [id, { frameDivisor }] of desired) {
+            this.cameraSources.get(id)?.setFrameDivisor(frameDivisor);
         }
 
         // Drop session-started ids whose layer is gone so a future undo
@@ -479,8 +498,17 @@ export class DarklyInstance {
             // input textures BEFORE render — handle.render reads from those
             // textures during composite, so a later upload would lag by a
             // frame.
+            //
+            // The frame count we pass to `tick` is the value the compositor's
+            // master counter *will* hold once `handle.render` increments it
+            // (which it does inside `update_animations`). Anticipating the
+            // increment keeps JS-side divisor gates phase-locked with the
+            // Rust-side veil / overlay / void divisors that check the
+            // post-increment value — so a camera `divisor=N` fires on the
+            // same rAF as a veil `divisor=N`, not one off.
+            const nextFrameCount = this.handle.frame_count() + 1;
             for (const src of this.cameraSources.values()) {
-                src.tick();
+                src.tick(nextFrameCount);
             }
             const needsMore = this.handle.render(ts / 1000.0);
 

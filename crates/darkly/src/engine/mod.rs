@@ -585,6 +585,15 @@ impl DarklyEngine {
 // ---------------------------------------------------------------------------
 
 impl DarklyEngine {
+    /// Master rAF tick counter. Advances exactly once per `render` call,
+    /// starting at 0. All divisor-throttled subsystems inside the compositor
+    /// (veils, overlay, voids) gate against this single counter; surfacing
+    /// it lets the frontend's camera-void upload throttle stay in lockstep
+    /// with them rather than running its own drifting counter.
+    pub fn frame_count(&self) -> u64 {
+        self.compositor.frame_count()
+    }
+
     /// Current overlay preview mask dimensions. Test-only accessor.
     pub fn compositor_preview_mask_size(&self) -> (u32, u32) {
         self.compositor.tool_overlay_ref().preview_mask_size()

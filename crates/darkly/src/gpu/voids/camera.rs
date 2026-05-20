@@ -77,6 +77,21 @@ const PARAMS: &[ParamDef] = &[
         name: "freeze",
         default: false,
     },
+    // How many rAF frames to skip between webcam → GPU uploads. 1 = upload
+    // every frame (live 60fps), 4 = upload every 4th frame (~15fps at 60Hz
+    // rAF, the default). Higher values trade smoothness for GPU/CPU savings
+    // — each skipped tick avoids a JS `drawImage` blit, a
+    // `copy_external_image_to_texture`, the void's canvas-resolution
+    // fragment shader, and the full compositor re-encode that an upload
+    // would trigger. The JS-side `CameraSource.tick()` reads this value
+    // from the layer params and gates its own upload accordingly; nothing
+    // here reads the field at render time.
+    ParamDef::Int {
+        name: "frame_divisor",
+        min: 1,
+        max: 60,
+        default: 4,
+    },
 ];
 
 pub fn register() -> VoidRegistration {
@@ -118,6 +133,12 @@ pub struct Camera {
     mirror_h: bool,
     mirror_v: bool,
     freeze: bool,
+    /// Rate-limit divisor for webcam → GPU uploads (1 = every rAF frame,
+    /// N = every Nth). Stored here as the source of truth; the JS-side
+    /// `CameraSource.tick()` reads it through the layer-tree reconciliation
+    /// and gates its uploads accordingly. Never read at render time on
+    /// the Rust side.
+    frame_divisor: u32,
     /// Current source dimensions (updated on each frame upload). 1×1 until
     /// the first frame arrives — matching the placeholder aux texture.
     webcam_w: u32,
@@ -160,6 +181,10 @@ impl Camera {
             Some(ParamValue::Bool(v)) => *v,
             _ => false,
         };
+        let frame_divisor = match params.get(7) {
+            Some(ParamValue::Int(v)) => (*v).max(1) as u32,
+            _ => 4,
+        };
         Camera {
             scale,
             rotation_deg,
@@ -168,6 +193,7 @@ impl Camera {
             mirror_h,
             mirror_v,
             freeze,
+            frame_divisor,
             webcam_w: 1,
             webcam_h: 1,
             canvas_w: Cell::new(1),
@@ -309,6 +335,7 @@ impl Void for Camera {
             ParamValue::Bool(self.mirror_h),
             ParamValue::Bool(self.mirror_v),
             ParamValue::Bool(self.freeze),
+            ParamValue::Int(self.frame_divisor as i32),
         ]
     }
 
@@ -356,6 +383,10 @@ impl Void for Camera {
         self.freeze = match params.get(6) {
             Some(ParamValue::Bool(v)) => *v,
             _ => self.freeze,
+        };
+        self.frame_divisor = match params.get(7) {
+            Some(ParamValue::Int(v)) => (*v).max(1) as u32,
+            _ => self.frame_divisor,
         };
         if let Some(buf) = cache.uniform_bufs.first() {
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
@@ -651,11 +682,12 @@ mod tests {
     fn param_round_trip() {
         // Default params round-trip through from_params → param_values.
         // Order matches PARAMS: scale, rotation, pan_x, pan_y,
-        // mirror_h, mirror_v, freeze. mirror_h defaults to ON (selfie
-        // mode); everything else off / zero / identity.
+        // mirror_h, mirror_v, freeze, frame_divisor. mirror_h defaults to
+        // ON (selfie mode); everything else off / zero / identity except
+        // frame_divisor which defaults to 4 (~15fps at 60Hz rAF).
         let cam = Camera::from_params(&default_params(), fake_pipeline());
         let out = cam.param_values();
-        assert_eq!(out.len(), 7);
+        assert_eq!(out.len(), 8);
         assert_eq!(out[0], ParamValue::Float(1.0));
         assert_eq!(out[1], ParamValue::Float(0.0));
         assert_eq!(out[2], ParamValue::Float(0.0));
@@ -663,6 +695,45 @@ mod tests {
         assert_eq!(out[4], ParamValue::Bool(true), "mirror_h defaults on");
         assert_eq!(out[5], ParamValue::Bool(false), "mirror_v defaults off");
         assert_eq!(out[6], ParamValue::Bool(false), "freeze defaults off");
+        assert_eq!(out[7], ParamValue::Int(4), "frame_divisor defaults to 4");
+    }
+
+    #[test]
+    fn frame_divisor_round_trip() {
+        // The JS side reads `frame_divisor` from the layer-tree params via
+        // `param_values` to throttle its `tick()` uploads. Verify update_params
+        // mutates the field in place and the new value flows back out.
+        let (_device, queue) = crate::gpu::test_utils::test_device();
+        let pipeline = fake_pipeline();
+        let mut cam = Camera::from_params(&default_params(), pipeline);
+        assert_eq!(cam.frame_divisor, 4);
+
+        let uniform_buf = _device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: std::mem::size_of::<CameraUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cache = EffectCache {
+            uniform_bufs: vec![uniform_buf],
+            bind_groups: Vec::new(),
+            aux_textures: Vec::new(),
+            aux_views: Vec::new(),
+            aux_pipelines: Vec::new(),
+        };
+
+        let mut new_params = default_params();
+        new_params[7] = ParamValue::Int(8);
+        cam.update_params(&queue, &cache, &new_params);
+        assert_eq!(cam.frame_divisor, 8);
+        assert_eq!(cam.param_values()[7], ParamValue::Int(8));
+
+        // Out-of-range values are clamped to >= 1 — divisor 0 would mean
+        // "upload every 0th frame" which is undefined; the JS gate uses
+        // `counter % divisor` so a zero divisor would panic on modulo.
+        new_params[7] = ParamValue::Int(0);
+        cam.update_params(&queue, &cache, &new_params);
+        assert_eq!(cam.frame_divisor, 1, "divisor clamps up to 1");
     }
 
     #[test]
