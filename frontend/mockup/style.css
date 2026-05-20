@@ -334,7 +334,7 @@ body {
     align-items: center;
     justify-content: space-between;
     padding: 10px 12px;
-    background: var(--bg-hover);
+    background: black;
 }
 
 .panel-title {

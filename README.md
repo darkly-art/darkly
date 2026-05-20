@@ -99,6 +99,7 @@ These are features that are helpful or essential to digital art workflows. They'
 - [x] Duplicate layer / group
 - [x] Merge down
 - [x] Void layers (domain‑warped FBM noise)
+- [x] Camera void (live webcam with scale / rotation / pan)
 - [ ] Flatten image
 - [ ] Clipping mask
 - [ ] Adjustment layers

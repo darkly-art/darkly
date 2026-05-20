@@ -1,6 +1,7 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import type { SaveBundle } from '../storage/saveDocument';
+import { CameraSource } from '../lib/cameraSource';
 
 export interface Color {
     r: number; g: number; b: number; a: number;
@@ -203,6 +204,135 @@ export class DarklyInstance {
         this.activeVeilIndex = null;
     }
 
+    /** Active webcam (and future screenshare) MediaStream-backed inputs, keyed
+     *  by the void layer's id. Each entry holds a `<video>` element, a live
+     *  `MediaStream`, and per-frame upload logic. `refreshLayerTree` reaps
+     *  entries whose layer no longer exists (covers undo / explicit delete /
+     *  document close). Reactive `$state` so the properties panel
+     *  re-renders when an entry's `error` string changes. */
+    cameraSources = $state<Map<number, CameraSource>>(new Map());
+
+    /** Set of camera-void layer IDs the user has explicitly authorized for
+     *  this session. The picker adds the id when a new layer is created;
+     *  the "Resume" button in VoidProperties adds it for layers loaded from
+     *  a `.darkly`. The reconciler only starts a MediaStream for layers in
+     *  this set, so reopening a document doesn't pop a permission prompt or
+     *  silently re-enable the camera — the saved last frame is displayed
+     *  until the user opts back in. Session-only: never persisted, cleared
+     *  on document open / page reload. */
+    cameraSessionStarted = $state<Set<number>>(new Set());
+
+    /** Mark a camera void as explicitly user-started for this session.
+     *  Idempotent. Triggers a layer-tree refresh so the reconciler picks
+     *  the new state up and spins up the MediaStream. */
+    markCameraVoidStarted(layerId: number) {
+        if (this.cameraSessionStarted.has(layerId)) return;
+        this.cameraSessionStarted = new Set(this.cameraSessionStarted).add(layerId);
+        this.refreshLayerTree();
+    }
+
+    /** Start a MediaStream for a camera void. Called from the reconciler
+     *  once the layer is in the tree, the user has opted in (added to
+     *  `cameraSessionStarted`), and the void isn't frozen. Idempotent. */
+    startCameraVoid(layerId: number) {
+        if (!this.handle) return;
+        if (this.cameraSources.has(layerId)) return;
+        const src = new CameraSource(layerId, this.handle);
+        // Reassign the Map so Svelte sees a new identity (Map mutations
+        // don't trigger reactivity on their own in current Svelte 5).
+        this.cameraSources = new Map(this.cameraSources).set(layerId, src);
+        src.start().then(() => {
+            // Force a redraw — `error` may have just been set, and we want
+            // a frame so the void either starts presenting frames or the
+            // VoidProperties notice appears.
+            this.cameraSources = new Map(this.cameraSources);
+            this.requestFrame();
+        });
+    }
+
+    /** Stop and unregister a camera void's MediaStream. Called by the delete
+     *  action and by `refreshLayerTree` for orphaned entries. */
+    stopCameraVoid(layerId: number) {
+        const src = this.cameraSources.get(layerId);
+        if (!src) return;
+        src.stop();
+        const next = new Map(this.cameraSources);
+        next.delete(layerId);
+        this.cameraSources = next;
+    }
+
+    /** Surface a camera source's current state to the properties panel.
+     *  Returns null when there's no source registered for the id (i.e. the
+     *  layer isn't a camera void or the source hasn't been created yet). */
+    cameraSourceFor(layerId: number): CameraSource | null {
+        return this.cameraSources.get(layerId) ?? null;
+    }
+
+    /** Reconcile the live `cameraSources` map against the latest layer tree:
+     *  every unfrozen camera void should have a running source, every frozen
+     *  / deleted / undone camera void should not. Called from
+     *  `refreshLayerTree` after every layer mutation (add / remove / undo /
+     *  redo / freeze toggle / document open), so dead MediaStreams are reaped
+     *  and the OS camera indicator turns off exactly when the user expects.
+     *
+     *  Takes the tree as a parameter (rather than reading `this.layerTree`)
+     *  so the caller — `refreshLayerTree` — doesn't accidentally read the
+     *  same reactive store it's about to write. Reading + writing the same
+     *  `$state` inside an effect-tracked code path causes Svelte to loop
+     *  the enclosing effect into the infinite-update guard. */
+    private reconcileCameraSources(tree: any[]) {
+        const desired = new Map<number, boolean>(); // layerId → frozen
+        const walk = (nodes: any[]) => {
+            for (const n of nodes) {
+                // `type` (not `kind`) is the serde variant tag on `LayerInfo`
+                // — set by `#[serde(tag = "type")]` in engine/types.rs. The
+                // word `kind` is also used on the inner `ParamInfo`, which
+                // is what we confused them for earlier.
+                if (n?.type === 'void' && n?.voidType === 'camera') {
+                    const freezeParam = (n.params ?? []).find(
+                        (p: any) => p?.name === 'freeze',
+                    );
+                    const frozen =
+                        freezeParam?.value === true ||
+                        (freezeParam?.value === undefined && freezeParam?.default === true);
+                    desired.set(n.id, frozen);
+                }
+                if (Array.isArray(n?.children)) walk(n.children);
+            }
+        };
+        walk(tree);
+
+        // Stop sources for layers that disappeared or that are now frozen.
+        for (const id of [...this.cameraSources.keys()]) {
+            const frozen = desired.get(id);
+            if (frozen === undefined || frozen === true) {
+                this.stopCameraVoid(id);
+            }
+        }
+        // Start sources for camera voids that should be running.
+        // Gate on `cameraSessionStarted` so loading a `.darkly` doesn't
+        // silently re-enable the camera — the user must explicitly opt in
+        // (via the picker for new layers, or the Resume button in
+        // VoidProperties for loaded layers).
+        for (const [id, frozen] of desired) {
+            if (!frozen && this.cameraSessionStarted.has(id) && !this.cameraSources.has(id)) {
+                this.startCameraVoid(id);
+            }
+        }
+
+        // Drop session-started ids whose layer is gone so a future undo
+        // that re-adds a different layer at the same id doesn't auto-start
+        // by accident.
+        let pruned: Set<number> | null = null;
+        for (const id of this.cameraSessionStarted) {
+            if (!desired.has(id)) {
+                pruned ??= new Set(this.cameraSessionStarted);
+                pruned.delete(id);
+            }
+        }
+        if (pruned) this.cameraSessionStarted = pruned;
+    }
+
     /** Remove a veil and keep `activeVeilIndex` consistent with the new list. */
     removeVeil(index: number) {
         if (!this.handle) return;
@@ -247,10 +377,20 @@ export class DarklyInstance {
 
     refreshLayerTree() {
         if (this.handle) {
+            let next: any[] = [];
             try {
-                const tree = JSON.parse(this.handle.layer_tree());
-                this.layerTree = Array.isArray(tree) ? tree : [];
-            } catch { this.layerTree = []; }
+                const parsed = JSON.parse(this.handle.layer_tree());
+                next = Array.isArray(parsed) ? parsed : [];
+            } catch { next = []; }
+            // Camera voids own a MediaStream + <video>; reconcile the live
+            // set against the new tree so freshly-added voids spin up,
+            // deleted / frozen / undone voids tear down (turning off the OS
+            // camera indicator). Done BEFORE assignment so this method only
+            // *writes* `layerTree` (never reads it), keeping it out of any
+            // enclosing effect's dependency set — otherwise the write loops
+            // back through the effect.
+            this.reconcileCameraSources(next);
+            this.layerTree = next;
             // Schedule a render frame: callers invoke this after layer
             // mutations (undo/redo, add/remove, drag/drop, etc.), and
             // the engine may have async work pending — dirty-pixel
@@ -335,6 +475,13 @@ export class DarklyInstance {
         requestAnimationFrame((ts) => {
             this._framePending = false;
             if (!this.handle) return;
+            // Push the latest webcam / screenshare frames into their void
+            // input textures BEFORE render — handle.render reads from those
+            // textures during composite, so a later upload would lag by a
+            // frame.
+            for (const src of this.cameraSources.values()) {
+                src.tick();
+            }
             const needsMore = this.handle.render(ts / 1000.0);
 
             // Sync thumbnail-readback completions into a Svelte-reactive

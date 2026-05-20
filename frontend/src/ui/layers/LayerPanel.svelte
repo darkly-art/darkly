@@ -71,7 +71,6 @@
         justify-content: space-between;
         gap: 8px;
         padding: 6px 12px 6px 8px;
-        background: var(--bg-hover);
         flex-shrink: 0;
     }
 

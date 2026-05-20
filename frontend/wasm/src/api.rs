@@ -1074,6 +1074,34 @@ impl DarklyHandle {
         }
     }
 
+    /// Push a fresh external-image frame into a camera-style void's input
+    /// texture. The JS side hands in an `OffscreenCanvas` that already has
+    /// the current `<video>` frame blitted into it via `drawImage`; we then
+    /// copy that canvas into the void's GPU texture.
+    ///
+    /// Why a canvas and not the `<video>` directly? Chromium's
+    /// `copyExternalImageToTexture` from an `HTMLVideoElement` silently
+    /// no-ops in some configurations (texture stays zero). The canvas blit
+    /// path is the well-tested route used by the official WebGPU samples
+    /// and stays GPU-side in modern Chromium (no CPU readback).
+    ///
+    /// Direct mutation (not queued) because the canvas reflects the current
+    /// frame at the moment of call; queueing would defer the texture copy
+    /// past the next frame, capturing stale pixels.
+    pub fn upload_void_external_image(&self, layer_id: f64, canvas: web_sys::OffscreenCanvas) {
+        self.flush_if_needed();
+        let id = LayerId::from_ffi(layer_id as u64);
+        let info = wgpu::CopyExternalImageSourceInfo {
+            source: wgpu::ExternalImageSource::OffscreenCanvas(canvas),
+            origin: wgpu::Origin2d::ZERO,
+            flip_y: false,
+        };
+        let source = darkly::gpu::void::ExternalImageSource::Web(info);
+        self.engine
+            .borrow_mut()
+            .upload_void_external_image(id, source);
+    }
+
     /// Replace the parameter values on a void layer. `params` is a JS object
     /// of `{ name: value, ... }` matching the layer's current `voidType`'s
     /// schema. Coalesces with prior `VoidParams` undo entries so a slider

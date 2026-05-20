@@ -133,10 +133,10 @@
         disabled={!canAddMask}
         title="Add mask"
     >
-        <span class="mask-glyph">
-            <i class="fa-solid fa-square mask-square"></i>
-            <i class="fa-solid fa-circle mask-dot"></i>
-        </span>
+        <svg class="mask-glyph" viewBox="0 0 16 10" aria-hidden="true">
+            <rect width="16" height="10" rx="1" fill="currentColor" />
+            <circle cx="8" cy="5" r="3" fill="var(--bg)" />
+        </svg>
     </button>
 
     <button
@@ -179,7 +179,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        background: none;
+        background: var(--bg);
         border: none;
         border-radius: var(--radius-sm);
         color: var(--text-muted);
@@ -191,7 +191,7 @@
     .footer > .footer-btn {
         width: 34px;
         height: 34px;
-        font-size: 16px;
+        font-size: 14px;
     }
 
     .footer-btn:hover:not(:disabled) {
@@ -215,24 +215,18 @@
         margin-right: 4px;
     }
 
-    .split-btn .footer-btn {
-        background: var(--text-muted);
-        color: var(--bg);
-    }
-
-    .split-btn .footer-btn:hover:not(:disabled) {
-        background: var(--text);
-        color: var(--bg);
-    }
-
     .split-main {
+        width: 34px;
+        height: 34px;
         border-top-right-radius: 0;
         border-bottom-right-radius: 0;
         padding-right: 0;
+        font-size: 18px;
     }
 
     .split-chevron {
         width: 16px;
+        height: 34px;
         font-size: 9px;
         border-top-left-radius: 0;
         border-bottom-left-radius: 0;
@@ -245,23 +239,8 @@
     }
 
     .mask-glyph {
-        position: relative;
         width: 18px;
-        height: 18px;
-        display: inline-block;
-    }
-    .mask-square {
-        position: absolute;
-        inset: 0;
-        font-size: 18px;
-        color: currentColor;
-    }
-    .mask-dot {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        font-size: 7px;
-        color: var(--bg);
+        height: 11px;
+        display: block;
     }
 </style>

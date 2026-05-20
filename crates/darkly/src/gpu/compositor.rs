@@ -1055,6 +1055,24 @@ impl Compositor {
                 height: ext.height,
             });
         }
+        // Persistent void textures (camera void's last frame, etc.) live
+        // on the void's own EffectCache rather than in `node_textures` —
+        // they're not canvas-sized and don't participate in the standard
+        // raster blend at that resolution. Surface them here so the save
+        // flow's `queue_pixel_readback` sees a uniform lookup, no kind
+        // discrimination at the call site.
+        if let Some(entry) = self.void_layers.get(&node_id) {
+            if let Some((w, h)) = entry.void.persistent_frame_size() {
+                if let Some(tex) = entry.cache.aux_textures.first() {
+                    return Some(PixelDataRef {
+                        texture: tex,
+                        format: tex.format(),
+                        width: w,
+                        height: h,
+                    });
+                }
+            }
+        }
         if let Some(sel) = self.selection_state.as_ref() {
             if sel.modifier_id == node_id {
                 let frame = sel.canvas_frame();
@@ -1067,6 +1085,41 @@ impl Compositor {
             }
         }
         None
+    }
+
+    /// Current persistent frame size of a void layer, if the void declares
+    /// one. Used by the engine after `upload_void_external_image` to keep
+    /// the doc's [`crate::layer::VoidLayer::frame`] in sync with the
+    /// GPU-side texture so save sees the right dimensions.
+    pub fn void_persistent_frame_size(&self, layer_id: LayerId) -> Option<(u32, u32)> {
+        self.void_layers
+            .get(&layer_id)
+            .and_then(|e| e.void.persistent_frame_size())
+    }
+
+    /// Restore a saved void frame at document load. Wraps
+    /// [`crate::gpu::void::Void::restore_persistent_pixels`] — sized for
+    /// the saved dimensions, the void rebuilds its bind group around the
+    /// new texture and writes the bytes via `queue.write_texture`. Marks
+    /// the void dirty so the next composite re-renders it.
+    pub fn restore_void_pixels(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        width: u32,
+        height: u32,
+        bytes: &[u8],
+    ) {
+        let entry = match self.void_layers.get_mut(&layer_id) {
+            Some(e) => e,
+            None => return,
+        };
+        entry
+            .void
+            .restore_persistent_pixels(device, queue, &mut entry.cache, width, height, bytes);
+        entry.dirty = true;
+        self.mark_dirty();
     }
 
     /// Replace a node's entire texture contents with `bytes`, then mark
@@ -1361,40 +1414,58 @@ impl Compositor {
         self.mark_dirty();
     }
 
-    /// Replace a void's procedural inputs. Builds a fresh trait object +
-    /// cache from the new params and marks the texture dirty so the next
-    /// frame re-renders. The blend uniforms (opacity/mode/etc.) are
-    /// untouched — only the procedural side changes.
+    /// Update a void's procedural inputs in place. The void mutates its
+    /// own fields and rewrites the uniform buffer; the existing
+    /// `EffectCache` (including any aux textures the void was using to
+    /// hold stateful pixel data — e.g. the camera void's last received
+    /// frame) is preserved untouched. The blend uniforms (opacity / mode
+    /// / isolated) are also untouched — only the procedural side changes.
+    ///
+    /// `void_type` is unused here but kept in the signature so the engine
+    /// API matches what callers had to thread through anyway. It used to
+    /// be required when this method rebuilt the void from scratch via the
+    /// registry; that path was abandoned because it dropped the camera
+    /// void's aux texture on every param edit.
     pub fn update_void_layer_params(
+        &mut self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layer_id: LayerId,
+        _void_type: &str,
+        params: &[ParamValue],
+    ) {
+        let entry = match self.void_layers.get_mut(&layer_id) {
+            Some(e) => e,
+            None => return,
+        };
+        entry.void.update_params(queue, &entry.cache, params);
+        entry.dirty = true;
+        self.mark_dirty();
+    }
+
+    /// Push a fresh external image frame (webcam, screenshare, …) into a
+    /// void's input texture. Delegates to the void's
+    /// [`Void::upload_external_image`], which handles texture allocation,
+    /// bind-group rebuild on dimension changes, and the actual texel copy.
+    /// Flags the void's destination texture dirty so the next compositor
+    /// frame re-renders it.
+    pub fn upload_void_external_image(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         layer_id: LayerId,
-        void_type: &str,
-        params: &[ParamValue],
+        source: crate::gpu::void::ExternalImageSource,
     ) {
-        if !self.void_layers.contains_key(&layer_id) {
-            return;
-        }
-        let tex_view = match self.node_textures.get(&layer_id) {
-            Some(t) => t.view().clone(),
+        let entry = match self.void_layers.get_mut(&layer_id) {
+            Some(e) => e,
             None => return,
         };
-        let format = self.node_textures[&layer_id].format();
-        let void = self
-            .void_registry
-            .create_void(void_type, params, device, format);
-        let cache = void.create_cache(
-            device,
-            queue,
-            &tex_view,
-            &self.sampler,
-            self.canvas_width,
-            self.canvas_height,
-        );
-        let entry = self.void_layers.get_mut(&layer_id).unwrap();
-        entry.void = void;
-        entry.cache = cache;
+        if !entry.void.wants_external_input() {
+            return;
+        }
+        entry
+            .void
+            .upload_external_image(device, queue, &mut entry.cache, source);
         entry.dirty = true;
         self.mark_dirty();
     }

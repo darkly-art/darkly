@@ -31,14 +31,18 @@ struct Params {
 
 const LACUNARITY: f32 = 2.0;
 const GAIN: f32 = 0.5;
-// Time drifts the sample point at a fixed, mildly off-axis rate so the field
-// scrolls cleanly without aligning to either pixel axis.
+// Drift rate in FBM-domain units per second of accumulated `time` (at
+// evolution=1.0). One FBM feature spans roughly one unit, so vec2(0.5, 0.31)
+// means "half a feature per second" — visible without being frantic. The
+// off-axis y component keeps motion from aligning to either pixel axis.
+// Dividing by `frequency` below converts to pixel-space so the perceived
+// speed is independent of feature size.
 const DRIFT: vec2f = vec2f(0.5, 0.31);
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     // FragCoord is in pixels — no resolution uniform needed; the shader works
     // at whatever target size the compositor allocated.
-    let pixel = in.position.xy + params.time * DRIFT;
+    let pixel = in.position.xy + params.time * DRIFT / params.frequency;
     let p = pixel * params.frequency;
 
     let v = fbm_warp(p, params.seed, params.octaves, LACUNARITY, GAIN, params.warp);
