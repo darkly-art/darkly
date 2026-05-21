@@ -36,6 +36,43 @@ pub fn create_blit_pipeline(
     format: wgpu::TextureFormat,
     label: &str,
 ) -> EffectPipeline {
+    create_filter_pipeline(
+        device,
+        format,
+        label,
+        include_str!("../../../../shaders/blit.wgsl"),
+        "fs_blit",
+    )
+}
+
+/// Build a render pipeline for the multi-tap soft downscale shader.
+/// Used by the veil chain to feed reduced-resolution veils with a
+/// properly anti-aliased input — single-tap bilinear (blit) aliases
+/// hard at any downscale ratio worse than ~0.7 because it's a fixed
+/// 2×2 box filter regardless of the source/destination ratio.
+pub fn create_downscale_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    label: &str,
+) -> EffectPipeline {
+    create_filter_pipeline(
+        device,
+        format,
+        label,
+        include_str!("../../../../shaders/downscale.wgsl"),
+        "fs_downscale",
+    )
+}
+
+/// Shared pipeline builder for texture+sampler shaders that share the
+/// blit bind-group layout (binding 0 = texture, binding 1 = sampler).
+fn create_filter_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    label: &str,
+    shader_source: &str,
+    fragment_entry: &str,
+) -> EffectPipeline {
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some(&format!("{label}-bgl")),
         entries: &[
@@ -66,7 +103,7 @@ pub fn create_blit_pipeline(
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(&format!("{label}-shader")),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../../../../shaders/blit.wgsl").into()),
+        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -80,7 +117,7 @@ pub fn create_blit_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
-            entry_point: Some("fs_blit"),
+            entry_point: Some(fragment_entry),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
                 blend: None,
