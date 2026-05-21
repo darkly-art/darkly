@@ -68,7 +68,7 @@ impl DarklyEngine {
         );
 
         self.add_veil_with_overrides("rainy_glass", &[(2, ParamValue::Float(180.0))]);
-        self.add_veil_with_overrides("noise", &[(0, ParamValue::Float(0.05))]);
+        self.add_veil_with_overrides("grain", &[(0, ParamValue::Float(0.05))]);
         self.add_veil_with_overrides("lens_blur", &[(0, ParamValue::Float(0.25))]);
         self.add_veil_with_overrides("vhs", &[]);
 

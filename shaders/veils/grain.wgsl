@@ -1,10 +1,10 @@
-// Noise veil — per-pixel noise with gradual evolution, applied via overlay blend.
+// Grain veil — per-pixel noise with gradual evolution, applied via overlay blend.
 //
 // Two-pass architecture:
 //   1. Evolve pass (fs_evolve): blends previous noise state toward fresh random
 //      noise by `rate` per frame, maintaining a persistent noise texture.
 //   2. Apply pass (fs_apply): reads the evolved noise texture and overlay-blends
-//      it onto the scene image.
+//      it onto the scene image, mixed with the original by `opacity`.
 
 struct VertexOutput {
     @builtin(position) position: vec4f,
@@ -23,7 +23,7 @@ struct Params {
     seed: f32,
     color: f32,
     rate: f32,
-    _pad: f32,
+    opacity: f32,
 }
 
 @group(0) @binding(0) var t_input: texture_2d<f32>;
@@ -83,12 +83,14 @@ fn overlay_blend(base: vec3f, blend: vec3f) -> vec3f {
     return mix(prev, fresh, replace);
 }
 
-/// Apply pass: overlay-blend evolved noise onto the scene image.
+/// Apply pass: overlay-blend evolved noise onto the scene image, then mix
+/// with the original by `opacity` (1 = full grain, 0 = veil is a no-op).
 /// Binding 0 (t_input) is the scene, binding 3 (t_noise_state) is evolved noise.
 @fragment fn fs_apply(in: VertexOutput) -> @location(0) vec4f {
     let color = textureSampleLevel(t_input, t_sampler, in.uv, 0.0);
     let evolved = textureSampleLevel(t_noise_state, t_sampler, in.uv, 0.0);
     let noise = mix(vec3f(evolved.a), evolved.rgb, params.color);
-    let result = overlay_blend(color.rgb, noise);
+    let overlaid = overlay_blend(color.rgb, noise);
+    let result = mix(color.rgb, overlaid, params.opacity);
     return vec4f(result, color.a);
 }

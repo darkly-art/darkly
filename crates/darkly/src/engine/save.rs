@@ -454,16 +454,16 @@ mod tests {
             .resize(&engine.gpu.device, &engine.gpu.queue, 32, 32);
 
         let defaults: Vec<crate::gpu::params::ParamValue> = engine
-            .veil_param_defs("noise")
+            .veil_param_defs("grain")
             .iter()
             .map(crate::gpu::params::ParamDef::default_value)
             .collect();
-        engine.add_veil("noise", &defaults);
+        engine.add_veil("grain", &defaults);
 
         let requires = requires_from_doc(&engine);
         assert!(
-            requires.veil.iter().any(|v| v == "noise"),
-            "requires.veil should list noise (got {:?})",
+            requires.veil.iter().any(|v| v == "grain"),
+            "requires.veil should list grain (got {:?})",
             requires.veil
         );
         assert!(

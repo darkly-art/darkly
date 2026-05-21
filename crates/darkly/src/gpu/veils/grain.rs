@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
     ParamDef::Float {
-        name: "evolution",
+        name: "speed",
         min: 0.0,
         max: 1.0,
         default: 0.05,
@@ -15,16 +15,22 @@ const PARAMS: &[ParamDef] = &[
         max: 1.0,
         default: 0.0,
     },
+    ParamDef::Float {
+        name: "opacity",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+    },
 ];
 
 pub fn register() -> VeilRegistration {
     VeilRegistration {
-        type_id: "noise",
-        display_name: "Noise",
+        type_id: "grain",
+        display_name: "Grain",
         params: PARAMS,
         create_pipeline: create_evolve_pipeline,
         from_params: |params, shared| {
-            let evolution = match params.first() {
+            let speed = match params.first() {
                 Some(ParamValue::Float(v)) => *v,
                 _ => 0.0,
             };
@@ -32,26 +38,33 @@ pub fn register() -> VeilRegistration {
                 Some(ParamValue::Float(v)) => *v,
                 _ => 0.0,
             };
-            Box::new(Noise::new(evolution, color, shared))
+            let opacity = match params.get(2) {
+                Some(ParamValue::Float(v)) => *v,
+                _ => 1.0,
+            };
+            Box::new(Grain::new(speed, color, opacity, shared))
         },
     }
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct NoiseUniforms {
+struct GrainUniforms {
     seed: f32,
     color: f32,
     rate: f32,
-    _pad: f32,
+    opacity: f32,
 }
 
 #[derive(Clone, Debug)]
-pub struct Noise {
+pub struct Grain {
     /// Per-frame blend rate toward fresh noise. 0 = static, 1 = fully random each frame.
-    pub evolution: f32,
+    pub speed: f32,
     /// 0 = grayscale noise, 1 = full RGB noise.
     pub color: f32,
+    /// Blend amount between the original image and the grain-overlaid result.
+    /// 0 = veil is a no-op, 1 = full overlay.
+    pub opacity: f32,
     /// Monotonic frame counter used as hash seed.
     frame_count: f32,
     /// Which noise texture to write next (ping-pong index).
@@ -59,11 +72,12 @@ pub struct Noise {
     shared: Arc<EffectPipeline>,
 }
 
-impl Noise {
-    pub fn new(evolution: f32, color: f32, shared: Arc<EffectPipeline>) -> Self {
-        Noise {
-            evolution,
+impl Grain {
+    pub fn new(speed: f32, color: f32, opacity: f32, shared: Arc<EffectPipeline>) -> Self {
+        Grain {
+            speed,
             color,
+            opacity,
             frame_count: 0.0,
             noise_idx: 0,
             shared,
@@ -71,9 +85,9 @@ impl Noise {
     }
 }
 
-impl Veil for Noise {
+impl Veil for Grain {
     fn type_id(&self) -> &'static str {
-        "noise"
+        "grain"
     }
 
     fn clone_boxed(&self) -> Box<dyn Veil> {
@@ -82,23 +96,24 @@ impl Veil for Noise {
 
     fn param_values(&self) -> Vec<ParamValue> {
         vec![
-            ParamValue::Float(self.evolution),
+            ParamValue::Float(self.speed),
             ParamValue::Float(self.color),
+            ParamValue::Float(self.opacity),
         ]
     }
 
     fn needs_animation(&self) -> bool {
-        self.evolution > 0.0
+        self.speed > 0.0
     }
 
     fn update_time(&mut self, queue: &wgpu::Queue, cache: &EffectCache, _dt: f32) {
         self.frame_count += 1.0;
         self.noise_idx = 1 - self.noise_idx;
-        let uniforms = NoiseUniforms {
+        let uniforms = GrainUniforms {
             seed: self.frame_count,
             color: self.color,
-            rate: self.evolution,
-            _pad: 0.0,
+            rate: self.speed,
+            opacity: self.opacity,
         };
         if let Some(buf) = cache.uniform_bufs.first() {
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&uniforms));
@@ -114,15 +129,15 @@ impl Veil for Noise {
         render_width: u32,
         render_height: u32,
     ) -> EffectCache {
-        let uniforms = NoiseUniforms {
+        let uniforms = GrainUniforms {
             seed: 0.0,
             color: self.color,
-            rate: self.evolution,
-            _pad: 0.0,
+            rate: self.speed,
+            opacity: self.opacity,
         };
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("noise-uniforms"),
-            size: std::mem::size_of::<NoiseUniforms>() as u64,
+            label: Some("grain-uniforms"),
+            size: std::mem::size_of::<GrainUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -132,7 +147,7 @@ impl Veil for Noise {
         let noise_textures: Vec<wgpu::Texture> = (0..2)
             .map(|i| {
                 device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&format!("noise-state-{i}")),
+                    label: Some(&format!("grain-state-{i}")),
                     size: wgpu::Extent3d {
                         width: render_width,
                         height: render_height,
@@ -196,7 +211,7 @@ impl Veil for Noise {
         // --- Evolve bind groups (3-binding layout from shared pipeline) ---
         let evolve_bgs: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("noise-evolve-bg-{i}")),
+                label: Some(&format!("grain-evolve-bg-{i}")),
                 layout: &self.shared.bind_group_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -217,7 +232,7 @@ impl Veil for Noise {
 
         // --- Apply pipeline (4-binding layout: input + noise + sampler + uniform) ---
         let apply_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("noise-apply-bgl"),
+            label: Some("grain-apply-bgl"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -260,20 +275,20 @@ impl Veil for Noise {
 
         let apply_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("noise-apply-pipeline-layout"),
+                label: Some("grain-apply-pipeline-layout"),
                 bind_group_layouts: &[&apply_bgl],
                 immediate_size: 0,
             });
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("noise-apply-shader"),
+            label: Some("grain-apply-shader"),
             source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../../../shaders/veils/noise.wgsl").into(),
+                include_str!("../../../../../shaders/veils/grain.wgsl").into(),
             ),
         });
 
         let apply_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("noise-apply-pipeline"),
+            label: Some("grain-apply-pipeline"),
             layout: Some(&apply_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
@@ -305,7 +320,7 @@ impl Veil for Noise {
         // Stored as bind_groups[1 + noise_idx][input_idx].
         let apply_bgs_noise0: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("noise-apply-bg-n0-i{i}")),
+                label: Some(&format!("grain-apply-bg-n0-i{i}")),
                 layout: &apply_bgl,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -330,7 +345,7 @@ impl Veil for Noise {
 
         let apply_bgs_noise1: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(&format!("noise-apply-bg-n1-i{i}")),
+                label: Some(&format!("grain-apply-bg-n1-i{i}")),
                 layout: &apply_bgl,
                 entries: &[
                     wgpu::BindGroupEntry {
@@ -370,13 +385,13 @@ impl Veil for Noise {
         dst_view: &wgpu::TextureView,
     ) {
         // Which noise texture the apply pass should read from.
-        let apply_noise_idx = if self.evolution > 0.0 {
+        let apply_noise_idx = if self.speed > 0.0 {
             let noise_write = self.noise_idx;
             let noise_read = 1 - noise_write;
 
             // Evolve pass: read noise[read], replace random pixels, write noise[write].
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("noise-evolve"),
+                label: Some("grain-evolve"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &cache.aux_views[noise_write],
                     resolve_target: None,
@@ -402,7 +417,7 @@ impl Veil for Noise {
         // Apply pass: overlay-blend noise onto scene image.
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("noise-apply"),
+                label: Some("grain-apply"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: dst_view,
                     resolve_target: None,
@@ -430,7 +445,7 @@ fn pcg_hash(n: u32) -> u32 {
 
 fn create_evolve_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -> EffectPipeline {
     let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("noise-evolve-bgl"),
+        label: Some("grain-evolve-bgl"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -462,20 +477,20 @@ fn create_evolve_pipeline(device: &wgpu::Device, _format: wgpu::TextureFormat) -
     });
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("noise-evolve-pipeline-layout"),
+        label: Some("grain-evolve-pipeline-layout"),
         bind_group_layouts: &[&bind_group_layout],
         immediate_size: 0,
     });
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("noise-shader"),
+        label: Some("grain-shader"),
         source: wgpu::ShaderSource::Wgsl(
-            include_str!("../../../../../shaders/veils/noise.wgsl").into(),
+            include_str!("../../../../../shaders/veils/grain.wgsl").into(),
         ),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("noise-evolve-pipeline"),
+        label: Some("grain-evolve-pipeline"),
         layout: Some(&pipeline_layout),
         vertex: wgpu::VertexState {
             module: &shader,
