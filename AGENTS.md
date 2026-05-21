@@ -4,11 +4,17 @@ Darkly is a web-based, gpu-native paint program written in Rust, Svelte and Type
 
 ## Architecture
 
-Darkly's Rust core (`crates/darkly/`) is platform-agnostic. It contains the document model, GPU compositor, veils, brush engine, undo system, and the `DarklyEngine` — all with zero platform dependencies. A WASM bridge wraps the engine for the browser.
+Darkly's Rust core (`crates/darkly/`) is platform-agnostic — document, brush engine, GPU compositor, undo, and `DarklyEngine` itself, all with zero platform dependencies. A WASM bridge (`frontend/wasm/`) wraps the engine for the browser: commands and query results cross the boundary as JSON (or `serde_wasm_bindgen` values for typed payloads).
 
-State is split three ways: the **document** is authoritative and undoable (layer tree, masks, selection, canvas size); **session** state lives on `DarklyEngine` (active tool, view transform, in-flight stroke); the **compositor** is a derived realization (GPU textures, blend pipelines, render caches) that's always rebuildable from the document. Data flows downhill — document → compositor, session → compositor — never the other way.
+State splits three ways:
 
-**Runtime stack** — how a pointer event becomes a pixel:
+- **Document** — authoritative, undoable, serializable. Layer tree, modifiers (mask / selection), canvas size. Reasoning about it requires no GPU.
+- **Session** — transient editor state on `DarklyEngine`. Active tool, view transform, in-flight stroke, undo stack.
+- **Compositor** — derived realization. GPU textures, pipelines, render caches. Always rebuildable from the document on the next frame.
+
+Data flows downhill: document → compositor, session → compositor. Never upward. Bulk pixel data (layer pixels, mask pixels) is the principled exception — GPU-authoritative because it's huge and the GPU is where it's used.
+
+**Runtime stack** — pointer event to pixel:
 
 ```mermaid
 flowchart LR
@@ -20,71 +26,41 @@ flowchart LR
     Canvas[WebGPU canvas]
 
     User --> Svelte
-    Svelte -- JSON commands --> Bridge
-    Bridge -- JSON queries --> Svelte
+    Svelte <-->|JSON commands + query results| Bridge
     Bridge --> Engine
     Engine --> WGPU
     WGPU --> Canvas
 ```
 
-**Inside the Rust core** — the document is authoritative; the compositor is a derived realization. Data flows downhill, never up:
-
-```mermaid
-flowchart TB
-    Engine[DarklyEngine<br/>session: active tool, view transform,<br/>stroke lifecycle, undo stack]
-
-    subgraph Doc[Document — authoritative, undoable, GPU-free]
-        Tree[Layer tree]
-        Masks[Mask presence]
-        Sel[Selection regions]
-        Size[Canvas size]
-    end
-
-    subgraph Brush[Brush engine]
-        Stroke[StrokeEngine<br/>+ stabilizers]
-        Graph[Node graph<br/>+ nodes]
-    end
-
-    subgraph GPU[GPU layer — derived from document]
-        Comp[Compositor<br/>group ping-pong blend]
-        Veils[Veils]
-        Region[RegionStore<br/>GpuSelection<br/>ReadbackScheduler]
-    end
-
-    Tools[Tools<br/>brush, fill, select, transform]
-
-    Engine -->|mutate| Doc
-    Engine --> Tools
-    Engine --> Brush
-    Tools --> Doc
-    Brush -->|paint dabs| Region
-    Doc -.->|read| Comp
-    Region --> Comp
-    Comp --> Veils
-```
-
-**Modular subsystems** — `build.rs` scans these directories and auto-generates the registration code, so adding a veil / tool / brush node / stabilizer / config section is a single new file with a `register()` function. No central match arms, no hand-maintained lists.
-
-| Directory | What lives here |
-| --- | --- |
-| `gpu/veils/` | Veil effects (rainy glass, VHS, painting, …) |
-| `tools/` | Selection + transform tools |
-| `brush/nodes/` | Brush graph nodes (pen_input, stamp, curve, …) |
-| `brush/stabilizers/` | Stroke stabilizers |
-| `config/sections/`, `config/presets/` | Config schema sections + bundled presets |
+**Repo layout** — `★` marks modular subsystems (drop a new file with `pub fn register()`; `build.rs` discovers it — no central registration to touch):
 
 ```
-crates/darkly/          Platform-agnostic core (wgpu, pure Rust)
-  src/document.rs       Authoritative document model
-  src/engine/           DarklyEngine — session state + dispatch
-  src/gpu/              Compositor, veils, shaders
-  src/brush/            Node-graph brush engine, stroke engine, library
-  src/nodegraph/        Generic node-graph (graph, compiler, layout)
-  src/tools/            Selection / transform tools
-  src/undo/             Undo stack + per-domain undoable ops
-frontend/wasm/          WASM bridge (wasm-bindgen) → browser
+crates/darkly/src/
+  document/             Authoritative model (layer tree, canvas, ...)
+    layer_kinds/  ★     group, raster, void
+    modifiers/    ★     mask, selection
+  engine/               DarklyEngine — session + per-domain dispatch
+                          (painting, rendering, load/save, export,
+                           floating, flatten, merge, undo_dispatch, …)
+  gpu/                  Compositor, ping-pong blend, regions, readback
+    blend_modes/  ★     normal, multiply, hue, color_burn, …
+    veils/        ★     post-process effects (rainy_glass, VHS, painting, …)
+    voids/        ★     procedural fill sources (camera, noise, …)
+  brush/                Stroke engine + node-graph brush engine
+    nodes/        ★     graph nodes (pen_input, stamp, curve, …)
+    stabilizers/  ★     stroke stabilizers (laplacian, …)
+  config/
+    sections/     ★     schema sections (canvas, input, ui, …)
+    presets/      ★     bundled presets (gimp, krita, photoshop)
+  tools/          ★     brush, fill, gradient, colorpicker,
+                        select (rect/ellipse/lasso/polygon/magic_wand), transform
+  undo/                 Per-domain undoable ops (layer, modifier, property,
+                        selection, gpu_region, compound)
+  format/               Save/load — zip container, manifest, registry I/O
+  nodegraph/            Generic node-graph (graph, compiler, layout)
+frontend/wasm/          WASM bridge (wasm-bindgen) — single API surface
 frontend/src/           Svelte UI
-shared/styles/          @darkly/styles — tokens + themes shared by UI and website
+shared/styles/          @darkly/styles — tokens + themes (UI + website)
 website/                Astro + Starlight site (splash, docs, /demo/)
 ```
 
@@ -99,14 +75,14 @@ When adding a new item to a modular system (filter, tool, brush, etc.):
 
 The project uses a `build.rs` script that scans module directories and auto-generates `mod.rs` files with module declarations and a `registrations()` function. This is the Rust equivalent of Python's `__init__.py` auto-discovery. Each module exports a `pub fn register()` that returns a registration struct describing everything the system needs to know about that module.
 
-**Adding a new filter** = create `crates/darkly/src/gpu/filters/my_filter.rs` with a `register()` function. Done. No other file touched.
+**Adding a new veil** = create `crates/darkly/src/gpu/veils/my_veil.rs` with a `pub fn register() -> VeilRegistration`. Done. No other file touched.
 
-**Example — the filter system:**
-- `filter.rs` defines `Filter` trait, `FilterRegistration` struct, `FilterRegistry` (HashMap-backed, lazy pipeline caching). *Filter* is the generic noun — there's no `NoiseFilterRegistry`, even though noise was probably the first filter implemented.
-- `filters/noise.rs` exports `register() -> FilterRegistration` containing type ID, pipeline constructor, and JS factory
-- `filters/mod.rs` is generated by `build.rs` — never edit it manually
-- `FilterRegistry::new()` calls the generated `registrations()` to populate itself
-- The compositor calls trait methods on `dyn Filter` — it never branches on filter type
+**Example — the veil system:**
+- `gpu/veil.rs` defines `Veil` trait, `VeilRegistration` struct, `VeilRegistry` (HashMap-backed, lazy pipeline caching). *Veil* is the generic noun — there's no `RainyGlassVeilRegistry`, even though rainy glass was probably the first veil implemented.
+- `gpu/veils/rainy_glass.rs` exports `register() -> VeilRegistration` containing type ID, pipeline constructor, and JS factory
+- `gpu/veils/mod.rs` is generated by `build.rs` — never edit it manually
+- `VeilRegistry::new()` calls the generated `registrations()` to populate itself
+- The compositor calls trait methods on `dyn Veil` — it never branches on veil type
 
 **Type-owned dispatch:** This same pattern applies to all modular systems in the project, including types and interfaces, which should own their own dispatch logic. Any time a type has variant-specific behavior — a format-specific GPU pipeline, a color-space-specific blend, a tool-specific cursor — the dispatch lives in the type, behind a uniform interface. Consumers call the interface; they never branch on which variant they got. *Anti-pattern: `if mask { ... } else { ... }` sprinkled across code that consumes a paint surface; the format-specific dispatch is conceptually a paint-surface concern, so it belongs in the paint-surface interface, not at every call site.*
 
