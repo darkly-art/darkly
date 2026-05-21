@@ -268,6 +268,28 @@ impl Document {
         self.parent.get(id).copied()
     }
 
+    /// True iff this node and every ancestor up to the root are individually
+    /// `visible`. The compositor's `compose_children` walk already short-
+    /// circuits invisible subtrees ([`crate::gpu::compositor::Compositor`]
+    /// line ~2665), so this is the corresponding read-side helper for
+    /// callers (engine, frontend) that need the same answer without walking
+    /// the tree themselves — e.g. deciding whether to keep a camera void's
+    /// MediaStream uploading frames when a parent group hid it.
+    pub fn effective_visible(&self, id: LayerId) -> bool {
+        let mut current = id;
+        loop {
+            match self.find_node(current) {
+                Some(n) if !n.visible() => return false,
+                Some(_) => {}
+                None => return false,
+            }
+            match self.parent_of(current) {
+                Some(p) => current = p,
+                None => return true,
+            }
+        }
+    }
+
     /// Index of an entity within its parent container.
     /// - For a tree node: position in its parent group's `children` Vec.
     /// - For a modifier: position in its host node's `modifiers` Vec.
@@ -368,6 +390,30 @@ impl Document {
             match self.find_node(child_id) {
                 Some(LayerNode::Layer(Layer::Raster(r))) => out.push(r),
                 Some(LayerNode::Group(_)) => self.collect_raster_layers(child_id, out),
+                _ => {}
+            }
+        }
+    }
+
+    /// Every content layer (raster + void) in the tree, regardless of
+    /// visibility. Both kinds share the standard blend pipeline and live
+    /// in the unified compositor `layer_cache`, so the GPU sync path only
+    /// needs to know "this is a layer the compositor manages" — kind
+    /// dispatch happens once, inside the compositor's `ensure_layer`.
+    pub fn all_content_layers(&self) -> Vec<&Layer> {
+        let mut out = Vec::new();
+        self.collect_content_layers(self.root, &mut out);
+        out
+    }
+
+    fn collect_content_layers<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a Layer>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            match self.find_node(child_id) {
+                Some(LayerNode::Layer(l)) => out.push(l),
+                Some(LayerNode::Group(_)) => self.collect_content_layers(child_id, out),
                 _ => {}
             }
         }
@@ -848,6 +894,42 @@ mod tests {
         let id = doc.add_raster_layer(None);
         assert_eq!(doc.flat_layers().len(), 1);
         assert_eq!(doc.flat_layers()[0].id(), id);
+    }
+
+    #[test]
+    fn effective_visible_walks_ancestors() {
+        // Camera void's GPU-saving gates rely on this helper being honest
+        // about parent visibility: a layer whose own eye is on but whose
+        // parent group is hidden must report effective_visible = false,
+        // otherwise the camera keeps uploading frames behind a hidden group.
+        let mut doc = Document::new(256, 256);
+        let outer = doc.add_group(None);
+        let inner = doc.add_group(Some(outer));
+        let leaf = doc.add_raster_layer(Some(inner));
+
+        assert!(doc.effective_visible(leaf), "all visible → true");
+
+        if let Some(LayerNode::Group(g)) = doc.find_node_mut(outer) {
+            g.common.visible = false;
+        }
+        assert!(
+            !doc.effective_visible(leaf),
+            "outer group hidden → leaf not effective-visible even though its own eye is on",
+        );
+
+        if let Some(LayerNode::Group(g)) = doc.find_node_mut(outer) {
+            g.common.visible = true;
+        }
+        if let Some(node) = doc.find_node_mut(leaf) {
+            // SAFETY of pattern: this is just toggling the bool on the
+            // raster's LayerCommon; using the trait getter would require
+            // an extra borrow gymnastics.
+            match node {
+                LayerNode::Layer(crate::layer::Layer::Raster(r)) => r.common.visible = false,
+                _ => unreachable!(),
+            }
+        }
+        assert!(!doc.effective_visible(leaf), "leaf's own eye off → false");
     }
 
     #[test]

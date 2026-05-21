@@ -67,7 +67,7 @@ flowchart TB
 
 | Directory | What lives here |
 | --- | --- |
-| `gpu/veils/` | Veil effects (rainy glass, VHS, kuwahara, …) |
+| `gpu/veils/` | Veil effects (rainy glass, VHS, painting, …) |
 | `tools/` | Selection + transform tools |
 | `brush/nodes/` | Brush graph nodes (pen_input, stamp, curve, …) |
 | `brush/stabilizers/` | Stroke stabilizers |

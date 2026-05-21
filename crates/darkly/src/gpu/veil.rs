@@ -35,6 +35,16 @@ pub trait Veil: std::fmt::Debug {
         render_height: u32,
     ) -> EffectCache;
 
+    /// Per-veil resolution scale, applied on top of the global
+    /// `rendering.veil_scale`. Veils whose per-pixel cost is too high at
+    /// full viewport resolution override this to a value below 1.0; the
+    /// chain renders the veil at the reduced resolution and bilinearly
+    /// upscales the result. Effective scale is
+    /// `global_scale * perf_scale_factor`. Default `1.0` (no extra scaling).
+    fn perf_scale_factor(&self) -> f32 {
+        1.0
+    }
+
     /// Whether this veil uses time-based animation.
     /// When true (and speed > 0 and visible), the compositor drives
     /// continuous re-rendering via `needs_present`.

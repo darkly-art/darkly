@@ -46,9 +46,15 @@ pub struct VeilChain {
     blit_pipeline: EffectPipeline,
     /// Bind groups for blitting veil_textures[0] or [1] to surface.
     blit_bind_groups: Option<[wgpu::BindGroup; 2]>,
-    /// Blit pipeline for downscale/upscale between native and reduced-res
-    /// textures (accum format). Created lazily on first scaled veil.
-    scaling_pipeline: Option<EffectPipeline>,
+    /// Multi-tap soft-downscale pipeline used to feed reduced-resolution
+    /// veils. Single-tap bilinear aliases hard on filters whose output is
+    /// sensitive to small input differences (Painting especially), so we
+    /// use a dedicated 4-tap filter sized by screen-space derivatives.
+    /// Created lazily on first scaled veil.
+    downscale_pipeline: Option<EffectPipeline>,
+    /// Single-tap bilinear upscale pipeline — correct as-is for upscaling
+    /// since each output pixel reads a sub-input-texel position.
+    upscale_pipeline: Option<EffectPipeline>,
     sampler: wgpu::Sampler,
     /// Current viewport dimensions (updated on resize).
     viewport_width: u32,
@@ -80,7 +86,8 @@ impl VeilChain {
             views: None,
             blit_pipeline,
             blit_bind_groups: None,
-            scaling_pipeline: None,
+            downscale_pipeline: None,
+            upscale_pipeline: None,
             sampler,
             viewport_width: 0,
             viewport_height: 0,
@@ -135,7 +142,7 @@ impl VeilChain {
     /// Add a veil to the chain. Creates GPU resources immediately.
     pub fn add_veil(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, veil: Box<dyn Veil>) {
         self.ensure_textures(device);
-        self.ensure_scaling_pipeline(device);
+        self.ensure_scaling_pipelines(device);
         let native_views = self.views.as_ref().unwrap();
 
         let (scaling, cache) = create_veil_resources(
@@ -144,7 +151,7 @@ impl VeilChain {
             &*veil,
             native_views,
             &self.sampler,
-            self.scaling_pipeline.as_ref(),
+            self.downscale_pipeline.as_ref(),
             self.accum_format,
             self.viewport_width,
             self.viewport_height,
@@ -209,7 +216,7 @@ impl VeilChain {
             return;
         }
         self.ensure_textures(device);
-        self.ensure_scaling_pipeline(device);
+        self.ensure_scaling_pipelines(device);
         let native_views = self.views.as_ref().unwrap();
 
         let (scaling, cache) = create_veil_resources(
@@ -218,7 +225,7 @@ impl VeilChain {
             &*new_veil,
             native_views,
             &self.sampler,
-            self.scaling_pipeline.as_ref(),
+            self.downscale_pipeline.as_ref(),
             self.accum_format,
             self.viewport_width,
             self.viewport_height,
@@ -347,11 +354,12 @@ impl VeilChain {
             let dst = 1 - current_src;
 
             if let Some(ref scaling) = entry.scaling {
-                let sp = self.scaling_pipeline.as_ref().unwrap();
+                let downscale = self.downscale_pipeline.as_ref().unwrap();
+                let upscale = self.upscale_pipeline.as_ref().unwrap();
                 // Downscale: native pp[current_src] → reduced[0]
                 blit_pass(
                     encoder,
-                    &sp.pipeline,
+                    &downscale.pipeline,
                     &scaling.downscale_bgs[current_src],
                     &scaling.views[0],
                     "veil-downscale",
@@ -363,7 +371,7 @@ impl VeilChain {
                 // Upscale: reduced[1] → native pp[dst]
                 blit_pass(
                     encoder,
-                    &sp.pipeline,
+                    &upscale.pipeline,
                     &scaling.upscale_bg,
                     &veil_views[dst],
                     "veil-upscale",
@@ -404,14 +412,24 @@ impl VeilChain {
 
     // --- Internal helpers ---
 
-    /// Ensure the scaling blit pipeline exists (needed when veils render at
-    /// reduced resolution).
-    fn ensure_scaling_pipeline(&mut self, device: &wgpu::Device) {
-        if self.applied_scale < 1.0 - FULL_SCALE_EPSILON && self.scaling_pipeline.is_none() {
-            self.scaling_pipeline = Some(effect::create_blit_pipeline(
+    /// Ensure the downscale and upscale pipelines exist. Needed whenever
+    /// a veil renders at reduced resolution — either because the global
+    /// `rendering.veil_scale` is < 1.0 or because the veil declares a
+    /// `perf_scale_factor` below 1.0. Cheap enough to create
+    /// unconditionally once veils exist.
+    fn ensure_scaling_pipelines(&mut self, device: &wgpu::Device) {
+        if self.downscale_pipeline.is_none() {
+            self.downscale_pipeline = Some(effect::create_downscale_pipeline(
                 device,
                 self.accum_format,
-                "veil-scaling",
+                "veil-downscale",
+            ));
+        }
+        if self.upscale_pipeline.is_none() {
+            self.upscale_pipeline = Some(effect::create_blit_pipeline(
+                device,
+                self.accum_format,
+                "veil-upscale",
             ));
         }
     }
@@ -486,7 +504,7 @@ impl VeilChain {
     fn recreate_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.drop_textures();
         self.ensure_textures(device);
-        self.ensure_scaling_pipeline(device);
+        self.ensure_scaling_pipelines(device);
 
         let native_views = self.views.as_ref().unwrap();
         for entry in &mut self.entries {
@@ -496,7 +514,7 @@ impl VeilChain {
                 &*entry.veil,
                 native_views,
                 &self.sampler,
-                self.scaling_pipeline.as_ref(),
+                self.downscale_pipeline.as_ref(),
                 self.accum_format,
                 self.viewport_width,
                 self.viewport_height,
@@ -511,22 +529,26 @@ impl VeilChain {
 // --- Free functions ---
 
 /// Create the veil's EffectCache and optional VeilScaling.
-/// At full scale (1.0) the veil reads and writes the native ping-pong
-/// views directly. Below 1.0 we allocate reduced-resolution textures and
-/// the encoder wraps the veil in downscale/upscale passes.
+///
+/// Render dimensions = `viewport * global_scale * veil.perf_scale_factor()`.
+/// At effective scale 1.0 the veil reads and writes the native ping-pong
+/// views directly; otherwise we allocate reduced-res textures and the
+/// encoder wraps the veil in downscale/upscale passes.
 fn create_veil_resources(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     veil: &dyn Veil,
     native_views: &[wgpu::TextureView; 2],
     sampler: &wgpu::Sampler,
-    scaling_pipeline: Option<&EffectPipeline>,
+    scaling_layout: Option<&EffectPipeline>,
     accum_format: wgpu::TextureFormat,
     viewport_width: u32,
     viewport_height: u32,
     scale: f32,
 ) -> (Option<VeilScaling>, EffectCache) {
-    if scale >= 1.0 - FULL_SCALE_EPSILON {
+    let effective_scale = (scale * veil.perf_scale_factor()).clamp(MIN_VEIL_SCALE, 1.0);
+
+    if effective_scale >= 1.0 - FULL_SCALE_EPSILON {
         let cache = veil.create_cache(
             device,
             queue,
@@ -538,10 +560,21 @@ fn create_veil_resources(
         return (None, cache);
     }
 
-    let rw = ((viewport_width as f32 * scale).round() as u32).max(1);
-    let rh = ((viewport_height as f32 * scale).round() as u32).max(1);
-    let sp = scaling_pipeline.expect("scaling pipeline must exist for scaled veils");
-    let scaling = create_veil_scaling(device, sampler, sp, accum_format, rw, rh, native_views);
+    let rw = ((viewport_width as f32 * effective_scale).round() as u32).max(1);
+    let rh = ((viewport_height as f32 * effective_scale).round() as u32).max(1);
+    // The downscale and upscale pipelines share a bind-group layout, so
+    // we can use either one to build the bind groups; we pass the
+    // downscale pipeline here purely for the layout.
+    let layout_source = scaling_layout.expect("scaling pipeline must exist for scaled veils");
+    let scaling = create_veil_scaling(
+        device,
+        sampler,
+        layout_source,
+        accum_format,
+        rw,
+        rh,
+        native_views,
+    );
     let cache = veil.create_cache(device, queue, &scaling.views, sampler, rw, rh);
     (Some(scaling), cache)
 }
@@ -550,7 +583,7 @@ fn create_veil_resources(
 fn create_veil_scaling(
     device: &wgpu::Device,
     sampler: &wgpu::Sampler,
-    scaling_pipeline: &EffectPipeline,
+    layout_source: &EffectPipeline,
     format: wgpu::TextureFormat,
     render_width: u32,
     render_height: u32,
@@ -578,7 +611,7 @@ fn create_veil_scaling(
     let (t0, v0) = make_tex("veil-scaled-0");
     let (t1, v1) = make_tex("veil-scaled-1");
 
-    let layout = &scaling_pipeline.bind_group_layout;
+    let layout = &layout_source.bind_group_layout;
 
     // Downscale: [i] reads native pp[i], draws to reduced[0].
     let downscale_bgs: [wgpu::BindGroup; 2] = std::array::from_fn(|i| {

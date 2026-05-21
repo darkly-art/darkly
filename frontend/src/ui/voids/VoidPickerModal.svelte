@@ -24,6 +24,15 @@
         const id = app.handle.add_void_layer(vt.type, defaults, app.activeLayerId ?? -1);
         if (id >= 0) {
             app.selectLayer(id);
+            // Adding a camera void via the picker is an explicit user
+            // gesture — opt the new layer into this session's camera
+            // allow-list so the reconciler spins up the MediaStream.
+            // Reopening a saved doc does NOT add to this set, which is
+            // why loaded camera voids hold their saved frame until the
+            // user clicks Resume in VoidProperties.
+            if (vt.type === 'camera') {
+                app.markCameraVoidStarted(id);
+            }
         }
         app.requestFrame();
         onclose();
