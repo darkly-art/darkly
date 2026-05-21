@@ -5,14 +5,23 @@
 // a scalar field; a future warp veil will consume `fbm_warp_offset` as a 2D
 // displacement map. Same primitives, different output contract.
 //
-// This file declares functions only — no @group / @binding / entry points.
-// Consumers concatenate it ahead of their own WGSL via Rust's `include_str!`
-// (WGSL has no native #include).
+// Consumers concatenate this file ahead of their own WGSL via Rust's
+// `include_str!` (WGSL has no native #include). The 3D primitives below
+// require the consumer to expose a 3D noise volume + sampler at
+// `@group(0) @binding(1..2)`; see `fbm_value_noise3` for details.
 //
-// Algorithm based on Inigo Quilez's domain-warping article:
+// Credits:
+//
+// • Domain-warp algorithm: Inigo Quilez, "Domain warping",
 //   https://iquilezles.org/articles/warp/
-// Value-noise primitive uses a PCG-style integer hash for cheap, pattern-
-// free pseudo-random per-cell values.
+//
+// • Texture-sampled noise primitive (used by the 3D variants below) is
+//   inspired by nimitz's "Watery" (https://www.shadertoy.com/view/MssSRS)
+//   — `noise(p) = texture(channel, p*.01).x`, replacing per-pixel hash
+//   computation with a single hardware-filtered fetch. Watery itself is
+//   licensed CC BY-NC-SA 3.0; we re-implement the *technique* (a 3D noise
+//   volume sampled by the FBM octave loop) rather than reusing any code.
+//   Contact the author (twitter: @stormoid) for other licensing options.
 
 /// Integer PCG hash. Fast, well-distributed, no visible patterns.
 fn fbm_pcg(n: u32) -> u32 {
@@ -129,10 +138,7 @@ fn fbm_warp(
 // PCG-hash-and-trilerp. A single texture sample is roughly one GPU cycle;
 // the compute version is ~32 PCG hashes + 7 lerps per call. With 15 noise
 // calls per pixel (3 fbm3 in fbm_warp3 × 5 octaves), the savings dominate
-// the shader cost. Inspired by the texture-based noise pattern from
-// Inigo Quilez's articles and shadertoy works like nimitz's "Watery"
-// (https://www.shadertoy.com/view/MssSRS), adapted for true in-place
-// time evolution via a 3D volume rather than 2D-with-drift.
+// the shader cost. See the file header for the credit chain.
 //
 // Consumers must bind:
 //   @group(0) @binding(1) — a 3D Rgba8Unorm noise texture, FBM_NOISE3D_DIM
