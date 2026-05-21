@@ -225,11 +225,13 @@ For details on Darkly's stance on AI, see [this blog post]().
 
 ## Acknowledgments
 
-Darkly stands on the shoulders of giants. Two programs in particular have influenced this project, and we love them dearly.
+Darkly stands on the shoulders of giants. Three programs in particular have influenced this project, and we love them dearly.
 
 **[GIMP](https://www.gimp.org/)** ([source](https://github.com/GNOME/gimp)) - originally written by **Spencer Kimball** and **Peter Mattis** in 1995, and maintained today by **Michael Natterer** and **Jehan Pagès**, with decades of contributions from a community far too large to list here (see the upstream [`AUTHORS`](https://github.com/GNOME/gimp/blob/master/AUTHORS) file).
 
 **[Krita](https://krita.org/)** ([source](https://github.com/KDE/krita)) - led by **Halla Rempt**, with core contributions over the years from **Dmitry Kazakov**, **Cyrille Berger**, **Sven Langkamp**, **Wolthera van Hövell tot Westerflier**, **L. E. Segovia**, **Scott Petrovic**, and many more (see the upstream [`developers.txt`](https://github.com/KDE/krita/blob/master/krita/data/aboutdata/developers.txt)).
+
+**[Graphite](https://graphite.art/)** ([source](https://github.com/GraphiteEditor/Graphite)) - founded by **Keavon Chambers** (@Keavon), with the core team of **Dennis Kobert** (@TrueDoctor), **Timon Schelling** (@timon-schelling), and **Adam Gerhant** (@pendapia), plus heroic contributions from **Hypercube** (@0HyperCube), **James Lindsay**, and [hundreds more](https://github.com/GraphiteEditor/Graphite/graphs/contributors). Graphite is a pioneer in bringing serious 2D graphics tooling to **Rust + WebAssembly + WebGPU**.
 
 While Darkly's architecture is fundamentally different, it was really insightful to see how these tools tackled many of the same hard problems, and their unique and smart approaches that made them pillars of open source!
 

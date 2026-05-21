@@ -3,9 +3,7 @@ target
 .venv
 Graphite
 /krita
+/gimp
 .claude
 frontend/wasm/pkg
 frontend/dist
-darkly-plan.md
-graphite-deep-dive.md
-krita-plus-graphite-perf-lessons.md
