@@ -21,38 +21,40 @@ struct Params {
     octaves: i32,
     frequency: f32,
     warp: f32,
-    color: f32,
+    // Tonal contrast exponent offset — output = pow(value, 1.0 + darkness).
+    // 0 = linear (washed grayscale); higher values push midtones toward
+    // black for a Watery-style mood.
+    darkness: f32,
     time: f32,
+    // Multiplier from render-target pixel coords to canvas-space pixel
+    // coords. The procedural texture renders into an aux buffer that may
+    // be smaller than the canvas (typically 1/2) and is bilinear-upsampled
+    // to the void's destination. Scaling here keeps the FBM domain canvas-
+    // aligned regardless of render-target size, so a given `frequency`
+    // produces the same feature size in the final output at any aux scale.
+    canvas_scale: f32,
     _pad0: f32,
-    _pad1: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 
 const LACUNARITY: f32 = 2.0;
 const GAIN: f32 = 0.5;
-// Drift rate in FBM-domain units per second of accumulated `time` (at
-// evolution=1.0). One FBM feature spans roughly one unit, so vec2(0.5, 0.31)
-// means "half a feature per second" — visible without being frantic. The
-// off-axis y component keeps motion from aligning to either pixel axis.
-// Dividing by `frequency` below converts to pixel-space so the perceived
-// speed is independent of feature size.
-const DRIFT: vec2f = vec2f(0.5, 0.31);
+// Time advances the z-axis of a 3D FBM field. Features morph in place at
+// fixed canvas positions rather than translating; at `evolution = 1.0` and
+// a 60 Hz void clock, one z-cell-cross takes ~7 seconds — visible but not
+// frenetic. Tune to taste.
+const Z_SCALE: f32 = 0.15;
 
 @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-    // FragCoord is in pixels — no resolution uniform needed; the shader works
-    // at whatever target size the compositor allocated.
-    let pixel = in.position.xy + params.time * DRIFT / params.frequency;
-    let p = pixel * params.frequency;
+    // FragCoord is in render-target pixels; scale to canvas space so the
+    // FBM domain is independent of aux-texture resolution.
+    let xy = in.position.xy * params.canvas_scale * params.frequency;
+    let p = vec3f(xy, params.time * Z_SCALE);
 
-    let v = fbm_warp(p, params.seed, params.octaves, LACUNARITY, GAIN, params.warp);
-
-    // Color path: three independent FBM fields at offset seeds give the RGB
-    // channels uncorrelated structure. `params.color` lerps from a grayscale
-    // ramp (single field replicated) to full RGB.
-    let g = fbm_warp(p + vec2f(7.3, 2.1), params.seed + 137u, params.octaves, LACUNARITY, GAIN, params.warp);
-    let b = fbm_warp(p + vec2f(-3.7, 9.5), params.seed + 271u, params.octaves, LACUNARITY, GAIN, params.warp);
-    let col = mix(vec3f(v), vec3f(v, g, b), params.color);
-
-    return vec4f(col, 1.0);
+    let v = fbm_warp3(p, params.seed, params.octaves, LACUNARITY, GAIN, params.warp);
+    // Apply darkness/contrast curve. `max` guards against the rare
+    // out-of-[0,1] FBM excursion under heavy warp.
+    let shaped = pow(max(v, 0.0), 1.0 + params.darkness);
+    return vec4f(shaped, shaped, shaped, 1.0);
 }
