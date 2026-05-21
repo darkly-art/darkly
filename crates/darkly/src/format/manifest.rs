@@ -247,7 +247,7 @@ mod tests {
                 height: 2048,
             },
             requires: ManifestRequires {
-                veil: vec!["noise".into()],
+                veil: vec!["grain".into()],
                 blend_mode: vec!["normal".into(), "multiply".into()],
                 layer_kind: vec!["raster".into(), "group".into()],
                 modifier: vec!["mask".into()],
@@ -273,10 +273,11 @@ mod tests {
             selection_id: None,
             veils: vec![ManifestVeil {
                 instance: InstancePayload::new(
-                    "noise",
+                    "grain",
                     vec![
                         crate::gpu::params::ParamValue::Float(0.5),
                         crate::gpu::params::ParamValue::Float(0.05),
+                        crate::gpu::params::ParamValue::Float(1.0),
                     ],
                 ),
                 visible: true,

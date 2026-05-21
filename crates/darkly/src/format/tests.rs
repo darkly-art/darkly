@@ -986,10 +986,10 @@ fn legacy_type_id_migration() {
     // someone accidentally drops the registry interface). The shape
     // a future migration test takes:
     //
-    //   1. Construct a Manifest with `requires.veil = vec!["noise"]`
+    //   1. Construct a Manifest with `requires.veil = vec!["grain"]`
     //      (current `type_id`).
-    //   2. Once `noise_v2` ships and `noise` becomes a legacy reader,
-    //      write a fixture where `requires` still names `noise` and
+    //   2. Once `grain_v2` ships and `grain` becomes a legacy reader,
+    //      write a fixture where `requires` still names `grain` and
     //      the body has the v1 params; assert the load succeeds and
     //      the migrated veil's params match what `migrate_v1_to_v2`
     //      would produce.
