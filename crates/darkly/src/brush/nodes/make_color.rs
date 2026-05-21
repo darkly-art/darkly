@@ -3,14 +3,13 @@
 //! Constructs a Color value from individual scalar components.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "make_color",
         category: "color",
         display_name: "Make Color",
@@ -36,7 +35,7 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
-    }
+    })
 }
 
 pub struct MakeColorEvaluator;

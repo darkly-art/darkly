@@ -27,7 +27,7 @@ use darkly::brush::dab_pool::{DabTexturePool, DAB_REFERENCE_SIZE};
 use darkly::brush::eval::{BrushNodeEvaluator, EvalContext};
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use darkly::brush::nodes::circle::CircleEvaluator;
-use darkly::brush::pipelines::BrushPipelines;
+use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::wire::{BrushWireType, ScalarValue};
 use darkly::brush::BrushNodeRegistry;
 use darkly::gpu::params::ParamValue;

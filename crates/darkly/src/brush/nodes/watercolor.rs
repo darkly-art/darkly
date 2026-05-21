@@ -37,19 +37,322 @@
 //! `color` (read separately) as the paint colour — avoids
 //! de-premultiplying (undefined where `dab.a == 0`).
 
+use std::any::Any;
+
 use crate::brush::eval::{BrushNodeEvaluator, BrushPreviewInfo, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::paint_target_ext::BrushPaintTargetExt;
-use crate::brush::pipelines::{
-    BlitUniforms, WatercolorCompositeUniforms, WatercolorPickupUniforms,
+use crate::brush::pipeline::{
+    BlitUniforms, BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
+// ── Pipelines ──────────────────────────────────────────────────────────
+
+/// Uniform data for the watercolor pickup shader.
+///
+/// Drives one render pass per watercolor dab that averages canvas_copy
+/// under the brush footprint (alpha-weighted RGB, unweighted alpha) into
+/// a 1×1 RGBA8 pickup texture.  Each dab is independent — no cross-dab
+/// carry; every dab samples the canvas afresh.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WatercolorPickupUniforms {
+    pub center: [f32; 2],              // brush centre in canvas pixels
+    pub copy_origin: [f32; 2], // top-left of the valid scratch-mirror region (canvas pixels)
+    pub scratch_mirror_size: [f32; 2], // scratch mirror texture dimensions
+    pub half_extent: [f32; 2], // half the dab footprint (canvas pixels) per axis
+}
+
+/// Uniform data for the watercolor compositing shader.
+///
+/// Same shape as `CompositeUniforms` minus the per-dab `blend_mode` and
+/// `fg_premultiplied` knobs (watercolor is always source-over with a
+/// premultiplied dab), plus `paint_color` and `deposit` — the two new
+/// quantities the watercolor blend reads on top of the standard composite
+/// inputs.
+///
+/// `paint_color` is first because vec4 needs 16-byte alignment in WGSL.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WatercolorCompositeUniforms {
+    pub paint_color: [f32; 4], // straight-alpha paint color (rgb used; alpha via dab.a)
+    pub origin: [f32; 2],      // quad top-left in canvas pixels
+    pub size: [f32; 2],        // quad size in canvas pixels
+    pub target_offset: [f32; 2], // canvas-space offset of render target's (0,0) pixel
+    pub target_size: [f32; 2], // render target pixel dimensions (vertex NDC)
+    pub canvas_size: [f32; 2], // document canvas dimensions (fragment selection UV)
+    pub uv_min: [f32; 2],      // min UV in dab texture (nonzero when clipped at top/left)
+    pub uv_max: [f32; 2],      // max UV in dab texture
+    pub deposit: f32,          // paint↔pickup mix ratio (0 = pure pickup, 1 = pure paint)
+    pub wetness: f32,          // smudge intensity (0 = dry brush, 1 = full smudge)
+    pub stroke_opacity: f32,   // per-stroke opacity cap (1.0 = no cap)
+    pub apply_selection: u32,  // 1 = modulate fg by selection, 0 = ignore (commit pass)
+}
+
+/// Watercolor pickup pipeline.  Alpha-weighted average of canvas_copy
+/// under the brush footprint, written to a 1×1 RGBA8 pickup texture.
+/// The composite pass samples this single texel so every fragment of the
+/// dab reads the same colour.  Each dab is independent.
+///
+/// Also owns the 1×1 pickup texture itself (allocated once, reused per
+/// dab — the pickup pass overwrites the single texel) and both its
+/// views: the sampled-side view embedded by every `Scratch` in its
+/// `watercolor_sources_bind_group`, and the render-attachment view the
+/// pickup pass writes to.
+pub struct WatercolorPickupPipeline {
+    pipeline: wgpu::RenderPipeline,
+    ring: DynamicUniformRing,
+    uniform_bind_group: wgpu::BindGroup,
+    _texture: wgpu::Texture,
+    sampled_view: wgpu::TextureView,
+    attachment_view: wgpu::TextureView,
+}
+
+impl WatercolorPickupPipeline {
+    fn build(ctx: &BuildContext) -> Self {
+        let shader = ctx
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("brush-watercolor-pickup"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("../../../../../shaders/brush/watercolor_pickup.wgsl").into(),
+                ),
+            });
+        // group(0) = uniforms, group(1) = canvas copy.
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("brush-watercolor-pickup-layout"),
+                bind_group_layouts: &[ctx.uniform_bgl, ctx.canvas_copy_bgl],
+                immediate_size: 0,
+            });
+        let pipeline = ctx
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("brush-watercolor-pickup"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+        let (ring, uniform_bind_group) = ctx.make_uniform_ring::<WatercolorPickupUniforms>(
+            "brush-watercolor-pickup-uniforms",
+            "brush-watercolor-pickup-uniform-bg",
+        );
+        let texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("brush-watercolor-pickup"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let sampled_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let attachment_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            pipeline,
+            ring,
+            uniform_bind_group,
+            _texture: texture,
+            sampled_view,
+            attachment_view,
+        }
+    }
+
+    pub fn pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline
+    }
+
+    pub fn uniform_bind_group(&self) -> &wgpu::BindGroup {
+        &self.uniform_bind_group
+    }
+
+    pub fn write_uniforms(&self, queue: &wgpu::Queue, uniforms: &WatercolorPickupUniforms) -> u32 {
+        self.ring.write(queue, bytemuck::bytes_of(uniforms))
+    }
+
+    /// Render-attachment view of the pickup texture.  The pickup pass
+    /// writes one fragment here per dab.
+    pub fn attachment_view(&self) -> &wgpu::TextureView {
+        &self.attachment_view
+    }
+
+    /// Sampled-side view of the pickup texture.  Embedded by every
+    /// `Scratch` in its `watercolor_sources_bind_group` at binding 2.
+    /// Forwarded by [`BrushPipelines::watercolor_pickup_view`].
+    pub fn sampled_view(&self) -> &wgpu::TextureView {
+        &self.sampled_view
+    }
+}
+
+impl BrushPipelineEntry for WatercolorPickupPipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn ring(&self) -> Option<&DynamicUniformRing> {
+        Some(&self.ring)
+    }
+}
+
+fn watercolor_pickup_pipeline_reg() -> BrushPipelineRegistration {
+    BrushPipelineRegistration {
+        id: "watercolor_pickup",
+        build: |ctx| Box::new(WatercolorPickupPipeline::build(ctx)),
+    }
+}
+
+/// Watercolor composite pipeline.  REPLACE blend (shader-side
+/// Porter-Duff, identical pattern to the standard composite).  Always
+/// targets RGBA8 stroke scratch — stroke→layer commits go through the
+/// shared composite pipeline, so no R8 variant is needed here.
+pub struct WatercolorCompositePipeline {
+    pipeline: wgpu::RenderPipeline,
+    ring: DynamicUniformRing,
+    uniform_bind_group: wgpu::BindGroup,
+}
+
+impl WatercolorCompositePipeline {
+    fn build(ctx: &BuildContext) -> Self {
+        let shader = ctx
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("brush-watercolor-composite"),
+                source: wgpu::ShaderSource::Wgsl(
+                    concat!(
+                        include_str!("../../../../../shaders/source_over.wgsl"),
+                        "\n",
+                        include_str!("../../../../../shaders/brush/watercolor_composite.wgsl"),
+                    )
+                    .into(),
+                ),
+            });
+        // group(0) = uniforms, group(1) = dab, group(2) = selection,
+        // group(3) = sources (canvas_copy + pickup).
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("brush-watercolor-composite-layout"),
+                bind_group_layouts: &[
+                    ctx.uniform_bgl,
+                    ctx.dab_bgl,
+                    ctx.selection_bgl,
+                    ctx.watercolor_sources_bgl,
+                ],
+                immediate_size: 0,
+            });
+        let pipeline = ctx
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("brush-watercolor-composite"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+        let (ring, uniform_bind_group) = ctx.make_uniform_ring::<WatercolorCompositeUniforms>(
+            "brush-watercolor-composite-uniforms",
+            "brush-watercolor-composite-uniform-bg",
+        );
+        Self {
+            pipeline,
+            ring,
+            uniform_bind_group,
+        }
+    }
+
+    pub fn pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline
+    }
+
+    pub fn uniform_bind_group(&self) -> &wgpu::BindGroup {
+        &self.uniform_bind_group
+    }
+
+    pub fn write_uniforms(
+        &self,
+        queue: &wgpu::Queue,
+        uniforms: &WatercolorCompositeUniforms,
+    ) -> u32 {
+        self.ring.write(queue, bytemuck::bytes_of(uniforms))
+    }
+}
+
+impl BrushPipelineEntry for WatercolorCompositePipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn ring(&self) -> Option<&DynamicUniformRing> {
+        Some(&self.ring)
+    }
+}
+
+fn watercolor_composite_pipeline_reg() -> BrushPipelineRegistration {
+    BrushPipelineRegistration {
+        id: "watercolor_composite",
+        build: |ctx| Box::new(WatercolorCompositePipeline::build(ctx)),
+    }
+}
+
+// ── Node ────────────────────────────────────────────────────────────────
 
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration {
+        pipelines: vec![
+            watercolor_pickup_pipeline_reg(),
+            watercolor_composite_pipeline_reg(),
+        ],
+        node: NodeRegistration {
         type_id: "watercolor",
         category: "output",
         display_name: "Watercolor",
@@ -97,6 +400,7 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: true,
+        },
     }
 }
 
@@ -190,9 +494,10 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             scratch_mirror_size,
             half_extent: [half_w.max(1.0), half_h.max(1.0)],
         };
-        let pickup_offset = gpu
+        let pickup = gpu
             .pipelines
-            .write_watercolor_pickup_uniforms(gpu.queue, &pickup_uniforms);
+            .get::<WatercolorPickupPipeline>("watercolor_pickup");
+        let pickup_offset = pickup.write_uniforms(gpu.queue, &pickup_uniforms);
         let scratch = gpu
             .scratch
             .as_deref()
@@ -201,7 +506,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("brush-watercolor-pickup"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: gpu.pipelines.watercolor_pickup_attachment_view(),
+                    view: pickup.attachment_view(),
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -212,12 +517,8 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
                 ..Default::default()
             });
             pass.set_viewport(0.0, 0.0, 1.0, 1.0, 0.0, 1.0);
-            pass.set_pipeline(gpu.pipelines.watercolor_pickup_pipeline());
-            pass.set_bind_group(
-                0,
-                &gpu.pipelines.watercolor_pickup_uniform_bind_group,
-                &[pickup_offset],
-            );
+            pass.set_pipeline(pickup.pipeline());
+            pass.set_bind_group(0, pickup.uniform_bind_group(), &[pickup_offset]);
             pass.set_bind_group(1, scratch.read_mirror_bind_group(), &[]);
             pass.draw(0..3, 0..1);
         }
@@ -237,9 +538,10 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             stroke_opacity: opacity,
             apply_selection: 1,
         };
-        let composite_offset = gpu
+        let composite = gpu
             .pipelines
-            .write_watercolor_composite_uniforms(gpu.queue, &composite_uniforms);
+            .get::<WatercolorCompositePipeline>("watercolor_composite");
+        let composite_offset = composite.write_uniforms(gpu.queue, &composite_uniforms);
         let dab_bind_group = gpu.dab_pool.bind_group(dab_handle);
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -256,12 +558,8 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
                 ..Default::default()
             });
             pass.set_viewport(0.0, 0.0, pt_width as f32, pt_height as f32, 0.0, 1.0);
-            pass.set_pipeline(gpu.pipelines.watercolor_composite_pipeline());
-            pass.set_bind_group(
-                0,
-                &gpu.pipelines.watercolor_composite_uniform_bind_group,
-                &[composite_offset],
-            );
+            pass.set_pipeline(composite.pipeline());
+            pass.set_bind_group(0, composite.uniform_bind_group(), &[composite_offset]);
             pass.set_bind_group(1, dab_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
             pass.set_bind_group(3, scratch.watercolor_sources_bind_group(), &[]);

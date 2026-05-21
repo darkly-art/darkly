@@ -28,15 +28,14 @@
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::paint_target_ext::BrushPaintTargetExt;
-use crate::brush::pipelines::BlitUniforms;
+use crate::brush::pipeline::BlitUniforms;
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "preview_terminal",
         category: "internal",
         display_name: "Preview Terminal",
@@ -44,7 +43,7 @@ pub fn register() -> BrushNodeRegistration {
             .with_description("Texture to render as the per-node preview thumbnail")],
         params: &[],
         is_gpu: true,
-    }
+    })
 }
 
 pub struct PreviewTerminalEvaluator;

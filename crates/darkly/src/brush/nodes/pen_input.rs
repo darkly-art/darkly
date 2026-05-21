@@ -5,14 +5,13 @@
 //! dispatch).  The evaluator is a no-op.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "pen_input",
         category: "input",
         display_name: "Pen Input",
@@ -114,7 +113,7 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
-    }
+    })
 }
 
 /// No-op evaluator — `seed_sensors()` handles this node directly.

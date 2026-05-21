@@ -4,14 +4,13 @@
 //! output slot directly with the stroke's foreground color.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "paint_color",
         category: "color",
         display_name: "Paint Color",
@@ -19,7 +18,7 @@ pub fn register() -> BrushNodeRegistration {
             .with_description("Current foreground painting color (RGBA)")],
         params: &[],
         is_gpu: false,
-    }
+    })
 }
 
 /// No-op evaluator — `seed_sensors()` handles this node directly.

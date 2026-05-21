@@ -9,17 +9,16 @@
 //! precomputed LUTs for brush dynamics curves.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 const DEFAULT_CURVE: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
 
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "curve",
         category: "modulate",
         display_name: "Curve",
@@ -36,7 +35,7 @@ pub fn register() -> BrushNodeRegistration {
             default: DEFAULT_CURVE,
         }],
         is_gpu: false,
-    }
+    })
 }
 
 pub struct CurveEvaluator;

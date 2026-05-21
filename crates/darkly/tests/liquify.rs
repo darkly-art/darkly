@@ -19,7 +19,7 @@ use darkly::brush::dab_pool::DabTexturePool;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use darkly::brush::paint_info::PaintInformation;
-use darkly::brush::pipelines::BrushPipelines;
+use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::brush::wire::BrushWireType;
 use darkly::brush::BrushNodeRegistry;

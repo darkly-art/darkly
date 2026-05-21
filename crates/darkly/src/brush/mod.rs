@@ -11,10 +11,11 @@ pub mod gpu_context;
 pub mod import;
 pub mod interpolation;
 pub mod library;
+pub mod node;
 pub mod nodes;
 pub mod paint_info;
 pub mod paint_target_ext;
-pub mod pipelines;
+pub mod pipeline;
 pub mod preview_renderer;
 pub mod preview_subgraph;
 pub mod save_points;
@@ -32,8 +33,10 @@ use std::collections::HashMap;
 use crate::nodegraph::NodeRegistration;
 use wire::BrushWireType;
 
-/// Type alias used by `build.rs` auto-generation for the nodes directory.
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
+/// Wrapper around `NodeRegistration<BrushWireType>` carrying the GPU
+/// pipelines a brush node owns.  Used by `build.rs` auto-generation for
+/// the nodes directory.
+pub use node::BrushNodeRegistration;
 
 /// HashMap-backed registry of all brush node types.
 ///
@@ -44,8 +47,14 @@ pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
 /// map of `type_id → Box<dyn BrushNodeEvaluator>`.  The split exists
 /// because metadata is data (serializable, cloneable, needed at compile
 /// time) while evaluators are behavior (trait objects, needed at runtime).
+///
+/// Stores a `BrushNodeRegistration` wrapper per type plus a parallel
+/// `nodegraph_map` of just the bare `NodeRegistration<W>` for handing to
+/// the nodegraph compiler, which is generic over `W` and doesn't know
+/// about the brush-specific pipeline metadata.
 pub struct BrushNodeRegistry {
     map: HashMap<String, BrushNodeRegistration>,
+    nodegraph_map: HashMap<String, NodeRegistration<BrushWireType>>,
 }
 
 impl BrushNodeRegistry {
@@ -53,10 +62,13 @@ impl BrushNodeRegistry {
     pub fn new() -> Self {
         let regs = nodes::registrations();
         let mut map = HashMap::with_capacity(regs.len());
+        let mut nodegraph_map = HashMap::with_capacity(regs.len());
         for reg in regs {
-            map.insert(reg.type_id.to_string(), reg);
+            let type_id = reg.node.type_id.to_string();
+            nodegraph_map.insert(type_id.clone(), reg.node.clone());
+            map.insert(type_id, reg);
         }
-        Self { map }
+        Self { map, nodegraph_map }
     }
 
     /// Look up a node registration by type_id.
@@ -69,9 +81,11 @@ impl BrushNodeRegistry {
         self.map.values()
     }
 
-    /// The backing HashMap (for passing to the compiler).
-    pub fn as_map(&self) -> &HashMap<String, BrushNodeRegistration> {
-        &self.map
+    /// The bare `NodeRegistration<W>` map for the nodegraph compiler
+    /// (which is generic over `W` and doesn't carry brush-specific
+    /// pipeline metadata).
+    pub fn as_map(&self) -> &HashMap<String, NodeRegistration<BrushWireType>> {
+        &self.nodegraph_map
     }
 }
 

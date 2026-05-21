@@ -34,7 +34,7 @@ use perf::StrokePerfStats;
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
 use crate::brush::library::BrushLibrary;
-use crate::brush::pipelines::BrushPipelines;
+use crate::brush::pipeline::BrushPipelines;
 use crate::brush::preview_renderer::BrushPreviewRenderer;
 use crate::brush::stabilizer::StabilizerRegistry;
 use crate::brush::stroke_buffer::StrokeBuffer;

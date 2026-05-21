@@ -5,15 +5,14 @@
 //! half of pressure affecting size).
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "remap",
         category: "math",
         display_name: "Remap",
@@ -49,7 +48,7 @@ pub fn register() -> BrushNodeRegistration {
             },
         ],
         is_gpu: false,
-    }
+    })
 }
 
 pub struct RemapEvaluator;

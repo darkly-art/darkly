@@ -6,7 +6,7 @@
 use super::{DarklyEngine, ReadbackContext};
 use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
-use crate::brush::{BrushNodeRegistration, BrushNodeRegistry};
+use crate::brush::BrushNodeRegistry;
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
@@ -45,9 +45,13 @@ enum ChangeKind {
 
 impl DarklyEngine {
     /// Return metadata for all registered brush node types.
-    pub fn brush_node_types(&self) -> Vec<BrushNodeRegistration> {
+    ///
+    /// Returns the bare nodegraph registration (ports, params, display
+    /// info) — the wrapper's pipeline metadata is engine-internal and the
+    /// frontend doesn't see it.
+    pub fn brush_node_types(&self) -> Vec<crate::nodegraph::NodeRegistration<BrushWireType>> {
         let registry = BrushNodeRegistry::new();
-        registry.types().cloned().collect()
+        registry.types().map(|r| r.node.clone()).collect()
     }
 
     /// Does the active brush graph's terminal honor erase mode?

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use super::dab_pool::DabTexturePool;
 use super::eval::BrushPreviewInfo;
-use super::pipelines::BrushPipelines;
+use super::pipeline::BrushPipelines;
 use super::scratch::Scratch;
 use super::wire::TextureHandle;
 use crate::gpu::paint_target::GpuPaintTarget;

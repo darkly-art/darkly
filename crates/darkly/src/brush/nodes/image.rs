@@ -10,14 +10,13 @@
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "image",
         category: "texture",
         display_name: "Image",
@@ -28,7 +27,7 @@ pub fn register() -> BrushNodeRegistration {
             default: "",
         }],
         is_gpu: true,
-    }
+    })
 }
 
 pub struct ImageEvaluator;
