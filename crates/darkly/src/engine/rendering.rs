@@ -613,82 +613,26 @@ impl DarklyEngine {
             }
         };
 
-        // --- Raster layers: ensure the GPU texture + uniforms ---
-        struct RasterInfo {
-            id: LayerId,
-            opacity: f32,
-            blend_mode_gpu: u32,
-            isolated: bool,
-            bounds: crate::coord::CanvasRect,
-        }
-        let infos: Vec<RasterInfo> = self
-            .doc
-            .all_raster_layers()
-            .into_iter()
-            .map(|r| RasterInfo {
-                id: r.id,
-                opacity: r.blend.opacity,
-                blend_mode_gpu: r.blend.blend_mode.gpu_value,
-                isolated: isolated_host(r.id),
-                bounds: r.pixels.bounds,
-            })
-            .collect();
-
-        for info in &infos {
-            self.compositor.ensure_raster_layer(
-                &self.gpu.device,
+        // --- Content layers: ensure GPU state + uniforms ---
+        // One walk over every layer that participates in the standard blend
+        // pipeline (raster + void). Kind dispatch lives inside
+        // `Compositor::ensure_layer` — the engine doesn't branch on it.
+        // Both kinds store blend state in the compositor's unified
+        // `layer_cache`, so the uniforms write is one shared call. Void
+        // state is regenerable from `(void_type, params)`, so on load (or
+        // after `Compositor::recreate_resources`) this walk rebuilds any
+        // missing GPU caches; `ensure_layer` is idempotent.
+        let content_layers = self.doc.all_content_layers();
+        for layer in &content_layers {
+            self.compositor
+                .ensure_layer(&self.gpu.device, &self.gpu.queue, layer);
+            let blend = layer.blend();
+            self.compositor.update_layer_uniforms_full(
                 &self.gpu.queue,
-                info.id,
-                info.bounds,
-            );
-            self.compositor.update_raster_uniforms_full(
-                &self.gpu.queue,
-                info.id,
-                info.opacity,
-                info.blend_mode_gpu,
-                info.isolated,
-            );
-        }
-
-        // --- Void layers: ensure the procedural texture + per-instance cache ---
-        // Void state is regenerable from `(void_type, params)`, so on load
-        // (or after `Compositor::recreate_resources`) we walk the doc and
-        // rebuild any missing GPU caches. `ensure_void_layer` is idempotent.
-        struct VoidInfo {
-            id: LayerId,
-            void_type: String,
-            params: Vec<crate::gpu::params::ParamValue>,
-            opacity: f32,
-            blend_mode_gpu: u32,
-            isolated: bool,
-        }
-        let void_infos: Vec<VoidInfo> = self
-            .doc
-            .all_void_layers()
-            .into_iter()
-            .map(|v| VoidInfo {
-                id: v.id,
-                void_type: v.void_type.clone(),
-                params: v.params.clone(),
-                opacity: v.blend.opacity,
-                blend_mode_gpu: v.blend.blend_mode.gpu_value,
-                isolated: isolated_host(v.id),
-            })
-            .collect();
-        for info in &void_infos {
-            self.compositor.ensure_void_layer(
-                &self.gpu.device,
-                &self.gpu.queue,
-                info.id,
-                &info.void_type,
-                &info.params,
-            );
-            self.compositor.update_void_uniforms_full(
-                &self.gpu.queue,
-                info.id,
-                info.opacity,
-                info.blend_mode_gpu,
-                info.isolated,
+                layer.id(),
+                blend.opacity,
+                blend.blend_mode.gpu_value,
+                isolated_host(layer.id()),
             );
         }
 

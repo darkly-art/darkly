@@ -478,19 +478,12 @@ impl DarklyEngine {
     /// by `engine.isolated_node` and reflected uniformly across node kinds.
     pub(crate) fn refresh_blend_uniforms(&mut self, layer_id: LayerId) {
         match self.doc.find_node(layer_id) {
-            Some(LayerNode::Layer(Layer::Raster(r))) => {
-                self.compositor.update_raster_uniforms(
-                    &self.gpu.queue,
-                    layer_id,
-                    r.blend.opacity,
-                    r.blend.blend_mode.gpu_value,
-                );
-            }
-            Some(LayerNode::Layer(Layer::Void(v))) => {
-                let opacity = v.blend.opacity;
-                let blend_mode_gpu = v.blend.blend_mode.gpu_value;
+            Some(LayerNode::Layer(layer)) => {
+                let blend = layer.blend();
+                let opacity = blend.opacity;
+                let blend_mode_gpu = blend.blend_mode.gpu_value;
                 let isolated = self.host_renders_isolated(layer_id);
-                self.compositor.update_void_uniforms_full(
+                self.compositor.update_layer_uniforms_full(
                     &self.gpu.queue,
                     layer_id,
                     opacity,

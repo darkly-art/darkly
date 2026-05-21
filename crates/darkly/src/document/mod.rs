@@ -395,6 +395,30 @@ impl Document {
         }
     }
 
+    /// Every content layer (raster + void) in the tree, regardless of
+    /// visibility. Both kinds share the standard blend pipeline and live
+    /// in the unified compositor `layer_cache`, so the GPU sync path only
+    /// needs to know "this is a layer the compositor manages" — kind
+    /// dispatch happens once, inside the compositor's `ensure_layer`.
+    pub fn all_content_layers(&self) -> Vec<&Layer> {
+        let mut out = Vec::new();
+        self.collect_content_layers(self.root, &mut out);
+        out
+    }
+
+    fn collect_content_layers<'a>(&'a self, group_id: LayerId, out: &mut Vec<&'a Layer>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            match self.find_node(child_id) {
+                Some(LayerNode::Layer(l)) => out.push(l),
+                Some(LayerNode::Group(_)) => self.collect_content_layers(child_id, out),
+                _ => {}
+            }
+        }
+    }
+
     pub fn all_groups(&self) -> Vec<&LayerGroup> {
         let mut out = Vec::new();
         self.collect_groups(self.root, &mut out);
