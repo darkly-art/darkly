@@ -111,6 +111,69 @@ impl DarklyEngine {
         ));
     }
 
+    /// Hand a fresh external image frame to a void's input texture.
+    /// Wraps [`crate::gpu::compositor::Compositor::upload_void_external_image`];
+    /// no-ops if `layer_id` isn't a void or the void doesn't consume external
+    /// input. Frames flow through here every animation frame from the JS
+    /// render loop for camera / future screenshare voids.
+    ///
+    /// Also syncs the doc-side [`crate::layer::VoidLayer::frame`] when the
+    /// void declares a new persistent frame size. The save flow reads that
+    /// field to decide whether to emit a pixel blob for the void, so
+    /// keeping it current here is what makes the last frame round-trip
+    /// through `.darkly`.
+    pub fn upload_void_external_image(
+        &mut self,
+        layer_id: LayerId,
+        source: crate::gpu::void::ExternalImageSource,
+    ) {
+        // Visibility gate: a hidden layer (or any hidden ancestor) means the
+        // composited output ignores this layer entirely, so the canvas blit
+        // upstream of us plus this GPU copy plus the void's encode pass plus
+        // the compositor recomposite would all be pure waste. The
+        // authoritative answer lives in the doc — `effective_visible` walks
+        // ancestors. The JS-side `CameraSource.tick()` also short-circuits
+        // on visibility, but this guard is the canonical correctness one:
+        // any future caller (tests, a different frontend, IPC) gets the
+        // same behaviour without needing to remember the JS optimization.
+        if !self.doc.effective_visible(layer_id) {
+            return;
+        }
+        self.compositor.upload_void_external_image(
+            &self.gpu.device,
+            &self.gpu.queue,
+            layer_id,
+            source,
+        );
+        self.sync_void_persistent_frame(layer_id);
+    }
+
+    /// Pull the void's current `persistent_frame_size` from the compositor
+    /// and mirror it onto [`crate::layer::VoidLayer::frame`]. Cheap when
+    /// nothing changed (compares before writing). Called after every
+    /// external-image upload and once at document open after a successful
+    /// `restore_void_pixels` so saves and reloads stay consistent.
+    fn sync_void_persistent_frame(&mut self, layer_id: LayerId) {
+        let Some((w, h)) = self.compositor.void_persistent_frame_size(layer_id) else {
+            return;
+        };
+        let blob_key = format!("layers/{}.pixels", layer_id.to_ffi());
+        let next = crate::format::manifest::ManifestPixelRef {
+            format: crate::format::manifest::texture_format_to_str(wgpu::TextureFormat::Rgba8Unorm)
+                .to_string(),
+            pixels: blob_key,
+            bounds: crate::coord::CanvasRect::from_xywh(0, 0, w, h),
+        };
+        if let Some(crate::layer::LayerNode::Layer(crate::layer::Layer::Void(v))) =
+            self.doc.find_node_mut(layer_id)
+        {
+            if v.frame.as_ref() != Some(&next) {
+                v.frame = Some(next);
+                self.doc.dirty = true;
+            }
+        }
+    }
+
     pub fn has_layer(&self, layer_id: LayerId) -> bool {
         // "Has" means linked into the tree — not just sitting orphaned in the
         // document's slotmap waiting on an undo reattach. Detached-for-undo
@@ -415,19 +478,12 @@ impl DarklyEngine {
     /// by `engine.isolated_node` and reflected uniformly across node kinds.
     pub(crate) fn refresh_blend_uniforms(&mut self, layer_id: LayerId) {
         match self.doc.find_node(layer_id) {
-            Some(LayerNode::Layer(Layer::Raster(r))) => {
-                self.compositor.update_raster_uniforms(
-                    &self.gpu.queue,
-                    layer_id,
-                    r.blend.opacity,
-                    r.blend.blend_mode.gpu_value,
-                );
-            }
-            Some(LayerNode::Layer(Layer::Void(v))) => {
-                let opacity = v.blend.opacity;
-                let blend_mode_gpu = v.blend.blend_mode.gpu_value;
+            Some(LayerNode::Layer(layer)) => {
+                let blend = layer.blend();
+                let opacity = blend.opacity;
+                let blend_mode_gpu = blend.blend_mode.gpu_value;
                 let isolated = self.host_renders_isolated(layer_id);
-                self.compositor.update_void_uniforms_full(
+                self.compositor.update_layer_uniforms_full(
                     &self.gpu.queue,
                     layer_id,
                     opacity,

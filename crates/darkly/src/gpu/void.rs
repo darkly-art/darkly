@@ -26,6 +26,36 @@ use std::sync::Arc;
 pub use super::effect::{EffectCache, EffectPipeline};
 pub use super::params::{ParamDef, ParamValue};
 
+/// External image source for [`Void::upload_external_image`]. Today the only
+/// populated variant is `Web`, which wraps wgpu's WebGPU-only external-image
+/// copy descriptor (HTMLVideoElement, ImageBitmap, etc.). On native targets
+/// the enum is uninhabited — the trait method signature still exists for a
+/// uniform API surface, but no caller can construct an argument.
+#[derive(Debug)]
+pub enum ExternalImageSource {
+    /// Browser-side image source: video element, image bitmap, canvas, etc.
+    /// The caller has already built a `CopyExternalImageSourceInfo` describing
+    /// the source rect and y-flip. The void implementation owns the
+    /// destination texture (in its [`EffectCache::aux_textures`]) and chooses
+    /// the destination's color-space / premultiplication.
+    #[cfg(target_arch = "wasm32")]
+    Web(wgpu::CopyExternalImageSourceInfo),
+}
+
+impl ExternalImageSource {
+    /// Pixel dimensions of the underlying source, used by voids to (re)size
+    /// their destination aux texture.
+    #[allow(clippy::needless_return, unreachable_code)]
+    pub fn pixel_size(&self) -> (u32, u32) {
+        #[cfg(target_arch = "wasm32")]
+        match self {
+            Self::Web(info) => return (info.source.width(), info.source.height()),
+        }
+        // Native: enum is uninhabited; method is unreachable.
+        unreachable!("ExternalImageSource has no variants on this target")
+    }
+}
+
 /// Layer-level procedural-content effect ("void"). Renders the layer's
 /// pixels from a shader instead of storing them.
 ///
@@ -60,13 +90,48 @@ pub trait Void: std::fmt::Debug {
     /// Whether this void uses time-based animation. When true (and visible),
     /// the compositor calls [`Self::update_time`] each frame the
     /// `animation.void_divisor` master clock fires, and keeps the canvas
-    /// re-presenting.
+    /// re-presenting. The visibility half of that gate is enforced by the
+    /// engine, not the void — voids don't store layer visibility (the doc
+    /// does).
     fn needs_animation(&self) -> bool {
         false
     }
 
     /// Per-frame uniform update for animated voids. Default is a no-op.
     fn update_time(&mut self, _queue: &wgpu::Queue, _cache: &EffectCache, _dt: f32) {}
+
+    /// Replace this void's parameter values in place — update internal
+    /// fields, rewrite the uniform buffer, but leave any stateful GPU
+    /// resources (aux textures holding the camera's last received frame,
+    /// future readback buffers, etc.) untouched. Required because the
+    /// alternative — rebuilding the void from `from_params` — drops
+    /// `EffectCache::aux_textures`, which is where the camera void stores
+    /// the live webcam frame. Toggling any param (including `freeze`)
+    /// would otherwise wipe the displayed image.
+    fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]);
+
+    /// Whether this void consumes per-frame external image input (webcam,
+    /// screenshare, …). When true, the bridge plumbs frames through
+    /// [`Self::upload_external_image`] each render. The default is false —
+    /// procedural voids (noise, future portals) ignore this path entirely.
+    fn wants_external_input(&self) -> bool {
+        false
+    }
+
+    /// Receive an external image frame (browser-supplied video, bitmap, etc.)
+    /// and copy it into the void's GPU input. Voids that own an input texture
+    /// in their [`EffectCache::aux_textures`] use this hook to (re)allocate on
+    /// dimension changes and dispatch a [`wgpu::Queue::copy_external_image_to_texture`].
+    /// Default no-op so the noise void (and any future pure-procedural void)
+    /// doesn't pay attention.
+    fn upload_external_image(
+        &mut self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _cache: &mut EffectCache,
+        _source: ExternalImageSource,
+    ) {
+    }
 
     /// Render the void's content into `dst_view`. Called once per frame
     /// while the void is visible. Re-rendered eagerly on parameter changes
@@ -77,6 +142,34 @@ pub trait Void: std::fmt::Debug {
         cache: &EffectCache,
         dst_view: &wgpu::TextureView,
     );
+
+    /// Persistent input-texture size, if this void stores its last received
+    /// frame as document state. Returns `Some((w, h))` for input-consuming
+    /// voids (camera, future screenshare) that have actually received a
+    /// frame; `None` for purely procedural voids and for input voids that
+    /// haven't seen their first frame yet. The engine reads this after
+    /// every `upload_external_image` to keep the doc-side
+    /// [`crate::layer::VoidLayer::frame`] in sync, so save sees the right
+    /// dimensions for the readback.
+    fn persistent_frame_size(&self) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Restore a saved frame at load time. Called once per camera void at
+    /// document open with the bytes read from the `.darkly` zip; the void
+    /// (re)allocates its aux texture at `(width, height)`, rebuilds the
+    /// bind group, and `queue.write_texture`s the pixels. Default no-op
+    /// for procedural voids that never declared persistent state.
+    fn restore_persistent_pixels(
+        &mut self,
+        _device: &wgpu::Device,
+        _queue: &wgpu::Queue,
+        _cache: &mut EffectCache,
+        _width: u32,
+        _height: u32,
+        _bytes: &[u8],
+    ) {
+    }
 }
 
 /// What each void module returns from its `register()` function.

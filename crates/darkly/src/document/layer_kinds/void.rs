@@ -1,9 +1,16 @@
 //! Void layer kind — procedural-content leaf in the layer tree.
 //!
-//! A void carries no pixel buffer; its content is regenerated each frame
-//! from `(void_type, params)`. So unlike [`raster`], the serializer emits
-//! NO pixel blob — the entire void state round-trips through the manifest
-//! body, which is a clean win for save-file size.
+//! Most voids carry no pixel buffer; their output is regenerated each
+//! frame from `(void_type, params)`, so the entire state round-trips
+//! through the manifest body — a clean win for save-file size.
+//!
+//! The **camera** void is the exception: it consumes external input
+//! (live webcam frames) and the *last* frame is persistent so reopening
+//! a `.darkly` shows the saved image rather than a black layer until
+//! permission is regranted. When a void's `frame` field is `Some(...)`
+//! the serializer emits a [`PixelBlobSpec`] and the load path restores
+//! the bytes through
+//! [`crate::gpu::compositor::Compositor::restore_void_pixels`].
 //!
 //! The void-type id and parameter values are validated against the
 //! [`crate::gpu::void::VoidRegistry`] at deserialize time so a save file
@@ -14,8 +21,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::document::layer_kind::{IdMap, LayerKindRegistration, SerializedEntity};
+use crate::document::layer_kind::{IdMap, LayerKindRegistration, PixelBlobSpec, SerializedEntity};
 use crate::format::error::LoadError;
+use crate::format::manifest::ManifestPixelRef;
 use crate::gpu::blend_mode;
 use crate::gpu::params::ParamValue;
 use crate::layer::{BlendProps, Layer, LayerId, LayerNode, NodeCommon, VoidLayer};
@@ -39,6 +47,14 @@ struct VoidBody {
     params: Vec<ParamValue>,
     #[serde(default)]
     modifiers: Vec<u64>,
+    /// Optional persistent frame for voids that consume external input
+    /// (camera, future screenshare). `None` for procedural voids — keeps
+    /// the save file as compact as before for noise / future portals.
+    /// The field name is `pixels` (not `frame`) so the existing
+    /// `extract_pixel_ref` in `engine/load.rs` finds it the same way it
+    /// finds raster pixel refs — one shared code path for both kinds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pixels: Option<ManifestPixelRef>,
 }
 
 pub fn register() -> LayerKindRegistration {
@@ -65,10 +81,19 @@ fn serialize(node: &LayerNode) -> SerializedEntity {
         void_type: v.void_type.clone(),
         params: v.params.clone(),
         modifiers: v.modifiers.iter().map(|m| m.to_ffi()).collect(),
+        pixels: v.frame.clone(),
+    };
+    let pixel_blobs = match &v.frame {
+        Some(pixels) => vec![PixelBlobSpec {
+            blob_key: pixels.pixels.clone(),
+            source_node_id: v.id,
+            pixels: pixels.clone(),
+        }],
+        None => Vec::new(),
     };
     SerializedEntity {
         body: serde_json::to_value(&body).expect("derived serde for VoidBody is infallible"),
-        pixel_blobs: Vec::new(),
+        pixel_blobs,
     }
 }
 
@@ -100,6 +125,7 @@ fn deserialize(body: &serde_json::Value, id: LayerId) -> Result<LayerNode, LoadE
         void_type: body.void_type,
         params: body.params,
         modifiers: body.modifiers.into_iter().map(LayerId::from_ffi).collect(),
+        frame: body.pixels,
     })))
 }
 
@@ -174,6 +200,82 @@ mod tests {
                 ParamValue::Float(0.1),
             ],
             "all params (including Int variants) must survive round-trip",
+        );
+    }
+
+    /// When a void layer carries a persistent frame snapshot (camera void's
+    /// last received webcam frame), serialize must round-trip the
+    /// `ManifestPixelRef` AND emit a matching `PixelBlobSpec` so the save
+    /// flow knows to readback the aux texture. This is the regression
+    /// shield for the camera-void persistence feature — without the spec
+    /// the save pipeline silently drops the frame and the user reopens to
+    /// a black layer.
+    #[test]
+    fn void_with_frame_emits_pixel_blob_spec() {
+        use crate::coord::CanvasRect;
+        use crate::format::manifest::ManifestPixelRef;
+
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_void_layer("camera".to_string(), "Camera", Vec::new(), None);
+        let frame = ManifestPixelRef {
+            format: "rgba8unorm".to_string(),
+            pixels: format!("layers/{}.pixels", id.to_ffi()),
+            bounds: CanvasRect::from_xywh(0, 0, 640, 480),
+        };
+        if let Some(LayerNode::Layer(Layer::Void(v))) = doc.find_node_mut(id) {
+            v.frame = Some(frame.clone());
+        }
+
+        let reg = register();
+        let node = doc.find_node(id).expect("void exists");
+        let serialized = (reg.serialize)(node);
+        assert_eq!(
+            serialized.pixel_blobs.len(),
+            1,
+            "void with frame must declare exactly one pixel blob",
+        );
+        assert_eq!(serialized.pixel_blobs[0].source_node_id, id);
+        assert_eq!(serialized.pixel_blobs[0].pixels, frame);
+
+        // Body should embed the same ref under "pixels" so the
+        // load path's `extract_pixel_ref` finds it.
+        let body_pixels: ManifestPixelRef = serde_json::from_value(
+            serialized
+                .body
+                .get("pixels")
+                .expect("body has pixels")
+                .clone(),
+        )
+        .expect("body pixels parses as ManifestPixelRef");
+        assert_eq!(body_pixels, frame);
+
+        // Deserialize round-trip preserves the frame.
+        let restored = (reg.deserialize)(&serialized.body, id).expect("deserialize must succeed");
+        let v_after = match &restored {
+            LayerNode::Layer(Layer::Void(v)) => v,
+            _ => panic!("deserialize must yield a Void layer"),
+        };
+        assert_eq!(v_after.frame, Some(frame));
+    }
+
+    /// A void without a frame (the normal noise void, or a freshly-added
+    /// camera void that hasn't received a frame yet) must NOT declare a
+    /// pixel blob — otherwise the save flow tries to read back a texture
+    /// that doesn't carry any saved-frame state.
+    #[test]
+    fn void_without_frame_emits_no_pixel_blob() {
+        let mut doc = Document::new(64, 64);
+        let id = doc.add_void_layer("noise".to_string(), "Noise", Vec::new(), None);
+        let reg = register();
+        let node = doc.find_node(id).expect("void exists");
+        let serialized = (reg.serialize)(node);
+        assert!(
+            serialized.pixel_blobs.is_empty(),
+            "voids without a frame must declare no blobs",
+        );
+        assert!(
+            serialized.body.get("pixels").is_none(),
+            "voids without a frame must omit the body pixels field entirely",
         );
     }
 

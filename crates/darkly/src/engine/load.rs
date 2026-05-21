@@ -442,6 +442,11 @@ fn install_staging(
     restore_veils(engine, manifest);
     ensure_selection_state(engine);
     engine.sync_compositor_layers();
+    // Restore void persistent pixels (camera void's last frame, etc.)
+    // AFTER `sync_compositor_layers` — that's where the void's GPU cache
+    // is first allocated (with a placeholder texture), and our restore
+    // method resizes + writes bytes into that cache.
+    upload_loaded_void_pixels(engine, entries);
 
     // Reset session-level state so the loaded doc starts clean.
     engine.active_stroke_layer = None;
@@ -478,6 +483,14 @@ fn upload_loaded_pixels(
     }
 
     for entry in &manifest.nodes {
+        // Voids carry their pixels in a separate aux texture (the void's
+        // own EffectCache), not in `node_textures`. They get restored in
+        // a dedicated pass after `sync_compositor_layers`; skip them
+        // here so we don't accidentally allocate a raster cache for a
+        // void's id.
+        if entry.type_id == crate::document::layer_kinds::void::TYPE_ID {
+            continue;
+        }
         let Some(new_id) = id_map.get(&entry.id).copied() else {
             continue;
         };
@@ -540,6 +553,38 @@ fn upload_loaded_pixels(
         if let Some(bytes) = entries.get(&pixels.pixels) {
             upload_to_node(engine, new_id, bytes);
         }
+    }
+}
+
+/// Restore persistent void textures (camera void's last received frame,
+/// future screenshare, …) into their freshly-allocated GPU caches. Runs
+/// after `sync_compositor_layers` so every void already has an
+/// `EffectCache` to overwrite. Walks the doc's void layers — the
+/// `frame` field on each is the authoritative source of "this void
+/// has a persisted texture under blob_key X at dims W×H".
+fn upload_loaded_void_pixels(engine: &mut DarklyEngine, entries: &HashMap<String, Vec<u8>>) {
+    let restores: Vec<(LayerId, u32, u32, String)> = engine
+        .doc
+        .all_void_layers()
+        .into_iter()
+        .filter_map(|v| {
+            let frame = v.frame.as_ref()?;
+            let bounds = frame.bounds;
+            Some((v.id, bounds.width, bounds.height, frame.pixels.clone()))
+        })
+        .collect();
+    for (id, w, h, blob_key) in restores {
+        let Some(bytes) = entries.get(&blob_key) else {
+            continue;
+        };
+        engine.compositor.restore_void_pixels(
+            &engine.gpu.device,
+            &engine.gpu.queue,
+            id,
+            w,
+            h,
+            bytes,
+        );
     }
 }
 

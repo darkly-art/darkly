@@ -46,6 +46,32 @@
     }
 
     const voidLabel = $derived(app.voidDisplayName(node.voidType));
+
+    // Camera voids surface MediaStream-level errors here so the user sees a
+    // human-readable reason ("Camera access was denied", "No camera was
+    // found", …) instead of a silently-transparent layer.
+    const cameraError = $derived(
+        node.voidType === 'camera' ? app.cameraSourceFor(node.id)?.error ?? null : null,
+    );
+
+    // True for a camera void whose layer exists but isn't currently
+    // streaming and hasn't been opted into this session — i.e. the user
+    // loaded a `.darkly` and is looking at the saved last frame. Showing
+    // a "Resume" button here is how they explicitly re-grant the camera.
+    const showResume = $derived(
+        node.voidType === 'camera'
+            && !isFrozen(node.params)
+            && !app.cameraSessionStarted.has(node.id),
+    );
+
+    function isFrozen(params: VoidParam[]): boolean {
+        const f = params.find((p) => p.name === 'freeze');
+        return (f?.value ?? f?.default) === true;
+    }
+
+    function resumeCamera() {
+        app.markCameraVoidStarted(node.id);
+    }
 </script>
 
 <div class="header">
@@ -59,6 +85,20 @@
         <i class="fa-solid fa-dice"></i>
     </button>
 </div>
+
+{#if cameraError}
+    <div class="notice">
+        <i class="fa-solid fa-triangle-exclamation"></i>
+        <span>{cameraError}</span>
+    </div>
+{/if}
+
+{#if showResume}
+    <button class="resume-btn" onclick={resumeCamera}>
+        <i class="fa-solid fa-video"></i>
+        <span>Resume camera</span>
+    </button>
+{/if}
 
 {#if node.params.length === 0}
     <div class="empty">No parameters</div>
@@ -171,5 +211,38 @@
         color: var(--text-dim);
         text-align: center;
         padding: 4px 0;
+    }
+
+    .notice {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 8px;
+        margin: 4px 0;
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+        border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+        border-radius: var(--radius-sm);
+        font-size: 11px;
+        color: var(--text);
+    }
+
+    .resume-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: 100%;
+        padding: 6px 8px;
+        margin: 4px 0;
+        background: var(--bg-hover);
+        border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+        border-radius: var(--radius-sm);
+        color: var(--text);
+        font-size: 11px;
+        cursor: pointer;
+        justify-content: center;
+    }
+    .resume-btn:hover {
+        background: var(--bg-active);
+        border-color: var(--accent);
     }
 </style>

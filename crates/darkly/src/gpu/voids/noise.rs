@@ -191,6 +191,36 @@ impl Void for Noise {
         }
     }
 
+    fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]) {
+        self.seed = match params.first() {
+            Some(ParamValue::Int(v)) => *v,
+            _ => self.seed,
+        };
+        self.octaves = match params.get(1) {
+            Some(ParamValue::Int(v)) => *v,
+            _ => self.octaves,
+        };
+        self.frequency = match params.get(2) {
+            Some(ParamValue::Float(v)) => *v,
+            _ => self.frequency,
+        };
+        self.warp = match params.get(3) {
+            Some(ParamValue::Float(v)) => *v,
+            _ => self.warp,
+        };
+        self.color = match params.get(4) {
+            Some(ParamValue::Float(v)) => *v,
+            _ => self.color,
+        };
+        self.evolution = match params.get(5) {
+            Some(ParamValue::Float(v)) => *v,
+            _ => self.evolution,
+        };
+        if let Some(buf) = cache.uniform_bufs.first() {
+            queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
+        }
+    }
+
     fn create_cache(
         &self,
         device: &wgpu::Device,

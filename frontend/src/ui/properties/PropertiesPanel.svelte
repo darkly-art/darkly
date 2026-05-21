@@ -53,7 +53,9 @@
         display: flex;
         flex-direction: column;
         border-top: 1px solid var(--bg-hover);
-        flex-shrink: 0;
+        max-height: 50%;
+        min-height: 0;
+        overflow-y: auto;
     }
 
     .panel-body {

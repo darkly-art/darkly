@@ -2,6 +2,7 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::gpu::void::VoidRegistration`.
 
+pub mod camera;
 pub mod noise;
 
 use crate::gpu::void::VoidRegistration;
@@ -9,6 +10,7 @@ use crate::gpu::void::VoidRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<VoidRegistration> {
     vec![
+        camera::register(),
         noise::register(),
     ]
 }

@@ -671,7 +671,7 @@ impl DarklyEngine {
 
         // Refresh the blend-uniform buffer so the composite pass sees the
         // new offset/size on the next render.
-        self.compositor.update_raster_uniforms_full(
+        self.compositor.update_layer_uniforms_full(
             &self.gpu.queue,
             layer_id,
             opacity,

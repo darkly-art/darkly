@@ -149,6 +149,15 @@ pub struct VoidLayer {
     /// [`crate::gpu::void::ParamDef`] schema, in order.
     pub params: Vec<ParamValue>,
     pub modifiers: Vec<LayerId>,
+    /// Optional persistent frame snapshot. Most voids leave this `None`
+    /// (their output is purely procedural — replays from params). The
+    /// camera void uses it to round-trip the last received webcam frame
+    /// through save/load so reopening a `.darkly` doesn't show a black
+    /// rectangle until permission is regranted. When set, the save flow
+    /// readbacks the void's aux texture into a pixel blob keyed
+    /// `"layers/<id>.pixels"`, and the load flow restores it via
+    /// [`crate::gpu::compositor::Compositor::restore_void_pixels`].
+    pub frame: Option<crate::format::manifest::ManifestPixelRef>,
 }
 
 impl VoidLayer {
@@ -160,6 +169,7 @@ impl VoidLayer {
             void_type,
             params,
             modifiers: Vec::new(),
+            frame: None,
         }
     }
 }

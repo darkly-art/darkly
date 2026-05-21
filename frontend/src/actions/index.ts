@@ -650,6 +650,11 @@ export function registerActions() {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null) return;
             try {
+                // Stop any associated camera MediaStream before the layer is
+                // gone. `refreshLayerTree` does the same reaping as a safety
+                // net (covers undo), but stopping eagerly turns off the
+                // browser's camera-in-use indicator immediately.
+                app.stopCameraVoid(layerId);
                 app.handle.remove_layer(layerId);
                 app.clearSelection();
                 app.refreshLayerTree();
