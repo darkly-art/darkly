@@ -123,43 +123,48 @@ fn fbm_warp(
 // field that is continuous in both space and time: features smoothly
 // appear, morph, and dissolve at fixed canvas positions rather than
 // rigidly translating. Used by the noise void's `evolution` parameter.
+//
+// The primitive `fbm_value_noise3` is implemented as a *hardware-filtered
+// texture lookup* into a 3D noise volume rather than a software
+// PCG-hash-and-trilerp. A single texture sample is roughly one GPU cycle;
+// the compute version is ~32 PCG hashes + 7 lerps per call. With 15 noise
+// calls per pixel (3 fbm3 in fbm_warp3 × 5 octaves), the savings dominate
+// the shader cost. Inspired by the texture-based noise pattern from
+// Inigo Quilez's articles and shadertoy works like nimitz's "Watery"
+// (https://www.shadertoy.com/view/MssSRS), adapted for true in-place
+// time evolution via a 3D volume rather than 2D-with-drift.
+//
+// Consumers must bind:
+//   @group(0) @binding(1) — a 3D Rgba8Unorm noise texture, FBM_NOISE3D_DIM
+//                           per side, filled with PCG-hashed random bytes.
+//   @group(0) @binding(2) — a filtering sampler with Repeat addressing.
 // =========================================================================
 
-/// Hash an integer 3D coordinate plus a seed into a uniform float in [0, 1).
-fn fbm_hash3(coord: vec3i, seed: u32) -> f32 {
-    let cx = bitcast<u32>(coord.x);
-    let cy = bitcast<u32>(coord.y);
-    let cz = bitcast<u32>(coord.z);
-    let h = fbm_pcg(cx + fbm_pcg(cy + fbm_pcg(cz + fbm_pcg(seed))));
-    return f32(h) / 4294967295.0;
-}
+@group(0) @binding(1) var fbm_noise3d_tex: texture_3d<f32>;
+@group(0) @binding(2) var fbm_noise3d_sampler: sampler;
 
-/// Quintic fade for three components.
-fn fbm_fade3(t: vec3f) -> vec3f {
-    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
-}
+const FBM_NOISE3D_DIM: f32 = 64.0;
 
-/// 3D value noise sampled at floating-point `p`. Trilinear blend of the
-/// eight surrounding integer-cell hashes through `fbm_fade3`.
+/// 3D value noise sampled at floating-point `p`. Trilinear blend done by
+/// hardware texture filtering — see comment above.
+///
+/// The seed shifts the texture-space sample position. With Repeat
+/// addressing every offset is valid; the PCG fold ensures adjacent seeds
+/// produce decorrelated samples even though they share the underlying
+/// volume. `& 0x3F` keeps the offset inside one texture period to avoid
+/// the modular collisions that would otherwise hit at exact multiples of
+/// FBM_NOISE3D_DIM.
 fn fbm_value_noise3(p: vec3f, seed: u32) -> f32 {
-    let pi = vec3i(floor(p));
-    let pf = fract(p);
-    let w = fbm_fade3(pf);
-    let c000 = fbm_hash3(pi + vec3i(0, 0, 0), seed);
-    let c100 = fbm_hash3(pi + vec3i(1, 0, 0), seed);
-    let c010 = fbm_hash3(pi + vec3i(0, 1, 0), seed);
-    let c110 = fbm_hash3(pi + vec3i(1, 1, 0), seed);
-    let c001 = fbm_hash3(pi + vec3i(0, 0, 1), seed);
-    let c101 = fbm_hash3(pi + vec3i(1, 0, 1), seed);
-    let c011 = fbm_hash3(pi + vec3i(0, 1, 1), seed);
-    let c111 = fbm_hash3(pi + vec3i(1, 1, 1), seed);
-    let x00 = mix(c000, c100, w.x);
-    let x10 = mix(c010, c110, w.x);
-    let x01 = mix(c001, c101, w.x);
-    let x11 = mix(c011, c111, w.x);
-    let y0 = mix(x00, x10, w.y);
-    let y1 = mix(x01, x11, w.y);
-    return mix(y0, y1, w.z);
+    let h1 = fbm_pcg(seed);
+    let h2 = fbm_pcg(h1);
+    let h3 = fbm_pcg(h2);
+    let seed_offset = vec3f(
+        f32(h1 & 0x3Fu),
+        f32(h2 & 0x3Fu),
+        f32(h3 & 0x3Fu),
+    );
+    let uvw = (p + seed_offset) / FBM_NOISE3D_DIM;
+    return textureSampleLevel(fbm_noise3d_tex, fbm_noise3d_sampler, uvw, 0.0).x;
 }
 
 /// 3D fractional Brownian motion. Same octave loop as `fbm`, with `q` in 3D.

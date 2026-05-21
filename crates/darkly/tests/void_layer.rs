@@ -199,12 +199,12 @@ fn update_void_params_is_undoable_and_coalesces() {
     );
 }
 
-/// With `evolution = 0.0`, the noise void must be perfectly static: ticking
+/// With `speed = 0.0`, the noise void must be perfectly static: ticking
 /// the animation clock must not change a single pixel of its output. Guards
 /// against accidentally rendering an animated frame when the user has
 /// explicitly disabled morphing.
 #[test]
-fn noise_void_evolution_off_is_static() {
+fn noise_void_speed_zero_is_static() {
     // Pin void_divisor to 1 so ticks fire every call — keeps the test
     // independent of the default-divisor schedule.
     darkly::config::set(
@@ -214,9 +214,9 @@ fn noise_void_evolution_off_is_static() {
 
     let mut engine = test_engine(64, 64);
     let mut params = noise_defaults(&engine);
-    // Force evolution = 0.0, warp = 1.5 so the warp path is active but
+    // Force speed = 0.0, warp = 1.5 so the warp path is active but
     // animation is off.
-    set_float_param(&mut params, "evolution", 0.0);
+    set_float_param(&mut params, "speed", 0.0);
     set_float_param(&mut params, "warp", 1.5);
     engine
         .add_void_layer("noise", params, None)
@@ -224,7 +224,7 @@ fn noise_void_evolution_off_is_static() {
 
     // First tick seeds last_wall_time (dt=0 by design); the second tick has
     // a real dt and would fire the void clock — but `needs_animation()` is
-    // false at evolution=0, so the void is skipped and the texture stays put.
+    // false at speed=0, so the void is skipped and the texture stays put.
     engine.test_tick_animations(0.1);
     let frame_a = engine.test_readback_canvas();
     engine.test_tick_animations(1.1);
@@ -234,19 +234,19 @@ fn noise_void_evolution_off_is_static() {
 
     assert_eq!(
         frame_a, frame_b,
-        "evolution=0 must produce byte-identical frames across animation ticks",
+        "speed=0 must produce byte-identical frames across animation ticks",
     );
 }
 
-/// With `evolution > 0`, the noise void must morph *continuously* —
+/// With `speed > 0`, the noise void must morph *continuously* —
 /// neighbouring frames should differ by a small amount per pixel, never
 /// teleport to an uncorrelated field. This is the regression test for the
 /// 3D-FBM design: a coin-flip-mix or full-realization-swap implementation
 /// would produce per-pixel deltas approaching 255 on flipped pixels and
 /// fail the mean-delta bound; 3D FBM is C1-continuous in time so the
-/// per-pixel delta is bounded by `~Z_SCALE * dt * evolution * fade_deriv`.
+/// per-pixel delta is bounded by `~Z_SCALE * dt * speed * fade_deriv`.
 #[test]
-fn noise_void_evolution_morphs_continuously() {
+fn noise_void_speed_morphs_continuously() {
     darkly::config::set(
         "animation.void_divisor",
         darkly::config::ConfigValue::Int(1),
@@ -254,14 +254,14 @@ fn noise_void_evolution_morphs_continuously() {
 
     let mut engine = test_engine(64, 64);
     let mut params = noise_defaults(&engine);
-    set_float_param(&mut params, "evolution", 1.0);
+    set_float_param(&mut params, "speed", 1.0);
     set_float_param(&mut params, "warp", 1.5);
     engine
         .add_void_layer("noise", params, None)
         .expect("noise void should be addable");
 
     // First tick seeds last_wall_time. Second tick has dt=0.5s, which with
-    // evolution=1 and Z_SCALE=0.15 advances z by ~0.075 — well under one
+    // speed=1 and Z_SCALE=0.15 advances z by ~0.075 — well under one
     // cell-cross, so deltas stay small but visible.
     engine.test_tick_animations(0.1);
     let frame_a = engine.test_readback_canvas();
@@ -310,7 +310,7 @@ fn noise_void_evolution_morphs_continuously() {
     );
 
     // Sanity: max delta within plausible 3D-FBM bound. The theoretical
-    // ceiling at dt=0.5 evolution=1 Z_SCALE=0.15 is ~0.14 in [0,1] ≈ 36 in
+    // ceiling at dt=0.5 speed=1 Z_SCALE=0.15 is ~0.14 in [0,1] ≈ 36 in
     // u8; allow 2× headroom for warp-path amplification.
     assert!(
         max_delta < 100,
@@ -319,9 +319,9 @@ fn noise_void_evolution_morphs_continuously() {
 }
 
 fn set_float_param(params: &mut [ParamValue], name: &str, value: f32) {
-    // Param order on the noise void: seed (Int), octaves (Int), frequency,
-    // warp, color, evolution. We index by name via the engine's schema to
-    // keep the test resilient to additions.
+    // Param order on the noise void: seed (Int), octaves (Int), size,
+    // warp, speed. We index by name via the engine's schema to keep
+    // the test resilient to additions.
     let engine = test_engine(1, 1);
     let defs = engine.void_param_defs("noise");
     let idx = defs
