@@ -199,6 +199,141 @@ fn update_void_params_is_undoable_and_coalesces() {
     );
 }
 
+/// With `evolution = 0.0`, the noise void must be perfectly static: ticking
+/// the animation clock must not change a single pixel of its output. Guards
+/// against accidentally rendering an animated frame when the user has
+/// explicitly disabled morphing.
+#[test]
+fn noise_void_evolution_off_is_static() {
+    // Pin void_divisor to 1 so ticks fire every call — keeps the test
+    // independent of the default-divisor schedule.
+    darkly::config::set(
+        "animation.void_divisor",
+        darkly::config::ConfigValue::Int(1),
+    );
+
+    let mut engine = test_engine(64, 64);
+    let mut params = noise_defaults(&engine);
+    // Force evolution = 0.0, warp = 1.5 so the warp path is active but
+    // animation is off.
+    set_float_param(&mut params, "evolution", 0.0);
+    set_float_param(&mut params, "warp", 1.5);
+    engine
+        .add_void_layer("noise", params, None)
+        .expect("noise void should be addable");
+
+    // First tick seeds last_wall_time (dt=0 by design); the second tick has
+    // a real dt and would fire the void clock — but `needs_animation()` is
+    // false at evolution=0, so the void is skipped and the texture stays put.
+    engine.test_tick_animations(0.1);
+    let frame_a = engine.test_readback_canvas();
+    engine.test_tick_animations(1.1);
+    let frame_b = engine.test_readback_canvas();
+
+    darkly::config::reset("animation.void_divisor");
+
+    assert_eq!(
+        frame_a, frame_b,
+        "evolution=0 must produce byte-identical frames across animation ticks",
+    );
+}
+
+/// With `evolution > 0`, the noise void must morph *continuously* —
+/// neighbouring frames should differ by a small amount per pixel, never
+/// teleport to an uncorrelated field. This is the regression test for the
+/// 3D-FBM design: a coin-flip-mix or full-realization-swap implementation
+/// would produce per-pixel deltas approaching 255 on flipped pixels and
+/// fail the mean-delta bound; 3D FBM is C1-continuous in time so the
+/// per-pixel delta is bounded by `~Z_SCALE * dt * evolution * fade_deriv`.
+#[test]
+fn noise_void_evolution_morphs_continuously() {
+    darkly::config::set(
+        "animation.void_divisor",
+        darkly::config::ConfigValue::Int(1),
+    );
+
+    let mut engine = test_engine(64, 64);
+    let mut params = noise_defaults(&engine);
+    set_float_param(&mut params, "evolution", 1.0);
+    set_float_param(&mut params, "warp", 1.5);
+    engine
+        .add_void_layer("noise", params, None)
+        .expect("noise void should be addable");
+
+    // First tick seeds last_wall_time. Second tick has dt=0.5s, which with
+    // evolution=1 and Z_SCALE=0.15 advances z by ~0.075 — well under one
+    // cell-cross, so deltas stay small but visible.
+    engine.test_tick_animations(0.1);
+    let frame_a = engine.test_readback_canvas();
+    engine.test_tick_animations(0.6);
+    let frame_b = engine.test_readback_canvas();
+
+    darkly::config::reset("animation.void_divisor");
+
+    assert_eq!(
+        frame_a.len(),
+        frame_b.len(),
+        "readbacks must be the same size",
+    );
+
+    // Sum of absolute per-byte differences. Lets us bound both the typical
+    // per-pixel change (mean) and confirm *some* change happened.
+    let mut total_delta: u64 = 0;
+    let mut changed_bytes: u32 = 0;
+    let mut max_delta: u8 = 0;
+    for (a, b) in frame_a.iter().zip(frame_b.iter()) {
+        let d = a.abs_diff(*b);
+        total_delta += d as u64;
+        if d > 0 {
+            changed_bytes += 1;
+        }
+        if d > max_delta {
+            max_delta = d;
+        }
+    }
+    let mean_delta = (total_delta as f32) / (frame_a.len() as f32);
+
+    // Continuity bound: 3D FBM at dt=0.5 produces mean per-byte delta in
+    // single digits. Teleport would produce mean ~70 (uncorrelated FBM
+    // realizations have std ~0.2 → ~50 in u8, mean abs delta ~70).
+    assert!(
+        mean_delta < 25.0,
+        "mean per-byte delta {mean_delta:.1} exceeds continuity bound; \
+         a value near 70 indicates a teleport-style implementation",
+    );
+
+    // Animation actually happened: at least 10% of bytes changed.
+    let total_bytes = frame_a.len() as u32;
+    assert!(
+        changed_bytes * 10 >= total_bytes,
+        "only {changed_bytes}/{total_bytes} bytes changed — animation isn't reaching the output",
+    );
+
+    // Sanity: max delta within plausible 3D-FBM bound. The theoretical
+    // ceiling at dt=0.5 evolution=1 Z_SCALE=0.15 is ~0.14 in [0,1] ≈ 36 in
+    // u8; allow 2× headroom for warp-path amplification.
+    assert!(
+        max_delta < 100,
+        "max per-byte delta {max_delta} exceeds plausible 3D-FBM bound",
+    );
+}
+
+fn set_float_param(params: &mut [ParamValue], name: &str, value: f32) {
+    // Param order on the noise void: seed (Int), octaves (Int), frequency,
+    // warp, color, evolution. We index by name via the engine's schema to
+    // keep the test resilient to additions.
+    let engine = test_engine(1, 1);
+    let defs = engine.void_param_defs("noise");
+    let idx = defs
+        .iter()
+        .position(|d| match d {
+            darkly::gpu::params::ParamDef::Float { name: n, .. } => *n == name,
+            _ => false,
+        })
+        .unwrap_or_else(|| panic!("noise void has no float param '{name}'"));
+    params[idx] = ParamValue::Float(value);
+}
+
 /// Pull the current param vector for a void layer back out of the layer tree
 /// (the round-trip JSON path the WASM bridge uses).
 fn void_params_via_tree(

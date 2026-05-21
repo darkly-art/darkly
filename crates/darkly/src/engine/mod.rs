@@ -704,6 +704,15 @@ impl DarklyEngine {
             .test_present_to_canvas(&self.gpu.device, &self.gpu.queue, &mut self.doc)
     }
 
+    /// Test-only animation tick. Headless `render()` returns early without
+    /// driving `update_animations`, so tests that need to advance the
+    /// veil / overlay / void master clock call this directly. Pass a
+    /// monotonically increasing `wall_time` in seconds.
+    pub fn test_tick_animations(&mut self, wall_time: f32) {
+        self.compositor
+            .update_animations(&self.gpu.queue, wall_time);
+    }
+
     /// Blocking readback of a mask modifier's R8 texture. For test assertions
     /// only. Resolves the mask modifier on the host and reads its texture
     /// from the unified node-texture pool. Returns one byte per pixel.

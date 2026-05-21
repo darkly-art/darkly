@@ -115,3 +115,101 @@ fn fbm_warp(
     let q = p + fbm_warp_offset(p, seed, octaves, lacunarity, gain, warp_strength);
     return fbm(q, seed + 31u, octaves, lacunarity, gain);
 }
+
+// =========================================================================
+// 3D variants — time-as-Z extension of the 2D helpers above.
+//
+// Sampling at `(x, y, t)` instead of `(x, y)` and advancing `t` gives a
+// field that is continuous in both space and time: features smoothly
+// appear, morph, and dissolve at fixed canvas positions rather than
+// rigidly translating. Used by the noise void's `evolution` parameter.
+// =========================================================================
+
+/// Hash an integer 3D coordinate plus a seed into a uniform float in [0, 1).
+fn fbm_hash3(coord: vec3i, seed: u32) -> f32 {
+    let cx = bitcast<u32>(coord.x);
+    let cy = bitcast<u32>(coord.y);
+    let cz = bitcast<u32>(coord.z);
+    let h = fbm_pcg(cx + fbm_pcg(cy + fbm_pcg(cz + fbm_pcg(seed))));
+    return f32(h) / 4294967295.0;
+}
+
+/// Quintic fade for three components.
+fn fbm_fade3(t: vec3f) -> vec3f {
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+}
+
+/// 3D value noise sampled at floating-point `p`. Trilinear blend of the
+/// eight surrounding integer-cell hashes through `fbm_fade3`.
+fn fbm_value_noise3(p: vec3f, seed: u32) -> f32 {
+    let pi = vec3i(floor(p));
+    let pf = fract(p);
+    let w = fbm_fade3(pf);
+    let c000 = fbm_hash3(pi + vec3i(0, 0, 0), seed);
+    let c100 = fbm_hash3(pi + vec3i(1, 0, 0), seed);
+    let c010 = fbm_hash3(pi + vec3i(0, 1, 0), seed);
+    let c110 = fbm_hash3(pi + vec3i(1, 1, 0), seed);
+    let c001 = fbm_hash3(pi + vec3i(0, 0, 1), seed);
+    let c101 = fbm_hash3(pi + vec3i(1, 0, 1), seed);
+    let c011 = fbm_hash3(pi + vec3i(0, 1, 1), seed);
+    let c111 = fbm_hash3(pi + vec3i(1, 1, 1), seed);
+    let x00 = mix(c000, c100, w.x);
+    let x10 = mix(c010, c110, w.x);
+    let x01 = mix(c001, c101, w.x);
+    let x11 = mix(c011, c111, w.x);
+    let y0 = mix(x00, x10, w.y);
+    let y1 = mix(x01, x11, w.y);
+    return mix(y0, y1, w.z);
+}
+
+/// 3D fractional Brownian motion. Same octave loop as `fbm`, with `q` in 3D.
+fn fbm3(p: vec3f, seed: u32, octaves: i32, lacunarity: f32, gain: f32) -> f32 {
+    var sum = 0.0;
+    var amp = 1.0;
+    var norm = 0.0;
+    var q = p;
+    let n = max(octaves, 1);
+    for (var i = 0; i < n; i = i + 1) {
+        sum = sum + amp * fbm_value_noise3(q, seed + u32(i) * 1013u);
+        norm = norm + amp;
+        q = q * lacunarity;
+        amp = amp * gain;
+    }
+    return sum / norm;
+}
+
+/// 3D domain warp offset — same Quilez warp as `fbm_warp_offset`, but the
+/// underlying FBM is sampled in 3D so the displacement field itself evolves
+/// continuously as `p.z` advances. Returns a 2D offset; the warp is a
+/// planar displacement (we don't displace `z`, which would warp time).
+fn fbm_warp3_offset(
+    p: vec3f,
+    seed: u32,
+    octaves: i32,
+    lacunarity: f32,
+    gain: f32,
+    warp_strength: f32,
+) -> vec2f {
+    if (warp_strength <= 0.0) {
+        return vec2f(0.0);
+    }
+    let qx = fbm3(p, seed + 1u, octaves, lacunarity, gain);
+    let qy = fbm3(p + vec3f(5.2, 1.3, 0.0), seed + 17u, octaves, lacunarity, gain);
+    return warp_strength * vec2f(qx - 0.5, qy - 0.5);
+}
+
+/// 3D domain-warped FBM scalar. The detail FBM is sampled at the warped
+/// xy position; the time component `p.z` passes through unchanged so that
+/// detail and warp share the same temporal cadence.
+fn fbm_warp3(
+    p: vec3f,
+    seed: u32,
+    octaves: i32,
+    lacunarity: f32,
+    gain: f32,
+    warp_strength: f32,
+) -> f32 {
+    let offset = fbm_warp3_offset(p, seed, octaves, lacunarity, gain, warp_strength);
+    let q = p + vec3f(offset, 0.0);
+    return fbm3(q, seed + 31u, octaves, lacunarity, gain);
+}
