@@ -127,6 +127,26 @@ export class DarklyInstance {
         this.layerKindDisplayNames = buildMap(handle.layer_kind_types());
     }
 
+    /** Add a veil with a partial overrides record. Param names match the
+     *  veil type's registered `name` fields (see each veil's `PARAMS`).
+     *  Missing params fall back to registered defaults via the WASM
+     *  bridge. Pass `visible: false` to hide the veil after add (the
+     *  common starter-veil case). */
+    addVeil(type: string, options: Record<string, unknown> = {}): void {
+        if (!this.handle) return;
+        const { visible, ...params } = options;
+        this.handle.add_veil(type, params);
+        if (visible === false) {
+            // `veil_list()` returns highest-index first, so the just-added
+            // veil sits at index 0 of the array.
+            const list = JSON.parse(this.handle.veil_list()) as Array<{ index: number }>;
+            const added = list[0];
+            if (added) this.handle.set_veil_visible(added.index, false);
+        }
+        this.refreshVeilList();
+        this.requestFrame();
+    }
+
     // Active layer
     activeLayerId = $state<number | null>(null);
 
