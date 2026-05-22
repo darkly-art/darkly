@@ -92,8 +92,17 @@ pub struct InkPenComputePipeline {
     /// shape when ink-pen-compute replaces the stamp + color_output chain.
     /// Reuses the existing `blit` infra to stretch the result into
     /// `preview_mask_view`.
+    ///
+    /// Uses a plain in-place uniform buffer (NOT a `DynamicUniformRing`)
+    /// because the preview path has at most one live uniform per
+    /// `queue.submit` cycle. Each `render_preview` call overwrites the
+    /// buffer's single slot and submits before returning, so there's
+    /// never a need for distinct ring slots — and a ring here would
+    /// silently leak (the registry's `reset_uniform_rings` only walks
+    /// rings returned from `BrushPipelineEntry::ring()`, which exposes
+    /// only the per-dispatch compute ring above).
     preview_pipeline: wgpu::RenderPipeline,
-    preview_ring: DynamicUniformRing,
+    preview_uniform_buffer: wgpu::Buffer,
     preview_uniform_bind_group: wgpu::BindGroup,
 }
 
@@ -233,11 +242,29 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
                 label: Some("ink-pen-compute-preview"),
                 source: wgpu::ShaderSource::Wgsl(preview_shader_src.into()),
             });
+        // Private BGL for the preview pipeline: single fixed-offset
+        // uniform (no dynamic offset), so each `render_preview` can write
+        // the same buffer in place rather than advancing a ring cursor.
+        let preview_uniform_bgl =
+            ctx.device
+                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("ink-pen-compute-preview-uniform-bgl"),
+                    entries: &[wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    }],
+                });
         let preview_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("ink-pen-compute-preview-layout"),
-                bind_group_layouts: &[ctx.uniform_bgl],
+                bind_group_layouts: &[&preview_uniform_bgl],
                 immediate_size: 0,
             });
         let preview_pipeline = ctx
@@ -270,10 +297,20 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
                 multiview_mask: None,
                 cache: None,
             });
-        let (preview_ring, preview_uniform_bind_group) = ctx.make_uniform_ring::<PreviewUniforms>(
-            "ink-pen-compute-preview-uniforms",
-            "ink-pen-compute-preview-uniform-bg",
-        );
+        let preview_uniform_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ink-pen-compute-preview-uniform"),
+            size: std::mem::size_of::<PreviewUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let preview_uniform_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ink-pen-compute-preview-uniform-bg"),
+            layout: &preview_uniform_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: preview_uniform_buffer.as_entire_binding(),
+            }],
+        });
 
         Self {
             pipeline,
@@ -283,7 +320,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
             dabs_bind_group,
             scratch_bgl,
             preview_pipeline,
-            preview_ring,
+            preview_uniform_buffer,
             preview_uniform_bind_group,
         }
     }
@@ -566,6 +603,19 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
         let union_size = [write_w, union_h];
         let blend_mode = gpu.blend_mode;
 
+        // Ingest the texture's current state into the compute buffer
+        // BEFORE the dispatch. The scratch texture is the canonical
+        // store across phases: checkpoint restores (divergence rewinds)
+        // mutate it directly, and the buffer's state is stale wrt that.
+        // Without this sync the dispatch would read stale buffer pixels,
+        // blend new dabs against them, and publish back to the texture
+        // — silently wiping any checkpoint-restored content under the
+        // new dabs' rows. This is the symmetric counterpart to the
+        // post-dispatch `sync_compute_buffer_to_texture` below.
+        if union_h > 0 && write_h > 0 {
+            scratch.sync_texture_to_compute_buffer(&mut gpu.encoder, union_y0, union_h);
+        }
+
         for chunk in dabs.chunks(MAX_DABS_PER_DISPATCH as usize) {
             // Upload this batch's dab data.
             gpu.queue
@@ -678,9 +728,13 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
             softness,
             _pad: [0.0; 3],
         };
-        let offset = pipeline_ref
-            .preview_ring
-            .write(gpu.queue, bytemuck::bytes_of(&uniforms));
+        // In-place uniform write — single live uniform per submit cycle,
+        // no ring needed. See `preview_uniform_buffer` doc on the pipeline.
+        gpu.queue.write_buffer(
+            &pipeline_ref.preview_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
 
         let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("ink-pen-compute-preview"),
@@ -697,7 +751,7 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
         });
         pass.set_viewport(0.0, 0.0, target_w as f32, target_h as f32, 0.0, 1.0);
         pass.set_pipeline(&pipeline_ref.preview_pipeline);
-        pass.set_bind_group(0, &pipeline_ref.preview_uniform_bind_group, &[offset]);
+        pass.set_bind_group(0, &pipeline_ref.preview_uniform_bind_group, &[]);
         pass.draw(0..3, 0..1);
         drop(pass);
 

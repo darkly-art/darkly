@@ -423,12 +423,65 @@ impl Scratch {
         }
     }
 
+    /// Copy a row-range of the scratch write texture **into** the
+    /// compute storage buffer. Called at the start of every compute
+    /// dispatch so the buffer reflects the latest texture state —
+    /// crucial because the texture can be mutated outside the compute
+    /// path (checkpoint restores during divergence rewinds, in
+    /// particular). Without this, the compute path's buffer→texture
+    /// publish at the end of the dispatch would silently overwrite
+    /// checkpoint-restored pixels with stale buffer contents.
+    ///
+    /// Whole-row copies, same `bytes_per_row` alignment story as
+    /// [`sync_compute_buffer_to_texture`].
+    pub fn sync_texture_to_compute_buffer(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        first_row: u32,
+        row_count: u32,
+    ) {
+        let Some(buf) = &self.compute_buffer else {
+            return;
+        };
+        if row_count == 0 || first_row >= self.write_h {
+            return;
+        }
+        let row_count = row_count.min(self.write_h - first_row);
+        let bytes_per_row = self.compute_aligned_width * 4;
+        let offset = (first_row as u64) * (bytes_per_row as u64);
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.write_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: first_row,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(row_count),
+                },
+            },
+            wgpu::Extent3d {
+                width: self.write_w,
+                height: row_count,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
     /// Copy a row-range of the compute buffer back into the write
-    /// texture. Called once per pen event after the compute dispatch so
-    /// the existing fragment-path commit (`commit_brush_dab`) can still
-    /// sample the scratch as a texture. Copies whole rows (x=0..write_w)
-    /// because partial-x sub-rects need `offset % 256 == 0`, which a
-    /// dab-aligned bbox can't guarantee.
+    /// texture. Called at the end of every compute dispatch so the
+    /// existing fragment-path commit (`commit_brush_dab`) can sample
+    /// the scratch as a texture. Whole rows because partial-x sub-rects
+    /// need `offset % 256 == 0`, which a dab-aligned bbox can't
+    /// guarantee.
     pub fn sync_compute_buffer_to_texture(
         &self,
         encoder: &mut wgpu::CommandEncoder,
