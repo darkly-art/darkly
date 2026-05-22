@@ -910,6 +910,8 @@ impl DarklyEngine {
                         pre_stroke_bind_group: Some(pre_stroke_bind_group),
                         dab_write_canvas_bbox: None,
                         perf: BrushPerfCounters::default(),
+                        pending_dabs: Vec::new(),
+                        pending_dabs_row_range: None,
                     }
                 }};
             }
@@ -1139,6 +1141,8 @@ impl DarklyEngine {
                     pre_stroke_bind_group: None,
                     dab_write_canvas_bbox: None,
                     perf: BrushPerfCounters::default(),
+                    pending_dabs: Vec::new(),
+                    pending_dabs_row_range: None,
                 };
                 self.brush_pipelines.reset_uniform_rings();
                 engine.move_to(info, &mut gpu_ctx);

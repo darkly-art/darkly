@@ -159,15 +159,6 @@ impl BrushBuilder {
         self.graph.set_port_exposed(node, port, true).unwrap();
     }
 
-    /// Add a curve node with control points defining the transfer function.
-    fn add_curve(&mut self, points: Vec<[f32; 2]>) -> NodeId {
-        self.graph.add_node(
-            "curve",
-            self.registry.get("curve").unwrap().ports.clone(),
-            vec![ParamValue::Curve(points)],
-        )
-    }
-
     /// Add a multiply node (Scalar × Scalar → Scalar).
     fn add_multiply(&mut self) -> NodeId {
         self.graph.add_node(
@@ -346,23 +337,78 @@ fn hard_round() -> Brush {
     b.build("Hard Round", "basic")
 }
 
+/// Ink Pen — POC compute-shader terminal.
+///
+/// Bypasses `BrushBuilder::new()`'s hardcoded `stamp + color_output` pair
+/// and wires straight into `ink_pen_compute`, a single GPU node that
+/// folds circle + stamp + compositing into one compute dispatch per
+/// rendering phase. Everything else (`pen_input`, `paint_color`, the
+/// pressure curve, the stabilizer) is identical to the prior ink-pen
+/// definition — only the GPU terminal has changed.
+///
+/// See `crates/darkly/src/brush/nodes/ink_pen_compute.rs` for the
+/// terminal and `darkly-stabilization-perf-investigation.md` for the
+/// motivation behind the swap.
 fn ink_pen() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(0.1);
-    // pressure → curve (approx sqrt) → stamp.size
-    let curve = b.add_curve(vec![
-        [0.0, 0.0],
-        [0.25, 0.5],
-        [0.5, 0.71],
-        [0.75, 0.87],
-        [1.0, 1.0],
-    ]);
-    b.wire(b.pen, "pressure", curve, "input");
-    b.wire(curve, "output", b.stamp, "size_input");
-    b.wire(b.pen, "pressure", b.stamp, "flow");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-    b.set_stabilize(0.6);
-    b.build("Ink Pen", "inking")
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let curve = graph.add_node(
+        "curve",
+        registry.get("curve").unwrap().ports.clone(),
+        vec![ParamValue::Curve(vec![
+            [0.0, 0.0],
+            [0.25, 0.5],
+            [0.5, 0.71],
+            [0.75, 0.87],
+            [1.0, 1.0],
+        ])],
+    );
+    let terminal = graph.add_node(
+        "ink_pen_compute",
+        registry.get("ink_pen_compute").unwrap().ports.clone(),
+        vec![],
+    );
+
+    let wires = [
+        (pen, "pressure", curve, "input"),
+        (curve, "output", terminal, "size_input"),
+        (pen, "pressure", terminal, "flow"),
+        (pen, "position", terminal, "position"),
+        (paint_color, "color", terminal, "color"),
+    ];
+    for (from_node, from_port, to_node, to_port) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    // Stabilization exposed to the toolbar (matches prior ink-pen behavior).
+    graph.set_port_default(pen, "stabilize", 0.6).unwrap();
+    graph.set_port_exposed(pen, "stabilize", true).unwrap();
+
+    let mut metadata = BrushMetadata::from_graph("Ink Pen", graph);
+    metadata.category = "inking".to_string();
+    Brush::without_resources(metadata)
 }
 
 fn airbrush() -> Brush {

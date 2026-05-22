@@ -8,6 +8,7 @@ pub mod clamp;
 pub mod color_output;
 pub mod curve;
 pub mod image;
+pub mod ink_pen_compute;
 pub mod jitter;
 pub mod liquify;
 pub mod make_color;
@@ -36,6 +37,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         color_output::register(),
         curve::register(),
         image::register(),
+        ink_pen_compute::register(),
         jitter::register(),
         liquify::register(),
         make_color::register(),

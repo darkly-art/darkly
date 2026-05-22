@@ -123,6 +123,23 @@ pub struct BrushPerfCounters {
     /// the top of `color_output::evaluate_gpu` (HashMap-by-string-key
     /// reads + `as_vec2`/match coercion).
     pub ctx_input_us: u64,
+
+    // --- Compute-path (ink_pen_compute terminal) ---
+    /// Per-event host time spent in `ink_pen_compute::commit` —
+    /// encoder bookkeeping + compute pass open/dispatch/close. Summed
+    /// across all events of the stroke.
+    pub compute_dispatch_us: u64,
+    /// Per-event host time spent on the `copy_buffer_to_texture` that
+    /// syncs the compute scratch buffer back to the scratch texture so
+    /// the downstream fragment-path commit can sample it. Summed across
+    /// all events of the stroke.
+    pub compute_buffer_sync_us: u64,
+    /// Total dabs that flowed through the compute path (queued in
+    /// `pending_dabs`, processed by the compute shader).
+    pub compute_dabs_total: u32,
+    /// Number of compute dispatches issued during this stroke (one per
+    /// pen event for the ink-pen-compute brush).
+    pub compute_dispatches_total: u32,
 }
 
 impl BrushPerfCounters {
@@ -219,6 +236,47 @@ impl BrushPerfCounters {
     pub fn record_ctx_input(&mut self, us: u64) {
         self.ctx_input_us = self.ctx_input_us.saturating_add(us);
     }
+
+    // --- Compute-path counters (ink_pen_compute terminal) ---
+
+    /// Record host wall-clock time spent in `ink_pen_compute::commit` —
+    /// encoder building, uniform write, compute pass open/dispatch/close,
+    /// buffer→texture sync. One reading per pen event.
+    pub fn record_compute_dispatch(&mut self, us: u64) {
+        self.compute_dispatch_us = self.compute_dispatch_us.saturating_add(us);
+    }
+
+    /// Record host wall-clock time around the `copy_buffer_to_texture` that
+    /// syncs the compute scratch buffer back to the scratch texture so the
+    /// downstream fragment-path commit can sample it.
+    pub fn record_compute_buffer_sync(&mut self, us: u64) {
+        self.compute_buffer_sync_us = self.compute_buffer_sync_us.saturating_add(us);
+    }
+
+    /// Increment dab counts at commit time once the queued dabs are flushed.
+    pub fn record_compute_dispatch_batch(&mut self, dab_count: u32) {
+        self.compute_dabs_total = self.compute_dabs_total.saturating_add(dab_count);
+        self.compute_dispatches_total = self.compute_dispatches_total.saturating_add(1);
+    }
+}
+
+/// One queued dab waiting for the next ink-pen-compute commit dispatch.
+///
+/// Layout MUST match the `Dab` struct in `shaders/brush/ink_pen_compute.wgsl`
+/// — the WGSL binding reads this verbatim as a storage buffer element.
+/// Trailing pad keeps the struct 16-byte aligned (vec4 alignment) so the
+/// shader's `array<Dab>` indexing lines up.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct DabComputeRecord {
+    /// Pen tip in **canvas pixels** (subtracted from layer offset in shader).
+    pub pos: [f32; 2],
+    /// Disc radius in canvas pixels (dab covers `pos ± radius`).
+    pub radius: f32,
+    /// Edge softness as fraction of radius. 0 = hard, 1 = fully feathered.
+    pub softness: f32,
+    /// Premultiplied paint color (rgba). Flow already multiplied in upstream.
+    pub color: [f32; 4],
 }
 
 /// Everything a GPU brush node needs to record render passes.
@@ -301,6 +359,16 @@ pub struct BrushGpuContext<'a> {
     /// Drained by `submit_final` — the engine merges the result into the
     /// stroke-level `StrokePerfStats`.
     pub perf: BrushPerfCounters,
+
+    /// Dabs queued by the `ink_pen_compute` terminal during a single pen
+    /// event. Drained by that terminal's `commit` hook (one compute
+    /// dispatch processes the whole queue). Empty for brushes that don't
+    /// use the compute path.
+    pub pending_dabs: Vec<DabComputeRecord>,
+    /// Layer-local row range covered by `pending_dabs`. The compute commit
+    /// uses this to bound the `copy_buffer_to_texture` sync that follows
+    /// the dispatch. `None` when the queue is empty.
+    pub pending_dabs_row_range: Option<[u32; 2]>,
 }
 
 impl<'a> BrushGpuContext<'a> {

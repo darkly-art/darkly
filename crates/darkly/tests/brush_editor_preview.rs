@@ -425,24 +425,25 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     );
 
     // Negative control: scrubbing a port the preview *does* read must
-    // still bump the version. `stamp.rotation` has no `preview_value`,
-    // is read by the stamp shader, and (for Ink Pen) is unwired — the
-    // perfect canary for "rule too broad". `brush_set_exposed_port`
-    // doesn't gate on the `exposed` flag (only the listing API does),
-    // so we reuse the stamp node id from the exposed `size` port.
+    // still bump the version. `softness` on the Ink Pen's compute
+    // terminal has no `preview_value`, is read by the preview shader,
+    // and is unwired — the perfect canary for "rule too broad".
+    // `brush_set_exposed_port` doesn't gate on the `exposed` flag (only
+    // the listing API does), so we reuse the terminal node id from the
+    // exposed `size` port.
     let size = engine
         .brush_exposed_ports()
         .into_iter()
         .find(|p| p.port_name == "size")
-        .expect("Ink Pen exposes a `size` port on the stamp node");
-    let v_before_rotation = engine.brush_graph_version();
+        .expect("Ink Pen exposes a `size` port on the compute terminal");
+    let v_before_softness = engine.brush_graph_version();
     engine
-        .brush_set_exposed_port(size.node_id, "rotation", 0.5)
+        .brush_set_exposed_port(size.node_id, "softness", 0.5)
         .expect("scrub set");
     assert_ne!(
         engine.brush_graph_version(),
-        v_before_rotation,
-        "rotation has no preview_value → it affects the preview output \
+        v_before_softness,
+        "softness has no preview_value → it affects the preview output \
          → its scrub must bump brush_graph_version. If this assertion \
          fails, the preview-irrelevant rule is over-broad and real \
          preview updates would also stall."

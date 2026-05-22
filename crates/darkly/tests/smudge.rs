@@ -197,6 +197,8 @@ macro_rules! make_ctx {
             pre_stroke_bind_group: Some(_pre_stroke_bind_group),
             dab_write_canvas_bbox: None,
             perf: BrushPerfCounters::default(),
+            pending_dabs: Vec::new(),
+            pending_dabs_row_range: None,
         }
     }};
 }

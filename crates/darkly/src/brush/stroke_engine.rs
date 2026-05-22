@@ -301,6 +301,11 @@ impl StrokeEngine {
             self.save_points
                 .finalize_render_state(i, self.capture_render_state());
         }
+
+        // Phase-end flush for compute-path terminals (ink_pen_compute):
+        // dispatch the batched dab queue before this phase's submit_final.
+        // Fragment-path terminals no-op here.
+        self.runner.flush_compute(gpu);
     }
 
     /// Process a raw pointer event — stabilize and render in one step.
@@ -379,7 +384,7 @@ impl StrokeEngine {
 
         // Update dab size from dab source node output (procedural, stamp,
         // or warp terminals like liquify that report an effective radius).
-        for node_type in &["procedural", "stamp", "liquify"] {
+        for node_type in &["procedural", "stamp", "liquify", "ink_pen_compute"] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
                 if let Some(val) = self.runner.read_slot(slot) {
                     let size = val.as_vec2();
@@ -498,6 +503,10 @@ impl StrokeEngine {
         self.last_point = Some(info);
         self.save_points
             .finalize_render_state(len - 1, self.capture_render_state());
+
+        // Phase-end flush for compute-path terminals. See sibling call
+        // in `render_from_stabilized_range_to`.
+        self.runner.flush_compute(gpu);
     }
 
     /// Delegate the stroke-start / rewind-boundary lifecycle hook to every
