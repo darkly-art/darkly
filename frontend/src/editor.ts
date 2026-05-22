@@ -114,6 +114,26 @@ export async function createInstance(
     return instance;
 }
 
+/** Populate a freshly-booted instance with the default starter content:
+ *  the 4 hidden veils new users discover the feature through. Caller
+ *  decides when to invoke (skipped for tabs that load existing
+ *  documents). Living as a free function (not a `DarklyInstance` method)
+ *  keeps "what's in a fresh tab" at the application layer — the engine
+ *  itself stays opinion-free. */
+export function seedFreshDocument(instance: DarklyInstance, docW: number, docH: number): void {
+    if (!instance.handle) return;
+    // The veil chain needs a non-zero viewport before `add_veil` will
+    // allocate textures; without this `ensure_textures` no-ops and the
+    // next call would unwrap on `views`. CanvasView issues its own
+    // resize to the surface dims right after, so the only cost is one
+    // GPU realloc that's immediately replaced.
+    instance.handle.resize(docW, docH);
+    instance.addVeil('rainy_glass', { direction: 135, visible: false });
+    instance.addVeil('grain',       { speed: 0.05,    visible: false });
+    instance.addVeil('lens_blur',   { radius: 0.25,   visible: false });
+    instance.addVeil('vhs',         { visible: false });
+}
+
 /** Single-instance boot path used by the standalone (non-multi-tab) host.
  *  Creates one `DarklyInstance`, makes it the active one, returns its
  *  handle. CanvasView calls this on mount. */
@@ -130,6 +150,7 @@ export async function initEditor(canvas: HTMLCanvasElement): Promise<DarklyHandl
     const instance = await createInstance(canvas, docWidth, docHeight, new DarklyInstance(), {
         seedBackground: true,
     });
+    seedFreshDocument(instance, docWidth, docHeight);
     setActiveInstance(instance);
     theme.pushToWasm();
     return instance.handle!;

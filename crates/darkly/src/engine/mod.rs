@@ -557,12 +557,6 @@ impl DarklyEngine {
         // the user to trigger a `compile_active` via a param change.
         engine.regenerate_brush_preview();
 
-        // Seed the document with the default starter veils (all hidden).
-        // Lives behind the chain's `has_visible()` gate, so it costs the
-        // ping-pong allocation but nothing at render time until a user
-        // toggles a veil on.
-        engine.add_default_veils();
-
         // Eagerly allocate the document selection modifier + its GPU state.
         // The selection is a typed Modifier on `doc.selection`; the R8 GPU
         // textures + bind groups live in `compositor.selection_state`. Both

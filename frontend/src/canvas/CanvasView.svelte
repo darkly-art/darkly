@@ -1,6 +1,6 @@
 <script lang="ts">
     import { onMount } from 'svelte';
-    import { initEditor, createInstance, ensureProcessInit } from '../editor';
+    import { initEditor, createInstance, ensureProcessInit, seedFreshDocument } from '../editor';
     import { config } from '../config/store.svelte';
     import { app, type DarklyInstance } from '../state/app.svelte';
     import { nav } from './navigation.svelte';
@@ -109,6 +109,9 @@
                 const docH = dims?.height ?? (config.get('canvas.height') as number);
                 providedInstance.pendingDims = null;
                 await createInstance(canvas, docW, docH, providedInstance, { seedBackground });
+                if (seedBackground) {
+                    seedFreshDocument(providedInstance, docW, docH);
+                }
                 handle = providedInstance.handle!;
             } else {
                 // Single-instance path: existing initEditor creates an
