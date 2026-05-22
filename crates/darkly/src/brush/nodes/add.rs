@@ -1,14 +1,13 @@
 //! Add node — Scalar + Scalar → Scalar.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "add",
         category: "math",
         display_name: "Add",
@@ -23,7 +22,7 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
-    }
+    })
 }
 
 pub struct AddEvaluator;

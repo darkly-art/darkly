@@ -40,18 +40,176 @@
 //! 0 → spike (sharp peak), 0.4 → saw (linear), 0.5 → sine (smooth),
 //! 1 → square (hard edge). See `liquify.wgsl` for the interpolation formula.
 
+use std::any::Any;
+
 use crate::brush::dab_pool::DAB_REFERENCE_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, BrushPreviewInfo, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::node::BrushNodeRegistration;
+use crate::brush::nodes::circle::{CirclePipeline, CircleUniforms};
 use crate::brush::paint_target_ext::BrushPaintTargetExt;
-use crate::brush::pipelines::{BlitUniforms, CircleUniforms, LiquifyUniforms};
+use crate::brush::pipeline::{
+    BlitUniforms, BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
+};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
+// ── Pipeline ────────────────────────────────────────────────────────────
+
+/// Uniform data for the liquify warp shader.
+///
+/// The shader samples `scratch read mirror` (a copy of the stroke scratch) at a
+/// displaced UV inside a circular brush disc and writes the warped sample
+/// back to the scratch. Everything is canvas-space; the shader converts to
+/// UVs via `canvas_size` and `copy_origin`.
+///
+/// Per-dab displacement magnitude is decided on the CPU (strength × radius)
+/// and passed as `displacement`; the shader just multiplies by a unit
+/// direction vector and the radial falloff. Pen speed never enters the
+/// equation — a slow drag produces the same per-dab warp as a fast flick.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct LiquifyUniforms {
+    /// Top-left of the render-pass quad in canvas pixels (clamped to the
+    /// **layer's** canvas extent so paste-extent / grown layers can warp
+    /// off-canvas pixels).
+    pub rect_origin: [f32; 2],
+    /// Width and height of the render-pass quad in canvas pixels.
+    pub rect_size: [f32; 2],
+    /// Layer's canvas-space offset (= GpuPaintTarget.offset_x/y). Vertex
+    /// stage subtracts this from canvas_pos before the NDC divide so the
+    /// quad maps onto the layer-sized scratch render target correctly.
+    pub target_offset: [f32; 2],
+    /// Layer pixel dimensions (= GpuPaintTarget.width/height). Used by
+    /// the vertex stage as the NDC denominator.
+    pub target_size: [f32; 2],
+    /// Document canvas dimensions (fragment-stage selection UV only —
+    /// the selection texture is canvas-sized).
+    pub canvas_size: [f32; 2],
+    /// Layer-local origin of the scratch read mirror region (matches the
+    /// `ensure_canvas_copy` source origin). The fragment shader floors
+    /// this before dividing to recover the texel coordinate, same
+    /// floor-then-ceil pattern as `composite.wgsl`.
+    pub copy_origin: [f32; 2],
+    /// Brush centre in canvas pixels.
+    pub center: [f32; 2],
+    /// Unit direction vector (cos θ, sin θ). Pixels sampled from
+    /// `canvas_pos − direction × displacement × falloff`.
+    pub direction: [f32; 2],
+    /// Displacement magnitude in canvas pixels at the brush centre
+    /// (where falloff = 1). Computed as `radius × K × strength`.
+    pub displacement: f32,
+    /// Brush radius in canvas pixels.
+    pub radius: f32,
+    /// Waveshape knob (0–1). 0 = saw, 0.5 = sine, 1 = square.
+    pub softness: f32,
+    pub _pad: f32,
+}
+
+/// Liquify warp pipeline.  REPLACE blend — reads canvas_copy at a
+/// displaced UV, writes the result straight into the scratch render
+/// target.  No alpha blending; outside the disc the shader discards.
+pub struct LiquifyPipeline {
+    pipeline: wgpu::RenderPipeline,
+    ring: DynamicUniformRing,
+    uniform_bind_group: wgpu::BindGroup,
+}
+
+impl LiquifyPipeline {
+    fn build(ctx: &BuildContext) -> Self {
+        let shader = ctx
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("brush-liquify"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("../../../../../shaders/brush/liquify.wgsl").into(),
+                ),
+            });
+        // group(0) = uniforms, group(1) = selection mask,
+        // group(2) = canvas copy (sampled at displaced UV — linear).
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("brush-liquify-layout"),
+                bind_group_layouts: &[ctx.uniform_bgl, ctx.selection_bgl, ctx.canvas_copy_bgl],
+                immediate_size: 0,
+            });
+        let pipeline = ctx
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("brush-liquify"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+        let (ring, uniform_bind_group) = ctx.make_uniform_ring::<LiquifyUniforms>(
+            "brush-liquify-uniforms",
+            "brush-liquify-uniform-bg",
+        );
+        Self {
+            pipeline,
+            ring,
+            uniform_bind_group,
+        }
+    }
+
+    pub fn pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline
+    }
+
+    pub fn uniform_bind_group(&self) -> &wgpu::BindGroup {
+        &self.uniform_bind_group
+    }
+
+    pub fn write_uniforms(&self, queue: &wgpu::Queue, uniforms: &LiquifyUniforms) -> u32 {
+        self.ring.write(queue, bytemuck::bytes_of(uniforms))
+    }
+}
+
+impl BrushPipelineEntry for LiquifyPipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn ring(&self) -> Option<&DynamicUniformRing> {
+        Some(&self.ring)
+    }
+}
+
+fn liquify_pipeline_reg() -> BrushPipelineRegistration {
+    BrushPipelineRegistration {
+        id: "liquify",
+        build: |ctx| Box::new(LiquifyPipeline::build(ctx)),
+    }
+}
+
+// ── Node ────────────────────────────────────────────────────────────────
 
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration {
+        pipelines: vec![liquify_pipeline_reg()],
+        node: NodeRegistration {
         type_id: "liquify",
         category: "output",
         display_name: "Liquify",
@@ -95,6 +253,7 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: true,
+        },
     }
 }
 
@@ -196,7 +355,8 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             softness,
             _pad: 0.0,
         };
-        let offset = gpu.pipelines.write_liquify_uniforms(gpu.queue, &uniforms);
+        let liq = gpu.pipelines.get::<LiquifyPipeline>("liquify");
+        let offset = liq.write_uniforms(gpu.queue, &uniforms);
         let scratch = gpu
             .scratch
             .as_deref()
@@ -220,8 +380,8 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             // shader can write into off-canvas pixels of paste-extent /
             // grown layers.
             pass.set_viewport(0.0, 0.0, pt_width as f32, pt_height as f32, 0.0, 1.0);
-            pass.set_pipeline(gpu.pipelines.liquify_pipeline());
-            pass.set_bind_group(0, &gpu.pipelines.liquify_uniform_bind_group, &[offset]);
+            pass.set_pipeline(liq.pipeline());
+            pass.set_bind_group(0, liq.uniform_bind_group(), &[offset]);
             pass.set_bind_group(1, gpu.selection_bind_group, &[]);
             pass.set_bind_group(2, scratch.read_mirror_bind_group(), &[]);
             pass.draw(0..6, 0..1);
@@ -344,9 +504,8 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             centroid_y: 0.0,
             _pad: [0.0; 2],
         };
-        let circle_offset = gpu
-            .pipelines
-            .write_circle_uniforms(gpu.queue, &circle_uniforms);
+        let circle = gpu.pipelines.get::<CirclePipeline>("circle");
+        let circle_offset = circle.write_uniforms(gpu.queue, &circle_uniforms);
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("liquify-preview-circle"),
@@ -362,12 +521,8 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 ..Default::default()
             });
             pass.set_viewport(0.0, 0.0, diameter_px as f32, diameter_px as f32, 0.0, 1.0);
-            pass.set_pipeline(gpu.pipelines.circle_pipeline());
-            pass.set_bind_group(
-                0,
-                &gpu.pipelines.circle_uniform_bind_group,
-                &[circle_offset],
-            );
+            pass.set_pipeline(circle.pipeline());
+            pass.set_bind_group(0, circle.uniform_bind_group(), &[circle_offset]);
             pass.draw(0..3, 0..1);
         }
 

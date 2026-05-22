@@ -26,17 +26,170 @@
 //! physical sense (erasing a dab against an empty scratch is a no-op).
 //! Engine-level paint-vs-erase is a *stroke* decision, applied at commit.
 
+use std::any::Any;
+
 use crate::brush::eval::{BrushNodeEvaluator, BrushPreviewInfo, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::paint_target_ext::BrushPaintTargetExt;
-use crate::brush::pipelines::{BlitUniforms, CompositeUniforms};
+use crate::brush::pipeline::{
+    BlitUniforms, BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
+};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
+// ── Pipeline ────────────────────────────────────────────────────────────
+
+/// Uniform data for the dab compositing shader.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CompositeUniforms {
+    pub origin: [f32; 2],        // quad top-left in canvas pixels
+    pub size: [f32; 2],          // quad size in canvas pixels
+    pub target_offset: [f32; 2], // canvas-space offset of render target's (0,0) pixel
+    pub target_size: [f32; 2],   // render target pixel dimensions (vertex NDC)
+    pub canvas_size: [f32; 2],   // document canvas dimensions (fragment selection UV)
+    pub uv_min: [f32; 2],        // min UV in dab texture (nonzero when clipped at top/left)
+    pub uv_max: [f32; 2],        // max UV in dab texture
+    pub blend_mode: u32,         // 0 = source-over, 1 = erase (destination-out)
+    pub fg_premultiplied: u32,   // 1 = dab input is premultiplied, 0 = straight alpha
+    pub stroke_opacity: f32,     // stroke-level opacity cap (1.0 = no cap)
+    pub apply_selection: u32,    // 1 = modulate by selection, 0 = ignore (commit pass)
+}
+
+/// Paint dab composite pipeline.  REPLACE blend with shader-side
+/// Porter-Duff source-over against the canvas copy, so the result is
+/// straight-alpha and correct against straight-alpha layer textures.
+///
+/// Owns two pipelines — one targeting `Rgba8Unorm` (per-dab into stroke
+/// scratch, and stroke→layer commit when the destination layer is RGBA8)
+/// and one targeting `R8Unorm` (stroke→mask commits).  Same WGSL; the
+/// GPU writes only `.r` to R8 targets.  Per the type-owned dispatch
+/// principle, the format branch lives in [`CompositePipeline::pipeline`],
+/// not at every call site.
+pub struct CompositePipeline {
+    pipeline_rgba: wgpu::RenderPipeline,
+    pipeline_r8: wgpu::RenderPipeline,
+    ring: DynamicUniformRing,
+    uniform_bind_group: wgpu::BindGroup,
+}
+
+impl CompositePipeline {
+    fn build(ctx: &BuildContext) -> Self {
+        let shader = ctx
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("brush-composite"),
+                source: wgpu::ShaderSource::Wgsl(
+                    concat!(
+                        include_str!("../../../../../shaders/source_over.wgsl"),
+                        "\n",
+                        include_str!("../../../../../shaders/brush/composite.wgsl"),
+                    )
+                    .into(),
+                ),
+            });
+        // group(0) = uniforms, group(1) = dab texture, group(2) = selection,
+        // group(3) = canvas copy (for shader-side Porter-Duff).
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("brush-composite-layout"),
+                bind_group_layouts: &[
+                    ctx.uniform_bgl,
+                    ctx.dab_bgl,
+                    ctx.selection_bgl,
+                    ctx.canvas_copy_bgl,
+                ],
+                immediate_size: 0,
+            });
+        let make = |format: wgpu::TextureFormat, label: &'static str| {
+            ctx.device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        ..Default::default()
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_main"),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: Some(wgpu::BlendState::REPLACE),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+        };
+        let pipeline_rgba = make(wgpu::TextureFormat::Rgba8Unorm, "brush-composite-rgba");
+        let pipeline_r8 = make(wgpu::TextureFormat::R8Unorm, "brush-composite-r8");
+        let (ring, uniform_bind_group) = ctx.make_uniform_ring::<CompositeUniforms>(
+            "brush-composite-uniforms",
+            "brush-composite-uniform-bg",
+        );
+        Self {
+            pipeline_rgba,
+            pipeline_r8,
+            ring,
+            uniform_bind_group,
+        }
+    }
+
+    /// Look up the composite pipeline for a destination format.  Stroke
+    /// scratch composites hit the RGBA variant; stroke→layer commits hit
+    /// the variant matching the layer's storage format.  Both pipelines
+    /// are built from the same WGSL.
+    pub fn pipeline(&self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        match format {
+            wgpu::TextureFormat::R8Unorm => &self.pipeline_r8,
+            _ => &self.pipeline_rgba,
+        }
+    }
+
+    pub fn uniform_bind_group(&self) -> &wgpu::BindGroup {
+        &self.uniform_bind_group
+    }
+
+    pub fn write_uniforms(&self, queue: &wgpu::Queue, uniforms: &CompositeUniforms) -> u32 {
+        self.ring.write(queue, bytemuck::bytes_of(uniforms))
+    }
+}
+
+impl BrushPipelineEntry for CompositePipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn ring(&self) -> Option<&DynamicUniformRing> {
+        Some(&self.ring)
+    }
+}
+
+fn composite_pipeline_reg() -> BrushPipelineRegistration {
+    BrushPipelineRegistration {
+        id: "composite",
+        build: |ctx| Box::new(CompositePipeline::build(ctx)),
+    }
+}
+
+// ── Node ────────────────────────────────────────────────────────────────
 
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration {
+        pipelines: vec![composite_pipeline_reg()],
+        node: NodeRegistration {
         type_id: "color_output",
         category: "output",
         display_name: "Color Output",
@@ -64,6 +217,7 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: true,
+        },
     }
 }
 
@@ -157,8 +311,9 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             stroke_opacity: 1.0, // per-dab composites aren't opacity-capped
             apply_selection: 1,  // selection masks every dab as it lands
         };
+        let composite = gpu.pipelines.get::<CompositePipeline>("composite");
         let t_wu = web_time::Instant::now();
-        let offset = gpu.pipelines.write_composite_uniforms(gpu.queue, &uniforms);
+        let offset = composite.write_uniforms(gpu.queue, &uniforms);
         gpu.perf
             .record_write_composite_uniforms(t_wu.elapsed().as_micros() as u64);
 
@@ -193,11 +348,8 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             // format-fixed, regardless of the destination layer's format.
             // (The R8 path appears at stroke commit time via
             // `GpuPaintTarget::commit_brush_dab`.)
-            pass.set_pipeline(
-                gpu.pipelines
-                    .composite_pipeline(wgpu::TextureFormat::Rgba8Unorm),
-            );
-            pass.set_bind_group(0, &gpu.pipelines.composite_uniform_bind_group, &[offset]);
+            pass.set_pipeline(composite.pipeline(wgpu::TextureFormat::Rgba8Unorm));
+            pass.set_bind_group(0, composite.uniform_bind_group(), &[offset]);
             pass.set_bind_group(1, dab_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
             pass.set_bind_group(3, scratch.read_mirror_bind_group(), &[]);

@@ -11,7 +11,7 @@
 //! - The per-event composite step writes the final result to the layer:
 //!   source-over blend of the scratch onto the pre-stroke snapshot.
 
-use crate::brush::pipelines::BrushPipelines;
+use crate::brush::pipeline::BrushPipelines;
 use crate::brush::scratch::Scratch;
 
 /// Manages the stroke-in-progress scratch (write+read pair) and pre-stroke

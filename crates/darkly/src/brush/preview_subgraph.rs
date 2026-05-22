@@ -88,9 +88,14 @@ pub fn build_node_preview_graph(
         .expect("preview_terminal is registered in default_evaluators")
         .clone();
     let term_id = sub.add_node(
-        term_reg.type_id,
-        term_reg.ports,
-        term_reg.params.iter().map(|p| p.default_value()).collect(),
+        term_reg.node.type_id,
+        term_reg.node.ports,
+        term_reg
+            .node
+            .params
+            .iter()
+            .map(|p| p.default_value())
+            .collect(),
     );
     sub.connect(
         PortRef {

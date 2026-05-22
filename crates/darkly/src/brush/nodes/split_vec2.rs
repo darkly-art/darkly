@@ -3,14 +3,13 @@
 //! Decomposes a two-component vector into its X and Y components.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "split_vec2",
         category: "math",
         display_name: "Split Vec2",
@@ -24,7 +23,7 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
-    }
+    })
 }
 
 pub struct SplitVec2Evaluator;

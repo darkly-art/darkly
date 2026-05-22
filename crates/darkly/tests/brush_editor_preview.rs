@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use darkly::brush::{
     dab_pool::DabTexturePool,
     default_graph,
-    pipelines::BrushPipelines,
+    pipeline::BrushPipelines,
     preview_renderer::{synthesize_preview_stroke, BrushPreviewRenderer},
 };
 use darkly::gpu::test_utils::{readback_texture, test_device};

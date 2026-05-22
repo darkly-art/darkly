@@ -13,14 +13,13 @@
 //! seed automatically.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
+use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
-
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration::compute(NodeRegistration {
         type_id: "random",
         category: "input",
         display_name: "Random",
@@ -38,7 +37,7 @@ pub fn register() -> BrushNodeRegistration {
             },
         ],
         is_gpu: false,
-    }
+    })
 }
 
 pub struct RandomEvaluator;

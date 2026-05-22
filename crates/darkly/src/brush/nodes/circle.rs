@@ -26,15 +26,146 @@
 //! Cy)` on the CPU per dab and passes it to the shader, which translates the
 //! sample-space pole so the centroid lands at UV (0.5, 0.5).
 
+use std::any::Any;
+
 use crate::brush::dab_pool::DAB_REFERENCE_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
-use crate::brush::pipelines::CircleUniforms;
+use crate::brush::node::BrushNodeRegistration;
+use crate::brush::pipeline::{
+    BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
+};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
+// ── Pipeline ────────────────────────────────────────────────────────────
+
+/// Uniform data for the circle mask generation shader.
+///
+/// Carries the algorithm choice (sine harmonic / 1D Perlin / Gielis
+/// superformula), all per-algorithm shape parameters, and the CPU-computed
+/// centroid offset that anchors the rendered shape's geometric centroid at
+/// the texture centre.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct CircleUniforms {
+    pub softness: f32,    // 0-1 fraction of base radius
+    pub algorithm: u32,   // 0 = sine harmonic, 1 = perlin/value-noise, 2 = superformula
+    pub amplitude: f32,   // bump amplitude (sine, perlin) — fraction of base radius
+    pub frequency: f32,   // bump count (sine.n, perlin.f, superformula.m)
+    pub phase: f32,       // rotation in radians applied before r(θ) sample
+    pub persistence: f32, // perlin: per-octave amplitude falloff
+    pub seed: f32,        // perlin: rng seed
+    pub octaves: u32,     // perlin: stacked frequency count
+    pub n1: f32,          // superformula: overall sharpness
+    pub n2: f32,          // superformula: bump rise
+    pub n3: f32,          // superformula: bump fall
+    pub base_radius: f32, // shrink factor so r_max stays inside the viewport
+    pub centroid_x: f32,  // shape centroid in viewport-radius units
+    pub centroid_y: f32,
+    pub _pad: [f32; 2], // pad to 16-byte alignment
+}
+
+/// SDF circle mask pipeline.  Renders the circle mask to a dab texture
+/// with REPLACE blend.  Also borrowed by the liquify node to synthesize
+/// its preview ring.
+pub struct CirclePipeline {
+    pipeline: wgpu::RenderPipeline,
+    ring: DynamicUniformRing,
+    uniform_bind_group: wgpu::BindGroup,
+}
+
+impl CirclePipeline {
+    fn build(ctx: &BuildContext) -> Self {
+        let shader = ctx
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("brush-circle"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("../../../../../shaders/brush/circle.wgsl").into(),
+                ),
+            });
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("brush-circle-layout"),
+                bind_group_layouts: &[ctx.uniform_bgl],
+                immediate_size: 0,
+            });
+        let pipeline = ctx
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("brush-circle"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+        let (ring, uniform_bind_group) = ctx.make_uniform_ring::<CircleUniforms>(
+            "brush-circle-uniforms",
+            "brush-circle-uniform-bg",
+        );
+        Self {
+            pipeline,
+            ring,
+            uniform_bind_group,
+        }
+    }
+
+    pub fn pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline
+    }
+
+    pub fn uniform_bind_group(&self) -> &wgpu::BindGroup {
+        &self.uniform_bind_group
+    }
+
+    /// Write circle mask uniforms to the next ring slot.  Returns the
+    /// dynamic byte offset for `set_bind_group`.
+    pub fn write_uniforms(&self, queue: &wgpu::Queue, uniforms: &CircleUniforms) -> u32 {
+        self.ring.write(queue, bytemuck::bytes_of(uniforms))
+    }
+}
+
+impl BrushPipelineEntry for CirclePipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn ring(&self) -> Option<&DynamicUniformRing> {
+        Some(&self.ring)
+    }
+}
+
+fn circle_pipeline_reg() -> BrushPipelineRegistration {
+    BrushPipelineRegistration {
+        id: "circle",
+        build: |ctx| Box::new(CirclePipeline::build(ctx)),
+    }
+}
+
+// ── Node ────────────────────────────────────────────────────────────────
 
 /// Algorithm-selector indices. Must match the `options` order in `register()`
 /// and the branch order in `shaders/brush/circle.wgsl`.
@@ -48,7 +179,9 @@ const ALGO_SUPERFORMULA: u32 = 2;
 const CENTROID_SAMPLES: usize = 256;
 
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration {
+        pipelines: vec![circle_pipeline_reg()],
+        node: NodeRegistration {
         type_id: "circle",
         category: "shape",
         display_name: "Circle",
@@ -160,6 +293,7 @@ pub fn register() -> BrushNodeRegistration {
             default: 0,
         }],
         is_gpu: true,
+        },
     }
 }
 
@@ -411,7 +545,8 @@ impl BrushNodeEvaluator for CircleEvaluator {
             centroid_y: cy,
             _pad: [0.0; 2],
         };
-        let offset = gpu.pipelines.write_circle_uniforms(gpu.queue, &uniforms);
+        let circle = gpu.pipelines.get::<CirclePipeline>("circle");
+        let offset = circle.write_uniforms(gpu.queue, &uniforms);
 
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -430,8 +565,8 @@ impl BrushNodeEvaluator for CircleEvaluator {
 
             let size = DAB_REFERENCE_SIZE as f32;
             pass.set_viewport(0.0, 0.0, size, size, 0.0, 1.0);
-            pass.set_pipeline(gpu.pipelines.circle_pipeline());
-            pass.set_bind_group(0, &gpu.pipelines.circle_uniform_bind_group, &[offset]);
+            pass.set_pipeline(circle.pipeline());
+            pass.set_bind_group(0, circle.uniform_bind_group(), &[offset]);
             pass.draw(0..3, 0..1);
         }
 

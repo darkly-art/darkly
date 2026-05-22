@@ -16,19 +16,139 @@
 //! a hard cap, so the user's slider keeps growing the brush past 100%.
 //! The shorter axis follows from the tip aspect ratio.
 
+use std::any::Any;
+
 use crate::brush::brush_tip::BrushTipApplication;
 use crate::brush::dab_pool::DAB_REFERENCE_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::BrushGpuContext;
-use crate::brush::pipelines::StampUniforms;
+use crate::brush::node::BrushNodeRegistration;
+use crate::brush::pipeline::{
+    BrushPipelineEntry, BrushPipelineRegistration, BrushPipelines, BuildContext, DynamicUniformRing,
+};
 use crate::brush::wire::{BrushWireType, ScalarValue, TextureHandle};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
-pub type BrushNodeRegistration = NodeRegistration<BrushWireType>;
+// ── Pipeline ────────────────────────────────────────────────────────────
+
+/// Uniform data for the stamp dab generation shader.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct StampUniforms {
+    pub dab_width: f32,   // dab viewport width in pixels
+    pub dab_height: f32,  // dab viewport height in pixels
+    pub opacity: f32,     // dab opacity (0-1)
+    pub rotation: f32,    // dab rotation in radians
+    pub color: [f32; 4],  // RGBA paint color (straight alpha)
+    pub mirror_x: f32,    // 1.0 = flip horizontally
+    pub mirror_y: f32,    // 1.0 = flip vertically
+    pub application: u32, // BrushTipApplication as u32
+    pub ratio: f32,       // user-controlled aspect ratio squeeze (1.0 = none)
+}
+
+/// Stamp tip pipeline.  Reads a brush tip texture, applies transforms,
+/// writes to a dab texture with REPLACE blend.
+pub struct StampPipeline {
+    pipeline: wgpu::RenderPipeline,
+    ring: DynamicUniformRing,
+    uniform_bind_group: wgpu::BindGroup,
+}
+
+impl StampPipeline {
+    fn build(ctx: &BuildContext) -> Self {
+        let shader = ctx
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("brush-stamp"),
+                source: wgpu::ShaderSource::Wgsl(
+                    include_str!("../../../../../shaders/brush/stamp.wgsl").into(),
+                ),
+            });
+        // group(0) = uniforms, group(1) = brush tip texture+sampler.
+        let layout = ctx
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("brush-stamp-layout"),
+                bind_group_layouts: &[ctx.uniform_bgl, ctx.dab_bgl],
+                immediate_size: 0,
+            });
+        let pipeline = ctx
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("brush-stamp"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+        let (ring, uniform_bind_group) = ctx
+            .make_uniform_ring::<StampUniforms>("brush-stamp-uniforms", "brush-stamp-uniform-bg");
+        Self {
+            pipeline,
+            ring,
+            uniform_bind_group,
+        }
+    }
+
+    pub fn pipeline(&self) -> &wgpu::RenderPipeline {
+        &self.pipeline
+    }
+
+    pub fn uniform_bind_group(&self) -> &wgpu::BindGroup {
+        &self.uniform_bind_group
+    }
+
+    /// Write stamp dab uniforms to the next ring slot.  Returns the
+    /// dynamic byte offset for `set_bind_group`.
+    pub fn write_uniforms(&self, queue: &wgpu::Queue, uniforms: &StampUniforms) -> u32 {
+        self.ring.write(queue, bytemuck::bytes_of(uniforms))
+    }
+}
+
+impl BrushPipelineEntry for StampPipeline {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn ring(&self) -> Option<&DynamicUniformRing> {
+        Some(&self.ring)
+    }
+}
+
+fn stamp_pipeline_reg() -> BrushPipelineRegistration {
+    BrushPipelineRegistration {
+        id: "stamp",
+        build: |ctx| Box::new(StampPipeline::build(ctx)),
+    }
+}
+
+// ── Node ────────────────────────────────────────────────────────────────
 
 pub fn register() -> BrushNodeRegistration {
-    NodeRegistration {
+    BrushNodeRegistration {
+        pipelines: vec![stamp_pipeline_reg()],
+        node: NodeRegistration {
         type_id: "stamp",
         category: "shape",
         display_name: "Stamp Tip",
@@ -130,6 +250,7 @@ pub fn register() -> BrushNodeRegistration {
             },
         ],
         is_gpu: true,
+        },
     }
 }
 
@@ -221,7 +342,7 @@ fn compute_dab_dims(effective_size: f32, tip_w: u32, tip_h: u32, nominal_dim: u3
 fn encode_stamp_pass(
     encoder: &mut wgpu::CommandEncoder,
     queue: &wgpu::Queue,
-    pipelines: &crate::brush::pipelines::BrushPipelines,
+    pipelines: &BrushPipelines,
     tip_bind_group: &wgpu::BindGroup,
     inputs: &StampInputs,
     target_view: &wgpu::TextureView,
@@ -242,8 +363,9 @@ fn encode_stamp_pass(
         application: inputs.application_int,
         ratio: inputs.ratio,
     };
+    let stamp = pipelines.get::<StampPipeline>("stamp");
     let t_wu = web_time::Instant::now();
-    let offset = pipelines.write_stamp_uniforms(queue, &uniforms);
+    let offset = stamp.write_uniforms(queue, &uniforms);
     let wu_us = t_wu.elapsed().as_micros() as u64;
     if let Some(p) = perf {
         p.record_write_stamp_uniforms(wu_us);
@@ -263,8 +385,8 @@ fn encode_stamp_pass(
         ..Default::default()
     });
     pass.set_viewport(0.0, 0.0, view_w as f32, view_h as f32, 0.0, 1.0);
-    pass.set_pipeline(pipelines.stamp_pipeline());
-    pass.set_bind_group(0, &pipelines.stamp_uniform_bind_group, &[offset]);
+    pass.set_pipeline(stamp.pipeline());
+    pass.set_bind_group(0, stamp.uniform_bind_group(), &[offset]);
     pass.set_bind_group(1, tip_bind_group, &[]);
     pass.draw(0..3, 0..1);
 }

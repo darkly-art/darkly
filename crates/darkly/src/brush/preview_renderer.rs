@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use super::dab_pool::DabTexturePool;
 use super::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use super::paint_info::PaintInformation;
-use super::pipelines::BrushPipelines;
+use super::pipeline::BrushPipelines;
 use super::spacing::SpacingConfig;
 use super::stabilizer::PassThrough;
 use super::stroke_buffer::StrokeBuffer;

@@ -23,7 +23,8 @@
 //! v` and `pre.r = v`, the result equals `v` exactly. Smudge/warp produce
 //! `mix(v_dst, v_src, dab.a)` — identical to a pure-R8 blend.
 
-use crate::brush::pipelines::{BrushPipelines, CompositeUniforms};
+use crate::brush::nodes::color_output::{CompositePipeline, CompositeUniforms};
+use crate::brush::pipeline::BrushPipelines;
 use crate::gpu::paint_target::GpuPaintTarget;
 
 pub trait BrushPaintTargetExt {
@@ -115,7 +116,8 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
             stroke_opacity: opacity,
             apply_selection: 0,
         };
-        let offset = brush_pipelines.write_composite_uniforms(queue, &uniforms);
+        let composite = brush_pipelines.get::<CompositePipeline>("composite");
+        let offset = composite.write_uniforms(queue, &uniforms);
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("paint-target-commit-brush-dab"),
@@ -131,8 +133,8 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
             ..Default::default()
         });
         pass.set_viewport(0.0, 0.0, layer_w, layer_h, 0.0, 1.0);
-        pass.set_pipeline(brush_pipelines.composite_pipeline(self.format()));
-        pass.set_bind_group(0, &brush_pipelines.composite_uniform_bind_group, &[offset]);
+        pass.set_pipeline(composite.pipeline(self.format()));
+        pass.set_bind_group(0, composite.uniform_bind_group(), &[offset]);
         pass.set_bind_group(1, scratch_bg, &[]);
         pass.set_bind_group(2, selection_bg, &[]);
         pass.set_bind_group(3, pre_stroke_bg, &[]);

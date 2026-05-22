@@ -13,9 +13,9 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital artists. It has everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
+[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital painters. It has everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
-[![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)](https://demo.darkly.art)
+If you're a sane artist who likes rulers, clean vector lines, and predictable outcomes, Darkly may not be for you. Darkly is a chaotic playground for brave explorers, where messes are made and happy accidents abound. Madness isn't a bug, it's a feature.
 
 ### Darkly pledges to:
 
@@ -26,41 +26,38 @@
 
 **Try the demo [here](https://demo.darkly.art).**
 
-## Kickstarter
+[![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)](https://demo.darkly.art)
 
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most, and help us rescue our friends and colleagues from the iron grip of Adobe!
+## Upcoming Kickstarter
+
+We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most, and help us rescue our soulmates from Adobe's iron grip!
 
 ## Unique Darkly Features
 
-In addition to the usual paint features, Darkly has some entropic tools to help with artistic exploration.
+In addition to the usual paint features, Darkly has some entropic tools to empower you on your dark quests.
 
 ### Veils
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By placing your art behind a strange or mysterious filter, they let you look on it with different eyes, inviting you to see something that wasn't there before.
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By placing your art behind a strange or mysterious filter, they let you look on it with different eyes, and may invite you to see something that wasn't there before.
 
-Examples of Veils include lens blur, retro VHS, ice crystal, and rainy glass. By non-destructively hiding detail, these help counteract age-old human tendencies like art fatigue (losing objectivity because you stared at it for too long), destructive self-criticism, and premature fixation on detail.
+Veils have practical uses, too. By non-destructively hiding detail, they can help counteract age-old human tendencies like art fatigue (losing good judgement because you stared at it for too long), destructive self-criticism, and premature fixation on detail. Basically, they give you permission to be messy.
 
-Veils live in their own group at the top of the layer stack, but within that you can mix, match, and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.
-
-You may use them differently, or not at all. But basically they give you permission to be messy, and have some happy accidents along the way.
+> [!NOTE]
+> Veils live in their own dedicated group, but within that you can stack and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.
 
 ### Voids
 
-Speaking of happy accidents, let's talk about ***entropy***. Entropy is an age-old tool, used even by traditional artists like Bob Ross, who when painting a mountain, would use the natural entropy of the canvas to create rocky textures in the snow.
+Voids are a special type of layer that specializes in pulling inspiration from outside sources. 
 
-Voids are the natural compliment to Veils. Like Veils, they are a special type of layer that adds entropy to your art. However, Voids live inside the layer stack, and can be placed over or underneath any of your other layers.
+You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
-"Noise", the de-facto Void, can generate infinite combinations of entropy that look like clouds, water, lightning, and everything in between. It's a great tool when you're stuck, or just want to brainstorm.
-
-Voids have another use, which is that they can be a window to somewhere else. For example, you can use the `screenshare` void to open a portal to another app on your computer (a 3D software, movie, or video game), which will appear as its own layer, updating in real time. This is great for hybrid workflows, and situations where you want to try out different lighting or camera angles, without having to render and paste it over and over.
-
-Voids are also a natural integration point other art programs like Blender, which will have a native Void in the future 🧡
+Voids are less restricted than veils and can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point other art programs like Blender, which may have dedicated voids in the future 🧡
 
 ### Node-Based Brush Engine
 
 ![brush-engine-screenshot](https://github.com/user-attachments/assets/28baa4dc-9cf1-4d9f-b1e3-4ccbe5943171)
 
-Darkly features a unified node-based brush system. Every brush type -- clone, liquify, watercolor, etc. -- all live in a single engine. This enables infinite customizability, mixing and matching of brush features, and making custom brushes on-the-fly.
+Darkly features a unified node-based brush system. Every brush type -- clone, liquify, watercolor, etc. -- all live in a single engine. This enables infinite customizability, mixing and matching of brush features, and on-the-fly creation of custom brushes.
 
 ## Feature Roadmap
 
