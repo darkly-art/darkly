@@ -5,7 +5,7 @@
 //! ## What this terminal does
 //!
 //! Each call to `evaluate_gpu` (one per dab placement) only **queues** a
-//! `DabComputeRecord` on the context. No render passes are opened. At the
+//! `PaintDabRecord` on the context. No render passes are opened. At the
 //! end of the rendering phase, the runner's `flush_compute` hook fires;
 //! this terminal's `flush_compute` opens **one** compute pass that
 //! processes every queued dab serially inside one workgroup, writing into
@@ -25,7 +25,7 @@
 use std::any::Any;
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
-use crate::brush::gpu_context::{BrushGpuContext, DabComputeRecord};
+use crate::brush::gpu_context::{BrushGpuContext, PaintDabRecord};
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipeline::{
@@ -72,7 +72,7 @@ pub struct PaintComputePipeline {
     uniform_ring: DynamicUniformRing,
     uniform_bind_group: wgpu::BindGroup,
     /// group(1) — dab storage buffer. Pre-allocated to
-    /// `MAX_DABS_PER_DISPATCH * sizeof(DabComputeRecord)` bytes. Contents
+    /// `MAX_DABS_PER_DISPATCH * sizeof(PaintDabRecord)` bytes. Contents
     /// uploaded per-dispatch via `queue.write_buffer`.
     dabs_buffer: wgpu::Buffer,
     dabs_bind_group: wgpu::BindGroup,
@@ -185,7 +185,7 @@ impl PaintComputePipeline {
         );
 
         let dabs_buffer_size =
-            (MAX_DABS_PER_DISPATCH as u64) * (std::mem::size_of::<DabComputeRecord>() as u64);
+            (MAX_DABS_PER_DISPATCH as u64) * (std::mem::size_of::<PaintDabRecord>() as u64);
         let dabs_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("paint-compute-dabs-buffer"),
             size: dabs_buffer_size,
@@ -357,7 +357,7 @@ pub fn register() -> BrushNodeRegistration {
         node: NodeRegistration {
             type_id: "paint_compute",
             category: "output",
-            display_name: "Ink Pen (Compute)",
+            display_name: "Paint (Compute)",
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
@@ -498,7 +498,7 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
             None => [local_y0, local_y1],
         });
 
-        gpu.pending_dabs.push(DabComputeRecord {
+        gpu.queue_compute_dab(&PaintDabRecord {
             pos: position,
             radius,
             softness,
@@ -537,8 +537,7 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         });
         // 3) Reset any stale dab queue from the previous context (this
         //    is a brand-new context, so this is just defensive).
-        gpu.pending_dabs.clear();
-        gpu.pending_dabs_row_range = None;
+        gpu.clear_compute_dabs();
     }
 
     /// Phase-end batch dispatch. Called by `BrushGraphRunner::flush_compute`
@@ -547,16 +546,21 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
     /// the queue exceeds the buffer capacity) compute dispatch(es) and
     /// syncs the result back to the scratch texture.
     fn flush_compute(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        if gpu.pending_dabs.is_empty() {
+        if gpu.pending_compute_dab_count == 0 {
             return;
         }
         let t_dispatch = web_time::Instant::now();
 
-        let total_dabs = gpu.pending_dabs.len() as u32;
         let row_range = gpu.pending_dabs_row_range.unwrap_or([0, 0]);
         let union_y0 = row_range[0];
         let union_y1 = row_range[1];
         let union_h = union_y1.saturating_sub(union_y0);
+
+        // Drain the queue up front so the rest of this function can take
+        // overlapping field borrows on `gpu` (scratch, encoder, queue)
+        // without colliding with a still-live `&mut gpu` from this method
+        // call.
+        let (dab_bytes, total_dabs) = gpu.take_compute_dabs();
 
         let pipeline_ref = gpu.pipelines.get::<PaintComputePipeline>("paint_compute");
         // Scratch buffer bind group: rebuilt per dispatch because the
@@ -566,10 +570,8 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
             .as_deref()
             .expect("paint_compute::flush_compute requires Scratch");
         let Some(scratch_buf) = scratch.compute_buffer() else {
-            // No compute buffer yet (no begin_stroke ran?) — drop the
-            // queue rather than dispatching against an absent target.
-            gpu.pending_dabs.clear();
-            gpu.pending_dabs_row_range = None;
+            // No compute buffer yet (no begin_stroke ran?) — the queue is
+            // already drained above; just bail without dispatching.
             return;
         };
         let aligned_width = scratch.compute_aligned_width();
@@ -595,7 +597,7 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         // Dispatch in batches of MAX_DABS_PER_DISPATCH if the phase
         // queued more dabs than the dabs_buffer holds. In practice one
         // phase queues ~30 dabs, so the loop runs once.
-        let dabs = std::mem::take(&mut gpu.pending_dabs);
+        let dabs: &[PaintDabRecord] = bytemuck::cast_slice(&dab_bytes);
         let union_origin = [0u32, union_y0];
         let union_size = [write_w, union_h];
         let blend_mode = gpu.blend_mode;
@@ -666,8 +668,8 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         gpu.perf
             .record_compute_dispatch(t_dispatch.elapsed().as_micros() as u64);
 
-        gpu.pending_dabs_row_range = None;
-        // `dabs` is dropped here (we already `mem::take`'d it into a local).
+        // `dab_bytes` is dropped here — `take_compute_dabs` already
+        // cleared `pending_dabs_row_range` on the context.
     }
 
     /// Composite the accumulated scratch onto the pre-stroke layer

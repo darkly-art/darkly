@@ -25,6 +25,7 @@ pub mod split_vec2;
 pub mod stamp;
 pub mod texture_overlay;
 pub mod watercolor;
+pub mod watercolor_compute;
 
 use crate::brush::BrushNodeRegistration;
 
@@ -54,5 +55,6 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         stamp::register(),
         texture_overlay::register(),
         watercolor::register(),
+        watercolor_compute::register(),
     ]
 }

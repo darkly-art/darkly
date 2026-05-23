@@ -384,7 +384,13 @@ impl StrokeEngine {
 
         // Update dab size from dab source node output (procedural, stamp,
         // or warp terminals like liquify that report an effective radius).
-        for node_type in &["procedural", "stamp", "liquify", "paint_compute"] {
+        for node_type in &[
+            "procedural",
+            "stamp",
+            "liquify",
+            "paint_compute",
+            "watercolor_compute",
+        ] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
                 if let Some(val) = self.runner.read_slot(slot) {
                     let size = val.as_vec2();

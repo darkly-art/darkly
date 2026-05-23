@@ -135,7 +135,7 @@ pub struct BrushPerfCounters {
     /// all events of the stroke.
     pub compute_buffer_sync_us: u64,
     /// Total dabs that flowed through the compute path (queued in
-    /// `pending_dabs`, processed by the compute shader).
+    /// `pending_compute_dab_bytes`, processed by the compute shader).
     pub compute_dabs_total: u32,
     /// Number of compute dispatches issued during this stroke (one per
     /// pen event for the paint-compute brush).
@@ -260,15 +260,20 @@ impl BrushPerfCounters {
     }
 }
 
-/// One queued dab waiting for the next paint-compute commit dispatch.
+/// One queued dab waiting for the next `paint_compute` commit dispatch.
 ///
 /// Layout MUST match the `Dab` struct in `shaders/brush/paint_compute.wgsl`
 /// — the WGSL binding reads this verbatim as a storage buffer element.
 /// Trailing pad keeps the struct 16-byte aligned (vec4 alignment) so the
 /// shader's `array<Dab>` indexing lines up.
+///
+/// Queued via `BrushGpuContext::queue_compute_dab` into the shared
+/// byte-buffer `pending_compute_dab_bytes`. Other compute terminals push
+/// their own record types into the same buffer — the brush graph has at
+/// most one compute terminal at a time, so the bytes are unambiguous.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct DabComputeRecord {
+pub struct PaintDabRecord {
     /// Pen tip in **canvas pixels** (subtracted from layer offset in shader).
     pub pos: [f32; 2],
     /// Disc radius in canvas pixels (dab covers `pos ± radius`).
@@ -360,14 +365,25 @@ pub struct BrushGpuContext<'a> {
     /// stroke-level `StrokePerfStats`.
     pub perf: BrushPerfCounters,
 
-    /// Dabs queued by the `paint_compute` terminal during a single pen
-    /// event. Drained by that terminal's `commit` hook (one compute
-    /// dispatch processes the whole queue). Empty for brushes that don't
-    /// use the compute path.
-    pub pending_dabs: Vec<DabComputeRecord>,
-    /// Layer-local row range covered by `pending_dabs`. The compute commit
-    /// uses this to bound the `copy_buffer_to_texture` sync that follows
-    /// the dispatch. `None` when the queue is empty.
+    /// Dabs queued by whichever compute terminal is active in the graph
+    /// during a single pen event. Drained by that terminal's
+    /// `flush_compute` hook (one compute dispatch processes the whole
+    /// queue). The bytes are written by `bytemuck::bytes_of` on each
+    /// terminal's own record struct — the WGSL binding reinterprets them
+    /// as that terminal's `Dab` type. A brush graph has at most one
+    /// compute terminal at a time, so the bytes are unambiguous.
+    ///
+    /// Empty for brushes that don't use a compute terminal.
+    pub pending_compute_dab_bytes: Vec<u8>,
+    /// Number of dab records currently in `pending_compute_dab_bytes`.
+    /// Each terminal's record size is constant per terminal, so
+    /// `bytes.len() == count * sizeof(Record)`; the count is tracked
+    /// explicitly so flush code doesn't need to know the record size.
+    pub pending_compute_dab_count: u32,
+    /// Layer-local row range covered by the queued compute dabs. The
+    /// terminal's `flush_compute` uses this to bound the
+    /// `copy_buffer_to_texture` sync that follows the dispatch. `None`
+    /// when the queue is empty.
     pub pending_dabs_row_range: Option<[u32; 2]>,
 }
 
@@ -419,6 +435,38 @@ impl<'a> BrushGpuContext<'a> {
             self.perf.flush_submit_us = self.perf.flush_submit_us.saturating_add(us);
             self.perf.submits = self.perf.submits.saturating_add(1);
         }
+    }
+
+    /// Queue a compute-terminal dab record into the shared byte buffer.
+    /// The terminal that owns `flush_compute` reinterprets the bytes as
+    /// its own record type — see [`PaintDabRecord`] for the
+    /// `paint_compute` layout. The active brush has exactly one compute
+    /// terminal in its graph, so the bytes are unambiguous at flush time.
+    pub fn queue_compute_dab<T: bytemuck::Pod>(&mut self, record: &T) {
+        self.pending_compute_dab_bytes
+            .extend_from_slice(bytemuck::bytes_of(record));
+        self.pending_compute_dab_count = self.pending_compute_dab_count.saturating_add(1);
+    }
+
+    /// Drain the compute-dab queue. Returns the raw bytes (caller
+    /// reinterprets via `bytemuck::cast_slice`) and the dab count. Also
+    /// clears `pending_dabs_row_range`. Called from a terminal's
+    /// `flush_compute` hook once the dispatch is encoded.
+    pub fn take_compute_dabs(&mut self) -> (Vec<u8>, u32) {
+        let bytes = std::mem::take(&mut self.pending_compute_dab_bytes);
+        let count = std::mem::take(&mut self.pending_compute_dab_count);
+        self.pending_dabs_row_range = None;
+        (bytes, count)
+    }
+
+    /// Discard the compute-dab queue without dispatching. Used at stroke
+    /// begin / rewind to drop any state from a prior context, and by
+    /// `flush_compute` when its early-out path runs (empty queue, no
+    /// scratch, etc.) so a follow-up dispatch doesn't see stale state.
+    pub fn clear_compute_dabs(&mut self) {
+        self.pending_compute_dab_bytes.clear();
+        self.pending_compute_dab_count = 0;
+        self.pending_dabs_row_range = None;
     }
 
     /// Union a write-pass footprint into `dab_write_canvas_bbox`. Called by
