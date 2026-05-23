@@ -143,20 +143,23 @@ fn cs_main(
                     continue;
                 }
 
-                // Premultiplied source-over against the current scratch
-                // pixel. dab.color is premultiplied; coverage scales both
-                // rgb and a uniformly.
+                // `dab.color` is premultiplied with flow already folded in;
+                // `coverage` scales both rgb and alpha uniformly so the
+                // foreground contribution stays premultiplied. The scratch
+                // buffer is **straight-alpha** rgba8 — so compositing must
+                // use the shared `source_over` / `destination_out` helpers
+                // that emit straight-alpha output. Inlining `src + dst*(1-a)`
+                // here writes premul into a straight-alpha target and
+                // darkens the result. See compositing-lessons-learned.md §4.
                 let src = dab.color * coverage;
                 let idx = py * u.aligned_width + px;
                 let dst = unpack4x8unorm(scratch[idx]);
 
                 var blended: vec4<f32>;
                 if (u.blend_mode == 1u) {
-                    // Destination-out (erase): keep dst.rgb, attenuate alpha.
-                    blended = vec4<f32>(dst.rgb * (1.0 - src.a), dst.a * (1.0 - src.a));
+                    blended = destination_out(src.a, dst);
                 } else {
-                    // Source-over (paint).
-                    blended = src + dst * (1.0 - src.a);
+                    blended = source_over(src.rgb, src.a, dst);
                 }
                 scratch[idx] = pack4x8unorm(blended);
             }

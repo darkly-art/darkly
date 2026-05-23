@@ -122,7 +122,12 @@ impl InkPenComputePipeline {
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("ink-pen-compute"),
                 source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../../../../../shaders/brush/ink_pen_compute.wgsl").into(),
+                    concat!(
+                        include_str!("../../../../../shaders/source_over.wgsl"),
+                        "\n",
+                        include_str!("../../../../../shaders/brush/ink_pen_compute.wgsl"),
+                    )
+                    .into(),
                 ),
             });
 

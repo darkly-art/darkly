@@ -9,7 +9,7 @@
 /// stepping produces catastrophic dab counts for small brushes (one dab
 /// per fractional pixel of stroke), so the engine refuses to advance by
 /// less than this regardless of `SpacingConfig`.
-pub const ABSOLUTE_MIN_SPACING_PX: f32 = 2.0;
+pub const ABSOLUTE_MIN_SPACING_PX: f32 = 1.0;
 
 /// How far apart dabs are placed along the stroke path.
 #[derive(Clone, Copy, Debug)]
