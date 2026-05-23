@@ -302,7 +302,7 @@ impl StrokeEngine {
                 .finalize_render_state(i, self.capture_render_state());
         }
 
-        // Phase-end flush for compute-path terminals (ink_pen_compute):
+        // Phase-end flush for compute-path terminals (paint_compute):
         // dispatch the batched dab queue before this phase's submit_final.
         // Fragment-path terminals no-op here.
         self.runner.flush_compute(gpu);
@@ -384,7 +384,7 @@ impl StrokeEngine {
 
         // Update dab size from dab source node output (procedural, stamp,
         // or warp terminals like liquify that report an effective radius).
-        for node_type in &["procedural", "stamp", "liquify", "ink_pen_compute"] {
+        for node_type in &["procedural", "stamp", "liquify", "paint_compute"] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
                 if let Some(val) = self.runner.read_slot(slot) {
                     let size = val.as_vec2();

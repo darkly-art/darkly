@@ -1,4 +1,4 @@
-//! Regression test for the alpha-storage bug in `ink_pen_compute.wgsl`.
+//! Regression test for the alpha-storage bug in `paint_compute.wgsl`.
 //!
 //! Pre-fix, the shader stored a Porter-Duff *premultiplied* source-over
 //! result (`src + dst * (1 - src.a)`) into the **straight-alpha** scratch
@@ -40,7 +40,7 @@ fn test_engine(w: u32, h: u32) -> DarklyEngine {
 /// "RGB ≈ 255" would pass even against the broken code. Removing
 /// stabilization caps the dab count so the buggy `(a, a, a, a)` math
 /// stays visible.
-fn ink_pen_compute_no_stabilize() -> Graph<BrushWireType> {
+fn paint_compute_no_stabilize() -> Graph<BrushWireType> {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::new();
 
@@ -55,8 +55,8 @@ fn ink_pen_compute_no_stabilize() -> Graph<BrushWireType> {
         vec![],
     );
     let terminal = graph.add_node(
-        "ink_pen_compute",
-        registry.get("ink_pen_compute").unwrap().ports.clone(),
+        "paint_compute",
+        registry.get("paint_compute").unwrap().ports.clone(),
         vec![],
     );
 
@@ -85,12 +85,12 @@ fn ink_pen_compute_no_stabilize() -> Graph<BrushWireType> {
 }
 
 #[test]
-fn ink_pen_compute_half_flow_paints_white_not_grey() {
+fn paint_compute_half_flow_paints_white_not_grey() {
     let (w, h) = (128u32, 128u32);
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    let graph = ink_pen_compute_no_stabilize();
+    let graph = paint_compute_no_stabilize();
     let json = serde_json::to_string(&graph).expect("graph serializes");
     engine
         .set_brush_graph(&json)

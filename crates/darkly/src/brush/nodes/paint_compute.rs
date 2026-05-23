@@ -1,5 +1,6 @@
-//! Ink Pen compute terminal — POC fold of `circle + stamp + color_output`
-//! into a single compute dispatch per render-phase.
+//! Paint compute terminal — folds `circle + stamp + color_output` into a
+//! single compute dispatch per render-phase. Drives every Basic brush
+//! (Round, Airbrush, Ink Pen).
 //!
 //! ## What this terminal does
 //!
@@ -20,14 +21,6 @@
 //! ~30ms/event in stabilization phase to per-dab render-pass overhead.
 //! Compute eliminates that overhead by folding every dab's GPU work into
 //! one pass with one barrier at each end, regardless of dab count.
-//!
-//! ## Scope
-//!
-//! Wired into the Ink Pen brush only (see `builtin_brushes::ink_pen`).
-//! Other brushes continue to use the existing `stamp + color_output`
-//! chain. If perf measurement shows the compute path wins, watercolor is
-//! the next conversion candidate (it needs the same R/W scratch access
-//! and is also slow).
 
 use std::any::Any;
 
@@ -57,10 +50,10 @@ const MAX_DABS_PER_DISPATCH: u32 = 1024;
 // ── Pipeline ────────────────────────────────────────────────────────────
 
 /// Per-dispatch uniforms. Layout MUST match `Uniforms` in
-/// `shaders/brush/ink_pen_compute.wgsl`.
+/// `shaders/brush/paint_compute.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct InkPenComputeUniforms {
+struct PaintComputeUniforms {
     union_origin: [u32; 2],
     union_size: [u32; 2],
     layer_offset: [i32; 2],
@@ -72,7 +65,7 @@ struct InkPenComputeUniforms {
     _pad: u32,
 }
 
-pub struct InkPenComputePipeline {
+pub struct PaintComputePipeline {
     pipeline: wgpu::ComputePipeline,
     /// group(0) — uniform ring slot (dynamic offset), built from the
     /// shared `uniform_bgl`. One slot per dispatch.
@@ -89,7 +82,7 @@ pub struct InkPenComputePipeline {
     scratch_bgl: wgpu::BindGroupLayout,
     /// Cached preview pipeline support: small fragment shader that draws
     /// a soft disc procedurally so the hover cursor still shows a brush
-    /// shape when ink-pen-compute replaces the stamp + color_output chain.
+    /// shape when paint-compute replaces the stamp + color_output chain.
     /// Reuses the existing `blit` infra to stretch the result into
     /// `preview_mask_view`.
     ///
@@ -114,18 +107,18 @@ struct PreviewUniforms {
     _pad: [f32; 3],
 }
 
-impl InkPenComputePipeline {
+impl PaintComputePipeline {
     fn build(ctx: &BuildContext) -> Self {
         // ── Compute pipeline ─────────────────────────────────────────
         let shader = ctx
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("ink-pen-compute"),
+                label: Some("paint-compute"),
                 source: wgpu::ShaderSource::Wgsl(
                     concat!(
                         include_str!("../../../../../shaders/source_over.wgsl"),
                         "\n",
-                        include_str!("../../../../../shaders/brush/ink_pen_compute.wgsl"),
+                        include_str!("../../../../../shaders/brush/paint_compute.wgsl"),
                     )
                     .into(),
                 ),
@@ -135,7 +128,7 @@ impl InkPenComputePipeline {
         let dabs_bgl = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("ink-pen-compute-dabs-bgl"),
+                label: Some("paint-compute-dabs-bgl"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -154,7 +147,7 @@ impl InkPenComputePipeline {
         let scratch_bgl = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("ink-pen-compute-scratch-bgl"),
+                label: Some("paint-compute-scratch-bgl"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
@@ -170,7 +163,7 @@ impl InkPenComputePipeline {
         let pipeline_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("ink-pen-compute-layout"),
+                label: Some("paint-compute-layout"),
                 bind_group_layouts: &[ctx.uniform_bgl, &dabs_bgl, ctx.selection_bgl, &scratch_bgl],
                 immediate_size: 0,
             });
@@ -178,7 +171,7 @@ impl InkPenComputePipeline {
         let pipeline = ctx
             .device
             .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("ink-pen-compute"),
+                label: Some("paint-compute"),
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some("cs_main"),
@@ -186,21 +179,21 @@ impl InkPenComputePipeline {
                 cache: None,
             });
 
-        let (uniform_ring, uniform_bind_group) = ctx.make_uniform_ring::<InkPenComputeUniforms>(
-            "ink-pen-compute-uniforms",
-            "ink-pen-compute-uniform-bg",
+        let (uniform_ring, uniform_bind_group) = ctx.make_uniform_ring::<PaintComputeUniforms>(
+            "paint-compute-uniforms",
+            "paint-compute-uniform-bg",
         );
 
         let dabs_buffer_size =
             (MAX_DABS_PER_DISPATCH as u64) * (std::mem::size_of::<DabComputeRecord>() as u64);
         let dabs_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ink-pen-compute-dabs-buffer"),
+            label: Some("paint-compute-dabs-buffer"),
             size: dabs_buffer_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let dabs_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ink-pen-compute-dabs-bg"),
+            label: Some("paint-compute-dabs-bg"),
             layout: &dabs_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -210,7 +203,7 @@ impl InkPenComputePipeline {
 
         // ── Preview pipeline ─────────────────────────────────────────
         // Tiny fragment shader that draws a soft disc into a preview
-        // mask. Keeps the hover cursor visible while ink-pen-compute
+        // mask. Keeps the hover cursor visible while paint-compute
         // replaces stamp + color_output's preview path.
         let preview_shader_src = r#"
 struct PreviewU { softness: f32, _pad0: f32, _pad1: f32, _pad2: f32 };
@@ -244,7 +237,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
         let preview_shader = ctx
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("ink-pen-compute-preview"),
+                label: Some("paint-compute-preview"),
                 source: wgpu::ShaderSource::Wgsl(preview_shader_src.into()),
             });
         // Private BGL for the preview pipeline: single fixed-offset
@@ -253,7 +246,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
         let preview_uniform_bgl =
             ctx.device
                 .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("ink-pen-compute-preview-uniform-bgl"),
+                    label: Some("paint-compute-preview-uniform-bgl"),
                     entries: &[wgpu::BindGroupLayoutEntry {
                         binding: 0,
                         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -268,14 +261,14 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
         let preview_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("ink-pen-compute-preview-layout"),
+                label: Some("paint-compute-preview-layout"),
                 bind_group_layouts: &[&preview_uniform_bgl],
                 immediate_size: 0,
             });
         let preview_pipeline = ctx
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("ink-pen-compute-preview"),
+                label: Some("paint-compute-preview"),
                 layout: Some(&preview_layout),
                 vertex: wgpu::VertexState {
                     module: &preview_shader,
@@ -303,13 +296,13 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
                 cache: None,
             });
         let preview_uniform_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ink-pen-compute-preview-uniform"),
+            label: Some("paint-compute-preview-uniform"),
             size: std::mem::size_of::<PreviewUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let preview_uniform_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ink-pen-compute-preview-uniform-bg"),
+            label: Some("paint-compute-preview-uniform-bg"),
             layout: &preview_uniform_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -335,7 +328,7 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
     }
 }
 
-impl BrushPipelineEntry for InkPenComputePipeline {
+impl BrushPipelineEntry for PaintComputePipeline {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -349,10 +342,10 @@ impl BrushPipelineEntry for InkPenComputePipeline {
     }
 }
 
-fn ink_pen_compute_pipeline_reg() -> BrushPipelineRegistration {
+fn paint_compute_pipeline_reg() -> BrushPipelineRegistration {
     BrushPipelineRegistration {
-        id: "ink_pen_compute",
-        build: |ctx| Box::new(InkPenComputePipeline::build(ctx)),
+        id: "paint_compute",
+        build: |ctx| Box::new(PaintComputePipeline::build(ctx)),
     }
 }
 
@@ -360,9 +353,9 @@ fn ink_pen_compute_pipeline_reg() -> BrushPipelineRegistration {
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
-        pipelines: vec![ink_pen_compute_pipeline_reg()],
+        pipelines: vec![paint_compute_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "ink_pen_compute",
+            type_id: "paint_compute",
             category: "output",
             display_name: "Ink Pen (Compute)",
             ports: vec![
@@ -390,6 +383,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_label("Softness")
                     .with_unit(UnitType::Percent)
                     .with_icon("fa-solid fa-feather")
+                    .exposed()
                     .with_description("Edge softness (0% = hard, 100% = feathered)"),
                 PortDef::input("flow", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
@@ -418,9 +412,9 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
-pub struct InkPenComputeEvaluator;
+pub struct PaintComputeEvaluator;
 
-impl InkPenComputeEvaluator {
+impl PaintComputeEvaluator {
     /// Compute the effective canvas-pixel radius for this dab from the
     /// `size_input * size` product. Mirrors `stamp::compute_dab_dims` for
     /// the round-tip case (no aspect ratio, no tip texture).
@@ -433,7 +427,7 @@ impl InkPenComputeEvaluator {
     }
 }
 
-impl BrushNodeEvaluator for InkPenComputeEvaluator {
+impl BrushNodeEvaluator for PaintComputeEvaluator {
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }
@@ -522,14 +516,14 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
         let scratch = gpu
             .scratch
             .as_deref_mut()
-            .expect("ink_pen_compute::begin_stroke requires Scratch");
+            .expect("paint_compute::begin_stroke requires Scratch");
         // 1) Allocate the compute buffer if needed (lazy on first use,
         //    re-allocated by `Scratch::grow_write` after a layer grow).
         scratch.ensure_compute_buffer(gpu.device);
         // 2) Clear both sides to transparent.
         scratch.clear_compute_buffer(&mut gpu.encoder);
         let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ink_pen_compute-begin_stroke"),
+            label: Some("paint_compute-begin_stroke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: scratch.write_view(),
                 resolve_target: None,
@@ -564,15 +558,13 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
         let union_y1 = row_range[1];
         let union_h = union_y1.saturating_sub(union_y0);
 
-        let pipeline_ref = gpu
-            .pipelines
-            .get::<InkPenComputePipeline>("ink_pen_compute");
+        let pipeline_ref = gpu.pipelines.get::<PaintComputePipeline>("paint_compute");
         // Scratch buffer bind group: rebuilt per dispatch because the
         // underlying buffer can be reallocated after a layer grow.
         let scratch = gpu
             .scratch
             .as_deref()
-            .expect("ink_pen_compute::flush_compute requires Scratch");
+            .expect("paint_compute::flush_compute requires Scratch");
         let Some(scratch_buf) = scratch.compute_buffer() else {
             // No compute buffer yet (no begin_stroke ran?) — drop the
             // queue rather than dispatching against an absent target.
@@ -583,7 +575,7 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
         let aligned_width = scratch.compute_aligned_width();
         let (write_w, write_h) = scratch.write_dimensions();
         let scratch_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ink-pen-compute-scratch-bg"),
+            label: Some("paint-compute-scratch-bg"),
             layout: pipeline_ref.scratch_bgl(),
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -596,7 +588,7 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
         let paint_target = gpu
             .paint_target
             .as_ref()
-            .expect("ink_pen_compute::flush_compute requires paint_target");
+            .expect("paint_compute::flush_compute requires paint_target");
         let canvas_ext = paint_target.canvas_extent();
         let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
 
@@ -627,7 +619,7 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
                 .write_buffer(&pipeline_ref.dabs_buffer, 0, bytemuck::cast_slice(chunk));
 
             // Write uniforms to the next ring slot.
-            let uniforms = InkPenComputeUniforms {
+            let uniforms = PaintComputeUniforms {
                 union_origin,
                 union_size,
                 layer_offset,
@@ -648,7 +640,7 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
                 let mut pass = gpu
                     .encoder
                     .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("ink-pen-compute-dispatch"),
+                        label: Some("paint-compute-dispatch"),
                         timestamp_writes: None,
                     });
                 pass.set_pipeline(&pipeline_ref.pipeline);
@@ -726,9 +718,7 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
         let radius = Self::effective_radius(ctx);
         let softness = ctx.input_f32("softness").clamp(0.0, 1.0);
 
-        let pipeline_ref = gpu
-            .pipelines
-            .get::<InkPenComputePipeline>("ink_pen_compute");
+        let pipeline_ref = gpu.pipelines.get::<PaintComputePipeline>("paint_compute");
         let uniforms = PreviewUniforms {
             softness,
             _pad: [0.0; 3],
@@ -742,7 +732,7 @@ impl BrushNodeEvaluator for InkPenComputeEvaluator {
         );
 
         let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("ink-pen-compute-preview"),
+            label: Some("paint-compute-preview"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target_view,
                 resolve_target: None,

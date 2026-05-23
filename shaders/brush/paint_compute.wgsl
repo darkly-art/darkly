@@ -1,5 +1,5 @@
-// Ink Pen compute terminal — POC fold of circle + stamp + color_output into
-// one dispatch per pen event.
+// Paint compute terminal — fold of circle + stamp + color_output into one
+// dispatch per pen event. Drives every Basic brush (Round, Airbrush, Ink Pen).
 //
 // Layout
 //   group(0) binding(0)  uniforms (dynamic-offset)

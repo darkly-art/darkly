@@ -96,7 +96,7 @@ pub struct Scratch {
     /// integer-aligned).
     write_sampler: wgpu::Sampler,
 
-    // --- Compute-path scratch (lazy; allocated on first ink_pen_compute use) ---
+    // --- Compute-path scratch (lazy; allocated on first paint_compute use) ---
     //
     // The compute brush terminal cannot read+write the scratch texture in
     // one dispatch (same WebGPU rule that drove the read mirror above), so
@@ -363,7 +363,7 @@ impl Scratch {
         // rebase, the same origin value points at different pixels — drop it.
         self.read_origin_cache = None;
         // Compute buffer (if allocated) was sized to the old write dims;
-        // drop it so the next ink_pen_compute use lazy-reallocates against
+        // drop it so the next paint_compute use lazy-reallocates against
         // the new layer extent. Its contents were authoritative for the
         // in-flight stroke, but a stroke-mid layer grow is a rewind boundary
         // anyway — begin_stroke will re-fire and zero the buffer.
@@ -402,7 +402,7 @@ impl Scratch {
     }
 
     /// The compute-path storage buffer. `None` until `ensure_compute_buffer`
-    /// is called (typically by the ink-pen-compute terminal's `begin_stroke`).
+    /// is called (typically by the paint-compute terminal's `begin_stroke`).
     pub fn compute_buffer(&self) -> Option<&wgpu::Buffer> {
         self.compute_buffer.as_ref()
     }

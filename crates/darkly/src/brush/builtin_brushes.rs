@@ -1,9 +1,8 @@
 //! Built-in brushes shipped with the application.
 //!
 //! Each brush is a programmatically constructed node graph wrapped in a
-//! `Brush`.  Image-based brushes embed their tip PNGs via
-//! `include_bytes!`.  All brushes are inserted into the `BrushLibrary`
-//! at engine startup.
+//! `Brush`. All brushes are inserted into the `BrushLibrary` at engine
+//! startup.
 
 use crate::brush::bundle::{Brush, BrushMetadata};
 use crate::brush::wire::BrushWireType;
@@ -14,8 +13,9 @@ use crate::nodegraph::{Graph, NodeId, PortRef};
 /// Return all built-in brushes.
 pub fn all() -> Vec<Brush> {
     vec![
-        ink_pen(),
+        round(),
         airbrush(),
+        ink_pen(),
         smooth_watercolor(),
         rough_watercolor(),
         smudge_brush(),
@@ -24,151 +24,21 @@ pub fn all() -> Vec<Brush> {
 }
 
 // ---------------------------------------------------------------------------
-// BrushBuilder — eliminates boilerplate across brushes
-// ---------------------------------------------------------------------------
-
-struct BrushBuilder {
-    graph: Graph<BrushWireType>,
-    registry: BrushNodeRegistry,
-    pen: NodeId,
-    paint_color: NodeId,
-    stamp: NodeId,
-    #[allow(dead_code)] // Used in new() for wiring, not read afterwards.
-    color_output: NodeId,
-}
-
-impl BrushBuilder {
-    /// Create a new builder with the standard nodes and output wiring.
-    ///
-    /// Pre-wires: stamp.dab → color_output.dab, stamp.dab_size →
-    /// color_output.dab_size, pen_input.position → color_output.position,
-    /// and stamp.preview → color_output.brush_preview (the hover preview
-    /// path — terminal's `render_preview` hook blits this into the
-    /// overlay). Brushes that want jitter call `wire_scatter` to splice
-    /// a `scatter` node onto the position wire.
-    fn new() -> Self {
-        let registry = BrushNodeRegistry::new();
-        let mut graph = Graph::new();
-
-        let pen = graph.add_node(
-            "pen_input",
-            registry.get("pen_input").unwrap().ports.clone(),
-            vec![],
-        );
-        let paint_color = graph.add_node(
-            "paint_color",
-            registry.get("paint_color").unwrap().ports.clone(),
-            vec![],
-        );
-        let stamp = graph.add_node(
-            "stamp",
-            registry.get("stamp").unwrap().ports.clone(),
-            vec![],
-        );
-        let color_output = graph.add_node(
-            "color_output",
-            registry.get("color_output").unwrap().ports.clone(),
-            vec![],
-        );
-
-        // Standard output wiring (every brush needs this).
-        let wires = [
-            (stamp, "dab", color_output, "dab"),
-            (stamp, "dab_size", color_output, "dab_size"),
-            (pen, "position", color_output, "position"),
-            // Hover preview: the terminal's `render_preview` hook blits the
-            // stamp's transform-baked, deposition-stripped preview texture.
-            (stamp, "preview", color_output, "brush_preview"),
-        ];
-        for (from_node, from_port, to_node, to_port) in wires {
-            graph
-                .connect(
-                    PortRef {
-                        node: from_node,
-                        port: from_port.into(),
-                    },
-                    PortRef {
-                        node: to_node,
-                        port: to_port.into(),
-                    },
-                )
-                .unwrap();
-        }
-
-        BrushBuilder {
-            graph,
-            registry,
-            pen,
-            paint_color,
-            stamp,
-            color_output,
-        }
-    }
-
-    /// Add a circle node with the given softness, wired to stamp.tip.
-    fn add_circle(&mut self, softness: f32) {
-        let circle = self.graph.add_node(
-            "circle",
-            self.registry.get("circle").unwrap().ports.clone(),
-            vec![],
-        );
-        self.graph
-            .set_port_default(circle, "softness", softness)
-            .unwrap();
-        self.wire(circle, "texture", self.stamp, "tip");
-    }
-
-    /// Set a port's instance-level default value.
-    ///
-    /// Replaces the old `add_constant` + `wire` pattern for feeding a fixed
-    /// number into a port: the port simply carries the value, no extra node
-    /// or wire needed.  The port's node-def metadata (label, unit, icon,
-    /// range) is reused; only the default changes.
-    fn set_port(&mut self, node: NodeId, port: &str, value: f32) {
-        self.graph.set_port_default(node, port, value).unwrap();
-    }
-
-    /// Generic wire helper.
-    fn wire(&mut self, from: NodeId, from_port: &str, to: NodeId, to_port: &str) {
-        self.graph
-            .connect(
-                PortRef {
-                    node: from,
-                    port: from_port.into(),
-                },
-                PortRef {
-                    node: to,
-                    port: to_port.into(),
-                },
-            )
-            .unwrap();
-    }
-
-    /// Build the brush (no resources).
-    fn build(self, name: &str, category: &str) -> Brush {
-        let mut metadata = BrushMetadata::from_graph(name, self.graph);
-        metadata.category = category.to_string();
-        Brush::without_resources(metadata)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Brush definitions
 // ---------------------------------------------------------------------------
 
-/// Ink Pen — POC compute-shader terminal.
+/// Build a Basic brush around the `paint_compute` terminal.
 ///
-/// Bypasses `BrushBuilder::new()`'s hardcoded `stamp + color_output` pair
-/// and wires straight into `ink_pen_compute`, a single GPU node that
-/// folds circle + stamp + compositing into one compute dispatch per
-/// rendering phase. Everything else (`pen_input`, `paint_color`, the
-/// pressure curve, the stabilizer) is identical to the prior ink-pen
-/// definition — only the GPU terminal has changed.
-///
-/// See `crates/darkly/src/brush/nodes/ink_pen_compute.rs` for the
-/// terminal and `darkly-stabilization-perf-investigation.md` for the
-/// motivation behind the swap.
-fn ink_pen() -> Brush {
+/// All three Basic brushes (Round, Airbrush, Ink Pen) share the same
+/// `pen_input + paint_color + paint_compute` skeleton — they only differ
+/// in which pen sensor drives which terminal port, the optional pressure
+/// curve, and a few port defaults. The closure runs after the bare graph
+/// is built and is responsible for wiring the brush-specific signal flow
+/// and setting any per-port defaults.
+fn paint_compute_brush(
+    name: &str,
+    configure: impl FnOnce(&mut Graph<BrushWireType>, NodeId, NodeId, NodeId),
+) -> Brush {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::new();
 
@@ -182,31 +52,21 @@ fn ink_pen() -> Brush {
         registry.get("paint_color").unwrap().ports.clone(),
         vec![],
     );
-    let curve = graph.add_node(
-        "curve",
-        registry.get("curve").unwrap().ports.clone(),
-        vec![ParamValue::Curve(vec![
-            [0.0, 0.0],
-            [0.25, 0.5],
-            [0.5, 0.71],
-            [0.75, 0.87],
-            [1.0, 1.0],
-        ])],
-    );
     let terminal = graph.add_node(
-        "ink_pen_compute",
-        registry.get("ink_pen_compute").unwrap().ports.clone(),
+        "paint_compute",
+        registry.get("paint_compute").unwrap().ports.clone(),
         vec![],
     );
 
-    let wires = [
-        (pen, "pressure", curve, "input"),
-        (curve, "output", terminal, "size_input"),
-        (pen, "pressure", terminal, "flow"),
+    // Position and color wiring is identical across all three Basic
+    // brushes — wire it here so the closure only deals with the pen-
+    // sensor → terminal-port mapping that distinguishes one brush from
+    // the next.
+    let shared_wires = [
         (pen, "position", terminal, "position"),
         (paint_color, "color", terminal, "color"),
     ];
-    for (from_node, from_port, to_node, to_port) in wires {
+    for (from_node, from_port, to_node, to_port) in shared_wires {
         graph
             .connect(
                 PortRef {
@@ -221,22 +81,136 @@ fn ink_pen() -> Brush {
             .unwrap();
     }
 
-    // Stabilization exposed to the toolbar (matches prior ink-pen behavior).
-    graph.set_port_default(pen, "stabilize", 0.6).unwrap();
-    graph.set_port_exposed(pen, "stabilize", true).unwrap();
+    configure(&mut graph, pen, paint_color, terminal);
 
-    let mut metadata = BrushMetadata::from_graph("Ink Pen", graph);
-    metadata.category = "inking".to_string();
+    let mut metadata = BrushMetadata::from_graph(name, graph);
+    metadata.category = "basic".to_string();
     Brush::without_resources(metadata)
 }
 
+/// Wire `pen.pressure → curve → terminal.size_input` with the given
+/// initial curve points. Helper for Basic brushes that want a
+/// user-tunable pressure-to-size transfer function.
+fn wire_pressure_size_curve(
+    graph: &mut Graph<BrushWireType>,
+    pen: NodeId,
+    terminal: NodeId,
+    points: Vec<[f32; 2]>,
+) {
+    let registry = BrushNodeRegistry::new();
+    let curve = graph.add_node(
+        "curve",
+        registry.get("curve").unwrap().ports.clone(),
+        vec![ParamValue::Curve(points)],
+    );
+    for (from_node, from_port, to_node, to_port) in [
+        (pen, "pressure", curve, "input"),
+        (curve, "output", terminal, "size_input"),
+    ] {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+}
+
+/// Round — soft procedural disc, pressure-driven size + flow, identity
+/// pressure curve so the brush feels predictable out of the box.
+fn round() -> Brush {
+    paint_compute_brush("Round", |graph, pen, _paint_color, terminal| {
+        // Identity curve so pressure maps 1:1 to size by default — the user
+        // can still scrub the curve node's spline in the brush editor for a
+        // bespoke response.
+        wire_pressure_size_curve(graph, pen, terminal, vec![[0.0, 0.0], [1.0, 1.0]]);
+        graph
+            .connect(
+                PortRef {
+                    node: pen,
+                    port: "pressure".into(),
+                },
+                PortRef {
+                    node: terminal,
+                    port: "flow".into(),
+                },
+            )
+            .unwrap();
+        // Mid-softness — a sensible default between the harder Ink Pen and
+        // the fully-feathered Airbrush.
+        graph.set_port_default(terminal, "softness", 0.5).unwrap();
+    })
+}
+
+/// Airbrush — fully-soft disc, pressure-driven *opacity* (not flow).
+/// Build-up-with-pressure semantic: every dab deposits at full flow into
+/// the scratch, but the per-event opacity cap (driven by current pressure)
+/// attenuates the commit, so light strokes layer up gradually as the user
+/// passes back over the same area. Pressure does NOT affect dab radius —
+/// `size_input` is left at its 100% port default (no pen wire) so the
+/// airbrush footprint is a fixed soft disc the user controls only via the
+/// Size slider.
 fn airbrush() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(1.0);
-    b.set_port(b.stamp, "size_input", 0.15);
-    b.wire(b.pen, "pressure", b.stamp, "flow");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-    b.build("Airbrush", "basic")
+    paint_compute_brush("Airbrush", |graph, pen, _paint_color, terminal| {
+        graph
+            .connect(
+                PortRef {
+                    node: pen,
+                    port: "pressure".into(),
+                },
+                PortRef {
+                    node: terminal,
+                    port: "opacity".into(),
+                },
+            )
+            .unwrap();
+        graph.set_port_default(terminal, "softness", 1.0).unwrap();
+    })
+}
+
+/// Ink Pen — harder edge than Round, pressure-driven size through a
+/// front-loaded curve (high size at low pressure) and pressure-driven
+/// flow. Stabilizer exposed for clean line work.
+fn ink_pen() -> Brush {
+    paint_compute_brush("Ink Pen", |graph, pen, _paint_color, terminal| {
+        // Curve front-loads the size response — small pressure already
+        // produces a recognisable mark, matching the feel of a fine-tipped
+        // ink pen.
+        wire_pressure_size_curve(
+            graph,
+            pen,
+            terminal,
+            vec![
+                [0.0, 0.0],
+                [0.25, 0.5],
+                [0.5, 0.71],
+                [0.75, 0.87],
+                [1.0, 1.0],
+            ],
+        );
+        graph
+            .connect(
+                PortRef {
+                    node: pen,
+                    port: "pressure".into(),
+                },
+                PortRef {
+                    node: terminal,
+                    port: "flow".into(),
+                },
+            )
+            .unwrap();
+        // Stabilization exposed to the toolbar (matches prior ink-pen
+        // behavior) — line work benefits more than soft-edged brushes.
+        graph.set_port_default(pen, "stabilize", 0.6).unwrap();
+        graph.set_port_exposed(pen, "stabilize", true).unwrap();
+    })
 }
 
 /// Build a watercolor brush around a procedural `circle` tip.

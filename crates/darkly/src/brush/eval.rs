@@ -290,7 +290,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// `render_from_stabilized_tail`) just before that phase's
     /// `submit_final`.
     ///
-    /// Compute-path terminals (ink_pen_compute) use this to dispatch their
+    /// Compute-path terminals (paint_compute) use this to dispatch their
     /// batched work; fragment-path terminals that already record per-dab
     /// passes inline keep the default no-op.
     fn flush_compute(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}

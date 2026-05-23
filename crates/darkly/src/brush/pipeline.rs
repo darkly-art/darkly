@@ -262,7 +262,7 @@ impl BrushPipelines {
 
         // ── Bind group layouts ──────────────────────────────────────
         // Shared layouts are visible in vertex + fragment AND compute so the
-        // compute-path terminals (ink_pen_compute) can reuse them for their
+        // compute-path terminals (paint_compute) can reuse them for their
         // uniform and selection bindings without rebuilding parallel BGLs.
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("brush-uniform-bgl"),

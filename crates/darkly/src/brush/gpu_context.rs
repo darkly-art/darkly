@@ -124,8 +124,8 @@ pub struct BrushPerfCounters {
     /// reads + `as_vec2`/match coercion).
     pub ctx_input_us: u64,
 
-    // --- Compute-path (ink_pen_compute terminal) ---
-    /// Per-event host time spent in `ink_pen_compute::commit` —
+    // --- Compute-path (paint_compute terminal) ---
+    /// Per-event host time spent in `paint_compute::commit` —
     /// encoder bookkeeping + compute pass open/dispatch/close. Summed
     /// across all events of the stroke.
     pub compute_dispatch_us: u64,
@@ -138,7 +138,7 @@ pub struct BrushPerfCounters {
     /// `pending_dabs`, processed by the compute shader).
     pub compute_dabs_total: u32,
     /// Number of compute dispatches issued during this stroke (one per
-    /// pen event for the ink-pen-compute brush).
+    /// pen event for the paint-compute brush).
     pub compute_dispatches_total: u32,
 }
 
@@ -237,9 +237,9 @@ impl BrushPerfCounters {
         self.ctx_input_us = self.ctx_input_us.saturating_add(us);
     }
 
-    // --- Compute-path counters (ink_pen_compute terminal) ---
+    // --- Compute-path counters (paint_compute terminal) ---
 
-    /// Record host wall-clock time spent in `ink_pen_compute::commit` —
+    /// Record host wall-clock time spent in `paint_compute::commit` —
     /// encoder building, uniform write, compute pass open/dispatch/close,
     /// buffer→texture sync. One reading per pen event.
     pub fn record_compute_dispatch(&mut self, us: u64) {
@@ -260,9 +260,9 @@ impl BrushPerfCounters {
     }
 }
 
-/// One queued dab waiting for the next ink-pen-compute commit dispatch.
+/// One queued dab waiting for the next paint-compute commit dispatch.
 ///
-/// Layout MUST match the `Dab` struct in `shaders/brush/ink_pen_compute.wgsl`
+/// Layout MUST match the `Dab` struct in `shaders/brush/paint_compute.wgsl`
 /// — the WGSL binding reads this verbatim as a storage buffer element.
 /// Trailing pad keeps the struct 16-byte aligned (vec4 alignment) so the
 /// shader's `array<Dab>` indexing lines up.
@@ -360,7 +360,7 @@ pub struct BrushGpuContext<'a> {
     /// stroke-level `StrokePerfStats`.
     pub perf: BrushPerfCounters,
 
-    /// Dabs queued by the `ink_pen_compute` terminal during a single pen
+    /// Dabs queued by the `paint_compute` terminal during a single pen
     /// event. Drained by that terminal's `commit` hook (one compute
     /// dispatch processes the whole queue). Empty for brushes that don't
     /// use the compute path.
