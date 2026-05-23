@@ -306,7 +306,7 @@ impl DarklyEngine {
             perf: BrushPerfCounters::default(),
             pending_compute_dab_bytes: Vec::new(),
             pending_compute_dab_count: 0,
-            pending_dabs_row_range: None,
+            pending_dabs_bbox: None,
         };
 
         self.brush_pipelines.reset_uniform_rings();

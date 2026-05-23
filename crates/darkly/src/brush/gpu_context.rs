@@ -260,6 +260,15 @@ impl BrushPerfCounters {
     }
 }
 
+/// Hard cap on dab records that can be queued in a single phase across
+/// any compute terminal. Sized so the per-phase dab buffer is trivial
+/// VRAM cost (16384 records × ~32-byte typical record ≈ 512 KB) and
+/// well above what any realistic stroke phase will reach (~30 dabs
+/// even at high stabilisation). `queue_compute_dab` debug-asserts on
+/// this — overflow panics loudly in test/dev so the constant gets
+/// bumped rather than silently truncating in release.
+pub const MAX_DABS_PER_PHASE: u32 = 16384;
+
 /// One queued dab waiting for the next `paint_compute` commit dispatch.
 ///
 /// Layout MUST match the `Dab` struct in `shaders/brush/paint_compute.wgsl`
@@ -380,11 +389,14 @@ pub struct BrushGpuContext<'a> {
     /// `bytes.len() == count * sizeof(Record)`; the count is tracked
     /// explicitly so flush code doesn't need to know the record size.
     pub pending_compute_dab_count: u32,
-    /// Layer-local row range covered by the queued compute dabs. The
-    /// terminal's `flush_compute` uses this to bound the
-    /// `copy_buffer_to_texture` sync that follows the dispatch. `None`
-    /// when the queue is empty.
-    pub pending_dabs_row_range: Option<[u32; 2]>,
+    /// Layer-local bounding box covered by the queued compute dabs, as
+    /// `[x0, y0, x1, y1]`. The terminal's `flush_compute` reads this to
+    /// size the dispatch grid (`paint_compute`) and to bound the
+    /// `copy_buffer_to_texture` sync that wraps the dispatch (sync uses
+    /// just the y range — partial-x sub-rects need a 256-byte aligned
+    /// row offset that a dab-aligned bbox can't guarantee). `None` when
+    /// the queue is empty.
+    pub pending_dabs_bbox: Option<[u32; 4]>,
 }
 
 impl<'a> BrushGpuContext<'a> {
@@ -446,16 +458,21 @@ impl<'a> BrushGpuContext<'a> {
         self.pending_compute_dab_bytes
             .extend_from_slice(bytemuck::bytes_of(record));
         self.pending_compute_dab_count = self.pending_compute_dab_count.saturating_add(1);
+        debug_assert!(
+            self.pending_compute_dab_count <= MAX_DABS_PER_PHASE,
+            "dab queue overflowed MAX_DABS_PER_PHASE ({MAX_DABS_PER_PHASE}); \
+             bump the constant or flush more often",
+        );
     }
 
     /// Drain the compute-dab queue. Returns the raw bytes (caller
     /// reinterprets via `bytemuck::cast_slice`) and the dab count. Also
-    /// clears `pending_dabs_row_range`. Called from a terminal's
+    /// clears `pending_dabs_bbox`. Called from a terminal's
     /// `flush_compute` hook once the dispatch is encoded.
     pub fn take_compute_dabs(&mut self) -> (Vec<u8>, u32) {
         let bytes = std::mem::take(&mut self.pending_compute_dab_bytes);
         let count = std::mem::take(&mut self.pending_compute_dab_count);
-        self.pending_dabs_row_range = None;
+        self.pending_dabs_bbox = None;
         (bytes, count)
     }
 
@@ -466,7 +483,7 @@ impl<'a> BrushGpuContext<'a> {
     pub fn clear_compute_dabs(&mut self) {
         self.pending_compute_dab_bytes.clear();
         self.pending_compute_dab_count = 0;
-        self.pending_dabs_row_range = None;
+        self.pending_dabs_bbox = None;
     }
 
     /// Union a write-pass footprint into `dab_write_canvas_bbox`. Called by

@@ -765,12 +765,15 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
 
         // The pickup pass also READS pixels from the same footprint, so
         // the row range must cover both read and write — which here are
-        // identical (the dab's bbox).
+        // identical (the dab's bbox). Watercolor dispatches across full
+        // rows, so the x range is pinned to the layer width (the bbox's
+        // tight-x mode is paint_compute's optimisation, not ours).
         let local_y0 = (bbox_y - canvas_ext.y0()).max(0) as u32;
         let local_y1 = local_y0 + bbox_h;
-        gpu.pending_dabs_row_range = Some(match gpu.pending_dabs_row_range {
-            Some([y0, y1]) => [y0.min(local_y0), y1.max(local_y1)],
-            None => [local_y0, local_y1],
+        let layer_w = canvas_ext.width;
+        gpu.pending_dabs_bbox = Some(match gpu.pending_dabs_bbox {
+            Some([_x0, y0, x1, y1]) => [0, y0.min(local_y0), x1.max(layer_w), y1.max(local_y1)],
+            None => [0, local_y0, layer_w, local_y1],
         });
 
         let (cx_offset, cy_offset) = integrate_centroid(&shape);
@@ -851,9 +854,9 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
         }
         let t_dispatch = web_time::Instant::now();
 
-        let row_range = gpu.pending_dabs_row_range.unwrap_or([0, 0]);
-        let union_y0 = row_range[0];
-        let union_y1 = row_range[1];
+        let bbox = gpu.pending_dabs_bbox.unwrap_or([0, 0, 0, 0]);
+        let union_y0 = bbox[1];
+        let union_y1 = bbox[3];
         let union_h = union_y1.saturating_sub(union_y0);
 
         let (dab_bytes, total_dabs) = gpu.take_compute_dabs();

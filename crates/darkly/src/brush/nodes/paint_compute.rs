@@ -25,7 +25,7 @@
 use std::any::Any;
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
-use crate::brush::gpu_context::{BrushGpuContext, PaintDabRecord};
+use crate::brush::gpu_context::{BrushGpuContext, PaintDabRecord, MAX_DABS_PER_PHASE};
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipeline::{
@@ -40,12 +40,6 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 /// `DAB_REFERENCE_SIZE`; kept local to avoid pulling `dab_pool` into a
 /// terminal that doesn't otherwise use it.
 const SIZE_REFERENCE_PX: f32 = crate::brush::dab_pool::DAB_REFERENCE_SIZE as f32;
-
-/// Max dabs queued in one compute dispatch. A long high-stabilization
-/// pen event places ~30 dabs in a stamp-based brush; round up generously.
-/// If a phase exceeds this it falls back to splitting across multiple
-/// dispatches (handled in `flush_compute`).
-const MAX_DABS_PER_DISPATCH: u32 = 1024;
 
 // ── Pipeline ────────────────────────────────────────────────────────────
 
@@ -72,7 +66,7 @@ pub struct PaintComputePipeline {
     uniform_ring: DynamicUniformRing,
     uniform_bind_group: wgpu::BindGroup,
     /// group(1) — dab storage buffer. Pre-allocated to
-    /// `MAX_DABS_PER_DISPATCH * sizeof(PaintDabRecord)` bytes. Contents
+    /// `MAX_DABS_PER_PHASE * sizeof(PaintDabRecord)` bytes. Contents
     /// uploaded per-dispatch via `queue.write_buffer`.
     dabs_buffer: wgpu::Buffer,
     dabs_bind_group: wgpu::BindGroup,
@@ -185,7 +179,7 @@ impl PaintComputePipeline {
         );
 
         let dabs_buffer_size =
-            (MAX_DABS_PER_DISPATCH as u64) * (std::mem::size_of::<PaintDabRecord>() as u64);
+            (MAX_DABS_PER_PHASE as u64) * (std::mem::size_of::<PaintDabRecord>() as u64);
         let dabs_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("paint-compute-dabs-buffer"),
             size: dabs_buffer_size,
@@ -489,13 +483,25 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
             bbox_x, bbox_y, bbox_w, bbox_h,
         ));
 
-        // Layer-local row range — feeds the per-phase buffer→texture
-        // sync at flush time.
+        // Layer-local bbox — sizes the dispatch grid and the per-phase
+        // buffer↔texture sync at flush time. Tracking x as well as y so
+        // a thin stroke doesn't waste a full layer-width row of threads
+        // per scanline (a 4K-wide layer would otherwise dispatch 512
+        // workgroups per row for a 10px stroke).
+        let layer_w = canvas_ext.width;
+        let layer_h = canvas_ext.height;
+        let local_x0 = (bbox_x - canvas_ext.x0()).max(0) as u32;
         let local_y0 = (bbox_y - canvas_ext.y0()).max(0) as u32;
-        let local_y1 = local_y0 + bbox_h;
-        gpu.pending_dabs_row_range = Some(match gpu.pending_dabs_row_range {
-            Some([y0, y1]) => [y0.min(local_y0), y1.max(local_y1)],
-            None => [local_y0, local_y1],
+        let local_x1 = (local_x0 + bbox_w).min(layer_w);
+        let local_y1 = (local_y0 + bbox_h).min(layer_h);
+        gpu.pending_dabs_bbox = Some(match gpu.pending_dabs_bbox {
+            Some([x0, y0, x1, y1]) => [
+                x0.min(local_x0),
+                y0.min(local_y0),
+                x1.max(local_x1),
+                y1.max(local_y1),
+            ],
+            None => [local_x0, local_y0, local_x1, local_y1],
         });
 
         gpu.queue_compute_dab(&PaintDabRecord {
@@ -542,25 +548,34 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
 
     /// Phase-end batch dispatch. Called by `BrushGraphRunner::flush_compute`
     /// at the end of every `render_from_stabilized_*` phase, just before
-    /// `submit_final`. Drains `gpu.pending_dabs` into one (or more, if
-    /// the queue exceeds the buffer capacity) compute dispatch(es) and
-    /// syncs the result back to the scratch texture.
+    /// `submit_final`. Drains the per-phase dab queue into **one** compute
+    /// dispatch sized to the queued union bbox and syncs the result back
+    /// to the scratch texture.
+    ///
+    /// One dispatch per phase — `MAX_DABS_PER_PHASE` is sized so no
+    /// realistic stroke phase exceeds it (and `queue_compute_dab`
+    /// debug-asserts on overflow). One buffer upload, one uniform write,
+    /// one compute pass.
     fn flush_compute(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
         if gpu.pending_compute_dab_count == 0 {
             return;
         }
         let t_dispatch = web_time::Instant::now();
 
-        let row_range = gpu.pending_dabs_row_range.unwrap_or([0, 0]);
-        let union_y0 = row_range[0];
-        let union_y1 = row_range[1];
-        let union_h = union_y1.saturating_sub(union_y0);
+        let bbox = gpu.pending_dabs_bbox.unwrap_or([0, 0, 0, 0]);
+        let [ux0, uy0, ux1, uy1] = bbox;
+        let union_w = ux1.saturating_sub(ux0);
+        let union_h = uy1.saturating_sub(uy0);
 
         // Drain the queue up front so the rest of this function can take
         // overlapping field borrows on `gpu` (scratch, encoder, queue)
         // without colliding with a still-live `&mut gpu` from this method
         // call.
         let (dab_bytes, total_dabs) = gpu.take_compute_dabs();
+
+        if union_w == 0 || union_h == 0 {
+            return;
+        }
 
         let pipeline_ref = gpu.pipelines.get::<PaintComputePipeline>("paint_compute");
         // Scratch buffer bind group: rebuilt per dispatch because the
@@ -575,7 +590,7 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
             return;
         };
         let aligned_width = scratch.compute_aligned_width();
-        let (write_w, write_h) = scratch.write_dimensions();
+        let (_write_w, write_h) = scratch.write_dimensions();
         let scratch_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("paint-compute-scratch-bg"),
             layout: pipeline_ref.scratch_bgl(),
@@ -594,12 +609,7 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         let canvas_ext = paint_target.canvas_extent();
         let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
 
-        // Dispatch in batches of MAX_DABS_PER_DISPATCH if the phase
-        // queued more dabs than the dabs_buffer holds. In practice one
-        // phase queues ~30 dabs, so the loop runs once.
         let dabs: &[PaintDabRecord] = bytemuck::cast_slice(&dab_bytes);
-        let union_origin = [0u32, union_y0];
-        let union_size = [write_w, union_h];
         let blend_mode = gpu.blend_mode;
 
         // Ingest the texture's current state into the compute buffer
@@ -611,55 +621,57 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         // — silently wiping any checkpoint-restored content under the
         // new dabs' rows. This is the symmetric counterpart to the
         // post-dispatch `sync_compute_buffer_to_texture` below.
-        if union_h > 0 && write_h > 0 {
-            scratch.sync_texture_to_compute_buffer(&mut gpu.encoder, union_y0, union_h);
+        //
+        // Sync uses the y range only — `sync_texture_to_compute_buffer`
+        // works whole rows because partial-x sub-rects need a 256-byte
+        // aligned row offset that a dab-aligned bbox can't guarantee.
+        // Pixels outside the dispatch x range stay untouched by the
+        // shader, so the wider sync is harmless.
+        if write_h > 0 {
+            scratch.sync_texture_to_compute_buffer(&mut gpu.encoder, uy0, union_h);
         }
 
-        for chunk in dabs.chunks(MAX_DABS_PER_DISPATCH as usize) {
-            // Upload this batch's dab data.
-            gpu.queue
-                .write_buffer(&pipeline_ref.dabs_buffer, 0, bytemuck::cast_slice(chunk));
+        gpu.queue
+            .write_buffer(&pipeline_ref.dabs_buffer, 0, bytemuck::cast_slice(dabs));
 
-            // Write uniforms to the next ring slot.
-            let uniforms = PaintComputeUniforms {
-                union_origin,
-                union_size,
-                layer_offset,
-                layer_size: [canvas_ext.width, canvas_ext.height],
-                canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                aligned_width,
-                dab_count: chunk.len() as u32,
-                blend_mode,
-                _pad: 0,
-            };
-            let uniform_offset = pipeline_ref
-                .uniform_ring
-                .write(gpu.queue, bytemuck::bytes_of(&uniforms));
+        let uniforms = PaintComputeUniforms {
+            union_origin: [ux0, uy0],
+            union_size: [union_w, union_h],
+            layer_offset,
+            layer_size: [canvas_ext.width, canvas_ext.height],
+            canvas_size: [gpu.canvas_width, gpu.canvas_height],
+            aligned_width,
+            dab_count: dabs.len() as u32,
+            blend_mode,
+            _pad: 0,
+        };
+        let uniform_offset = pipeline_ref
+            .uniform_ring
+            .write(gpu.queue, bytemuck::bytes_of(&uniforms));
 
-            // One compute pass per chunk. Single workgroup, serial
-            // dab loop inside the shader.
-            {
-                let mut pass = gpu
-                    .encoder
-                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("paint-compute-dispatch"),
-                        timestamp_writes: None,
-                    });
-                pass.set_pipeline(&pipeline_ref.pipeline);
-                pass.set_bind_group(0, &pipeline_ref.uniform_bind_group, &[uniform_offset]);
-                pass.set_bind_group(1, &pipeline_ref.dabs_bind_group, &[]);
-                pass.set_bind_group(2, gpu.selection_bind_group, &[]);
-                pass.set_bind_group(3, &scratch_bind_group, &[]);
-                pass.dispatch_workgroups(1, 1, 1);
-            }
+        let tiles_x = union_w.div_ceil(8);
+        let tiles_y = union_h.div_ceil(8);
+        {
+            let mut pass = gpu
+                .encoder
+                .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("paint-compute-dispatch"),
+                    timestamp_writes: None,
+                });
+            pass.set_pipeline(&pipeline_ref.pipeline);
+            pass.set_bind_group(0, &pipeline_ref.uniform_bind_group, &[uniform_offset]);
+            pass.set_bind_group(1, &pipeline_ref.dabs_bind_group, &[]);
+            pass.set_bind_group(2, gpu.selection_bind_group, &[]);
+            pass.set_bind_group(3, &scratch_bind_group, &[]);
+            pass.dispatch_workgroups(tiles_x, tiles_y, 1);
         }
 
         // Sync the compute buffer's union rows back to the scratch
         // texture so the upcoming `commit` (or any other fragment-path
         // consumer this phase) sees current state.
         let t_sync = web_time::Instant::now();
-        if union_h > 0 && write_h > 0 {
-            scratch.sync_compute_buffer_to_texture(&mut gpu.encoder, union_y0, union_h);
+        if write_h > 0 {
+            scratch.sync_compute_buffer_to_texture(&mut gpu.encoder, uy0, union_h);
         }
         gpu.perf
             .record_compute_buffer_sync(t_sync.elapsed().as_micros() as u64);
@@ -667,9 +679,6 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         gpu.perf.record_compute_dispatch_batch(total_dabs);
         gpu.perf
             .record_compute_dispatch(t_dispatch.elapsed().as_micros() as u64);
-
-        // `dab_bytes` is dropped here — `take_compute_dabs` already
-        // cleared `pending_dabs_row_range` on the context.
     }
 
     /// Composite the accumulated scratch onto the pre-stroke layer

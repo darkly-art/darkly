@@ -11,17 +11,16 @@
 //                        `y * aligned_width + x` in layer-local coords.
 //
 // Threading model
-//   ONE workgroup per dispatch. 8×8 = 64 threads inside it. The workgroup
-//   loops over the event's queued dabs serially; for each dab it
-//   tile-walks the dab's layer-local bbox in 8×8 chunks. Within a tile,
-//   each thread owns one pixel and does its own load/blend/store. The
-//   `storageBarrier()` between dabs guarantees dab N+1 reads what dab N
-//   wrote — that's the whole point of going compute instead of fragment.
+//   One dispatch per phase. The dispatch grid covers the event's union
+//   bbox in 8×8 tiles; each thread owns ONE pixel and walks the queued
+//   dab list serially in array order, compositing in registers. One
+//   scratch load at entry, one store at exit (suppressed when no dab
+//   contributed). Cross-dab ordering is intrinsic to the per-thread loop
+//   — no barriers, no inter-dispatch synchronization.
 
 struct Uniforms {
-    // Layer-clipped event union bbox in **layer-local** pixels. The
-    // shader's outer loop walks this region; pixels outside the layer
-    // never get touched.
+    // Event union bbox in **layer-local** pixels. Defines the dispatch
+    // grid; out-of-bbox lanes early-out.
     union_origin: vec2<u32>,  // (ox, oy)
     union_size:   vec2<u32>,  // (w, h)
     // Layer's canvas-space offset and pixel size. Per-dab `pos` in the
@@ -60,114 +59,86 @@ struct Dab {
 
 @compute @workgroup_size(8, 8, 1)
 fn cs_main(
+    @builtin(workgroup_id)        wid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>,
 ) {
-    // Tile-walk the event's union bbox: each iteration covers an 8×8 tile
-    // and each thread handles one pixel inside it. Recomputing the bbox /
-    // dab / blend per iteration is fine — the inner work is trivial.
-    let tiles_x = (u.union_size.x + 7u) / 8u;
-    let tiles_y = (u.union_size.y + 7u) / 8u;
+    // Pixel in layer-local coords.
+    let px = u.union_origin.x + wid.x * 8u + lid.x;
+    let py = u.union_origin.y + wid.y * 8u + lid.y;
+    // Out-of-bbox lanes (dispatch grid is ceil(union_size / 8), so the
+    // trailing 8×8 tile straddling the bbox edge runs idle lanes).
+    if (px >= u.union_origin.x + u.union_size.x ||
+        py >= u.union_origin.y + u.union_size.y) {
+        return;
+    }
+    // Defensive layer clip — the union is pre-clipped CPU-side, but
+    // off-by-one would silently splat outside the scratch buffer.
+    if (px >= u.layer_size.x || py >= u.layer_size.y) {
+        return;
+    }
+
+    // Canvas-space sample point + selection UV are constant for this
+    // thread's pixel — compute once, not per dab.
+    let sample_canvas = vec2<f32>(
+        f32(px) + 0.5 + f32(u.layer_offset.x),
+        f32(py) + 0.5 + f32(u.layer_offset.y),
+    );
+    let sel_uv = sample_canvas / vec2<f32>(f32(u.canvas_size.x), f32(u.canvas_size.y));
+    let sel = textureSampleLevel(sel_tex, sel_smp, sel_uv, 0.0).r;
+    // Fully outside selection — no dab can paint here, so skip the
+    // scratch read and the dab walk entirely.
+    if (sel <= 0.0) {
+        return;
+    }
+
+    let idx = py * u.aligned_width + px;
+    var color = unpack4x8unorm(scratch[idx]);
+    var touched = false;
 
     for (var d: u32 = 0u; d < u.dab_count; d = d + 1u) {
         let dab = dabs[d];
-
-        // Dab bbox in layer-local pixels, clipped to the layer extent.
-        // Off-canvas portion is dropped silently — no scratch row outside
-        // [0, layer_size) is writable anyway.
-        let canvas_min = dab.pos - vec2<f32>(dab.radius);
-        let canvas_max = dab.pos + vec2<f32>(dab.radius);
-        let local_min = canvas_min - vec2<f32>(f32(u.layer_offset.x), f32(u.layer_offset.y));
-        let local_max = canvas_max - vec2<f32>(f32(u.layer_offset.x), f32(u.layer_offset.y));
-        let dab_x0 = max(i32(floor(local_min.x)), i32(u.union_origin.x));
-        let dab_y0 = max(i32(floor(local_min.y)), i32(u.union_origin.y));
-        let dab_x1 = min(i32(ceil(local_max.x)),  i32(u.union_origin.x + u.union_size.x));
-        let dab_y1 = min(i32(ceil(local_max.y)),  i32(u.union_origin.y + u.union_size.y));
-        if (dab_x1 <= dab_x0 || dab_y1 <= dab_y0) {
-            // Off-layer dab — nothing to do, but still hit the barrier so
-            // all threads in the workgroup stay lock-step.
-            storageBarrier();
+        // Cheap canvas-space AABB reject — avoids the sqrt for non-overlapping
+        // dabs. Coherent within a workgroup so the branch is well-predicted.
+        let dx = sample_canvas.x - dab.pos.x;
+        let dy = sample_canvas.y - dab.pos.y;
+        if (abs(dx) >= dab.radius || abs(dy) >= dab.radius) {
             continue;
         }
-        let dab_w = u32(dab_x1 - dab_x0);
-        let dab_h = u32(dab_y1 - dab_y0);
-        let dab_tiles_x = (dab_w + 7u) / 8u;
-        let dab_tiles_y = (dab_h + 7u) / 8u;
-
-        // Soft-circle parameters: solid out to `r_solid`, linear falloff
-        // from `r_solid` to `radius`. Matches circle.wgsl's softness math
-        // closely enough that the ink-pen output reads the same to the eye.
+        // Disc coverage: 1 inside r_solid, falls to 0 at radius.
+        let dist = sqrt(dx * dx + dy * dy);
+        if (dist >= dab.radius) {
+            continue;
+        }
         let r_solid = dab.radius * (1.0 - dab.softness);
-
-        for (var ty: u32 = 0u; ty < dab_tiles_y; ty = ty + 1u) {
-            for (var tx: u32 = 0u; tx < dab_tiles_x; tx = tx + 1u) {
-                let lx_off = tx * 8u + lid.x;
-                let ly_off = ty * 8u + lid.y;
-                if (lx_off >= dab_w || ly_off >= dab_h) {
-                    continue;
-                }
-                // Layer-local pixel coords.
-                let px = u32(dab_x0) + lx_off;
-                let py = u32(dab_y0) + ly_off;
-
-                // Canvas-space sample point at the pixel center.
-                let sample_canvas = vec2<f32>(
-                    f32(px) + 0.5 + f32(u.layer_offset.x),
-                    f32(py) + 0.5 + f32(u.layer_offset.y),
-                );
-                let delta = sample_canvas - dab.pos;
-                let dist = length(delta);
-
-                // Disc coverage: 1 inside r_solid, falls to 0 at radius.
-                var coverage: f32;
-                if (dist >= dab.radius) {
-                    coverage = 0.0;
-                } else if (dist <= r_solid) {
-                    coverage = 1.0;
-                } else {
-                    let t = (dab.radius - dist) / max(dab.radius - r_solid, 1e-5);
-                    coverage = clamp(t, 0.0, 1.0);
-                }
-                if (coverage <= 0.0) {
-                    continue;
-                }
-
-                // Selection modulates coverage (existing color_output
-                // semantic — selection masks every dab as it lands).
-                let sel_uv = vec2<f32>(
-                    (f32(px) + 0.5 + f32(u.layer_offset.x)) / f32(u.canvas_size.x),
-                    (f32(py) + 0.5 + f32(u.layer_offset.y)) / f32(u.canvas_size.y),
-                );
-                let sel = textureSampleLevel(sel_tex, sel_smp, sel_uv, 0.0).r;
-                coverage = coverage * sel;
-                if (coverage <= 0.0) {
-                    continue;
-                }
-
-                // `dab.color` is premultiplied with flow already folded in;
-                // `coverage` scales both rgb and alpha uniformly so the
-                // foreground contribution stays premultiplied. The scratch
-                // buffer is **straight-alpha** rgba8 — so compositing must
-                // use the shared `source_over` / `destination_out` helpers
-                // that emit straight-alpha output. Inlining `src + dst*(1-a)`
-                // here writes premul into a straight-alpha target and
-                // darkens the result. See compositing-lessons-learned.md §4.
-                let src = dab.color * coverage;
-                let idx = py * u.aligned_width + px;
-                let dst = unpack4x8unorm(scratch[idx]);
-
-                var blended: vec4<f32>;
-                if (u.blend_mode == 1u) {
-                    blended = destination_out(src.a, dst);
-                } else {
-                    blended = source_over(src.rgb, src.a, dst);
-                }
-                scratch[idx] = pack4x8unorm(blended);
-            }
+        var coverage: f32;
+        if (dist <= r_solid) {
+            coverage = 1.0;
+        } else {
+            coverage = clamp(
+                (dab.radius - dist) / max(dab.radius - r_solid, 1e-5),
+                0.0, 1.0,
+            );
+        }
+        coverage = coverage * sel;
+        if (coverage <= 0.0) {
+            continue;
         }
 
-        // Ensure dab d's writes are visible to dab d+1 within this
-        // workgroup. Without this, threads that race ahead to the next
-        // dab could read pre-update values.
-        storageBarrier();
+        // `dab.color` is premultiplied with flow folded in; `coverage`
+        // scales both rgb and alpha uniformly so the foreground stays
+        // premultiplied. Scratch is straight-alpha rgba8 — must use the
+        // shared helpers that emit straight-alpha (see
+        // `compositing-lessons-learned.md` §4).
+        let src = dab.color * coverage;
+        if (u.blend_mode == 1u) {
+            color = destination_out(src.a, color);
+        } else {
+            color = source_over(src.rgb, src.a, color);
+        }
+        touched = true;
+    }
+
+    if (touched) {
+        scratch[idx] = pack4x8unorm(color);
     }
 }
