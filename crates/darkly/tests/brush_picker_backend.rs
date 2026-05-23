@@ -21,7 +21,7 @@ fn brush_thumbnail_first_call_kicks_bake_then_returns_png() {
     let mut engine = fresh_engine();
 
     // First call returns empty bytes — the bake was scheduled, not run.
-    let first = engine.brush_thumbnail("Soft Round");
+    let first = engine.brush_thumbnail("Airbrush");
     assert!(
         first.is_empty(),
         "first call should return empty bytes while the bake is in flight"
@@ -29,7 +29,7 @@ fn brush_thumbnail_first_call_kicks_bake_then_returns_png() {
 
     // Calling again before the readback completes returns empty too —
     // we don't queue a second bake on top of an in-flight one.
-    let second = engine.brush_thumbnail("Soft Round");
+    let second = engine.brush_thumbnail("Airbrush");
     assert!(
         second.is_empty(),
         "second call before flush should still be empty"
@@ -38,7 +38,7 @@ fn brush_thumbnail_first_call_kicks_bake_then_returns_png() {
     // Flush the pending readback and confirm the library entry now
     // carries a PNG-encoded thumbnail.
     engine.test_flush_readbacks();
-    let third = engine.brush_thumbnail("Soft Round");
+    let third = engine.brush_thumbnail("Airbrush");
     assert!(
         !third.is_empty(),
         "after flush the library entry should hold the baked PNG"
@@ -55,9 +55,9 @@ fn theme_change_invalidates_brush_thumbnail() {
     let mut engine = fresh_engine();
 
     // Bake under the dark default theme.
-    let _ = engine.brush_thumbnail("Soft Round");
+    let _ = engine.brush_thumbnail("Airbrush");
     engine.test_flush_readbacks();
-    let dark_png = engine.brush_thumbnail("Soft Round");
+    let dark_png = engine.brush_thumbnail("Airbrush");
     assert!(!dark_png.is_empty(), "dark-theme bake produced bytes");
     assert_eq!(
         &dark_png[..8],
@@ -68,14 +68,14 @@ fn theme_change_invalidates_brush_thumbnail() {
     // drop its baked PNG so the next picker fetch kicks off a re-bake.
     engine.set_preview_theme([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
 
-    let pending = engine.brush_thumbnail("Soft Round");
+    let pending = engine.brush_thumbnail("Airbrush");
     assert!(
         pending.is_empty(),
         "first call after theme swap returns empty while the re-bake is in flight"
     );
 
     engine.test_flush_readbacks();
-    let light_png = engine.brush_thumbnail("Soft Round");
+    let light_png = engine.brush_thumbnail("Airbrush");
     assert!(
         !light_png.is_empty(),
         "post-flush bytes are present under the new theme"
@@ -92,19 +92,19 @@ fn brush_dab_thumbnail_first_call_kicks_bake_then_returns_png() {
 
     // First call schedules a bake and returns empty; second call is a
     // duplicate-suppress no-op until the readback lands.
-    let first = engine.brush_dab_thumbnail("Soft Round");
+    let first = engine.brush_dab_thumbnail("Airbrush");
     assert!(
         first.is_empty(),
         "first call returns empty while the dab bake is in flight"
     );
-    let second = engine.brush_dab_thumbnail("Soft Round");
+    let second = engine.brush_dab_thumbnail("Airbrush");
     assert!(
         second.is_empty(),
         "back-to-back call before flush stays empty (no double-queue)"
     );
 
     engine.test_flush_readbacks();
-    let third = engine.brush_dab_thumbnail("Soft Round");
+    let third = engine.brush_dab_thumbnail("Airbrush");
     assert!(
         !third.is_empty(),
         "after flush the dab cache holds a baked PNG"
@@ -120,20 +120,20 @@ fn brush_dab_thumbnail_first_call_kicks_bake_then_returns_png() {
 fn theme_change_invalidates_dab_thumbnail() {
     let mut engine = fresh_engine();
 
-    let _ = engine.brush_dab_thumbnail("Soft Round");
+    let _ = engine.brush_dab_thumbnail("Airbrush");
     engine.test_flush_readbacks();
-    let dark = engine.brush_dab_thumbnail("Soft Round");
+    let dark = engine.brush_dab_thumbnail("Airbrush");
     assert!(!dark.is_empty(), "dark-theme dab bake produced bytes");
 
     engine.set_preview_theme([0.0, 0.0, 0.0, 1.0], [1.0, 1.0, 1.0, 1.0]);
-    let pending = engine.brush_dab_thumbnail("Soft Round");
+    let pending = engine.brush_dab_thumbnail("Airbrush");
     assert!(
         pending.is_empty(),
         "first call after theme swap returns empty while the re-bake is in flight"
     );
 
     engine.test_flush_readbacks();
-    let light = engine.brush_dab_thumbnail("Soft Round");
+    let light = engine.brush_dab_thumbnail("Airbrush");
     assert!(!light.is_empty(), "rebake produces fresh bytes");
     assert_ne!(
         light, dark,
@@ -174,58 +174,6 @@ fn small_size_brush_dab_thumbnail_is_framed() {
     );
 }
 
-/// Scatter Brush displaces every dab by ±dab_size in x/y via a scatter
-/// node. With a single-sample dab path that was enough to push the
-/// dab off the small render canvas entirely for some seeds. The bake
-/// must produce visible content regardless — render headroom + bbox
-/// crop keeps the dab visible no matter where the scatter lands.
-#[test]
-fn scatter_brush_dab_thumbnail_has_visible_content() {
-    let mut engine = fresh_engine();
-    let _ = engine.brush_dab_thumbnail("Scatter Brush");
-    engine.test_flush_readbacks();
-    let png = engine.brush_dab_thumbnail("Scatter Brush");
-    let ratio = decoded_dab_content_ratio(&png);
-    assert!(
-        ratio > 0.05,
-        "Scatter Brush dab should produce visible content somewhere in the framed thumbnail; got {:.1}%",
-        ratio * 100.0
-    );
-}
-
-/// Regression: image-based brushes (Calligraphy, Textured Ink, Pencil,
-/// Charcoal, Canvas Brush) embed PNG tip resources. The picker's lazy
-/// thumbnail bake fired against the active brush's `resource_handles`,
-/// so any brush *not currently loaded* lacked its tip texture and baked
-/// to the theme bg only — every image-based tile in the picker grid
-/// looked blank until the user clicked it.
-#[test]
-fn image_based_brush_thumbnail_renders_with_resource() {
-    let mut engine = fresh_engine();
-
-    // Calligraphy is not the active brush — the active graph is the
-    // built-in default (a procedural circle stamp). The picker still
-    // has to bake Calligraphy's thumbnail using its own embedded
-    // calligraphy.png tip.
-    let _ = engine.brush_thumbnail("Calligraphy");
-    engine.test_flush_readbacks();
-    let png = engine.brush_thumbnail("Calligraphy");
-    assert!(!png.is_empty(), "Calligraphy bake should produce bytes");
-
-    // Decode the PNG and look for stroke pixels. The default preview
-    // theme bg is ~#141414 (0.08 linear); anything brighter than mid-
-    // grey can only come from the white stroke fg. If the tip texture
-    // wasn't uploaded, the bake produces a uniform bg with no stroke.
-    let img = image::load_from_memory(&png).expect("valid PNG");
-    let rgba = img.to_rgba8();
-    let bright_pixels = rgba.pixels().filter(|p| p.0[0] > 128).count();
-    assert!(
-        bright_pixels > 0,
-        "Calligraphy bake should include stroke pixels — got {bright_pixels} bright pixels, \
-         which means the tip texture wasn't picked up by the renderer"
-    );
-}
-
 #[test]
 fn brush_thumbnail_unknown_name_returns_empty() {
     let mut engine = fresh_engine();
@@ -263,8 +211,8 @@ fn brush_thumbnail_unknown_name_returns_empty() {
 fn active_dab_preview_first_call_empty_then_present_after_flush() {
     let mut engine = fresh_engine();
     engine
-        .brush_load("Soft Round")
-        .expect("Soft Round is a built-in brush");
+        .brush_load("Airbrush")
+        .expect("Airbrush is a built-in brush");
 
     let first = engine.brush_active_dab_preview();
     assert!(
@@ -286,9 +234,9 @@ fn active_dab_preview_first_call_empty_then_present_after_flush() {
 
     // Byte-equality invariant: bake the picker-tile thumbnail and
     // confirm it matches the live preview byte-for-byte.
-    let _ = engine.brush_dab_thumbnail("Soft Round");
+    let _ = engine.brush_dab_thumbnail("Airbrush");
     engine.test_flush_readbacks();
-    let baked = engine.brush_dab_thumbnail("Soft Round");
+    let baked = engine.brush_dab_thumbnail("Airbrush");
     assert!(!baked.is_empty(), "baked thumbnail produced bytes");
     assert_eq!(
         live, baked,
@@ -353,7 +301,7 @@ fn size_scrub_does_not_change_active_dab_pixels() {
     // Also locks in the topology-version contract the brush-bar UI relies
     // on: a scrub must not advance `brush_topology_version`. The frontend
     // uses that counter to decide whether the active preset name still
-    // applies — a false bump would flip "Soft Round" → "Custom" on every
+    // applies — a false bump would flip "Airbrush" → "Custom" on every
     // size drag. Regression for that bug lives here, against the same
     // engine, to avoid creating an extra wgpu device in parallel.
     let mut engine = fresh_engine();
@@ -420,8 +368,8 @@ fn graph_change_triggers_active_dab_rebake() {
     // queues a fresh render on the next call (the previous bytes are
     // returned as fallback to avoid a flash to zeros mid-swap).
     engine
-        .brush_load("Hard Round")
-        .expect("Hard Round is a built-in brush");
+        .brush_load("Ink Pen")
+        .expect("Ink Pen is a built-in brush");
     let _stale_fallback = engine.brush_active_dab_preview();
 
     engine.test_flush_readbacks();
@@ -432,6 +380,6 @@ fn graph_change_triggers_active_dab_rebake() {
     );
     assert_ne!(
         after, before,
-        "swapping Soft Round for Hard Round should produce different dab pixels"
+        "swapping Airbrush for Ink Pen should produce different dab pixels"
     );
 }

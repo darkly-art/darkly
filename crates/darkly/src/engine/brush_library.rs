@@ -126,10 +126,11 @@ impl DarklyEngine {
         let Some(brush) = self.brush_library.get(name).cloned() else {
             return Vec::new();
         };
-        // Image-based brushes (Calligraphy, Textured Ink, Pencil, ...)
-        // need their tip/pattern textures on the GPU before the bake;
-        // without this, picker tiles for inactive image brushes render
-        // bg-only.
+        // Image-based brushes need their tip/pattern textures on the
+        // GPU before the bake; without this, picker tiles for inactive
+        // image brushes render bg-only. (No image-based builtins remain
+        // after the brush-compute port, but the call is still required
+        // for any custom user brushes that bundle resources.)
         self.ensure_brush_resources(&brush);
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;

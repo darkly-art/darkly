@@ -766,10 +766,6 @@ fn lasso_selection_performance_and_correctness() {
     );
 }
 
-// ============================================================================
-// Scatter brush dabs must survive stabilizer-driven checkpoint restore
-// ============================================================================
-
 fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
     engine
         .active_brush_graph()
@@ -779,103 +775,6 @@ fn find_node_id(engine: &DarklyEngine, type_id: &str) -> u64 {
         .unwrap_or_else(|| panic!("no '{type_id}' node in default graph"))
         .id
         .0
-}
-
-/// Regression: `stroke_engine::place_dab` used to derive the save-point
-/// bbox from `info.pos ± dab_radius` — the unscattered polyline point, not
-/// where the dab actually landed. Every graph that offsets the dab (scatter
-/// being the obvious one) dropped paint outside the recorded bbox on
-/// checkpoint restore. With the stabilizer enabled, checkpoints save every
-/// `spacing` dabs and the synthetic tip divergence fires on every pen
-/// event, so the drop happens continuously during live drawing.
-///
-/// Setup: loads the "Scatter Brush" built-in (scatter node on the position
-/// wire, size-proportional via `stamp.dab_size`). Amount_y is forced
-/// high and the scatter node's own random is deterministic (hash of
-/// `stroke_seed + node_id + dab_index`), so replays reproduce the same
-/// pattern. With the bug, pixels outside the unscattered bbox are wiped
-/// on each checkpoint restore; with the fix, they survive.
-#[test]
-fn scatter_brush_survives_checkpoint_restore() {
-    let (w, h) = (256, 256);
-    let mut engine = test_engine(w, h);
-    let layer_id = engine.add_raster_layer(None);
-
-    engine.brush_load("Scatter Brush").expect("brush load");
-
-    // Configure the scatter brush graph to exercise the checkpoint path.
-    let pen_id = find_node_id(&engine, "pen_input");
-    let stamp_id = find_node_id(&engine, "stamp");
-    let scatter_id = find_node_id(&engine, "scatter");
-    // Enable laplacian stabilizer — gives spacing > 1 so restores actually
-    // find a prior checkpoint (with spacing=1, restore_before's strict `<`
-    // test never matches and the bug is hidden behind a full re-render).
-    engine
-        .brush_graph_set_port_default(pen_id, "stabilize", 0.5)
-        .unwrap();
-    // Pin dab size: pressure(=1) → stamp.size_input, size=0.1 → ~51px dab at
-    // DAB_REFERENCE_SIZE=512. amount_y=1.0 offsets up to ±51px per dab.
-    engine
-        .brush_graph_set_port_default(stamp_id, "size", 0.1)
-        .unwrap();
-    engine
-        .brush_graph_set_port_default(scatter_id, "amount_x", 0.0)
-        .unwrap();
-    engine
-        .brush_graph_set_port_default(scatter_id, "amount_y", 1.0)
-        .unwrap();
-
-    // Horizontal stroke at y=128. With scatter, every dab lands centered
-    // near y=174 (=128 + 0.9 * 51), footprint y ≈ [148, 200].
-    let stroke_y = (h / 2) as f32;
-    engine.begin_stroke(layer_id);
-    let samples = 40;
-    for i in 0..samples {
-        let t = i as f32 / (samples - 1) as f32;
-        let x = 32.0 + t * (w as f32 - 64.0);
-        engine.stroke_to(StrokeOp::BrushStroke {
-            x,
-            y: stroke_y,
-            pressure: 1.0,
-            x_tilt: 0.0,
-            y_tilt: 0.0,
-            rotation: 0.0,
-            tangential_pressure: 0.0,
-            time_ms: i as f64 * 16.0,
-            cr: 1.0,
-            cg: 0.0,
-            cb: 0.0,
-            ca: 1.0,
-        });
-    }
-    engine.end_stroke();
-    engine.render(0.0);
-
-    let pixels = engine.test_readback_layer(layer_id);
-
-    // Measure the vertical spread of painted pixels. With scatter on Y,
-    // paint should spread well past the unscattered bbox around y=128
-    // (which would be ~y ∈ [102, 154], total ~52px tall for this dab
-    // size). The bug clamps the spread to that bbox; the fix preserves
-    // the full scattered footprint ~y ∈ [51, 205], total ~150px tall.
-    let mut min_y = u32::MAX;
-    let mut max_y = 0u32;
-    for py in 0..h {
-        for px in 0..w {
-            if alpha_at(&pixels, w, px, py) > 0 {
-                min_y = min_y.min(py);
-                max_y = max_y.max(py);
-            }
-        }
-    }
-    assert!(min_y != u32::MAX, "stroke painted nothing");
-    let spread = max_y - min_y + 1;
-    assert!(
-        spread > 90,
-        "scatter vertical spread is only {spread}px (y ∈ [{min_y}, {max_y}]); \
-         dab footprint should stretch ~150px across y but is clamped to the \
-         unscattered bbox because checkpoint restore wipes outside-bbox pixels"
-    );
 }
 
 // ============================================================================
@@ -3937,8 +3836,9 @@ fn long_stabilized_stroke_no_fallback() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    engine.brush_load("Scatter Brush").expect("brush load");
-
+    // Default brush (circle + stamp + color_output) is enough to exercise
+    // the checkpoint ring's coverage invariant — this test is about the
+    // stabilizer's full-rerender fallback, not anything scatter-specific.
     let pen_id = find_node_id(&engine, "pen_input");
     let stamp_id = find_node_id(&engine, "stamp");
     // Full-strength stabilization → max_divergence_window = 11 (iterations=10

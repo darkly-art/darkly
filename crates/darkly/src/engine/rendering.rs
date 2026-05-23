@@ -806,10 +806,10 @@ const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
 /// Brushes that already fill the canvas bbox to the
 /// canvas → just downscaled. Brushes that paint a small dot (Airbrush)
 /// bbox to the dot → upscaled into the frame. Brushes that displace
-/// the dab off-center (Scatter Brush) bbox to wherever the displaced
-/// dab landed → crop re-centers it. Empty renders (degenerate brushes,
-/// or a scatter that hit fully off-canvas) fall through to a centered
-/// square of the bg, which the picker shows as a flat tile.
+/// the dab off-center bbox to wherever the displaced dab landed → crop
+/// re-centers it. Empty renders (degenerate brushes, or a scatter that
+/// hit fully off-canvas) fall through to a centered square of the bg,
+/// which the picker shows as a flat tile.
 fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> Vec<u8> {
     let expected = (width * height * 4) as usize;
     if pixels.len() < expected {

@@ -322,7 +322,7 @@ fn brush_save_bakes_thumbnail_asynchronously() {
 /// the path degenerated. Without an inset, endpoints sit on the canvas
 /// edge and the framer can't recover the clipped half of the dab.
 #[test]
-fn hard_round_endpoint_dabs_not_clipped_against_cache_border() {
+fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
     use darkly::engine::DarklyEngine;
     use darkly::gpu::context::GpuContext;
 
@@ -334,10 +334,11 @@ fn hard_round_endpoint_dabs_not_clipped_against_cache_border() {
     // — black bg, white stroke.
     engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
 
-    // Hard Round is a built-in: circle tip, no pressure→size_input wire.
-    engine
-        .brush_load("Hard Round")
-        .expect("Hard Round built-in");
+    // Airbrush is a built-in: circle tip with a fixed `size_input` constant
+    // (no pressure→size_input wire), so the dab radius doesn't scale with
+    // the synthetic stroke's pressure ramp. Same invariant the old
+    // "Hard Round" test exercised before that brush was removed.
+    engine.brush_load("Airbrush").expect("Airbrush built-in");
 
     // Prime + flush + read.
     let _ = engine.brush_editor_preview();
@@ -361,7 +362,7 @@ fn hard_round_endpoint_dabs_not_clipped_against_cache_border() {
                 let i = ((y * width + x) * 4) as usize;
                 assert!(
                     !is_stroke(i),
-                    "Hard Round preview cuts off at the edge — column {x} y={y} \
+                    "Airbrush preview cuts off at the edge — column {x} y={y} \
                      has stroke pixel rgba={:?}",
                     [pixels[i], pixels[i + 1], pixels[i + 2]],
                 );

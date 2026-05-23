@@ -292,7 +292,7 @@ fn unwired_brush_grows_linearly_across_size_range() {
     let pen = find_node_id(&engine, "pen_input");
     let stamp = find_node_id(&engine, "stamp");
 
-    // Mimic Soft Round / Hard Round: no pressure wire on the stamp.
+    // Mimic Airbrush: no pressure wire on stamp.size_input.
     engine
         .brush_graph_disconnect(pen.0, "pressure", stamp.0, "size_input")
         .ok(); // Disconnect is a no-op if already disconnected.

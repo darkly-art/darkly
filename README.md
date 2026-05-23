@@ -66,8 +66,8 @@ These are features that are helpful or essential to digital art workflows. They'
 ### Painting & brush engine
 - [x] Node-based brush engine
 - Brushes
-    - [x] Simple round
-    - [x] Calligraphy
+    - [ ] Simple round
+    - [ ] Calligraphy
     - [x] Ink pen
     - [x] Liquify
     - [x] Watercolor
