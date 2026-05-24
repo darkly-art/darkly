@@ -1,0 +1,50 @@
+{
+    "version": 1,
+    "recorded_at": "2026-05-23T15:30:00.000Z",
+    "canvas_width": 1920,
+    "canvas_height": 1080,
+    "events": [
+        {
+            "x": 100.0,
+            "y": 200.0,
+            "pressure": 0.25,
+            "x_tilt": 0.10,
+            "y_tilt": -0.05,
+            "rotation": 0.0,
+            "tangential_pressure": 0.0,
+            "time_ms": 1000.0,
+            "cr": 0.0,
+            "cg": 0.0,
+            "cb": 0.0,
+            "ca": 1.0
+        },
+        {
+            "x": 150.0,
+            "y": 220.0,
+            "pressure": 0.55,
+            "x_tilt": 0.12,
+            "y_tilt": -0.05,
+            "rotation": 0.0,
+            "tangential_pressure": 0.0,
+            "time_ms": 1016.0,
+            "cr": 0.0,
+            "cg": 0.0,
+            "cb": 0.0,
+            "ca": 1.0
+        },
+        {
+            "x": 200.0,
+            "y": 240.0,
+            "pressure": 0.85,
+            "x_tilt": 0.14,
+            "y_tilt": -0.06,
+            "rotation": 0.0,
+            "tangential_pressure": 0.0,
+            "time_ms": 1032.0,
+            "cr": 0.0,
+            "cg": 0.0,
+            "cb": 0.0,
+            "ca": 1.0
+        }
+    ]
+}

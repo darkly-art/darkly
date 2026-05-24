@@ -2,6 +2,7 @@ import type { Tool, ToolContext } from './registry';
 import { app } from '../state/app.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { srgbToLinear } from '../lib/color';
+import { strokeRecorder, currentCanvasDimensions } from '../lib/strokeRecorder';
 import {
     KIND_MASKED_STAMP,
     FLAG_CANVAS_SPACE,
@@ -203,13 +204,18 @@ export const brushTool: Tool = {
         ctx.handle.clear_overlay();
         ctx.handle.clear_brush_preview_pose();
         clearHover();
+        const params = brushStrokeParams(e, cx, cy);
         ctx.handle.begin_stroke(layerId);
-        ctx.handle.stroke_to('brush_stroke', brushStrokeParams(e, cx, cy));
+        ctx.handle.stroke_to('brush_stroke', params);
+        const dims = currentCanvasDimensions();
+        if (dims) strokeRecorder.beginStroke(dims[0], dims[1], params);
     },
 
     onPointerMove(ctx, e, cx, cy) {
         if (e.buttons & 1) {
-            ctx.handle.stroke_to('brush_stroke', brushStrokeParams(e, cx, cy));
+            const params = brushStrokeParams(e, cx, cy);
+            ctx.handle.stroke_to('brush_stroke', params);
+            strokeRecorder.addEvent(params);
             return;
         }
         // Hover: re-render the preview with live pen data + draw it.
@@ -218,6 +224,7 @@ export const brushTool: Tool = {
 
     onPointerUp(ctx) {
         ctx.handle.end_stroke();
+        strokeRecorder.endStroke();
     },
 
     onPointerLeave(ctx) {

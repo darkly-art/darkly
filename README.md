@@ -2,7 +2,7 @@
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
 [![Patreon](https://img.shields.io/badge/Patreon-Forbidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
-[![Blog](https://img.shields.io/badge/Blog-Deranged_Texts-orange?logo=substack&logoColor=white&style=for-the-badge&color=4400ff)](https://www.patreon.com/c/DarklyArt)
+[![Blog](https://img.shields.io/badge/Blog-Deranged_Texts-orange?logo=substack&logoColor=white&style=for-the-badge&color=4400ff)](https://substack.com/@darklyart)
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=9500ff)
 ![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=6914ff)
@@ -15,14 +15,14 @@
 
 [Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital painters. It has everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
-If you're a sane artist who likes rulers, clean vector lines, and predictable outcomes, Darkly may not be for you. Darkly is a chaotic playground for brave explorers, where messes are made and happy accidents abound. Madness isn't a bug, it's a feature.
-
 ### Darkly pledges to:
 
 - 🛐 Honor human imagination
 - ⚛️ Run offline and without a login
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
+
+If you're a sane artist who likes rulers, guides, and clean vector lines, Darkly may not be for you. Darkly is a chaotic playground for artists who make messes and incur happy accidents. Madness isn't a bug, it's a feature.
 
 **Try the demo [here](https://demo.darkly.art).**
 
