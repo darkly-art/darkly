@@ -30,6 +30,12 @@ pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
 /// at 2048). For perf benches that need to allocate textures larger than
 /// the portability floor — 4K canvases, large brush dabs, etc. Picks the
 /// `HighPerformance` adapter to match what the real frontend uses.
+///
+/// Also opts in to `TIMESTAMP_QUERY` (plus the inside-pass variant) when
+/// the adapter supports it, so bench-side instrumentation can wrap GPU
+/// passes in `ComputePassTimestampWrites`. Pipelines that record
+/// timestamps check the device's features at build time and degrade
+/// gracefully on adapters that don't expose the feature.
 pub fn bench_device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -38,10 +44,13 @@ pub fn bench_device() -> (wgpu::Device, wgpu::Queue) {
         force_fallback_adapter: false,
     }))
     .expect("no GPU adapter available for benches");
+    let adapter_features = adapter.features();
+    let optional = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+    let required_features = adapter_features & optional;
     let limits = adapter.limits();
     block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("bench-device"),
-        required_features: wgpu::Features::empty(),
+        required_features,
         required_limits: limits,
         ..Default::default()
     }))

@@ -588,6 +588,39 @@ impl DarklyEngine {
         self.compositor.frame_count()
     }
 
+    /// True when the active GPU device exposes `TIMESTAMP_QUERY` and the
+    /// paint-compute pipeline allocated its query infrastructure. Bench
+    /// harnesses gate their `gpu_us` columns on this.
+    ///
+    /// Native-only. The frontend never opts in to `TIMESTAMP_QUERY`, so
+    /// this returns `false` on WASM builds at runtime.
+    pub fn paint_compute_has_timestamps(&self) -> bool {
+        self.brush_pipelines
+            .get::<crate::brush::nodes::paint_compute::PaintComputePipeline>("paint_compute")
+            .timestamps()
+            .is_some()
+    }
+
+    /// Non-blocking drain of pending paint-compute GPU timestamps.
+    /// Returns `(total_ns, sample_count)` for every dispatch whose
+    /// readback callback has fired since the last drain. Callbacks for
+    /// very recently submitted dispatches may still be in flight — those
+    /// roll over into the next drain.
+    ///
+    /// **Native bench harnesses only.** Internally calls `device.poll`,
+    /// which on WebGPU/WASM is a no-op (and `TIMESTAMP_QUERY` isn't
+    /// requested there anyway). Returns `(0, 0)` if the device wasn't
+    /// created with the feature.
+    pub fn drain_paint_compute_timestamps(&self) -> (u64, u32) {
+        let pipeline = self
+            .brush_pipelines
+            .get::<crate::brush::nodes::paint_compute::PaintComputePipeline>("paint_compute");
+        match pipeline.timestamps() {
+            Some(ts) => ts.drain(&self.gpu.device),
+            None => (0, 0),
+        }
+    }
+
     /// Current overlay preview mask dimensions. Test-only accessor.
     pub fn compositor_preview_mask_size(&self) -> (u32, u32) {
         self.compositor.tool_overlay_ref().preview_mask_size()

@@ -123,6 +123,17 @@ pub struct EventTiming {
     /// timings against the original recording timeline.
     pub t_offset_ms: f64,
     pub cpu_us: u64,
+    /// True GPU shader time, summed across every paint-compute dispatch
+    /// observed by the drain. Zero when the device doesn't expose
+    /// `TIMESTAMP_QUERY`, or when the dispatch's readback callback
+    /// hadn't fired yet at drain time (it rolls into the next event's
+    /// reading; aggregate over the stroke is still correct).
+    pub gpu_ns: u64,
+    /// Number of paint-compute dispatches whose timestamps folded into
+    /// `gpu_ns`. Useful for divining the per-dispatch average when the
+    /// engine emits more than one flush per event (e.g., stabilizer
+    /// rewinds).
+    pub gpu_samples: u32,
 }
 
 /// Pacing knob for [`replay`]. The engine's stabilizer reads `time_ms`
@@ -178,11 +189,17 @@ pub fn replay(
         let t = Instant::now();
         engine.stroke_to(op);
         let cpu_us = t.elapsed().as_micros() as u64;
+        // Drain whatever paint-compute timestamps the GPU has finished
+        // since the last event. Off-by-one delays roll over into the
+        // next event's reading; the aggregate over the stroke stays correct.
+        let (gpu_ns, gpu_samples) = engine.drain_paint_compute_timestamps();
 
         timings.push(EventTiming {
             index: i,
             t_offset_ms: ev.time_ms - stream_start,
             cpu_us,
+            gpu_ns,
+            gpu_samples,
         });
     }
 
@@ -190,6 +207,15 @@ pub fn replay(
     // Flush pending compositor work so a subsequent caller's first frame
     // doesn't pick up residue from this stroke.
     engine.render(0.0);
+
+    // Any timestamps still in flight (the GPU hadn't finished the final
+    // dispatch when the last event drained) fold into the last event's
+    // gpu_ns so the stroke total stays consistent.
+    if let Some(last) = timings.last_mut() {
+        let (tail_ns, tail_samples) = engine.drain_paint_compute_timestamps();
+        last.gpu_ns = last.gpu_ns.saturating_add(tail_ns);
+        last.gpu_samples = last.gpu_samples.saturating_add(tail_samples);
+    }
 
     timings
 }

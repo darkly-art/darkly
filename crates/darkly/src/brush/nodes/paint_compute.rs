@@ -23,6 +23,7 @@
 //! one pass with one barrier at each end, regardless of dab count.
 
 use std::any::Any;
+use std::sync::{Arc, Mutex};
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::gpu_context::{BrushGpuContext, PaintDabRecord, MAX_DABS_PER_PHASE};
@@ -59,6 +60,188 @@ struct PaintComputeUniforms {
     _pad: u32,
 }
 
+// ── GPU-timestamp instrumentation ───────────────────────────────────────
+//
+// When the device exposes `TIMESTAMP_QUERY`, every `flush_compute` dispatch
+// is bracketed with a `ComputePassTimestampWrites` and the resolved pair
+// streams into a per-flush readback buffer. The bench harness drains the
+// accumulator after each `stroke_to` to produce per-event `gpu_us` numbers.
+//
+// Production WASM code MUST NOT call `drain_paint_compute_timestamps` on
+// the engine — it relies on `device.poll()` to drive callbacks, which
+// deadlocks the JS event loop. The accessor lives on `DarklyEngine` for
+// native bench binaries only.
+//
+// **Perf cost when disabled:** Only `bench_device` opts in to
+// `TIMESTAMP_QUERY`; the frontend's `GpuContext` does not. So in
+// production this whole subsystem stays inert:
+//   * `PaintComputeTimestamps::build` sees the feature absent and returns
+//     `None` — no query set, no resolve buffer, no accumulator allocated.
+//   * `flush_compute` does two `Option::as_ref()` checks per dispatch on
+//     `pipeline_ref.timestamps`, both `None`, both branchless. No GPU
+//     commands, no buffer maps.
+//   * Engine accessors degrade to `(0, 0)` returns without polling.
+// Net cost on the frontend's compute path: a handful of nanoseconds per
+// dispatch. No allocations, no GPU work, no encoder commands.
+
+/// Shared state for one paint-compute pipeline's outstanding timestamp
+/// readbacks. Accessed by the GPU map_async callback (writer) and by the
+/// drain method (reader); the `Mutex` keeps the two off each other.
+#[derive(Default)]
+struct TimestampAccumulator {
+    /// Buffers whose map_async has been requested but the callback may
+    /// not have fired yet. `drain` polls every entry; ones with `Ready`
+    /// status fold their delta into `total_ns` + `sample_count` and are
+    /// removed.
+    pending: Vec<PendingTimestamp>,
+    total_ns: u64,
+    sample_count: u32,
+}
+
+enum PendingTimestampState {
+    /// Created during encoding; the `copy_buffer_to_buffer` is in the
+    /// command stream but the encoder hasn't been submitted yet (or
+    /// `map_async` hasn't been called yet). `drain` will kick off
+    /// mapping on its next visit.
+    AwaitingMap,
+    /// `map_async` is in flight; the callback writes the result into
+    /// `ready` when the GPU finishes. `drain` polls this and reads on
+    /// success.
+    Mapping {
+        ready: Arc<Mutex<Option<Result<(), wgpu::BufferAsyncError>>>>,
+    },
+}
+
+struct PendingTimestamp {
+    buffer: wgpu::Buffer,
+    state: PendingTimestampState,
+    /// Nanoseconds per timestamp tick on this device (`queue.get_timestamp_period()`).
+    period_ns_per_tick: f32,
+}
+
+pub struct PaintComputeTimestamps {
+    query_set: wgpu::QuerySet,
+    /// Two-slot QUERY_RESOLVE buffer (16 bytes). Reused per dispatch —
+    /// the GPU writes the resolved start/end pair, then the encoder
+    /// copies into a fresh readback buffer so the next dispatch can
+    /// overwrite this one without losing the previous reading.
+    resolve_buffer: wgpu::Buffer,
+    period_ns_per_tick: f32,
+    accumulator: Arc<Mutex<TimestampAccumulator>>,
+}
+
+impl PaintComputeTimestamps {
+    /// Build the per-pipeline timestamp infra. Returns `None` when the
+    /// device doesn't expose `TIMESTAMP_QUERY` — the caller leaves its
+    /// `Option<PaintComputeTimestamps>` field `None` and the dispatch
+    /// path elides the `timestamp_writes` clause.
+    fn build(ctx: &BuildContext) -> Option<Self> {
+        if !ctx
+            .device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+        {
+            return None;
+        }
+        let query_set = ctx.device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("paint-compute-timestamps"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2,
+        });
+        let resolve_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("paint-compute-timestamp-resolve"),
+            size: 16,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        // wgpu's `map_async` callback type requires `Send + 'static`,
+        // which forces an `Arc<Mutex<...>>` even though on WASM the
+        // single-threaded runtime makes `Send`/`Sync` moot. clippy lints
+        // the construction; the type system requirement is the reason
+        // for it.
+        #[allow(clippy::arc_with_non_send_sync)]
+        let accumulator = Arc::new(Mutex::new(TimestampAccumulator::default()));
+        Some(PaintComputeTimestamps {
+            query_set,
+            resolve_buffer,
+            period_ns_per_tick: ctx.queue.get_timestamp_period(),
+            accumulator,
+        })
+    }
+
+    /// Non-blocking drain. Returns `(total_ns, sample_count)` since the
+    /// last call. Polls the device once to nudge any pending map_async
+    /// callbacks; callbacks for very recently submitted dispatches may
+    /// not have fired yet and roll over into a subsequent drain — which
+    /// is fine because the bench harness aggregates many events.
+    pub fn drain(&self, device: &wgpu::Device) -> (u64, u32) {
+        let mut acc = self.accumulator.lock().expect("timestamp accumulator");
+
+        // 1. Kick off map_async for any buffers that are post-submit but
+        //    pre-mapping. The drain is the only place that knows submits
+        //    have happened — calling map_async earlier (during encoding)
+        //    races with the still-pending submit and trips a wgpu
+        //    "buffer is still mapped" validation error.
+        for entry in acc.pending.iter_mut() {
+            if matches!(entry.state, PendingTimestampState::AwaitingMap) {
+                #[allow(clippy::arc_with_non_send_sync)]
+                let ready: Arc<Mutex<Option<Result<(), wgpu::BufferAsyncError>>>> =
+                    Arc::new(Mutex::new(None));
+                let ready_clone = Arc::clone(&ready);
+                entry
+                    .buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |res| {
+                        let mut guard = ready_clone.lock().expect("ready slot");
+                        *guard = Some(res);
+                    });
+                entry.state = PendingTimestampState::Mapping { ready };
+            }
+        }
+
+        // 2. Nudge the native completion queue so any callbacks that the
+        //    GPU has finished can fire. WASM-side this is a no-op (we
+        //    don't request the feature on web anyway).
+        let _ = device.poll(wgpu::PollType::Poll);
+
+        // 3. Walk pending entries; fold completed ones into the accumulator.
+        let mut i = 0;
+        while i < acc.pending.len() {
+            let ready_status = match &acc.pending[i].state {
+                PendingTimestampState::Mapping { ready } => {
+                    ready.lock().expect("ready slot").clone()
+                }
+                PendingTimestampState::AwaitingMap => None,
+            };
+            match ready_status {
+                Some(Ok(())) => {
+                    let pending = acc.pending.remove(i);
+                    let slice = pending.buffer.slice(..);
+                    let mapped = slice.get_mapped_range();
+                    let bytes: [u8; 16] = mapped[..16].try_into().expect("16 bytes");
+                    drop(mapped);
+                    pending.buffer.unmap();
+                    let start = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+                    let end = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+                    let ticks = end.saturating_sub(start);
+                    let ns = (ticks as f64 * pending.period_ns_per_tick as f64) as u64;
+                    acc.total_ns = acc.total_ns.saturating_add(ns);
+                    acc.sample_count = acc.sample_count.saturating_add(1);
+                }
+                Some(Err(_)) => {
+                    // Mapping failed — drop the buffer so we don't loop on it.
+                    acc.pending.remove(i);
+                }
+                None => i += 1,
+            }
+        }
+
+        let total_ns = std::mem::take(&mut acc.total_ns);
+        let count = std::mem::take(&mut acc.sample_count);
+        (total_ns, count)
+    }
+}
+
 pub struct PaintComputePipeline {
     pipeline: wgpu::ComputePipeline,
     /// group(0) — uniform ring slot (dynamic offset), built from the
@@ -91,6 +274,9 @@ pub struct PaintComputePipeline {
     preview_pipeline: wgpu::RenderPipeline,
     preview_uniform_buffer: wgpu::Buffer,
     preview_uniform_bind_group: wgpu::BindGroup,
+    /// `Some` iff the device exposes `TIMESTAMP_QUERY`. Bench-only — the
+    /// frontend never opts in to the feature and never drains.
+    timestamps: Option<PaintComputeTimestamps>,
 }
 
 #[repr(C)]
@@ -304,6 +490,8 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
             }],
         });
 
+        let timestamps = PaintComputeTimestamps::build(ctx);
+
         Self {
             pipeline,
             uniform_ring,
@@ -314,11 +502,18 @@ struct VsOut { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
             preview_pipeline,
             preview_uniform_buffer,
             preview_uniform_bind_group,
+            timestamps,
         }
     }
 
     pub fn scratch_bgl(&self) -> &wgpu::BindGroupLayout {
         &self.scratch_bgl
+    }
+
+    /// Native bench access to the per-pipeline timestamp accumulator.
+    /// `None` when the device wasn't created with `TIMESTAMP_QUERY`.
+    pub fn timestamps(&self) -> Option<&PaintComputeTimestamps> {
+        self.timestamps.as_ref()
     }
 }
 
@@ -651,12 +846,21 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
 
         let tiles_x = union_w.div_ceil(8);
         let tiles_y = union_h.div_ceil(8);
+        let timestamp_writes =
+            pipeline_ref
+                .timestamps
+                .as_ref()
+                .map(|ts| wgpu::ComputePassTimestampWrites {
+                    query_set: &ts.query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                });
         {
             let mut pass = gpu
                 .encoder
                 .begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("paint-compute-dispatch"),
-                    timestamp_writes: None,
+                    timestamp_writes,
                 });
             pass.set_pipeline(&pipeline_ref.pipeline);
             pass.set_bind_group(0, &pipeline_ref.uniform_bind_group, &[uniform_offset]);
@@ -664,6 +868,37 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
             pass.set_bind_group(3, &scratch_bind_group, &[]);
             pass.dispatch_workgroups(tiles_x, tiles_y, 1);
+        }
+        if let Some(ts) = pipeline_ref.timestamps.as_ref() {
+            // Resolve into the shared 16-byte buffer, then copy into a
+            // fresh per-flush readback buffer so the next dispatch can
+            // overwrite the resolve buffer without losing this one's
+            // data. The readback buffer is registered with the
+            // accumulator; its map_async callback fires on the next
+            // `device.poll`, after the engine's `queue.submit`.
+            gpu.encoder
+                .resolve_query_set(&ts.query_set, 0..2, &ts.resolve_buffer, 0);
+            let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("paint-compute-timestamp-readback"),
+                size: 16,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            gpu.encoder
+                .copy_buffer_to_buffer(&ts.resolve_buffer, 0, &readback, 0, 16);
+            // Register the buffer for deferred mapping. `map_async` MUST
+            // wait until after the encoder is submitted, otherwise wgpu
+            // rejects the next submit ("buffer is still mapped"). The
+            // drain method kicks off mapping for any AwaitingMap entries.
+            ts.accumulator
+                .lock()
+                .expect("timestamp accumulator")
+                .pending
+                .push(PendingTimestamp {
+                    buffer: readback,
+                    state: PendingTimestampState::AwaitingMap,
+                    period_ns_per_tick: ts.period_ns_per_tick,
+                });
         }
 
         // Sync the compute buffer's union rows back to the scratch

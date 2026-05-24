@@ -45,7 +45,7 @@ use darkly::nodegraph::Graph;
 /// `size_port = 2 * radius_px / DAB_REFERENCE_SIZE_PX`.
 const DAB_REFERENCE_SIZE_PX: f32 = 512.0;
 
-const DAB_RADII_PX: &[f32] = &[1.0, 10.0, 100.0, 1000.0, 2000.0];
+const DAB_RADII_PX: &[f32] = &[1.0, 10.0, 100.0, 250.0, 500.0, 1000.0, 2000.0];
 
 const RESOLUTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)];
 
@@ -142,9 +142,26 @@ struct CellResult {
     stroke_duration_ms: f64,
     wall_total_ms: f64,
     behind_by_ms: f64,
+    /// Worst single-event lateness: the max over events of
+    /// `max(0, cpu_us/1000 - event_step_ms)`, where `event_step_ms` is the
+    /// inter-event gap from the recording. Captures the worst dropped
+    /// frame the user would have felt, where `behind_by_ms` only captures
+    /// the cumulative stroke-level lag.
+    max_event_behind_ms: f64,
     cpu_median_us: f64,
     cpu_p95_us: f64,
     cpu_max_us: u64,
+    /// True GPU shader time per event, in microseconds. Folded from the
+    /// non-blocking timestamp drain in `replay`. Zero when the device
+    /// wasn't created with `TIMESTAMP_QUERY` — bench_device opts in when
+    /// the adapter advertises support.
+    gpu_median_us: f64,
+    gpu_p95_us: f64,
+    gpu_max_us: u64,
+    /// True when at least one event reported a non-zero `gpu_ns` — the
+    /// header notes this so future readers know the gpu columns are
+    /// instrumented data vs all-zeros.
+    gpu_timestamps_available: bool,
 }
 
 fn percentile(sorted: &[u64], pct: f64) -> f64 {
@@ -185,8 +202,28 @@ fn run_cell(recording: &StrokeRecording, canvas: (u32, u32), dab_radius_px: f32)
     );
     let wall_total_ms = wall_start.elapsed().as_secs_f64() * 1000.0;
 
+    // Per-event lateness: subtract the recorded inter-event gap from
+    // each event's CPU time. The first event's "gap" is undefined; treat
+    // it as 0 so any startup cost counts toward the worst-frame metric.
+    let max_event_behind_ms = timings
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let step_ms = if i == 0 {
+                0.0
+            } else {
+                timings[i].t_offset_ms - timings[i - 1].t_offset_ms
+            };
+            ((t.cpu_us as f64 / 1000.0) - step_ms).max(0.0)
+        })
+        .fold(0.0_f64, f64::max);
+
     let mut cpu_us: Vec<u64> = timings.iter().map(|t| t.cpu_us).collect();
     cpu_us.sort_unstable();
+
+    let mut gpu_us: Vec<u64> = timings.iter().map(|t| t.gpu_ns / 1000).collect();
+    let gpu_timestamps_available = gpu_us.iter().any(|&v| v > 0);
+    gpu_us.sort_unstable();
 
     CellResult {
         canvas,
@@ -195,9 +232,14 @@ fn run_cell(recording: &StrokeRecording, canvas: (u32, u32), dab_radius_px: f32)
         stroke_duration_ms,
         wall_total_ms,
         behind_by_ms: wall_total_ms - stroke_duration_ms,
+        max_event_behind_ms,
         cpu_median_us: percentile(&cpu_us, 0.5),
         cpu_p95_us: percentile(&cpu_us, 0.95),
         cpu_max_us: *cpu_us.last().unwrap_or(&0),
+        gpu_median_us: percentile(&gpu_us, 0.5),
+        gpu_p95_us: percentile(&gpu_us, 0.95),
+        gpu_max_us: *gpu_us.last().unwrap_or(&0),
+        gpu_timestamps_available,
     }
 }
 
@@ -242,12 +284,14 @@ fn write_tsv(path: &Path, results: &[CellResult]) -> std::io::Result<()> {
     writeln!(
         file,
         "canvas_w\tcanvas_h\tdab_radius_px\tevent_count\tstroke_duration_ms\t\
-         wall_total_ms\tbehind_by_ms\tcpu_median_us\tcpu_p95_us\tcpu_max_us"
+         wall_total_ms\tbehind_by_ms\tmax_event_behind_ms\t\
+         cpu_median_us\tcpu_p95_us\tcpu_max_us\t\
+         gpu_median_us\tgpu_p95_us\tgpu_max_us"
     )?;
     for r in results {
         writeln!(
             file,
-            "{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.2}\t{:.2}\t{}",
+            "{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.2}\t{:.2}\t{}\t{:.2}\t{:.2}\t{}",
             r.canvas.0,
             r.canvas.1,
             r.dab_radius_px,
@@ -255,9 +299,13 @@ fn write_tsv(path: &Path, results: &[CellResult]) -> std::io::Result<()> {
             r.stroke_duration_ms,
             r.wall_total_ms,
             r.behind_by_ms,
+            r.max_event_behind_ms,
             r.cpu_median_us,
             r.cpu_p95_us,
             r.cpu_max_us,
+            r.gpu_median_us,
+            r.gpu_p95_us,
+            r.gpu_max_us,
         )?;
     }
     Ok(())
@@ -279,23 +327,39 @@ fn write_markdown(
         "Brush: `{BRUSH_NAME}` (stabilize=`{STABILIZE}`). Recording: \
          {} events spanning {:.0} ms recorded at {}×{}. Replay pacing: \
          real-time. `behind_by_ms = wall_total - stroke_duration` — positive \
-         means the engine fell behind the recorded cadence.",
+         means the engine fell behind the recorded cadence. \
+         `max_event_behind_ms` is the worst single-event lateness \
+         (`cpu_ms - inter_event_gap_ms`, clamped at zero, max across events).",
         recording.events.len(),
         recording.events.last().unwrap().time_ms - recording.events[0].time_ms,
         recording.canvas_width,
         recording.canvas_height,
     )?;
+    let any_gpu = results.iter().any(|r| r.gpu_timestamps_available);
+    if !any_gpu {
+        writeln!(file)?;
+        writeln!(
+            file,
+            "**GPU timestamps unavailable on this adapter** — the bench device \
+             couldn't request `TIMESTAMP_QUERY`. The `gpu_*` columns will all \
+             read 0; use `cpu_*` for perf signal."
+        )?;
+    }
     writeln!(file)?;
     writeln!(
         file,
         "| canvas | radius_px | events | duration (ms) | wall (ms) | behind (ms) | \
-         cpu p50 (µs) | cpu p95 (µs) | cpu max (µs) |"
+         max_event_behind (ms) | cpu p50 (µs) | cpu p95 (µs) | cpu max (µs) | \
+         gpu p50 (µs) | gpu p95 (µs) | gpu max (µs) |"
     )?;
-    writeln!(file, "|---|---:|---:|---:|---:|---:|---:|---:|---:|")?;
+    writeln!(
+        file,
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+    )?;
     for r in results {
         writeln!(
             file,
-            "| {}×{} | {} | {} | {:.0} | {:.0} | {:+.0} | {:.0} | {:.0} | {} |",
+            "| {}×{} | {} | {} | {:.0} | {:.0} | {:+.0} | {:.1} | {:.0} | {:.0} | {} | {:.0} | {:.0} | {} |",
             r.canvas.0,
             r.canvas.1,
             r.dab_radius_px,
@@ -303,9 +367,13 @@ fn write_markdown(
             r.stroke_duration_ms,
             r.wall_total_ms,
             r.behind_by_ms,
+            r.max_event_behind_ms,
             r.cpu_median_us,
             r.cpu_p95_us,
             r.cpu_max_us,
+            r.gpu_median_us,
+            r.gpu_p95_us,
+            r.gpu_max_us,
         )?;
     }
     Ok(())
@@ -338,8 +406,18 @@ fn main() {
             );
             let r = run_cell(&recording, canvas, dab_radius_px);
             eprintln!(
-                "wall={:>5.0}ms ({:+5.0}ms vs stroke), cpu p50/p95/max = {:>5.0}/{:>5.0}/{:>6} µs",
-                r.wall_total_ms, r.behind_by_ms, r.cpu_median_us, r.cpu_p95_us, r.cpu_max_us,
+                "wall={:>5.0}ms ({:+5.0}ms, worst-frame +{:>5.1}ms), \
+                 cpu p50/p95/max = {:>5.0}/{:>5.0}/{:>6} µs, \
+                 gpu p50/p95/max = {:>5.0}/{:>5.0}/{:>6} µs",
+                r.wall_total_ms,
+                r.behind_by_ms,
+                r.max_event_behind_ms,
+                r.cpu_median_us,
+                r.cpu_p95_us,
+                r.cpu_max_us,
+                r.gpu_median_us,
+                r.gpu_p95_us,
+                r.gpu_max_us,
             );
             results.push(r);
         }

@@ -7,6 +7,13 @@
  *
  * Output is consumed by `cargo run --bin stroke_replay_bench` for
  * deterministic perf-bench replay of real tablet input.
+ *
+ * **Perf cost when disabled:** `init()` reads the URL search once at boot
+ * and stores `enabled = false`. Every recorder method early-returns on
+ * that flag before doing any work — one boolean check per pointer event,
+ * no allocations, no buffer growth, no event projection. The brush tool
+ * calls `beginStroke / addEvent / endStroke` unconditionally; the cost
+ * when disabled is below the measurement floor.
  */
 
 import { app } from '../state/app.svelte';
