@@ -81,7 +81,8 @@ export class OpfsStorage implements DarklyStorage {
         const fh = await loc.parent.getFileHandle(loc.leaf, { create: true });
         const writer = await fh.createWritable();
         try {
-            await writer.write(data);
+            // See fileHandle.ts::writeToHandle for the cast rationale.
+            await writer.write(data as Uint8Array<ArrayBuffer>);
         } finally {
             await writer.close();
         }

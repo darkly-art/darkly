@@ -101,7 +101,9 @@ export function openDarklyAsTab(picked: OpenedFile): void {
 async function openImageAsTab(picked: OpenedFile, kind: FileKind): Promise<void> {
     let bitmap: ImageBitmap;
     try {
-        bitmap = await createImageBitmap(new Blob([picked.bytes]));
+        // BlobPart requires Uint8Array<ArrayBuffer>; TS 5.7+ defaults to
+        // <ArrayBufferLike>. WASM-sourced bytes are non-shared.
+        bitmap = await createImageBitmap(new Blob([picked.bytes as Uint8Array<ArrayBuffer>]));
     } catch (e) {
         toast.show('error', `Failed to decode ${kind.toUpperCase()}: ${picked.name}`);
         console.error('[open] image decode failed', e);
