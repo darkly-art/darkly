@@ -237,15 +237,12 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         // Preview path is dispatched via `render_preview`; this method is
         // only invoked during stroke evaluation, no mode check needed.
 
-        let t_ctx_input = web_time::Instant::now();
         let dab_handle = match ctx.input("dab") {
             ScalarValue::Texture(h) => h,
             _ => return vec![],
         };
         let dab_size = ctx.input("dab_size").as_vec2();
         let position = ctx.input("position").as_vec2();
-        gpu.perf
-            .record_ctx_input(t_ctx_input.elapsed().as_micros() as u64);
 
         let dab_w = dab_size[0];
         let dab_h = dab_size[1];
@@ -261,13 +258,10 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         // Layer-clip the dab footprint, push the canvas-space write bbox,
         // and snapshot the scratch under the dab into canvas_copy. Returns
         // None when the dab doesn't overlap the layer (early-out).
-        let t_prep = web_time::Instant::now();
         let footprint = match gpu.prepare_dab_canvas_copy(position, half_w, half_h) {
             Some(f) => f,
             None => return vec![],
         };
-        gpu.perf
-            .record_prepare_canvas_copy(t_prep.elapsed().as_micros() as u64);
         let [pt_offset_x, pt_offset_y] = footprint.layer_offset;
         let [pt_width, pt_height] = footprint.layer_size;
         let [unclipped_x0, unclipped_y0] = footprint.unclipped_origin;
@@ -312,10 +306,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             apply_selection: 1,  // selection masks every dab as it lands
         };
         let composite = gpu.pipelines.get::<CompositePipeline>("composite");
-        let t_wu = web_time::Instant::now();
         let offset = composite.write_uniforms(gpu.queue, &uniforms);
-        gpu.perf
-            .record_write_composite_uniforms(t_wu.elapsed().as_micros() as u64);
 
         let dab_bind_group = gpu.dab_pool.bind_group(dab_handle);
         let scratch = gpu
@@ -326,7 +317,6 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
         // Composite dab onto the stroke scratch (REPLACE blend — shader does
         // Porter-Duff). The "bg" bind group is the read mirror, which was
         // just filled with the scratch's current contents above.
-        let t_pass = web_time::Instant::now();
         {
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("brush-composite"),
@@ -355,8 +345,6 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             pass.set_bind_group(3, scratch.read_mirror_bind_group(), &[]);
             pass.draw(0..6, 0..1);
         }
-        gpu.perf
-            .record_composite_pass(t_pass.elapsed().as_micros() as u64);
 
         // Terminal node — no outputs.
         vec![]

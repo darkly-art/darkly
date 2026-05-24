@@ -259,12 +259,12 @@ impl DarklyEngine {
         }
         self.auto_commit_floating();
         self.active_stroke_layer = Some(layer_id);
-        // Reset the per-stroke perf accumulator. Emitted at `end_stroke`.
-        self.stroke_perf = super::perf::StrokePerfStats::default();
-        // Reset the bench-side per-event delta snapshot so the first
+        // Reset the per-stroke counter accumulator. The bench-side
+        // per-event delta snapshot resets in lockstep so the first
         // post-`begin_stroke` drain subtracts against zero rather than
-        // last stroke's totals.
-        self.last_brush_perf_snapshot = super::perf::BrushPerfSnapshot::default();
+        // the previous stroke's totals.
+        self.brush_perf = BrushPerfCounters::default();
+        self.last_brush_perf = BrushPerfCounters::default();
         // GPU setup is deferred to first stroke_to (lazy init).
     }
 
@@ -276,15 +276,6 @@ impl DarklyEngine {
     /// entry point through this predicate so the rejection is uniform.
     pub fn is_node_paintable(&self, layer_id: LayerId) -> bool {
         self.doc.pixel_buffer(layer_id).is_some()
-    }
-
-    /// Feed the largest BrushStroke backlog the WASM bridge saw in its most
-    /// recent drain. Lets the stroke summary include input-queueing signal
-    /// without exposing the perf struct across the crate boundary.
-    pub fn record_input_backlog(&mut self, backlog: u32) {
-        if backlog > self.stroke_perf.max_queue_backlog {
-            self.stroke_perf.max_queue_backlog = backlog;
-        }
     }
 
     /// Read the most recent `render()` sub-phase timings. Used by the WASM
@@ -826,23 +817,13 @@ impl DarklyEngine {
             &self.brush_pipelines.default_selection_bind_group
         };
 
-        // Per-event host wall-clock. Captures the full
-        // `gpu_stroke_to(BrushStroke{..})` invocation so the stroke summary
-        // can report avg ms/event.
-        let perf_start = web_time::Instant::now();
-        // Track dabs-placed delta across all contexts spawned by this event,
-        // so the per-event peak is comparable across events.
-        let dabs_before = self.stroke_perf.total_dabs;
-
         if let Some(ref mut stroke_buffer) = stroke_buffer {
             // Stabilized path: dabs render into the scratch, then the
             // terminal's `commit` hook lands them on the layer.
             self.brush_pipelines.reset_uniform_rings();
-            let t_stab = web_time::Instant::now();
             let result = engine.stabilize(info);
             let max_div = engine.max_divergence_window();
             let tip_vi = engine.stabilizer_len().saturating_sub(1);
-            self.stroke_perf.total_phase_stabilize_us += t_stab.elapsed().as_micros() as u64;
 
             // Synthesize divergence on the previously-rendered tip segment.
             // It was drawn with a degenerate `p3 = p2` because the next
@@ -925,36 +906,29 @@ impl DarklyEngine {
             if need_begin_stroke {
                 let mut gpu_ctx = make_gpu_ctx!("brush-begin-stroke");
                 engine.begin_stroke(&mut gpu_ctx);
-                let p = gpu_ctx.submit_final();
-                self.stroke_perf.merge_brush(p);
+                self.brush_perf += gpu_ctx.submit_final();
             }
 
             if let Some(div_idx) = div_idx {
-                self.stroke_perf.divergence_events += 1;
                 // Divergence — try checkpoint-based partial re-render.
                 // The terminal's `begin_stroke` establishes outside-bbox
                 // state for whichever path we take below; the checkpoint
                 // ring no longer clears on its own.
-                let t_rewind = web_time::Instant::now();
                 {
                     let mut gpu_ctx = make_gpu_ctx!("brush-begin-stroke-rewind");
                     engine.begin_stroke(&mut gpu_ctx);
-                    let p = gpu_ctx.submit_final();
-                    self.stroke_perf.merge_brush(p);
+                    self.brush_perf += gpu_ctx.submit_final();
                 }
-                self.stroke_perf.total_phase_rewind_us += t_rewind.elapsed().as_micros() as u64;
 
                 let stroke_frame = crate::gpu::atlas::CanvasFrame {
                     texture: stroke_buffer.scratch().write_texture(),
                     canvas_extent: paint_target.canvas_frame().canvas_extent,
                 };
-                let t_restore = web_time::Instant::now();
                 let restore = self.gpu.encode_ret("stroke-checkpoint-restore", |encoder| {
                     self.checkpoint_ring
                         .restore_before(encoder, &stroke_frame, div_idx)
                 });
-                self.stroke_perf.total_phase_restore_us += t_restore.elapsed().as_micros() as u64;
-                self.stroke_perf.total_submits += 1;
+                self.brush_perf.submits = self.brush_perf.submits.saturating_add(1);
 
                 let start_vi = if let Some(cp) = restore {
                     // Restored from checkpoint — truncate and resume.
@@ -980,25 +954,17 @@ impl DarklyEngine {
                     // Only the former is a "mid-stroke full re-render
                     // fallback" worth counting.
                     if self.checkpoint_ring.has_any_valid() {
-                        self.stroke_perf.full_rerender_events += 1;
+                        self.brush_perf.full_rerender_events += 1;
                     }
                     engine.reset_render_state();
                     self.checkpoint_ring.clear();
                     0
                 };
-                let rerender_range = tip_vi.saturating_sub(start_vi) as u32;
-                self.stroke_perf.total_rerender_range += rerender_range as u64;
-                if rerender_range > self.stroke_perf.max_rerender_range {
-                    self.stroke_perf.max_rerender_range = rerender_range;
-                }
-                self.stroke_perf.last_max_div_window = max_div;
-                self.stroke_perf.last_spacing = CheckpointRing::spacing(max_div);
 
                 // Render in segments with checkpoints at boundaries.
                 let boundaries =
                     CheckpointRing::compute_segment_boundaries(start_vi, tip_vi, max_div);
 
-                let t_segments = web_time::Instant::now();
                 let mut seg_start = start_vi;
                 for &boundary in &boundaries {
                     // Strict `<` (not `<=`): `compute_segment_boundaries`
@@ -1013,8 +979,7 @@ impl DarklyEngine {
                     // Render segment.
                     let mut gpu_ctx = make_gpu_ctx!("brush-rerender-seg");
                     engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, boundary);
-                    let p = gpu_ctx.submit_final();
-                    self.stroke_perf.merge_brush(p);
+                    self.brush_perf += gpu_ctx.submit_final();
 
                     // Save checkpoint at this boundary.
                     if let Some(bbox) = engine.save_points.full_bbox() {
@@ -1037,29 +1002,23 @@ impl DarklyEngine {
                                 max_div,
                             );
                         });
-                        self.stroke_perf.total_submits += 1;
+                        self.brush_perf.submits = self.brush_perf.submits.saturating_add(1);
                     }
 
                     seg_start = boundary + 1;
                 }
-                self.stroke_perf.total_phase_segments_us += t_segments.elapsed().as_micros() as u64;
 
                 // Render any remaining dabs past the last boundary.
                 if seg_start <= tip_vi {
-                    let t_tail = web_time::Instant::now();
                     let mut gpu_ctx = make_gpu_ctx!("brush-rerender-tail");
                     engine.render_from_stabilized_range_to(&mut gpu_ctx, seg_start, tip_vi);
-                    let p = gpu_ctx.submit_final();
-                    self.stroke_perf.merge_brush(p);
-                    self.stroke_perf.total_phase_tail_us += t_tail.elapsed().as_micros() as u64;
+                    self.brush_perf += gpu_ctx.submit_final();
                 }
             } else {
                 // No divergence — render tail only.
-                let t_tail = web_time::Instant::now();
                 let mut gpu_ctx = make_gpu_ctx!("brush-dab");
                 engine.render_from_stabilized_tail(&mut gpu_ctx);
-                let p = gpu_ctx.submit_final();
-                self.stroke_perf.merge_brush(p);
+                self.brush_perf += gpu_ctx.submit_final();
 
                 // Periodically save a checkpoint to keep the ring fresh.
                 let spacing = CheckpointRing::spacing(max_div);
@@ -1088,25 +1047,19 @@ impl DarklyEngine {
                                 max_div,
                             );
                         });
-                        self.stroke_perf.total_submits += 1;
+                        self.brush_perf.submits = self.brush_perf.submits.saturating_add(1);
                     }
                 }
-                self.stroke_perf.total_phase_tail_us += t_tail.elapsed().as_micros() as u64;
-                self.stroke_perf.last_max_div_window = max_div;
-                self.stroke_perf.last_spacing = CheckpointRing::spacing(max_div);
             }
 
             // Ask the terminal to commit the stroke state onto the layer.
             // For paint this is `source_over(scratch × opacity, pre_stroke)`;
             // other terminals (warp, smudge, …) will do their own thing.
-            let t_commit = web_time::Instant::now();
             {
                 let mut gpu_ctx = make_gpu_ctx!("brush-commit");
                 engine.commit(&mut gpu_ctx);
-                let p = gpu_ctx.submit_final();
-                self.stroke_perf.merge_brush(p);
+                self.brush_perf += gpu_ctx.submit_final();
             }
-            self.stroke_perf.total_phase_commit_us += t_commit.elapsed().as_micros() as u64;
         } else {
             // Fallback: no stroke buffer — render directly to the paint
             // target (shouldn't happen in practice). Skips the lifecycle
@@ -1159,18 +1112,6 @@ impl DarklyEngine {
         // Put the engine and buffer back.
         self.brush_stroke_engine = Some(engine);
         self.stroke_buffer = stroke_buffer;
-
-        // Record per-event timing + per-event dab count peak. Sub-phase
-        // counters were accumulated in-place above; the wrap-up here is
-        // just per-event aggregation.
-        let elapsed_us = perf_start.elapsed().as_micros() as u64;
-        self.stroke_perf.events += 1;
-        self.stroke_perf.total_elapsed_us += elapsed_us;
-        if elapsed_us > self.stroke_perf.max_event_us {
-            self.stroke_perf.max_event_us = elapsed_us;
-        }
-        let dabs_this_event = (self.stroke_perf.total_dabs - dabs_before) as u32;
-        self.stroke_perf.update_max_dabs_per_event(dabs_this_event);
     }
 
     /// Start async GPU flood fill: readback paint target texture, then
@@ -1304,164 +1245,6 @@ impl DarklyEngine {
 
     pub fn end_stroke(&mut self) {
         if let Some(layer_id) = self.active_stroke_layer.take() {
-            // Emit the per-stroke perf summary before any cleanup. `events == 0`
-            // means this wasn't a brush stroke (e.g. a flood-fill `end_stroke`)
-            // so skip the log.
-            let p = &self.stroke_perf;
-            if p.events > 0 {
-                let n = p.events as f32;
-                let to_ms = |v: u64| (v as f32) / 1000.0;
-                let avg_us = p.total_elapsed_us as f32 / n;
-                let avg_rerender = if p.divergence_events > 0 {
-                    p.total_rerender_range as f32 / p.divergence_events as f32
-                } else {
-                    0.0
-                };
-                log::info!(
-                    "[stab-perf] stroke summary: events={} div_events={} full_rerenders={} \
-                     avg_event={:.2}ms max_event={:.2}ms total={:.0}ms \
-                     avg_rerender_range={:.1} max_rerender_range={} \
-                     max_div_window={} spacing={} max_queue_backlog={} \
-                     total_dabs={} max_dabs/event={}",
-                    p.events,
-                    p.divergence_events,
-                    p.full_rerender_events,
-                    avg_us / 1000.0,
-                    p.max_event_us as f32 / 1000.0,
-                    p.total_elapsed_us as f32 / 1000.0,
-                    avg_rerender,
-                    p.max_rerender_range,
-                    p.last_max_div_window,
-                    p.last_spacing,
-                    p.max_queue_backlog,
-                    p.total_dabs,
-                    p.max_dabs_per_event,
-                );
-                // Phase breakdown — averaged per event.
-                log::info!(
-                    "[stab-perf] phases (avg per event): \
-                     stabilize={:.2}ms rewind={:.2}ms restore={:.2}ms \
-                     segments={:.2}ms tail={:.2}ms commit={:.2}ms \
-                     submits/event={:.1} submit/event={:.2}ms",
-                    to_ms(p.total_phase_stabilize_us) / n,
-                    to_ms(p.total_phase_rewind_us) / n,
-                    to_ms(p.total_phase_restore_us) / n,
-                    to_ms(p.total_phase_segments_us) / n,
-                    to_ms(p.total_phase_tail_us) / n,
-                    to_ms(p.total_phase_commit_us) / n,
-                    p.total_submits as f32 / n,
-                    to_ms(p.total_submit_us) / n,
-                );
-                // Per-dab breakdown — host wall-clock attribution.
-                //
-                // Top-level split: total = graph_eval + execute_gpu +
-                // release_all + flush_submit + post_dab + bookkeeping
-                // The first "unattributed" number is whatever escapes
-                // even these wider buckets — likely the tiny gaps in
-                // `place_dab` between the timed sections.
-                //
-                // Inside execute_gpu, the per-node buckets (stamp,
-                // composite, read_mirror) are subsets. Their delta is
-                // framework overhead + other GPU nodes' evaluators.
-                let total_dabs = p.total_dabs.max(1) as f32;
-                let top_level_attributed = p.total_dab_graph_eval_us
-                    + p.total_dab_execute_gpu_us
-                    + p.total_dab_release_all_us
-                    + p.total_dab_flush_us
-                    + p.total_dab_post_us;
-                let unattributed = p.total_dab_us.saturating_sub(top_level_attributed);
-                let exec_gpu_attributed = p.total_dab_stamp_us
-                    + p.total_dab_composite_us
-                    + p.total_dab_read_mirror_us
-                    + p.total_dab_pool_acquire_us;
-                let exec_gpu_other = p
-                    .total_dab_execute_gpu_us
-                    .saturating_sub(exec_gpu_attributed);
-                log::info!(
-                    "[stab-perf] per dab top-level (avg µs): \
-                     total={:.0} graph_eval={:.0} execute_gpu={:.0} \
-                     release_all={:.0} flush_submit={:.0} post_dab={:.0} \
-                     unattributed={:.0}",
-                    p.total_dab_us as f32 / total_dabs,
-                    p.total_dab_graph_eval_us as f32 / total_dabs,
-                    p.total_dab_execute_gpu_us as f32 / total_dabs,
-                    p.total_dab_release_all_us as f32 / total_dabs,
-                    p.total_dab_flush_us as f32 / total_dabs,
-                    p.total_dab_post_us as f32 / total_dabs,
-                    unattributed as f32 / total_dabs,
-                );
-                log::info!(
-                    "[stab-perf] execute_gpu breakdown (avg µs): \
-                     stamp_pass={:.0} composite_pass={:.0} \
-                     read_mirror_copy={:.0} pool_acquire={:.0} other={:.0}",
-                    p.total_dab_stamp_us as f32 / total_dabs,
-                    p.total_dab_composite_us as f32 / total_dabs,
-                    p.total_dab_read_mirror_us as f32 / total_dabs,
-                    p.total_dab_pool_acquire_us as f32 / total_dabs,
-                    exec_gpu_other as f32 / total_dabs,
-                );
-                // Brush-graph runner breakdown. `steps/dab` is how many
-                // GPU-tagged plan steps the runner walks per dab; the two
-                // time figures are the per-dab averages of `gather_inputs`
-                // and the per-step output write-back loop (both are
-                // per-step costs × steps/dab).
-                let steps_per_dab = p.total_gpu_steps as f32 / total_dabs;
-                // Per-dab time spent in evaluator bodies vs runner framework:
-                //   eval_gpu_call: sum of `evaluator.evaluate_gpu(...)` calls
-                //   eval_cpu_in_gpu: sum of promoted-CPU `evaluate_cpu(...)` calls
-                //   framework = execute_gpu − eval_gpu_call − eval_cpu_in_gpu
-                //               − gather_inputs − step_outputs
-                let eval_gpu_call_us = p.total_evaluate_gpu_call_us as f32 / total_dabs;
-                let eval_cpu_in_gpu_us = p.total_evaluate_cpu_in_gpu_us as f32 / total_dabs;
-                let gather_us = p.total_gather_inputs_us as f32 / total_dabs;
-                let outputs_us = p.total_step_outputs_us as f32 / total_dabs;
-                let exec_gpu_us = p.total_dab_execute_gpu_us as f32 / total_dabs;
-                let framework_us =
-                    (exec_gpu_us - eval_gpu_call_us - eval_cpu_in_gpu_us - gather_us - outputs_us)
-                        .max(0.0);
-                log::info!(
-                    "[stab-perf] runner per dab: steps/dab={:.1} \
-                     gather_inputs={:.0}µs step_outputs={:.0}µs \
-                     eval_gpu_call={:.0}µs eval_cpu_in_gpu={:.0}µs \
-                     framework={:.0}µs",
-                    steps_per_dab,
-                    gather_us,
-                    outputs_us,
-                    eval_gpu_call_us,
-                    eval_cpu_in_gpu_us,
-                    framework_us,
-                );
-                // Evaluator-body hotspots — what fills the eval_gpu_call
-                // total beyond the bucketed render passes. `prep_no_copy`
-                // is the footprint math, isolated from the read_mirror
-                // copy already shown above.
-                let prep_total = p.total_prepare_canvas_copy_us as f32 / total_dabs;
-                let prep_no_copy = (p.total_prepare_canvas_copy_us as i64
-                    - p.total_dab_read_mirror_us as i64)
-                    .max(0) as f32
-                    / total_dabs;
-                log::info!(
-                    "[stab-perf] evaluator hotspots (avg µs): \
-                     prepare_canvas_copy={:.0} (footprint_math={:.0}) \
-                     write_composite_uniforms={:.0} \
-                     write_stamp_uniforms={:.0} ctx_input={:.0}",
-                    prep_total,
-                    prep_no_copy,
-                    p.total_write_composite_uniforms_us as f32 / total_dabs,
-                    p.total_write_stamp_uniforms_us as f32 / total_dabs,
-                    p.total_ctx_input_us as f32 / total_dabs,
-                );
-                if p.full_rerender_events > 0 {
-                    log::warn!(
-                        "[stab-perf] stroke had {} mid-stroke full re-render \
-                         fallback(s) — checkpoint ring lost coverage of the \
-                         divergence window. See docs/brush/stabilization.md \
-                         §\"Checkpoint Ring Invariants\".",
-                        p.full_rerender_events,
-                    );
-                }
-            }
-
             // Per-stroke thumbnail refresh — the node texture (raster or mask
             // modifier) now holds the cumulative pixels of every dab/op since
             // begin_stroke. Live mid-stroke updates are intentionally skipped.

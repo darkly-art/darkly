@@ -29,7 +29,7 @@ pub use types::{
 pub use perf::{BrushPerfDelta, FrameRenderPhases};
 
 mod perf;
-use perf::{BrushPerfSnapshot, StrokePerfStats};
+use crate::brush::gpu_context::BrushPerfCounters;
 
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
@@ -435,16 +435,16 @@ pub struct DarklyEngine {
     /// process lifetime.
     pub(crate) layer_growth_capped: bool,
 
-    /// Per-stroke perf accumulator. Reset at `begin_stroke`, emitted at
-    /// `end_stroke`. See `StrokePerfStats` for what each field means.
-    pub(crate) stroke_perf: StrokePerfStats,
+    /// Per-stroke counter accumulator. Reset at `begin_stroke`; each
+    /// per-event `BrushGpuContext` `+=`'s its drained counters into here.
+    pub(crate) brush_perf: BrushPerfCounters,
 
-    /// Last `stroke_perf` snapshot captured by `drain_brush_perf_delta`.
-    /// Subtracted from the current state on each drain to produce a
-    /// per-interval delta. Reset to default at `begin_stroke` along with
-    /// `stroke_perf`. Native bench harnesses only — production never reads
-    /// this.
-    pub(crate) last_brush_perf_snapshot: BrushPerfSnapshot,
+    /// Snapshot of `brush_perf` taken on the last `drain_brush_perf_delta`
+    /// call. Subtracted from the current accumulator on each drain to
+    /// produce a per-interval delta. Reset to default at `begin_stroke`
+    /// alongside `brush_perf`. Native bench harnesses only — production
+    /// never reads this.
+    pub(crate) last_brush_perf: BrushPerfCounters,
 
     /// Most recent `render()` sub-phase timings. Overwritten every frame;
     /// read by the WASM bridge when it logs a slow frame.
@@ -551,8 +551,8 @@ impl DarklyEngine {
             thumbnail_cache: ThumbnailCache::new(),
             thumbnail_version: 0,
             layer_growth_capped: false,
-            stroke_perf: StrokePerfStats::default(),
-            last_brush_perf_snapshot: BrushPerfSnapshot::default(),
+            brush_perf: BrushPerfCounters::default(),
+            last_brush_perf: BrushPerfCounters::default(),
             last_frame_phases: FrameRenderPhases::default(),
         };
 
@@ -631,42 +631,17 @@ impl DarklyEngine {
         }
     }
 
-    /// Per-event drain of the brush perf accumulator. Captures a fresh
-    /// snapshot, subtracts the previous one to yield the scalar deltas
-    /// (submit / dispatch / sync time + dab / dispatch / area counts),
-    /// and takes the per-flush vectors out of `stroke_perf`. Updates the
-    /// stashed snapshot so the next call subtracts against this point.
+    /// Per-event drain of the brush perf accumulator. Returns the delta
+    /// against the previous drain (per-flush vectors taken via `mem::take`,
+    /// scalars `saturating_sub`'d) and resnapshots `last_brush_perf` so the
+    /// next call subtracts against this point.
     ///
-    /// **Native bench harnesses only.** Mutates `stroke_perf`'s per-flush
+    /// **Native bench harnesses only.** Mutates `brush_perf`'s per-flush
     /// vectors via `std::mem::take`. WASM frontends do not call this.
     pub fn drain_brush_perf_delta(&mut self) -> BrushPerfDelta {
-        let curr = BrushPerfSnapshot::capture(&self.stroke_perf);
-        let prev = self.last_brush_perf_snapshot;
-        self.last_brush_perf_snapshot = curr;
-
-        BrushPerfDelta {
-            submit_us: curr.total_submit_us.saturating_sub(prev.total_submit_us),
-            submits: curr.total_submits.saturating_sub(prev.total_submits),
-            compute_dispatch_us: curr
-                .total_compute_dispatch_us
-                .saturating_sub(prev.total_compute_dispatch_us),
-            compute_buffer_sync_us: curr
-                .total_compute_buffer_sync_us
-                .saturating_sub(prev.total_compute_buffer_sync_us),
-            compute_dispatches: curr
-                .total_compute_dispatches
-                .saturating_sub(prev.total_compute_dispatches),
-            compute_dabs: curr
-                .total_compute_dabs
-                .saturating_sub(prev.total_compute_dabs),
-            compute_union_bbox_area_total: curr
-                .total_compute_union_bbox_area
-                .saturating_sub(prev.total_compute_union_bbox_area),
-            compute_dabs_per_flush: std::mem::take(&mut self.stroke_perf.compute_dabs_per_flush),
-            compute_union_bbox_area_per_flush: std::mem::take(
-                &mut self.stroke_perf.compute_union_bbox_area_per_flush,
-            ),
-        }
+        let delta = BrushPerfDelta::between(&mut self.brush_perf, &self.last_brush_perf);
+        self.last_brush_perf = self.brush_perf.clone();
+        delta
     }
 
     /// Current overlay preview mask dimensions. Test-only accessor.
@@ -830,18 +805,18 @@ impl DarklyEngine {
     }
 
     /// Count of mid-stroke full-re-render fallbacks observed during the
-    /// most recent stroke (drained at `end_stroke`). Used by integration
-    /// tests to assert that the checkpoint ring's coverage invariant
-    /// kept fallback at zero across a stroke.
+    /// most recent stroke. Used by integration tests to assert that the
+    /// checkpoint ring's coverage invariant kept fallback at zero across
+    /// a stroke.
     pub fn test_stroke_full_rerender_events(&self) -> u32 {
-        self.stroke_perf.full_rerender_events
+        self.brush_perf.full_rerender_events
     }
 
-    /// Total dabs placed during the most recent stroke. `stroke_perf` is
+    /// Total dabs placed during the most recent stroke. `brush_perf` is
     /// reset at `begin_stroke`, so call this between `end_stroke` and the
     /// next `begin_stroke` to read the just-finished stroke's count.
     pub fn test_stroke_total_dabs(&self) -> u64 {
-        self.stroke_perf.total_dabs
+        self.brush_perf.dabs_placed as u64
     }
 
     // -----------------------------------------------------------------

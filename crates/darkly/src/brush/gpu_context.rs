@@ -16,261 +16,55 @@ use super::scratch::Scratch;
 use super::wire::TextureHandle;
 use crate::gpu::paint_target::GpuPaintTarget;
 
-/// Host-side wall-clock counters tracking per-dab cost inside a single
-/// `BrushGpuContext` lifetime. Drained by `submit_final` so the engine
-/// can fold them into the per-stroke summary.
+/// Brush perf counters. Lives both per-`BrushGpuContext` (drained at
+/// `submit_final`) and per-engine (accumulated across all contexts of a
+/// stroke via [`AddAssign`]). The bench harness reads interval-deltas
+/// against the engine-side accumulator via
+/// [`crate::engine::BrushPerfDelta::between`].
 ///
-/// All times are microseconds. None of these reflect GPU shader execution
-/// — they're recorded around CPU-side encoder ops, IPC submissions, and
-/// host-side bookkeeping. The lag investigation indicated drain dominated
-/// the frame, so host-side timing is what we actually want.
-///
-/// Callers OUTSIDE this module (the stroke engine + individual brush node
-/// evaluators) call `record_*` helpers to attribute their work to the
-/// right bucket. INTERNAL helpers (`sync_scratch_read_mirror`,
-/// `flush_if_needed`, `submit_final`) instrument themselves.
+/// `submit_us` is wall-clock around `queue.submit()`. The compute-path
+/// counters describe workload (dispatch/dab/bbox-area volume), not host
+/// time spent processing it — finer-grained timing belongs in
+/// `PaintComputeTimestamps`' GPU query slots, not here. See
+/// `engine/perf.rs` for the design note.
 #[derive(Default, Clone, Debug)]
 pub struct BrushPerfCounters {
-    /// Number of `place_dab` invocations that ran during this context's
-    /// lifetime.
+    /// Number of `place_dab` invocations during this counter's lifetime.
+    /// Exposed by `engine.test_stroke_total_dabs()` for integration tests.
     pub dabs_placed: u32,
-    /// Sum of per-dab end-to-end host time (from `place_dab` start to end,
-    /// inclusive of every node + pool + flush check).
-    pub dab_total_us: u64,
-    /// Sum of CPU node-graph evaluation time (`execute_cpu` +
-    /// `execute_gpu` orchestration overhead — excludes the node
-    /// evaluators' own GPU encoder work, which is bucketed by node type
-    /// below).
-    pub graph_eval_us: u64,
-    /// Sum of host time recording stamp render passes
-    /// (`stamp::encode_stamp_pass` — `begin_render_pass` + draw + drop).
-    pub stamp_pass_us: u64,
-    /// Sum of host time recording color_output composite render passes
-    /// (the `begin_render_pass` + draw + drop sequence in
-    /// `color_output::evaluate_gpu`).
-    pub composite_pass_us: u64,
-    /// Sum of host time spent issuing the read-mirror
-    /// `copy_texture_to_texture` (`Scratch::sync_read_mirror`).
-    pub read_mirror_copy_us: u64,
-    /// Sum of host time spent in `DabTexturePool::acquire_sized`.
-    pub pool_acquire_us: u64,
-    /// Sum of host time spent in `flush_if_needed` when it actually
-    /// flushes (excludes the no-op fast path).
-    pub flush_submit_us: u64,
-    /// Time spent inside the final `queue.submit()` in `submit_final`.
+    /// Number of mid-stroke full-re-render fallbacks. Per-engine only —
+    /// per-context value is always zero. Exposed by
+    /// `engine.test_stroke_full_rerender_events()`.
+    pub full_rerender_events: u32,
+    /// Wall-clock microseconds inside `queue.submit()` (final + ring-flush).
     pub submit_us: u64,
-    /// Number of `queue.submit()` calls issued from this context (final
-    /// submit + every mid-context flush).
+    /// Number of `queue.submit()` calls.
     pub submits: u32,
-
-    // --- Newer per-dab buckets (added to chase the unattributed 39µs/dab) ---
-    /// Total host time inside `runner.execute_gpu(gpu)` per dab. This is
-    /// a wrapper around all GPU-node evaluators; `stamp_pass_us` and
-    /// `composite_pass_us` are subsets of it. The delta
-    /// (`execute_gpu_us − stamp_pass_us − composite_pass_us −
-    /// read_mirror_copy_us`) is framework overhead + other GPU-node
-    /// evaluators.
-    pub execute_gpu_us: u64,
-    /// Sum of host time spent in `DabTexturePool::release_all` per dab.
-    pub release_all_us: u64,
-    /// Sum of host time spent in `place_dab`'s post-`execute_gpu`
-    /// bookkeeping: terminal-output reads, canvas-bbox math, save-points
-    /// push.
-    pub post_dab_us: u64,
-
-    /// Number of GPU steps the brush graph runner iterates over, summed
-    /// across all dabs in this context. Divide by `dabs_placed` for the
-    /// average GPU-step count per dab.
-    pub gpu_steps: u64,
-    /// Sum of host time inside `gather_inputs` across all GPU steps. The
-    /// runner builds a fresh `HashMap` per step and walks `port_defs` for
-    /// each input's wire-boundary remap; this counter tells us how much
-    /// of the per-dab cost is that bookkeeping.
-    pub gather_inputs_us: u64,
-    /// Sum of host time inside the per-step output write-back loop.
-    /// Iterates `step.output_slots` linearly with a string match per
-    /// produced output.
-    pub step_outputs_us: u64,
-    /// Sum of host time inside `evaluator.evaluate_gpu(...)` calls — the
-    /// evaluator-body time. Excludes the runner-framework time
-    /// (`gather_inputs`, `step_outputs`, evaluator lookup, context build).
-    /// Sub-buckets like `stamp_pass_us`, `composite_pass_us`,
-    /// `read_mirror_copy_us`, `pool_acquire_us` are subsets of this.
-    pub evaluate_gpu_call_us: u64,
-    /// Sum of host time inside `evaluator.evaluate_cpu(...)` calls *made
-    /// from inside `dispatch_gpu`* (promoted-CPU nodes that landed in the
-    /// GPU phase because they depend on a GPU output). Separate from the
-    /// `execute_cpu` phase's evaluation.
-    pub evaluate_cpu_in_gpu_us: u64,
-
-    // --- Inside-evaluator hotspots (added to chase the 30µs of
-    //     `eval_gpu_call` time that the per-pass timers don't account
-    //     for) ---
-    /// Sum of host time inside `prepare_dab_canvas_copy` calls
-    /// (`color_output::evaluate_gpu`). Includes the inner
-    /// `sync_scratch_read_mirror` cost already tracked in
-    /// `read_mirror_copy_us`; subtract to isolate the footprint-math
-    /// + `push_dab_write_bbox` + `DabFootprint` build.
-    pub prepare_canvas_copy_us: u64,
-    /// Sum of host time inside `write_composite_uniforms` calls
-    /// (`queue.write_buffer` + ring-slot math).
-    pub write_composite_uniforms_us: u64,
-    /// Sum of host time inside `write_stamp_uniforms` calls. Subset of
-    /// `stamp_pass_us` (the stamp-pass timer wraps the whole
-    /// `encode_stamp_pass` call which contains the uniform write).
-    pub write_stamp_uniforms_us: u64,
-    /// Sum of host time inside `ctx.input(...)` lookups performed at
-    /// the top of `color_output::evaluate_gpu` (HashMap-by-string-key
-    /// reads + `as_vec2`/match coercion).
-    pub ctx_input_us: u64,
-
-    // --- Compute-path (paint_compute terminal) ---
-    /// Per-event host time spent in `paint_compute::commit` —
-    /// encoder bookkeeping + compute pass open/dispatch/close. Summed
-    /// across all events of the stroke.
-    pub compute_dispatch_us: u64,
-    /// Per-event host time spent on the `copy_buffer_to_texture` that
-    /// syncs the compute scratch buffer back to the scratch texture so
-    /// the downstream fragment-path commit can sample it. Summed across
-    /// all events of the stroke.
-    pub compute_buffer_sync_us: u64,
-    /// Total dabs that flowed through the compute path (queued in
-    /// `pending_compute_dab_bytes`, processed by the compute shader).
-    pub compute_dabs_total: u32,
-    /// Number of compute dispatches issued during this stroke (one per
-    /// pen event for the paint-compute brush).
-    pub compute_dispatches_total: u32,
+    /// Number of paint-compute flushes that issued a dispatch.
+    pub compute_dispatches: u32,
+    /// Total dabs that flowed through the compute path.
+    pub compute_dabs: u32,
     /// Sum of `union_w * union_h` across every paint-compute flush.
-    /// Indicates how much canvas-pixel area the compute dispatches *thought*
-    /// they had to touch (vs `compute_dabs_total` which measures dab volume).
-    /// Used by the bench to correlate cell perf with workload shape.
-    pub compute_union_bbox_area_total: u64,
-    /// Per-flush dab counts. One entry per `flush_compute` call within
-    /// this context's lifetime. Drained per-event by the bench harness;
-    /// production paths never read this. Kept on the per-context counters
-    /// so a `BrushGpuContext` lifetime corresponds to one append cycle —
-    /// merge_brush moves the entries into `StrokePerfStats`.
+    pub compute_union_bbox_area: u64,
+    /// Per-flush dab counts. One entry per `flush_compute` call. Drained
+    /// per-event by the bench harness; production paths never read this.
     pub compute_dabs_per_flush: Vec<u32>,
-    /// Per-flush `union_w * union_h` in canvas pixels. Same indexing as
+    /// Per-flush `union_w * union_h` in canvas pixels. Parallel to
     /// `compute_dabs_per_flush`.
     pub compute_union_bbox_area_per_flush: Vec<u32>,
 }
 
 impl BrushPerfCounters {
-    /// Record host wall-clock time attributed to CPU brush-graph eval. The
-    /// stroke engine calls this around `execute_cpu` + `execute_gpu`
-    /// minus already-attributed work (the node evaluators add to their
-    /// own buckets directly).
-    pub fn record_graph_eval(&mut self, us: u64) {
-        self.graph_eval_us = self.graph_eval_us.saturating_add(us);
-    }
-
-    /// Record host wall-clock time for one stamp render pass. Called by
-    /// the stamp node's evaluator.
-    pub fn record_stamp_pass(&mut self, us: u64) {
-        self.stamp_pass_us = self.stamp_pass_us.saturating_add(us);
-    }
-
-    /// Record host wall-clock time for one color_output composite pass.
-    pub fn record_composite_pass(&mut self, us: u64) {
-        self.composite_pass_us = self.composite_pass_us.saturating_add(us);
-    }
-
-    /// Record host wall-clock time for one `acquire_sized` call.
-    pub fn record_pool_acquire(&mut self, us: u64) {
-        self.pool_acquire_us = self.pool_acquire_us.saturating_add(us);
-    }
-
-    /// Increment the dab counter and add to the per-dab total. Called by
-    /// `place_dab`.
-    pub fn record_dab(&mut self, us: u64) {
+    /// Increment the per-stroke dab counter. Called once per `place_dab`.
+    pub fn record_dab(&mut self) {
         self.dabs_placed = self.dabs_placed.saturating_add(1);
-        self.dab_total_us = self.dab_total_us.saturating_add(us);
     }
 
-    /// Record host wall-clock time around `runner.execute_gpu(gpu)`. The
-    /// node-specific buckets (`stamp_pass_us`, `composite_pass_us`,
-    /// `read_mirror_copy_us`) are subsets — the delta is framework
-    /// overhead + other GPU nodes.
-    pub fn record_execute_gpu(&mut self, us: u64) {
-        self.execute_gpu_us = self.execute_gpu_us.saturating_add(us);
-    }
-
-    /// Record host wall-clock time around `dab_pool.release_all()`.
-    pub fn record_release_all(&mut self, us: u64) {
-        self.release_all_us = self.release_all_us.saturating_add(us);
-    }
-
-    /// Record host wall-clock time around `place_dab`'s post-`execute_gpu`
-    /// bookkeeping.
-    pub fn record_post_dab(&mut self, us: u64) {
-        self.post_dab_us = self.post_dab_us.saturating_add(us);
-    }
-
-    /// Increment the GPU step counter. Called once per step inside the
-    /// brush-graph runner's `dispatch_gpu` loop.
-    pub fn record_gpu_step(&mut self) {
-        self.gpu_steps = self.gpu_steps.saturating_add(1);
-    }
-
-    /// Record host time spent in one `gather_inputs` call.
-    pub fn record_gather_inputs(&mut self, us: u64) {
-        self.gather_inputs_us = self.gather_inputs_us.saturating_add(us);
-    }
-
-    /// Record host time spent in one step's output write-back loop.
-    pub fn record_step_outputs(&mut self, us: u64) {
-        self.step_outputs_us = self.step_outputs_us.saturating_add(us);
-    }
-
-    /// Record host time spent inside one `evaluator.evaluate_gpu(...)`
-    /// call.
-    pub fn record_evaluate_gpu_call(&mut self, us: u64) {
-        self.evaluate_gpu_call_us = self.evaluate_gpu_call_us.saturating_add(us);
-    }
-
-    /// Record host time spent inside one `evaluator.evaluate_cpu(...)`
-    /// call dispatched from `dispatch_gpu`.
-    pub fn record_evaluate_cpu_in_gpu(&mut self, us: u64) {
-        self.evaluate_cpu_in_gpu_us = self.evaluate_cpu_in_gpu_us.saturating_add(us);
-    }
-
-    pub fn record_prepare_canvas_copy(&mut self, us: u64) {
-        self.prepare_canvas_copy_us = self.prepare_canvas_copy_us.saturating_add(us);
-    }
-
-    pub fn record_write_composite_uniforms(&mut self, us: u64) {
-        self.write_composite_uniforms_us = self.write_composite_uniforms_us.saturating_add(us);
-    }
-
-    pub fn record_write_stamp_uniforms(&mut self, us: u64) {
-        self.write_stamp_uniforms_us = self.write_stamp_uniforms_us.saturating_add(us);
-    }
-
-    pub fn record_ctx_input(&mut self, us: u64) {
-        self.ctx_input_us = self.ctx_input_us.saturating_add(us);
-    }
-
-    // --- Compute-path counters (paint_compute terminal) ---
-
-    /// Record host wall-clock time spent in `paint_compute::commit` —
-    /// encoder building, uniform write, compute pass open/dispatch/close,
-    /// buffer→texture sync. One reading per pen event.
-    pub fn record_compute_dispatch(&mut self, us: u64) {
-        self.compute_dispatch_us = self.compute_dispatch_us.saturating_add(us);
-    }
-
-    /// Record host wall-clock time around the `copy_buffer_to_texture` that
-    /// syncs the compute scratch buffer back to the scratch texture so the
-    /// downstream fragment-path commit can sample it.
-    pub fn record_compute_buffer_sync(&mut self, us: u64) {
-        self.compute_buffer_sync_us = self.compute_buffer_sync_us.saturating_add(us);
-    }
-
-    /// Increment dab counts at commit time once the queued dabs are flushed.
+    /// Increment dab + dispatch counts at flush time once the queued dabs
+    /// are about to be dispatched.
     pub fn record_compute_dispatch_batch(&mut self, dab_count: u32) {
-        self.compute_dabs_total = self.compute_dabs_total.saturating_add(dab_count);
-        self.compute_dispatches_total = self.compute_dispatches_total.saturating_add(1);
+        self.compute_dabs = self.compute_dabs.saturating_add(dab_count);
+        self.compute_dispatches = self.compute_dispatches.saturating_add(1);
     }
 
     /// Record the workload shape of one paint-compute flush:
@@ -280,11 +74,36 @@ impl BrushPerfCounters {
     /// union bbox has been computed.
     pub fn record_compute_flush_workload(&mut self, dab_count: u32, union_w: u32, union_h: u32) {
         let area = (union_w as u64).saturating_mul(union_h as u64);
-        self.compute_union_bbox_area_total =
-            self.compute_union_bbox_area_total.saturating_add(area);
+        self.compute_union_bbox_area = self.compute_union_bbox_area.saturating_add(area);
         self.compute_dabs_per_flush.push(dab_count);
         self.compute_union_bbox_area_per_flush
             .push(area.min(u32::MAX as u64) as u32);
+    }
+}
+
+impl std::ops::AddAssign for BrushPerfCounters {
+    /// Merge per-context counters into the engine-side stroke accumulator
+    /// (or any two accumulators in general). Scalars saturating-add;
+    /// per-flush vectors append in order. `full_rerender_events` is
+    /// per-engine state; per-context counters always contribute zero.
+    fn add_assign(&mut self, mut rhs: Self) {
+        self.dabs_placed = self.dabs_placed.saturating_add(rhs.dabs_placed);
+        self.full_rerender_events = self
+            .full_rerender_events
+            .saturating_add(rhs.full_rerender_events);
+        self.submit_us = self.submit_us.saturating_add(rhs.submit_us);
+        self.submits = self.submits.saturating_add(rhs.submits);
+        self.compute_dispatches = self
+            .compute_dispatches
+            .saturating_add(rhs.compute_dispatches);
+        self.compute_dabs = self.compute_dabs.saturating_add(rhs.compute_dabs);
+        self.compute_union_bbox_area = self
+            .compute_union_bbox_area
+            .saturating_add(rhs.compute_union_bbox_area);
+        self.compute_dabs_per_flush
+            .append(&mut rhs.compute_dabs_per_flush);
+        self.compute_union_bbox_area_per_flush
+            .append(&mut rhs.compute_union_bbox_area_per_flush);
     }
 }
 
@@ -396,10 +215,10 @@ pub struct BrushGpuContext<'a> {
     /// outside stroke evaluation.
     pub dab_write_canvas_bbox: Option<crate::coord::CanvasRect>,
 
-    /// Host wall-clock counters drained at submit time. Stroke engine
-    /// and node evaluators write to this directly via `record_*` helpers.
-    /// Drained by `submit_final` — the engine merges the result into the
-    /// stroke-level `StrokePerfStats`.
+    /// Host-side counters for this context's lifetime. Written by the
+    /// stroke engine + compute terminals via `record_*` helpers; drained
+    /// by `submit_final` so the engine can `+= ` the result into its own
+    /// stroke-level accumulator.
     pub perf: BrushPerfCounters,
 
     /// Dabs queued by whichever compute terminal is active in the graph
@@ -434,9 +253,9 @@ impl<'a> BrushGpuContext<'a> {
     /// `queue.submit()` call — no per-dab submission needed thanks to
     /// dynamic uniform buffer offsets.
     ///
-    /// Returns the per-context perf counters so the caller can fold them
-    /// into the stroke-level `StrokePerfStats`. The final submit's wall
-    /// clock is recorded into `submit_us` before returning.
+    /// Returns the per-context perf counters so the caller can `+=` them
+    /// into the engine's stroke-level accumulator. The final submit's
+    /// wall clock is folded into `submit_us` before returning.
     pub fn submit_final(mut self) -> BrushPerfCounters {
         let t = web_time::Instant::now();
         self.queue.submit([self.encoder.finish()]);
@@ -471,8 +290,10 @@ impl<'a> BrushGpuContext<'a> {
             );
             self.queue.submit([finished.finish()]);
             self.pipelines.reset_uniform_rings();
-            let us = t.elapsed().as_micros() as u64;
-            self.perf.flush_submit_us = self.perf.flush_submit_us.saturating_add(us);
+            self.perf.submit_us = self
+                .perf
+                .submit_us
+                .saturating_add(t.elapsed().as_micros() as u64);
             self.perf.submits = self.perf.submits.saturating_add(1);
         }
     }
@@ -670,7 +491,6 @@ impl<'a> BrushGpuContext<'a> {
         height: u32,
     ) {
         if let Some(scratch) = self.scratch.as_deref_mut() {
-            let t = web_time::Instant::now();
             scratch.sync_read_mirror(
                 self.device,
                 &mut self.encoder,
@@ -679,8 +499,6 @@ impl<'a> BrushGpuContext<'a> {
                 width,
                 height,
             );
-            let us = t.elapsed().as_micros() as u64;
-            self.perf.read_mirror_copy_us = self.perf.read_mirror_copy_us.saturating_add(us);
         }
     }
 }

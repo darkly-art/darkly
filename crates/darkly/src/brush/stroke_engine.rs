@@ -328,10 +328,6 @@ impl StrokeEngine {
         gpu: &mut BrushGpuContext,
         vector_index: usize,
     ) {
-        // Per-dab host wall-clock — captures end-to-end CPU time spent in
-        // this dab so the stroke summary can break the 30ms-per-event budget
-        // down by dab count. GPU shader cost is NOT measured here.
-        let t_dab = web_time::Instant::now();
         let mut dab_info = *info;
         dab_info.fade = (dab_info.distance / FADE_DISTANCE_PX).min(1.0);
         // Motion is a per-dab quantity — the previous-dab → this-dab delta.
@@ -339,10 +335,6 @@ impl StrokeEngine {
         // fill it here so smudge sees the correct smear-sample offset.
         dab_info.motion = self.next_dab_motion(dab_info.pos);
 
-        // CPU graph eval — `execute_cpu` and the bookkeeping that frames it.
-        // Bucketed separately from `execute_gpu` because the CPU path runs
-        // for every dab regardless of GPU pipeline shape.
-        let t_graph = web_time::Instant::now();
         self.runner.clear_slots();
         self.runner.seed_sensors(
             &dab_info,
@@ -351,8 +343,6 @@ impl StrokeEngine {
             self.dab_count,
         );
         self.runner.execute_cpu();
-        gpu.perf
-            .record_graph_eval(t_graph.elapsed().as_micros() as u64);
 
         // Per-dab context state: reset the read-mirror cache so the first
         // node that needs a canvas region this dab actually issues the copy.
@@ -360,27 +350,11 @@ impl StrokeEngine {
         // Reset the write-bbox accumulator so each terminal's passes can
         // publish their footprint fresh. Read back after execute_gpu below.
         gpu.dab_write_canvas_bbox = None;
-        // GPU-node-evaluator host time bucketed three ways: the outer
-        // `execute_gpu_us` covers EVERY node's evaluator + framework
-        // overhead; the inner per-node buckets (stamp / composite /
-        // read_mirror) are subsets. Their delta is "rest of the graph".
-        let t_exec = web_time::Instant::now();
         self.runner.execute_gpu(gpu);
-        let exec_us = t_exec.elapsed().as_micros() as u64;
-        gpu.perf.record_execute_gpu(exec_us);
 
-        let t_release = web_time::Instant::now();
         gpu.dab_pool.release_all();
-        gpu.perf
-            .record_release_all(t_release.elapsed().as_micros() as u64);
 
         gpu.flush_if_needed();
-
-        // Post-execute bookkeeping: terminal-output reads, canvas-bbox
-        // math, save_points.push. Bucketed together because each piece
-        // is too small to time individually but their sum can be material
-        // at high dab counts.
-        let t_post = web_time::Instant::now();
 
         // Update dab size from dab source node output (procedural, stamp,
         // or warp terminals like liquify that report an effective radius).
@@ -438,11 +412,7 @@ impl StrokeEngine {
         );
 
         self.dab_count += 1;
-        gpu.perf
-            .record_post_dab(t_post.elapsed().as_micros() as u64);
-        // End-to-end per-dab wall-clock (CPU only). The summary log
-        // divides this by `dabs_placed` for an average host cost per dab.
-        gpu.perf.record_dab(t_dab.elapsed().as_micros() as u64);
+        gpu.perf.record_dab();
     }
 
     /// Render only the tail of the stabilized polyline — the latest point.

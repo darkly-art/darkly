@@ -187,16 +187,6 @@ enum Command {
 
 fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
     let cmds: Vec<Command> = commands.borrow_mut().drain(..).collect();
-    // Largest backlog of `BrushStroke` ops in a single drain. High values
-    // mean the engine is falling behind input — each backed-up event will
-    // still be processed in this drain. Fed to the stroke perf summary.
-    let brush_backlog = cmds
-        .iter()
-        .filter(|c| matches!(c, Command::StrokeOp(StrokeOp::BrushStroke { .. })))
-        .count() as u32;
-    if brush_backlog > 0 {
-        engine.record_input_backlog(brush_backlog);
-    }
     for cmd in cmds {
         match cmd {
             Command::BeginStroke(id) => engine.begin_stroke(LayerId::from_ffi(id)),

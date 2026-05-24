@@ -852,7 +852,6 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
         if gpu.pending_compute_dab_count == 0 {
             return;
         }
-        let t_dispatch = web_time::Instant::now();
 
         let bbox = gpu.pending_dabs_bbox.unwrap_or([0, 0, 0, 0]);
         let union_y0 = bbox[1];
@@ -932,16 +931,11 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
             }
         }
 
-        let t_sync = web_time::Instant::now();
         if union_h > 0 && write_h > 0 {
             scratch.sync_compute_buffer_to_texture(&mut gpu.encoder, union_y0, union_h);
         }
-        gpu.perf
-            .record_compute_buffer_sync(t_sync.elapsed().as_micros() as u64);
 
         gpu.perf.record_compute_dispatch_batch(total_dabs);
-        gpu.perf
-            .record_compute_dispatch(t_dispatch.elapsed().as_micros() as u64);
     }
 
     /// Direct blit scratch → layer. The scratch already holds the

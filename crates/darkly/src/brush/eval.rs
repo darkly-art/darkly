@@ -562,22 +562,16 @@ impl BrushGraphRunner {
                 continue;
             };
 
-            gpu.perf.record_gpu_step();
-
             // Gather connected inputs from the slot table, applying
             // wire-boundary range remap where both source and dest ports
             // declare a `natural_range`. Allocates a fresh `HashMap` per
-            // step; under high dab counts the cumulative allocator +
-            // remap-lookup cost shows up in the perf summary.
-            let t_gather = web_time::Instant::now();
+            // step.
             let inputs = gather_inputs(
                 &self.slots,
                 &step.input_slots,
                 step.node_id,
                 &self.node_data,
             );
-            gpu.perf
-                .record_gather_inputs(t_gather.elapsed().as_micros() as u64);
 
             let node = self.node_data.get(&step.node_id);
             let empty_params = Vec::new();
@@ -598,22 +592,13 @@ impl BrushGraphRunner {
             // `evaluate_gpu` closure runs too and no-ops (empty default).
             // Declared-GPU nodes take the opposite path: `evaluate_cpu`
             // returns empty, `evaluate_gpu` does the work.
-            let t_cpu = web_time::Instant::now();
             let mut outputs = evaluator.evaluate_cpu(&ctx);
-            let cpu_us = t_cpu.elapsed().as_micros() as u64;
-            gpu.perf.record_evaluate_cpu_in_gpu(cpu_us);
-
-            let t_gpu_call = web_time::Instant::now();
             let gpu_outputs = f(evaluator.as_ref(), &ctx, gpu);
-            let gpu_call_us = t_gpu_call.elapsed().as_micros() as u64;
-            gpu.perf.record_evaluate_gpu_call(gpu_call_us);
 
             outputs.extend(gpu_outputs);
 
             // Write outputs to their assigned slots. Linear scan with
-            // string compare per produced output × per step × per dab —
-            // a candidate hot spot at high dab counts.
-            let t_outputs = web_time::Instant::now();
+            // string compare per produced output × per step × per dab.
             for (port_name, value) in outputs {
                 for (name, slot_idx) in &step.output_slots {
                     if *name == port_name {
@@ -622,8 +607,6 @@ impl BrushGraphRunner {
                     }
                 }
             }
-            gpu.perf
-                .record_step_outputs(t_outputs.elapsed().as_micros() as u64);
         }
     }
 

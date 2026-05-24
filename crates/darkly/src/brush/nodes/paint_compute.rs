@@ -830,7 +830,6 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         if gpu.pending_compute_dab_count == 0 {
             return;
         }
-        let t_dispatch = web_time::Instant::now();
 
         let bbox = gpu.pending_dabs_bbox.unwrap_or([0, 0, 0, 0]);
         let [ux0, uy0, ux1, uy1] = bbox;
@@ -971,7 +970,6 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         // consumer this phase) sees current state. Bracketed with
         // timestamps 4/5 so the bench can attribute this copy's GPU time
         // separately from the shader pass it follows.
-        let t_sync = web_time::Instant::now();
         if let Some(ts) = pipeline_ref.timestamps.as_ref() {
             if ts.encoder_writes_enabled {
                 gpu.encoder.write_timestamp(&ts.query_set, 4);
@@ -985,8 +983,6 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
                 gpu.encoder.write_timestamp(&ts.query_set, 5);
             }
         }
-        gpu.perf
-            .record_compute_buffer_sync(t_sync.elapsed().as_micros() as u64);
 
         if let Some(ts) = pipeline_ref.timestamps.as_ref() {
             // Resolve all 6 slots into the shared buffer, then copy into a
@@ -1031,8 +1027,6 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         }
 
         gpu.perf.record_compute_dispatch_batch(total_dabs);
-        gpu.perf
-            .record_compute_dispatch(t_dispatch.elapsed().as_micros() as u64);
     }
 
     /// Composite the accumulated scratch onto the pre-stroke layer
