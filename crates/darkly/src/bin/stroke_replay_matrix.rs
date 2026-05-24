@@ -320,15 +320,35 @@ struct CellResult {
     cpu_median_us: f64,
     cpu_p95_us: f64,
     cpu_max_us: u64,
-    /// True GPU shader time per event, in microseconds. Folded from the
-    /// non-blocking timestamp drain in `replay`. Zero when the device
+    /// Compute-pass shader time per event, in microseconds. Folded from
+    /// the non-blocking timestamp drain in `replay`. Zero when the device
     /// wasn't created with `TIMESTAMP_QUERY` — bench_device opts in when
     /// the adapter advertises support.
-    gpu_median_us: f64,
-    gpu_p95_us: f64,
-    gpu_max_us: u64,
-    /// True when at least one event reported a non-zero `gpu_ns` — the
-    /// header notes this so future readers know the gpu columns are
+    gpu_shader_median_us: f64,
+    gpu_shader_p95_us: f64,
+    gpu_shader_max_us: u64,
+    /// `copy_texture_to_buffer` (sync_in) and `copy_buffer_to_texture`
+    /// (sync_out) GPU time per event. Zero unless the device exposes
+    /// `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
+    gpu_sync_in_median_us: f64,
+    gpu_sync_in_p95_us: f64,
+    gpu_sync_in_max_us: u64,
+    gpu_sync_out_median_us: f64,
+    gpu_sync_out_p95_us: f64,
+    gpu_sync_out_max_us: u64,
+    /// `queue.submit()` host time per event (back-pressure indicator).
+    submit_median_us: f64,
+    submit_p95_us: f64,
+    submit_max_us: u64,
+    /// Average dispatches, dabs, and union bbox area per event across the
+    /// stroke. Workload signal — `dabs/ev` discriminates spacing regimes
+    /// even when canvas/radius are fixed, and `bbox_area/ev` highlights
+    /// the union-bbox-lane-waste regime that hurts approach #3.
+    dispatches_per_event_avg: f64,
+    dabs_per_event_avg: f64,
+    union_bbox_area_per_event_avg: f64,
+    /// True when at least one event reported a non-zero `gpu_shader_ns` —
+    /// the header notes this so future readers know the gpu columns are
     /// instrumented data vs all-zeros.
     gpu_timestamps_available: bool,
 }
@@ -395,9 +415,31 @@ fn run_cell(
     let mut cpu_us: Vec<u64> = timings.iter().map(|t| t.cpu_us).collect();
     cpu_us.sort_unstable();
 
-    let mut gpu_us: Vec<u64> = timings.iter().map(|t| t.gpu_ns / 1000).collect();
-    let gpu_timestamps_available = gpu_us.iter().any(|&v| v > 0);
-    gpu_us.sort_unstable();
+    let mut gpu_shader_us: Vec<u64> = timings.iter().map(|t| t.gpu_shader_ns / 1000).collect();
+    let gpu_timestamps_available = gpu_shader_us.iter().any(|&v| v > 0);
+    gpu_shader_us.sort_unstable();
+
+    let mut gpu_sync_in_us: Vec<u64> = timings.iter().map(|t| t.gpu_sync_in_ns / 1000).collect();
+    gpu_sync_in_us.sort_unstable();
+    let mut gpu_sync_out_us: Vec<u64> = timings.iter().map(|t| t.gpu_sync_out_ns / 1000).collect();
+    gpu_sync_out_us.sort_unstable();
+
+    let mut submit_us: Vec<u64> = timings.iter().map(|t| t.submit_us).collect();
+    submit_us.sort_unstable();
+
+    let total_events = timings.len().max(1) as f64;
+    let dispatches_per_event_avg = timings
+        .iter()
+        .map(|t| t.compute_dispatches as f64)
+        .sum::<f64>()
+        / total_events;
+    let dabs_per_event_avg =
+        timings.iter().map(|t| t.dabs_total as f64).sum::<f64>() / total_events;
+    let union_bbox_area_per_event_avg = timings
+        .iter()
+        .map(|t| t.union_bbox_area_total as f64)
+        .sum::<f64>()
+        / total_events;
 
     CellResult {
         canvas,
@@ -410,9 +452,21 @@ fn run_cell(
         cpu_median_us: percentile(&cpu_us, 0.5),
         cpu_p95_us: percentile(&cpu_us, 0.95),
         cpu_max_us: *cpu_us.last().unwrap_or(&0),
-        gpu_median_us: percentile(&gpu_us, 0.5),
-        gpu_p95_us: percentile(&gpu_us, 0.95),
-        gpu_max_us: *gpu_us.last().unwrap_or(&0),
+        gpu_shader_median_us: percentile(&gpu_shader_us, 0.5),
+        gpu_shader_p95_us: percentile(&gpu_shader_us, 0.95),
+        gpu_shader_max_us: *gpu_shader_us.last().unwrap_or(&0),
+        gpu_sync_in_median_us: percentile(&gpu_sync_in_us, 0.5),
+        gpu_sync_in_p95_us: percentile(&gpu_sync_in_us, 0.95),
+        gpu_sync_in_max_us: *gpu_sync_in_us.last().unwrap_or(&0),
+        gpu_sync_out_median_us: percentile(&gpu_sync_out_us, 0.5),
+        gpu_sync_out_p95_us: percentile(&gpu_sync_out_us, 0.95),
+        gpu_sync_out_max_us: *gpu_sync_out_us.last().unwrap_or(&0),
+        submit_median_us: percentile(&submit_us, 0.5),
+        submit_p95_us: percentile(&submit_us, 0.95),
+        submit_max_us: *submit_us.last().unwrap_or(&0),
+        dispatches_per_event_avg,
+        dabs_per_event_avg,
+        union_bbox_area_per_event_avg,
         gpu_timestamps_available,
     }
 }
@@ -461,12 +515,22 @@ fn write_tsv(path: &Path, results: &[CellResult]) -> std::io::Result<()> {
         "canvas_w\tcanvas_h\tdab_radius_px\tevent_count\tstroke_duration_ms\t\
          wall_total_ms\tbehind_by_ms\tmax_event_behind_ms\t\
          cpu_median_us\tcpu_p95_us\tcpu_max_us\t\
-         gpu_median_us\tgpu_p95_us\tgpu_max_us"
+         gpu_shader_median_us\tgpu_shader_p95_us\tgpu_shader_max_us\t\
+         gpu_sync_in_median_us\tgpu_sync_in_p95_us\tgpu_sync_in_max_us\t\
+         gpu_sync_out_median_us\tgpu_sync_out_p95_us\tgpu_sync_out_max_us\t\
+         submit_median_us\tsubmit_p95_us\tsubmit_max_us\t\
+         dispatches_per_event_avg\tdabs_per_event_avg\tunion_bbox_area_per_event_avg"
     )?;
     for r in results {
         writeln!(
             file,
-            "{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t{:.2}\t{:.2}\t{}\t{:.2}\t{:.2}\t{}",
+            "{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t\
+             {:.2}\t{:.2}\t{}\t\
+             {:.2}\t{:.2}\t{}\t\
+             {:.2}\t{:.2}\t{}\t\
+             {:.2}\t{:.2}\t{}\t\
+             {:.2}\t{:.2}\t{}\t\
+             {:.3}\t{:.3}\t{:.0}",
             r.canvas.0,
             r.canvas.1,
             r.dab_radius_px,
@@ -478,9 +542,21 @@ fn write_tsv(path: &Path, results: &[CellResult]) -> std::io::Result<()> {
             r.cpu_median_us,
             r.cpu_p95_us,
             r.cpu_max_us,
-            r.gpu_median_us,
-            r.gpu_p95_us,
-            r.gpu_max_us,
+            r.gpu_shader_median_us,
+            r.gpu_shader_p95_us,
+            r.gpu_shader_max_us,
+            r.gpu_sync_in_median_us,
+            r.gpu_sync_in_p95_us,
+            r.gpu_sync_in_max_us,
+            r.gpu_sync_out_median_us,
+            r.gpu_sync_out_p95_us,
+            r.gpu_sync_out_max_us,
+            r.submit_median_us,
+            r.submit_p95_us,
+            r.submit_max_us,
+            r.dispatches_per_event_avg,
+            r.dabs_per_event_avg,
+            r.union_bbox_area_per_event_avg,
         )?;
     }
     Ok(())
@@ -529,32 +605,43 @@ fn write_markdown(
     writeln!(file)?;
     writeln!(
         file,
-        "| canvas | radius_px | events | duration (ms) | wall (ms) | behind (ms) | \
-         max_event_behind (ms) | cpu p50 (µs) | cpu p95 (µs) | cpu max (µs) | \
-         gpu p50 (µs) | gpu p95 (µs) | gpu max (µs) |"
+        "Markdown carries the slim view; the sibling TSV has p95/max for every column. \
+         `gpu_shader` is the compute pass; `gpu_sync_in` is `copy_texture_to_buffer`; \
+         `gpu_sync_out` is `copy_buffer_to_texture`. The sync columns are zero unless the \
+         adapter exposes `TIMESTAMP_QUERY_INSIDE_ENCODERS`. `submit` is host wall-clock \
+         around `queue.submit()` — high values indicate back-pressure. `dispatches/ev`, \
+         `dabs/ev`, `bbox/ev` are per-event averages of the workload the engine fed the GPU."
+    )?;
+    writeln!(file)?;
+    writeln!(
+        file,
+        "| canvas | radius_px | events | wall (ms) | behind (ms) | worst-frame (ms) | \
+         cpu p50 (µs) | gpu_shader p50 (µs) | gpu_sync_in p50 (µs) | gpu_sync_out p50 (µs) | \
+         submit p50 (µs) | dispatches/ev | dabs/ev | bbox px²/ev |"
     )?;
     writeln!(
         file,
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     )?;
     for r in results {
         writeln!(
             file,
-            "| {}×{} | {} | {} | {:.0} | {:.0} | {:+.0} | {:.1} | {:.0} | {:.0} | {} | {:.0} | {:.0} | {} |",
+            "| {}×{} | {} | {} | {:.0} | {:+.0} | {:.1} | {:.0} | {:.0} | {:.0} | {:.0} | {:.0} | {:.2} | {:.1} | {:.0} |",
             r.canvas.0,
             r.canvas.1,
             r.dab_radius_px,
             r.event_count,
-            r.stroke_duration_ms,
             r.wall_total_ms,
             r.behind_by_ms,
             r.max_event_behind_ms,
             r.cpu_median_us,
-            r.cpu_p95_us,
-            r.cpu_max_us,
-            r.gpu_median_us,
-            r.gpu_p95_us,
-            r.gpu_max_us,
+            r.gpu_shader_median_us,
+            r.gpu_sync_in_median_us,
+            r.gpu_sync_out_median_us,
+            r.submit_median_us,
+            r.dispatches_per_event_avg,
+            r.dabs_per_event_avg,
+            r.union_bbox_area_per_event_avg,
         )?;
     }
     Ok(())
@@ -589,17 +676,19 @@ fn main() {
             let r = run_cell(args.topology, &recording, canvas, dab_radius_px);
             eprintln!(
                 "wall={:>5.0}ms ({:+5.0}ms, worst-frame +{:>5.1}ms), \
-                 cpu p50/p95/max = {:>5.0}/{:>5.0}/{:>6} µs, \
-                 gpu p50/p95/max = {:>5.0}/{:>5.0}/{:>6} µs",
+                 cpu p50 = {:>5.0} µs, gpu_shader p50 = {:>5.0} µs, \
+                 sync_in/out p50 = {:>4.0}/{:>4.0} µs, submit p50 = {:>5.0} µs, \
+                 dabs/ev={:>4.1} bbox/ev={:>8.0}",
                 r.wall_total_ms,
                 r.behind_by_ms,
                 r.max_event_behind_ms,
                 r.cpu_median_us,
-                r.cpu_p95_us,
-                r.cpu_max_us,
-                r.gpu_median_us,
-                r.gpu_p95_us,
-                r.gpu_max_us,
+                r.gpu_shader_median_us,
+                r.gpu_sync_in_median_us,
+                r.gpu_sync_out_median_us,
+                r.submit_median_us,
+                r.dabs_per_event_avg,
+                r.union_bbox_area_per_event_avg,
             );
             results.push(r);
         }

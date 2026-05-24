@@ -220,9 +220,29 @@ fn write_tsv(path: &Path, timings: &[EventTiming]) -> std::io::Result<()> {
         fs::create_dir_all(parent)?;
     }
     let mut file = fs::File::create(path)?;
-    writeln!(file, "ev_index\tt_offset_ms\tcpu_us")?;
+    writeln!(
+        file,
+        "ev_index\tt_offset_ms\tcpu_us\t\
+         gpu_shader_us\tgpu_sync_in_us\tgpu_sync_out_us\tgpu_samples\t\
+         submit_us\tsubmits\tcompute_dispatches\tdabs_total\tunion_bbox_area_total"
+    )?;
     for t in timings {
-        writeln!(file, "{}\t{:.3}\t{}", t.index, t.t_offset_ms, t.cpu_us)?;
+        writeln!(
+            file,
+            "{}\t{:.3}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            t.index,
+            t.t_offset_ms,
+            t.cpu_us,
+            t.gpu_shader_ns / 1000,
+            t.gpu_sync_in_ns / 1000,
+            t.gpu_sync_out_ns / 1000,
+            t.gpu_samples,
+            t.submit_us,
+            t.submits,
+            t.compute_dispatches,
+            t.dabs_total,
+            t.union_bbox_area_total,
+        )?;
     }
     Ok(())
 }
@@ -274,13 +294,27 @@ fn main() {
     let median_us = percentile(&cpu_us, 0.5);
     let p95_us = percentile(&cpu_us, 0.95);
 
+    let mut gpu_shader_us: Vec<u64> = timings.iter().map(|t| t.gpu_shader_ns / 1000).collect();
+    gpu_shader_us.sort_unstable();
+    let mut gpu_sync_us: Vec<u64> = timings
+        .iter()
+        .map(|t| (t.gpu_sync_in_ns + t.gpu_sync_out_ns) / 1000)
+        .collect();
+    gpu_sync_us.sort_unstable();
+    let mut submit_us_sorted: Vec<u64> = timings.iter().map(|t| t.submit_us).collect();
+    submit_us_sorted.sort_unstable();
+
     eprintln!(
-        "replayed {} events in {:.1} ms wall (cpu_total={} µs, cpu_median={:.0} µs, cpu_p95={:.0} µs)",
+        "replayed {} events in {:.1} ms wall (cpu_total={} µs, cpu_median={:.0} µs, cpu_p95={:.0} µs, \
+         gpu_shader_p50 = {:.0} µs, gpu_sync_p50 = {:.0} µs, submit_p50 = {:.0} µs)",
         timings.len(),
         wall_elapsed_ms,
         total_cpu_us,
         median_us,
         p95_us,
+        percentile(&gpu_shader_us, 0.5),
+        percentile(&gpu_sync_us, 0.5),
+        percentile(&submit_us_sorted, 0.5),
     );
 
     let output = args

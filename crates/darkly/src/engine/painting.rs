@@ -261,6 +261,10 @@ impl DarklyEngine {
         self.active_stroke_layer = Some(layer_id);
         // Reset the per-stroke perf accumulator. Emitted at `end_stroke`.
         self.stroke_perf = super::perf::StrokePerfStats::default();
+        // Reset the bench-side per-event delta snapshot so the first
+        // post-`begin_stroke` drain subtracts against zero rather than
+        // last stroke's totals.
+        self.last_brush_perf_snapshot = super::perf::BrushPerfSnapshot::default();
         // GPU setup is deferred to first stroke_to (lazy init).
     }
 

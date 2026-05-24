@@ -313,48 +313,45 @@ that any dab actually touches, not the whole union bbox.
   recorder ([crates/darkly/tests/fixtures/recorded_curvy_stroke.json](crates/darkly/tests/fixtures/recorded_curvy_stroke.json))
   and re-runnable across approaches via `stroke_replay_matrix`.
 
-**Still missing (hiccup uncovered during synthesis review):**
+**Done in the second instrumentation pass (this branch):**
 
-The current GPU timestamps wrap *only* the compute pass —
-`begin_compute_pass` → `end_pass`. They do **not** measure:
-- The `sync_texture_to_compute_buffer` copy before each dispatch.
-- The `sync_compute_buffer_to_texture` copy after each dispatch.
-- The dispatch-grid construction / scoreboard work the driver does
-  for a 60k-workgroup dispatch.
-- Time spent inside `queue.submit()` (which can block under
-  back-pressure even though the call signature is "fire and forget").
+- ✅ Per-flush GPU timeline split into `sync_in` (`copy_texture_to_buffer`)
+  / `shader` (compute pass) / `sync_out` (`copy_buffer_to_texture`).
+  6-slot query set per flush, gated on `TIMESTAMP_QUERY_INSIDE_ENCODERS`
+  for the sync brackets; the shader slot keeps working on adapters
+  that only expose `TIMESTAMP_QUERY_INSIDE_PASSES`.
+- ✅ Per-event `submit_us` exposed via `BrushPerfDelta` — the
+  back-pressure waterfall that was hiding inside `cpu_us` is now a
+  first-class bench column.
+- ✅ Per-event `dabs_total` and `union_bbox_area_total` surfaced from
+  `BrushPerfCounters` so cells can be read by the actual workload the
+  engine fed the GPU rather than the nominal radius axis. Markdown
+  carries the per-event averages; TSV carries the per-flush vectors
+  if a future analysis wants them.
+- ✅ `gpu_samples` is already in `EventTiming`; the matrix's TSV does
+  not yet split it out per column but `replay()` aggregates it onto
+  every event.
 
-This led to an over-confident reading of the synthesis: at 4K +
-1000px the matrix shows `cpu_p50 = 37 ms` vs `gpu_p50 = 3 ms`, which
-I initially called "12× CPU-bound" and used to argue that a faster
-GPU wouldn't help. The truer reading is that **`gpu_p50` measures
-shader-only time, and the surrounding GPU work (sync copies, driver
-overhead, submit back-pressure) is all hidden inside `cpu_p50`.** A
-faster GPU would partially help; an architectural change (tile-bin,
-adaptive flush) would help regardless of GPU speed because the
-hidden work scales with `union_bbox_area`, not painted area.
+**Smoke run on `dab-compute-shader` confirms the planned hypothesis:**
+at 4K + 1000px the matrix now reads `gpu_shader_p50 = 3033 µs`,
+`gpu_sync_in_p50 = 12133 µs`, `gpu_sync_out_p50 = 9089 µs`, `submit_p50 =
+25416 µs`. The "12× CPU-bound" reading from the first synthesis was
+wrong — the sync copies *alone* are 6× the shader pass, and
+`queue.submit()` back-pressure on top of that is 8×. The architectural
+prescription stands: changes that shrink `union_bbox_area` (tile-bin,
+adaptive flush) help regardless of GPU speed because the hidden sync
+cost scales with that area, not painted area.
 
-What we still need before we can confidently attribute lag to a
-specific layer of the stack:
-- Wrap each `copy_texture_to_buffer` / `copy_buffer_to_texture` in
-  its own timestamp pair so we can see how much of "GPU time" is
-  shader vs sync vs other.
-- Surface `gpu_samples` per event from `EventTiming` (we already
-  collect it) so a single event with `gpu_samples=3` is
-  distinguishable from one with `gpu_samples=1` in the bench output.
-- Time `queue.submit()` separately from encoder building inside
-  `BrushGpuContext::submit_final` so the bench can distinguish
-  "CPU was encoding" from "CPU was waiting on the GPU queue".
-- Log `union_bbox` area and `dab_count` per flush — would let the
-  bench correlate cell perf with the actual workload the engine
-  fed the GPU, not just the matrix's nominal dab radius.
+**Still missing:**
 
-Without this any "shader X is faster than shader Y" comparison is
-suspect — the surrounding sync copies and submit overhead could
-swing the conclusion either direction. The synthesis section's
-takeaways stand as cell-level pattern observations, but the
-architectural prescription (where to spend optimization effort)
-depends on resolving these instrumentation gaps first.
+- Driver dispatch-grid construction / scoreboard cost. The 6-slot
+  timeline above brackets every encoder command we issue, but the
+  driver's per-dispatch CPU work (workgroup scheduling, descriptor
+  validation) is still folded into `submit_us` rather than measured
+  separately. Probably fine — at 4K+1000px the sync columns dominate
+  by an order of magnitude over what driver overhead could plausibly
+  be — but worth revisiting if a future attempt shrinks the sync
+  cost without moving `cpu_us`.
 
 ## Bench synthesis
 

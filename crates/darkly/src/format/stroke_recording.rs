@@ -116,24 +116,52 @@ impl RecordedEvent {
 
 /// Per-event timing produced by [`replay`]. CPU wall-clock around a
 /// single `engine.stroke_to` dispatch — the harness's perf signal.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Default)]
 pub struct EventTiming {
     pub index: usize,
     /// Milliseconds since `events[0].time_ms`. Useful for joining replay
     /// timings against the original recording timeline.
     pub t_offset_ms: f64,
     pub cpu_us: u64,
-    /// True GPU shader time, summed across every paint-compute dispatch
-    /// observed by the drain. Zero when the device doesn't expose
-    /// `TIMESTAMP_QUERY`, or when the dispatch's readback callback
+    /// Compute-pass shader time, summed across every paint-compute
+    /// dispatch observed by the drain. Zero when the device doesn't
+    /// expose `TIMESTAMP_QUERY`, or when the dispatch's readback callback
     /// hadn't fired yet at drain time (it rolls into the next event's
     /// reading; aggregate over the stroke is still correct).
-    pub gpu_ns: u64,
+    pub gpu_shader_ns: u64,
+    /// GPU time for the pre-dispatch `copy_texture_to_buffer` that ingests
+    /// the scratch texture into the compute buffer. Zero unless the device
+    /// also exposes `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
+    pub gpu_sync_in_ns: u64,
+    /// GPU time for the post-dispatch `copy_buffer_to_texture` that
+    /// publishes the compute buffer back to the scratch texture. Same
+    /// feature gating as `gpu_sync_in_ns`.
+    pub gpu_sync_out_ns: u64,
     /// Number of paint-compute dispatches whose timestamps folded into
-    /// `gpu_ns`. Useful for divining the per-dispatch average when the
-    /// engine emits more than one flush per event (e.g., stabilizer
-    /// rewinds).
+    /// the `gpu_*_ns` totals. Useful for divining the per-dispatch average
+    /// when the engine emits more than one flush per event (e.g.,
+    /// stabilizer rewinds).
     pub gpu_samples: u32,
+
+    // --- Drained from `BrushPerfDelta` (Phase C). All us-scale CPU
+    //     timings. Vectors are per-flush, in submission order. ---
+    /// Host time inside `queue.submit()` calls during the event. Captures
+    /// the "submit was back-pressured" tail that bloats `cpu_us` past
+    /// shader time on saturated queues.
+    pub submit_us: u64,
+    /// Number of `queue.submit()` calls during the event.
+    pub submits: u32,
+    /// Number of paint-compute flushes (dispatches) during the event.
+    pub compute_dispatches: u32,
+    /// Dabs that flowed through the compute path during the event.
+    pub dabs_total: u32,
+    /// Sum of `union_w * union_h` across every flush of the event.
+    pub union_bbox_area_total: u64,
+    /// Per-flush dab counts (one entry per flush).
+    pub compute_dabs_per_flush: Vec<u32>,
+    /// Per-flush `union_w * union_h` in canvas pixels (parallel to
+    /// `compute_dabs_per_flush`).
+    pub compute_union_bbox_area_per_flush: Vec<u32>,
 }
 
 /// Pacing knob for [`replay`]. The engine's stabilizer reads `time_ms`
@@ -192,14 +220,24 @@ pub fn replay(
         // Drain whatever paint-compute timestamps the GPU has finished
         // since the last event. Off-by-one delays roll over into the
         // next event's reading; the aggregate over the stroke stays correct.
-        let (gpu_ns, gpu_samples) = engine.drain_paint_compute_timestamps();
+        let ts = engine.drain_paint_compute_timestamps();
+        let perf = engine.drain_brush_perf_delta();
 
         timings.push(EventTiming {
             index: i,
             t_offset_ms: ev.time_ms - stream_start,
             cpu_us,
-            gpu_ns,
-            gpu_samples,
+            gpu_shader_ns: ts.shader_ns,
+            gpu_sync_in_ns: ts.sync_in_ns,
+            gpu_sync_out_ns: ts.sync_out_ns,
+            gpu_samples: ts.sample_count,
+            submit_us: perf.submit_us,
+            submits: perf.submits,
+            compute_dispatches: perf.compute_dispatches,
+            dabs_total: perf.compute_dabs.min(u32::MAX as u64) as u32,
+            union_bbox_area_total: perf.compute_union_bbox_area_total,
+            compute_dabs_per_flush: perf.compute_dabs_per_flush,
+            compute_union_bbox_area_per_flush: perf.compute_union_bbox_area_per_flush,
         });
     }
 
@@ -210,11 +248,32 @@ pub fn replay(
 
     // Any timestamps still in flight (the GPU hadn't finished the final
     // dispatch when the last event drained) fold into the last event's
-    // gpu_ns so the stroke total stays consistent.
+    // gpu_* totals so the stroke aggregate stays consistent. The brush
+    // perf delta likewise gets folded in for any flushes that landed
+    // after the last per-event drain (e.g., end_stroke's final submit).
     if let Some(last) = timings.last_mut() {
-        let (tail_ns, tail_samples) = engine.drain_paint_compute_timestamps();
-        last.gpu_ns = last.gpu_ns.saturating_add(tail_ns);
-        last.gpu_samples = last.gpu_samples.saturating_add(tail_samples);
+        let tail_ts = engine.drain_paint_compute_timestamps();
+        last.gpu_shader_ns = last.gpu_shader_ns.saturating_add(tail_ts.shader_ns);
+        last.gpu_sync_in_ns = last.gpu_sync_in_ns.saturating_add(tail_ts.sync_in_ns);
+        last.gpu_sync_out_ns = last.gpu_sync_out_ns.saturating_add(tail_ts.sync_out_ns);
+        last.gpu_samples = last.gpu_samples.saturating_add(tail_ts.sample_count);
+
+        let tail_perf = engine.drain_brush_perf_delta();
+        last.submit_us = last.submit_us.saturating_add(tail_perf.submit_us);
+        last.submits = last.submits.saturating_add(tail_perf.submits);
+        last.compute_dispatches = last
+            .compute_dispatches
+            .saturating_add(tail_perf.compute_dispatches);
+        last.dabs_total = last
+            .dabs_total
+            .saturating_add(tail_perf.compute_dabs.min(u32::MAX as u64) as u32);
+        last.union_bbox_area_total = last
+            .union_bbox_area_total
+            .saturating_add(tail_perf.compute_union_bbox_area_total);
+        last.compute_dabs_per_flush
+            .extend(tail_perf.compute_dabs_per_flush);
+        last.compute_union_bbox_area_per_flush
+            .extend(tail_perf.compute_union_bbox_area_per_flush);
     }
 
     timings

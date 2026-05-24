@@ -31,11 +31,12 @@ pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
 /// the portability floor — 4K canvases, large brush dabs, etc. Picks the
 /// `HighPerformance` adapter to match what the real frontend uses.
 ///
-/// Also opts in to `TIMESTAMP_QUERY` (plus the inside-pass variant) when
-/// the adapter supports it, so bench-side instrumentation can wrap GPU
-/// passes in `ComputePassTimestampWrites`. Pipelines that record
-/// timestamps check the device's features at build time and degrade
-/// gracefully on adapters that don't expose the feature.
+/// Also opts in to `TIMESTAMP_QUERY` (plus the inside-pass and
+/// inside-encoder variants) when the adapter supports it, so bench-side
+/// instrumentation can wrap GPU passes in `ComputePassTimestampWrites`
+/// and bracket encoder-scoped sync copies with `write_timestamp`. Pipelines
+/// that record timestamps check the device's features at build time and
+/// degrade gracefully on adapters that don't expose the features.
 pub fn bench_device() -> (wgpu::Device, wgpu::Queue) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
     let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
@@ -45,7 +46,9 @@ pub fn bench_device() -> (wgpu::Device, wgpu::Queue) {
     }))
     .expect("no GPU adapter available for benches");
     let adapter_features = adapter.features();
-    let optional = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
+    let optional = wgpu::Features::TIMESTAMP_QUERY
+        | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
+        | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
     let required_features = adapter_features & optional;
     let limits = adapter.limits();
     block_on(adapter.request_device(&wgpu::DeviceDescriptor {

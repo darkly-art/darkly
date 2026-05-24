@@ -63,9 +63,18 @@ struct PaintComputeUniforms {
 // ── GPU-timestamp instrumentation ───────────────────────────────────────
 //
 // When the device exposes `TIMESTAMP_QUERY`, every `flush_compute` dispatch
-// is bracketed with a `ComputePassTimestampWrites` and the resolved pair
-// streams into a per-flush readback buffer. The bench harness drains the
-// accumulator after each `stroke_to` to produce per-event `gpu_us` numbers.
+// is bracketed with a 6-slot query set:
+//
+//   slot 0 / 1 — `sync_texture_to_compute_buffer` (encoder-scoped writes)
+//   slot 2 / 3 — compute pass begin / end (`ComputePassTimestampWrites`)
+//   slot 4 / 5 — `sync_compute_buffer_to_texture` (encoder-scoped writes)
+//
+// All six resolve into one per-flush readback buffer. The bench harness
+// drains the accumulator after each `stroke_to` and gets the GPU timeline
+// split into sync-in / shader / sync-out so it can attribute "GPU time"
+// to the right bucket — `gpu_p50` previously measured only the compute
+// pass and hid the copy_texture_to_buffer / copy_buffer_to_texture cost
+// inside `cpu_us`.
 //
 // Production WASM code MUST NOT call `drain_paint_compute_timestamps` on
 // the engine — it relies on `device.poll()` to drive callbacks, which
@@ -77,12 +86,36 @@ struct PaintComputeUniforms {
 // production this whole subsystem stays inert:
 //   * `PaintComputeTimestamps::build` sees the feature absent and returns
 //     `None` — no query set, no resolve buffer, no accumulator allocated.
-//   * `flush_compute` does two `Option::as_ref()` checks per dispatch on
-//     `pipeline_ref.timestamps`, both `None`, both branchless. No GPU
+//   * `flush_compute` does Option::as_ref() checks per dispatch on
+//     `pipeline_ref.timestamps`, all `None`, all branchless. No GPU
 //     commands, no buffer maps.
-//   * Engine accessors degrade to `(0, 0)` returns without polling.
+//   * Engine accessors degrade to zeros without polling.
 // Net cost on the frontend's compute path: a handful of nanoseconds per
 // dispatch. No allocations, no GPU work, no encoder commands.
+
+/// Number of timestamp slots written per flush. Layout documented above.
+const TIMESTAMP_SLOTS_PER_FLUSH: u32 = 6;
+const TIMESTAMP_BUFFER_BYTES: u64 = (TIMESTAMP_SLOTS_PER_FLUSH as u64) * 8;
+
+/// Per-flush GPU-time split returned by the timestamp drain.
+#[derive(Default, Debug, Clone, Copy)]
+pub struct PaintComputeTimestampDelta {
+    pub sync_in_ns: u64,
+    pub shader_ns: u64,
+    pub sync_out_ns: u64,
+    pub sample_count: u32,
+}
+
+impl PaintComputeTimestampDelta {
+    pub fn saturating_add(self, other: Self) -> Self {
+        Self {
+            sync_in_ns: self.sync_in_ns.saturating_add(other.sync_in_ns),
+            shader_ns: self.shader_ns.saturating_add(other.shader_ns),
+            sync_out_ns: self.sync_out_ns.saturating_add(other.sync_out_ns),
+            sample_count: self.sample_count.saturating_add(other.sample_count),
+        }
+    }
+}
 
 /// Shared state for one paint-compute pipeline's outstanding timestamp
 /// readbacks. Accessed by the GPU map_async callback (writer) and by the
@@ -91,10 +124,11 @@ struct PaintComputeUniforms {
 struct TimestampAccumulator {
     /// Buffers whose map_async has been requested but the callback may
     /// not have fired yet. `drain` polls every entry; ones with `Ready`
-    /// status fold their delta into `total_ns` + `sample_count` and are
-    /// removed.
+    /// status fold their delta into the per-bucket totals and are removed.
     pending: Vec<PendingTimestamp>,
-    total_ns: u64,
+    sync_in_ns: u64,
+    shader_ns: u64,
+    sync_out_ns: u64,
     sample_count: u32,
 }
 
@@ -117,17 +151,28 @@ struct PendingTimestamp {
     state: PendingTimestampState,
     /// Nanoseconds per timestamp tick on this device (`queue.get_timestamp_period()`).
     period_ns_per_tick: f32,
+    /// Mirrors `PaintComputeTimestamps::encoder_writes_enabled` at the
+    /// moment this dispatch was encoded. Drain skips the sync_in / sync_out
+    /// slots when this is false (they were never written).
+    encoder_writes_enabled: bool,
 }
 
 pub struct PaintComputeTimestamps {
     query_set: wgpu::QuerySet,
-    /// Two-slot QUERY_RESOLVE buffer (16 bytes). Reused per dispatch —
-    /// the GPU writes the resolved start/end pair, then the encoder
-    /// copies into a fresh readback buffer so the next dispatch can
-    /// overwrite this one without losing the previous reading.
+    /// 6-slot QUERY_RESOLVE buffer (48 bytes). Reused per dispatch — the
+    /// GPU writes the resolved sync_in/shader/sync_out triplets, then the
+    /// encoder copies into a fresh readback buffer so the next dispatch
+    /// can overwrite this one without losing the previous reading.
     resolve_buffer: wgpu::Buffer,
     period_ns_per_tick: f32,
     accumulator: Arc<Mutex<TimestampAccumulator>>,
+    /// True when the device advertises `TIMESTAMP_QUERY_INSIDE_ENCODERS`,
+    /// the feature gating `encoder.write_timestamp` outside a pass. Without
+    /// it we can still time the compute pass (via `ComputePassTimestampWrites`)
+    /// but the sync_in / sync_out brackets are silently elided — those
+    /// buckets stay zero. `bench_device` opts into both features on adapters
+    /// that support them; production WASM opts into neither.
+    encoder_writes_enabled: bool,
 }
 
 impl PaintComputeTimestamps {
@@ -143,14 +188,18 @@ impl PaintComputeTimestamps {
         {
             return None;
         }
+        let encoder_writes_enabled = ctx
+            .device
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
         let query_set = ctx.device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("paint-compute-timestamps"),
             ty: wgpu::QueryType::Timestamp,
-            count: 2,
+            count: TIMESTAMP_SLOTS_PER_FLUSH,
         });
         let resolve_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("paint-compute-timestamp-resolve"),
-            size: 16,
+            size: TIMESTAMP_BUFFER_BYTES,
             usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
@@ -166,15 +215,16 @@ impl PaintComputeTimestamps {
             resolve_buffer,
             period_ns_per_tick: ctx.queue.get_timestamp_period(),
             accumulator,
+            encoder_writes_enabled,
         })
     }
 
-    /// Non-blocking drain. Returns `(total_ns, sample_count)` since the
-    /// last call. Polls the device once to nudge any pending map_async
+    /// Non-blocking drain. Returns the per-bucket totals since the last
+    /// call. Polls the device once to nudge any pending map_async
     /// callbacks; callbacks for very recently submitted dispatches may
     /// not have fired yet and roll over into a subsequent drain — which
     /// is fine because the bench harness aggregates many events.
-    pub fn drain(&self, device: &wgpu::Device) -> (u64, u32) {
+    pub fn drain(&self, device: &wgpu::Device) -> PaintComputeTimestampDelta {
         let mut acc = self.accumulator.lock().expect("timestamp accumulator");
 
         // 1. Kick off map_async for any buffers that are post-submit but
@@ -218,14 +268,36 @@ impl PaintComputeTimestamps {
                     let pending = acc.pending.remove(i);
                     let slice = pending.buffer.slice(..);
                     let mapped = slice.get_mapped_range();
-                    let bytes: [u8; 16] = mapped[..16].try_into().expect("16 bytes");
+                    let bytes: [u8; TIMESTAMP_BUFFER_BYTES as usize] = mapped
+                        [..TIMESTAMP_BUFFER_BYTES as usize]
+                        .try_into()
+                        .expect("timestamp buffer bytes");
                     drop(mapped);
                     pending.buffer.unmap();
-                    let start = u64::from_le_bytes(bytes[0..8].try_into().unwrap());
-                    let end = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
-                    let ticks = end.saturating_sub(start);
-                    let ns = (ticks as f64 * pending.period_ns_per_tick as f64) as u64;
-                    acc.total_ns = acc.total_ns.saturating_add(ns);
+                    let mut slots = [0u64; TIMESTAMP_SLOTS_PER_FLUSH as usize];
+                    for (s, slot) in slots.iter_mut().enumerate() {
+                        let lo = s * 8;
+                        *slot = u64::from_le_bytes(bytes[lo..lo + 8].try_into().unwrap());
+                    }
+                    let period = pending.period_ns_per_tick as f64;
+                    let ticks_to_ns = |start: u64, end: u64| -> u64 {
+                        let ticks = end.saturating_sub(start);
+                        (ticks as f64 * period) as u64
+                    };
+                    let sync_in_ns = if pending.encoder_writes_enabled {
+                        ticks_to_ns(slots[0], slots[1])
+                    } else {
+                        0
+                    };
+                    let shader_ns = ticks_to_ns(slots[2], slots[3]);
+                    let sync_out_ns = if pending.encoder_writes_enabled {
+                        ticks_to_ns(slots[4], slots[5])
+                    } else {
+                        0
+                    };
+                    acc.sync_in_ns = acc.sync_in_ns.saturating_add(sync_in_ns);
+                    acc.shader_ns = acc.shader_ns.saturating_add(shader_ns);
+                    acc.sync_out_ns = acc.sync_out_ns.saturating_add(sync_out_ns);
                     acc.sample_count = acc.sample_count.saturating_add(1);
                 }
                 Some(Err(_)) => {
@@ -236,9 +308,12 @@ impl PaintComputeTimestamps {
             }
         }
 
-        let total_ns = std::mem::take(&mut acc.total_ns);
-        let count = std::mem::take(&mut acc.sample_count);
-        (total_ns, count)
+        PaintComputeTimestampDelta {
+            sync_in_ns: std::mem::take(&mut acc.sync_in_ns),
+            shader_ns: std::mem::take(&mut acc.shader_ns),
+            sync_out_ns: std::mem::take(&mut acc.sync_out_ns),
+            sample_count: std::mem::take(&mut acc.sample_count),
+        }
     }
 }
 
@@ -772,6 +847,13 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
             return;
         }
 
+        // Record the workload shape before the dispatch. The bench harness
+        // correlates per-event GPU/CPU time against `dabs × union_area` so
+        // cells in the matrix can be interpreted by the actual work the
+        // engine fed the GPU, not the nominal radius/canvas axes.
+        gpu.perf
+            .record_compute_flush_workload(total_dabs, union_w, union_h);
+
         let pipeline_ref = gpu.pipelines.get::<PaintComputePipeline>("paint_compute");
         // Scratch buffer bind group: rebuilt per dispatch because the
         // underlying buffer can be reallocated after a layer grow.
@@ -822,8 +904,23 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
         // aligned row offset that a dab-aligned bbox can't guarantee.
         // Pixels outside the dispatch x range stay untouched by the
         // shader, so the wider sync is harmless.
+        // Sync-in bracket — always write the timestamp pair when the
+        // encoder-scoped write feature is enabled, even if write_h == 0
+        // and the actual sync is skipped (defensive bail). Leaving slots
+        // unwritten would resolve to undefined values; writing them
+        // unconditionally guarantees a defined zero-delta reading.
+        if let Some(ts) = pipeline_ref.timestamps.as_ref() {
+            if ts.encoder_writes_enabled {
+                gpu.encoder.write_timestamp(&ts.query_set, 0);
+            }
+        }
         if write_h > 0 {
             scratch.sync_texture_to_compute_buffer(&mut gpu.encoder, uy0, union_h);
+        }
+        if let Some(ts) = pipeline_ref.timestamps.as_ref() {
+            if ts.encoder_writes_enabled {
+                gpu.encoder.write_timestamp(&ts.query_set, 1);
+            }
         }
 
         gpu.queue
@@ -852,8 +949,8 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
                 .as_ref()
                 .map(|ts| wgpu::ComputePassTimestampWrites {
                     query_set: &ts.query_set,
-                    beginning_of_pass_write_index: Some(0),
-                    end_of_pass_write_index: Some(1),
+                    beginning_of_pass_write_index: Some(2),
+                    end_of_pass_write_index: Some(3),
                 });
         {
             let mut pass = gpu
@@ -869,23 +966,54 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
             pass.set_bind_group(3, &scratch_bind_group, &[]);
             pass.dispatch_workgroups(tiles_x, tiles_y, 1);
         }
+        // Sync the compute buffer's union rows back to the scratch
+        // texture so the upcoming `commit` (or any other fragment-path
+        // consumer this phase) sees current state. Bracketed with
+        // timestamps 4/5 so the bench can attribute this copy's GPU time
+        // separately from the shader pass it follows.
+        let t_sync = web_time::Instant::now();
         if let Some(ts) = pipeline_ref.timestamps.as_ref() {
-            // Resolve into the shared 16-byte buffer, then copy into a
+            if ts.encoder_writes_enabled {
+                gpu.encoder.write_timestamp(&ts.query_set, 4);
+            }
+        }
+        if write_h > 0 {
+            scratch.sync_compute_buffer_to_texture(&mut gpu.encoder, uy0, union_h);
+        }
+        if let Some(ts) = pipeline_ref.timestamps.as_ref() {
+            if ts.encoder_writes_enabled {
+                gpu.encoder.write_timestamp(&ts.query_set, 5);
+            }
+        }
+        gpu.perf
+            .record_compute_buffer_sync(t_sync.elapsed().as_micros() as u64);
+
+        if let Some(ts) = pipeline_ref.timestamps.as_ref() {
+            // Resolve all 6 slots into the shared buffer, then copy into a
             // fresh per-flush readback buffer so the next dispatch can
             // overwrite the resolve buffer without losing this one's
             // data. The readback buffer is registered with the
             // accumulator; its map_async callback fires on the next
             // `device.poll`, after the engine's `queue.submit`.
-            gpu.encoder
-                .resolve_query_set(&ts.query_set, 0..2, &ts.resolve_buffer, 0);
+            gpu.encoder.resolve_query_set(
+                &ts.query_set,
+                0..TIMESTAMP_SLOTS_PER_FLUSH,
+                &ts.resolve_buffer,
+                0,
+            );
             let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("paint-compute-timestamp-readback"),
-                size: 16,
+                size: TIMESTAMP_BUFFER_BYTES,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            gpu.encoder
-                .copy_buffer_to_buffer(&ts.resolve_buffer, 0, &readback, 0, 16);
+            gpu.encoder.copy_buffer_to_buffer(
+                &ts.resolve_buffer,
+                0,
+                &readback,
+                0,
+                TIMESTAMP_BUFFER_BYTES,
+            );
             // Register the buffer for deferred mapping. `map_async` MUST
             // wait until after the encoder is submitted, otherwise wgpu
             // rejects the next submit ("buffer is still mapped"). The
@@ -898,18 +1026,9 @@ impl BrushNodeEvaluator for PaintComputeEvaluator {
                     buffer: readback,
                     state: PendingTimestampState::AwaitingMap,
                     period_ns_per_tick: ts.period_ns_per_tick,
+                    encoder_writes_enabled: ts.encoder_writes_enabled,
                 });
         }
-
-        // Sync the compute buffer's union rows back to the scratch
-        // texture so the upcoming `commit` (or any other fragment-path
-        // consumer this phase) sees current state.
-        let t_sync = web_time::Instant::now();
-        if write_h > 0 {
-            scratch.sync_compute_buffer_to_texture(&mut gpu.encoder, uy0, union_h);
-        }
-        gpu.perf
-            .record_compute_buffer_sync(t_sync.elapsed().as_micros() as u64);
 
         gpu.perf.record_compute_dispatch_batch(total_dabs);
         gpu.perf

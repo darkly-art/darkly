@@ -29,7 +29,7 @@ use crate::gpu::paint_target::GpuPaintTarget;
 /// evaluators) call `record_*` helpers to attribute their work to the
 /// right bucket. INTERNAL helpers (`sync_scratch_read_mirror`,
 /// `flush_if_needed`, `submit_final`) instrument themselves.
-#[derive(Default, Clone, Copy, Debug)]
+#[derive(Default, Clone, Debug)]
 pub struct BrushPerfCounters {
     /// Number of `place_dab` invocations that ran during this context's
     /// lifetime.
@@ -140,6 +140,20 @@ pub struct BrushPerfCounters {
     /// Number of compute dispatches issued during this stroke (one per
     /// pen event for the paint-compute brush).
     pub compute_dispatches_total: u32,
+    /// Sum of `union_w * union_h` across every paint-compute flush.
+    /// Indicates how much canvas-pixel area the compute dispatches *thought*
+    /// they had to touch (vs `compute_dabs_total` which measures dab volume).
+    /// Used by the bench to correlate cell perf with workload shape.
+    pub compute_union_bbox_area_total: u64,
+    /// Per-flush dab counts. One entry per `flush_compute` call within
+    /// this context's lifetime. Drained per-event by the bench harness;
+    /// production paths never read this. Kept on the per-context counters
+    /// so a `BrushGpuContext` lifetime corresponds to one append cycle —
+    /// merge_brush moves the entries into `StrokePerfStats`.
+    pub compute_dabs_per_flush: Vec<u32>,
+    /// Per-flush `union_w * union_h` in canvas pixels. Same indexing as
+    /// `compute_dabs_per_flush`.
+    pub compute_union_bbox_area_per_flush: Vec<u32>,
 }
 
 impl BrushPerfCounters {
@@ -257,6 +271,20 @@ impl BrushPerfCounters {
     pub fn record_compute_dispatch_batch(&mut self, dab_count: u32) {
         self.compute_dabs_total = self.compute_dabs_total.saturating_add(dab_count);
         self.compute_dispatches_total = self.compute_dispatches_total.saturating_add(1);
+    }
+
+    /// Record the workload shape of one paint-compute flush:
+    /// `dab_count` queued dabs covering a `union_w × union_h` bbox in
+    /// canvas pixels. Appends to both per-flush vectors and accumulates
+    /// the area total. Called at the top of `flush_compute` once the
+    /// union bbox has been computed.
+    pub fn record_compute_flush_workload(&mut self, dab_count: u32, union_w: u32, union_h: u32) {
+        let area = (union_w as u64).saturating_mul(union_h as u64);
+        self.compute_union_bbox_area_total =
+            self.compute_union_bbox_area_total.saturating_add(area);
+        self.compute_dabs_per_flush.push(dab_count);
+        self.compute_union_bbox_area_per_flush
+            .push(area.min(u32::MAX as u64) as u32);
     }
 }
 

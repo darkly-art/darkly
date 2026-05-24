@@ -26,10 +26,10 @@ pub use types::{
     ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
 };
 
-pub use perf::FrameRenderPhases;
+pub use perf::{BrushPerfDelta, FrameRenderPhases};
 
 mod perf;
-use perf::StrokePerfStats;
+use perf::{BrushPerfSnapshot, StrokePerfStats};
 
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::dab_pool::DabTexturePool;
@@ -439,6 +439,13 @@ pub struct DarklyEngine {
     /// `end_stroke`. See `StrokePerfStats` for what each field means.
     pub(crate) stroke_perf: StrokePerfStats,
 
+    /// Last `stroke_perf` snapshot captured by `drain_brush_perf_delta`.
+    /// Subtracted from the current state on each drain to produce a
+    /// per-interval delta. Reset to default at `begin_stroke` along with
+    /// `stroke_perf`. Native bench harnesses only — production never reads
+    /// this.
+    pub(crate) last_brush_perf_snapshot: BrushPerfSnapshot,
+
     /// Most recent `render()` sub-phase timings. Overwritten every frame;
     /// read by the WASM bridge when it logs a slow frame.
     pub(crate) last_frame_phases: FrameRenderPhases,
@@ -545,6 +552,7 @@ impl DarklyEngine {
             thumbnail_version: 0,
             layer_growth_capped: false,
             stroke_perf: StrokePerfStats::default(),
+            last_brush_perf_snapshot: BrushPerfSnapshot::default(),
             last_frame_phases: FrameRenderPhases::default(),
         };
 
@@ -602,22 +610,62 @@ impl DarklyEngine {
     }
 
     /// Non-blocking drain of pending paint-compute GPU timestamps.
-    /// Returns `(total_ns, sample_count)` for every dispatch whose
-    /// readback callback has fired since the last drain. Callbacks for
-    /// very recently submitted dispatches may still be in flight — those
-    /// roll over into the next drain.
+    /// Returns the per-bucket totals (sync_in / shader / sync_out) for
+    /// every dispatch whose readback callback has fired since the last
+    /// drain. Callbacks for very recently submitted dispatches may still
+    /// be in flight — those roll over into the next drain.
     ///
     /// **Native bench harnesses only.** Internally calls `device.poll`,
     /// which on WebGPU/WASM is a no-op (and `TIMESTAMP_QUERY` isn't
-    /// requested there anyway). Returns `(0, 0)` if the device wasn't
-    /// created with the feature.
-    pub fn drain_paint_compute_timestamps(&self) -> (u64, u32) {
+    /// requested there anyway). Returns the default delta (all zeros) if
+    /// the device wasn't created with the feature.
+    pub fn drain_paint_compute_timestamps(
+        &self,
+    ) -> crate::brush::nodes::paint_compute::PaintComputeTimestampDelta {
         let pipeline = self
             .brush_pipelines
             .get::<crate::brush::nodes::paint_compute::PaintComputePipeline>("paint_compute");
         match pipeline.timestamps() {
             Some(ts) => ts.drain(&self.gpu.device),
-            None => (0, 0),
+            None => Default::default(),
+        }
+    }
+
+    /// Per-event drain of the brush perf accumulator. Captures a fresh
+    /// snapshot, subtracts the previous one to yield the scalar deltas
+    /// (submit / dispatch / sync time + dab / dispatch / area counts),
+    /// and takes the per-flush vectors out of `stroke_perf`. Updates the
+    /// stashed snapshot so the next call subtracts against this point.
+    ///
+    /// **Native bench harnesses only.** Mutates `stroke_perf`'s per-flush
+    /// vectors via `std::mem::take`. WASM frontends do not call this.
+    pub fn drain_brush_perf_delta(&mut self) -> BrushPerfDelta {
+        let curr = BrushPerfSnapshot::capture(&self.stroke_perf);
+        let prev = self.last_brush_perf_snapshot;
+        self.last_brush_perf_snapshot = curr;
+
+        BrushPerfDelta {
+            submit_us: curr.total_submit_us.saturating_sub(prev.total_submit_us),
+            submits: curr.total_submits.saturating_sub(prev.total_submits),
+            compute_dispatch_us: curr
+                .total_compute_dispatch_us
+                .saturating_sub(prev.total_compute_dispatch_us),
+            compute_buffer_sync_us: curr
+                .total_compute_buffer_sync_us
+                .saturating_sub(prev.total_compute_buffer_sync_us),
+            compute_dispatches: curr
+                .total_compute_dispatches
+                .saturating_sub(prev.total_compute_dispatches),
+            compute_dabs: curr
+                .total_compute_dabs
+                .saturating_sub(prev.total_compute_dabs),
+            compute_union_bbox_area_total: curr
+                .total_compute_union_bbox_area
+                .saturating_sub(prev.total_compute_union_bbox_area),
+            compute_dabs_per_flush: std::mem::take(&mut self.stroke_perf.compute_dabs_per_flush),
+            compute_union_bbox_area_per_flush: std::mem::take(
+                &mut self.stroke_perf.compute_union_bbox_area_per_flush,
+            ),
         }
     }
 

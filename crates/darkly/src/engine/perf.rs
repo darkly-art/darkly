@@ -123,6 +123,34 @@ pub(crate) struct StrokePerfStats {
     /// Sum of host time inside `ctx.input(...)` lookups at the top of
     /// `color_output::evaluate_gpu`.
     pub total_ctx_input_us: u64,
+
+    // --- Compute-path workload tracking (paint_compute terminal) ---
+    /// Sum of `union_w * union_h` (canvas pixels²) across every
+    /// paint-compute flush of the stroke. Bench output divides by
+    /// `total_compute_dispatches` for an average bbox area per flush.
+    pub total_compute_union_bbox_area: u64,
+    /// Total dabs that flowed through the compute path during the stroke.
+    /// Mirrors `BrushPerfCounters::compute_dabs_total` accumulation but
+    /// at stroke scope so the bench can read it via the per-event delta.
+    pub total_compute_dabs: u64,
+    /// Number of paint-compute flushes (one per pen event when the brush
+    /// hits the compute path).
+    pub total_compute_dispatches: u32,
+    /// Sum of host wall-clock time spent in `paint_compute::flush_compute`.
+    /// Includes encoder building, uniform write, pass open/dispatch/close,
+    /// plus the surrounding sync brackets — but NOT `queue.submit()`.
+    pub total_compute_dispatch_us: u64,
+    /// Sum of host wall-clock time spent encoding the post-dispatch
+    /// `copy_buffer_to_texture` sync. A subset of
+    /// `total_compute_dispatch_us`.
+    pub total_compute_buffer_sync_us: u64,
+    /// Per-flush dab counts across the stroke. Cleared by
+    /// `DarklyEngine::drain_brush_perf_delta` so bench output sees only
+    /// the flushes that landed since the last drain.
+    pub compute_dabs_per_flush: Vec<u32>,
+    /// Per-flush `union_w * union_h` in canvas pixels. Same indexing as
+    /// `compute_dabs_per_flush`.
+    pub compute_union_bbox_area_per_flush: Vec<u32>,
 }
 
 impl StrokePerfStats {
@@ -130,7 +158,7 @@ impl StrokePerfStats {
     /// time. Counters are cumulative across all contexts created during a
     /// single `brush_stroke_to`; the caller decides when to track the
     /// per-event peak (see `update_max_dabs_per_event`).
-    pub fn merge_brush(&mut self, c: BrushPerfCounters) {
+    pub fn merge_brush(&mut self, mut c: BrushPerfCounters) {
         self.total_dabs = self.total_dabs.saturating_add(c.dabs_placed as u64);
         self.total_dab_us = self.total_dab_us.saturating_add(c.dab_total_us);
         self.total_dab_graph_eval_us = self.total_dab_graph_eval_us.saturating_add(c.graph_eval_us);
@@ -175,6 +203,25 @@ impl StrokePerfStats {
         self.total_ctx_input_us = self.total_ctx_input_us.saturating_add(c.ctx_input_us);
         self.total_submit_us = self.total_submit_us.saturating_add(c.submit_us);
         self.total_submits = self.total_submits.saturating_add(c.submits);
+        self.total_compute_union_bbox_area = self
+            .total_compute_union_bbox_area
+            .saturating_add(c.compute_union_bbox_area_total);
+        self.total_compute_dabs = self
+            .total_compute_dabs
+            .saturating_add(c.compute_dabs_total as u64);
+        self.total_compute_dispatches = self
+            .total_compute_dispatches
+            .saturating_add(c.compute_dispatches_total);
+        self.total_compute_dispatch_us = self
+            .total_compute_dispatch_us
+            .saturating_add(c.compute_dispatch_us);
+        self.total_compute_buffer_sync_us = self
+            .total_compute_buffer_sync_us
+            .saturating_add(c.compute_buffer_sync_us);
+        self.compute_dabs_per_flush
+            .append(&mut c.compute_dabs_per_flush);
+        self.compute_union_bbox_area_per_flush
+            .append(&mut c.compute_union_bbox_area_per_flush);
     }
 
     /// Track the largest dab count seen in a single `brush_stroke_to`.
@@ -184,6 +231,69 @@ impl StrokePerfStats {
             self.max_dabs_per_event = dabs_this_event;
         }
     }
+}
+
+/// Snapshot of the monotonic counters on `StrokePerfStats` at a point in
+/// time. Subtracting two snapshots yields the per-interval delta the bench
+/// harness folds into `EventTiming`. Per-flush `Vec`s are intentionally
+/// excluded — they're drained (taken) by `drain_brush_perf_delta` rather
+/// than subtracted.
+#[derive(Default, Clone, Copy, Debug)]
+pub(crate) struct BrushPerfSnapshot {
+    pub total_submit_us: u64,
+    pub total_submits: u32,
+    pub total_compute_dispatch_us: u64,
+    pub total_compute_buffer_sync_us: u64,
+    pub total_compute_dispatches: u32,
+    pub total_compute_dabs: u64,
+    pub total_compute_union_bbox_area: u64,
+}
+
+impl BrushPerfSnapshot {
+    pub fn capture(s: &StrokePerfStats) -> Self {
+        Self {
+            total_submit_us: s.total_submit_us,
+            total_submits: s.total_submits,
+            total_compute_dispatch_us: s.total_compute_dispatch_us,
+            total_compute_buffer_sync_us: s.total_compute_buffer_sync_us,
+            total_compute_dispatches: s.total_compute_dispatches,
+            total_compute_dabs: s.total_compute_dabs,
+            total_compute_union_bbox_area: s.total_compute_union_bbox_area,
+        }
+    }
+}
+
+/// Per-interval brush perf delta returned by
+/// `DarklyEngine::drain_brush_perf_delta`. Scalars are differences against
+/// the previous snapshot; vectors are taken whole-cloth and reset to empty.
+///
+/// Bench-only — the WASM bridge never calls the drain.
+#[derive(Default, Debug, Clone)]
+pub struct BrushPerfDelta {
+    /// Wall-clock microseconds spent inside `queue.submit()` (final +
+    /// flush) during this interval.
+    pub submit_us: u64,
+    /// Number of `queue.submit()` calls issued during this interval.
+    pub submits: u32,
+    /// Host-side time inside `paint_compute::flush_compute` (encoder
+    /// building, uniform write, pass open/dispatch/close, sync brackets).
+    /// Excludes `queue.submit()`.
+    pub compute_dispatch_us: u64,
+    /// Host-side time around the post-dispatch `copy_buffer_to_texture`
+    /// sync (a subset of `compute_dispatch_us`).
+    pub compute_buffer_sync_us: u64,
+    /// Number of paint-compute flushes that landed during this interval.
+    pub compute_dispatches: u32,
+    /// Total dabs that flowed through the compute path during the interval.
+    pub compute_dabs: u64,
+    /// Sum of `union_w * union_h` across every flush during the interval.
+    pub compute_union_bbox_area_total: u64,
+    /// Per-flush dab counts for the flushes that landed during this
+    /// interval, in the order they were submitted.
+    pub compute_dabs_per_flush: Vec<u32>,
+    /// Per-flush `union_w * union_h` in canvas pixels, parallel to
+    /// `compute_dabs_per_flush`.
+    pub compute_union_bbox_area_per_flush: Vec<u32>,
 }
 
 /// Most recent `engine.render()` sub-phase timings, in microseconds.
