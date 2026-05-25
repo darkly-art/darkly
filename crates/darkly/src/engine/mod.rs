@@ -596,41 +596,6 @@ impl DarklyEngine {
         self.compositor.frame_count()
     }
 
-    /// True when the active GPU device exposes `TIMESTAMP_QUERY` and the
-    /// paint-compute pipeline allocated its query infrastructure. Bench
-    /// harnesses gate their `gpu_us` columns on this.
-    ///
-    /// Native-only. The frontend never opts in to `TIMESTAMP_QUERY`, so
-    /// this returns `false` on WASM builds at runtime.
-    pub fn paint_compute_has_timestamps(&self) -> bool {
-        self.brush_pipelines
-            .get::<crate::brush::nodes::paint_compute::PaintComputePipeline>("paint_compute")
-            .timestamps()
-            .is_some()
-    }
-
-    /// Non-blocking drain of pending paint-compute GPU timestamps.
-    /// Returns the per-bucket totals (sync_in / shader / sync_out) for
-    /// every dispatch whose readback callback has fired since the last
-    /// drain. Callbacks for very recently submitted dispatches may still
-    /// be in flight — those roll over into the next drain.
-    ///
-    /// **Native bench harnesses only.** Internally calls `device.poll`,
-    /// which on WebGPU/WASM is a no-op (and `TIMESTAMP_QUERY` isn't
-    /// requested there anyway). Returns the default delta (all zeros) if
-    /// the device wasn't created with the feature.
-    pub fn drain_paint_compute_timestamps(
-        &self,
-    ) -> crate::brush::nodes::paint_compute::PaintComputeTimestampDelta {
-        let pipeline = self
-            .brush_pipelines
-            .get::<crate::brush::nodes::paint_compute::PaintComputePipeline>("paint_compute");
-        match pipeline.timestamps() {
-            Some(ts) => ts.drain(&self.gpu.device),
-            None => Default::default(),
-        }
-    }
-
     /// Per-event drain of the brush perf accumulator. Returns the delta
     /// against the previous drain (per-flush vectors taken via `mem::take`,
     /// scalars `saturating_sub`'d) and resnapshots `last_brush_perf` so the

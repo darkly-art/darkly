@@ -403,6 +403,7 @@ impl BrushNodeEvaluator for ColorOutputEvaluator {
             pre_stroke_bg,
             opacity,
             gpu.blend_mode,
+            /* fg_premultiplied */ false,
         );
     }
 

@@ -304,8 +304,8 @@ impl DarklyEngine {
             pre_stroke_bind_group: None,
             dab_write_canvas_bbox: None,
             perf: BrushPerfCounters::default(),
-            pending_compute_dab_bytes: Vec::new(),
-            pending_compute_dab_count: 0,
+            pending_dab_bytes: Vec::new(),
+            pending_dab_count: 0,
             pending_dabs_bbox: None,
         };
 

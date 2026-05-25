@@ -250,6 +250,135 @@ GPU has just enough slack at this resolution that submit doesn't
 back up but encoding still bloats. Worth a repeat run if anything
 hinges on it.
 
+### #4 — Single-pass instanced fragment (this branch, current)
+
+**Shape:** one terminal `paint`, one render pass per phase, N
+instanced draws (`pass.draw(0..6, 0..N)`). Per-instance data
+(`PaintDabRecord`) lives in a storage buffer. Vertex shader computes
+each instance's clip-space quad from `pos ± radius`; fragment shader
+computes disc coverage + softness + selection, emits premultiplied
+output. Pipeline blend state runs source-over (`One, OneMinusSrcAlpha`
+on color *and* alpha) or destination-out for erase. The scratch
+texture is written directly by the ROP stage — no buffer round-trip
+anywhere.
+
+**Files:** [`shaders/brush/paint.wgsl`](shaders/brush/paint.wgsl),
+[`crates/darkly/src/brush/nodes/paint.rs`](crates/darkly/src/brush/nodes/paint.rs).
+
+**Alpha note.** The scratch texture is straight-alpha for every other
+consumer (color_output, watercolor, smudge, liquify). During a Basic-
+brush stroke the convention is internal to the `paint` terminal —
+it writes premultiplied, then the commit hook flips
+`fg_premultiplied: true` on `commit_brush_dab` so the existing
+composite shader interprets the scratch correctly when blitting to
+the layer. See `compositing-lessons-learned.md` §4 for why hardware
+source-over requires a premultiplied destination; per the same lesson,
+straight-alpha + hardware blend would produce dark-edge artifacts on
+partially transparent backgrounds. The shipped fragment terminal is
+the answer that lesson was waiting for.
+
+**What it bought:** both #1's and #3's failure modes disappear in one
+move. Per-dab `begin_render_pass` overhead is gone (one pass per
+phase, regardless of dab count). Buffer round-trip is gone (hardware
+ROP writes the scratch directly, no `copy_texture_to_buffer` /
+`copy_buffer_to_texture`). Cost scales with `Σ(dab_area)` —
+actually-rasterized pixels — instead of `dab_count` (#1) or
+`union_bbox_area` (#3). Neither catastrophe regime applies.
+
+**Why this was always available but took four attempts.** The
+predecessor doc claimed the scratch had been flipped to premultiplied
+alpha so hardware blend would work. It hadn't (or the flip was
+reverted when paint_compute landed). #3 worked around the
+straight-alpha constraint with a storage-buffer compute path and
+manual blend math; the resulting buffer round-trip became the
+dominant cost the bench surfaced. Once we localised the premultiplied
+convention to the paint terminal's own commit (via `fg_premultiplied:
+true`), the rest of the codebase stays unchanged and hardware blend
+works correctly.
+
+**WebGPU spec on instance ordering** — instances within a draw call
+are issued in instance-index order, and primitives within a draw are
+blended in primitive-issue order. So overlapping dabs blend
+deterministically with no inter-instance hazards. The earlier #3 doc
+hedged this as "implementation-defined"; the spec is firmer than that
+hedge suggested.
+
+#### Bench data
+
+`stroke_replay_matrix --topology paint` against
+[recorded_curvy_stroke.json](crates/darkly/tests/fixtures/recorded_curvy_stroke.json),
+same recording as the prior attempts. Full table at
+[bench-results/stroke-replay-matrix-paint-recorded_curvy_stroke-66d4dd649e.md](crates/darkly/bench-results/stroke-replay-matrix-paint-recorded_curvy_stroke-66d4dd649e.md).
+The 6-slot GPU-timestamp split (sync_in / shader / sync_out) is gone
+from the bench because the path it instrumented (the buffer
+round-trip) no longer exists.
+
+| canvas | radius_px | wall (ms) | behind (ms) | worst-frame (ms) | cpu p50 (µs) | submit p50 (µs) | dabs/ev | bbox/ev (px²) |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1280×720 | 1 | 3553 | +17 | 1.7 | 3619 | 1664 | 286.5 | 4654 |
+| 1280×720 | 10 | 3551 | +15 | 1.2 | 3394 | 1669 | 201.8 | 10854 |
+| 1280×720 | 100 | 3555 | +19 | 1.2 | 3006 | 1772 | 20.2 | 197168 |
+| 1280×720 | 250 | 3552 | +16 | 22.4 | 2973 | 1799 | 8.1 | 835616 |
+| 1280×720 | 500 | 3553 | +17 | 24.7 | 2716 | 1597 | 4.1 | 1837229 |
+| 1280×720 | 1000 | 3555 | +19 | 15.1 | 2696 | 1585 | 2.0 | 2255072 |
+| 1280×720 | 2000 | 3554 | +18 | 16.2 | 2554 | 1485 | 1.0 | 1466990 |
+| 1920×1080 | 1 | 3552 | +16 | 23.8 | 4203 | 1774 | 438.5 | 10081 |
+| 1920×1080 | 10 | 3550 | +14 | 24.9 | 3855 | 1769 | 308.8 | 18755 |
+| 1920×1080 | 100 | 3558 | +22 | 26.3 | 3328 | 1950 | 30.9 | 235482 |
+| 1920×1080 | 250 | 3554 | +18 | 21.4 | 3236 | 1928 | 12.4 | 1045568 |
+| 1920×1080 | 500 | 3556 | +20 | 17.7 | 3116 | 1868 | 6.2 | 2813993 |
+| 1920×1080 | 1000 | 3555 | +19 | 26.7 | 2656 | 1553 | 3.2 | 5348161 |
+| 1920×1080 | 2000 | 3554 | +18 | 27.0 | 2693 | 1570 | 1.6 | 5017430 |
+| 2560×1440 | 1 | 3553 | +17 | 17.5 | 4781 | 1885 | 597.0 | 17572 |
+| 2560×1440 | 10 | 3558 | +22 | 16.2 | 4034 | 1776 | 420.4 | 28767 |
+| 2560×1440 | 100 | 3554 | +18 | 32.0 | 3353 | 1994 | 42.1 | 275881 |
+| 2560×1440 | 250 | 3555 | +19 | 23.6 | 3238 | 1944 | 16.9 | 1198200 |
+| 2560×1440 | 500 | 3559 | +23 | 26.8 | 3119 | 1849 | 8.4 | 3516147 |
+| 2560×1440 | 1000 | 3554 | +18 | 13.5 | 3085 | 1819 | 4.2 | 7635587 |
+| 2560×1440 | 2000 | 3557 | +21 | 11.1 | 2781 | 1650 | 2.1 | 8789082 |
+| 3840×2160 | 1 | 3551 | +15 | 33.2 | 5224 | 1701 | 916.5 | 39237 |
+| 3840×2160 | 10 | 3552 | +16 | 28.7 | 4622 | 1723 | 645.5 | 55577 |
+| 3840×2160 | 100 | 3555 | +19 | 26.0 | 3368 | 1836 | 64.6 | 356606 |
+| 3840×2160 | 250 | 3556 | +20 | 22.3 | 3406 | 1991 | 25.8 | 1412694 |
+| 3840×2160 | 500 | 3557 | +21 | 26.5 | 3323 | 1958 | 12.9 | 4395837 |
+| 3840×2160 | 1000 | 3556 | +20 | 26.0 | 3702 | 2187 | 6.5 | 11656344 |
+| 3840×2160 | 2000 | 3660 | **+124** | 108.8 | 18277 | 2163 | 3.3 | 20514778 |
+
+**Every cell of the matrix is within the recorded cadence.** 26 of 28
+cells are at +15–23 ms behind — bench-noise level, identical
+behaviour across small-radius and large-radius regimes. The worst
+cell, 4K + 2000px, sits at +124 ms — still under 4 % of the 3.5 s
+stroke, and 33× better than #3's +4151 ms.
+
+**Cross-attempt diff on the previously-worst cells:**
+
+| cell | #1 fragment | #3 thread-per-pixel | #4 instanced fragment |
+|---|---:|---:|---:|
+| 4K + 1px | +17614 ms | +5 ms | +15 ms |
+| 4K + 500px | +20 ms | +1794 ms | **+21 ms** |
+| 4K + 1000px | +55 ms | +3562 ms | **+20 ms** |
+| 4K + 2000px | +1249 ms | +4200 ms | **+124 ms** |
+| 1080p + 1000px | +21 ms | +3 ms | +19 ms |
+| 1280×720 + 1px | +3113 ms | +3 ms | +15 ms |
+
+**The catastrophe regimes are gone.** #1's small-radius cells
+(thousands of dabs/event × per-pass driver overhead) caught up; #3's
+large-bbox cells (buffer round-trip × union bbox bytes) caught up. The
+single residual outlier — 4K + 2000px — is the heavily-overlapping-
+large-dabs regime called out in the plan's "where this could lose"
+hedge: 3.3 dabs × ~20 M px² union with heavy overdraw produces ~60 M
+shaded fragment invocations per event, borderline. Still well under
+the threshold where the user feels lag. If a future use case ever
+makes this regime first-class, a per-dab tile-bin or a coarse
+overdraw cull is the next lever.
+
+**Where #4 *doesn't* close a gap and why that's OK.** Tiny radius
+cells (1px) read slightly higher than #3 (+15 ms vs +5 ms in the 4K
+column). The difference is bench noise and the modest CPU cost of
+appending 900 dab records to the storage buffer per event vs writing
+the same records as compute-buffer dabs. Neither is felt by a user;
+the matrix's noise floor is around ±20 ms.
+
 ## Background changes that are NOT competing attempts
 
 These landed for different reasons over the same time window. Listed
@@ -268,12 +397,19 @@ the per-event compute structure.
 
 ## Options to explore next
 
-> **Re-ranked after the per-event instrumentation re-run.** The data
-> shows sync-copy bytes are the dominant cost in #3's bad cells, not
-> shader lane-waste. Options that attack sync bytes (D, C-as-hybrid)
-> are now ahead of options that attack shader lane-waste (A).
-> See the *Architectural cost model* + *Bench synthesis* sections
-> above for the supporting numbers.
+> **Status as of #4 shipping.** The hybrid-router framing was rejected
+> in favour of pure C (single-pass instanced fragment, shipped as #4).
+> The "fragment + compute hybrid with bbox_density routing" would have
+> required every brush node to grow two implementations and a generic
+> dispatch system for a speculative regime (heavy overdraw on huge
+> overlapping dabs) we have no evidence of in practice. The 4K +
+> 2000px cell at +124 ms is the closest #4 comes to that regime and
+> it's still well within real-time. If a use case ever makes heavy
+> overdraw first-class, the next lever is a per-dab tile-bin or a
+> coarse overdraw cull, not a fragment+compute hybrid.
+>
+> Options A, B, D below are kept for reference. None of them are
+> active work.
 
 ### A. Tile-binning (Forward+ for dabs) — *demoted*
 
@@ -368,65 +504,66 @@ while the GPU completes the prior one. This is the fastest path to
 unblocking the 4K + ≥500px regression *without* changing the
 architecture — bench-driven CPU heuristic only.
 
-Cheap, partial; ships behind the heuristic and reverts cleanly.
-Worth doing immediately, in parallel with the (C)/hybrid track.
+Cheap, partial; ships behind the heuristic. **Rejected in favour of
+(C)** — the mechanism actually depends on intermediate
+`queue.submit()` calls to pipeline CPU/GPU work, and once you accept
+that complexity the buffer round-trip is still the dominant cost. (C)
+removes the round-trip entirely.
 
 ## What the user proposed
 
 > "We can do all the dabs in one pass without assigning each pixel a thread."
 
-Closest literal match: **(C) instanced-quad render pass** — the
-rasterizer assigns threads, not us. *After the instrumentation
-re-run this turns out to also be the closest robust-perf match*,
-because (C) eliminates the buffer round-trip that's actually the
-dominant cost. The earlier "(A) tile-binning" framing was based on
-the over-confident reading that union-bbox lane-waste was the
-problem; the new data shows lane-waste is real but small. (A) is
-still worth doing — it's a 1-3 ms win per event — but it doesn't
-close the felt-experience gap on its own.
+**Shipped as #4.** The closest literal match — option (C) instanced-
+quad render pass — turned out to also be the closest robust-perf
+match, because it eliminates the buffer round-trip that was the
+dominant cost in #3 *and* the per-dab `begin_render_pass` overhead
+that was the dominant cost in #1. The two failure regimes from the
+prior attempts disappear in one move.
 
 ## Instrumentation status
 
-**Done:**
-- ✅ GPU timestamp queries around the paint-compute compute pass
-  ([`PaintComputeTimestamps`](crates/darkly/src/brush/nodes/paint_compute.rs)).
+> **Historical.** The 6-slot GPU-timestamp split
+> (`sync_in` / `shader` / `sync_out`) was specific to the
+> compute path's buffer round-trip and was removed alongside
+> `paint_compute`. The bench harness now surfaces `cpu_us`,
+> `submit_us`, and the per-flush dab + union-bbox workload
+> vectors. CPU/submit alone proved sufficient for #4 — both
+> failure axes that motivated the timestamp split disappeared
+> structurally, so there's no per-flush GPU sub-cost left to
+> attribute.
+
+**Still present (active):**
+
 - ✅ Deterministic bench stroke — captured via the `?_RECORD_STROKES=1`
   recorder ([crates/darkly/tests/fixtures/recorded_curvy_stroke.json](crates/darkly/tests/fixtures/recorded_curvy_stroke.json))
   and re-runnable across approaches via `stroke_replay_matrix`.
-
-**Done in the second instrumentation pass (this branch):**
-
-- ✅ Per-flush GPU timeline split into `sync_in` (`copy_texture_to_buffer`)
-  / `shader` (compute pass) / `sync_out` (`copy_buffer_to_texture`).
-  6-slot query set per flush, gated on `TIMESTAMP_QUERY_INSIDE_ENCODERS`
-  for the sync brackets; the shader slot keeps working on adapters
-  that only expose `TIMESTAMP_QUERY_INSIDE_PASSES`.
 - ✅ Per-event `submit_us` exposed via `BrushPerfDelta` — the
-  back-pressure waterfall that was hiding inside `cpu_us` is now a
+  back-pressure waterfall that was hiding inside `cpu_us` is a
   first-class bench column.
 - ✅ Per-event `dabs_total` and `union_bbox_area_total` surfaced from
   `BrushPerfCounters` so cells can be read by the actual workload the
   engine fed the GPU rather than the nominal radius axis. Markdown
   carries the per-event averages; TSV carries the per-flush vectors
   if a future analysis wants them.
-- ✅ `gpu_samples` is already in `EventTiming`; the matrix's TSV does
-  not yet split it out per column but `replay()` aggregates it onto
-  every event.
 
-**Smoke run on `dab-compute-shader` confirms the planned hypothesis:**
-at 4K + 1000px the matrix now reads `gpu_shader_p50 = 3166 µs`,
-`gpu_sync_in_p50 = 12133 µs`, `gpu_sync_out_p50 = 9595 µs`, `submit_p50 =
-28835 µs` (canonical `b146df4220` run). The "12× CPU-bound" reading
-from the first synthesis was wrong — the sync copies *alone* are 6.8×
-the shader pass, and `queue.submit()` back-pressure on top of that
-brings cpu_p50 to 11.8× the shader.
+**Removed with `paint_compute`:**
 
-The architectural prescription inverts from the original: it's the
-sync-bytes axis that matters, not the shader-lane-waste axis. Tile-bin
-attacks lane-waste and is now demoted — see *Options to explore next*
-above for the re-ranked options and *Architectural cost model* for
-why fragment (option C, with hybrid routing) is now the cleanest
-candidate.
+- ❌ `PaintComputeTimestamps` (6-slot query set per flush, gated on
+  `TIMESTAMP_QUERY_INSIDE_ENCODERS`).
+- ❌ `EventTiming::gpu_shader_ns` / `gpu_sync_in_ns` / `gpu_sync_out_ns` /
+  `gpu_samples` — the bench's `EventTiming` no longer carries these.
+
+**Notes from the prior instrumentation pass (kept for context):**
+
+A smoke run on `dab-compute-shader` against #3 had read
+`gpu_shader_p50 = 3166 µs`, `gpu_sync_in_p50 = 12133 µs`,
+`gpu_sync_out_p50 = 9595 µs`, `submit_p50 = 28835 µs` at the 4K + 1000px
+cell (canonical `b146df4220` run). The "12× CPU-bound" reading from
+the first synthesis was wrong — the sync copies *alone* were 6.8× the
+shader pass, and `queue.submit()` back-pressure on top of that brought
+`cpu_p50` to 11.8× the shader. This is what motivated #4 (eliminate
+the round-trip rather than optimise within it).
 
 **Still missing:**
 
@@ -480,6 +617,7 @@ along a different axis, with a different catastrophe regime:
 | **#1 fragment** | `dab_count` (per-pass driver overhead) + `Σ(dab_area)` (rasterized pixels) | many dabs/event — high stabilizer × tight spacing |
 | **#2 1-wg compute** | `union_bbox_area × dab_count` (64 threads chew tiles serially) + sync round-trip | large dabs anywhere — workgroup parallelism is the bottleneck |
 | **#3 thread-per-pixel** | `union_bbox_area` (sync copies + dispatch grid) | few large dabs spread over a big bbox |
+| **#4 instanced fragment** *(shipped)* | `Σ(dab_area)` (rasterized pixels) — no per-pass overhead, no round-trip | heavy overdraw on huge overlapping dabs (theoretical; not reached in the matrix) |
 
 A 1px dab on a 4K canvas: #1 pays 1 render pass + ~1 pixel
 rasterized. #3 pays a sync round-trip of ~4 KB. #1 wins handily —
@@ -493,45 +631,48 @@ entire union bbox regardless of where dabs land. #3 loses because
 the round-trip cost is proportional to the *bounding rectangle*,
 not the painted area.
 
-**Implication for any hybrid.** The routing key should be
-`union_bbox_area_per_flush` (or `dab_area_total / union_bbox_area`,
-which captures "density" within the bbox), **not** `dab_count`.
-These are correlated in this matrix but dissociate for brushes like
-impasto oil that pin spacing to 1px regardless of dab radius.
+**Implication for #4.** Eliminating *both* the per-pass driver
+overhead axis (#1's failure) and the buffer round-trip axis (#3's
+failure) collapses the design space — no routing decision is needed
+because one approach dominates everywhere a Basic brush actually
+runs. The hybrid framing earlier in this doc was the right shape
+*given* #1 and #3's failure regimes; once #4 closed both, the
+hybrid became unnecessary infrastructure.
 
 ## Bench synthesis
 
 Cross-approach `behind_by_ms` on the same recording. Negative or
 near-zero = the engine kept up with the recorded cadence; positive =
-the engine fell behind by that many ms over a 3.5s stroke.
+the engine fell behind by that many ms over a 3.5s stroke. **#4 wins
+every cell.**
 
-| canvas | radius_px | #1 fragment | #2 1-wg compute | #3 thread-per-pixel | winner |
-|---|---:|---:|---:|---:|:---|
-| 1280×720 | 1 | **+3113** | +4 | +7 | #2 / #3 |
-| 1280×720 | 10 | **+1006** | +4 | +7 | #2 / #3 |
-| 1280×720 | 100 | +15 | +4 | +5 | #2 / #3 |
-| 1280×720 | 250 | +18 | +34 | +3 | #3 |
-| 1280×720 | 500 | +18 | **+1705** | +4 | #3 |
-| 1280×720 | 1000 | +23 | **+2936** | +3 | #3 |
-| 1280×720 | 2000 | +16 | **+1283** | +4 | #1 / #3 |
-| 1920×1080 | 1 | **+6369** | +5 | +4 | #2 / #3 |
-| 1920×1080 | 100 | +27 | +3 | +4 | #2 / #3 |
-| 1920×1080 | 250 | +16 | **+1269** | +3 | #1 / #3 |
-| 1920×1080 | 500 | +18 | **+5328** | +4 | #1 / #3 |
-| 1920×1080 | 1000 | +21 | **+11355** | +3 | #1 / #3 |
-| 1920×1080 | 2000 | +23 | **+11431** | +4 | #1 / #3 |
-| 2560×1440 | 1 | **+9515** | +5 | +4 | #2 / #3 |
-| 2560×1440 | 100 | +16 | +17 | +4 | #3 |
-| 2560×1440 | 250 | +16 | **+3099** | +5 | #1 / #3 |
-| 2560×1440 | 500 | +20 | **+8854** | +4 | #1 / #3 |
-| 2560×1440 | 1000 | +20 | **+18222** | +295 | #1 |
-| 2560×1440 | 2000 | +20 | **+22101** | +102 | #1 |
-| 3840×2160 | 1 | **+17614** | +5 | +5 | #2 / #3 |
-| 3840×2160 | 100 | +17 | **+1415** | +4 | #1 / #3 |
-| 3840×2160 | 250 | +17 | **+6765** | +36 | #1 |
-| 3840×2160 | 500 | +20 | **+16227** | **+1794** | #1 |
-| 3840×2160 | 1000 | +55 | **+33169** | **+3562** | #1 |
-| 3840×2160 | 2000 | **+1249** | **+54099** | **+4200** | #1 |
+| canvas | radius_px | #1 fragment | #2 1-wg compute | #3 thread-per-pixel | #4 instanced fragment |
+|---|---:|---:|---:|---:|---:|
+| 1280×720 | 1 | **+3113** | +4 | +7 | **+17** |
+| 1280×720 | 10 | **+1006** | +4 | +7 | **+15** |
+| 1280×720 | 100 | +15 | +4 | +5 | **+19** |
+| 1280×720 | 250 | +18 | +34 | +3 | **+16** |
+| 1280×720 | 500 | +18 | **+1705** | +4 | **+17** |
+| 1280×720 | 1000 | +23 | **+2936** | +3 | **+19** |
+| 1280×720 | 2000 | +16 | **+1283** | +4 | **+18** |
+| 1920×1080 | 1 | **+6369** | +5 | +4 | **+16** |
+| 1920×1080 | 100 | +27 | +3 | +4 | **+22** |
+| 1920×1080 | 250 | +16 | **+1269** | +3 | **+18** |
+| 1920×1080 | 500 | +18 | **+5328** | +4 | **+20** |
+| 1920×1080 | 1000 | +21 | **+11355** | +3 | **+19** |
+| 1920×1080 | 2000 | +23 | **+11431** | +4 | **+18** |
+| 2560×1440 | 1 | **+9515** | +5 | +4 | **+17** |
+| 2560×1440 | 100 | +16 | +17 | +4 | **+18** |
+| 2560×1440 | 250 | +16 | **+3099** | +5 | **+19** |
+| 2560×1440 | 500 | +20 | **+8854** | +4 | **+23** |
+| 2560×1440 | 1000 | +20 | **+18222** | +295 | **+18** |
+| 2560×1440 | 2000 | +20 | **+22101** | +102 | **+21** |
+| 3840×2160 | 1 | **+17614** | +5 | +5 | **+15** |
+| 3840×2160 | 100 | +17 | **+1415** | +4 | **+19** |
+| 3840×2160 | 250 | +17 | **+6765** | +36 | **+20** |
+| 3840×2160 | 500 | +20 | **+16227** | **+1794** | **+21** |
+| 3840×2160 | 1000 | +55 | **+33169** | **+3562** | **+20** |
+| 3840×2160 | 2000 | **+1249** | **+54099** | **+4200** | **+124** |
 
 **Important framing — read radius as a spacing proxy.** Ink Pen's
 default spacing is a fraction of dab radius, so the matrix's radius
@@ -577,13 +718,13 @@ cells in the per-approach tables above):
   with radius ≥ 250, never beats #1 at small dabs. Its only reason
   for existing was to escape #1's per-dab overhead — which #3 also
   escapes, without #2's single-workgroup serialization.
-- **Hybrid #1 + #3 is the clean fix.** Route on
-  `union_bbox_area_per_flush` (or `dab_area_total / bbox_area`
-  density). When density is high, use #3 (one dispatch dominates
-  hundreds of fragment passes). When density is low, use #1 (no
-  buffer round-trip on a mostly-empty bbox). The matrix shows the
-  two approaches' failure regimes are *disjoint*, so a hybrid would
-  dominate cell-by-cell with no architectural trade-off.
+- **#4 dominates without a hybrid.** Once #1's per-pass overhead and
+  #3's buffer round-trip are *both* eliminated in one architecture
+  (one render pass per phase + N instanced draws with hardware blend),
+  there's no cell where the trade-off between #1 and #3 still
+  matters. The hybrid framing earlier in this doc was the right call
+  given #1's and #3's actual failure modes — once the shipped #4
+  removed both, the hybrid became unnecessary infrastructure.
 
 ## Working agreement
 

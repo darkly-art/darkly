@@ -17,7 +17,7 @@
 //!     terminal's `size` port to the cell's dab radius.
 //!   - Adds a raster layer.
 //!   - Replays the recording at `ReplayPacing::Realtime`.
-//!   - Records per-event CPU timings + total wall-clock.
+//!   - Records per-event CPU + per-flush workload counters.
 //!
 //! Note on `dab_radius_px`: this is the value of the brush graph's `size`
 //! port at port-default-pressure (1.0). Ink Pen modulates `size_input`
@@ -62,25 +62,27 @@ const STABILIZE: f32 = 1.0;
 // ── CLI ─────────────────────────────────────────────────────────────────
 
 /// Which terminal topology the Ink Pen brush graph uses for each cell.
-/// Selects between paint-terminal architectures #1 and #3 catalogued in
-/// `paint-compute-perf-tracking.md`; approach #2 is at git ref `dfa4207`
-/// and reachable only via a worktree.
+/// `Paint` is the current shipped path (single-pass instanced fragment,
+/// attempt #4 in `paint-compute-perf-tracking.md`). `StampColorOutput`
+/// preserves the pre-compute fragment topology (attempt #1) for
+/// cross-approach comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Topology {
-    /// Current shipped Ink Pen — `pen_input → paint_color → paint_compute`,
-    /// where `paint_compute` is the thread-per-pixel iterate-dabs compute
-    /// terminal (approach #3 in the tracking doc).
-    PaintCompute,
+    /// Current shipped Ink Pen — `pen_input → paint_color → paint`.
+    /// Single render pass per phase, N instanced draws, hardware
+    /// premultiplied source-over.
+    Paint,
     /// Pre-compute Ink Pen — `pen_input → paint_color → circle → stamp →
     /// color_output`, fragment-path composite, one render pass per dab
-    /// (approach #1 in the tracking doc).
+    /// (approach #1 in the tracking doc). Kept so the bench can still
+    /// measure how the cost-per-pass overhead axis evolves.
     StampColorOutput,
 }
 
 impl Topology {
     fn parse(s: &str) -> Option<Self> {
         match s {
-            "paint-compute" | "paint_compute" | "compute" => Some(Topology::PaintCompute),
+            "paint" => Some(Topology::Paint),
             "stamp-color-output" | "stamp_color_output" | "fragment" => {
                 Some(Topology::StampColorOutput)
             }
@@ -90,14 +92,14 @@ impl Topology {
 
     fn slug(self) -> &'static str {
         match self {
-            Topology::PaintCompute => "paint-compute",
+            Topology::Paint => "paint",
             Topology::StampColorOutput => "stamp-color-output",
         }
     }
 
     fn terminal_id(self) -> &'static str {
         match self {
-            Topology::PaintCompute => "paint_compute",
+            Topology::Paint => "paint",
             Topology::StampColorOutput => "color_output",
         }
     }
@@ -113,7 +115,7 @@ struct Args {
 fn parse_args() -> Args {
     let mut input: Option<PathBuf> = None;
     let mut output: Option<PathBuf> = None;
-    let mut topology = Topology::PaintCompute;
+    let mut topology = Topology::Paint;
     let mut argv = std::env::args().skip(1);
     while let Some(a) = argv.next() {
         match a.as_str() {
@@ -128,19 +130,17 @@ fn parse_args() -> Args {
             "--topology" | "-t" => {
                 let v = argv.next().expect("--topology requires a value");
                 topology = Topology::parse(&v).unwrap_or_else(|| {
-                    panic!(
-                        "unknown topology `{v}` — expected `paint-compute` or `stamp-color-output`"
-                    )
+                    panic!("unknown topology `{v}` — expected `paint` or `stamp-color-output`")
                 });
             }
             "-h" | "--help" => {
                 eprintln!(
                     "stroke_replay_matrix --input <path> [--output <tsv>] \
-                     [--topology paint-compute|stamp-color-output]\n\n\
+                     [--topology paint|stamp-color-output]\n\n\
                      Replays a recording across the configured (dab_radius × resolution) matrix.\n\
                      Axes are constants at the top of stroke_replay_matrix.rs.\n\
-                     Default topology is `paint-compute` (current shipped, approach #3).\n\
-                     `stamp-color-output` picks the pre-compute fragment topology (approach #1)."
+                     Default topology is `paint` (current shipped, attempt #4).\n\
+                     `stamp-color-output` picks the pre-compute fragment topology (attempt #1)."
                 );
                 std::process::exit(0);
             }
@@ -174,14 +174,14 @@ fn ink_pen_pressure_curve() -> Vec<[f32; 2]> {
 
 fn brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
     match topology {
-        Topology::PaintCompute => ink_pen_paint_compute_graph_json(dab_radius_px),
+        Topology::Paint => ink_pen_paint_graph_json(dab_radius_px),
         Topology::StampColorOutput => ink_pen_fragment_graph_json(dab_radius_px),
     }
 }
 
-/// Approach #3 — load the shipped Ink Pen brush, override the
-/// `paint_compute` terminal's `size` port and the `pen_input` stabilizer.
-fn ink_pen_paint_compute_graph_json(dab_radius_px: f32) -> String {
+/// Attempt #4 — load the shipped Ink Pen brush, override the `paint`
+/// terminal's `size` port and the `pen_input` stabilizer.
+fn ink_pen_paint_graph_json(dab_radius_px: f32) -> String {
     let mut brush = builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == BRUSH_NAME)
@@ -196,9 +196,9 @@ fn ink_pen_paint_compute_graph_json(dab_radius_px: f32) -> String {
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "paint_compute")
+        .find(|(_, n)| n.type_id == "paint")
         .map(|(id, _)| *id)
-        .expect("brush must have a paint_compute terminal");
+        .expect("brush must have a paint terminal");
     let size_port = (2.0 * dab_radius_px) / DAB_REFERENCE_SIZE_PX;
     graph
         .set_port_default(term_id, "size", size_port)
@@ -213,8 +213,7 @@ fn ink_pen_paint_compute_graph_json(dab_radius_px: f32) -> String {
 /// `pen_input → paint_color → circle → stamp → color_output`. The graph
 /// matches `builtin_brushes.rs::ink_pen` in spirit (pressure curve →
 /// `stamp.size_input`, `pen.pressure → stamp.flow`) but terminates in
-/// the fragment `color_output` instead of the compute `paint_compute`.
-/// Reach-of-this-topology is what the tracking doc calls "approach #1".
+/// the fragment `color_output` instead of the instanced `paint`.
 ///
 /// Lives in the bench rather than `builtin_brushes.rs` so we don't ship
 /// a permanent regression brush to users.
@@ -253,9 +252,6 @@ fn ink_pen_fragment_graph_json(dab_radius_px: f32) -> String {
         vec![],
     );
 
-    // Same defaults the bench uses for approach #3, except `size` lives
-    // on the `stamp` node here (not on the terminal). Same formula —
-    // `size = 2 * radius_px / DAB_REFERENCE_SIZE_PX`.
     let size_port = (2.0 * dab_radius_px) / DAB_REFERENCE_SIZE_PX;
     graph
         .set_port_default(stamp, "size", size_port)
@@ -265,16 +261,11 @@ fn ink_pen_fragment_graph_json(dab_radius_px: f32) -> String {
         .expect("set pen.stabilize");
 
     let wires = [
-        // pressure curve → stamp.size_input (front-loaded response)
         (pen, "pressure", curve, "input"),
         (curve, "output", stamp, "size_input"),
-        // pen.pressure → stamp.flow (raw, no curve)
         (pen, "pressure", stamp, "flow"),
-        // circle (procedural tip) feeds stamp.tip
         (circle, "texture", stamp, "tip"),
-        // paint_color → stamp.color (color lives with the tinted dab)
         (paint_color, "color", stamp, "color"),
-        // stamp produces dab + dab_size + preview consumed by color_output
         (stamp, "dab", terminal, "dab"),
         (stamp, "dab_size", terminal, "dab_size"),
         (stamp, "preview", terminal, "brush_preview"),
@@ -295,8 +286,6 @@ fn ink_pen_fragment_graph_json(dab_radius_px: f32) -> String {
             .expect("brush wire connects");
     }
 
-    // Sanity: wrap in metadata for symmetry with the paint_compute path,
-    // even though we only serialize the graph itself.
     let _metadata = BrushMetadata::from_graph("Ink Pen (fragment, bench)", graph.clone());
     serde_json::to_string(&graph).expect("serialize brush graph")
 }
@@ -320,37 +309,17 @@ struct CellResult {
     cpu_median_us: f64,
     cpu_p95_us: f64,
     cpu_max_us: u64,
-    /// Compute-pass shader time per event, in microseconds. Folded from
-    /// the non-blocking timestamp drain in `replay`. Zero when the device
-    /// wasn't created with `TIMESTAMP_QUERY` — bench_device opts in when
-    /// the adapter advertises support.
-    gpu_shader_median_us: f64,
-    gpu_shader_p95_us: f64,
-    gpu_shader_max_us: u64,
-    /// `copy_texture_to_buffer` (sync_in) and `copy_buffer_to_texture`
-    /// (sync_out) GPU time per event. Zero unless the device exposes
-    /// `TIMESTAMP_QUERY_INSIDE_ENCODERS`.
-    gpu_sync_in_median_us: f64,
-    gpu_sync_in_p95_us: f64,
-    gpu_sync_in_max_us: u64,
-    gpu_sync_out_median_us: f64,
-    gpu_sync_out_p95_us: f64,
-    gpu_sync_out_max_us: u64,
     /// `queue.submit()` host time per event (back-pressure indicator).
     submit_median_us: f64,
     submit_p95_us: f64,
     submit_max_us: u64,
-    /// Average dispatches, dabs, and union bbox area per event across the
-    /// stroke. Workload signal — `dabs/ev` discriminates spacing regimes
-    /// even when canvas/radius are fixed, and `bbox_area/ev` highlights
-    /// the union-bbox-lane-waste regime that hurts approach #3.
+    /// Per-event averages of the workload the engine fed the GPU. `dabs/ev`
+    /// discriminates spacing regimes; `bbox_area/ev` carries the union-
+    /// bbox shape that mattered for the compute round-trip (and stays
+    /// interesting for the fragment path's overdraw cost).
     dispatches_per_event_avg: f64,
     dabs_per_event_avg: f64,
     union_bbox_area_per_event_avg: f64,
-    /// True when at least one event reported a non-zero `gpu_shader_ns` —
-    /// the header notes this so future readers know the gpu columns are
-    /// instrumented data vs all-zeros.
-    gpu_timestamps_available: bool,
 }
 
 fn percentile(sorted: &[u64], pct: f64) -> f64 {
@@ -396,9 +365,6 @@ fn run_cell(
     );
     let wall_total_ms = wall_start.elapsed().as_secs_f64() * 1000.0;
 
-    // Per-event lateness: subtract the recorded inter-event gap from
-    // each event's CPU time. The first event's "gap" is undefined; treat
-    // it as 0 so any startup cost counts toward the worst-frame metric.
     let max_event_behind_ms = timings
         .iter()
         .enumerate()
@@ -415,24 +381,12 @@ fn run_cell(
     let mut cpu_us: Vec<u64> = timings.iter().map(|t| t.cpu_us).collect();
     cpu_us.sort_unstable();
 
-    let mut gpu_shader_us: Vec<u64> = timings.iter().map(|t| t.gpu_shader_ns / 1000).collect();
-    let gpu_timestamps_available = gpu_shader_us.iter().any(|&v| v > 0);
-    gpu_shader_us.sort_unstable();
-
-    let mut gpu_sync_in_us: Vec<u64> = timings.iter().map(|t| t.gpu_sync_in_ns / 1000).collect();
-    gpu_sync_in_us.sort_unstable();
-    let mut gpu_sync_out_us: Vec<u64> = timings.iter().map(|t| t.gpu_sync_out_ns / 1000).collect();
-    gpu_sync_out_us.sort_unstable();
-
     let mut submit_us: Vec<u64> = timings.iter().map(|t| t.submit_us).collect();
     submit_us.sort_unstable();
 
     let total_events = timings.len().max(1) as f64;
-    let dispatches_per_event_avg = timings
-        .iter()
-        .map(|t| t.compute_dispatches as f64)
-        .sum::<f64>()
-        / total_events;
+    let dispatches_per_event_avg =
+        timings.iter().map(|t| t.dab_flushes as f64).sum::<f64>() / total_events;
     let dabs_per_event_avg =
         timings.iter().map(|t| t.dabs_total as f64).sum::<f64>() / total_events;
     let union_bbox_area_per_event_avg = timings
@@ -452,22 +406,12 @@ fn run_cell(
         cpu_median_us: percentile(&cpu_us, 0.5),
         cpu_p95_us: percentile(&cpu_us, 0.95),
         cpu_max_us: *cpu_us.last().unwrap_or(&0),
-        gpu_shader_median_us: percentile(&gpu_shader_us, 0.5),
-        gpu_shader_p95_us: percentile(&gpu_shader_us, 0.95),
-        gpu_shader_max_us: *gpu_shader_us.last().unwrap_or(&0),
-        gpu_sync_in_median_us: percentile(&gpu_sync_in_us, 0.5),
-        gpu_sync_in_p95_us: percentile(&gpu_sync_in_us, 0.95),
-        gpu_sync_in_max_us: *gpu_sync_in_us.last().unwrap_or(&0),
-        gpu_sync_out_median_us: percentile(&gpu_sync_out_us, 0.5),
-        gpu_sync_out_p95_us: percentile(&gpu_sync_out_us, 0.95),
-        gpu_sync_out_max_us: *gpu_sync_out_us.last().unwrap_or(&0),
         submit_median_us: percentile(&submit_us, 0.5),
         submit_p95_us: percentile(&submit_us, 0.95),
         submit_max_us: *submit_us.last().unwrap_or(&0),
         dispatches_per_event_avg,
         dabs_per_event_avg,
         union_bbox_area_per_event_avg,
-        gpu_timestamps_available,
     }
 }
 
@@ -515,9 +459,6 @@ fn write_tsv(path: &Path, results: &[CellResult]) -> std::io::Result<()> {
         "canvas_w\tcanvas_h\tdab_radius_px\tevent_count\tstroke_duration_ms\t\
          wall_total_ms\tbehind_by_ms\tmax_event_behind_ms\t\
          cpu_median_us\tcpu_p95_us\tcpu_max_us\t\
-         gpu_shader_median_us\tgpu_shader_p95_us\tgpu_shader_max_us\t\
-         gpu_sync_in_median_us\tgpu_sync_in_p95_us\tgpu_sync_in_max_us\t\
-         gpu_sync_out_median_us\tgpu_sync_out_p95_us\tgpu_sync_out_max_us\t\
          submit_median_us\tsubmit_p95_us\tsubmit_max_us\t\
          dispatches_per_event_avg\tdabs_per_event_avg\tunion_bbox_area_per_event_avg"
     )?;
@@ -525,9 +466,6 @@ fn write_tsv(path: &Path, results: &[CellResult]) -> std::io::Result<()> {
         writeln!(
             file,
             "{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.3}\t{:.3}\t\
-             {:.2}\t{:.2}\t{}\t\
-             {:.2}\t{:.2}\t{}\t\
-             {:.2}\t{:.2}\t{}\t\
              {:.2}\t{:.2}\t{}\t\
              {:.2}\t{:.2}\t{}\t\
              {:.3}\t{:.3}\t{:.0}",
@@ -542,15 +480,6 @@ fn write_tsv(path: &Path, results: &[CellResult]) -> std::io::Result<()> {
             r.cpu_median_us,
             r.cpu_p95_us,
             r.cpu_max_us,
-            r.gpu_shader_median_us,
-            r.gpu_shader_p95_us,
-            r.gpu_shader_max_us,
-            r.gpu_sync_in_median_us,
-            r.gpu_sync_in_p95_us,
-            r.gpu_sync_in_max_us,
-            r.gpu_sync_out_median_us,
-            r.gpu_sync_out_p95_us,
-            r.gpu_sync_out_max_us,
             r.submit_median_us,
             r.submit_p95_us,
             r.submit_max_us,
@@ -589,44 +518,31 @@ fn write_markdown(
         recording.canvas_width,
         recording.canvas_height,
     )?;
-    let any_gpu = results.iter().any(|r| r.gpu_timestamps_available);
-    if !any_gpu {
-        writeln!(file)?;
-        writeln!(
-            file,
-            "**GPU timestamps absent** — the bench's `TIMESTAMP_QUERY` \
-             instrumentation only wraps the `paint_compute` compute pass. \
-             This topology either dispatches through a different terminal \
-             (`{}` for this run) or the adapter doesn't expose the feature. \
-             The `gpu_*` columns will all read 0; use `cpu_*` for perf signal.",
-            topology.terminal_id(),
-        )?;
-    }
     writeln!(file)?;
     writeln!(
         file,
         "Markdown carries the slim view; the sibling TSV has p95/max for every column. \
-         `gpu_shader` is the compute pass; `gpu_sync_in` is `copy_texture_to_buffer`; \
-         `gpu_sync_out` is `copy_buffer_to_texture`. The sync columns are zero unless the \
-         adapter exposes `TIMESTAMP_QUERY_INSIDE_ENCODERS`. `submit` is host wall-clock \
-         around `queue.submit()` — high values indicate back-pressure. `dispatches/ev`, \
-         `dabs/ev`, `bbox/ev` are per-event averages of the workload the engine fed the GPU."
+         `submit` is host wall-clock around `queue.submit()` — high values indicate \
+         back-pressure. `dispatches/ev`, `dabs/ev`, `bbox/ev` are per-event averages \
+         of the workload the engine fed the GPU. The 6-slot GPU-timestamp columns \
+         (`gpu_shader` / `gpu_sync_in` / `gpu_sync_out`) that the older matrices \
+         carried are gone — they instrumented the compute-path buffer round-trip, \
+         which the `paint` terminal no longer pays."
     )?;
     writeln!(file)?;
     writeln!(
         file,
         "| canvas | radius_px | events | wall (ms) | behind (ms) | worst-frame (ms) | \
-         cpu p50 (µs) | gpu_shader p50 (µs) | gpu_sync_in p50 (µs) | gpu_sync_out p50 (µs) | \
-         submit p50 (µs) | dispatches/ev | dabs/ev | bbox px²/ev |"
+         cpu p50 (µs) | submit p50 (µs) | dispatches/ev | dabs/ev | bbox px²/ev |"
     )?;
     writeln!(
         file,
-        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"
     )?;
     for r in results {
         writeln!(
             file,
-            "| {}×{} | {} | {} | {:.0} | {:+.0} | {:.1} | {:.0} | {:.0} | {:.0} | {:.0} | {:.0} | {:.2} | {:.1} | {:.0} |",
+            "| {}×{} | {} | {} | {:.0} | {:+.0} | {:.1} | {:.0} | {:.0} | {:.2} | {:.1} | {:.0} |",
             r.canvas.0,
             r.canvas.1,
             r.dab_radius_px,
@@ -635,9 +551,6 @@ fn write_markdown(
             r.behind_by_ms,
             r.max_event_behind_ms,
             r.cpu_median_us,
-            r.gpu_shader_median_us,
-            r.gpu_sync_in_median_us,
-            r.gpu_sync_out_median_us,
             r.submit_median_us,
             r.dispatches_per_event_avg,
             r.dabs_per_event_avg,
@@ -676,16 +589,12 @@ fn main() {
             let r = run_cell(args.topology, &recording, canvas, dab_radius_px);
             eprintln!(
                 "wall={:>5.0}ms ({:+5.0}ms, worst-frame +{:>5.1}ms), \
-                 cpu p50 = {:>5.0} µs, gpu_shader p50 = {:>5.0} µs, \
-                 sync_in/out p50 = {:>4.0}/{:>4.0} µs, submit p50 = {:>5.0} µs, \
+                 cpu p50 = {:>5.0} µs, submit p50 = {:>5.0} µs, \
                  dabs/ev={:>4.1} bbox/ev={:>8.0}",
                 r.wall_total_ms,
                 r.behind_by_ms,
                 r.max_event_behind_ms,
                 r.cpu_median_us,
-                r.gpu_shader_median_us,
-                r.gpu_sync_in_median_us,
-                r.gpu_sync_out_median_us,
                 r.submit_median_us,
                 r.dabs_per_event_avg,
                 r.union_bbox_area_per_event_avg,

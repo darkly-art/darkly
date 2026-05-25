@@ -10,21 +10,21 @@
 //!
 //! - `begin_stroke` — Copy `pre_stroke_texture` → scratch texture so the
 //!   first dab's pickup reads real canvas pixels. The compute buffer is
-//!   re-seeded from the texture on every `flush_compute`'s
+//!   re-seeded from the texture on every `flush_dabs`'s
 //!   `sync_texture_to_compute_buffer`, so no explicit buffer clear is
 //!   needed.
 //! - `evaluate_gpu` (per dab) — Build `WatercolorDabRecord`, push to
-//!   `gpu.pending_compute_dab_bytes`. No render passes.
-//! - `flush_compute` (per render phase) — One compute dispatch processes
+//!   `gpu.pending_dab_bytes`. No render passes.
+//! - `flush_dabs` (per render phase) — One compute dispatch processes
 //!   the whole queue with `storageBarrier()` between dabs. Single
 //!   `copy_buffer_to_texture` syncs the buffer back to the scratch
 //!   texture for the upcoming commit.
 //! - `commit` — `commit_scratch_blit` copies the finished scratch over
 //!   the layer. `gpu.blend_mode` ignored — erase on a wet smudge brush
 //!   isn't meaningful.
-//! - `render_preview` — Procedural soft-disc preview, same approach as
-//!   `paint_compute` (we own the procedural shape inline, no upstream
-//!   `brush_preview` texture exists).
+//! - `render_preview` — Procedural soft-disc preview: this terminal
+//!   owns the procedural shape inline (no upstream `brush_preview`
+//!   texture exists in a wet-media brush graph).
 
 use std::any::Any;
 
@@ -43,7 +43,7 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 const SIZE_REFERENCE_PX: f32 = crate::brush::dab_pool::DAB_REFERENCE_SIZE as f32;
 
-/// Max dabs queued in one compute dispatch. Same cap as `paint_compute`.
+/// Max dabs queued in one compute dispatch.
 /// At 96 bytes per `WatercolorDabRecord`, 1024 dabs is ~96 KB — well
 /// within a single allocation.
 const MAX_DABS_PER_DISPATCH: u32 = 1024;
@@ -231,7 +231,7 @@ impl WatercolorComputePipeline {
         });
 
         // ── Preview pipeline ─────────────────────────────────────────
-        // Procedural soft disc — same approach as paint_compute. We
+        // Procedural soft disc — we
         // don't render the modulated r(θ) shape in the preview because
         // (a) it'd require its own quad pipeline and (b) the hover
         // cursor is a UX hint, not a precise stamp preview.
@@ -767,7 +767,7 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
         // the row range must cover both read and write — which here are
         // identical (the dab's bbox). Watercolor dispatches across full
         // rows, so the x range is pinned to the layer width (the bbox's
-        // tight-x mode is paint_compute's optimisation, not ours).
+        // tight-x mode would be an optimisation we don.t apply here).
         let local_y0 = (bbox_y - canvas_ext.y0()).max(0) as u32;
         let local_y1 = local_y0 + bbox_h;
         let layer_w = canvas_ext.width;
@@ -778,7 +778,7 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
 
         let (cx_offset, cy_offset) = integrate_centroid(&shape);
 
-        gpu.queue_compute_dab(&WatercolorDabRecord {
+        gpu.queue_dab(&WatercolorDabRecord {
             pos: position,
             radius,
             r_max_unit,
@@ -805,7 +805,7 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
 
     /// Seed scratch from the pre-stroke layer snapshot so the first
     /// dab's pickup reads real canvas pixels. The compute buffer is
-    /// re-seeded from the texture on the next `flush_compute` via
+    /// re-seeded from the texture on the next `flush_dabs` via
     /// `sync_texture_to_compute_buffer`, so no separate buffer-side
     /// initialisation is needed here.
     fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
@@ -814,7 +814,7 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
             .as_deref_mut()
             .expect("watercolor_compute::begin_stroke requires Scratch");
         scratch.ensure_compute_buffer(gpu.device);
-        gpu.clear_compute_dabs();
+        gpu.clear_pending_dabs();
 
         let Some(pre_stroke) = gpu.pre_stroke_texture else {
             return;
@@ -846,10 +846,10 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
         );
     }
 
-    /// Same shape as `paint_compute::flush_compute` — see that
+    /// Phase-end batch dispatch. See gpu-passes.md for the compute-terminal
     /// function's comments for the texture↔buffer sync rationale.
-    fn flush_compute(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        if gpu.pending_compute_dab_count == 0 {
+    fn flush_dabs(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
+        if gpu.pending_dab_count == 0 {
             return;
         }
 
@@ -858,7 +858,7 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
         let union_y1 = bbox[3];
         let union_h = union_y1.saturating_sub(union_y0);
 
-        let (dab_bytes, total_dabs) = gpu.take_compute_dabs();
+        let (dab_bytes, total_dabs) = gpu.take_pending_dabs();
 
         let pipeline_ref = gpu
             .pipelines
@@ -866,7 +866,7 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
         let scratch = gpu
             .scratch
             .as_deref()
-            .expect("watercolor_compute::flush_compute requires Scratch");
+            .expect("watercolor_compute::flush_dabs requires Scratch");
         let Some(scratch_buf) = scratch.compute_buffer() else {
             return;
         };
@@ -884,7 +884,7 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
         let paint_target = gpu
             .paint_target
             .as_ref()
-            .expect("watercolor_compute::flush_compute requires paint_target");
+            .expect("watercolor_compute::flush_dabs requires paint_target");
         let canvas_ext = paint_target.canvas_extent();
         let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
 
@@ -935,12 +935,12 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
             scratch.sync_compute_buffer_to_texture(&mut gpu.encoder, union_y0, union_h);
         }
 
-        gpu.perf.record_compute_dispatch_batch(total_dabs);
+        gpu.perf.record_dab_flush(total_dabs);
     }
 
     /// Direct blit scratch → layer. The scratch already holds the
     /// finished image (pre_stroke + watercolor dabs blended into the
-    /// buffer by `flush_compute`, then synced back to the texture).
+    /// buffer by `flush_dabs`, then synced back to the texture).
     fn commit(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
         let Some(paint_target) = gpu.paint_target.as_ref() else {
             return;
@@ -958,7 +958,7 @@ impl BrushNodeEvaluator for WatercolorComputeEvaluator {
     }
 
     /// Hover preview — procedural soft disc, same approach as
-    /// `paint_compute`. We don't render the modulated r(θ) shape here
+    /// the paint terminal. We don.t render the modulated r(θ) shape here
     /// because the preview is a UX hint about *where* the brush will
     /// land, not an exact stamp preview.
     fn render_preview(

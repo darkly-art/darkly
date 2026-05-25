@@ -22,11 +22,9 @@ use crate::gpu::paint_target::GpuPaintTarget;
 /// against the engine-side accumulator via
 /// [`crate::engine::BrushPerfDelta::between`].
 ///
-/// `submit_us` is wall-clock around `queue.submit()`. The compute-path
-/// counters describe workload (dispatch/dab/bbox-area volume), not host
-/// time spent processing it — finer-grained timing belongs in
-/// `PaintComputeTimestamps`' GPU query slots, not here. See
-/// `engine/perf.rs` for the design note.
+/// `submit_us` is wall-clock around `queue.submit()`. The per-flush
+/// counters describe workload (dab volume, union-bbox area), not host
+/// time spent processing it. See `engine/perf.rs` for the design note.
 #[derive(Default, Clone, Debug)]
 pub struct BrushPerfCounters {
     /// Number of `place_dab` invocations during this counter's lifetime.
@@ -40,18 +38,18 @@ pub struct BrushPerfCounters {
     pub submit_us: u64,
     /// Number of `queue.submit()` calls.
     pub submits: u32,
-    /// Number of paint-compute flushes that issued a dispatch.
-    pub compute_dispatches: u32,
-    /// Total dabs that flowed through the compute path.
-    pub compute_dabs: u32,
-    /// Sum of `union_w * union_h` across every paint-compute flush.
-    pub compute_union_bbox_area: u64,
-    /// Per-flush dab counts. One entry per `flush_compute` call. Drained
+    /// Number of dab-terminal flushes (one `flush_dabs` call each).
+    pub dab_flushes: u32,
+    /// Total dabs that flowed through a dab-batching terminal.
+    pub flushed_dabs: u32,
+    /// Sum of `union_w * union_h` across every dab flush.
+    pub dab_union_bbox_area: u64,
+    /// Per-flush dab counts. One entry per `flush_dabs` call. Drained
     /// per-event by the bench harness; production paths never read this.
-    pub compute_dabs_per_flush: Vec<u32>,
+    pub dabs_per_flush: Vec<u32>,
     /// Per-flush `union_w * union_h` in canvas pixels. Parallel to
-    /// `compute_dabs_per_flush`.
-    pub compute_union_bbox_area_per_flush: Vec<u32>,
+    /// `dabs_per_flush`.
+    pub dab_union_bbox_area_per_flush: Vec<u32>,
 }
 
 impl BrushPerfCounters {
@@ -62,21 +60,21 @@ impl BrushPerfCounters {
 
     /// Increment dab + dispatch counts at flush time once the queued dabs
     /// are about to be dispatched.
-    pub fn record_compute_dispatch_batch(&mut self, dab_count: u32) {
-        self.compute_dabs = self.compute_dabs.saturating_add(dab_count);
-        self.compute_dispatches = self.compute_dispatches.saturating_add(1);
+    pub fn record_dab_flush(&mut self, dab_count: u32) {
+        self.flushed_dabs = self.flushed_dabs.saturating_add(dab_count);
+        self.dab_flushes = self.dab_flushes.saturating_add(1);
     }
 
-    /// Record the workload shape of one paint-compute flush:
-    /// `dab_count` queued dabs covering a `union_w × union_h` bbox in
-    /// canvas pixels. Appends to both per-flush vectors and accumulates
-    /// the area total. Called at the top of `flush_compute` once the
-    /// union bbox has been computed.
-    pub fn record_compute_flush_workload(&mut self, dab_count: u32, union_w: u32, union_h: u32) {
+    /// Record the workload shape of one dab flush: `dab_count` queued
+    /// dabs covering a `union_w × union_h` bbox in canvas pixels.
+    /// Appends to both per-flush vectors and accumulates the area
+    /// total. Called at the top of `flush_dabs` once the union bbox
+    /// has been computed.
+    pub fn record_dab_flush_workload(&mut self, dab_count: u32, union_w: u32, union_h: u32) {
         let area = (union_w as u64).saturating_mul(union_h as u64);
-        self.compute_union_bbox_area = self.compute_union_bbox_area.saturating_add(area);
-        self.compute_dabs_per_flush.push(dab_count);
-        self.compute_union_bbox_area_per_flush
+        self.dab_union_bbox_area = self.dab_union_bbox_area.saturating_add(area);
+        self.dabs_per_flush.push(dab_count);
+        self.dab_union_bbox_area_per_flush
             .push(area.min(u32::MAX as u64) as u32);
     }
 }
@@ -93,40 +91,39 @@ impl std::ops::AddAssign for BrushPerfCounters {
             .saturating_add(rhs.full_rerender_events);
         self.submit_us = self.submit_us.saturating_add(rhs.submit_us);
         self.submits = self.submits.saturating_add(rhs.submits);
-        self.compute_dispatches = self
-            .compute_dispatches
-            .saturating_add(rhs.compute_dispatches);
-        self.compute_dabs = self.compute_dabs.saturating_add(rhs.compute_dabs);
-        self.compute_union_bbox_area = self
-            .compute_union_bbox_area
-            .saturating_add(rhs.compute_union_bbox_area);
-        self.compute_dabs_per_flush
-            .append(&mut rhs.compute_dabs_per_flush);
-        self.compute_union_bbox_area_per_flush
-            .append(&mut rhs.compute_union_bbox_area_per_flush);
+        self.dab_flushes = self.dab_flushes.saturating_add(rhs.dab_flushes);
+        self.flushed_dabs = self.flushed_dabs.saturating_add(rhs.flushed_dabs);
+        self.dab_union_bbox_area = self
+            .dab_union_bbox_area
+            .saturating_add(rhs.dab_union_bbox_area);
+        self.dabs_per_flush.append(&mut rhs.dabs_per_flush);
+        self.dab_union_bbox_area_per_flush
+            .append(&mut rhs.dab_union_bbox_area_per_flush);
     }
 }
 
 /// Hard cap on dab records that can be queued in a single phase across
-/// any compute terminal. Sized so the per-phase dab buffer is trivial
-/// VRAM cost (16384 records × ~32-byte typical record ≈ 512 KB) and
-/// well above what any realistic stroke phase will reach (~30 dabs
-/// even at high stabilisation). `queue_compute_dab` debug-asserts on
-/// this — overflow panics loudly in test/dev so the constant gets
+/// any dab-batching terminal. Sized so the per-phase dab buffer is
+/// trivial VRAM cost (16384 records × ~32-byte typical record ≈ 512
+/// KB) and well above what any realistic stroke phase will reach
+/// (~30 dabs even at high stabilisation). `queue_dab` debug-asserts
+/// on this — overflow panics loudly in test/dev so the constant gets
 /// bumped rather than silently truncating in release.
 pub const MAX_DABS_PER_PHASE: u32 = 16384;
 
-/// One queued dab waiting for the next `paint_compute` commit dispatch.
+/// One queued dab waiting for the next `paint` terminal flush.
 ///
-/// Layout MUST match the `Dab` struct in `shaders/brush/paint_compute.wgsl`
-/// — the WGSL binding reads this verbatim as a storage buffer element.
-/// Trailing pad keeps the struct 16-byte aligned (vec4 alignment) so the
-/// shader's `array<Dab>` indexing lines up.
+/// Layout MUST match the `Dab` struct in `shaders/brush/paint.wgsl` —
+/// the WGSL binding reads this verbatim as a storage buffer element.
+/// In std430, `vec2` is 8-byte aligned and `vec4` is 16-byte aligned,
+/// so `vec2 pos + f32 radius + f32 softness + vec4 color` packs cleanly
+/// into 32 bytes with no trailing pad.
 ///
-/// Queued via `BrushGpuContext::queue_compute_dab` into the shared
-/// byte-buffer `pending_compute_dab_bytes`. Other compute terminals push
-/// their own record types into the same buffer — the brush graph has at
-/// most one compute terminal at a time, so the bytes are unambiguous.
+/// Queued via `BrushGpuContext::queue_dab` into the shared byte-buffer
+/// `pending_dab_bytes`. Other dab-batching terminals (watercolor_compute)
+/// push their own record types into the same buffer — the brush graph
+/// has at most one dab-batching terminal at a time, so the bytes are
+/// unambiguous.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct PaintDabRecord {
@@ -221,28 +218,30 @@ pub struct BrushGpuContext<'a> {
     /// stroke-level accumulator.
     pub perf: BrushPerfCounters,
 
-    /// Dabs queued by whichever compute terminal is active in the graph
-    /// during a single pen event. Drained by that terminal's
-    /// `flush_compute` hook (one compute dispatch processes the whole
-    /// queue). The bytes are written by `bytemuck::bytes_of` on each
-    /// terminal's own record struct — the WGSL binding reinterprets them
-    /// as that terminal's `Dab` type. A brush graph has at most one
-    /// compute terminal at a time, so the bytes are unambiguous.
+    /// Dabs queued by whichever dab-batching terminal is active in the
+    /// graph during a single pen event. Drained by that terminal's
+    /// `flush_dabs` hook (one render pass — `paint` — or one compute
+    /// dispatch — `watercolor_compute` — processes the whole queue).
+    /// The bytes are written by `bytemuck::bytes_of` on each terminal's
+    /// own record struct — the WGSL binding reinterprets them as that
+    /// terminal's `Dab` type. A brush graph has at most one
+    /// dab-batching terminal at a time, so the bytes are unambiguous.
     ///
-    /// Empty for brushes that don't use a compute terminal.
-    pub pending_compute_dab_bytes: Vec<u8>,
-    /// Number of dab records currently in `pending_compute_dab_bytes`.
+    /// Empty for brushes that don't use a dab-batching terminal.
+    pub pending_dab_bytes: Vec<u8>,
+    /// Number of dab records currently in `pending_dab_bytes`.
     /// Each terminal's record size is constant per terminal, so
     /// `bytes.len() == count * sizeof(Record)`; the count is tracked
     /// explicitly so flush code doesn't need to know the record size.
-    pub pending_compute_dab_count: u32,
-    /// Layer-local bounding box covered by the queued compute dabs, as
-    /// `[x0, y0, x1, y1]`. The terminal's `flush_compute` reads this to
-    /// size the dispatch grid (`paint_compute`) and to bound the
-    /// `copy_buffer_to_texture` sync that wraps the dispatch (sync uses
-    /// just the y range — partial-x sub-rects need a 256-byte aligned
-    /// row offset that a dab-aligned bbox can't guarantee). `None` when
-    /// the queue is empty.
+    pub pending_dab_count: u32,
+    /// Layer-local bounding box covered by the queued dabs, as
+    /// `[x0, y0, x1, y1]`. The terminal's `flush_dabs` reads it both as
+    /// a workload metric (recorded into `BrushPerfCounters` for the bench
+    /// harness) and, for compute terminals like `watercolor_compute`, to
+    /// bound the `copy_buffer_to_texture` sync that wraps the dispatch
+    /// (sync uses just the y range — partial-x sub-rects need a 256-byte
+    /// aligned row offset that a dab-aligned bbox can't guarantee).
+    /// `None` when the queue is empty.
     pub pending_dabs_bbox: Option<[u32; 4]>,
 }
 
@@ -298,17 +297,17 @@ impl<'a> BrushGpuContext<'a> {
         }
     }
 
-    /// Queue a compute-terminal dab record into the shared byte buffer.
-    /// The terminal that owns `flush_compute` reinterprets the bytes as
-    /// its own record type — see [`PaintDabRecord`] for the
-    /// `paint_compute` layout. The active brush has exactly one compute
-    /// terminal in its graph, so the bytes are unambiguous at flush time.
-    pub fn queue_compute_dab<T: bytemuck::Pod>(&mut self, record: &T) {
-        self.pending_compute_dab_bytes
+    /// Queue a dab record into the shared byte buffer. The terminal
+    /// that owns `flush_dabs` reinterprets the bytes as its own record
+    /// type — see [`PaintDabRecord`] for the `paint` layout. The active
+    /// brush has exactly one dab-batching terminal in its graph, so the
+    /// bytes are unambiguous at flush time.
+    pub fn queue_dab<T: bytemuck::Pod>(&mut self, record: &T) {
+        self.pending_dab_bytes
             .extend_from_slice(bytemuck::bytes_of(record));
-        self.pending_compute_dab_count = self.pending_compute_dab_count.saturating_add(1);
+        self.pending_dab_count = self.pending_dab_count.saturating_add(1);
         debug_assert!(
-            self.pending_compute_dab_count <= MAX_DABS_PER_PHASE,
+            self.pending_dab_count <= MAX_DABS_PER_PHASE,
             "dab queue overflowed MAX_DABS_PER_PHASE ({MAX_DABS_PER_PHASE}); \
              bump the constant or flush more often",
         );
@@ -317,21 +316,21 @@ impl<'a> BrushGpuContext<'a> {
     /// Drain the compute-dab queue. Returns the raw bytes (caller
     /// reinterprets via `bytemuck::cast_slice`) and the dab count. Also
     /// clears `pending_dabs_bbox`. Called from a terminal's
-    /// `flush_compute` hook once the dispatch is encoded.
-    pub fn take_compute_dabs(&mut self) -> (Vec<u8>, u32) {
-        let bytes = std::mem::take(&mut self.pending_compute_dab_bytes);
-        let count = std::mem::take(&mut self.pending_compute_dab_count);
+    /// `flush_dabs` hook once the dispatch is encoded.
+    pub fn take_pending_dabs(&mut self) -> (Vec<u8>, u32) {
+        let bytes = std::mem::take(&mut self.pending_dab_bytes);
+        let count = std::mem::take(&mut self.pending_dab_count);
         self.pending_dabs_bbox = None;
         (bytes, count)
     }
 
     /// Discard the compute-dab queue without dispatching. Used at stroke
     /// begin / rewind to drop any state from a prior context, and by
-    /// `flush_compute` when its early-out path runs (empty queue, no
+    /// `flush_dabs` when its early-out path runs (empty queue, no
     /// scratch, etc.) so a follow-up dispatch doesn't see stale state.
-    pub fn clear_compute_dabs(&mut self) {
-        self.pending_compute_dab_bytes.clear();
-        self.pending_compute_dab_count = 0;
+    pub fn clear_pending_dabs(&mut self) {
+        self.pending_dab_bytes.clear();
+        self.pending_dab_count = 0;
         self.pending_dabs_bbox = None;
     }
 

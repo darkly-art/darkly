@@ -27,15 +27,15 @@ pub fn all() -> Vec<Brush> {
 // Brush definitions
 // ---------------------------------------------------------------------------
 
-/// Build a Basic brush around the `paint_compute` terminal.
+/// Build a Basic brush around the `paint` terminal.
 ///
 /// All three Basic brushes (Round, Airbrush, Ink Pen) share the same
-/// `pen_input + paint_color + paint_compute` skeleton — they only differ
+/// `pen_input + paint_color + paint` skeleton — they only differ
 /// in which pen sensor drives which terminal port, the optional pressure
 /// curve, and a few port defaults. The closure runs after the bare graph
 /// is built and is responsible for wiring the brush-specific signal flow
 /// and setting any per-port defaults.
-fn paint_compute_brush(
+fn paint_brush(
     name: &str,
     configure: impl FnOnce(&mut Graph<BrushWireType>, NodeId, NodeId, NodeId),
 ) -> Brush {
@@ -53,8 +53,8 @@ fn paint_compute_brush(
         vec![],
     );
     let terminal = graph.add_node(
-        "paint_compute",
-        registry.get("paint_compute").unwrap().ports.clone(),
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
         vec![],
     );
 
@@ -125,7 +125,7 @@ fn wire_pressure_size_curve(
 /// Round — soft procedural disc, pressure-driven size + flow, identity
 /// pressure curve so the brush feels predictable out of the box.
 fn round() -> Brush {
-    paint_compute_brush("Round", |graph, pen, _paint_color, terminal| {
+    paint_brush("Round", |graph, pen, _paint_color, terminal| {
         // Identity curve so pressure maps 1:1 to size by default — the user
         // can still scrub the curve node's spline in the brush editor for a
         // bespoke response.
@@ -157,7 +157,7 @@ fn round() -> Brush {
 /// airbrush footprint is a fixed soft disc the user controls only via the
 /// Size slider.
 fn airbrush() -> Brush {
-    paint_compute_brush("Airbrush", |graph, pen, _paint_color, terminal| {
+    paint_brush("Airbrush", |graph, pen, _paint_color, terminal| {
         graph
             .connect(
                 PortRef {
@@ -178,7 +178,7 @@ fn airbrush() -> Brush {
 /// front-loaded curve (high size at low pressure) and pressure-driven
 /// flow. Stabilizer exposed for clean line work.
 fn ink_pen() -> Brush {
-    paint_compute_brush("Ink Pen", |graph, pen, _paint_color, terminal| {
+    paint_brush("Ink Pen", |graph, pen, _paint_color, terminal| {
         // Curve front-loads the size response — small pressure already
         // produces a recognisable mark, matching the feel of a fine-tipped
         // ink pen.

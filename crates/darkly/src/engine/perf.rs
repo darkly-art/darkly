@@ -31,17 +31,17 @@ pub struct BrushPerfDelta {
     /// Number of `queue.submit()` calls issued during this interval.
     pub submits: u32,
     /// Number of paint-compute flushes that landed during this interval.
-    pub compute_dispatches: u32,
+    pub dab_flushes: u32,
     /// Total dabs that flowed through the compute path during the interval.
-    pub compute_dabs: u64,
+    pub flushed_dabs: u64,
     /// Sum of `union_w * union_h` across every flush during the interval.
-    pub compute_union_bbox_area_total: u64,
+    pub dab_union_bbox_area_total: u64,
     /// Per-flush dab counts for the flushes that landed during this
     /// interval, in the order they were submitted.
-    pub compute_dabs_per_flush: Vec<u32>,
+    pub dabs_per_flush: Vec<u32>,
     /// Per-flush `union_w * union_h` in canvas pixels, parallel to
-    /// `compute_dabs_per_flush`.
-    pub compute_union_bbox_area_per_flush: Vec<u32>,
+    /// `dabs_per_flush`.
+    pub dab_union_bbox_area_per_flush: Vec<u32>,
 }
 
 impl BrushPerfDelta {
@@ -54,17 +54,13 @@ impl BrushPerfDelta {
         Self {
             submit_us: curr.submit_us.saturating_sub(prev.submit_us),
             submits: curr.submits.saturating_sub(prev.submits),
-            compute_dispatches: curr
-                .compute_dispatches
-                .saturating_sub(prev.compute_dispatches),
-            compute_dabs: (curr.compute_dabs as u64).saturating_sub(prev.compute_dabs as u64),
-            compute_union_bbox_area_total: curr
-                .compute_union_bbox_area
-                .saturating_sub(prev.compute_union_bbox_area),
-            compute_dabs_per_flush: std::mem::take(&mut curr.compute_dabs_per_flush),
-            compute_union_bbox_area_per_flush: std::mem::take(
-                &mut curr.compute_union_bbox_area_per_flush,
-            ),
+            dab_flushes: curr.dab_flushes.saturating_sub(prev.dab_flushes),
+            flushed_dabs: (curr.flushed_dabs as u64).saturating_sub(prev.flushed_dabs as u64),
+            dab_union_bbox_area_total: curr
+                .dab_union_bbox_area
+                .saturating_sub(prev.dab_union_bbox_area),
+            dabs_per_flush: std::mem::take(&mut curr.dabs_per_flush),
+            dab_union_bbox_area_per_flush: std::mem::take(&mut curr.dab_union_bbox_area_per_flush),
         }
     }
 }

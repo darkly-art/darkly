@@ -39,6 +39,13 @@ pub trait BrushPaintTargetExt {
     ///     (background; group 3).
     ///   - `opacity`: stroke-level opacity cap (0..1).
     ///   - `blend_mode`: 0 = source-over (paint), 1 = destination-out (erase).
+    ///   - `fg_premultiplied`: `true` if the scratch contains
+    ///     premultiplied-alpha pixels (e.g. the `paint` terminal renders
+    ///     this way to use hardware source-over blend). `false` for
+    ///     straight-alpha producers (`color_output`, watercolor commit).
+    ///     Per `compositing-lessons-learned.md` §4, the shader needs to
+    ///     know the convention to compute correct Porter-Duff on the
+    ///     straight-alpha layer destination.
     ///
     /// Selection has already been baked into the scratch via per-dab
     /// composites, so this commit passes `apply_selection: 0` to the shader.
@@ -52,6 +59,7 @@ pub trait BrushPaintTargetExt {
         pre_stroke_bg: &wgpu::BindGroup,
         opacity: f32,
         blend_mode: u32,
+        fg_premultiplied: bool,
     );
 
     /// Populate an RGBA8 pre-stroke snapshot from this paint target.
@@ -95,6 +103,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
         pre_stroke_bg: &wgpu::BindGroup,
         opacity: f32,
         blend_mode: u32,
+        fg_premultiplied: bool,
     ) {
         let canvas_ext = self.canvas_extent();
         let layer_w = canvas_ext.width as f32;
@@ -112,7 +121,7 @@ impl BrushPaintTargetExt for GpuPaintTarget<'_> {
             uv_min: [0.0, 0.0],
             uv_max: [1.0, 1.0],
             blend_mode,
-            fg_premultiplied: 0,
+            fg_premultiplied: u32::from(fg_premultiplied),
             stroke_opacity: opacity,
             apply_selection: 0,
         };

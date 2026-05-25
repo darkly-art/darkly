@@ -290,10 +290,10 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// `render_from_stabilized_tail`) just before that phase's
     /// `submit_final`.
     ///
-    /// Compute-path terminals (paint_compute) use this to dispatch their
+    /// Dab-batching terminals (paint, watercolor_compute) use this to dispatch their
     /// batched work; fragment-path terminals that already record per-dab
     /// passes inline keep the default no-op.
-    fn flush_compute(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
+    fn flush_dabs(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
 
     /// Does this terminal honor `BrushGpuContext::blend_mode` (paint vs.
     /// erase)? Default `true` — most terminals do, and non-terminal
@@ -624,13 +624,13 @@ impl BrushGraphRunner {
         self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.commit(ctx, gpu));
     }
 
-    /// Dispatch `flush_compute` to every GPU node's evaluator in
+    /// Dispatch `flush_dabs` to every GPU node's evaluator in
     /// topological order. Called at the end of each dab-rendering phase
     /// (segments / tail) so compute-path terminals can issue their batched
     /// dispatch before the phase's `submit_final`. Fragment-path
     /// terminals no-op.
-    pub fn flush_compute(&mut self, gpu: &mut BrushGpuContext) {
-        self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.flush_compute(ctx, gpu));
+    pub fn flush_dabs(&mut self, gpu: &mut BrushGpuContext) {
+        self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.flush_dabs(ctx, gpu));
     }
 
     /// Shared walker for lifecycle hooks. Mirrors `execute_gpu` minus the
