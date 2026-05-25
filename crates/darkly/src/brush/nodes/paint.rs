@@ -570,7 +570,7 @@ impl BrushNodeEvaluator for PaintEvaluator {
         }
 
         // Record per-flush workload shape for the bench harness — same
-        // counters watercolor_compute uses, so the bench cell layout
+        // counters watercolor_batched uses, so the bench cell layout
         // doesn't change.
         gpu.perf
             .record_dab_flush_workload(total_dabs, union_w, union_h);

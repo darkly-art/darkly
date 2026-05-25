@@ -213,11 +213,11 @@ fn ink_pen() -> Brush {
     })
 }
 
-/// Build a Wet Media (watercolor) brush around the `watercolor_compute`
+/// Build a Wet Media (watercolor) brush around the `watercolor_batched`
 /// terminal.
 ///
 /// All watercolor variants share the same skeleton — `pen_input +
-/// paint_color + watercolor_compute` — and only differ in their shape
+/// paint_color + watercolor_batched` — and only differ in their shape
 /// parameter defaults and per-dab modulation wires (random seed,
 /// random rotation, etc.). The closure runs after the bare graph is
 /// built and can set `algorithm` / `amplitude` / etc. defaults plus
@@ -246,14 +246,14 @@ fn watercolor_brush(
         vec![],
     );
     let terminal = graph.add_node(
-        "watercolor_compute",
-        registry.get("watercolor_compute").unwrap().ports.clone(),
+        "watercolor_batched",
+        registry.get("watercolor_batched").unwrap().ports.clone(),
         vec![ParamValue::Int(0)], // algorithm — closure may overwrite
     );
 
     // Pressure → flow so light strokes deposit less paint, matching the
     // fragment-path watercolor's pen.pressure → stamp.flow wire. Flow is
-    // folded into the paint colour alpha inside the compute terminal.
+    // folded into the paint colour alpha inside the terminal.
     let wires = [
         (pen, "position", terminal, "position"),
         (pen, "pressure", terminal, "flow"),

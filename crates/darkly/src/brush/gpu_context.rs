@@ -120,7 +120,7 @@ pub const MAX_DABS_PER_PHASE: u32 = 16384;
 /// into 32 bytes with no trailing pad.
 ///
 /// Queued via `BrushGpuContext::queue_dab` into the shared byte-buffer
-/// `pending_dab_bytes`. Other dab-batching terminals (watercolor_compute)
+/// `pending_dab_bytes`. Other dab-batching terminals (watercolor_batched)
 /// push their own record types into the same buffer — the brush graph
 /// has at most one dab-batching terminal at a time, so the bytes are
 /// unambiguous.
@@ -220,8 +220,8 @@ pub struct BrushGpuContext<'a> {
 
     /// Dabs queued by whichever dab-batching terminal is active in the
     /// graph during a single pen event. Drained by that terminal's
-    /// `flush_dabs` hook (one render pass — `paint` — or one compute
-    /// dispatch — `watercolor_compute` — processes the whole queue).
+    /// `flush_dabs` hook (one render pass for `paint`; two render
+    /// passes — pickup atlas + composite — for `watercolor_batched`).
     /// The bytes are written by `bytemuck::bytes_of` on each terminal's
     /// own record struct — the WGSL binding reinterprets them as that
     /// terminal's `Dab` type. A brush graph has at most one
@@ -235,13 +235,12 @@ pub struct BrushGpuContext<'a> {
     /// explicitly so flush code doesn't need to know the record size.
     pub pending_dab_count: u32,
     /// Layer-local bounding box covered by the queued dabs, as
-    /// `[x0, y0, x1, y1]`. The terminal's `flush_dabs` reads it both as
-    /// a workload metric (recorded into `BrushPerfCounters` for the bench
-    /// harness) and, for compute terminals like `watercolor_compute`, to
-    /// bound the `copy_buffer_to_texture` sync that wraps the dispatch
-    /// (sync uses just the y range — partial-x sub-rects need a 256-byte
-    /// aligned row offset that a dab-aligned bbox can't guarantee).
-    /// `None` when the queue is empty.
+    /// `[x0, y0, x1, y1]`. The terminal's `flush_dabs` reads it as a
+    /// workload metric (recorded into `BrushPerfCounters` for the bench
+    /// harness). `None` when the queue is empty. Per-flush `flush_dabs`
+    /// implementations may also use it for a discriminator-or-clip
+    /// decision, but neither shipped terminal does today —
+    /// hardware-blend writes scale per-fragment, not per-bbox-pixel.
     pub pending_dabs_bbox: Option<[u32; 4]>,
 }
 

@@ -302,7 +302,7 @@ impl StrokeEngine {
                 .finalize_render_state(i, self.capture_render_state());
         }
 
-        // Phase-end flush for dab-batching terminals (paint, watercolor_compute):
+        // Phase-end flush for dab-batching terminals (paint, watercolor_batched):
         // dispatch the batched dab queue before this phase's submit_final.
         // Fragment-path terminals no-op here.
         self.runner.flush_dabs(gpu);
@@ -363,7 +363,7 @@ impl StrokeEngine {
             "stamp",
             "liquify",
             "paint",
-            "watercolor_compute",
+            "watercolor_batched",
         ] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
                 if let Some(val) = self.runner.read_slot(slot) {

@@ -13,8 +13,10 @@
 //!
 //! Each cell:
 //!   - Builds a fresh `DarklyEngine` at the cell's canvas size.
-//!   - Loads `Ink Pen`, sets `pen_input.stabilize = 1.0` and the
-//!     terminal's `size` port to the cell's dab radius.
+//!   - Loads the topology's brush (`Ink Pen` for paint-family
+//!     topologies, `Smooth Watercolor` for the watercolor topology),
+//!     sets `pen_input.stabilize = 1.0` and the terminal's `size`
+//!     port to the cell's dab radius.
 //!   - Adds a raster layer.
 //!   - Replays the recording at `ReplayPacing::Realtime`.
 //!   - Records per-event CPU + per-flush workload counters.
@@ -52,8 +54,11 @@ const DAB_RADII_PX: &[f32] = &[1.0, 10.0, 100.0, 250.0, 500.0, 1000.0, 2000.0];
 
 const RESOLUTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080), (2560, 1440), (3840, 2160)];
 
-/// Built-in brush name — must match the string in `builtin_brushes::ink_pen()`.
-const BRUSH_NAME: &str = "Ink Pen";
+/// Built-in brush names — must match the strings in
+/// `builtin_brushes::ink_pen()` and `builtin_brushes::smooth_watercolor()`.
+/// `Topology::brush_name` picks the right one for the cell.
+const BRUSH_NAME_INK_PEN: &str = "Ink Pen";
+const BRUSH_NAME_WATERCOLOR: &str = "Smooth Watercolor";
 
 /// Stabilizer strength override. The recorded stroke is what stresses
 /// the stabilizer; cranking this to 1.0 maximises the rewind workload.
@@ -77,6 +82,11 @@ enum Topology {
     /// (approach #1 in the tracking doc). Kept so the bench can still
     /// measure how the cost-per-pass overhead axis evolves.
     StampColorOutput,
+    /// Wet Media (`Smooth Watercolor`) brush — `pen_input → paint_color
+    /// → watercolor_batched`. The terminal is selected by name; the
+    /// bench overrides the `size` port on whatever terminal id
+    /// `Topology::terminal_id` returns.
+    Watercolor,
 }
 
 impl Topology {
@@ -86,6 +96,7 @@ impl Topology {
             "stamp-color-output" | "stamp_color_output" | "fragment" => {
                 Some(Topology::StampColorOutput)
             }
+            "watercolor" | "watercolor-compute" | "wet-media" => Some(Topology::Watercolor),
             _ => None,
         }
     }
@@ -94,13 +105,25 @@ impl Topology {
         match self {
             Topology::Paint => "paint",
             Topology::StampColorOutput => "stamp-color-output",
+            Topology::Watercolor => "watercolor",
         }
     }
 
+    /// Terminal node `type_id` to look up in the brush graph when
+    /// overriding the cell's `size` port. Match this against whatever
+    /// the brush wires its terminal as.
     fn terminal_id(self) -> &'static str {
         match self {
             Topology::Paint => "paint",
             Topology::StampColorOutput => "color_output",
+            Topology::Watercolor => "watercolor_batched",
+        }
+    }
+
+    fn brush_name(self) -> &'static str {
+        match self {
+            Topology::Paint | Topology::StampColorOutput => BRUSH_NAME_INK_PEN,
+            Topology::Watercolor => BRUSH_NAME_WATERCOLOR,
         }
     }
 }
@@ -130,17 +153,20 @@ fn parse_args() -> Args {
             "--topology" | "-t" => {
                 let v = argv.next().expect("--topology requires a value");
                 topology = Topology::parse(&v).unwrap_or_else(|| {
-                    panic!("unknown topology `{v}` — expected `paint` or `stamp-color-output`")
+                    panic!(
+                        "unknown topology `{v}` — expected `paint`, `stamp-color-output`, or `watercolor`"
+                    )
                 });
             }
             "-h" | "--help" => {
                 eprintln!(
                     "stroke_replay_matrix --input <path> [--output <tsv>] \
-                     [--topology paint|stamp-color-output]\n\n\
+                     [--topology paint|stamp-color-output|watercolor]\n\n\
                      Replays a recording across the configured (dab_radius × resolution) matrix.\n\
                      Axes are constants at the top of stroke_replay_matrix.rs.\n\
                      Default topology is `paint` (current shipped, attempt #4).\n\
-                     `stamp-color-output` picks the pre-compute fragment topology (attempt #1)."
+                     `stamp-color-output` picks the pre-compute Ink Pen fragment topology.\n\
+                     `watercolor` picks the Wet Media brush (Smooth Watercolor)."
                 );
                 std::process::exit(0);
             }
@@ -174,18 +200,23 @@ fn ink_pen_pressure_curve() -> Vec<[f32; 2]> {
 
 fn brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
     match topology {
-        Topology::Paint => ink_pen_paint_graph_json(dab_radius_px),
+        Topology::Paint | Topology::Watercolor => builtin_brush_graph_json(topology, dab_radius_px),
         Topology::StampColorOutput => ink_pen_fragment_graph_json(dab_radius_px),
     }
 }
 
-/// Attempt #4 — load the shipped Ink Pen brush, override the `paint`
-/// terminal's `size` port and the `pen_input` stabilizer.
-fn ink_pen_paint_graph_json(dab_radius_px: f32) -> String {
+/// Load the topology's built-in brush, override its terminal's `size`
+/// port and the `pen_input` stabilizer. Works for any topology whose
+/// brush comes straight from `builtin_brushes::all()` — `Paint` (Ink
+/// Pen → `paint` terminal) and `Watercolor` (Smooth Watercolor →
+/// `watercolor_batched` terminal) both fit this shape.
+fn builtin_brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
+    let brush_name = topology.brush_name();
+    let terminal_id = topology.terminal_id();
     let mut brush = builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == BRUSH_NAME)
-        .unwrap_or_else(|| panic!("brush `{BRUSH_NAME}` not found in builtin_brushes::all()"));
+        .find(|b| b.metadata.name == brush_name)
+        .unwrap_or_else(|| panic!("brush `{brush_name}` not found in builtin_brushes::all()"));
     let graph = &mut brush.metadata.graph;
     let pen_id = graph
         .nodes
@@ -196,9 +227,9 @@ fn ink_pen_paint_graph_json(dab_radius_px: f32) -> String {
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "paint")
+        .find(|(_, n)| n.type_id == terminal_id)
         .map(|(id, _)| *id)
-        .expect("brush must have a paint terminal");
+        .unwrap_or_else(|| panic!("brush `{brush_name}` must have a `{terminal_id}` terminal"));
     let size_port = (2.0 * dab_radius_px) / DAB_REFERENCE_SIZE_PX;
     graph
         .set_port_default(term_id, "size", size_port)
@@ -505,12 +536,13 @@ fn write_markdown(
     writeln!(file)?;
     writeln!(
         file,
-        "Brush: `{BRUSH_NAME}` topology `{}` (terminal: `{}`, stabilize=`{STABILIZE}`). \
+        "Brush: `{}` topology `{}` (terminal: `{}`, stabilize=`{STABILIZE}`). \
          Recording: {} events spanning {:.0} ms recorded at {}×{}. Replay pacing: \
          real-time. `behind_by_ms = wall_total - stroke_duration` — positive \
          means the engine fell behind the recorded cadence. \
          `max_event_behind_ms` is the worst single-event lateness \
          (`cpu_ms - inter_event_gap_ms`, clamped at zero, max across events).",
+        topology.brush_name(),
         topology.slug(),
         topology.terminal_id(),
         recording.events.len(),
@@ -569,11 +601,12 @@ fn main() {
         std::process::exit(1);
     });
     eprintln!(
-        "matrix: {} cells ({}×{}) on `{BRUSH_NAME}` topology=`{}` stabilize={STABILIZE} \
+        "matrix: {} cells ({}×{}) on `{}` topology=`{}` stabilize={STABILIZE} \
          vs {} events spanning {:.0} ms",
         DAB_RADII_PX.len() * RESOLUTIONS.len(),
         DAB_RADII_PX.len(),
         RESOLUTIONS.len(),
+        args.topology.brush_name(),
         args.topology.slug(),
         recording.events.len(),
         recording.events.last().unwrap().time_ms - recording.events[0].time_ms,

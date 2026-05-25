@@ -308,7 +308,7 @@ hedge suggested.
 `stroke_replay_matrix --topology paint` against
 [recorded_curvy_stroke.json](crates/darkly/tests/fixtures/recorded_curvy_stroke.json),
 same recording as the prior attempts. Full table at
-[bench-results/stroke-replay-matrix-paint-recorded_curvy_stroke-66d4dd649e.md](crates/darkly/bench-results/stroke-replay-matrix-paint-recorded_curvy_stroke-66d4dd649e.md).
+[bench-results/stroke-replay-matrix-paint-recorded_curvy_stroke-cc26144cf2.md](crates/darkly/bench-results/stroke-replay-matrix-paint-recorded_curvy_stroke-cc26144cf2.md).
 The 6-slot GPU-timestamp split (sync_in / shader / sync_out) is gone
 from the bench because the path it instrumented (the buffer
 round-trip) no longer exists.
@@ -731,5 +731,7 @@ cells in the per-approach tables above):
 - Each new attempt is its own commit. Shader + CPU evolve together.
 - New attempts append a row here: what we did, what we measured, why
   we kept it or moved on.
-- Watercolor / smudge / liquify stay untouched. Their compute ports
-  will reuse whatever pattern wins.
+- Watercolor has now been ported to the same architecture — see
+  [`watercolor-perf-tracking.md`](watercolor-perf-tracking.md). Smudge
+  and liquify still on their per-dab fragment paths; the same pattern
+  applies if/when their compute ports need a perf pass.

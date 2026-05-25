@@ -290,7 +290,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// `render_from_stabilized_tail`) just before that phase's
     /// `submit_final`.
     ///
-    /// Dab-batching terminals (paint, watercolor_compute) use this to dispatch their
+    /// Dab-batching terminals (paint, watercolor_batched) use this to dispatch their
     /// batched work; fragment-path terminals that already record per-dab
     /// passes inline keep the default no-op.
     fn flush_dabs(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}

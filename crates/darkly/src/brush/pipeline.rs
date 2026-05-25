@@ -184,8 +184,20 @@ pub trait BrushPipelineEntry: Any {
     /// registry iterates every entry's ring on frame reset and on overflow
     /// checks; pipelines without per-dab uniforms (`mask_blit`, ...) return
     /// `None`.
+    ///
+    /// Most pipelines have at most one ring; entries that own multiple
+    /// rings (e.g. a terminal that runs both a pickup and a composite
+    /// pass with separate uniform layouts) override [`Self::rings`]
+    /// instead.
     fn ring(&self) -> Option<&DynamicUniformRing> {
         None
+    }
+    /// All dynamic-offset uniform rings the registry must coordinate
+    /// (reset, overflow-check) for this entry. Default returns the
+    /// single [`Self::ring`] wrapped in a `Vec`; override directly when
+    /// the entry holds more than one ring.
+    fn rings(&self) -> Vec<&DynamicUniformRing> {
+        self.ring().into_iter().collect()
     }
 }
 
@@ -716,14 +728,14 @@ impl BrushPipelines {
         }
         self.entries
             .values()
-            .filter_map(|e| e.ring())
+            .flat_map(|e| e.rings())
             .any(|r| r.nearly_full())
     }
 
     /// Reset all uniform rings for a new frame.
     pub fn reset_uniform_rings(&self) {
         self.blit_uniform_ring.reset();
-        for r in self.entries.values().filter_map(|e| e.ring()) {
+        for r in self.entries.values().flat_map(|e| e.rings()) {
             r.reset();
         }
     }

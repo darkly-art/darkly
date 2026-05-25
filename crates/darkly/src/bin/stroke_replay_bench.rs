@@ -145,10 +145,10 @@ fn brush_graph_json(brush_name: &str, dab_size_px: Option<f32>) -> String {
             .graph
             .nodes
             .iter()
-            .find(|(_, n)| matches!(n.type_id.as_str(), "paint" | "watercolor_compute"))
+            .find(|(_, n)| matches!(n.type_id.as_str(), "paint" | "watercolor_batched"))
             .map(|(id, _)| *id)
             .unwrap_or_else(|| {
-                panic!("brush `{brush_name}` has no paint/watercolor_compute terminal")
+                panic!("brush `{brush_name}` has no paint/watercolor_batched terminal")
             });
         brush
             .metadata
