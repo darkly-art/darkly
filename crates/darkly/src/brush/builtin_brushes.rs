@@ -20,6 +20,7 @@ pub fn all() -> Vec<Brush> {
         rough_watercolor(),
         smudge_brush(),
         liquify_push(),
+        perlin_ink(),
     ]
 }
 
@@ -531,6 +532,130 @@ fn liquify_push() -> Brush {
 
     let mut metadata = BrushMetadata::from_graph("Liquify", graph);
     metadata.category = "effects".to_string();
+    Brush::without_resources(metadata)
+}
+
+/// Perlin Ink — the first 100%-compiled brush.
+///
+/// Wires `pen_input + paint_color + 3×random + circle(perlin) + stamp`
+/// into the `paint_compiled` terminal. Each dab gets a unique
+/// perlin-modulated silhouette driven by three independent per-dab
+/// random seeds (amplitude, phase, seed). Pressure controls dab size
+/// through an ink-pen front-loaded curve. The entire graph compiles
+/// to one WGSL fragment shader at brush load — no per-dab GPU
+/// dispatch, no inter-node textures.
+///
+/// This brush is the proving ground for the WGSL compilation
+/// framework — see `crates/darkly/src/brush/wgsl_compile.rs`.
+fn perlin_ink() -> Brush {
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    graph.set_port_default(pen, "stabilize", 0.6).unwrap();
+    graph.set_port_exposed(pen, "stabilize", true).unwrap();
+
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let curve = graph.add_node(
+        "curve",
+        registry.get("curve").unwrap().ports.clone(),
+        vec![ParamValue::Curve(vec![
+            [0.0, 0.0],
+            [0.25, 0.5],
+            [0.5, 0.71],
+            [0.75, 0.87],
+            [1.0, 1.0],
+        ])],
+    );
+    let rand_amp = graph.add_node(
+        "random",
+        registry.get("random").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // per-dab
+    );
+    let rand_phase = graph.add_node(
+        "random",
+        registry.get("random").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)],
+    );
+    let rand_seed = graph.add_node(
+        "random",
+        registry.get("random").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)],
+    );
+    let circle = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![ParamValue::Int(1)], // 1 = Perlin Noise
+    );
+    // Defaults for the perlin shape — these are stroke-constant
+    // unless wired (the random nodes below override amplitude /
+    // phase_input / seed per-dab).
+    graph.set_port_default(circle, "frequency", 8.0).unwrap();
+    graph.set_port_default(circle, "persistence", 0.5).unwrap();
+    graph.set_port_default(circle, "octaves", 4.0).unwrap();
+    graph.set_port_default(circle, "softness", 0.1).unwrap();
+
+    let stamp = graph.add_node(
+        "stamp",
+        registry.get("stamp").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // 0 = Alpha Mask
+    );
+    let terminal = graph.add_node(
+        "paint_compiled",
+        registry.get("paint_compiled").unwrap().ports.clone(),
+        vec![],
+    );
+
+    let wires = [
+        // Pressure → size (via ink-pen curve) on the TERMINAL,
+        // because the terminal owns dab dimensions in the compiled
+        // model.
+        (pen, "pressure", curve, "input"),
+        (curve, "output", terminal, "size_input"),
+        // Pressure → flow on the stamp (modulates per-dab alpha).
+        (pen, "pressure", stamp, "flow"),
+        // 3 random nodes drive the perlin shape per dab.
+        (rand_amp, "value", circle, "amplitude"),
+        (rand_phase, "value", circle, "phase_input"),
+        (rand_seed, "value", circle, "seed"),
+        // Circle (shape) → stamp (tip mask).
+        (circle, "texture", stamp, "tip"),
+        // Paint color → stamp.
+        (paint_color, "color", stamp, "color"),
+        // Stamp.dab → terminal.rgba (premultiplied RGBA).
+        (stamp, "dab", terminal, "rgba"),
+        // Terminal needs position too.
+        (pen, "position", terminal, "position"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    // Amplitude default range is [0, 0.5] — the random nodes output
+    // [0, 1] which gets remapped to [0, 0.5] by the wire-boundary
+    // remap (circle.amplitude has natural_range = (0, 0.5)).
+
+    let mut metadata = BrushMetadata::from_graph("Perlin Ink", graph);
+    metadata.category = "basic".to_string();
     Brush::without_resources(metadata)
 }
 

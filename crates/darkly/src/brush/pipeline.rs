@@ -226,11 +226,14 @@ pub struct BrushPipelineRegistration {
 /// owner.
 pub struct BrushPipelines {
     // ── Shared bind-group layouts ────────────────────────────────────
-    // `uniform_bgl` lives only for the duration of `new()` — every per-
-    // mode pipeline copies its own uniform bind group out of it before
-    // we drop the local.  The three BGLs below have external consumers
-    // (`Scratch::new`, format-bridging blit-source bind groups, the
-    // composite that wants a shared layout for both R8 and RGBA8 variants).
+    // `uniform_bgl` is stored alongside the others so per-brush
+    // compiled pipelines (built lazily after `new()`) can rebuild
+    // their dynamic-uniform bind group against the same layout the
+    // shared infra was set up with.  The three BGLs below have
+    // external consumers (`Scratch::new`, format-bridging blit-source
+    // bind groups, the composite that wants a shared layout for both
+    // R8 and RGBA8 variants).
+    uniform_bgl: wgpu::BindGroupLayout,
     selection_bgl: wgpu::BindGroupLayout,
     canvas_copy_bgl: wgpu::BindGroupLayout,
     watercolor_sources_bgl: wgpu::BindGroupLayout,
@@ -595,6 +598,7 @@ impl BrushPipelines {
         }
 
         Self {
+            uniform_bgl,
             selection_bgl,
             canvas_copy_bgl,
             watercolor_sources_bgl,
@@ -607,6 +611,15 @@ impl BrushPipelines {
             scratch_blit_r8_pipeline,
             entries,
         }
+    }
+
+    /// BGL used by every per-mode pipeline's dynamic-offset uniform
+    /// buffer (group 0). Exposed so per-brush compiled pipelines
+    /// built lazily after `BrushPipelines::new` can bind their own
+    /// uniform ring against the same layout. See
+    /// [`crate::brush::nodes::paint_compiled`].
+    pub fn uniform_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.uniform_bgl
     }
 
     /// Look up a per-mode pipeline by id.  Panics if the id is not

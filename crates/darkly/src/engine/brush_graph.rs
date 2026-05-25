@@ -307,6 +307,8 @@ impl DarklyEngine {
             pending_dab_bytes: Vec::new(),
             pending_dab_count: 0,
             pending_dabs_bbox: None,
+            compiled_brush: None,
+            slot_outputs_owned: None,
         };
 
         self.brush_pipelines.reset_uniform_rings();

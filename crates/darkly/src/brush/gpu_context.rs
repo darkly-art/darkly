@@ -8,12 +8,14 @@
 //! struct — terminals stop branching on a mode enum.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::dab_pool::DabTexturePool;
 use super::eval::BrushPreviewInfo;
 use super::pipeline::BrushPipelines;
 use super::scratch::Scratch;
-use super::wire::TextureHandle;
+use super::wgsl_compile::CompiledBrush;
+use super::wire::{ScalarValue, TextureHandle};
 use crate::gpu::paint_target::GpuPaintTarget;
 
 /// Brush perf counters. Lives both per-`BrushGpuContext` (drained at
@@ -242,6 +244,23 @@ pub struct BrushGpuContext<'a> {
     /// decision, but neither shipped terminal does today —
     /// hardware-blend writes scale per-fragment, not per-bbox-pixel.
     pub pending_dabs_bbox: Option<[u32; 4]>,
+
+    /// Compiled WGSL for this brush, populated by the engine before
+    /// stroke evaluation when the brush's graph terminates in
+    /// `paint_compiled`. Read by that terminal's `evaluate_gpu` and
+    /// `flush_dabs` to know the dab record / uniform layouts and the
+    /// pipeline topology hash. `None` for brushes on the per-dab
+    /// dispatch path.
+    pub compiled_brush: Option<Arc<CompiledBrush>>,
+
+    /// Name → value map of every output slot in the brush graph,
+    /// built by the runner's `dispatch_gpu` immediately after
+    /// `execute_cpu` and held for the duration of the dispatch pass.
+    /// Keys follow the `n{node_id}_{port_name}` convention used by
+    /// [`crate::brush::wgsl_compile::CompileWgslCtx::dab_field_name`].
+    /// The compiled terminal reads from this to pack per-dab records
+    /// and uniforms. `None` for brushes on the per-dab dispatch path.
+    pub slot_outputs_owned: Option<HashMap<String, ScalarValue>>,
 }
 
 impl<'a> BrushGpuContext<'a> {

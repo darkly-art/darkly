@@ -363,6 +363,7 @@ impl StrokeEngine {
             "stamp",
             "liquify",
             "paint",
+            "paint_compiled",
             "watercolor_batched",
         ] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {

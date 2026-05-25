@@ -35,6 +35,7 @@ use crate::brush::node::BrushNodeRegistration;
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
+use crate::brush::wgsl_compile::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -571,5 +572,71 @@ impl BrushNodeEvaluator for CircleEvaluator {
         }
 
         vec![("texture".into(), ScalarValue::Texture(handle))]
+    }
+
+    /// Emit a per-fragment coverage function for the compiled brush
+    /// path. The `texture` output is bridged to a scalar coverage
+    /// value: downstream nodes (notably `stamp`) substitute the
+    /// function call into their `tip` input as if it were sampling a
+    /// procedurally-generated mask. No actual texture is allocated.
+    ///
+    /// `params.algorithm` is read from the node param at compile time
+    /// (constant per brush). Per-port shape inputs (`amplitude`,
+    /// `phase`, `seed`, etc.) become input expressions — wired to
+    /// dab-record fields when modulated, literals when not.
+    fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        if !cctx.consumed_outputs.contains("texture") {
+            return Ok(wgsl);
+        }
+
+        let algorithm = match cctx.params.first() {
+            Some(crate::gpu::params::ParamValue::Int(v)) => (*v as u32).min(2),
+            _ => 0,
+        };
+        let amplitude = cctx.input("amplitude").as_f32();
+        let frequency = cctx.input("frequency").as_f32();
+        let phase = cctx.input("phase").as_f32();
+        let phase_input = cctx.input("phase_input").as_f32();
+        let persistence = cctx.input("persistence").as_f32();
+        let seed = cctx.input("seed").as_f32();
+        let octaves = cctx.input("octaves").as_f32();
+        let n1 = cctx.input("n1").as_f32();
+        let n2 = cctx.input("n2").as_f32();
+        let n3 = cctx.input("n3").as_f32();
+        let softness = cctx.input("softness").as_f32();
+
+        // Emit the shape evaluation as an inline block inside
+        // `fs_main` rather than a top-level function — the input
+        // expressions reference `d.<field>` and `u.<field>` which are
+        // only in scope inside the fragment shader body. Using a
+        // block-let preserves a single `let` binding name downstream
+        // nodes can substitute.
+        let params_ident = cctx.ident("circle_params");
+        let shape_ident = cctx.ident("circle_shape");
+        let body = format!(
+            "    let {params_ident}: ShapeParams = ShapeParams(\n\
+             \x20       {algorithm}u,\n\
+             \x20       max(({amplitude}), 0.0),\n\
+             \x20       max(round(({frequency})), 1.0),\n\
+             \x20       ({phase}) + ({phase_input}),\n\
+             \x20       clamp(({persistence}), 0.0, 1.0),\n\
+             \x20       ({seed}),\n\
+             \x20       clamp(u32(round(({octaves}))), 1u, 6u),\n\
+             \x20       max(({n1}), 0.05),\n\
+             \x20       max(({n2}), 0.05),\n\
+             \x20       max(({n3}), 0.05),\n\
+             \x20   );\n\
+             \x20   let {shape_ident}_r_at: f32 = shape_r_theta({params_ident}, theta);\n\
+             \x20   let {shape_ident}_soft: f32 = clamp(({softness}), 0.0, 1.0);\n\
+             \x20   let {shape_ident}_r_solid: f32 = {shape_ident}_r_at * (1.0 - {shape_ident}_soft);\n\
+             \x20   var {shape_ident}: f32 = 0.0;\n\
+             \x20   if (local_dist >= {shape_ident}_r_at) {{ {shape_ident} = 0.0; }}\n\
+             \x20   else if (local_dist <= {shape_ident}_r_solid) {{ {shape_ident} = 1.0; }}\n\
+             \x20   else {{ {shape_ident} = clamp(({shape_ident}_r_at - local_dist) / max({shape_ident}_r_at - {shape_ident}_r_solid, 1e-5), 0.0, 1.0); }}\n",
+        );
+        wgsl.body = body;
+        wgsl.outputs.insert("texture".into(), shape_ident);
+        Ok(wgsl)
     }
 }

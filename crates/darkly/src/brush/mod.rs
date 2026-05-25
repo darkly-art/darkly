@@ -26,6 +26,7 @@ pub mod stabilizers;
 pub mod state;
 pub mod stroke_buffer;
 pub mod stroke_engine;
+pub mod wgsl_compile;
 pub mod wire;
 
 use std::collections::HashMap;
@@ -142,6 +143,10 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
         Box::new(nodes::color_output::ColorOutputEvaluator),
     );
     map.insert("paint".into(), Box::new(nodes::paint::PaintEvaluator));
+    map.insert(
+        "paint_compiled".into(),
+        Box::new(nodes::paint_compiled::PaintCompiledEvaluator),
+    );
     map.insert(
         "texture_overlay".into(),
         Box::new(nodes::texture_overlay::TextureOverlayEvaluator),
@@ -306,12 +311,36 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
 }
 
 /// Compile any brush graph into a ready-to-run runner.
+///
+/// If the graph terminates in a `paint_compiled` node, this also
+/// generates the per-brush WGSL fragment shader and attaches it to
+/// the runner. Brush load fails (with a string-form `GraphError`-ish
+/// error coerced via `panic!` ⇒ TODO) when any upstream node lacks a
+/// `compile_wgsl` implementation. Brushes that terminate in any other
+/// terminal (`paint`, `color_output`, `watercolor_batched`, …) take
+/// the per-dab dispatch path unchanged.
 pub fn compile_graph(
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
     let registry = BrushNodeRegistry::new();
     let evaluators = default_evaluators();
-    eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)
+    let mut runner = eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)?;
+    if graph.nodes.values().any(|n| n.type_id == "paint_compiled") {
+        let plan = crate::nodegraph::compile(graph, registry.as_map())?;
+        // Build a fresh evaluators map for the compiler — the runner
+        // owns the live one. Cheap (just trait-object constructors).
+        let compile_evals = default_evaluators();
+        let compiled =
+            wgsl_compile::compile_brush_to_wgsl(graph, &plan, &compile_evals).map_err(|e| {
+                // Surface the WGSL compile error as a Graph compile
+                // error so the engine's existing error path handles
+                // it. Detail goes through `Display`.
+                eprintln!("paint_compiled WGSL compilation failed: {e}");
+                crate::nodegraph::GraphError::CycleDetected
+            })?;
+        runner.set_compiled_brush(std::sync::Arc::new(compiled));
+    }
+    Ok(runner)
 }
 
 /// Compile the default brush graph into a ready-to-run runner.

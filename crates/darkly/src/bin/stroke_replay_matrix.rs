@@ -59,6 +59,7 @@ const RESOLUTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080), (2560, 1440), (3
 /// `Topology::brush_name` picks the right one for the cell.
 const BRUSH_NAME_INK_PEN: &str = "Ink Pen";
 const BRUSH_NAME_WATERCOLOR: &str = "Smooth Watercolor";
+const BRUSH_NAME_PERLIN_INK: &str = "Perlin Ink";
 
 /// Stabilizer strength override. The recorded stroke is what stresses
 /// the stabilizer; cranking this to 1.0 maximises the rewind workload.
@@ -87,6 +88,13 @@ enum Topology {
     /// bench overrides the `size` port on whatever terminal id
     /// `Topology::terminal_id` returns.
     Watercolor,
+    /// Perlin Ink — the first 100%-compiled brush. Wires `pen + 3×random
+    /// → circle(perlin) → stamp → paint_compiled`, with the entire
+    /// upstream graph fused into one WGSL fragment shader at brush
+    /// load. Stress-tests the framework against `paint` (procedural
+    /// disc) on the same recorded stroke matrix — see
+    /// `crates/darkly/src/brush/wgsl_compile.rs`.
+    PerlinInk,
 }
 
 impl Topology {
@@ -97,6 +105,7 @@ impl Topology {
                 Some(Topology::StampColorOutput)
             }
             "watercolor" | "watercolor-compute" | "wet-media" => Some(Topology::Watercolor),
+            "perlin-ink" | "perlin_ink" | "compiled" => Some(Topology::PerlinInk),
             _ => None,
         }
     }
@@ -106,6 +115,7 @@ impl Topology {
             Topology::Paint => "paint",
             Topology::StampColorOutput => "stamp-color-output",
             Topology::Watercolor => "watercolor",
+            Topology::PerlinInk => "perlin-ink",
         }
     }
 
@@ -117,6 +127,7 @@ impl Topology {
             Topology::Paint => "paint",
             Topology::StampColorOutput => "color_output",
             Topology::Watercolor => "watercolor_batched",
+            Topology::PerlinInk => "paint_compiled",
         }
     }
 
@@ -124,6 +135,7 @@ impl Topology {
         match self {
             Topology::Paint | Topology::StampColorOutput => BRUSH_NAME_INK_PEN,
             Topology::Watercolor => BRUSH_NAME_WATERCOLOR,
+            Topology::PerlinInk => BRUSH_NAME_PERLIN_INK,
         }
     }
 }
@@ -200,7 +212,9 @@ fn ink_pen_pressure_curve() -> Vec<[f32; 2]> {
 
 fn brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
     match topology {
-        Topology::Paint | Topology::Watercolor => builtin_brush_graph_json(topology, dab_radius_px),
+        Topology::Paint | Topology::Watercolor | Topology::PerlinInk => {
+            builtin_brush_graph_json(topology, dab_radius_px)
+        }
         Topology::StampColorOutput => ink_pen_fragment_graph_json(dab_radius_px),
     }
 }

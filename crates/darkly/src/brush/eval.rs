@@ -6,6 +6,7 @@
 //! reused across dabs.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::{
@@ -15,6 +16,7 @@ use crate::nodegraph::{
 use super::curve_math::CurveLut;
 
 use super::gpu_context::BrushGpuContext;
+use super::wgsl_compile::CompiledBrush;
 use super::wire::{BrushWireType, ScalarValue};
 
 // ── Evaluator trait ─────────────────────────────────────────────────
@@ -306,6 +308,19 @@ pub trait BrushNodeEvaluator: Send + Sync {
     fn supports_erase(&self) -> bool {
         true
     }
+
+    /// Emit this node's contribution to a compiled WGSL fragment
+    /// shader. Used only by brushes that terminate in `paint_compiled`
+    /// (the compiled execution path); brushes on the per-dab dispatch
+    /// path never call this. Returning `Err` makes the whole brush
+    /// fail to load when its terminal asks for compilation — there is
+    /// no runtime fallback. See [`crate::brush::wgsl_compile`].
+    fn compile_wgsl(
+        &self,
+        _cctx: &crate::brush::wgsl_compile::CompileWgslCtx,
+    ) -> Result<crate::brush::wgsl_compile::NodeWgsl, String> {
+        Err("node has no WGSL implementation".into())
+    }
 }
 
 // ── Graph runner ────────────────────────────────────────────────────
@@ -357,6 +372,12 @@ pub struct BrushGraphRunner {
     stroke_seed: u32,
     /// Index of the current dab, set by `seed_sensors()`.
     dab_index: u32,
+    /// Compiled WGSL for this brush, populated by `compile_graph` when
+    /// the graph terminates in `paint_compiled`. `None` for per-dab
+    /// dispatch brushes. The runner copies this into the
+    /// `BrushGpuContext` at `dispatch_gpu` time so the terminal can
+    /// read its dab/uniform layouts.
+    compiled: Option<Arc<CompiledBrush>>,
 }
 
 struct NodeData {
@@ -420,7 +441,39 @@ impl BrushGraphRunner {
             paint_color_slot,
             stroke_seed: 0,
             dab_index: 0,
+            compiled: None,
         })
+    }
+
+    /// Attach a pre-built [`CompiledBrush`] to this runner. Called by
+    /// [`crate::brush::compile_graph`] when the graph terminates in
+    /// `paint_compiled`. Idempotent — overwrites any prior value.
+    pub fn set_compiled_brush(&mut self, compiled: Arc<CompiledBrush>) {
+        self.compiled = Some(compiled);
+    }
+
+    /// Returns the compiled WGSL for this brush, if the graph
+    /// terminates in `paint_compiled`.
+    pub fn compiled_brush(&self) -> Option<Arc<CompiledBrush>> {
+        self.compiled.clone()
+    }
+
+    /// Build a name → value map of every output slot in the graph,
+    /// keyed by `n{node_id}_{port_name}` (matching the convention
+    /// [`crate::brush::wgsl_compile::CompileWgslCtx::dab_field_name`]
+    /// uses). Called by `dispatch_gpu` for compiled brushes; the
+    /// compiled terminal reads from this to pack per-dab records and
+    /// uniforms. Returns an empty map for graphs with no slots.
+    fn build_slot_outputs(&self) -> HashMap<String, ScalarValue> {
+        let mut out = HashMap::with_capacity(self.slots.len());
+        for step in &self.plan.steps {
+            for (port_name, slot_idx) in &step.output_slots {
+                if let Some(val) = self.slots[*slot_idx] {
+                    out.insert(format!("n{}_{}", step.node_id.0, port_name), val);
+                }
+            }
+        }
+        out
     }
 
     /// Seed sensor output slots directly from pen data.
@@ -553,8 +606,31 @@ impl BrushGraphRunner {
             &mut BrushGpuContext,
         ) -> Vec<(String, ScalarValue)>,
     {
+        // Attach the brush's compiled WGSL (if any) and a snapshot of
+        // every output slot keyed by `n{id}_{port}`. The compiled
+        // terminal reads these to pack per-dab records and uniforms;
+        // brushes on the per-dab dispatch path leave both as `None`.
+        let is_compiled = self.compiled.is_some();
+        if let Some(compiled) = &self.compiled {
+            gpu.compiled_brush = Some(compiled.clone());
+            gpu.slot_outputs_owned = Some(self.build_slot_outputs());
+        }
+
         for step in &self.plan.steps {
             if !step.is_gpu {
+                continue;
+            }
+            // CRITICAL perf: in compiled mode, every upstream GPU
+            // node's contribution is fused into the terminal's
+            // fragment shader. Skipping their per-dab `evaluate_gpu`
+            // (which would otherwise spend a per-dab render pass into
+            // the dab pool, ignored by the compiled terminal) is what
+            // makes the framework actually faster than the per-dab
+            // dispatch path. The terminal is identified by being the
+            // ONLY node whose `compile_wgsl` emits a body that ends
+            // in `return`; in practice it's whichever step ends the
+            // plan. Walk only the last GPU step.
+            if is_compiled && step.type_id != "paint_compiled" {
                 continue;
             }
 

@@ -4,8 +4,11 @@
 //! `seed_sensors()` writes directly to its output slots (no virtual
 //! dispatch).  The evaluator is a no-op.
 
+use std::sync::Arc;
+
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
+use crate::brush::wgsl_compile::{CompileWgslCtx, DabField, NodeWgsl, WgslType};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -123,5 +126,77 @@ impl BrushNodeEvaluator for PenInputEvaluator {
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         // Slots are written by seed_sensors(), not by the evaluator.
         vec![]
+    }
+
+    /// Pen-input outputs become per-dab record fields. The compiled
+    /// `paint_compiled` terminal reads the slot table after
+    /// `execute_cpu` and packs the values into the dab record using
+    /// the lookup-by-name keys this method registers.
+    ///
+    /// Only emits dab fields for outputs that are *consumed* by some
+    /// downstream node (per `cctx.consumed_outputs`). Unwired pen
+    /// ports cost nothing. Fields are declared alignment-descending
+    /// within the node's contribution so the std430 layout has no
+    /// internal gaps.
+    fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+
+        // vec2 outputs first (alignment 8).
+        let vec2_outputs = ["position", "motion"];
+        for name in &vec2_outputs {
+            if !cctx.consumed_outputs.contains(*name) {
+                continue;
+            }
+            let field_name = cctx.dab_field_name(name);
+            let key = field_name.clone();
+            wgsl.dab_fields.push(DabField {
+                name: field_name.clone(),
+                ty: WgslType::Vec2,
+                pack: Arc::new(move |outputs, bytes| {
+                    let v = outputs.get(&key).map(|s| s.as_vec2()).unwrap_or([0.0; 2]);
+                    bytes.extend_from_slice(bytemuck::bytes_of(&v));
+                }),
+            });
+            wgsl.outputs
+                .insert((*name).into(), format!("d.{}", field_name));
+        }
+
+        // f32-equivalent outputs (alignment 4). Includes scalar sensors
+        // and the `index` int (emitted as f32 — fine for the first
+        // ~16M dabs, cast to u32 in WGSL where downstream nodes want it).
+        let f32_outputs = [
+            "pressure",
+            "x_tilt",
+            "y_tilt",
+            "tilt_magnitude",
+            "tilt_direction",
+            "rotation",
+            "tangential_pressure",
+            "speed",
+            "distance",
+            "drawing_angle",
+            "time",
+            "index",
+            "fade",
+        ];
+        for name in &f32_outputs {
+            if !cctx.consumed_outputs.contains(*name) {
+                continue;
+            }
+            let field_name = cctx.dab_field_name(name);
+            let key = field_name.clone();
+            wgsl.dab_fields.push(DabField {
+                name: field_name.clone(),
+                ty: WgslType::F32,
+                pack: Arc::new(move |outputs, bytes| {
+                    let v = outputs.get(&key).map(|s| s.as_f32()).unwrap_or(0.0);
+                    bytes.extend_from_slice(bytemuck::bytes_of(&v));
+                }),
+            });
+            wgsl.outputs
+                .insert((*name).into(), format!("d.{}", field_name));
+        }
+
+        Ok(wgsl)
     }
 }

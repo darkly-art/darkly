@@ -12,8 +12,11 @@
 //! produce independent sequences — the node's own ID salts the PRNG
 //! seed automatically.
 
+use std::sync::Arc;
+
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
+use crate::brush::wgsl_compile::{CompileWgslCtx, DabField, NodeWgsl, UniformField, WgslType};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
@@ -55,5 +58,51 @@ impl BrushNodeEvaluator for RandomEvaluator {
         };
 
         vec![("value".into(), ScalarValue::Scalar(value))]
+    }
+
+    /// `random` is CPU-evaluated. Its output is the hashed scalar
+    /// already computed by `evaluate_cpu` and stored in the slot
+    /// table. The terminal extracts it and packs into either the
+    /// dab record (per-dab mode) or the uniform buffer (per-stroke
+    /// mode). The WGSL just reads the value back as a constant.
+    fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        if !cctx.consumed_outputs.contains("value") {
+            return Ok(wgsl);
+        }
+        let mode = match cctx.params.first() {
+            Some(crate::gpu::params::ParamValue::Int(v)) => *v,
+            _ => 0,
+        };
+        let per_stroke = mode == 1;
+
+        if per_stroke {
+            let field_name = cctx.uniform_field_name("value");
+            let key = field_name.clone();
+            wgsl.uniform_fields.push(UniformField {
+                name: field_name.clone(),
+                ty: WgslType::F32,
+                pack: Arc::new(move |outputs, bytes| {
+                    let v = outputs.get(&key).map(|s| s.as_f32()).unwrap_or(0.0);
+                    bytes.extend_from_slice(bytemuck::bytes_of(&v));
+                }),
+            });
+            wgsl.outputs
+                .insert("value".into(), format!("u.{}", field_name));
+        } else {
+            let field_name = cctx.dab_field_name("value");
+            let key = field_name.clone();
+            wgsl.dab_fields.push(DabField {
+                name: field_name.clone(),
+                ty: WgslType::F32,
+                pack: Arc::new(move |outputs, bytes| {
+                    let v = outputs.get(&key).map(|s| s.as_f32()).unwrap_or(0.0);
+                    bytes.extend_from_slice(bytemuck::bytes_of(&v));
+                }),
+            });
+            wgsl.outputs
+                .insert("value".into(), format!("d.{}", field_name));
+        }
+        Ok(wgsl)
     }
 }

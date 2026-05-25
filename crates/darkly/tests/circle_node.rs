@@ -147,6 +147,8 @@ fn render_dab(algorithm: i32, inputs: Inputs) -> Vec<u8> {
             pending_dab_bytes: Vec::new(),
             pending_dab_count: 0,
             pending_dabs_bbox: None,
+            compiled_brush: None,
+            slot_outputs_owned: None,
         };
         let eval_ctx = EvalContext {
             inputs: &input_map,

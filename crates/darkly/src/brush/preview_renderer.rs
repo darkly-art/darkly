@@ -217,6 +217,8 @@ impl BrushPreviewRenderer {
                     pending_dab_bytes: Vec::new(),
                     pending_dab_count: 0,
                     pending_dabs_bbox: None,
+                    compiled_brush: None,
+                    slot_outputs_owned: None,
                 }
             }};
         }

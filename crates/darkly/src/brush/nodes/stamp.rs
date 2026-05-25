@@ -26,6 +26,7 @@ use crate::brush::node::BrushNodeRegistration;
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BrushPipelines, BuildContext, DynamicUniformRing,
 };
+use crate::brush::wgsl_compile::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue, TextureHandle};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -489,5 +490,69 @@ impl BrushNodeEvaluator for StampEvaluator {
                 ScalarValue::Vec2([dab_w as f32, dab_h as f32]),
             ),
         ]
+    }
+
+    /// Compiled-brush WGSL contribution. Supported only in AlphaMask
+    /// mode — other application modes (ImageStamp, LightnessMap,
+    /// GradientMap) rely on sampling a real `tip` RGBA texture, which
+    /// has no inline equivalent without a texture-array binding (out
+    /// of scope this PR). A brush that wires ImageStamp / etc. into a
+    /// `paint_compiled` terminal will fail brush load with this
+    /// error message and must use `paint` (or another existing
+    /// terminal) instead.
+    ///
+    /// In AlphaMask mode the `tip` input is a scalar mask (e.g. from
+    /// `circle.texture`), and the output `dab` is premultiplied RGBA
+    /// of `color × mask × flow`. The `size_input`, `size`, `rotation`,
+    /// `mirror_*`, and `ratio` ports are **ignored** in compiled
+    /// mode: dab dimensions are owned by the terminal, and the
+    /// transform/mirror knobs would require rotating `local_uv` before
+    /// the upstream shape evaluation — a more invasive change saved
+    /// for a follow-up. Wiring those ports has no effect on the
+    /// rendered dab today.
+    fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        if !cctx.consumed_outputs.contains("dab") {
+            return Ok(wgsl);
+        }
+        let application = match cctx.params.first() {
+            Some(crate::gpu::params::ParamValue::Int(v)) => *v,
+            _ => 0,
+        };
+        if application != 0 {
+            return Err(format!(
+                "stamp.application = {application} (expected AlphaMask = 0); \
+                 compiled brushes only support AlphaMask mode this PR. \
+                 Use the `paint` terminal instead, or restructure the brush \
+                 to use a procedural tip (e.g. circle node).",
+            ));
+        }
+        // In AlphaMask mode the upstream `tip` produces a scalar
+        // coverage in [0, 1]. The wire's WGSL expression returns
+        // `f32` (circle's `compile_wgsl` emits a function call), so
+        // we use it directly as the mask.
+        let mask = cctx.input("tip").as_f32();
+        let color = cctx.input("color").as_vec4();
+        let flow = cctx.input("flow").as_f32();
+
+        let fn_name = cctx.ident("stamp");
+        let decls = format!(
+            "fn {fn_name}(mask: f32, color: vec4<f32>, flow: f32) -> vec4<f32> {{\n\
+             \x20   let a = color.a * mask * flow;\n\
+             \x20   return vec4<f32>(color.rgb * a, a);\n\
+             }}\n"
+        );
+        wgsl.decls = decls;
+        // Output expression — substituted into stamp's downstream
+        // consumer (paint_compiled.rgba).
+        wgsl.outputs.insert(
+            "dab".into(),
+            format!("{}({}, {}, {})", fn_name, mask, color, flow),
+        );
+        // `dab_size` and `preview` aren't meaningful in the compiled
+        // path (the terminal owns dab dimensions). If a downstream
+        // node wires them, we'd need additional plumbing — for now
+        // we don't emit them.
+        Ok(wgsl)
     }
 }
