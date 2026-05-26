@@ -608,6 +608,13 @@ fn perlin_ink() -> Brush {
         registry.get("stamp").unwrap().ports.clone(),
         vec![ParamValue::Int(0)], // 0 = Alpha Mask
     );
+    // Stamp's `size` port is exposed by default (because per-dab
+    // dispatch needs it), but `paint_compiled` ignores stamp's
+    // dimension knobs — the terminal owns dab dimensions in the
+    // compiled execution model. Hide stamp.size from the brush
+    // properties panel so the user doesn't see two "Size" sliders
+    // and scrub the inert one.
+    graph.set_port_exposed(stamp, "size", false).unwrap();
     let terminal = graph.add_node(
         "paint_compiled",
         registry.get("paint_compiled").unwrap().ports.clone(),

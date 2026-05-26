@@ -52,6 +52,7 @@ use std::sync::Arc;
 
 use crate::brush::eval::BrushNodeEvaluator;
 use crate::brush::wire::{BrushWireType, ScalarValue};
+use crate::gpu::params::ParamValue;
 use crate::nodegraph::{ExecutionPlan, NodeId, PortDef, PortDir, PortRef};
 
 // ── Type system ─────────────────────────────────────────────────────────
@@ -231,6 +232,85 @@ impl InputBinding {
     }
 }
 
+// ── Extent protocol ─────────────────────────────────────────────────────
+
+/// One node's contribution to the per-brush dab bounding-box extent.
+///
+/// The framework walks the graph at brush-compile time and asks every
+/// node for its `extent` contribution. Contributions are composed
+/// along the graph into a single `(factor, extra_px)` pair stored on
+/// [`CompiledBrush`]; the `paint_compiled` terminal multiplies the
+/// per-dab effective radius by `factor` and adds `extra_px` to produce
+/// the dab's `bbox_radius`. That value is packed into the per-dab
+/// record and read by the WGSL fragment shader to size the rasterized
+/// quad and to clip the dab's write footprint to the layer bbox.
+///
+/// Because the value flows from the framework into both the CPU bbox
+/// computation and the GPU shader (via the dab record), the CPU bbox
+/// and shader write footprint cannot diverge. The bug this protocol
+/// was introduced to fix: the WGSL prelude inflated the rasterized
+/// quad by a hardcoded `QUAD_R_MAX = 1.6` while the CPU layer-clip
+/// bbox used the un-inflated `radius`. On a mid-stroke save-point
+/// rewind, the save-point system cleared pixels outside the CPU bbox
+/// but only restored into it — so anything the shader wrote in the
+/// inflation margin was lost, visibly truncating previous dabs to a
+/// smaller square as the user kept drawing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ExtentContribution {
+    /// No effect — bbox passes through unchanged from upstream.
+    Identity,
+    /// Multiplier on upstream extent. `circle` uses `1 + amp_max` for
+    /// sine/perlin (or the superformula's `r_max`) so the bbox covers
+    /// the shape's worst-case rasterized footprint.
+    Multiply(f32),
+    /// Additive canvas-pixel padding on top of upstream. Future
+    /// displacement / warp nodes use this (e.g. warp by ±strength px).
+    /// `passthrough` multiplies the upstream extent; `added_px` is the
+    /// post-multiply additive padding in canvas pixels.
+    AddCanvasPixels { passthrough: f32, added_px: f32 },
+    /// Hard cap below upstream — `bbox_radius` is min'd with
+    /// `factor * radius`. For clip-to-circle style masks.
+    ClipTo(f32),
+}
+
+/// Per-node context passed to `BrushNodeEvaluator::extent`. Mirrors the
+/// shape of [`CompileWgslCtx`] minus the WGSL plumbing: just port defs,
+/// params, and a wired-input set so [`Self::port_max_value`] can pick
+/// the wire-aware max for each input.
+pub struct ExtentCtx<'a> {
+    pub node_id: NodeId,
+    pub params: &'a [ParamValue],
+    pub port_defs: &'a [PortDef<BrushWireType>],
+    /// Names of input ports on this node that have an inbound wire.
+    /// Used by [`Self::port_max_value`] to decide whether to return
+    /// the port's `natural_range` max (wired) or its default (unwired).
+    pub wired_inputs: HashSet<String>,
+}
+
+impl ExtentCtx<'_> {
+    /// Maximum value the named input port can take, given the wire
+    /// graph. For a wired input, returns the port's `natural_range`
+    /// max (or its slider `max` if no natural range is declared) —
+    /// the wire-boundary remap maps every wire to the dst's natural
+    /// range, so that's the actual ceiling. For an unwired input,
+    /// returns the port's `default` (the only value it can take).
+    /// Unknown ports return `0.0`.
+    pub fn port_max_value(&self, port_name: &str) -> f32 {
+        let Some(port) = self
+            .port_defs
+            .iter()
+            .find(|p| p.name == port_name && p.dir == PortDir::Input)
+        else {
+            return 0.0;
+        };
+        if self.wired_inputs.contains(port_name) {
+            port.natural_range.map(|(_, max)| max).unwrap_or(port.max)
+        } else {
+            port.default
+        }
+    }
+}
+
 // ── Compile context ─────────────────────────────────────────────────────
 
 /// Per-node context passed to `compile_wgsl`.
@@ -312,6 +392,18 @@ pub struct CompiledBrush {
     /// Stable hash of the graph topology + relevant params, for
     /// pipeline caching.
     pub topology_hash: u64,
+    /// Multiplier on per-dab `effective_radius` produced by composing
+    /// every node's [`ExtentContribution::extent`] over the graph. The
+    /// terminal computes `bbox_radius = effective_radius * factor +
+    /// extra_px` and packs that into the dab record's intrinsic
+    /// header. `1.0` for graphs with no shape-modulating upstream
+    /// (the disc fallback). See [`ExtentContribution`] for the
+    /// composition rules.
+    pub brush_extent_factor: f32,
+    /// Additive canvas-pixel padding produced by `AddCanvasPixels`
+    /// contributions (displacement / warp nodes). `0.0` for the
+    /// current node set.
+    pub brush_extent_extra_px: f32,
 }
 
 impl std::fmt::Debug for CompiledBrush {
@@ -354,12 +446,22 @@ impl std::error::Error for CompileError {}
 // ── Intrinsic dab record header ─────────────────────────────────────────
 
 /// Fields the terminal always reads from the per-dab record, regardless
-/// of upstream nodes: pen-tip position (canvas pixels) and effective
-/// radius (canvas pixels). The terminal packs these itself in its
-/// `evaluate_gpu` — every compiled brush has them.
+/// of upstream nodes: pen-tip position (canvas pixels), effective
+/// radius (canvas pixels), and `bbox_radius` — the inflated radius
+/// the WGSL fragment shader uses both for the rasterized quad's half-
+/// extent and for the per-fragment discard test. The terminal packs
+/// these itself in its `evaluate_gpu`; every compiled brush has them.
+///
+/// `bbox_radius` is computed from [`CompiledBrush::brush_extent_factor`]
+/// and `brush_extent_extra_px` at dab time and is the single source of
+/// truth for the dab's write footprint. The CPU layer-clip bbox and
+/// the GPU shader read the same value, so they cannot diverge — the
+/// rewind/save-point bug fixed by the extent protocol is impossible
+/// to reintroduce as long as the shader keeps reading `d.bbox_radius`.
 pub fn intrinsic_dab_header() -> Vec<DabField> {
-    // Order matters for std430 alignment: vec2 (8) → f32 (4) → f32 pad.
-    // The terminal packs `pos`, `radius`, `_pad` for total 16 bytes.
+    // Order matters for std430 alignment: vec2 (8) → f32 (4) → f32 (4)
+    // for total 16 bytes. The terminal packs `pos`, `radius`,
+    // `bbox_radius`.
     vec![
         DabField {
             name: "pos".into(),
@@ -378,10 +480,10 @@ pub fn intrinsic_dab_header() -> Vec<DabField> {
             }),
         },
         DabField {
-            name: "_intrinsic_pad".into(),
+            name: "bbox_radius".into(),
             ty: WgslType::F32,
             pack: Arc::new(|_outputs, _bytes| {
-                unreachable!("intrinsic pad packer should not be invoked");
+                unreachable!("intrinsic bbox_radius packer should not be invoked");
             }),
         },
     ]
@@ -555,6 +657,9 @@ pub fn compile_brush_to_wgsl(
     // stability becomes an issue we can switch to xxhash).
     let topology_hash = hash_graph_topology(graph);
 
+    let (brush_extent_factor, brush_extent_extra_px) =
+        compose_brush_extent(graph, plan, evaluators);
+
     Ok(CompiledBrush {
         wgsl,
         dab_layout: dab_fields,
@@ -562,7 +667,62 @@ pub fn compile_brush_to_wgsl(
         uniform_layout: uniform_fields,
         uniform_size,
         topology_hash,
+        brush_extent_factor,
+        brush_extent_extra_px,
     })
+}
+
+/// Compose every node's [`ExtentContribution`] into a single
+/// `(factor, extra_px)` pair for the brush. Walks every step in the
+/// execution plan in topological order; each node sees the upstream-
+/// accumulated extent and contributes its own multiplier / additive
+/// padding / clip. Nodes that don't override `extent` (the trait
+/// default returns [`ExtentContribution::Identity`]) leave the running
+/// pair unchanged.
+fn compose_brush_extent(
+    graph: &crate::nodegraph::Graph<BrushWireType>,
+    plan: &ExecutionPlan,
+    evaluators: &HashMap<String, Box<dyn BrushNodeEvaluator>>,
+) -> (f32, f32) {
+    let mut factor: f32 = 1.0;
+    let mut extra_px: f32 = 0.0;
+    for step in &plan.steps {
+        let Some(evaluator) = evaluators.get(&step.type_id) else {
+            continue;
+        };
+        let Some(node) = graph.nodes.get(&step.node_id) else {
+            continue;
+        };
+        let wired_inputs: HashSet<String> = step
+            .input_slots
+            .iter()
+            .map(|s| s.port_name.clone())
+            .collect();
+        let ectx = ExtentCtx {
+            node_id: step.node_id,
+            params: &node.params,
+            port_defs: &node.ports,
+            wired_inputs,
+        };
+        match evaluator.extent(&ectx) {
+            ExtentContribution::Identity => {}
+            ExtentContribution::Multiply(m) => {
+                factor *= m;
+                extra_px *= m;
+            }
+            ExtentContribution::AddCanvasPixels {
+                passthrough,
+                added_px,
+            } => {
+                factor *= passthrough;
+                extra_px = extra_px * passthrough + added_px;
+            }
+            ExtentContribution::ClipTo(cap) => {
+                factor = factor.min(cap);
+            }
+        }
+    }
+    (factor, extra_px)
 }
 
 /// Pack one dab's worth of per-node values into the byte buffer the
@@ -797,7 +957,7 @@ fn assemble_shader(
     out.push_str("    let canvas_pos = in.canvas_pos;\n");
     out.push_str("    let local = canvas_pos - d.pos;\n");
     out.push_str("    let local_dist_px = length(local);\n");
-    out.push_str("    if (local_dist_px >= d.radius * QUAD_R_MAX) {\n");
+    out.push_str("    if (local_dist_px >= d.bbox_radius) {\n");
     out.push_str("        discard;\n");
     out.push_str("    }\n");
     out.push_str("    let local_uv = local / d.radius;\n");
@@ -845,11 +1005,14 @@ fn vs_main(
 ) -> VsOut {
     let dab = dabs[ii];
     let corner = quad_corner(vi);
-    // Inflate the quad by QUAD_R_MAX so shape-modulating nodes whose
-    // r(θ) exceeds 1 (e.g. perlin with amplitude > 0) still rasterise
-    // every covered fragment. Conservative — overshoots a little for
-    // simple discs.
-    let quad_half = dab.radius * QUAD_R_MAX;
+    // `dab.bbox_radius` is the per-brush extent computed at compile
+    // time by composing every node's `ExtentContribution`. The
+    // fragment stage discards past the same bound, so the quad covers
+    // exactly what the shader can write — no waste, no clipping. The
+    // CPU side packs the same value into the dab record and uses it
+    // for the layer-clip bbox, so the save-point system tracks the
+    // same footprint the shader writes.
+    let quad_half = dab.bbox_radius;
     let canvas_pos = dab.pos + (corner * 2.0 - vec2<f32>(1.0, 1.0)) * quad_half;
     let layer_offset = u.intrinsic.layer_offset;
     let layer_size = u.intrinsic.layer_size;

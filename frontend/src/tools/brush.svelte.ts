@@ -57,13 +57,25 @@ export interface PenPose {
     tangentialPressure: number;
 }
 
+/** Effective pressure for a PointerEvent. Stylus / touch report real
+ *  per-event pressure; mouse-with-button-down reports the W3C spec
+ *  default of 0.5 (a "split the difference" value designed for generic
+ *  gesture surfaces). For paint tools that means a Flow=100% mouse
+ *  click only deposits ~50% alpha, which is surprising — Krita,
+ *  Photoshop, GIMP, and MyPaint all override mouse to full pressure
+ *  for the same reason. Match that convention here. */
+export function effectivePressure(e: PointerEvent): number {
+    return e.pointerType === 'mouse' ? 1.0 : e.pressure;
+}
+
 /** Pose for the on-canvas cursor preview. Tracks the live PointerEvent
- *  verbatim so the cursor circle reflects what a dab at this pose would
+ *  pressure (with mouse overridden to full per [`effectivePressure`])
+ *  so the cursor circle reflects what a dab at this pose would
  *  actually look like — pressure-driven dynamics included. The resize
  *  scrub uses the same pose, keeping cursor and stroke in lockstep. */
 export function cursorPose(e: PointerEvent): PenPose {
     return {
-        pressure: e.pressure,
+        pressure: effectivePressure(e),
         tiltX: (e.tiltX ?? 0) / 90,
         tiltY: (e.tiltY ?? 0) / 90,
         twist: (e.twist ?? 0) / 360,
@@ -140,7 +152,7 @@ function brushStrokeParams(e: PointerEvent, cx: number, cy: number) {
     return {
         x: cx,
         y: cy,
-        pressure: e.pressure,
+        pressure: effectivePressure(e),
         x_tilt: (e.tiltX ?? 0) / 90, // normalize -90..90 → -1..1
         y_tilt: (e.tiltY ?? 0) / 90,
         rotation: (e.twist ?? 0) / 360, // normalize 0..359 → 0..1

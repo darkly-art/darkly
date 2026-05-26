@@ -35,7 +35,7 @@ use crate::brush::node::BrushNodeRegistration;
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
-use crate::brush::wgsl_compile::{CompileWgslCtx, NodeWgsl};
+use crate::brush::wgsl_compile::{CompileWgslCtx, ExtentContribution, ExtentCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -612,6 +612,18 @@ impl BrushNodeEvaluator for CircleEvaluator {
         // only in scope inside the fragment shader body. Using a
         // block-let preserves a single `let` binding name downstream
         // nodes can substitute.
+        //
+        // Edge coverage mirrors `shaders/brush/circle.wgsl`:
+        // smoothstep over a constant softness band (in unit-disc /
+        // natural units, independent of `r_at`), with a 0.004 AA
+        // floor so softness == 0 still produces a one-pixel-ish
+        // anti-aliased boundary instead of jagged stair-steps.
+        //
+        // A linear ramp scaled by `r_at` (what the original draft did)
+        // makes the falloff width vary along the perlin edge —
+        // outward bumps get softer than inward dips — which reads as
+        // "wonky" and exaggerates the noise band when the dab is
+        // large.
         let params_ident = cctx.ident("circle_params");
         let shape_ident = cctx.ident("circle_shape");
         let body = format!(
@@ -628,15 +640,58 @@ impl BrushNodeEvaluator for CircleEvaluator {
              \x20       max(({n3}), 0.05),\n\
              \x20   );\n\
              \x20   let {shape_ident}_r_at: f32 = shape_r_theta({params_ident}, theta);\n\
-             \x20   let {shape_ident}_soft: f32 = clamp(({softness}), 0.0, 1.0);\n\
-             \x20   let {shape_ident}_r_solid: f32 = {shape_ident}_r_at * (1.0 - {shape_ident}_soft);\n\
-             \x20   var {shape_ident}: f32 = 0.0;\n\
-             \x20   if (local_dist >= {shape_ident}_r_at) {{ {shape_ident} = 0.0; }}\n\
-             \x20   else if (local_dist <= {shape_ident}_r_solid) {{ {shape_ident} = 1.0; }}\n\
-             \x20   else {{ {shape_ident} = clamp(({shape_ident}_r_at - local_dist) / max({shape_ident}_r_at - {shape_ident}_r_solid, 1e-5), 0.0, 1.0); }}\n",
+             \x20   let {shape_ident}_band: f32 = max(clamp(({softness}), 0.0, 1.0), 0.004);\n\
+             \x20   let {shape_ident}: f32 = 1.0 - smoothstep({shape_ident}_r_at - {shape_ident}_band, {shape_ident}_r_at, local_dist);\n",
         );
         wgsl.body = body;
         wgsl.outputs.insert("texture".into(), shape_ident);
         Ok(wgsl)
+    }
+
+    /// Worst-case multiplier on the upstream dab extent. The shape's
+    /// `r(θ)` is in units of the upstream radius (compiled-path
+    /// `local_dist` is `length(local_uv)` where `local_uv = local /
+    /// d.radius`), so the dab footprint stretches by the algorithm's
+    /// `r_max`. Mirrors [`ShapeParams::r_max_unit`] but uses
+    /// [`ExtentCtx::port_max_value`] so the bound covers every value
+    /// any wire can deliver, not just the per-dab realisation.
+    fn extent(&self, ctx: &ExtentCtx) -> ExtentContribution {
+        let algorithm = match ctx.params.first() {
+            Some(crate::gpu::params::ParamValue::Int(v)) => (*v as u32).min(2),
+            _ => 0,
+        };
+        let factor = match algorithm {
+            // r(θ) = 1 + A·sin(...) for sine, and 1 + A·(2·fbm - 1)
+            // for perlin (fbm ∈ [0, 1] → swing in [-1, 1]) — both
+            // peak at 1 + amplitude_max.
+            ALGO_SINE | ALGO_PERLIN => 1.0 + ctx.port_max_value("amplitude").max(0.0),
+            // Superformula's r is unbounded as n1 → 0; the best we
+            // can do without per-dab knowledge is a numerical scan
+            // using port_max for the three n-knobs and the port's
+            // frequency_max. Matches the per-dab `r_max_unit` shape
+            // exactly, only with worst-case wire values plugged in.
+            ALGO_SUPERFORMULA => {
+                let p = ShapeParams {
+                    algorithm,
+                    amplitude: 0.0,
+                    frequency: ctx.port_max_value("frequency").max(1.0).round(),
+                    phase: 0.0,
+                    persistence: 0.0,
+                    seed: 0.0,
+                    octaves: 1,
+                    n1: ctx.port_max_value("n1").max(0.05),
+                    n2: ctx.port_max_value("n2").max(0.05),
+                    n3: ctx.port_max_value("n3").max(0.05),
+                };
+                let mut max_r: f32 = 0.0;
+                for i in 0..32 {
+                    let theta = -std::f32::consts::PI + (i as f32) * std::f32::consts::TAU / 32.0;
+                    max_r = max_r.max(superformula_r(&p, theta));
+                }
+                max_r.max(1.0)
+            }
+            _ => 1.0,
+        };
+        ExtentContribution::Multiply(factor)
     }
 }

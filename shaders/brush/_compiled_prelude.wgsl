@@ -1,6 +1,6 @@
 // Common prelude for compiled brush graphs (paint_compiled and any
-// future compiled terminal). Defines the intrinsic uniform struct and
-// the QUAD_R_MAX const used by the generated vertex stage.
+// future compiled terminal). Defines the intrinsic uniform struct
+// shared by every assembled brush.
 //
 // The full shader assembled by `wgsl_compile::assemble_shader` looks
 // like:
@@ -14,16 +14,16 @@
 //   vertex stage
 //   fs_main { ... per-node bodies + terminal return ... }
 //
+// The per-dab bbox radius (the inflated half-extent the vertex stage
+// emits the quad around, and the fragment stage discards past) lives
+// on the per-dab record as `bbox_radius` — see
+// `wgsl_compile::intrinsic_dab_header`. No `QUAD_R_MAX` const here:
+// the value is computed per-brush by composing each node's
+// `ExtentContribution` and flows through the dab record so the CPU
+// and GPU sides cannot diverge.
+//
 // Symbols defined here are referenced by every compiled brush; keep
 // the surface tight.
-
-/// Per-instance quad inflation factor. The vertex stage emits a quad
-/// covering `dab.pos ± dab.radius * QUAD_R_MAX` so shape-modulating
-/// nodes whose `r(θ)` exceeds 1.0 still rasterise every covered
-/// fragment. 1.6 covers a circle node with `amplitude = 0.5` (the
-/// slider max) with a small AA margin; if a future node wants more,
-/// bump this. Overshoots a little for unmodulated discs — cheap.
-const QUAD_R_MAX: f32 = 1.6;
 
 /// Stroke-constant uniforms every compiled brush carries. Packed by
 /// the terminal at the start of the uniform buffer; node-contributed

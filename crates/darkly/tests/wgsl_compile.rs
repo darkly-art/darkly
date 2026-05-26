@@ -110,6 +110,127 @@ fn topology_hash_is_stable_for_identical_graphs() {
 }
 
 #[test]
+fn extent_protocol_composes_along_chain() {
+    // Build the same skeleton the test harness builds for Perlin:
+    // pen + circle(perlin) + stamp + paint_compiled with a wire on
+    // `amplitude` so it counts as wired. circle's extent must report
+    // `1 + amplitude.natural_range.max = 1.5`, and the framework's
+    // compose pass must surface it on the CompiledBrush.
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        reg.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let rand_amp = graph.add_node(
+        "random",
+        reg.get("random").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let circle = graph.add_node(
+        "circle",
+        reg.get("circle").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(1)], // Perlin
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        reg.get("stamp").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let term = graph.add_node(
+        "paint_compiled",
+        reg.get("paint_compiled").unwrap().ports.clone(),
+        vec![],
+    );
+    let wires = [
+        (rand_amp, "value", circle, "amplitude"),
+        (circle, "texture", stamp, "tip"),
+        (paint_color, "color", stamp, "color"),
+        (stamp, "dab", term, "rgba"),
+        (pen, "position", term, "position"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    // amplitude port has natural_range = (0.0, 0.5); the wire bumps
+    // factor to 1.5.
+    assert!(
+        (compiled.brush_extent_factor - 1.5).abs() < 1e-4,
+        "expected extent factor ≈ 1.5, got {}",
+        compiled.brush_extent_factor,
+    );
+    assert!(
+        compiled.brush_extent_extra_px.abs() < 1e-6,
+        "no displacement nodes — extra_px must be zero, got {}",
+        compiled.brush_extent_extra_px,
+    );
+}
+
+#[test]
+fn extent_default_identity_when_no_shape() {
+    // pen → paint_compiled with no upstream shape node — every node
+    // returns the trait-default `Identity`, so the brush extent
+    // collapses to (factor=1.0, extra_px=0.0). bbox_radius then
+    // equals the dab's effective_radius, matching the existing
+    // `paint` terminal's footprint exactly.
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let term = graph.add_node(
+        "paint_compiled",
+        reg.get("paint_compiled").unwrap().ports.clone(),
+        vec![],
+    );
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "position".into(),
+            },
+            PortRef {
+                node: term,
+                port: "position".into(),
+            },
+        )
+        .unwrap();
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).unwrap();
+    assert!(
+        (compiled.brush_extent_factor - 1.0).abs() < 1e-6,
+        "no shape upstream — factor must be 1.0, got {}",
+        compiled.brush_extent_factor,
+    );
+    assert!(
+        compiled.brush_extent_extra_px.abs() < 1e-6,
+        "no shape upstream — extra_px must be 0.0, got {}",
+        compiled.brush_extent_extra_px,
+    );
+}
+
+#[test]
 fn paint_compiled_only_graph_falls_through_to_disc() {
     // pen_input → paint_compiled with no upstream graph: terminal's
     // `rgba` input is unwired, so the fallback "opaque white modulated

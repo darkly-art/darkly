@@ -367,13 +367,20 @@ fn two_dabs_same_flush_both_deposit() {
 }
 
 #[test]
-fn builtin_perlin_ink_brush_renders_without_shader_error() {
+fn builtin_perlin_ink_brush_renders_within_declared_bbox() {
     // Render the actual Perlin Ink builtin — exercises `random →
     // circle` wires that pack per-dab values into the dab record
     // and reference them from the shape evaluator. Regression test
     // for the case where circle's shape eval was emitted as a
     // top-level WGSL function that captured `d.<field>` from outside
     // its scope (Dawn rejects, naga silently accepted on native).
+    //
+    // Also acts as a regression test for the extent protocol: the
+    // rendered footprint must fall inside the brush's declared
+    // bbox (effective_radius × `brush_extent_factor`). If the shader
+    // writes outside the bbox, the save-point system on rewind
+    // truncates previous dabs to the un-inflated square — the bug
+    // the protocol was introduced to fix.
     let perlin = darkly::brush::builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == "Perlin Ink")
@@ -415,6 +422,15 @@ fn builtin_perlin_ink_brush_renders_without_shader_error() {
     graph.set_port_default(term_id, "size", 0.15).unwrap();
 
     let runner = compile_graph(&graph).expect("Perlin Ink compiles");
+    let compiled = runner.compiled_brush().expect("compiled brush attached");
+    // Perlin Ink wires `random → circle.amplitude` (natural_range max
+    // = 0.5) so the brush extent factor composes to 1.5.
+    assert!(
+        (compiled.brush_extent_factor - 1.5).abs() < 1e-4,
+        "expected perlin-ink extent factor ≈ 1.5, got {}",
+        compiled.brush_extent_factor,
+    );
+
     let mut h = Harness {
         device,
         queue,
@@ -438,13 +454,17 @@ fn builtin_perlin_ink_brush_renders_without_shader_error() {
     // Perlin shape varies per random seed — the centre may be inside
     // or outside, but *some* deposition has to land within the dab
     // footprint (radius ~38px around (64, 64)) if the shader
-    // compiled. Scan the whole bbox for any non-black pixel.
+    // compiled.
     let mut deposited = 0;
-    for y in 20..108 {
-        for x in 20..108 {
+    let mut max_dist_sq: f32 = 0.0;
+    for y in 0..CANVAS {
+        for x in 0..CANVAS {
             let p = center_pixel(&rgba, x, y);
             if p[0] > 0 || p[1] > 0 || p[2] > 0 {
                 deposited += 1;
+                let dx = x as f32 - 64.0;
+                let dy = y as f32 - 64.0;
+                max_dist_sq = max_dist_sq.max(dx * dx + dy * dy);
             }
         }
     }
@@ -452,6 +472,172 @@ fn builtin_perlin_ink_brush_renders_without_shader_error() {
         deposited > 50,
         "expected ≥50 non-black pixels inside dab footprint, found {deposited} \
          (shader compile silently failed or dab missed the layer)"
+    );
+
+    // size = 0.15 → effective_radius = 0.15 * DAB_REFERENCE_SIZE * 0.5
+    // = ~38.4 (DAB_REFERENCE_SIZE = 512 px). bbox_radius =
+    // effective_radius * 1.5 = ~57.6. Allow 1px slack for the
+    // rasterizer's edge.
+    let effective_radius = 0.15 * darkly::brush::dab_pool::DAB_REFERENCE_SIZE as f32 * 0.5;
+    let bbox_radius =
+        effective_radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
+    let max_dist = max_dist_sq.sqrt();
+    assert!(
+        max_dist <= bbox_radius + 1.0,
+        "rendered pixel at distance {max_dist} exceeds declared bbox \
+         {bbox_radius} (effective_radius {effective_radius}, factor \
+         {})",
+        compiled.brush_extent_factor,
+    );
+    // Sanity: shape must extend at least to the unmodulated disc
+    // boundary somewhere — confirms perlin is actually drawing past
+    // the un-inflated radius, which is the half of the bug we're
+    // defending against (bbox too small → clipping inside the bbox
+    // is the "bug not present" check).
+    assert!(
+        max_dist >= effective_radius * 0.5,
+        "rendered footprint suspiciously small (max_dist {max_dist}, \
+         effective_radius {effective_radius}) — shader may be \
+         clipping inside the declared bbox",
+    );
+}
+
+#[test]
+fn perlin_ink_overlapping_dabs_render_without_truncation() {
+    // Regression test for the QUAD_R_MAX-vs-radius divergence bug.
+    // Render two overlapping perlin dabs in the same flush. Each dab
+    // packs its own `bbox_radius` into the per-instance dab record;
+    // the WGSL vertex stage sizes the quad to that per-dab value,
+    // and the fragment stage discards past it. If the per-instance
+    // bbox were globally clamped (the pre-protocol bug), the larger
+    // dab would be clipped by the smaller's quad.
+    let perlin = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Perlin Ink")
+        .expect("Perlin Ink registered");
+    let mut graph = perlin.metadata.graph.clone();
+    let term_id = graph
+        .nodes
+        .iter()
+        .find(|(_, n)| n.type_id == "paint_compiled")
+        .map(|(id, _)| *id)
+        .unwrap();
+    graph.set_port_default(term_id, "size", 0.15).unwrap();
+
+    let mut h = harness(&black_canvas(), graph);
+    let compiled = h.runner.compiled_brush().expect("compiled brush attached");
+    h.begin_stroke();
+    // Two overlapping dabs at different pressures → different
+    // effective_radius → different bbox_radius per dab record.
+    let a = PaintInformation {
+        pos: [44.0, 64.0],
+        pressure: 0.5,
+        ..Default::default()
+    };
+    let b = PaintInformation {
+        pos: [84.0, 64.0],
+        pressure: 1.0,
+        ..Default::default()
+    };
+    h.two_dabs_same_phase(&a, &b, [1.0, 0.0, 0.0, 1.0]);
+
+    let rgba = h.readback_canvas();
+    let bbox_factor = compiled.brush_extent_factor;
+
+    // Sum deposited pixels per dab, gated by each dab's declared bbox.
+    let mut dab_a_pixels = 0;
+    let mut dab_b_pixels = 0;
+    let dab_size = 0.15 * darkly::brush::dab_pool::DAB_REFERENCE_SIZE as f32 * 0.5;
+    // Per-dab effective_radius differs only through the curve(pressure)
+    // wire; the brush's curve is identity-shape so radius ∝ pressure.
+    let r_a = (dab_size * 0.5 * bbox_factor) + 1.0;
+    let r_b = (dab_size * 1.0 * bbox_factor) + 1.0;
+    for y in 0..CANVAS {
+        for x in 0..CANVAS {
+            let p = center_pixel(&rgba, x, y);
+            if p[0] == 0 && p[1] == 0 && p[2] == 0 {
+                continue;
+            }
+            let dxa = x as f32 - a.pos[0];
+            let dya = y as f32 - a.pos[1];
+            let dxb = x as f32 - b.pos[0];
+            let dyb = y as f32 - b.pos[1];
+            let da = (dxa * dxa + dya * dya).sqrt();
+            let db = (dxb * dxb + dyb * dyb).sqrt();
+            // Pixel must lie within at least one dab's declared bbox.
+            assert!(
+                da <= r_a || db <= r_b,
+                "pixel at ({x}, {y}) deposited outside both declared \
+                 bboxes (da={da}, r_a={r_a}; db={db}, r_b={r_b})",
+            );
+            if da <= r_a {
+                dab_a_pixels += 1;
+            }
+            if db <= r_b {
+                dab_b_pixels += 1;
+            }
+        }
+    }
+    // Both dabs must have actually deposited something — catches the
+    // case where a per-instance buffer index bug aliases all draws
+    // to dab 0 (or one dab gets entirely clipped).
+    assert!(
+        dab_a_pixels > 20 && dab_b_pixels > 20,
+        "both dabs must render — got A={dab_a_pixels}, B={dab_b_pixels}",
+    );
+}
+
+#[test]
+fn terminal_flow_scales_dab_alpha() {
+    // Regression test: `paint_compiled.flow` must fold into the
+    // returned rgba's alpha, matching the `paint` terminal's
+    // `color[3] *= flow` step. Before the fix, the terminal declared
+    // the `flow` port but never read it in `compile_wgsl`, so the
+    // brush properties' Flow slider was a no-op.
+    fn deposit_red_at_center(flow: f32) -> [u8; 4] {
+        let mut graph = build_test_graph(
+            /* sine */ 0, /* amplitude */ 0.0, /* size */ 0.2,
+        );
+        // Replace the terminal.flow default. build_test_graph hard-
+        // sets it to 1.0 already; override here per-test.
+        let term_id = graph
+            .nodes
+            .iter()
+            .find(|(_, n)| n.type_id == "paint_compiled")
+            .map(|(id, _)| *id)
+            .unwrap();
+        graph.set_port_default(term_id, "flow", flow).unwrap();
+        let mut h = harness(&black_canvas(), graph);
+        h.begin_stroke();
+        let info = PaintInformation {
+            pos: [64.0, 64.0],
+            pressure: 1.0,
+            ..Default::default()
+        };
+        h.dab_and_flush(&info, [1.0, 0.0, 0.0, 1.0], 0);
+        let rgba = h.readback_canvas();
+        center_pixel(&rgba, 64, 64)
+    }
+
+    let full = deposit_red_at_center(1.0);
+    let third = deposit_red_at_center(0.3);
+    // Both render red (no green/blue), opaque (canvas is opaque
+    // black underneath). Difference is the per-pixel red intensity
+    // — at flow=0.3 the source RGB only deposits ~30% over the
+    // underlying black.
+    assert!(
+        full[0] > 200,
+        "flow=1.0 should deposit ~full red, got {full:?}",
+    );
+    assert!(
+        third[0] > 40 && third[0] < 120,
+        "flow=0.3 should deposit ~30% red over black, got {third:?}",
+    );
+    assert!(
+        full[0] > third[0] + 80,
+        "flow=1.0 ({}) must deposit more red than flow=0.3 ({})",
+        full[0],
+        third[0],
     );
 }
 

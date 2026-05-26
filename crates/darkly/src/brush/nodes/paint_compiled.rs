@@ -382,13 +382,17 @@ impl PaintCompiledEvaluator {
         (effective_size * SIZE_REFERENCE_PX * 0.5).max(0.5)
     }
 
-    /// Pack the intrinsic dab header (`pos` + `radius` + `_pad`) at
-    /// the end of the byte buffer. Followed by node-contributed
-    /// fields via [`pack_dab_record`].
-    fn pack_intrinsic_header(bytes: &mut Vec<u8>, pos: [f32; 2], radius: f32) {
+    /// Pack the intrinsic dab header (`pos` + `radius` + `bbox_radius`)
+    /// at the end of the byte buffer. `bbox_radius` is the per-dab
+    /// inflated half-extent — both the WGSL vertex stage's quad size
+    /// and the fragment stage's discard test read this field, so the
+    /// CPU layer-clip bbox computed from the same value cannot
+    /// diverge. Followed by node-contributed fields via
+    /// [`pack_dab_record`].
+    fn pack_intrinsic_header(bytes: &mut Vec<u8>, pos: [f32; 2], radius: f32, bbox_radius: f32) {
         bytes.extend_from_slice(bytemuck::bytes_of(&pos));
         bytes.extend_from_slice(bytemuck::bytes_of(&radius));
-        bytes.extend_from_slice(bytemuck::bytes_of(&0.0f32)); // _pad
+        bytes.extend_from_slice(bytemuck::bytes_of(&bbox_radius));
     }
 
     /// Pack the intrinsic uniforms (layer offset/size, canvas size)
@@ -429,17 +433,22 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
             return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
         }
 
-        // Layer-clip the dab's footprint. Matches `paint`'s tracking
-        // so the bench harness's per-flush union-bbox reads the same.
+        // Per-brush extent: composed by the framework at compile time
+        // from every upstream node's `ExtentContribution`. This is
+        // exactly what the WGSL fragment shader discards past
+        // (`d.bbox_radius`); using the same value here means the
+        // layer-clip bbox tracks exactly what the shader writes, and
+        // mid-stroke rewinds can't truncate previous dabs.
+        let bbox_radius = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
         let canvas_ext = paint_target.canvas_extent();
         let layer_x0 = canvas_ext.x0() as f32;
         let layer_y0 = canvas_ext.y0() as f32;
         let layer_x1 = layer_x0 + canvas_ext.width as f32;
         let layer_y1 = layer_y0 + canvas_ext.height as f32;
-        let cx0 = (position[0] - radius).max(layer_x0);
-        let cy0 = (position[1] - radius).max(layer_y0);
-        let cx1 = (position[0] + radius).min(layer_x1);
-        let cy1 = (position[1] + radius).min(layer_y1);
+        let cx0 = (position[0] - bbox_radius).max(layer_x0);
+        let cy0 = (position[1] - bbox_radius).max(layer_y0);
+        let cx1 = (position[0] + bbox_radius).min(layer_x1);
+        let cy1 = (position[1] + bbox_radius).min(layer_y1);
         if cx1 <= cx0 || cy1 <= cy0 {
             return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
         }
@@ -474,7 +483,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         // the HashMap per dab was a multi-millisecond-per-event
         // disaster at high dab counts.
         let record_start = gpu.pending_dab_bytes.len();
-        Self::pack_intrinsic_header(&mut gpu.pending_dab_bytes, position, radius);
+        Self::pack_intrinsic_header(&mut gpu.pending_dab_bytes, position, radius, bbox_radius);
         let outputs = gpu
             .slot_outputs_owned
             .as_ref()
@@ -652,9 +661,9 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
     }
 
     /// Preview is unimplemented for now — falls through to a no-op so
-    /// the hover cursor disappears for compiled brushes. The shape-
-    /// aware procedural preview lives on the to-do list (see
-    /// `handoff-brush-preview.md`).
+    /// the hover cursor disappears for compiled brushes. A shape-aware
+    /// procedural preview (matching what `color_output` does for the
+    /// per-dab dispatch path) is the eventual follow-up.
     fn render_preview(
         &self,
         _ctx: &EvalContext,
@@ -683,9 +692,16 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
                 "vec4<f32>(1.0, 1.0, 1.0, 1.0) * max(1.0 - local_dist, 0.0)".into()
             }
         };
+        // Stroke-/dab-level flow cap. Matches the `paint` terminal's
+        // `color[3] *= flow` step — folded directly into the
+        // premultiplied rgba (multiply all four components). Wired
+        // values flow through their dab-record field; unwired uses
+        // the port default literal (1.0 by default).
+        let flow_expr = cctx.input("flow").as_f32();
         wgsl.body = format!(
             "    let rgba = {rgba_expr};\n\
-             \x20   return rgba * sel;\n"
+             \x20   let flow = clamp({flow_expr}, 0.0, 1.0);\n\
+             \x20   return rgba * flow * sel;\n"
         );
         Ok(wgsl)
     }

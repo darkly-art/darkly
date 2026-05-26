@@ -321,6 +321,24 @@ pub trait BrushNodeEvaluator: Send + Sync {
     ) -> Result<crate::brush::wgsl_compile::NodeWgsl, String> {
         Err("node has no WGSL implementation".into())
     }
+
+    /// Per-node contribution to the brush's dab bounding-box extent.
+    /// Composed by the framework at brush-compile time into a single
+    /// `(factor, extra_px)` pair on [`crate::brush::wgsl_compile::CompiledBrush`];
+    /// the `paint_compiled` terminal uses it to size both the per-dab
+    /// rasterized quad (via `dab.bbox_radius`) and the CPU layer-clip
+    /// bbox, ensuring the save-point system tracks exactly what the
+    /// shader writes.
+    ///
+    /// Default `Identity` — only nodes that change the dab footprint
+    /// (shape masks, displacement / warp) override. See
+    /// [`crate::brush::wgsl_compile::ExtentContribution`].
+    fn extent(
+        &self,
+        _ctx: &crate::brush::wgsl_compile::ExtentCtx,
+    ) -> crate::brush::wgsl_compile::ExtentContribution {
+        crate::brush::wgsl_compile::ExtentContribution::Identity
+    }
 }
 
 // ── Graph runner ────────────────────────────────────────────────────
