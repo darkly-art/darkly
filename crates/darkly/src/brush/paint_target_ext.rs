@@ -23,7 +23,7 @@
 //! v` and `pre.r = v`, the result equals `v` exactly. Smudge/warp produce
 //! `mix(v_dst, v_src, dab.a)` — identical to a pure-R8 blend.
 
-use crate::brush::nodes::color_output::{CompositePipeline, CompositeUniforms};
+use crate::brush::composite_pipeline::{CompositePipeline, CompositeUniforms};
 use crate::brush::pipeline::BrushPipelines;
 use crate::gpu::paint_target::GpuPaintTarget;
 

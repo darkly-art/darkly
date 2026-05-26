@@ -200,6 +200,15 @@ fn remap_scalar(value: f32, src: (f32, f32), dst: (f32, f32)) -> f32 {
     dst_min + fraction * (dst_max - dst_min)
 }
 
+/// True for every terminal whose upstream graph fuses into a compiled
+/// WGSL fragment shader. The dispatch walk in `dispatch_gpu` skips
+/// every upstream GPU node when one of these is present (their
+/// contribution lives inside the terminal's compiled shader) — only
+/// the terminal itself runs to queue dabs and flush.
+pub(crate) fn is_compiled_terminal(type_id: &str) -> bool {
+    matches!(type_id, "paint_compiled" | "watercolor_compiled")
+}
+
 /// Deterministic PRNG: hash seed + index to produce a 0-1 float.
 /// xorshift-style for speed; shared by all nodes via `EvalContext::prng_at`.
 #[inline]
@@ -648,7 +657,7 @@ impl BrushGraphRunner {
             // ONLY node whose `compile_wgsl` emits a body that ends
             // in `return`; in practice it's whichever step ends the
             // plan. Walk only the last GPU step.
-            if is_compiled && step.type_id != "paint_compiled" {
+            if is_compiled && !is_compiled_terminal(&step.type_id) {
                 continue;
             }
 

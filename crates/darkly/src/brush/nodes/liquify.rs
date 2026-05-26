@@ -1,5 +1,16 @@
 //! Liquify warp GPU terminal node.
 //!
+//! ## Stays on the dispatch path
+//!
+//! Liquify is one of the two builtin brushes (with [`smudge`]) that did
+//! not migrate to the compiled-WGSL single-pass model. Its output is a
+//! *displaced sample of the input canvas* — not a deposit on top — and
+//! successive dabs compound by reading the prior dab's scratch state.
+//! A single instanced render pass can't express that feedback loop, and
+//! the warp shape doesn't fit `paint_compiled`'s "deposit premultiplied
+//! RGBA" terminal contract. See `handoff-port-everything-to-compiled.md`
+//! §"What might not compile" for the design discussion.
+//!
 //! A warp brush that pushes pixels along the pen's drawing direction with a
 //! radial falloff around the brush center. Unlike paint terminals it does
 //! not deposit pigment — every pixel inside the brush disc is replaced with

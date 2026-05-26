@@ -5,7 +5,6 @@
 pub mod add;
 pub mod circle;
 pub mod clamp;
-pub mod color_output;
 pub mod curve;
 pub mod image;
 pub mod jitter;
@@ -13,7 +12,6 @@ pub mod liquify;
 pub mod make_color;
 pub mod mix;
 pub mod multiply;
-pub mod paint;
 pub mod paint_color;
 pub mod paint_compiled;
 pub mod pen_input;
@@ -25,8 +23,7 @@ pub mod smudge;
 pub mod split_vec2;
 pub mod stamp;
 pub mod texture_overlay;
-pub mod watercolor;
-pub mod watercolor_batched;
+pub mod watercolor_compiled;
 
 use crate::brush::BrushNodeRegistration;
 
@@ -36,7 +33,6 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         add::register(),
         circle::register(),
         clamp::register(),
-        color_output::register(),
         curve::register(),
         image::register(),
         jitter::register(),
@@ -44,7 +40,6 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         make_color::register(),
         mix::register(),
         multiply::register(),
-        paint::register(),
         paint_color::register(),
         paint_compiled::register(),
         pen_input::register(),
@@ -56,7 +51,6 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         split_vec2::register(),
         stamp::register(),
         texture_overlay::register(),
-        watercolor::register(),
-        watercolor_batched::register(),
+        watercolor_compiled::register(),
     ]
 }

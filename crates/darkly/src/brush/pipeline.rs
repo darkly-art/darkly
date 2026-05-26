@@ -129,9 +129,6 @@ pub struct BuildContext<'a> {
     /// Texture + linear sampler — bound where shaders sample the per-dab
     /// scratch read mirror snapshot (composite, liquify, smudge, ...).
     pub canvas_copy_bgl: &'a wgpu::BindGroupLayout,
-    /// Read mirror + sampler + 1×1 pickup texture — used only by the
-    /// watercolor pickup and composite passes.
-    pub watercolor_sources_bgl: &'a wgpu::BindGroupLayout,
     /// Dab-texture layout from the global [`DabTexturePool`].
     ///
     /// [`DabTexturePool`]: crate::brush::dab_pool::DabTexturePool
@@ -236,7 +233,6 @@ pub struct BrushPipelines {
     uniform_bgl: wgpu::BindGroupLayout,
     selection_bgl: wgpu::BindGroupLayout,
     canvas_copy_bgl: wgpu::BindGroupLayout,
-    watercolor_sources_bgl: wgpu::BindGroupLayout,
 
     // ── Shared samplers / default bind groups ────────────────────────
     canvas_copy_sampler: wgpu::Sampler,
@@ -339,43 +335,6 @@ impl BrushPipelines {
                 },
             ],
         });
-
-        // Watercolor sources: canvas_copy (texture+sampler at 0/1) plus
-        // the 1×1 carried-pickup texture at 2 (no sampler — shader uses
-        // `textureLoad`). Packed into one BGL because WebGPU caps
-        // `max_bind_groups` at 4.
-        let watercolor_sources_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("brush-watercolor-sources-bgl"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                ],
-            });
 
         // ── Default selection (1×1 white = fully selected) ─────────
         let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -583,7 +542,6 @@ impl BrushPipelines {
             uniform_bgl: &uniform_bgl,
             selection_bgl: &selection_bgl,
             canvas_copy_bgl: &canvas_copy_bgl,
-            watercolor_sources_bgl: &watercolor_sources_bgl,
             dab_bgl,
             canvas_copy_sampler: &canvas_copy_sampler,
             min_uniform_align,
@@ -596,12 +554,22 @@ impl BrushPipelines {
                 debug_assert!(prev.is_none(), "duplicate brush pipeline id: {id}");
             }
         }
+        // The brush commit pipeline isn't a node — it's the shared
+        // scratch→layer blit used by every terminal's `commit` hook.
+        // Register it manually so it lives outside the auto-discovered
+        // `nodes/` tree.
+        let prev = entries.insert(
+            "composite",
+            Box::new(crate::brush::composite_pipeline::CompositePipeline::build(
+                &build_ctx,
+            )),
+        );
+        debug_assert!(prev.is_none(), "composite pipeline id collided");
 
         Self {
             uniform_bgl,
             selection_bgl,
             canvas_copy_bgl,
-            watercolor_sources_bgl,
             canvas_copy_sampler,
             default_selection_bind_group,
             blit_pipeline,
@@ -703,12 +671,6 @@ impl BrushPipelines {
         &self.canvas_copy_bgl
     }
 
-    /// BGL used by the watercolor sources bind group on every `Scratch`
-    /// (read mirror + sampler + pickup texture).
-    pub fn watercolor_sources_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
-        &self.watercolor_sources_bgl
-    }
-
     /// Linear sampler shared by every `Scratch`'s read-mirror bind group.
     pub fn canvas_copy_sampler(&self) -> &wgpu::Sampler {
         &self.canvas_copy_sampler
@@ -719,16 +681,6 @@ impl BrushPipelines {
     /// `BrushGpuContext` manually and need a default selection mask.
     pub fn default_selection_bind_group(&self) -> &wgpu::BindGroup {
         &self.default_selection_bind_group
-    }
-
-    /// Sampled-side view of the 1×1 watercolor pickup texture.  Embedded
-    /// by `Scratch` in its `watercolor_sources_bind_group` at binding 2.
-    ///
-    /// Forwards to the watercolor pickup pipeline entry, which owns the
-    /// texture.
-    pub fn watercolor_pickup_view(&self) -> &wgpu::TextureView {
-        self.get::<crate::brush::nodes::watercolor::WatercolorPickupPipeline>("watercolor_pickup")
-            .sampled_view()
     }
 
     // ── Ring coordination ───────────────────────────────────────────

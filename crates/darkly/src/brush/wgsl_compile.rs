@@ -175,6 +175,19 @@ pub struct NodeWgsl {
     pub dab_fields: Vec<DabField>,
     /// Stroke-constant uniform fields this node contributes.
     pub uniform_fields: Vec<UniformField>,
+    /// Extra `@group(...) @binding(...) var ...` declarations the
+    /// terminal node owns. Spliced into the assembled shader after
+    /// the framework's three intrinsic bind groups (group 0: uniforms,
+    /// group 1: dabs, group 2: selection). Only the terminal node
+    /// should set this — the per-brush pipeline build must match the
+    /// declared layout. Empty for every non-terminal node.
+    ///
+    /// Use case: terminals like `watercolor_compiled` need bindings
+    /// the standard fragment-stage prelude doesn't provide (pickup
+    /// atlas, pre-stroke canvas). Declaring them here keeps the
+    /// extension scoped to the one node that uses it instead of
+    /// extending the `BrushNodeEvaluator` trait surface.
+    pub terminal_bindings: String,
 }
 
 // ── Input binding ───────────────────────────────────────────────────────
@@ -515,6 +528,11 @@ pub fn compile_brush_to_wgsl(
     let mut body = String::new();
     let mut dab_fields = intrinsic_dab_header();
     let mut uniform_fields: Vec<UniformField> = Vec::new();
+    // Captured from the last (terminal) step. Spliced into the
+    // assembled shader after the framework's three intrinsic bind
+    // groups so the terminal can add its own bindings (e.g.
+    // `watercolor_compiled`'s pickup atlas).
+    let mut terminal_bindings = String::new();
 
     // Track each output port's emitted expression so downstream nodes
     // can substitute.
@@ -616,6 +634,12 @@ pub fn compile_brush_to_wgsl(
         }
         dab_fields.extend(result.dab_fields);
         uniform_fields.extend(result.uniform_fields);
+        if !result.terminal_bindings.is_empty() {
+            if !terminal_bindings.is_empty() {
+                terminal_bindings.push('\n');
+            }
+            terminal_bindings.push_str(&result.terminal_bindings);
+        }
 
         // Register this node's outputs so downstream nodes can resolve
         // their wires.
@@ -651,7 +675,13 @@ pub fn compile_brush_to_wgsl(
     let uniform_size = compute_struct_size_for_uniforms(&uniform_fields);
 
     // Assemble the full shader.
-    let wgsl = assemble_shader(&dab_fields, &uniform_fields, &decls, &body);
+    let wgsl = assemble_shader(
+        &dab_fields,
+        &uniform_fields,
+        &decls,
+        &body,
+        &terminal_bindings,
+    );
 
     // Topology hash: stable across runs (uses DefaultHasher; if process
     // stability becomes an issue we can switch to xxhash).
@@ -899,6 +929,7 @@ fn assemble_shader(
     uniform_fields: &[UniformField],
     node_decls: &str,
     fs_body: &str,
+    terminal_bindings: &str,
 ) -> String {
     let mut out = String::new();
     out.push_str(include_str!("../../../../shaders/brush/_shape.wgsl"));
@@ -937,7 +968,14 @@ fn assemble_shader(
     out.push_str("@group(0) @binding(0) var<uniform> u: Uniforms;\n");
     out.push_str("@group(1) @binding(0) var<storage, read> dabs: array<DabRecord>;\n");
     out.push_str("@group(2) @binding(0) var sel_tex: texture_2d<f32>;\n");
-    out.push_str("@group(2) @binding(1) var sel_smp: sampler;\n\n");
+    out.push_str("@group(2) @binding(1) var sel_smp: sampler;\n");
+    if !terminal_bindings.is_empty() {
+        out.push_str(terminal_bindings);
+        if !terminal_bindings.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    out.push('\n');
 
     // Node-level declarations (helper functions, const arrays).
     out.push_str(node_decls);

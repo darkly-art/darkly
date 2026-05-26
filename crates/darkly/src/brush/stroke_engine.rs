@@ -362,9 +362,8 @@ impl StrokeEngine {
             "procedural",
             "stamp",
             "liquify",
-            "paint",
             "paint_compiled",
-            "watercolor_batched",
+            "watercolor_compiled",
         ] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
                 if let Some(val) = self.runner.read_slot(slot) {
@@ -437,6 +436,13 @@ impl StrokeEngine {
             self.last_point = Some(info);
             self.save_points
                 .finalize_render_state(len - 1, self.capture_render_state());
+            // Compiled terminals queue the dab and rely on `flush_dabs`
+            // to actually run the render pass. Without this, a single-
+            // event stroke (one `move_to` + `end_stroke`) leaves the
+            // queued first dab unflushed; the dispatch-path terminals
+            // happened to render synchronously in `evaluate_gpu` so the
+            // bug only surfaces post-migration.
+            self.runner.flush_dabs(gpu);
             return;
         }
 

@@ -1,5 +1,19 @@
 //! Smudge GPU terminal node — drag pixels along the stroke.
 //!
+//! ## Stays on the dispatch path
+//!
+//! Smudge is one of the two builtin brushes (with [`liquify`]) that did
+//! not migrate to the compiled-WGSL single-pass model. Its per-dab
+//! semantics — read the scratch at `canvas_pos − motion`, blend, write
+//! back to scratch — depend on each dab seeing the **cumulative** scratch
+//! state mid-stroke. A single instanced render pass can't express that
+//! feedback loop (every instance would read the same `pre_stroke`, not
+//! the prior instance's output). Compiling the brush-mask half while
+//! keeping the canvas read as a separate per-dab pass would still cost
+//! one render pass per dab, so it isn't worth the framework complexity
+//! for two brushes. See `handoff-port-everything-to-compiled.md`
+//! §"What might not compile" for the design discussion.
+//!
 //! Per dab, the composite shader reads the scratch read mirror twice:
 //! once at `canvas_pos − motion` (smear sample, what was under the brush
 //! at the previous dab) and once at `canvas_pos` (current background).

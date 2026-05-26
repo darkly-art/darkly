@@ -162,6 +162,8 @@ Every system must be implemented properly. No hacks, no hardcoding, no shortcuts
 
 **Keep the README "Features & Roadmap" checklist in sync with the codebase.** When you ship, remove, or rename a user-visible feature (one with a button and, where appropriate, a hotkey in the frontend) in the same change update the checklist in `README.md` — flip `[ ]` to `[x]`, or add a new line. A Rust helper without a frontend surface does not count as shipped.
 
+**Speculative deletion.** If code looks dead, delete it and see what happens. The compiler and tests are the authoritative check, and a `git checkout` restores it cheaply if you're wrong. Every file read is an opportunity to scan nearby code for vestigial slop. If you're not sure whether to keep an old snippet, err on the side of deleting, and let the user know what was deleted.
+
 ## No Migrations / No Backwards Compatibility (pre-release)
 
 Darkly is in pre-release / alpha. Until the first public release, breaking on-disk and on-the-wire formats is fine — do not write migrations, format-version upgrade paths, or legacy compatibility shims. Make the breaking change directly and update every producer and consumer in the same pass; existing user data can be invalidated.

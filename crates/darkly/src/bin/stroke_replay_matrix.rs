@@ -33,19 +33,14 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use darkly::brush::builtin_brushes;
-use darkly::brush::bundle::BrushMetadata;
-use darkly::brush::wire::BrushWireType;
-use darkly::brush::BrushNodeRegistry;
 use darkly::engine::DarklyEngine;
 use darkly::format::stroke_recording::{replay, ReplayPacing, StrokeRecording};
 use darkly::gpu::context::GpuContext;
-use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::bench_device;
-use darkly::nodegraph::{Graph, PortRef};
 
 // ── Matrix axes ─────────────────────────────────────────────────────────
 
-/// Mirrors `crates/darkly/src/brush/dab_pool.rs::DAB_REFERENCE_SIZE`.
+/// Mirrors `crates/darkly/src/brush/DAB_REFERENCE_SIZE`.
 /// `radius_px = size_port * DAB_REFERENCE_SIZE_PX * 0.5`, so
 /// `size_port = 2 * radius_px / DAB_REFERENCE_SIZE_PX`.
 const DAB_REFERENCE_SIZE_PX: f32 = 512.0;
@@ -67,33 +62,24 @@ const STABILIZE: f32 = 1.0;
 
 // ── CLI ─────────────────────────────────────────────────────────────────
 
-/// Which terminal topology the Ink Pen brush graph uses for each cell.
-/// `Paint` is the current shipped path (single-pass instanced fragment,
-/// attempt #4 in `paint-compute-perf-tracking.md`). `StampColorOutput`
-/// preserves the pre-compute fragment topology (attempt #1) for
-/// cross-approach comparison.
+/// Which terminal topology the bench's brush graph uses for each cell.
+/// All topologies run through compiled-WGSL terminals after the great
+/// compiled-port migration — the `StampColorOutput` cross-approach
+/// comparison was retired with the `color_output` dispatch terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Topology {
-    /// Current shipped Ink Pen — `pen_input → paint_color → paint`.
-    /// Single render pass per phase, N instanced draws, hardware
-    /// premultiplied source-over.
+    /// Ink Pen brush through the compiled `paint_compiled` terminal —
+    /// `pen → paint_color → circle (disc) → stamp → paint_compiled`.
+    /// Single instanced render pass per phase.
     Paint,
-    /// Pre-compute Ink Pen — `pen_input → paint_color → circle → stamp →
-    /// color_output`, fragment-path composite, one render pass per dab
-    /// (approach #1 in the tracking doc). Kept so the bench can still
-    /// measure how the cost-per-pass overhead axis evolves.
-    StampColorOutput,
-    /// Wet Media (`Smooth Watercolor`) brush — `pen_input → paint_color
-    /// → watercolor_batched`. The terminal is selected by name; the
-    /// bench overrides the `size` port on whatever terminal id
-    /// `Topology::terminal_id` returns.
+    /// Wet Media (`Smooth Watercolor`) — `pen → paint_color → circle
+    /// (sine) → watercolor_compiled`. Two-pass per phase (pickup atlas
+    /// + composite), composite shader is per-brush compiled.
     Watercolor,
-    /// Perlin Ink — the first 100%-compiled brush. Wires `pen + 3×random
-    /// → circle(perlin) → stamp → paint_compiled`, with the entire
-    /// upstream graph fused into one WGSL fragment shader at brush
-    /// load. Stress-tests the framework against `paint` (procedural
-    /// disc) on the same recorded stroke matrix — see
-    /// `crates/darkly/src/brush/wgsl_compile.rs`.
+    /// Perlin Ink — `pen + 3×random → circle(perlin) → stamp →
+    /// paint_compiled`. The original demo brush for the compiled
+    /// framework; same terminal as Paint but a more elaborate upstream
+    /// graph (per-dab random nodes drive the perlin shape).
     PerlinInk,
 }
 
@@ -101,9 +87,6 @@ impl Topology {
     fn parse(s: &str) -> Option<Self> {
         match s {
             "paint" => Some(Topology::Paint),
-            "stamp-color-output" | "stamp_color_output" | "fragment" => {
-                Some(Topology::StampColorOutput)
-            }
             "watercolor" | "watercolor-compute" | "wet-media" => Some(Topology::Watercolor),
             "perlin-ink" | "perlin_ink" | "compiled" => Some(Topology::PerlinInk),
             _ => None,
@@ -113,27 +96,24 @@ impl Topology {
     fn slug(self) -> &'static str {
         match self {
             Topology::Paint => "paint",
-            Topology::StampColorOutput => "stamp-color-output",
             Topology::Watercolor => "watercolor",
             Topology::PerlinInk => "perlin-ink",
         }
     }
 
     /// Terminal node `type_id` to look up in the brush graph when
-    /// overriding the cell's `size` port. Match this against whatever
-    /// the brush wires its terminal as.
+    /// overriding the cell's `size` port.
     fn terminal_id(self) -> &'static str {
         match self {
-            Topology::Paint => "paint",
-            Topology::StampColorOutput => "color_output",
-            Topology::Watercolor => "watercolor_batched",
+            Topology::Paint => "paint_compiled",
+            Topology::Watercolor => "watercolor_compiled",
             Topology::PerlinInk => "paint_compiled",
         }
     }
 
     fn brush_name(self) -> &'static str {
         match self {
-            Topology::Paint | Topology::StampColorOutput => BRUSH_NAME_INK_PEN,
+            Topology::Paint => BRUSH_NAME_INK_PEN,
             Topology::Watercolor => BRUSH_NAME_WATERCOLOR,
             Topology::PerlinInk => BRUSH_NAME_PERLIN_INK,
         }
@@ -166,19 +146,18 @@ fn parse_args() -> Args {
                 let v = argv.next().expect("--topology requires a value");
                 topology = Topology::parse(&v).unwrap_or_else(|| {
                     panic!(
-                        "unknown topology `{v}` — expected `paint`, `stamp-color-output`, or `watercolor`"
+                        "unknown topology `{v}` — expected `paint`, `watercolor`, or `perlin-ink`"
                     )
                 });
             }
             "-h" | "--help" => {
                 eprintln!(
                     "stroke_replay_matrix --input <path> [--output <tsv>] \
-                     [--topology paint|stamp-color-output|watercolor]\n\n\
+                     [--topology paint|watercolor|perlin-ink]\n\n\
                      Replays a recording across the configured (dab_radius × resolution) matrix.\n\
                      Axes are constants at the top of stroke_replay_matrix.rs.\n\
-                     Default topology is `paint` (current shipped, attempt #4).\n\
-                     `stamp-color-output` picks the pre-compute Ink Pen fragment topology.\n\
-                     `watercolor` picks the Wet Media brush (Smooth Watercolor)."
+                     `paint` = Ink Pen (compiled). `watercolor` = Smooth Watercolor (compiled).\n\
+                     `perlin-ink` = the demo brush with the upstream random graph."
                 );
                 std::process::exit(0);
             }
@@ -197,34 +176,9 @@ fn parse_args() -> Args {
 
 // ── Brush graph customisation ───────────────────────────────────────────
 
-/// Pressure → size curve for Ink Pen — copied from
-/// `crates/darkly/src/brush/builtin_brushes.rs::ink_pen`. Front-loaded so
-/// small pressure already produces a recognisable mark.
-fn ink_pen_pressure_curve() -> Vec<[f32; 2]> {
-    vec![
-        [0.0, 0.0],
-        [0.25, 0.5],
-        [0.5, 0.71],
-        [0.75, 0.87],
-        [1.0, 1.0],
-    ]
-}
-
-fn brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
-    match topology {
-        Topology::Paint | Topology::Watercolor | Topology::PerlinInk => {
-            builtin_brush_graph_json(topology, dab_radius_px)
-        }
-        Topology::StampColorOutput => ink_pen_fragment_graph_json(dab_radius_px),
-    }
-}
-
 /// Load the topology's built-in brush, override its terminal's `size`
-/// port and the `pen_input` stabilizer. Works for any topology whose
-/// brush comes straight from `builtin_brushes::all()` — `Paint` (Ink
-/// Pen → `paint` terminal) and `Watercolor` (Smooth Watercolor →
-/// `watercolor_batched` terminal) both fit this shape.
-fn builtin_brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
+/// port and the `pen_input` stabilizer.
+fn brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
     let brush_name = topology.brush_name();
     let terminal_id = topology.terminal_id();
     let mut brush = builtin_brushes::all()
@@ -252,87 +206,6 @@ fn builtin_brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
         .set_port_default(pen_id, "stabilize", STABILIZE)
         .expect("set stabilize port default");
     serde_json::to_string(graph).expect("serialize brush graph")
-}
-
-/// Approach #1 — pre-compute Ink Pen built inline:
-/// `pen_input → paint_color → circle → stamp → color_output`. The graph
-/// matches `builtin_brushes.rs::ink_pen` in spirit (pressure curve →
-/// `stamp.size_input`, `pen.pressure → stamp.flow`) but terminates in
-/// the fragment `color_output` instead of the instanced `paint`.
-///
-/// Lives in the bench rather than `builtin_brushes.rs` so we don't ship
-/// a permanent regression brush to users.
-fn ink_pen_fragment_graph_json(dab_radius_px: f32) -> String {
-    let registry = BrushNodeRegistry::new();
-    let mut graph = Graph::<BrushWireType>::new();
-
-    let pen = graph.add_node(
-        "pen_input",
-        registry.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let paint_color = graph.add_node(
-        "paint_color",
-        registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
-    );
-    let circle = graph.add_node(
-        "circle",
-        registry.get("circle").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)],
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![],
-    );
-    let curve = graph.add_node(
-        "curve",
-        registry.get("curve").unwrap().ports.clone(),
-        vec![ParamValue::Curve(ink_pen_pressure_curve())],
-    );
-    let terminal = graph.add_node(
-        "color_output",
-        registry.get("color_output").unwrap().ports.clone(),
-        vec![],
-    );
-
-    let size_port = (2.0 * dab_radius_px) / DAB_REFERENCE_SIZE_PX;
-    graph
-        .set_port_default(stamp, "size", size_port)
-        .expect("set stamp.size");
-    graph
-        .set_port_default(pen, "stabilize", STABILIZE)
-        .expect("set pen.stabilize");
-
-    let wires = [
-        (pen, "pressure", curve, "input"),
-        (curve, "output", stamp, "size_input"),
-        (pen, "pressure", stamp, "flow"),
-        (circle, "texture", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        (stamp, "dab", terminal, "dab"),
-        (stamp, "dab_size", terminal, "dab_size"),
-        (stamp, "preview", terminal, "brush_preview"),
-        (pen, "position", terminal, "position"),
-    ];
-    for (fnode, fport, tnode, tport) in wires {
-        graph
-            .connect(
-                PortRef {
-                    node: fnode,
-                    port: fport.into(),
-                },
-                PortRef {
-                    node: tnode,
-                    port: tport.into(),
-                },
-            )
-            .expect("brush wire connects");
-    }
-
-    let _metadata = BrushMetadata::from_graph("Ink Pen (fragment, bench)", graph.clone());
-    serde_json::to_string(&graph).expect("serialize brush graph")
 }
 
 // ── Cell runner ─────────────────────────────────────────────────────────

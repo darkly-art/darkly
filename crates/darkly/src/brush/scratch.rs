@@ -52,39 +52,29 @@ pub struct Scratch {
     read_mirror_view: wgpu::TextureView,
     /// Bind group over `read_mirror_texture` using the canvas-copy BGL —
     /// the per-dab composite shaders (`composite.wgsl`,
-    /// `watercolor_composite.wgsl`, `liquify.wgsl`) bind this to sample the
-    /// write side without an R/W hazard.
+    /// `liquify.wgsl`, `smudge.wgsl`) bind this to sample the write side
+    /// without an R/W hazard.
     read_mirror_bind_group: wgpu::BindGroup,
-    /// Combined bind group: read_mirror at bindings 0/1 + watercolor pickup
-    /// at binding 2.  Watercolor's composite pass needs both in one bind
-    /// group (max_bind_groups=4 is tight).  Must be rebuilt whenever the
-    /// read mirror is reallocated.
-    watercolor_sources_bind_group: wgpu::BindGroup,
     read_w: u32,
     read_h: u32,
 
     /// Origin (in write-side / layer-local pixels) of the valid region
     /// currently in the read mirror.  Multiple GPU nodes per dab may need
-    /// the same canvas region (e.g. watercolor pickup + composite); the
-    /// cache lets the second caller skip a redundant copy.  Reset between
-    /// dabs (via [`Scratch::reset_read_origin_cache`]) and after any
-    /// resize of either side.
+    /// the same canvas region; the cache lets the second caller skip a
+    /// redundant copy.  Reset between dabs (via
+    /// [`Scratch::reset_read_origin_cache`]) and after any resize of
+    /// either side.
     read_origin_cache: Option<[u32; 2]>,
 
     // --- Bind-group rebuild handles (cheap clones — wgpu types are Arc'd internally) ---
     dab_bgl: wgpu::BindGroupLayout,
     canvas_copy_bgl: wgpu::BindGroupLayout,
-    watercolor_sources_bgl: wgpu::BindGroupLayout,
-    canvas_copy_sampler: wgpu::Sampler,
-    watercolor_pickup_view: wgpu::TextureView,
     /// Linear sampler for the read mirror.  Stored so grow rebuilds can
-    /// reuse it instead of allocating per grow.  Nearest would be fine for
-    /// composite, but liquify reads at displaced sub-pixel UVs and needs
-    /// bilinear interpolation to avoid blocky warp output.
+    /// reuse it instead of allocating per grow.  Liquify reads at
+    /// displaced sub-pixel UVs and needs bilinear interpolation.
     read_mirror_sampler: wgpu::Sampler,
     /// Sampler for the write-side bind group.  Nearest filter — no sub-
-    /// pixel reads in the consumers (color_output's commit blit is
-    /// integer-aligned).
+    /// pixel reads in the consumers (commit blit is integer-aligned).
     write_sampler: wgpu::Sampler,
 }
 
@@ -97,28 +87,17 @@ impl Scratch {
     /// the foreground at commit time.
     ///
     /// `canvas_copy_bgl` is the per-dab read BGL the brush composite
-    /// shaders bind on group 2 or 3 (depending on terminal).
-    ///
-    /// `watercolor_sources_bgl` is the combined "read mirror + pickup" BGL
-    /// the watercolor composite shader binds on group 3.
+    /// shaders bind for the read mirror.
     ///
     /// `canvas_copy_sampler` is shared across the canvas-copy BGL bind
     /// groups.  Linear filter (liquify needs sub-pixel sampling).
-    ///
-    /// `watercolor_pickup_view` is the 1×1 pickup texture's view, owned by
-    /// `BrushPipelines`.  Embedded in the watercolor sources bind group at
-    /// binding 2.  Static across strokes — only the read-mirror side of
-    /// the bind group needs rebuilding when the mirror grows.
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         layer_w: u32,
         layer_h: u32,
         dab_bgl: &wgpu::BindGroupLayout,
         canvas_copy_bgl: &wgpu::BindGroupLayout,
-        watercolor_sources_bgl: &wgpu::BindGroupLayout,
         canvas_copy_sampler: &wgpu::Sampler,
-        watercolor_pickup_view: &wgpu::TextureView,
     ) -> Self {
         let write_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("scratch-write-sampler"),
@@ -139,13 +118,6 @@ impl Scratch {
             &read_mirror_view,
             canvas_copy_sampler,
         );
-        let watercolor_sources_bind_group = build_watercolor_sources_bind_group(
-            device,
-            watercolor_sources_bgl,
-            &read_mirror_view,
-            canvas_copy_sampler,
-            watercolor_pickup_view,
-        );
 
         Self {
             write_texture,
@@ -156,15 +128,11 @@ impl Scratch {
             read_mirror_texture,
             read_mirror_view,
             read_mirror_bind_group,
-            watercolor_sources_bind_group,
             read_w: READ_MIRROR_INITIAL_DIM,
             read_h: READ_MIRROR_INITIAL_DIM,
             read_origin_cache: None,
             dab_bgl: dab_bgl.clone(),
             canvas_copy_bgl: canvas_copy_bgl.clone(),
-            watercolor_sources_bgl: watercolor_sources_bgl.clone(),
-            canvas_copy_sampler: canvas_copy_sampler.clone(),
-            watercolor_pickup_view: watercolor_pickup_view.clone(),
             read_mirror_sampler,
             write_sampler,
         }
@@ -184,9 +152,6 @@ impl Scratch {
     }
     pub fn read_mirror_texture(&self) -> &wgpu::Texture {
         &self.read_mirror_texture
-    }
-    pub fn watercolor_sources_bind_group(&self) -> &wgpu::BindGroup {
-        &self.watercolor_sources_bind_group
     }
     pub fn write_dimensions(&self) -> (u32, u32) {
         (self.write_w, self.write_h)
@@ -340,18 +305,10 @@ impl Scratch {
             &new_view,
             &self.read_mirror_sampler,
         );
-        let new_watercolor_bg = build_watercolor_sources_bind_group(
-            device,
-            &self.watercolor_sources_bgl,
-            &new_view,
-            &self.canvas_copy_sampler,
-            &self.watercolor_pickup_view,
-        );
 
         self.read_mirror_texture = new_texture;
         self.read_mirror_view = new_view;
         self.read_mirror_bind_group = new_read_bg;
-        self.watercolor_sources_bind_group = new_watercolor_bg;
         self.read_w = new_w;
         self.read_h = new_h;
         self.read_origin_cache = None;
@@ -446,33 +403,6 @@ fn build_read_mirror_bind_group(
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-    })
-}
-
-fn build_watercolor_sources_bind_group(
-    device: &wgpu::Device,
-    watercolor_sources_bgl: &wgpu::BindGroupLayout,
-    read_mirror_view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-    watercolor_pickup_view: &wgpu::TextureView,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("scratch-watercolor-sources-bg"),
-        layout: watercolor_sources_bgl,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(read_mirror_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(watercolor_pickup_view),
             },
         ],
     })

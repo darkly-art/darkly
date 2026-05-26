@@ -426,20 +426,20 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     );
 
     // Negative control: scrubbing a port the preview *does* read must
-    // still bump the version. `softness` on the Ink Pen's compute
-    // terminal has no `preview_value`, is read by the preview shader,
-    // and is unwired — the perfect canary for "rule too broad".
-    // `brush_set_exposed_port` doesn't gate on the `exposed` flag (only
-    // the listing API does), so we reuse the terminal node id from the
-    // exposed `size` port.
-    let size = engine
+    // still bump the version. After the compiled-WGSL migration
+    // `softness` lives on the upstream `circle` node (the
+    // `paint_compiled` terminal has no softness port). It has no
+    // `preview_value`, is read by the preview shader, and is unwired —
+    // the perfect canary for "rule too broad". Find its node via the
+    // exposed-port listing.
+    let softness = engine
         .brush_exposed_ports()
         .into_iter()
-        .find(|p| p.port_name == "size")
-        .expect("Ink Pen exposes a `size` port on the compute terminal");
+        .find(|p| p.port_name == "softness")
+        .expect("Ink Pen exposes a `softness` port (on circle after migration)");
     let v_before_softness = engine.brush_graph_version();
     engine
-        .brush_set_exposed_port(size.node_id, "softness", 0.5)
+        .brush_set_exposed_port(softness.node_id, "softness", 0.5)
         .expect("scrub set");
     assert_ne!(
         engine.brush_graph_version(),

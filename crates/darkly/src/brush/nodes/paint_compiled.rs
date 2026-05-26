@@ -52,10 +52,10 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 // ── Constants ───────────────────────────────────────────────────────────
 
-/// Canvas-pixel reference for `size_input * size = 1.0`. Mirrors
-/// `paint::SIZE_REFERENCE_PX` so a brush feels identical whether it
-/// terminates in `paint` or `paint_compiled`.
-const SIZE_REFERENCE_PX: f32 = crate::brush::dab_pool::DAB_REFERENCE_SIZE as f32;
+/// Canvas-pixel reference for `size_input * size = 1.0`. Same
+/// `DAB_REFERENCE_SIZE` used by every other brush node — see
+/// [`crate::brush::DAB_REFERENCE_SIZE`].
+const SIZE_REFERENCE_PX: f32 = crate::brush::DAB_REFERENCE_SIZE as f32;
 
 /// Maximum uniform buffer size we'll allocate per brush pipeline.
 const MAX_UNIFORM_BYTES: usize = 1024;
@@ -728,7 +728,6 @@ fn ensure_per_brush_pipeline(
         uniform_bgl: gpu.pipelines.uniform_bind_group_layout(),
         selection_bgl: gpu.pipelines.selection_bind_group_layout(),
         canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
-        watercolor_sources_bgl: gpu.pipelines.watercolor_sources_bind_group_layout(),
         dab_bgl: gpu.dab_pool.bind_group_layout(),
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,

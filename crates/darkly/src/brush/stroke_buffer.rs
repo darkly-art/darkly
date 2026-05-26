@@ -58,9 +58,7 @@ impl StrokeBuffer {
             height,
             dab_bgl,
             pipelines.canvas_copy_bind_group_layout(),
-            pipelines.watercolor_sources_bind_group_layout(),
             pipelines.canvas_copy_sampler(),
-            pipelines.watercolor_pickup_view(),
         );
 
         let pre_stroke_texture = device.create_texture(&wgpu::TextureDescriptor {
