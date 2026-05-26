@@ -9,6 +9,7 @@ pub mod curve;
 pub mod image;
 pub mod jitter;
 pub mod liquify;
+pub mod liquify_compiled;
 pub mod make_color;
 pub mod mix;
 pub mod multiply;
@@ -20,6 +21,7 @@ pub mod random;
 pub mod remap;
 pub mod scatter;
 pub mod smudge;
+pub mod smudge_compiled;
 pub mod split_vec2;
 pub mod stamp;
 pub mod texture_overlay;
@@ -37,6 +39,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         image::register(),
         jitter::register(),
         liquify::register(),
+        liquify_compiled::register(),
         make_color::register(),
         mix::register(),
         multiply::register(),
@@ -48,6 +51,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         remap::register(),
         scatter::register(),
         smudge::register(),
+        smudge_compiled::register(),
         split_vec2::register(),
         stamp::register(),
         texture_overlay::register(),

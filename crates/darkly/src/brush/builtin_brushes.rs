@@ -305,6 +305,10 @@ fn watercolor_brush(
         registry.get("circle").unwrap().ports.clone(),
         vec![ParamValue::Int(0)], // algorithm — closure overwrites
     );
+    // Soft edge by default — watercolor reads as a wash, not a
+    // hard-edged stamp. Variants can override via `configure`.
+    graph.set_port_default(circle, "softness", 0.2).unwrap();
+    graph.set_port_exposed(circle, "softness", true).unwrap();
     let terminal = graph.add_node(
         "watercolor_compiled",
         registry.get("watercolor_compiled").unwrap().ports.clone(),
@@ -355,6 +359,9 @@ fn smooth_watercolor() -> Brush {
             graph.set_port_default(circle, "amplitude", 0.05).unwrap();
             graph.set_port_default(circle, "frequency", 5.0).unwrap();
             graph.set_port_default(circle, "phase", 0.0).unwrap();
+            // Smooth watercolor leans on a softer edge than the shared
+            // default to keep the harmonic bumps reading as a wash.
+            graph.set_port_default(circle, "softness", 0.5).unwrap();
 
             // Per-dab random rotation so the harmonic bumps land at a
             // fresh angle every stamp — without it, every dab is
@@ -422,11 +429,17 @@ fn rough_watercolor() -> Brush {
     )
 }
 
-/// Smudge brush. Drags canvas pixels along the stroke — at each dab, the
-/// `smudge` terminal samples the scratch at `position − motion` and stamps
-/// it back through the brush mask. Built directly (not via `BrushBuilder`)
-/// because the standard builder pre-wires `color_output`; smudge has its
-/// own terminal node with its own lifecycle.
+/// Smudge brush. Drags canvas pixels along the stroke — at each dab,
+/// the `smudge_compiled` terminal samples the scratch at `position −
+/// motion` and mixes by `rate × mask × selection × opacity`. Built
+/// directly (not via `BrushBuilder`) because the standard builder
+/// pre-wires `color_output`; smudge has its own terminal node with
+/// its own lifecycle.
+///
+/// Compiled-graph shape: `pen → circle → smudge_compiled` plus
+/// `pen.motion / .position` wired directly into the terminal. The
+/// upstream `circle.texture` compiles inline into the terminal's
+/// fragment shader as the per-fragment brush coverage.
 fn smudge_brush() -> Brush {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::<BrushWireType>::new();
@@ -436,24 +449,14 @@ fn smudge_brush() -> Brush {
         registry.get("pen_input").unwrap().ports.clone(),
         vec![],
     );
-    let paint_color = graph.add_node(
-        "paint_color",
-        registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
-    );
     let circle = graph.add_node(
         "circle",
         registry.get("circle").unwrap().ports.clone(),
         vec![ParamValue::Int(0)], // 0 = Sine Harmonic; amplitude 0 → plain disc
     );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![],
-    );
     let smudge = graph.add_node(
-        "smudge",
-        registry.get("smudge").unwrap().ports.clone(),
+        "smudge_compiled",
+        registry.get("smudge_compiled").unwrap().ports.clone(),
         vec![],
     );
 
@@ -477,16 +480,11 @@ fn smudge_brush() -> Brush {
     graph.set_port_exposed(circle, "softness", true).unwrap();
 
     let wires = [
-        (circle, "texture", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        // Pressure shapes the dab — heavier press = larger, fuller smear.
-        (pen, "pressure", stamp, "flow"),
-        (pen, "pressure", stamp, "size_input"),
-        (stamp, "dab", smudge, "dab"),
-        (stamp, "dab_size", smudge, "dab_size"),
+        (circle, "texture", smudge, "mask"),
         (pen, "position", smudge, "position"),
         (pen, "motion", smudge, "motion"),
-        (stamp, "preview", smudge, "brush_preview"),
+        // Pressure shapes the dab — heavier press = larger smear footprint.
+        (pen, "pressure", smudge, "size_input"),
     ];
     for (from_node, from_port, to_node, to_port) in wires {
         graph
@@ -509,9 +507,9 @@ fn smudge_brush() -> Brush {
 }
 
 /// Liquify warp brush. Pushes pixels along pen motion with a radial
-/// falloff. Unlike paint brushes, the graph has no stamp / paint_color /
-/// color_output — the liquify node is itself the terminal, with its own
-/// `begin_stroke` / `commit` / `render_preview` lifecycle.
+/// falloff. Unlike paint brushes, the graph has no stamp / paint_color
+/// / color_output — `liquify_compiled` is itself the terminal, with
+/// its own `begin_stroke` / `commit` / per-dab pass lifecycle.
 fn liquify_push() -> Brush {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::<BrushWireType>::new();
@@ -522,66 +520,61 @@ fn liquify_push() -> Brush {
         vec![],
     );
     let liquify = graph.add_node(
-        "liquify",
-        registry.get("liquify").unwrap().ports.clone(),
+        "liquify_compiled",
+        registry.get("liquify_compiled").unwrap().ports.clone(),
         vec![],
     );
 
-    // pen_input.position → liquify.position
+    let wires = [
+        (pen, "position", liquify, "position"),
+        // pen.drawing_angle → liquify.direction (radians; shader turns
+        // it into a unit direction vector). Magnitude comes from motion.
+        (pen, "drawing_angle", liquify, "direction"),
+        // pen.distance → liquify.distance (gates the first dab so a
+        // stationary click doesn't smear in the default direction).
+        (pen, "distance", liquify, "distance"),
+        // pen.motion → liquify.motion. The terminal uses |motion| as
+        // the per-dab displacement scale, so 100% strength makes the
+        // pixel travel a full cursor step (lock).
+        (pen, "motion", liquify, "motion"),
+    ];
+    for (from_node, from_port, to_node, to_port) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    // size / strength / softness are already `.exposed()` on the
+    // liquify_compiled node-def, so the toolbar picks them up without
+    // extra brush work.
+
+    // Pin dab spacing in *absolute canvas pixels*, not as a fraction
+    // of brush diameter. Setting ratio to 0 disables the diameter
+    // term; `spacing_min_px = LIQUIFY_SPACING_PX` then floors the
+    // engine's `SpacingConfig::distance(...)` at that pixel value
+    // regardless of brush size. Combined with the terminal's
+    // `displacement = strength × |motion|`, this gives:
+    //   * size-invariant per-dab push (the size slider controls only
+    //     the warped extent),
+    //   * `strength = 1` → lock (per-dab push = per-dab cursor motion),
+    //   * `strength = 0.5` → 50% drag.
+    graph.set_port_default(pen, "spacing", 0.0).unwrap();
     graph
-        .connect(
-            PortRef {
-                node: pen,
-                port: "position".into(),
-            },
-            PortRef {
-                node: liquify,
-                port: "position".into(),
-            },
+        .set_port_default(
+            pen,
+            "spacing_min_px",
+            crate::brush::nodes::liquify_compiled::LIQUIFY_SPACING_PX,
         )
         .unwrap();
-    // pen_input.drawing_angle → liquify.direction (radians; shader turns
-    // it into a unit direction vector). Magnitude comes from strength.
-    graph
-        .connect(
-            PortRef {
-                node: pen,
-                port: "drawing_angle".into(),
-            },
-            PortRef {
-                node: liquify,
-                port: "direction".into(),
-            },
-        )
-        .unwrap();
-    // pen_input.distance → liquify.distance (gates the first dab so a
-    // stationary click doesn't smear in the default direction).
-    graph
-        .connect(
-            PortRef {
-                node: pen,
-                port: "distance".into(),
-            },
-            PortRef {
-                node: liquify,
-                port: "distance".into(),
-            },
-        )
-        .unwrap();
-
-    // size / strength / softness are already `.exposed()` on the liquify
-    // node-def, so the toolbar picks them up without extra brush work.
-
-    // Tighten dab spacing well below the paint default (10%). Liquify's
-    // per-dab displacement is ~25% of radius (DRAG_FACTOR in liquify.rs),
-    // so spacing must be much smaller for warps to accumulate smoothly.
-    // 4% is the port floor — anything lower kills stabilizer performance.
-    graph.set_port_default(pen, "spacing", 0.04).unwrap();
-
-    // Compensate the per-dab strength for the ~2.5× denser dabs — total
-    // accumulated displacement along the stroke stays roughly what it was
-    // at the old 10% spacing / 0.5 strength combination. Tune empirically.
-    graph.set_port_default(liquify, "strength", 0.2).unwrap();
 
     let mut metadata = BrushMetadata::from_graph("Liquify", graph);
     metadata.category = "effects".to_string();

@@ -51,13 +51,15 @@ pub enum UnitType {
     Degrees,
     /// Identity with no suffix — useful for dimensionless multipliers.
     Raw,
+    /// Identity with `px` suffix — value is in canvas pixels.
+    Pixels,
 }
 
 impl UnitType {
     /// Convert from port-space to display-space.
     pub fn to_display(self, value: f32) -> f32 {
         match self {
-            Self::Normalized | Self::Raw => value,
+            Self::Normalized | Self::Raw | Self::Pixels => value,
             Self::Percent => value * 100.0,
             Self::Degrees => value * (180.0 / std::f32::consts::PI),
         }
@@ -66,7 +68,7 @@ impl UnitType {
     /// Convert from display-space back to port-space.
     pub fn from_display(self, display: f32) -> f32 {
         match self {
-            Self::Normalized | Self::Raw => display,
+            Self::Normalized | Self::Raw | Self::Pixels => display,
             Self::Percent => display / 100.0,
             Self::Degrees => display * (std::f32::consts::PI / 180.0),
         }
@@ -79,6 +81,7 @@ impl UnitType {
             Self::Percent => "%",
             Self::Degrees => "°",
             Self::Raw => "",
+            Self::Pixels => "px",
         }
     }
 }

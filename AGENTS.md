@@ -66,6 +66,10 @@ website/                Astro + Starlight site (splash, docs, /demo/)
 
 ## Modularity Principle
 
+**Default to modular.** When you design anything with more than one variant — or that will plausibly grow one — the first question is "what's the unit, and how does the rest of the code stay ignorant of which one it's looking at?" That mindset applies at every scale: from a small enum where one method per variant beats a `match` at the call site, up to full subsystems with traits, registries, and per-variant files. The cost of designing modularly up front is almost always small; the cost of retrofitting after centralized branching has spread across the codebase is large. Hand-written dispatch should feel like an exception that needs justifying, not the default shape.
+
+This is a stronger claim than the Engineering Principle's "build a proper system for it" — that one says *don't hack*; this one says *the proper system is almost always one where new variants slot in without consumers being edited*.
+
 Module-specific code lives in the module. Module-generic infrastructure — registries, dispatchers, shared state, caches — is generic by name and by shape, never named after any single module that happens to use it today.
 
 When adding a new item to a modular system (filter, tool, brush, etc.):
@@ -84,7 +88,9 @@ The project uses a `build.rs` script that scans module directories and auto-gene
 - `VeilRegistry::new()` calls the generated `registrations()` to populate itself
 - The compositor calls trait methods on `dyn Veil` — it never branches on veil type
 
-**Type-owned dispatch:** This same pattern applies to all modular systems in the project, including types and interfaces, which should own their own dispatch logic. Any time a type has variant-specific behavior — a format-specific GPU pipeline, a color-space-specific blend, a tool-specific cursor — the dispatch lives in the type, behind a uniform interface. Consumers call the interface; they never branch on which variant they got. *Anti-pattern: `if mask { ... } else { ... }` sprinkled across code that consumes a paint surface; the format-specific dispatch is conceptually a paint-surface concern, so it belongs in the paint-surface interface, not at every call site.*
+The "default to modular" stance leads directly to the type-owned dispatch rule below: once a system is modular, the consumer must not re-introduce centralized branching by asking variants what they are.
+
+**Type-owned dispatch:** Anything a type knows about itself — behavior, properties, capabilities, identity — lives on the type, behind a uniform interface. Consumers call methods; they never introspect, classify, or branch on which variant they got. The diagnostic question: *would adding a new variant, or changing what an existing one knows about itself, force me to edit this code?* If yes, the knowledge is misplaced. The violation has one recurring shape — `matches!(type_id, ...)`, `if kind == X`, `fn is_foo(type_id) -> bool`, or any consumer-side helper that routes by type — code outside a type's own module asking questions the type should be answering itself. Replace it with a trait method, defaulted to the common case and overridden per variant, so new variants are purely additive.
 
 ## DRY Principle
 

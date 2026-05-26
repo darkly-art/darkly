@@ -606,7 +606,7 @@ pub fn register() -> BrushNodeRegistration {
                     .exposed()
                     .with_description("How much pickup color tints the load"),
                 PortDef::input("pickup_size", BrushWireType::Scalar)
-                    .with_range(0.0, 2.0, 0.33)
+                    .with_range(0.0, 2.0, 0.5)
                     .with_natural_range(0.0, 2.0)
                     .with_label("Pickup Size")
                     .with_unit(UnitType::Percent)
@@ -660,6 +660,10 @@ impl WatercolorCompiledEvaluator {
 }
 
 impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
+    fn is_compiled_terminal(&self) -> bool {
+        true
+    }
+
     fn supports_erase(&self) -> bool {
         // Erase on wet media doesn't read naturally — match the
         // dispatch-path watercolor terminals.

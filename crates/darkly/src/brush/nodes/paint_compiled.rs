@@ -404,6 +404,10 @@ impl PaintCompiledEvaluator {
 }
 
 impl BrushNodeEvaluator for PaintCompiledEvaluator {
+    fn is_compiled_terminal(&self) -> bool {
+        true
+    }
+
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }

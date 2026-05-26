@@ -200,15 +200,6 @@ fn remap_scalar(value: f32, src: (f32, f32), dst: (f32, f32)) -> f32 {
     dst_min + fraction * (dst_max - dst_min)
 }
 
-/// True for every terminal whose upstream graph fuses into a compiled
-/// WGSL fragment shader. The dispatch walk in `dispatch_gpu` skips
-/// every upstream GPU node when one of these is present (their
-/// contribution lives inside the terminal's compiled shader) — only
-/// the terminal itself runs to queue dabs and flush.
-pub(crate) fn is_compiled_terminal(type_id: &str) -> bool {
-    matches!(type_id, "paint_compiled" | "watercolor_compiled")
-}
-
 /// Deterministic PRNG: hash seed + index to produce a 0-1 float.
 /// xorshift-style for speed; shared by all nodes via `EvalContext::prng_at`.
 #[inline]
@@ -316,6 +307,22 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// flag to decide whether the active brush supports erase at all.
     fn supports_erase(&self) -> bool {
         true
+    }
+
+    /// True for every terminal whose upstream graph fuses into a
+    /// compiled WGSL fragment shader. The dispatch walk in
+    /// [`BrushGraphRunner::dispatch_gpu`] skips every upstream GPU
+    /// node when one of these is present (their contribution lives
+    /// inside the terminal's compiled shader) — only the terminal
+    /// itself runs to queue dabs and flush.
+    ///
+    /// Default `false`. Terminals override to `true`. Type-owned
+    /// dispatch — there is no central list of compiled terminals
+    /// anywhere in the project. This method goes away entirely once
+    /// every upstream GPU node implements `compile_wgsl` (then the
+    /// dispatch walk has nothing to skip).
+    fn is_compiled_terminal(&self) -> bool {
+        false
     }
 
     /// Emit this node's contribution to a compiled WGSL fragment
@@ -483,6 +490,21 @@ impl BrushGraphRunner {
     /// terminates in `paint_compiled`.
     pub fn compiled_brush(&self) -> Option<Arc<CompiledBrush>> {
         self.compiled.clone()
+    }
+
+    /// Returns `true` if the graph terminates in a compiled-WGSL
+    /// terminal (any node whose evaluator overrides
+    /// [`BrushNodeEvaluator::is_compiled_terminal`] to return `true`).
+    /// Type-owned dispatch: no central list of terminal type_ids.
+    /// Used by [`crate::brush::compile_graph`] to decide whether to
+    /// run the WGSL compile step.
+    pub fn has_compiled_terminal(&self) -> bool {
+        self.plan.steps.iter().any(|step| {
+            self.evaluators
+                .get(&step.type_id)
+                .map(|ev| ev.is_compiled_terminal())
+                .unwrap_or(false)
+        })
     }
 
     /// Build a name → value map of every output slot in the graph,
@@ -657,13 +679,12 @@ impl BrushGraphRunner {
             // ONLY node whose `compile_wgsl` emits a body that ends
             // in `return`; in practice it's whichever step ends the
             // plan. Walk only the last GPU step.
-            if is_compiled && !is_compiled_terminal(&step.type_id) {
-                continue;
-            }
-
             let Some(evaluator) = self.evaluators.get(&step.type_id) else {
                 continue;
             };
+            if is_compiled && !evaluator.is_compiled_terminal() {
+                continue;
+            }
 
             // Gather connected inputs from the slot table, applying
             // wire-boundary range remap where both source and dest ports

@@ -245,6 +245,18 @@ pub struct BrushGpuContext<'a> {
     /// hardware-blend writes scale per-fragment, not per-bbox-pixel.
     pub pending_dabs_bbox: Option<[u32; 4]>,
 
+    /// Terminal-private per-dab CPU meta, packed by `evaluate_gpu` in
+    /// lockstep with [`Self::pending_dab_bytes`] and drained by the
+    /// terminal's `flush_dabs` hook. Only used by per-dab-feedback
+    /// terminals (`smudge_compiled`, `liquify_compiled`) that need
+    /// CPU-side state at flush time to drive mirror-snapshot copies
+    /// without re-deriving footprints from GPU memory. The framework
+    /// doesn't interpret these bytes — the owning terminal reinterprets
+    /// them via `bytemuck::cast_slice` against its own meta record
+    /// struct. Cleared together with `pending_dab_bytes` by
+    /// [`Self::clear_pending_dabs`] and [`Self::take_pending_dabs`].
+    pub pending_dab_meta_bytes: Vec<u8>,
+
     /// Compiled WGSL for this brush, populated by the engine before
     /// stroke evaluation when the brush's graph terminates in
     /// `paint_compiled`. Read by that terminal's `evaluate_gpu` and
@@ -333,13 +345,23 @@ impl<'a> BrushGpuContext<'a> {
 
     /// Drain the compute-dab queue. Returns the raw bytes (caller
     /// reinterprets via `bytemuck::cast_slice`) and the dab count. Also
-    /// clears `pending_dabs_bbox`. Called from a terminal's
-    /// `flush_dabs` hook once the dispatch is encoded.
+    /// clears `pending_dabs_bbox`. The terminal-private
+    /// `pending_dab_meta_bytes` is *not* drained here — the caller
+    /// drains it directly via [`Self::take_pending_dab_meta`] when it
+    /// needs to walk per-dab meta inside its `flush_dabs` loop. Called
+    /// from a terminal's `flush_dabs` hook once the dispatch is encoded.
     pub fn take_pending_dabs(&mut self) -> (Vec<u8>, u32) {
         let bytes = std::mem::take(&mut self.pending_dab_bytes);
         let count = std::mem::take(&mut self.pending_dab_count);
         self.pending_dabs_bbox = None;
         (bytes, count)
+    }
+
+    /// Drain the per-dab CPU meta queue. Symmetric with
+    /// [`Self::take_pending_dabs`]; callers `bytemuck::cast_slice` the
+    /// returned bytes against their meta record type.
+    pub fn take_pending_dab_meta(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.pending_dab_meta_bytes)
     }
 
     /// Discard the compute-dab queue without dispatching. Used at stroke
@@ -350,6 +372,7 @@ impl<'a> BrushGpuContext<'a> {
         self.pending_dab_bytes.clear();
         self.pending_dab_count = 0;
         self.pending_dabs_bbox = None;
+        self.pending_dab_meta_bytes.clear();
     }
 
     /// Union a write-pass footprint into `dab_write_canvas_bbox`. Called by

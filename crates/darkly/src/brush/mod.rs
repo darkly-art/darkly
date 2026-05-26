@@ -170,10 +170,18 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     );
     map.insert("liquify".into(), Box::new(nodes::liquify::LiquifyEvaluator));
     map.insert(
+        "liquify_compiled".into(),
+        Box::new(nodes::liquify_compiled::LiquifyCompiledEvaluator),
+    );
+    map.insert(
         "watercolor_compiled".into(),
         Box::new(nodes::watercolor_compiled::WatercolorCompiledEvaluator),
     );
     map.insert("smudge".into(), Box::new(nodes::smudge::SmudgeEvaluator));
+    map.insert(
+        "smudge_compiled".into(),
+        Box::new(nodes::smudge_compiled::SmudgeCompiledEvaluator),
+    );
     // Internal terminal used by per-node preview pipeline. Not exposed to the
     // frontend palette (filtered by `category == "internal"`).
     map.insert(
@@ -262,11 +270,7 @@ pub fn compile_graph(
     let registry = BrushNodeRegistry::new();
     let evaluators = default_evaluators();
     let mut runner = eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)?;
-    if graph
-        .nodes
-        .values()
-        .any(|n| eval::is_compiled_terminal(&n.type_id))
-    {
+    if runner.has_compiled_terminal() {
         let plan = crate::nodegraph::compile(graph, registry.as_map())?;
         // Build a fresh evaluators map for the compiler — the runner
         // owns the live one. Cheap (just trait-object constructors).

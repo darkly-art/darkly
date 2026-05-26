@@ -113,6 +113,25 @@ pub fn register() -> BrushNodeRegistration {
                      10% is the paint default; warp/smudge brushes typically want 4\u{2013}5%. \
                      Floor of 4% — anything lower swamps the stabilizer.",
                 ),
+            // Absolute-pixel spacing floor. The effective spacing per
+            // dab is `max(diameter × ratio, spacing_min_px,
+            // ABSOLUTE_MIN_SPACING_PX)`. Set this above zero — and
+            // ratio to a small value — to pin dab spacing in canvas
+            // pixels regardless of brush size. Liquify uses this so
+            // its per-dab displacement (= strength × spacing) stays
+            // size-invariant: the strength slider names a fixed pixel
+            // amount, not a fraction of brush radius.
+            PortDef::input("spacing_min_px", BrushWireType::Scalar)
+                .with_range(0.0, 64.0, 0.0)
+                .with_natural_range(0.0, 32.0)
+                .with_unit(UnitType::Pixels)
+                .with_icon("fa-solid fa-ruler-horizontal")
+                .with_label("Spacing min (px)")
+                .with_description(
+                    "Absolute-pixel floor for dab spacing. 0 = use the \
+                     ratio above; non-zero pins spacing to at least \
+                     this many canvas pixels regardless of brush size.",
+                ),
         ],
         params: &[],
         is_gpu: false,

@@ -125,6 +125,18 @@ fn liquify_graph(size: f32, strength: f32, softness: f32) -> Graph<BrushWireType
             },
         )
         .unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "motion".into(),
+            },
+            PortRef {
+                node: liquify,
+                port: "motion".into(),
+            },
+        )
+        .unwrap();
 
     graph
 }
@@ -295,6 +307,7 @@ macro_rules! make_ctx {
             pending_dab_bytes: Vec::new(),
             pending_dab_count: 0,
             pending_dabs_bbox: None,
+            pending_dab_meta_bytes: Vec::new(),
             compiled_brush: None,
             slot_outputs_owned: None,
         }
@@ -369,17 +382,27 @@ fn canvas_with_bar() -> Vec<u8> {
     pixels
 }
 
+/// Per-dab motion magnitude the test harness simulates — a real
+/// stroke would have `|motion| ≈ spacing` here, and the Liquify
+/// brush pins spacing to `LIQUIFY_SPACING_PX = 4` so dispatch tests
+/// match the live behaviour at strength=1: displacement = 4 px.
+const TEST_MOTION_PX: f32 = 4.0;
+
 /// Build a `PaintInformation` with a given position and drawing direction.
 /// `direction` is in radians (0 = east, matching `pen_input.drawing_angle`).
 ///
 /// Sets `distance` to a non-zero value (the stroke engine would do this for
-/// any dab after the first). Tests that want to exercise the "stationary
-/// click → no-op" gate construct PaintInformation manually with distance=0.
+/// any dab after the first), and `motion` to a unit vector in the drawing
+/// direction scaled by `TEST_MOTION_PX` so the terminal's
+/// `displacement = strength × |motion|` formula has a non-zero magnitude
+/// to work with. Tests that want to exercise the "stationary click →
+/// no-op" gate construct PaintInformation manually with distance=0.
 fn pen(pos: [f32; 2], direction: f32) -> PaintInformation {
     PaintInformation {
         pos,
         drawing_angle: direction,
         distance: 10.0,
+        motion: [TEST_MOTION_PX * direction.cos(), TEST_MOTION_PX * direction.sin()],
         ..Default::default()
     }
 }
@@ -388,12 +411,12 @@ fn pen(pos: [f32; 2], direction: f32) -> PaintInformation {
 
 /// An eastward dab should push the bar's red pixels to the right.
 ///
-/// With `direction = 0` (east), `strength = 1`, `softness = 1` (square,
-/// flat inside the disc) and `size = 0.5` → radius = 128 px:
-///   displacement = radius × 0.25 × strength = 32 px
-/// The shader samples at `canvas_pos − (32, 0)`, so the original bar at
-/// x=63 appears at x=95 after the dab. At x=63, the sample source is
-/// x=31 which is background.
+/// With `direction = 0` (east), `strength = 1`, `softness = 1`
+/// (square, flat inside the disc) and `|motion| = TEST_MOTION_PX = 4`,
+/// displacement at strength=1 is 4 px regardless of brush size. The
+/// shader samples at `canvas_pos − (4, 0)`, so the original bar at
+/// x=63 appears at x=67 after the dab. At x=63, the sample source is
+/// x=59 which is background.
 #[test]
 fn rightward_direction_pushes_pixels_right() {
     let mut h = harness(&canvas_with_bar(), 0.5, 1.0, 1.0);
@@ -403,13 +426,13 @@ fn rightward_direction_pushes_pixels_right() {
 
     let after = h.readback();
 
-    let shifted = pixel(&after, 95, 64);
+    let shifted = pixel(&after, 67, 64);
     assert!(
         shifted[0] > 200 && shifted[3] > 200,
-        "expected red at shifted position (95,64), got {:?}",
+        "expected red at shifted position (67,64), got {:?}",
         shifted,
     );
-    // Original bar location now samples from (31,64) which was background.
+    // Original bar location now samples from (59,64) which was background.
     let orig = pixel(&after, 63, 64);
     assert!(
         orig[0] < 20,
@@ -627,13 +650,13 @@ fn speed_does_not_affect_displacement() {
 ///     inside the layer but *outside* the buggy code's viewport
 ///     ([0..CANVAS]).
 ///   - A small eastward liquify dab at canvas (105, 64) shifts pixels
-///     ~13 px to the right (size = 0.2 → radius ≈ 51, displacement ≈
-///     13). The bar should appear at canvas X = 113 (layer-local X =
-///     145), again in the off-canvas right strip.
+///     `strength × |motion| = 4` px to the right. The bar should
+///     appear at canvas X = 104 (layer-local X = 136), again in the
+///     off-canvas right strip.
 ///
-/// Probe layer-local (145, 80) — canvas (113, 64). With the fix this is
+/// Probe layer-local (136, 80) — canvas (104, 64). With the fix this is
 /// red (warp landed correctly). With the bug this is background, because
-/// the canvas-sized viewport never reaches layer-local X = 145.
+/// the canvas-sized viewport never reaches layer-local X = 136.
 #[test]
 fn warp_position_correct_on_offset_layer() {
     const PAD_LEFT: u32 = 32;
@@ -659,15 +682,15 @@ fn warp_position_correct_on_offset_layer() {
 
     let mut h = harness_offset(&initial, lw, lh, offset_x, offset_y, 0.2, 1.0, 1.0);
     h.begin_stroke();
-    // Dab eastward at canvas (105, 64). Brush radius ≈ 51, displacement
-    // ≈ 13 — covers the bar at canvas X=100 and shifts it to canvas
-    // X≈113 (layer-local X≈145).
+    // Dab eastward at canvas (105, 64). Brush radius ≈ 51 (so the
+    // disc covers the bar at canvas X=100), displacement = 4 px —
+    // shifts the bar to canvas X=104 (layer-local X=136).
     h.dab(&pen([105.0, 64.0], 0.0));
     h.commit();
 
     let after = h.readback();
 
-    let probe_canvas_x: i32 = 113;
+    let probe_canvas_x: i32 = 104;
     let probe_canvas_y: i32 = 64;
     let probe_layer_x = (probe_canvas_x - offset_x) as u32;
     let probe_layer_y = (probe_canvas_y - offset_y) as u32;
@@ -709,8 +732,8 @@ fn dab_footprint_exceeding_canvas_does_not_overflow_read_mirror() {
     let initial = vec![128u8; (lw * lh * 4) as usize];
 
     // size = 1.0  →  radius = 1 * 256 = 256 px
-    // displacement ≤ 0.25 * radius * strength = 64 px (with strength 1.0)
-    // half = radius + displacement = 320 px
+    // displacement = strength * |motion| = 4 px
+    // half = radius + displacement = 260 px
     // After layer-clipping: footprint = full layer = 400 px on each axis,
     // which is > CANVAS=128 in both dimensions.
     let mut h = harness_offset(&initial, lw, lh, offset_x, offset_y, 1.0, 1.0, 1.0);

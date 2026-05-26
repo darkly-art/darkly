@@ -55,6 +55,8 @@ const RESOLUTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080), (2560, 1440), (3
 const BRUSH_NAME_INK_PEN: &str = "Ink Pen";
 const BRUSH_NAME_WATERCOLOR: &str = "Smooth Watercolor";
 const BRUSH_NAME_PERLIN_INK: &str = "Perlin Ink";
+const BRUSH_NAME_SMUDGE: &str = "Smudge";
+const BRUSH_NAME_LIQUIFY: &str = "Liquify";
 
 /// Stabilizer strength override. The recorded stroke is what stresses
 /// the stabilizer; cranking this to 1.0 maximises the rewind workload.
@@ -81,6 +83,17 @@ enum Topology {
     /// framework; same terminal as Paint but a more elaborate upstream
     /// graph (per-dab random nodes drive the perlin shape).
     PerlinInk,
+    /// Smudge — `pen → circle → smudge_compiled`. Per-dab fragment
+    /// pass with a `copy_texture_to_texture` barrier between dabs so
+    /// each dab reads the prior dab's writeback. Stresses the per-dab
+    /// serialization path; expected dab counts per event are tens
+    /// rather than hundreds.
+    Smudge,
+    /// Liquify — `pen → liquify_compiled`. Per-dab warp pass with the
+    /// same barrier shape as smudge; useful for measuring how the
+    /// per-dab regime scales with displacement padding (larger read
+    /// footprint vs. smudge).
+    Liquify,
 }
 
 impl Topology {
@@ -89,6 +102,8 @@ impl Topology {
             "paint" => Some(Topology::Paint),
             "watercolor" | "watercolor-compute" | "wet-media" => Some(Topology::Watercolor),
             "perlin-ink" | "perlin_ink" | "compiled" => Some(Topology::PerlinInk),
+            "smudge" => Some(Topology::Smudge),
+            "liquify" => Some(Topology::Liquify),
             _ => None,
         }
     }
@@ -98,6 +113,8 @@ impl Topology {
             Topology::Paint => "paint",
             Topology::Watercolor => "watercolor",
             Topology::PerlinInk => "perlin-ink",
+            Topology::Smudge => "smudge",
+            Topology::Liquify => "liquify",
         }
     }
 
@@ -108,6 +125,8 @@ impl Topology {
             Topology::Paint => "paint_compiled",
             Topology::Watercolor => "watercolor_compiled",
             Topology::PerlinInk => "paint_compiled",
+            Topology::Smudge => "smudge_compiled",
+            Topology::Liquify => "liquify_compiled",
         }
     }
 
@@ -116,6 +135,8 @@ impl Topology {
             Topology::Paint => BRUSH_NAME_INK_PEN,
             Topology::Watercolor => BRUSH_NAME_WATERCOLOR,
             Topology::PerlinInk => BRUSH_NAME_PERLIN_INK,
+            Topology::Smudge => BRUSH_NAME_SMUDGE,
+            Topology::Liquify => BRUSH_NAME_LIQUIFY,
         }
     }
 }

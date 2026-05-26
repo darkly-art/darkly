@@ -17,10 +17,14 @@
 //! a sample from elsewhere in the scratch, displaced opposite the direction
 //! of travel.
 //!
-//! Displacement *magnitude* is a function of `strength` and `radius` only —
-//! pen speed is intentionally ignored. A slow deliberate drag produces the
-//! same per-dab displacement as a fast flick. Speed still governs stroke
-//! length (dabs fire as the pen moves), but not per-dab warp intensity.
+//! Displacement *magnitude* is `strength × |pen.motion|` — the
+//! cursor's per-dab travel scaled by strength. The Liquify brush
+//! pins `pen_input.spacing_min_px` to a fixed pixel value, so
+//! `|motion|` is size-invariant per dab and brush size controls only
+//! the warped disc extent, not the intensity. A slow deliberate
+//! drag produces the same per-dab displacement as a fast flick.
+//! Speed still governs stroke length (dabs fire as the pen moves),
+//! but not per-dab warp intensity.
 //!
 //! ## Stroke lifecycle
 //!
@@ -74,10 +78,13 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 /// back to the scratch. Everything is canvas-space; the shader converts to
 /// UVs via `canvas_size` and `copy_origin`.
 ///
-/// Per-dab displacement magnitude is decided on the CPU (strength × radius)
-/// and passed as `displacement`; the shader just multiplies by a unit
-/// direction vector and the radial falloff. Pen speed never enters the
-/// equation — a slow drag produces the same per-dab warp as a fast flick.
+/// Per-dab displacement magnitude is decided on the CPU as
+/// `strength × |pen.motion|` and passed as `displacement`; the shader
+/// multiplies by a unit direction vector and the radial falloff.
+/// Because the Liquify brush pins `pen_input.spacing_min_px`, the
+/// per-dab `|motion|` is constant in canvas pixels regardless of
+/// brush size. Pen speed never enters the equation — a slow drag
+/// produces the same per-dab warp as a fast flick.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct LiquifyUniforms {
@@ -108,7 +115,7 @@ pub struct LiquifyUniforms {
     /// `canvas_pos − direction × displacement × falloff`.
     pub direction: [f32; 2],
     /// Displacement magnitude in canvas pixels at the brush centre
-    /// (where falloff = 1). Computed as `radius × K × strength`.
+    /// (where falloff = 1). Computed as `strength × |pen.motion|`.
     pub displacement: f32,
     /// Brush radius in canvas pixels.
     pub radius: f32,
@@ -259,6 +266,14 @@ pub fn register() -> BrushNodeRegistration {
                 .with_description("Direction to push pixels"),
             PortDef::input("distance", BrushWireType::Scalar)
                 .with_description("How far the pen has traveled along the stroke"),
+            // Per-dab cursor motion vector. Magnitude sets the per-dab
+            // displacement scale (`strength × |motion|`). See
+            // `liquify_compiled` for the lock/drag rationale.
+            PortDef::input("motion", BrushWireType::Vec2)
+                .with_description(
+                    "Per-dab cursor motion vector. Magnitude sets \
+                     the per-dab displacement scale.",
+                ),
             PortDef::output("dab_size", BrushWireType::Vec2)
                 .with_description("Size of the affected area"),
         ],
@@ -301,6 +316,8 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let position = ctx.input("position").as_vec2();
         let direction = ctx.input_f32("direction");
         let distance = ctx.input_f32("distance");
+        let motion = ctx.input("motion").as_vec2();
+        let motion_mag = (motion[0] * motion[0] + motion[1] * motion[1]).sqrt();
 
         let radius = size * (DAB_REFERENCE_SIZE as f32) * 0.5;
         if radius < 1.0 {
@@ -321,13 +338,14 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             return vec![];
         }
 
-        // Per-dab displacement magnitude is a fixed fraction of the brush
-        // radius — pen speed doesn't enter the equation. `DRAG_FACTOR` is
-        // tuned so that strength=1 pushes pixels approximately one dab
-        // spacing (~25% of radius) per dab, giving a 1:1 "drag" feel along
-        // the stroke path. Tune empirically as users give feedback.
-        const DRAG_FACTOR: f32 = 0.25;
-        let displacement = radius * DRAG_FACTOR * strength;
+        // Per-dab displacement magnitude = `strength × |motion|`. The
+        // brush pins `pen_input.spacing_min_px` to a fixed pixel
+        // amount, so |motion| is size-invariant per dab. At
+        // `strength = 1` per-dab push equals per-dab cursor motion,
+        // locking pixels to the cursor; at fractional strength the
+        // pixel lags by that fraction. Size controls the disc extent,
+        // not the intensity.
+        let displacement = motion_mag * strength;
 
         // Layer-clip the dab footprint, push the canvas-space write bbox,
         // and snapshot the scratch under the disc into canvas_copy.
