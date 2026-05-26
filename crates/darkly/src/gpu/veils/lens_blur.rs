@@ -3,11 +3,15 @@ use crate::gpu::veil::{ParamDef, ParamValue, Veil, VeilRegistration};
 use std::sync::Arc;
 
 const PARAMS: &[ParamDef] = &[
+    // User-facing 0..1 slider. The shader multiplies by 0.03 to derive the
+    // blur radius as a fraction of sqrt(canvas area), so user 1.0 = 3% of
+    // sqrt(area) (≈ 30 px on a 1024² canvas) and the default user 1/3
+    // ≈ 0.01 of sqrt(area) (≈ 10 px on 1024²).
     ParamDef::Float {
         name: "radius",
-        min: 0.1,
+        min: 0.0,
         max: 1.0,
-        default: 0.5,
+        default: 1.0 / 3.0,
     },
     ParamDef::Float {
         name: "threshold",
@@ -26,7 +30,7 @@ pub fn register() -> VeilRegistration {
         from_params: |params, shared| {
             let radius = match params.first() {
                 Some(ParamValue::Float(v)) => *v,
-                _ => 0.5,
+                _ => 1.0 / 3.0,
             };
             let threshold = match params.get(1) {
                 Some(ParamValue::Float(v)) => *v,
@@ -56,7 +60,7 @@ pub struct LensBlur {
 impl LensBlur {
     pub fn new(radius: f32, threshold: f32, shared: Arc<EffectPipeline>) -> Self {
         LensBlur {
-            radius: radius.max(0.1),
+            radius: radius.max(0.0),
             threshold: threshold.max(0.01),
             shared,
         }

@@ -35,11 +35,13 @@ const GA_SIN: f32 = 0.6755;
 
 @fragment fn fs_lens_blur(in: VertexOutput) -> @location(0) vec4f {
     let resolution = vec2f(params.resolution_x, params.resolution_y);
-    let aspect = resolution.x / resolution.y;
-    let px = params.radius / resolution.y;
+    // Reference size: blur radius is measured in sqrt(area) units so the
+    // disc scales uniformly with screen area, not just height.
+    let ref_size = sqrt(resolution.x * resolution.y);
 
-    // Fixed initial offset direction (pointing right).
-    var p = vec2f(px, 0.0);
+    // Fixed initial unit-length direction (pointing right). Rotated each
+    // iter by the golden angle so the samples spiral out evenly.
+    var p = vec2f(1.0, 0.0);
 
     let inv_t = 1.0 / max(params.threshold, 0.001);
 
@@ -52,14 +54,18 @@ const GA_SIN: f32 = 0.6755;
     for (var n = 0; n < 128; n++) {
         if (i >= 16.0) { break; }
 
-        // Rotate sample point by the golden angle.
+        // Rotate sample direction by the golden angle.
         p = vec2f(
             p.x * GA_COS - p.y * GA_SIN,
             p.x * GA_SIN + p.y * GA_COS,
         );
 
-        let offset = p * i;
-        let sample_uv = in.uv + vec2f(offset.x / aspect, offset.y);
+        // Offset in pixels: max (at i=16) = params.radius * 0.03 * sqrt(area).
+        // The 0.03 maps the user-facing 0..1 radius onto a useful range
+        // (~3% of sqrt(area) at the maximum). Dividing by `resolution`
+        // converts to a UV-space offset whose disc is circular in screen pixels.
+        let offset_px = p * (i * params.radius * 0.03 * ref_size / 16.0);
+        let sample_uv = in.uv + offset_px / resolution;
         let s = textureSampleLevel(t_input, t_sampler, sample_uv, 0.0);
 
         // Exponential accumulation: bright samples dominate,

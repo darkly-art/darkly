@@ -36,12 +36,13 @@ struct Params {
 /// Map a screen-space UV to the normal map, preserving the normal map's
 /// aspect ratio so the ice pattern never stretches. The normal map tiles
 /// via REPEAT addressing; `scale` controls tile density (1.0 = one tile
-/// across the smaller screen dimension).
+/// across sqrt(area), so density depends on area and is invariant to
+/// aspect ratio).
 fn normal_uv(screen_uv: vec2f) -> vec2f {
-    let screen_aspect = params.resolution_x / params.resolution_y;
-    // Centered coords in [-0.5, 0.5] scaled by aspect so one "unit"
-    // is the same in X and Y.
-    var p = (screen_uv - 0.5) * vec2f(screen_aspect, 1.0) / params.scale;
+    let resolution = vec2f(params.resolution_x, params.resolution_y);
+    let ref_size = sqrt(resolution.x * resolution.y);
+    // Centered coords scaled so one "unit" = sqrt(area) pixels in both X and Y.
+    var p = (screen_uv - 0.5) * resolution / (ref_size * params.scale);
     // Re-compensate for the normal map's own aspect ratio so a square
     // region of screen samples a square region of the normal map.
     p.x /= params.normal_aspect;
@@ -57,10 +58,12 @@ fn normal_uv(screen_uv: vec2f) -> vec2f {
     let sample = textureSample(t_normal, t_normal_sampler, n_uv).rgb;
     let n = sample * 2.0 - 1.0;
 
-    // Aspect-corrected UV displacement so the refraction looks isotropic
-    // regardless of viewport shape.
-    let screen_aspect = params.resolution_x / params.resolution_y;
-    let disp = vec2f(n.x / screen_aspect, n.y) * params.strength;
+    // Convert the normal-map vector into a UV-space displacement whose
+    // magnitude scales with sqrt(area): the refraction is isotropic in
+    // screen pixels and depends only on area, not aspect ratio.
+    let resolution = vec2f(params.resolution_x, params.resolution_y);
+    let ref_size = sqrt(resolution.x * resolution.y);
+    let disp = n.xy * params.strength * ref_size / resolution;
 
     // Chromatic aberration: per-channel displacement scaled slightly
     // apart so the glass has a subtle prism edge. 0 = clean refraction.
