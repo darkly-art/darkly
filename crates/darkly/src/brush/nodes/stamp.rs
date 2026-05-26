@@ -1,515 +1,138 @@
-//! Stamp dab generation GPU node.
+//! Stamp dab GPU node — compile-only.
 //!
-//! Image-based dab source — receives a brush tip texture handle on its
-//! `tip` input (typically from an Image node) and stamps it onto a dab
-//! texture with size, rotation, mirror, ratio, opacity, and color
-//! transforms via the `stamp.wgsl` shader.
+//! Inlines `color × mask × flow` into the brush's compiled WGSL via
+//! [`compile_wgsl`]. The upstream `tip` input is a scalar coverage
+//! expression (typically from `circle.texture`'s compile output); the
+//! emitted `dab` output is premultiplied RGBA that downstream paint
+//! terminals consume.
 //!
-//! If the `tip` input is disconnected (no upstream image), the node
-//! produces no output — no tip means no dab.
+//! ## AlphaMask only
 //!
-//! The dab viewport may be non-square: if the tip texture has a non-square
-//! aspect ratio, the viewport preserves it so the tip is sampled without
-//! distortion.  The effective size — `size_input * size` — scales the
-//! longer axis; `DAB_REFERENCE_SIZE` is the canvas-pixel reference for
-//! `effective_size = 1.0` (i.e. the slider's "100%" mark) but is no longer
-//! a hard cap, so the user's slider keeps growing the brush past 100%.
-//! The shorter axis follows from the tip aspect ratio.
+//! The compiled path supports AlphaMask mode exclusively. The original
+//! ImageStamp / LightnessMap / GradientMap modes relied on sampling a
+//! real RGBA tip texture and were dropped together with the dispatch
+//! pipeline in phase 4 of the compiled-port migration. Setting
+//! `application` to any non-zero value makes brush load fail with a
+//! clear error.
+//!
+//! ## Ignored ports
+//!
+//! `size_input`, `size`, `rotation`, `rotation_input`, `mirror_*`, and
+//! `ratio` are no-ops in compiled mode — dab dimensions, rotation and
+//! mirroring are owned by the terminal (which sizes its quad from
+//! `bbox_radius`). Wiring them has no effect on the rendered dab. A
+//! future revision can reintroduce rotation/mirror by rotating
+//! `local_uv` before the shape evaluator runs.
 
-use std::any::Any;
-
-use crate::brush::brush_tip::BrushTipApplication;
-use crate::brush::dab_pool::DAB_REFERENCE_SIZE;
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
-use crate::brush::gpu_context::BrushGpuContext;
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::pipeline::{
-    BrushPipelineEntry, BrushPipelineRegistration, BrushPipelines, BuildContext, DynamicUniformRing,
-};
 use crate::brush::wgsl_compile::{CompileWgslCtx, NodeWgsl};
-use crate::brush::wire::{BrushWireType, ScalarValue, TextureHandle};
+use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
-// ── Pipeline ────────────────────────────────────────────────────────────
-
-/// Uniform data for the stamp dab generation shader.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct StampUniforms {
-    pub dab_width: f32,   // dab viewport width in pixels
-    pub dab_height: f32,  // dab viewport height in pixels
-    pub opacity: f32,     // dab opacity (0-1)
-    pub rotation: f32,    // dab rotation in radians
-    pub color: [f32; 4],  // RGBA paint color (straight alpha)
-    pub mirror_x: f32,    // 1.0 = flip horizontally
-    pub mirror_y: f32,    // 1.0 = flip vertically
-    pub application: u32, // BrushTipApplication as u32
-    pub ratio: f32,       // user-controlled aspect ratio squeeze (1.0 = none)
-}
-
-/// Stamp tip pipeline.  Reads a brush tip texture, applies transforms,
-/// writes to a dab texture with REPLACE blend.
-pub struct StampPipeline {
-    pipeline: wgpu::RenderPipeline,
-    ring: DynamicUniformRing,
-    uniform_bind_group: wgpu::BindGroup,
-}
-
-impl StampPipeline {
-    fn build(ctx: &BuildContext) -> Self {
-        let shader = ctx
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("brush-stamp"),
-                source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../../../../../shaders/brush/stamp.wgsl").into(),
-                ),
-            });
-        // group(0) = uniforms, group(1) = brush tip texture+sampler.
-        let layout = ctx
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("brush-stamp-layout"),
-                bind_group_layouts: &[ctx.uniform_bgl, ctx.dab_bgl],
-                immediate_size: 0,
-            });
-        let pipeline = ctx
-            .device
-            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("brush-stamp"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
-                        blend: Some(wgpu::BlendState::REPLACE),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                multiview_mask: None,
-                cache: None,
-            });
-        let (ring, uniform_bind_group) = ctx
-            .make_uniform_ring::<StampUniforms>("brush-stamp-uniforms", "brush-stamp-uniform-bg");
-        Self {
-            pipeline,
-            ring,
-            uniform_bind_group,
-        }
-    }
-
-    pub fn pipeline(&self) -> &wgpu::RenderPipeline {
-        &self.pipeline
-    }
-
-    pub fn uniform_bind_group(&self) -> &wgpu::BindGroup {
-        &self.uniform_bind_group
-    }
-
-    /// Write stamp dab uniforms to the next ring slot.  Returns the
-    /// dynamic byte offset for `set_bind_group`.
-    pub fn write_uniforms(&self, queue: &wgpu::Queue, uniforms: &StampUniforms) -> u32 {
-        self.ring.write(queue, bytemuck::bytes_of(uniforms))
-    }
-}
-
-impl BrushPipelineEntry for StampPipeline {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-    fn ring(&self) -> Option<&DynamicUniformRing> {
-        Some(&self.ring)
-    }
-}
-
-fn stamp_pipeline_reg() -> BrushPipelineRegistration {
-    BrushPipelineRegistration {
-        id: "stamp",
-        build: |ctx| Box::new(StampPipeline::build(ctx)),
-    }
-}
-
-// ── Node ────────────────────────────────────────────────────────────────
-
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
-        pipelines: vec![stamp_pipeline_reg()],
+        pipelines: vec![],
         node: NodeRegistration {
-        type_id: "stamp",
-        category: "shape",
-        display_name: "Stamp Tip",
-        ports: vec![
-            PortDef::input("tip", BrushWireType::Texture)
-                .with_description("Brush tip image"),
-            PortDef::input("size_input", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 1.0)
-                .with_natural_range(0.0, 1.0)
-                .with_label("Size Input")
-                .with_unit(UnitType::Percent)
-                .with_icon("fa-solid fa-circle")
-                .with_description(
-                    "Per-touch size multiplier. Connect Pen Input pressure (or a curve on top) here for pressure-sensitive size.",
-                ),
-            // `size` deliberately has no `natural_range` — the slider
-            // intentionally over-drags past 100% to support dramatically
-            // over-sized stamps, so a wire feeding in (e.g. pen pressure)
-            // must pass through raw rather than getting clamped/remapped
-            // into the slider's 0..4 hint.
-            PortDef::input("size", BrushWireType::Scalar)
-                .with_range(0.0, 4.0, 0.1)
-                .with_label("Size")
-                .with_unit(UnitType::Percent)
-                .with_icon("fa-solid fa-up-right-and-down-left-from-center")
-                .exposed()
-                // Size is a working scaling factor, not part of the
-                // brush's identity. Excluded from previews entirely
-                // by spoofing to a fixed ~25 px-radius value — the
-                // preview pipeline never reads the user's actual size.
-                .with_preview_value(0.1)
-                .with_description("Overall brush size"),
-            // No `natural_range`: radians are a unit, not a normalized
-            // signal. Wiring `pen.tilt_direction`, `pen.drawing_angle`,
-            // or `pen.rotation` here is a unit-preserving identity wire
-            // — both ports speak the same language, so the value passes
-            // through raw and sums with the user's `rotation` offset.
-            PortDef::input("rotation_input", BrushWireType::Scalar)
-                .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                .with_label("Rotation Input")
-                .with_unit(UnitType::Degrees)
-                .with_icon("fa-solid fa-rotate")
-                .with_description(
-                    "Per-dab rotation, summed with `rotation`. Wire `pen.tilt_direction`, `pen.drawing_angle`, or `pen.rotation` so the brush follows the pen.",
-                ),
-            PortDef::input("rotation", BrushWireType::Scalar)
-                .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                .with_label("Rotation")
-                .with_unit(UnitType::Degrees)
-                .with_icon("fa-solid fa-rotate")
-                // Orientation is part of brush identity (a 45° nib is a
-                // different-looking brush), so the thumbnail tracks the
-                // user's value instead of being reset to 0.
-                .persist_in_thumbnail()
-                .with_description(
-                    "Static rotation offset, summed with `rotation_input`. Expose this as a knob for the user; route dynamic signals (tilt, drawing angle, barrel) into `rotation_input` instead.",
-                ),
-            PortDef::input("mirror_x", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Flip horizontally"),
-            PortDef::input("mirror_y", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Flip vertically"),
-            PortDef::input("ratio", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 1.0)
-                .with_natural_range(0.0, 1.0)
-                .with_label("Ratio")
-                .with_unit(UnitType::Percent)
-                .with_icon("fa-solid fa-arrows-left-right")
-                .with_description("Aspect ratio (100% = round)"),
-            PortDef::input("flow", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 1.0)
-                .with_natural_range(0.0, 1.0)
-                .with_label("Flow")
-                .with_unit(UnitType::Percent)
-                .with_icon("fa-solid fa-droplet")
-                .exposed()
-                .with_description("Paint deposited per dab"),
-            PortDef::input("color", BrushWireType::Color)
-                .with_description("Brush color"),
-            PortDef::output("dab", BrushWireType::Texture)
-                .with_description("The stamped brush mark"),
-            PortDef::output("dab_size", BrushWireType::Vec2)
-                .with_description("Brush mark size in pixels"),
-            PortDef::output("preview", BrushWireType::Texture)
-                .with_description("Brush shape shown under the cursor on hover, with rotation, aspect ratio, and mirroring applied"),
-        ],
-        params: &[
-            // Enum stored as Int — order MUST match the `BrushTipApplication`
-            // match in `resolve_inputs`: AlphaMask=0, ImageStamp=1,
-            // LightnessMap=2, GradientMap=3. Labeled dropdown so users pick
-            // by name rather than memorizing application indices.
-            ParamDef::Enum {
-                name: "application",
-                options: &["Alpha Mask", "Image Stamp", "Lightness Map", "Gradient Map"],
-                default: 0,
-            },
-        ],
-        is_gpu: true,
+            type_id: "stamp",
+            category: "shape",
+            display_name: "Stamp Tip",
+            ports: vec![
+                PortDef::input("tip", BrushWireType::Texture)
+                    .with_description("Brush tip image (scalar coverage in compiled mode)"),
+                PortDef::input("size_input", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 1.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_label("Size Input")
+                    .with_unit(UnitType::Percent)
+                    .with_icon("fa-solid fa-circle")
+                    .with_description(
+                        "Per-touch size multiplier. Ignored in compiled mode — \
+                         the terminal owns the dab dimensions.",
+                    ),
+                PortDef::input("size", BrushWireType::Scalar)
+                    .with_range(0.0, 4.0, 0.1)
+                    .with_label("Size")
+                    .with_unit(UnitType::Percent)
+                    .with_icon("fa-solid fa-up-right-and-down-left-from-center")
+                    .exposed()
+                    .with_preview_value(0.1)
+                    .with_description("Overall brush size (ignored — terminal owns size)"),
+                PortDef::input("rotation_input", BrushWireType::Scalar)
+                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
+                    .with_label("Rotation Input")
+                    .with_unit(UnitType::Degrees)
+                    .with_icon("fa-solid fa-rotate")
+                    .with_description("Per-dab rotation (ignored in compiled mode)"),
+                PortDef::input("rotation", BrushWireType::Scalar)
+                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
+                    .with_label("Rotation")
+                    .with_unit(UnitType::Degrees)
+                    .with_icon("fa-solid fa-rotate")
+                    .persist_in_thumbnail()
+                    .with_description("Static rotation (ignored in compiled mode)"),
+                PortDef::input("mirror_x", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Flip horizontally (ignored in compiled mode)"),
+                PortDef::input("mirror_y", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Flip vertically (ignored in compiled mode)"),
+                PortDef::input("ratio", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 1.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_label("Ratio")
+                    .with_unit(UnitType::Percent)
+                    .with_icon("fa-solid fa-arrows-left-right")
+                    .with_description("Aspect ratio (ignored in compiled mode)"),
+                PortDef::input("flow", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 1.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_label("Flow")
+                    .with_unit(UnitType::Percent)
+                    .with_icon("fa-solid fa-droplet")
+                    .exposed()
+                    .with_description("Paint deposited per dab"),
+                PortDef::input("color", BrushWireType::Color).with_description("Brush color"),
+                PortDef::output("dab", BrushWireType::Texture)
+                    .with_description("The stamped brush mark (premultiplied RGBA)"),
+                PortDef::output("dab_size", BrushWireType::Vec2)
+                    .with_description("Brush mark size in pixels (unused in compiled mode)"),
+                PortDef::output("preview", BrushWireType::Texture)
+                    .with_description("Brush preview (stubbed during phase 4 migration)"),
+            ],
+            params: &[
+                // Enum stored as Int. Only `Alpha Mask` (= 0) is
+                // supported on the compiled path; the other modes are
+                // listed here so old brush JSON deserializes without a
+                // schema mismatch, but `compile_wgsl` errors on any
+                // non-zero value.
+                ParamDef::Enum {
+                    name: "application",
+                    options: &["Alpha Mask", "Image Stamp", "Lightness Map", "Gradient Map"],
+                    default: 0,
+                },
+            ],
+            is_gpu: true,
         },
     }
-}
-
-/// Fully-resolved stamp inputs, computed once and reused by both the live
-/// evaluation path and the preview path. Everything here is pure CPU data.
-struct StampInputs {
-    tip_handle: TextureHandle,
-    effective_size: f32, // size_input * size, no upper bound — the user's
-    // `size` slider grows the brush as far as they want.
-    ratio: f32,
-    /// Per-dab paint deposition (industry "flow"). Feeds the stamp shader's
-    /// `opacity` uniform — the stamp pipeline still calls its uniform
-    /// `opacity` because it represents the per-dab alpha. Stroke-level
-    /// opacity is applied later in the commit pass.
-    flow: f32,
-    color: [f32; 4],
-    rotation_rad: f32,
-    mirror_x: f32,
-    mirror_y: f32,
-    application_int: u32,
-}
-
-fn resolve_inputs(ctx: &EvalContext) -> Option<StampInputs> {
-    let tip_handle = match ctx.input("tip") {
-        ScalarValue::Texture(h) => h,
-        _ => return None,
-    };
-
-    let size_input = ctx.input_f32("size_input");
-    let size = ctx.input_f32("size");
-    let rotation = ctx.input_f32("rotation");
-    let rotation_input = ctx.input_f32("rotation_input");
-    let mirror_x_input = ctx.input_f32("mirror_x");
-    let mirror_y_input = ctx.input_f32("mirror_y");
-    let ratio = ctx.input_f32("ratio").max(0.01);
-    let flow = ctx.input_f32("flow");
-    let color = ctx.input("color").as_color();
-
-    let application_int = match ctx.params.first() {
-        Some(crate::gpu::params::ParamValue::Int(v)) => *v as u32,
-        _ => 0,
-    };
-    let _application = match application_int {
-        1 => BrushTipApplication::ImageStamp,
-        2 => BrushTipApplication::LightnessMap,
-        3 => BrushTipApplication::GradientMap,
-        _ => BrushTipApplication::AlphaMask,
-    };
-
-    Some(StampInputs {
-        tip_handle,
-        effective_size: (size_input * size).max(0.0),
-        ratio,
-        flow,
-        color,
-        rotation_rad: rotation + rotation_input,
-        mirror_x: if mirror_x_input > 0.5 { 1.0 } else { 0.0 },
-        mirror_y: if mirror_y_input > 0.5 { 1.0 } else { 0.0 },
-        application_int,
-    })
-}
-
-/// Compute the dab's pixel dimensions given the effective size and the tip's
-/// aspect ratio. `nominal_dim` is the canvas-pixel size the brush draws at
-/// `effective_size = 1.0` — i.e. the reference for the "100%" mark on the
-/// user-facing size slider. Above 1.0, the dab grows proportionally; the
-/// engine no longer caps internally so the slider keeps working past 100%.
-fn compute_dab_dims(effective_size: f32, tip_w: u32, tip_h: u32, nominal_dim: u32) -> (u32, u32) {
-    let nominal = nominal_dim as f32;
-    let tip_aspect = tip_w as f32 / tip_h as f32;
-    if tip_aspect >= 1.0 {
-        let w = (effective_size * nominal).max(1.0);
-        let h = (w / tip_aspect).max(1.0);
-        (w.ceil() as u32, h.ceil() as u32)
-    } else {
-        let h = (effective_size * nominal).max(1.0);
-        let w = (h * tip_aspect).max(1.0);
-        (w.ceil() as u32, h.ceil() as u32)
-    }
-}
-
-/// Record a single stamp render pass into `target_view` at the given pixel
-/// viewport size. Shared by live stroke evaluation (target = pool dab) and
-/// preview (target = overlay's preview mask).
-///
-/// Split-borrow friendly: takes the pieces it needs rather than `&mut gpu`,
-/// so the caller can hold a `gpu.dab_pool.view(target_handle)` borrow
-/// concurrently without a conflict.
-fn encode_stamp_pass(
-    encoder: &mut wgpu::CommandEncoder,
-    queue: &wgpu::Queue,
-    pipelines: &BrushPipelines,
-    tip_bind_group: &wgpu::BindGroup,
-    inputs: &StampInputs,
-    target_view: &wgpu::TextureView,
-    viewport: (u32, u32),
-    label: &'static str,
-) {
-    let (view_w, view_h) = viewport;
-
-    let uniforms = StampUniforms {
-        dab_width: view_w as f32,
-        dab_height: view_h as f32,
-        opacity: inputs.flow,
-        rotation: inputs.rotation_rad,
-        color: inputs.color,
-        mirror_x: inputs.mirror_x,
-        mirror_y: inputs.mirror_y,
-        application: inputs.application_int,
-        ratio: inputs.ratio,
-    };
-    let stamp = pipelines.get::<StampPipeline>("stamp");
-    let offset = stamp.write_uniforms(queue, &uniforms);
-
-    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some(label),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: target_view,
-            resolve_target: None,
-            depth_slice: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        ..Default::default()
-    });
-    pass.set_viewport(0.0, 0.0, view_w as f32, view_h as f32, 0.0, 1.0);
-    pass.set_pipeline(stamp.pipeline());
-    pass.set_bind_group(0, stamp.uniform_bind_group(), &[offset]);
-    pass.set_bind_group(1, tip_bind_group, &[]);
-    pass.draw(0..3, 0..1);
 }
 
 pub struct StampEvaluator;
 
 impl BrushNodeEvaluator for StampEvaluator {
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        // GPU node — CPU evaluation is a no-op.
         vec![]
     }
 
-    fn evaluate_gpu(
-        &self,
-        ctx: &EvalContext,
-        gpu: &mut BrushGpuContext,
-    ) -> Vec<(String, ScalarValue)> {
-        let Some(inputs) = resolve_inputs(ctx) else {
-            return vec![];
-        };
-
-        let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
-        let (dab_w, dab_h) =
-            compute_dab_dims(inputs.effective_size, tip_w, tip_h, DAB_REFERENCE_SIZE);
-
-        // Allocate the dab texture at the exact size we need. The pool
-        // reuses entries with matching dimensions across dabs, so a
-        // constant-pressure stroke allocates once. Variable-pressure
-        // strokes get one entry per distinct integer pixel size — bounded
-        // by the dab pool's existing free-list reuse.
-        let handle = gpu.dab_pool.acquire_sized(gpu.device, dab_w, dab_h);
-        let dab_view = gpu.dab_pool.view(handle).clone();
-        let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
-        encode_stamp_pass(
-            &mut gpu.encoder,
-            gpu.queue,
-            gpu.pipelines,
-            &tip_bind_group,
-            &inputs,
-            &dab_view,
-            (dab_w, dab_h),
-            "brush-stamp",
-        );
-
-        vec![
-            ("dab".into(), ScalarValue::Texture(handle)),
-            (
-                "dab_size".into(),
-                ScalarValue::Vec2([dab_w as f32, dab_h as f32]),
-            ),
-        ]
-    }
-
-    /// Preview-mode render: produce a brush-tip texture with rotation,
-    /// ratio, and mirror baked in — but *without* per-dab deposition
-    /// modulation (flow=1, color=white). The texture is sized to the
-    /// brush's canvas-pixel footprint, so downstream consumers (typically
-    /// `color_output`) can read its dimensions directly without a separate
-    /// size wire.
-    ///
-    /// The same `encode_stamp_pass` shader as the stroke path is used —
-    /// single source of truth for tip rasterisation. The only difference
-    /// is the input values fed in.
-    fn render_preview(
-        &self,
-        ctx: &EvalContext,
-        gpu: &mut BrushGpuContext,
-    ) -> Vec<(String, ScalarValue)> {
-        let Some(mut inputs) = resolve_inputs(ctx) else {
-            return vec![];
-        };
-
-        // Strip deposition modulation. The preview shows the brush, not
-        // how much paint a single dab would deposit.
-        inputs.flow = 1.0;
-        inputs.color = [1.0, 1.0, 1.0, 1.0];
-
-        let (tip_w, tip_h) = gpu.dab_pool.texture_size(inputs.tip_handle);
-        let (dab_w, dab_h) =
-            compute_dab_dims(inputs.effective_size, tip_w, tip_h, DAB_REFERENCE_SIZE);
-        if dab_w == 0 || dab_h == 0 {
-            return vec![];
-        }
-
-        // Right-sized texture: dimensions == brush canvas-pixel extent.
-        // `color_output::render_preview` queries `texture_size(handle)` to
-        // recover this without a parallel size wire.
-        let handle = gpu.dab_pool.acquire_sized(gpu.device, dab_w, dab_h);
-        let view = gpu.dab_pool.view(handle).clone();
-        let tip_bind_group = gpu.dab_pool.bind_group(inputs.tip_handle).clone();
-        encode_stamp_pass(
-            &mut gpu.encoder,
-            gpu.queue,
-            gpu.pipelines,
-            &tip_bind_group,
-            &inputs,
-            &view,
-            (dab_w, dab_h),
-            "brush-stamp-preview",
-        );
-
-        vec![
-            ("preview".into(), ScalarValue::Texture(handle)),
-            (
-                "dab_size".into(),
-                ScalarValue::Vec2([dab_w as f32, dab_h as f32]),
-            ),
-        ]
-    }
-
-    /// Compiled-brush WGSL contribution. Supported only in AlphaMask
-    /// mode — other application modes (ImageStamp, LightnessMap,
-    /// GradientMap) rely on sampling a real `tip` RGBA texture, which
-    /// has no inline equivalent without a texture-array binding (out
-    /// of scope this PR). A brush that wires ImageStamp / etc. into a
-    /// `paint_compiled` terminal will fail brush load with this
-    /// error message and must use `paint` (or another existing
-    /// terminal) instead.
-    ///
-    /// In AlphaMask mode the `tip` input is a scalar mask (e.g. from
-    /// `circle.texture`), and the output `dab` is premultiplied RGBA
-    /// of `color × mask × flow`. The `size_input`, `size`, `rotation`,
-    /// `mirror_*`, and `ratio` ports are **ignored** in compiled
-    /// mode: dab dimensions are owned by the terminal, and the
-    /// transform/mirror knobs would require rotating `local_uv` before
-    /// the upstream shape evaluation — a more invasive change saved
-    /// for a follow-up. Wiring those ports has no effect on the
-    /// rendered dab today.
+    /// Inline `color × mask × flow` into the brush's compiled WGSL.
+    /// `tip` carries the upstream scalar coverage expression; the
+    /// emitted `dab` output is premultiplied RGBA. Errors on any
+    /// application mode other than AlphaMask — those relied on
+    /// sampling a real RGBA tip texture and were dropped together
+    /// with the dispatch pipeline.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         if !cctx.consumed_outputs.contains("dab") {
@@ -522,15 +145,11 @@ impl BrushNodeEvaluator for StampEvaluator {
         if application != 0 {
             return Err(format!(
                 "stamp.application = {application} (expected AlphaMask = 0); \
-                 compiled brushes only support AlphaMask mode this PR. \
-                 Use the `paint` terminal instead, or restructure the brush \
-                 to use a procedural tip (e.g. circle node).",
+                 ImageStamp / LightnessMap / GradientMap were dropped in the \
+                 compiled-port migration. Use a procedural tip (circle node) \
+                 instead.",
             ));
         }
-        // In AlphaMask mode the upstream `tip` produces a scalar
-        // coverage in [0, 1]. The wire's WGSL expression returns
-        // `f32` (circle's `compile_wgsl` emits a function call), so
-        // we use it directly as the mask.
         let mask = cctx.input("tip").as_f32();
         let color = cctx.input("color").as_vec4();
         let flow = cctx.input("flow").as_f32();
@@ -543,16 +162,10 @@ impl BrushNodeEvaluator for StampEvaluator {
              }}\n"
         );
         wgsl.decls = decls;
-        // Output expression — substituted into stamp's downstream
-        // consumer (paint_compiled.rgba).
         wgsl.outputs.insert(
             "dab".into(),
             format!("{}({}, {}, {})", fn_name, mask, color, flow),
         );
-        // `dab_size` and `preview` aren't meaningful in the compiled
-        // path (the terminal owns dab dimensions). If a downstream
-        // node wires them, we'd need additional plumbing — for now
-        // we don't emit them.
         Ok(wgsl)
     }
 }

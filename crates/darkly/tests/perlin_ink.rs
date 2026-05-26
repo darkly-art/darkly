@@ -17,17 +17,15 @@
 //!    Validates the compiled `shape_r_theta` parity with the existing
 //!    CPU implementation.
 
-use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use darkly::brush::compile_graph;
-use darkly::brush::dab_pool::DabTexturePool;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::stroke_buffer::StrokeBuffer;
-use darkly::brush::wire::{BrushWireType, TextureHandle};
+use darkly::brush::wire::BrushWireType;
 use darkly::brush::BrushNodeRegistry;
 use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
@@ -51,10 +49,8 @@ struct Harness {
     layer_texture: wgpu::Texture,
     layer_view: wgpu::TextureView,
     pipelines: BrushPipelines,
-    dab_pool: DabTexturePool,
     stroke_buffer: StrokeBuffer,
     runner: BrushGraphRunner,
-    resource_handles: HashMap<String, TextureHandle>,
 }
 
 /// Build a minimal compiled-brush graph for testing:
@@ -141,15 +137,8 @@ fn harness(initial: &[u8], graph: Graph<BrushWireType>) -> Harness {
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, initial);
 
-    let dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-    let stroke_buffer = StrokeBuffer::new(
-        &device,
-        CANVAS,
-        CANVAS,
-        dab_pool.bind_group_layout(),
-        &pipelines,
-    );
+    let pipelines = BrushPipelines::new(&device, &queue);
+    let stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
 
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
@@ -172,15 +161,13 @@ fn harness(initial: &[u8], graph: Graph<BrushWireType>) -> Harness {
         layer_texture,
         layer_view,
         pipelines,
-        dab_pool,
         stroke_buffer,
         runner,
-        resource_handles: HashMap::new(),
     }
 }
 
 macro_rules! make_ctx {
-    ($h:ident, $label:expr, $resources:expr) => {{
+    ($h:ident, $label:expr) => {{
         let (_scratch, _pre_stroke_texture, _pre_stroke_bind_group) =
             $h.stroke_buffer.parts_for_brush_ctx();
         BrushGpuContext {
@@ -191,7 +178,6 @@ macro_rules! make_ctx {
                 }),
             device: &$h.device,
             queue: &$h.queue,
-            dab_pool: &mut $h.dab_pool,
             pipelines: &$h.pipelines,
             scratch: Some(_scratch),
             canvas_width: CANVAS,
@@ -207,7 +193,6 @@ macro_rules! make_ctx {
             ),
             selection_bind_group: $h.pipelines.default_selection_bind_group(),
             preview_target_view: None,
-            resource_handles: $resources,
             blend_mode: 0,
             preview_mask_view: None,
             preview_mask_size: (0, 0),
@@ -228,45 +213,33 @@ macro_rules! make_ctx {
 
 impl Harness {
     fn begin_stroke(&mut self) {
-        let resources = std::mem::take(&mut self.resource_handles);
-        {
-            let mut ctx = make_ctx!(self, "perlin-ink-test-begin", &resources);
-            self.runner.begin_stroke(&mut ctx);
-            self.queue.submit([ctx.encoder.finish()]);
-        }
-        self.resource_handles = resources;
+        let mut ctx = make_ctx!(self, "perlin-ink-test-begin");
+        self.runner.begin_stroke(&mut ctx);
+        self.queue.submit([ctx.encoder.finish()]);
     }
 
     fn dab_and_flush(&mut self, info: &PaintInformation, color: [f32; 4], dab_index: u32) {
-        let resources = std::mem::take(&mut self.resource_handles);
-        {
-            let mut ctx = make_ctx!(self, "perlin-ink-test-dab", &resources);
-            self.runner.seed_sensors(info, color, 0xC0FFEE, dab_index);
-            self.runner.execute_cpu();
-            self.runner.execute_gpu(&mut ctx);
-            self.runner.flush_dabs(&mut ctx);
-            self.runner.commit(&mut ctx);
-            self.queue.submit([ctx.encoder.finish()]);
-        }
-        self.resource_handles = resources;
+        let mut ctx = make_ctx!(self, "perlin-ink-test-dab");
+        self.runner.seed_sensors(info, color, 0xC0FFEE, dab_index);
+        self.runner.execute_cpu();
+        self.runner.execute_gpu(&mut ctx);
+        self.runner.flush_dabs(&mut ctx);
+        self.runner.commit(&mut ctx);
+        self.queue.submit([ctx.encoder.finish()]);
     }
 
     fn two_dabs_same_phase(&mut self, a: &PaintInformation, b: &PaintInformation, color: [f32; 4]) {
-        let resources = std::mem::take(&mut self.resource_handles);
-        {
-            let mut ctx = make_ctx!(self, "perlin-ink-test-two-dabs", &resources);
-            self.runner.seed_sensors(a, color, 0xC0FFEE, 0);
-            self.runner.execute_cpu();
-            self.runner.execute_gpu(&mut ctx);
-            self.runner.seed_sensors(b, color, 0xC0FFEE, 1);
-            self.runner.execute_cpu();
-            self.runner.execute_gpu(&mut ctx);
-            // Single flush, two instanced dabs.
-            self.runner.flush_dabs(&mut ctx);
-            self.runner.commit(&mut ctx);
-            self.queue.submit([ctx.encoder.finish()]);
-        }
-        self.resource_handles = resources;
+        let mut ctx = make_ctx!(self, "perlin-ink-test-two-dabs");
+        self.runner.seed_sensors(a, color, 0xC0FFEE, 0);
+        self.runner.execute_cpu();
+        self.runner.execute_gpu(&mut ctx);
+        self.runner.seed_sensors(b, color, 0xC0FFEE, 1);
+        self.runner.execute_cpu();
+        self.runner.execute_gpu(&mut ctx);
+        // Single flush, two instanced dabs.
+        self.runner.flush_dabs(&mut ctx);
+        self.runner.commit(&mut ctx);
+        self.queue.submit([ctx.encoder.finish()]);
     }
 
     fn readback_canvas(&self) -> Vec<u8> {
@@ -389,15 +362,8 @@ fn builtin_perlin_ink_brush_renders_within_declared_bbox() {
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) =
         create_test_texture(&device, &queue, CANVAS, CANVAS, &black_canvas());
-    let dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-    let stroke_buffer = StrokeBuffer::new(
-        &device,
-        CANVAS,
-        CANVAS,
-        dab_pool.bind_group_layout(),
-        &pipelines,
-    );
+    let pipelines = BrushPipelines::new(&device, &queue);
+    let stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
     let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
         &layer_view,
@@ -438,10 +404,8 @@ fn builtin_perlin_ink_brush_renders_within_declared_bbox() {
         layer_texture,
         layer_view,
         pipelines,
-        dab_pool,
         stroke_buffer,
         runner,
-        resource_handles: HashMap::new(),
     };
     h.begin_stroke();
     let info = PaintInformation {
@@ -479,7 +443,7 @@ fn builtin_perlin_ink_brush_renders_within_declared_bbox() {
     // = ~38.4 (DAB_REFERENCE_SIZE = 512 px). bbox_radius =
     // effective_radius * 1.5 = ~57.6. Allow 1px slack for the
     // rasterizer's edge.
-    let effective_radius = 0.15 * darkly::brush::dab_pool::DAB_REFERENCE_SIZE as f32 * 0.5;
+    let effective_radius = 0.15 * darkly::brush::DAB_REFERENCE_SIZE as f32 * 0.5;
     let bbox_radius =
         effective_radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
     let max_dist = max_dist_sq.sqrt();
@@ -548,7 +512,7 @@ fn perlin_ink_overlapping_dabs_render_without_truncation() {
     // Sum deposited pixels per dab, gated by each dab's declared bbox.
     let mut dab_a_pixels = 0;
     let mut dab_b_pixels = 0;
-    let dab_size = 0.15 * darkly::brush::dab_pool::DAB_REFERENCE_SIZE as f32 * 0.5;
+    let dab_size = 0.15 * darkly::brush::DAB_REFERENCE_SIZE as f32 * 0.5;
     // Per-dab effective_radius differs only through the curve(pressure)
     // wire; the brush's curve is identity-shape so radius ∝ pressure.
     let r_a = (dab_size * 0.5 * bbox_factor) + 1.0;

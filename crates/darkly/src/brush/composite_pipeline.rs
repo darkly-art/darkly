@@ -63,9 +63,13 @@ impl CompositePipeline {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("brush-composite-layout"),
+                // group(1) is the scratch foreground; the scratch's
+                // write bind group is rebuilt against `canvas_copy_bgl`
+                // after the dab_pool removal — the shape is identical
+                // (`texture_2d<f32> + sampler`).
                 bind_group_layouts: &[
                     ctx.uniform_bgl,
-                    ctx.dab_bgl,
+                    ctx.canvas_copy_bgl,
                     ctx.selection_bgl,
                     ctx.canvas_copy_bgl,
                 ],

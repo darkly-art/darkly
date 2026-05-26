@@ -32,7 +32,6 @@ mod perf;
 use crate::brush::gpu_context::BrushPerfCounters;
 
 use crate::brush::checkpoint_ring::CheckpointRing;
-use crate::brush::dab_pool::DabTexturePool;
 use crate::brush::library::BrushLibrary;
 use crate::brush::pipeline::BrushPipelines;
 use crate::brush::preview_renderer::BrushPreviewRenderer;
@@ -213,17 +212,6 @@ pub(crate) enum ReadbackContext {
     ActiveBrushDab {
         topology_version: u64,
     },
-    /// Async readback of a per-node preview rendered via the
-    /// `preview_subgraph` pipeline (target node + transitive predecessors +
-    /// synthesised `preview_terminal`). On completion the pixels are
-    /// PNG-encoded and stored in `node_preview_cache` keyed by `node_id`.
-    /// The `topology_version` travels with the request so stale results
-    /// from an in-flight render that's been superseded by a graph mutation
-    /// get dropped (mirrors `ActiveBrushDab`'s pattern).
-    NodePreview {
-        node_id: u64,
-        topology_version: u64,
-    },
 }
 
 /// Cached thumbnail RGBA bytes per node id. Keyed uniformly across layers,
@@ -289,7 +277,6 @@ pub struct DarklyEngine {
     pub(crate) pending_selection_snapshot: Option<crate::gpu::region_store::Snapshot>,
 
     // --- Brush Engine ---
-    pub(crate) dab_pool: DabTexturePool,
     pub(crate) brush_pipelines: BrushPipelines,
     /// Active brush stroke engine (only during a BrushStroke operation).
     pub(crate) brush_stroke_engine: Option<StrokeEngine>,
@@ -348,14 +335,6 @@ pub struct DarklyEngine {
     /// Topology version at the last time we issued a dab render. Compared
     /// against `brush_topology_version` to skip redundant dab renders.
     pub(crate) last_rendered_dab_topology_version: u64,
-    /// Per-node preview cache: `node_id → (topology_version, png_bytes)`.
-    /// `brush_node_preview(node_id)` returns the bytes if the version
-    /// matches `brush_topology_version`, otherwise kicks off a fresh render
-    /// via the `preview_subgraph` pipeline. Stale entries become cache-misses
-    /// after the next topology bump and self-invalidate; we keep the old
-    /// bytes around so the UI shows the last-known thumbnail rather than a
-    /// blank gap during the readback gap.
-    pub(crate) node_preview_cache: std::collections::HashMap<u64, (u64, Vec<u8>)>,
     /// Theme colors for brush thumbnails (not the live editor preview —
     /// that uses the caller-supplied fg and auto-picked contrast bg). The
     /// frontend sets these via `set_preview_theme()` when the UI theme
@@ -365,10 +344,6 @@ pub struct DarklyEngine {
 
     // --- Brush Library ---
     pub(crate) brush_library: BrushLibrary,
-    /// Resource name → TextureHandle for images uploaded by the current brush.
-    /// Built by `upload_brush_resources()`, read by Image nodes via BrushGpuContext.
-    pub(crate) resource_handles:
-        std::collections::HashMap<String, crate::brush::wire::TextureHandle>,
 
     /// Stroke buffer for stabilizer-driven rewind + re-render.
     pub(crate) stroke_buffer: Option<StrokeBuffer>,
@@ -486,9 +461,7 @@ impl DarklyEngine {
         let undo_stack = UndoStack::new(50);
         let region_store = RegionStore::new(&gpu.device, doc_width, doc_height);
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
-        let dab_pool = DabTexturePool::new(&gpu.device);
-        let brush_pipelines =
-            BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout());
+        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue);
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
         let diff_rect = DiffRectPass::new(&gpu.device);
 
@@ -508,7 +481,6 @@ impl DarklyEngine {
             paint_pipelines,
             scratch_snapshot: None,
             pending_selection_snapshot: None,
-            dab_pool,
             brush_pipelines,
             brush_stroke_engine: None,
             tool_session,
@@ -519,7 +491,6 @@ impl DarklyEngine {
             last_rendered_preview_version: 0,
             active_dab_preview_cache: None,
             last_rendered_dab_topology_version: 0,
-            node_preview_cache: std::collections::HashMap::new(),
             // Default theme: dark (white on dark). Frontend overrides via
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
@@ -531,7 +502,6 @@ impl DarklyEngine {
                 }
                 lib
             },
-            resource_handles: std::collections::HashMap::new(),
             stroke_buffer: None,
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),

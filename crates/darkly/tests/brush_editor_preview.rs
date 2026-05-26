@@ -5,10 +5,7 @@
 //! drawn. Uses the blocking `test_utils::readback_texture` helper — native
 //! only; the wasm path does async readback via the ReadbackScheduler.
 
-use std::collections::HashMap;
-
 use darkly::brush::{
-    dab_pool::DabTexturePool,
     default_graph,
     pipeline::BrushPipelines,
     preview_renderer::{synthesize_preview_stroke, BrushPreviewRenderer},
@@ -18,9 +15,7 @@ use darkly::gpu::test_utils::{readback_texture, test_device};
 #[test]
 fn renders_s_curve_over_black_background() {
     let (device, queue) = test_device();
-    let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-    let resources: HashMap<_, _> = HashMap::new();
+    let pipelines = BrushPipelines::new(&device, &queue);
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();
 
@@ -33,17 +28,7 @@ fn renders_s_curve_over_black_background() {
 
     let texture = renderer
         .render_stroke(
-            &device,
-            &queue,
-            &mut dab_pool,
-            &pipelines,
-            &resources,
-            &graph,
-            &path,
-            fg,
-            bg,
-            width,
-            height,
+            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height,
         )
         .expect("render_stroke should return a texture for the default graph");
 
@@ -106,9 +91,7 @@ fn renders_s_curve_over_black_background() {
 #[test]
 fn renderer_reuses_target_across_renders_of_same_size() {
     let (device, queue) = test_device();
-    let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-    let resources: HashMap<_, _> = HashMap::new();
+    let pipelines = BrushPipelines::new(&device, &queue);
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();
     let path = synthesize_preview_stroke(320.0, 120.0, 20, 0.0);
@@ -118,9 +101,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
     let _ = renderer.render_stroke(
         &device,
         &queue,
-        &mut dab_pool,
         &pipelines,
-        &resources,
         &graph,
         &path,
         [1.0, 1.0, 1.0, 1.0],
@@ -134,9 +115,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
     let _ = renderer.render_stroke(
         &device,
         &queue,
-        &mut dab_pool,
         &pipelines,
-        &resources,
         &graph,
         &path,
         [1.0, 0.0, 0.0, 1.0],
@@ -454,18 +433,14 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 #[test]
 fn empty_path_returns_none() {
     let (device, queue) = test_device();
-    let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-    let resources: HashMap<_, _> = HashMap::new();
+    let pipelines = BrushPipelines::new(&device, &queue);
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();
 
     let result = renderer.render_stroke(
         &device,
         &queue,
-        &mut dab_pool,
         &pipelines,
-        &resources,
         &graph,
         &[],
         [1.0, 1.0, 1.0, 1.0],

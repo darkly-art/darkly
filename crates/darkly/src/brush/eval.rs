@@ -626,9 +626,6 @@ impl BrushGraphRunner {
     /// their scalar inputs (size, opacity, color, position) from the slot
     /// table populated by CPU nodes.  GPU nodes record render passes into
     /// the encoder and write texture handles back to the slot table.
-    ///
-    /// After this returns, call `gpu.dab_pool.release_all()` to return
-    /// acquired dab textures to the pool.
     pub fn execute_gpu(&mut self, gpu: &mut BrushGpuContext) {
         self.dispatch_gpu(gpu, |ev, ctx, gpu| ev.evaluate_gpu(ctx, gpu));
     }

@@ -466,9 +466,10 @@ fn smudge_brush() -> Brush {
     graph.set_port_exposed(pen, "stabilize", true).unwrap();
 
     // Tighten spacing well below the paint default. The smear is per-dab,
-    // so the visible drag is dab-density-bound; the liquify-style 4% gives
-    // a continuous trail. The port floor is also 4%.
-    graph.set_port_default(pen, "spacing", 0.04).unwrap();
+    // so the visible drag is dab-density-bound; 1% gives a near-continuous
+    // trail. The single-pass WGSL-compiled brush pipeline keeps this within
+    // frame budget — the port floor is also 1%.
+    graph.set_port_default(pen, "spacing", 0.01).unwrap();
 
     // Sharper-than-typical tip. With a softened mask, the read at
     // `canvas_pos − motion` lands in the falloff ring and smears canvas

@@ -127,12 +127,12 @@ pub struct BuildContext<'a> {
     /// fragment output by the selection mask.
     pub selection_bgl: &'a wgpu::BindGroupLayout,
     /// Texture + linear sampler — bound where shaders sample the per-dab
-    /// scratch read mirror snapshot (composite, liquify, smudge, ...).
+    /// scratch read mirror snapshot (composite, smudge_compiled,
+    /// liquify_compiled, watercolor_compiled atlas). After the
+    /// `dab_pool` deletion this BGL is the single shape for every
+    /// `texture_2d<f32> + sampler` binding in the brush stack — the
+    /// scratch's write bind group also lives on it.
     pub canvas_copy_bgl: &'a wgpu::BindGroupLayout,
-    /// Dab-texture layout from the global [`DabTexturePool`].
-    ///
-    /// [`DabTexturePool`]: crate::brush::dab_pool::DabTexturePool
-    pub dab_bgl: &'a wgpu::BindGroupLayout,
     pub canvas_copy_sampler: &'a wgpu::Sampler,
     pub min_uniform_align: u32,
 }
@@ -256,19 +256,11 @@ pub struct BrushPipelines {
 impl BrushPipelines {
     /// Build all brush pipelines.
     ///
-    /// `dab_bgl` is the dab texture bind group layout from
-    /// [`DabTexturePool`].  No canvas dimensions: the read-mirror texture
-    /// brush composite shaders sample from lives on
-    /// [`Scratch`](crate::brush::scratch::Scratch) (per-stroke, lazy-grown
-    /// to dab footprint), so engine-init no longer needs to know the
-    /// canvas size.
-    ///
-    /// [`DabTexturePool`]: crate::brush::dab_pool::DabTexturePool
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        dab_bgl: &wgpu::BindGroupLayout,
-    ) -> Self {
+    /// No canvas dimensions: the read-mirror texture brush composite
+    /// shaders sample from lives on [`Scratch`](crate::brush::scratch::Scratch)
+    /// (per-stroke, lazy-grown to dab footprint), so engine-init no
+    /// longer needs to know the canvas size.
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let min_uniform_align = device.limits().min_uniform_buffer_offset_alignment;
 
         // ── Bind group layouts ──────────────────────────────────────
@@ -411,9 +403,12 @@ impl BrushPipelines {
                 include_str!("../../../../shaders/brush/blit.wgsl").into(),
             ),
         });
+        // `canvas_copy_bgl` is the canonical `texture_2d<f32> + sampler`
+        // layout — same shape the old dab-pool BGL had, used here for
+        // the blit's source texture binding.
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-blit-layout"),
-            bind_group_layouts: &[&uniform_bgl, dab_bgl],
+            bind_group_layouts: &[&uniform_bgl, &canvas_copy_bgl],
             immediate_size: 0,
         });
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -542,7 +537,6 @@ impl BrushPipelines {
             uniform_bgl: &uniform_bgl,
             selection_bgl: &selection_bgl,
             canvas_copy_bgl: &canvas_copy_bgl,
-            dab_bgl,
             canvas_copy_sampler: &canvas_copy_sampler,
             min_uniform_align,
         };

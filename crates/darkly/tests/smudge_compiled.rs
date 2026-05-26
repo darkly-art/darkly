@@ -12,17 +12,14 @@
 //! into a single instanced draw), dab 2 would read pre-stroke and
 //! the test would fail.
 
-use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use darkly::brush::compile_graph;
-use darkly::brush::dab_pool::DabTexturePool;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::stroke_buffer::StrokeBuffer;
-use darkly::brush::wire::TextureHandle;
 use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
 
 const CANVAS: u32 = 128;
@@ -88,15 +85,8 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) =
         create_test_texture(&device, &queue, CANVAS, CANVAS, &two_tone_canvas(36));
-    let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-    let mut stroke_buffer = StrokeBuffer::new(
-        &device,
-        CANVAS,
-        CANVAS,
-        dab_pool.bind_group_layout(),
-        &pipelines,
-    );
+    let pipelines = BrushPipelines::new(&device, &queue);
+    let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
 
     let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
@@ -112,8 +102,6 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
     queue.submit([enc.finish()]);
 
     let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
-    let resources: HashMap<String, TextureHandle> = HashMap::new();
-
     macro_rules! make_ctx {
         ($label:expr) => {{
             let (scratch, pre_stroke_tex, pre_stroke_bg) = stroke_buffer.parts_for_brush_ctx();
@@ -123,7 +111,6 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
                 }),
                 device: &device,
                 queue: &queue,
-                dab_pool: &mut dab_pool,
                 pipelines: &pipelines,
                 scratch: Some(scratch),
                 canvas_width: CANVAS,
@@ -139,7 +126,6 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
                 ),
                 selection_bind_group: pipelines.default_selection_bind_group(),
                 preview_target_view: None,
-                resource_handles: &resources,
                 blend_mode: 0,
                 preview_mask_view: None,
                 preview_mask_size: (0, 0),

@@ -40,9 +40,13 @@ pub struct Scratch {
     // --- Write side (layer-sized) ---
     write_texture: wgpu::Texture,
     write_view: wgpu::TextureView,
-    /// Bind group over `write_texture` using the dab BGL — `color_output::commit`
-    /// binds this as the composite foreground (the in-flight stroke pixels)
-    /// when blitting the stroke onto the layer.
+    /// Bind group over `write_texture` using the canvas-copy BGL — paint
+    /// terminals' `commit_brush_dab` bind this as the composite
+    /// foreground (the in-flight stroke pixels) when blitting the stroke
+    /// onto the layer. The dab pool's BGL was the historical home for
+    /// this binding; after the compiled-port migration the two are the
+    /// same shape (texture_2d<f32> + sampler) and we collapsed on the
+    /// canvas-copy BGL.
     write_bind_group: wgpu::BindGroup,
     write_w: u32,
     write_h: u32,
@@ -51,9 +55,9 @@ pub struct Scratch {
     read_mirror_texture: wgpu::Texture,
     read_mirror_view: wgpu::TextureView,
     /// Bind group over `read_mirror_texture` using the canvas-copy BGL —
-    /// the per-dab composite shaders (`composite.wgsl`,
-    /// `liquify.wgsl`, `smudge.wgsl`) bind this to sample the write side
-    /// without an R/W hazard.
+    /// the per-dab composite shaders (`composite.wgsl`, smudge_compiled,
+    /// liquify_compiled) bind this to sample the write side without an
+    /// R/W hazard.
     read_mirror_bind_group: wgpu::BindGroup,
     read_w: u32,
     read_h: u32,
@@ -67,7 +71,6 @@ pub struct Scratch {
     read_origin_cache: Option<[u32; 2]>,
 
     // --- Bind-group rebuild handles (cheap clones — wgpu types are Arc'd internally) ---
-    dab_bgl: wgpu::BindGroupLayout,
     canvas_copy_bgl: wgpu::BindGroupLayout,
     /// Linear sampler for the read mirror.  Stored so grow rebuilds can
     /// reuse it instead of allocating per grow.  Liquify reads at
@@ -82,12 +85,10 @@ impl Scratch {
     /// Allocate a new scratch.  Write side starts at `(layer_w, layer_h)`;
     /// read mirror starts at `1×1` and grows lazily on first dab.
     ///
-    /// `dab_bgl` is the dab-pool's "texture+sampler" BGL; the write bind
-    /// group uses it so the composite shader can sample the write side as
-    /// the foreground at commit time.
-    ///
     /// `canvas_copy_bgl` is the per-dab read BGL the brush composite
-    /// shaders bind for the read mirror.
+    /// shaders bind for the read mirror; the same BGL also holds the
+    /// write-side bind group (the composite shader's foreground at
+    /// commit time).
     ///
     /// `canvas_copy_sampler` is shared across the canvas-copy BGL bind
     /// groups.  Linear filter (liquify needs sub-pixel sampling).
@@ -95,7 +96,6 @@ impl Scratch {
         device: &wgpu::Device,
         layer_w: u32,
         layer_h: u32,
-        dab_bgl: &wgpu::BindGroupLayout,
         canvas_copy_bgl: &wgpu::BindGroupLayout,
         canvas_copy_sampler: &wgpu::Sampler,
     ) -> Self {
@@ -108,7 +108,8 @@ impl Scratch {
         let read_mirror_sampler = canvas_copy_sampler.clone();
 
         let (write_texture, write_view) = create_write_texture(device, layer_w, layer_h);
-        let write_bind_group = build_write_bind_group(device, dab_bgl, &write_view, &write_sampler);
+        let write_bind_group =
+            build_write_bind_group(device, canvas_copy_bgl, &write_view, &write_sampler);
 
         let (read_mirror_texture, read_mirror_view) =
             create_read_mirror_texture(device, READ_MIRROR_INITIAL_DIM, READ_MIRROR_INITIAL_DIM);
@@ -131,7 +132,6 @@ impl Scratch {
             read_w: READ_MIRROR_INITIAL_DIM,
             read_h: READ_MIRROR_INITIAL_DIM,
             read_origin_cache: None,
-            dab_bgl: dab_bgl.clone(),
             canvas_copy_bgl: canvas_copy_bgl.clone(),
             read_mirror_sampler,
             write_sampler,
@@ -280,8 +280,12 @@ impl Scratch {
             );
         }
 
-        let new_bind_group =
-            build_write_bind_group(device, &self.dab_bgl, &new_view, &self.write_sampler);
+        let new_bind_group = build_write_bind_group(
+            device,
+            &self.canvas_copy_bgl,
+            &new_view,
+            &self.write_sampler,
+        );
 
         self.write_texture = new_texture;
         self.write_view = new_view;
@@ -366,13 +370,13 @@ fn create_read_mirror_texture(
 
 fn build_write_bind_group(
     device: &wgpu::Device,
-    dab_bgl: &wgpu::BindGroupLayout,
+    canvas_copy_bgl: &wgpu::BindGroupLayout,
     view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("scratch-write-bg"),
-        layout: dab_bgl,
+        layout: canvas_copy_bgl,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,

@@ -10,12 +10,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::dab_pool::DabTexturePool;
 use super::eval::BrushPreviewInfo;
 use super::pipeline::BrushPipelines;
 use super::scratch::Scratch;
 use super::wgsl_compile::CompiledBrush;
-use super::wire::{ScalarValue, TextureHandle};
+use super::wire::ScalarValue;
 use crate::gpu::paint_target::GpuPaintTarget;
 
 /// Brush perf counters. Lives both per-`BrushGpuContext` (drained at
@@ -150,7 +149,6 @@ pub struct BrushGpuContext<'a> {
     pub encoder: wgpu::CommandEncoder,
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
-    pub dab_pool: &'a mut DabTexturePool,
     pub pipelines: &'a BrushPipelines,
     /// The stroke scratch (write side + R/W-hazard read mirror).
     /// `Some` during stroke evaluation and palette-thumbnail rendering;
@@ -180,9 +178,6 @@ pub struct BrushGpuContext<'a> {
     /// write into.  Aliased only for codepaths that need *some* texture
     /// view (e.g. early-out checks).  `None` in stroke mode.
     pub preview_target_view: Option<&'a wgpu::TextureView>,
-    /// Resource name → TextureHandle for images uploaded by the brush loader.
-    /// Image nodes read from this to resolve their `resource_name` param.
-    pub resource_handles: &'a HashMap<String, TextureHandle>,
     /// Composite blend mode override: 0 = source-over (paint), 1 = destination-out (erase).
     /// Set per-stroke by the engine based on the active tool.
     pub blend_mode: u32,

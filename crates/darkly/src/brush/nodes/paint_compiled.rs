@@ -732,7 +732,6 @@ fn ensure_per_brush_pipeline(
         uniform_bgl: gpu.pipelines.uniform_bind_group_layout(),
         selection_bgl: gpu.pipelines.selection_bind_group_layout(),
         canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
-        dab_bgl: gpu.dab_pool.bind_group_layout(),
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
     };

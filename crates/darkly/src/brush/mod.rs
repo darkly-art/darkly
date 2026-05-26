@@ -6,7 +6,6 @@ pub mod bundle;
 pub mod checkpoint_ring;
 pub mod composite_pipeline;
 pub mod curve_math;
-pub mod dab_pool;
 pub mod eval;
 pub mod gpu_context;
 pub mod import;
@@ -18,7 +17,6 @@ pub mod paint_info;
 pub mod paint_target_ext;
 pub mod pipeline;
 pub mod preview_renderer;
-pub mod preview_subgraph;
 pub mod save_points;
 pub mod scratch;
 pub mod spacing;
@@ -158,17 +156,11 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("scatter".into(), Box::new(nodes::scatter::ScatterEvaluator));
     // GPU nodes.
     map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
-    map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
     map.insert(
         "paint_compiled".into(),
         Box::new(nodes::paint_compiled::PaintCompiledEvaluator),
     );
-    map.insert(
-        "texture_overlay".into(),
-        Box::new(nodes::texture_overlay::TextureOverlayEvaluator),
-    );
-    map.insert("liquify".into(), Box::new(nodes::liquify::LiquifyEvaluator));
     map.insert(
         "liquify_compiled".into(),
         Box::new(nodes::liquify_compiled::LiquifyCompiledEvaluator),
@@ -177,16 +169,9 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
         "watercolor_compiled".into(),
         Box::new(nodes::watercolor_compiled::WatercolorCompiledEvaluator),
     );
-    map.insert("smudge".into(), Box::new(nodes::smudge::SmudgeEvaluator));
     map.insert(
         "smudge_compiled".into(),
         Box::new(nodes::smudge_compiled::SmudgeCompiledEvaluator),
-    );
-    // Internal terminal used by per-node preview pipeline. Not exposed to the
-    // frontend palette (filtered by `category == "internal"`).
-    map.insert(
-        "preview_terminal".into(),
-        Box::new(nodes::preview_terminal::PreviewTerminalEvaluator),
     );
     map
 }

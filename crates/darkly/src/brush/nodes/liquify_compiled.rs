@@ -17,6 +17,7 @@
 //!   * `strength < 1` produces a strength-fraction drag;
 //!   * brush size controls only the warped *extent* (the disc), never
 //!     the *intensity*.
+//!
 //! Pen speed enters only via dab density along the path; the per-dab
 //! push is identical for slow and fast drags.
 //!
@@ -826,7 +827,6 @@ fn ensure_per_brush_pipeline(
         uniform_bgl: gpu.pipelines.uniform_bind_group_layout(),
         selection_bgl: gpu.pipelines.selection_bind_group_layout(),
         canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
-        dab_bgl: gpu.dab_pool.bind_group_layout(),
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
     };

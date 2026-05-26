@@ -8,7 +8,6 @@
 //! - Evaluating the brush graph per dab (CPU + GPU)
 //! - Per-dab save points for rewind capability
 
-use super::dab_pool::DAB_REFERENCE_SIZE;
 use super::eval::BrushGraphRunner;
 use super::gpu_context::BrushGpuContext;
 use super::interpolation::{lerp_paint_info, CatmullRomSegment};
@@ -16,6 +15,7 @@ use super::paint_info::{PaintInformation, StrokeRecord};
 use super::save_points::SavePointStore;
 use super::spacing::SpacingConfig;
 use super::stabilizer::{StabilizeResult, StabilizerAlgorithm};
+use super::DAB_REFERENCE_SIZE;
 
 /// Snapshot of the stroke engine's render state at a specific dab.
 ///
@@ -352,18 +352,19 @@ impl StrokeEngine {
         gpu.dab_write_canvas_bbox = None;
         self.runner.execute_gpu(gpu);
 
-        gpu.dab_pool.release_all();
-
         gpu.flush_if_needed();
 
-        // Update dab size from dab source node output (procedural, stamp,
-        // or warp terminals like liquify that report an effective radius).
+        // Update `last_dab_size` from whichever terminal in the graph
+        // publishes a `dab_size` output. Every compiled terminal does;
+        // the first hit wins. Each terminal owns the unit-of-`dab_size`
+        // it returns — paint/watercolor return `diameter` from the
+        // size port; smudge does the same; liquify returns its disc
+        // diameter for stroke-engine spacing.
         for node_type in &[
-            "procedural",
-            "stamp",
-            "liquify",
             "paint_compiled",
             "watercolor_compiled",
+            "smudge_compiled",
+            "liquify_compiled",
         ] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
                 if let Some(val) = self.runner.read_slot(slot) {

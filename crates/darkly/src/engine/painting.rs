@@ -490,7 +490,7 @@ impl DarklyEngine {
 
         // Center-out-of-bounds: pad the requested rect by half of
         // DAB_REFERENCE_SIZE so the grown extent includes the dab's footprint.
-        const HALF: i32 = (crate::brush::dab_pool::DAB_REFERENCE_SIZE / 2) as i32;
+        const HALF: i32 = (crate::brush::DAB_REFERENCE_SIZE / 2) as i32;
         let needed = crate::coord::CanvasRect::from_xywh(
             cx - HALF,
             cy - HALF,
@@ -783,7 +783,6 @@ impl DarklyEngine {
                     &self.gpu.device,
                     layer_extent.width,
                     layer_extent.height,
-                    self.dab_pool.bind_group_layout(),
                     &self.brush_pipelines,
                 );
                 let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
@@ -897,7 +896,6 @@ impl DarklyEngine {
                         ),
                         device: &self.gpu.device,
                         queue: &self.gpu.queue,
-                        dab_pool: &mut self.dab_pool,
                         pipelines: &self.brush_pipelines,
                         scratch: Some(scratch),
                         canvas_width: canvas_w,
@@ -905,7 +903,6 @@ impl DarklyEngine {
                         paint_target: Some(paint_target),
                         selection_bind_group: sel_bg,
                         preview_target_view: None,
-                        resource_handles: &self.resource_handles,
                         // blend_mode applies at commit (paint vs. erase). The
                         // per-dab composite inside `color_output::evaluate_gpu`
                         // hard-codes source-over regardless of this value.
@@ -1103,7 +1100,6 @@ impl DarklyEngine {
                     ),
                     device: &self.gpu.device,
                     queue: &self.gpu.queue,
-                    dab_pool: &mut self.dab_pool,
                     pipelines: &self.brush_pipelines,
                     // No stroke buffer in this defensive fallback — `move_to`
                     // only updates stabilizer state and never reaches into
@@ -1115,7 +1111,6 @@ impl DarklyEngine {
                     paint_target: Some(paint_target),
                     selection_bind_group: sel_bg,
                     preview_target_view: Some(canvas_view),
-                    resource_handles: &self.resource_handles,
                     blend_mode: self.brush_blend_mode,
                     preview_mask_view: None,
                     preview_mask_size: (0, 0),

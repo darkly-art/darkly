@@ -104,14 +104,14 @@ pub fn register() -> BrushNodeRegistration {
             // *should* re-render the preview.
             PortDef::input("spacing", BrushWireType::Scalar)
                 .with_range(0.01, 1.0, 0.10)
-                .with_natural_range(0.04, 1.0)
+                .with_natural_range(0.01, 1.0)
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-grip-lines-vertical")
                 .with_label("Spacing")
                 .with_description(
                     "Distance between dabs as a fraction of dab diameter. \
-                     10% is the paint default; warp/smudge brushes typically want 4\u{2013}5%. \
-                     Floor of 4% — anything lower swamps the stabilizer.",
+                     10% is the paint default; warp/smudge brushes typically want 1\u{2013}5%. \
+                     The single-pass WGSL-compiled brush pipeline keeps even 1% spacing within frame budget.",
                 ),
             // Absolute-pixel spacing floor. The effective spacing per
             // dab is `max(diameter × ratio, spacing_min_px,

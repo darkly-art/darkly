@@ -218,46 +218,14 @@ impl DarklyEngine {
         self.brush_library.import_bytes(bytes)
     }
 
-    /// Ensure every image resource referenced by `brush` is uploaded to
-    /// the GPU and registered in `self.resource_handles`. Idempotent —
-    /// names already present are skipped, so loading the active brush,
-    /// baking inactive picker thumbnails, and reloading the same brush
-    /// all share one cache entry per resource.
+    /// Ensure brush image resources are loaded.
     ///
-    /// Handles both `BrushTip` and `Pattern` resource kinds — both are
-    /// uploaded as static textures and accessed identically by node
-    /// evaluators.
-    ///
-    /// v1 keeps every uploaded resource for the engine's lifetime. With
-    /// only built-in brushes that's a fixed, tiny set; v2 imported
-    /// brushes will need a name-collision strategy and eviction policy.
-    pub(crate) fn ensure_brush_resources(&mut self, brush: &Brush) {
-        for meta in &brush.metadata.resources {
-            if self.resource_handles.contains_key(&meta.name) {
-                continue;
-            }
-            let Some(data) = brush.resource(meta.name.as_str()) else {
-                log::warn!("brush resource '{}' not found in bundle", meta.name);
-                continue;
-            };
-            match image::load_from_memory(data) {
-                Ok(img) => {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    let handle = self.dab_pool.upload_image(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &meta.name,
-                        w,
-                        h,
-                        rgba.as_raw(),
-                    );
-                    self.resource_handles.insert(meta.name.clone(), handle);
-                }
-                Err(e) => {
-                    log::warn!("failed to decode resource '{}': {e}", meta.name);
-                }
-            }
-        }
-    }
+    /// **No-op during phase 4.** The image node, dab pool, and
+    /// resource handle plumbing were retired together with the
+    /// dispatch path. Bundles with brush-tip or pattern resources are
+    /// preserved on disk but their bytes aren't uploaded anywhere
+    /// during this transitional phase. Phase 5 reintroduces a dedicated
+    /// texture bank that owns these uploads independently of the
+    /// per-dab pool.
+    pub(crate) fn ensure_brush_resources(&mut self, _brush: &Brush) {}
 }
