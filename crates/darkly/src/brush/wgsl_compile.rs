@@ -766,10 +766,10 @@ pub fn compile_brush_to_wgsl(
     {
         let (head, tail) = dab_fields.split_at_mut(INTRINSIC_DAB_HEADER_FIELDS);
         let _ = head;
-        tail.sort_by(|a, b| b.ty.align().cmp(&a.ty.align()));
+        tail.sort_by_key(|f| std::cmp::Reverse(f.ty.align()));
     }
     // Same treatment for uniforms.
-    uniform_fields.sort_by(|a, b| b.ty.align().cmp(&a.ty.align()));
+    uniform_fields.sort_by_key(|f| std::cmp::Reverse(f.ty.align()));
 
     // Compute per-dab record size with std430-aware alignment.
     let dab_record_size = compute_struct_size(&dab_fields);

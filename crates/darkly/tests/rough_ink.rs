@@ -489,6 +489,25 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
         .map(|(id, _)| *id)
         .unwrap();
     graph.set_port_default(term_id, "size", 0.15).unwrap();
+    // Replace the builtin's pressure-shaping curve (a monotone Hermite
+    // spline through `(0,0), (0.4,0.7), (1,1)`) with the identity curve
+    // so this test's `r_a` / `r_b` math (radius ∝ pressure) lines up
+    // with what the CPU side packs into the dab record. The QUAD_R_MAX-
+    // vs-radius divergence we're guarding against is independent of the
+    // curve shape.
+    let curve_id = graph
+        .nodes
+        .iter()
+        .find(|(_, n)| n.type_id == "curve")
+        .map(|(id, _)| *id)
+        .unwrap();
+    graph
+        .set_param(
+            curve_id,
+            0,
+            ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
+        )
+        .unwrap();
 
     let mut h = harness(&black_canvas(), graph);
     let compiled = h.runner.compiled_brush().expect("compiled brush attached");

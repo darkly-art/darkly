@@ -205,7 +205,7 @@ fn airbrush() -> Brush {
                     },
                     PortRef {
                         node: terminal,
-                        port: "opacity".into(),
+                        port: "flow".into(),
                     },
                 )
                 .unwrap();
