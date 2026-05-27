@@ -502,11 +502,7 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
         .map(|(id, _)| *id)
         .unwrap();
     graph
-        .set_param(
-            curve_id,
-            0,
-            ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]),
-        )
+        .set_param(curve_id, 0, ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]]))
         .unwrap();
 
     let mut h = harness(&black_canvas(), graph);
