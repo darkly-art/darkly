@@ -240,27 +240,22 @@ impl DarklyEngine {
         };
 
         // Always dispatch `render_preview` — individual terminals decide
-        // whether they produce output this frame. A paint graph with no
-        // `brush_preview` wire has color_output's hook return early and
-        // `brush_preview_info` stays None; a self-previewing terminal
-        // (liquify etc.) fires its hook and publishes placement info. The
-        // post-run `info.is_some()` check below routes both outcomes.
+        // whether they produce output this frame. A graph with no
+        // compiled-terminal hook fires nothing and `brush_preview_info`
+        // stays None; the four compiled terminals each fire their
+        // hook and publish placement info. The post-run
+        // `info.is_some()` check below routes both outcomes.
 
-        // Fixed-size preview mask; overlay's linear sampler handles display
-        // scaling via the primitive's canvas-space half-extent.
-        let target_size = (128_u32, 128_u32);
-        let target_view = self
-            .compositor
-            .ensure_overlay_preview_mask(&self.gpu.device, target_size.0, target_size.1)
-            .clone();
-        let preview_tex = self
-            .compositor
-            .overlay_preview_mask_texture()
-            .expect("ensure_overlay_preview_mask just allocated it");
-
-        let sel_bg = if self.has_selection() {
-            self.compositor
-                .selection_state()
+        // Split-borrow the compositor so we can hold a mutable handle
+        // on `tool_overlay` (for the terminal's `ensure_preview_mask`
+        // grow) alongside an immutable borrow of `selection_state` for
+        // the brush bind group. The two fields are disjoint;
+        // `Compositor::split_overlay_and_selection` documents the
+        // pattern.
+        let (overlay, selection) = self.compositor.split_overlay_and_selection();
+        let has_selection = selection.is_some();
+        let sel_bg = if has_selection {
+            selection
                 .map(|s| s.brush_bind_group())
                 .unwrap_or(&self.brush_pipelines.default_selection_bind_group)
         } else {
@@ -273,30 +268,30 @@ impl DarklyEngine {
                 label: Some("brush-preview-regen"),
             });
 
-        // `preview_tex` is unused in this path (the preview writes to
-        // `preview_mask_view` instead).  We discard the binding to avoid an
-        // unused-variable warning while preserving the caller's lookup.
-        let _ = preview_tex;
         let mut gpu_ctx = BrushGpuContext {
             encoder,
             device: &self.gpu.device,
             queue: &self.gpu.queue,
             pipelines: &self.brush_pipelines,
             // The preview pipeline doesn't touch the stroke scratch — the
-            // terminal's `render_preview` writes to `preview_mask_view`
-            // instead. No `Scratch` is needed; any accidental call to a
-            // scratch accessor will panic, exposing the bug.
+            // terminal's `render_preview` writes to the preview mask
+            // through `preview_mask_overlay` instead. No `Scratch` is
+            // needed; any accidental call to a scratch accessor will
+            // panic, exposing the bug.
             scratch: None,
-            canvas_width: target_size.0,
-            canvas_height: target_size.1,
+            canvas_width: 0,
+            canvas_height: 0,
             // No layer / pre-stroke state in preview — commit isn't called,
-            // and `render_preview` writes to `preview_mask_view`.
+            // and `render_preview` writes to the preview mask.
             paint_target: None,
             selection_bind_group: sel_bg,
-            preview_target_view: Some(&target_view),
+            preview_target_view: None,
             blend_mode: 0,
-            preview_mask_view: Some(&target_view),
-            preview_mask_size: target_size,
+            // Tests pre-allocate `preview_mask_view`; the engine path
+            // grows the mask on demand via `preview_mask_overlay`.
+            preview_mask_view: None,
+            preview_mask_size: (0, 0),
+            preview_mask_overlay: Some(overlay),
             brush_preview_info: None,
             pre_stroke_texture: None,
             pre_stroke_bind_group: None,

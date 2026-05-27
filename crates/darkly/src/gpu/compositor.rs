@@ -1889,6 +1889,22 @@ impl Compositor {
         self.tool_overlay.ensure_preview_mask(device, width, height)
     }
 
+    /// Split-borrow accessor for the preview-render hot path: returns
+    /// `(&mut tool_overlay, &selection_state)` so a caller can grow
+    /// the preview mask through the overlay *and* keep a borrow of
+    /// the active selection's brush bind group at the same time. The
+    /// two fields are disjoint, but the borrow checker can't see
+    /// through method calls — splitting at this granularity here
+    /// makes the disjoint-field pattern usable from outside.
+    pub fn split_overlay_and_selection(
+        &mut self,
+    ) -> (
+        &mut ToolOverlay,
+        Option<&crate::gpu::selection::SelectionState>,
+    ) {
+        (&mut self.tool_overlay, self.selection_state.as_ref())
+    }
+
     /// Route the preview-mask texture as the active overlay mask binding.
     pub fn use_overlay_preview_mask(&mut self) {
         self.tool_overlay.use_preview_mask_as_mask();

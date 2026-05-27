@@ -882,9 +882,9 @@ impl DarklyHandle {
     /// Values come straight from the PointerEvent; hardware that doesn't
     /// report a sensor passes 0 (which is also the neutral state, so no
     /// conditional-default logic is needed). Pressure = 0 is remapped to
-    /// 0.5 inside the engine because the hover event reports 0 pressure
+    /// 1.0 inside the engine because the hover event reports 0 pressure
     /// (no contact) but the preview should reflect what happens "if the
-    /// pen presses now."
+    /// pen presses now" — at full engagement.
     pub fn refresh_brush_preview(
         &self,
         x: f32,
@@ -899,7 +899,7 @@ impl DarklyHandle {
 
         let mut pen = PaintInformation::preview_dummy();
         pen.pos = [x, y];
-        // Hover reports pressure=0 (no contact) — keep the dummy's 0.5 as
+        // Hover reports pressure=0 (no contact) — keep the dummy's 1.0 as
         // a "what-if-pressed-now" fallback. If the pen is actively pressed
         // during hover (some hardware does this near the surface), use it.
         if pressure > 0.0 {

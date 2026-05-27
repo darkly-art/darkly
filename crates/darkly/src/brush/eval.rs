@@ -281,9 +281,12 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// into the scratch. The terminal pushes the scratch onto the layer
     /// however its semantics require. Non-terminal nodes default to no-op.
     ///
-    /// Like `begin_stroke`, inputs here are port defaults only — the
-    /// committed state is a function of the scratch, which already
-    /// reflects all per-dab CPU input resolution.
+    /// Inputs reflect the LAST dab's evaluated slot values — `commit`
+    /// runs after `execute_gpu`, so the slot table still holds the most
+    /// recent dab's results. Ports declared as "applied at commit"
+    /// (e.g. `paint_compiled.opacity`) read their wired value through
+    /// `ctx.input_*`. `begin_stroke` is different: it runs before any
+    /// dab and sees port defaults only.
     fn commit(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
 
     /// Flush any per-rendering-phase work the terminal has queued during
@@ -336,6 +339,32 @@ pub trait BrushNodeEvaluator: Send + Sync {
         _cctx: &crate::brush::wgsl_compile::CompileWgslCtx,
     ) -> Result<crate::brush::wgsl_compile::NodeWgsl, String> {
         Err("node has no WGSL implementation".into())
+    }
+
+    /// Preview-mode replacement for the terminal's `compile_wgsl`
+    /// body. Default delegates to `compile_wgsl`, which is correct for
+    /// terminals whose stroke body doesn't reference `@group(2)` /
+    /// `@group(3)` bindings — the preview skeleton substitutes `sel =
+    /// 1.0` and omits both groups, so the same body works under both
+    /// modes.
+    ///
+    /// Terminals that sample scratch / atlas in their stroke body
+    /// (watercolor's pickup atlas, smudge / liquify's `scratch_mirror`)
+    /// override this to emit a body that doesn't need those bindings —
+    /// typically a neutral-color mask of the brush footprint. Only the
+    /// `body` field of the returned `NodeWgsl` is consumed; decls /
+    /// dab_fields / uniform_fields / outputs come from the stroke pass
+    /// and are shared across both shader variants (helper functions a
+    /// preview body references — e.g. liquify's `falloff_fn` — live in
+    /// `decls` and are visible to both skeletons).
+    ///
+    /// Non-terminal nodes never have this called — only nodes for
+    /// which `is_compiled_terminal()` returns `true` invoke the hook.
+    fn compile_preview_body(
+        &self,
+        cctx: &crate::brush::wgsl_compile::CompileWgslCtx,
+    ) -> Result<crate::brush::wgsl_compile::NodeWgsl, String> {
+        self.compile_wgsl(cctx)
     }
 
     /// Per-node contribution to the brush's dab bounding-box extent.
@@ -735,14 +764,18 @@ impl BrushGraphRunner {
     /// order. Only terminal nodes override — everything else no-ops. Runs
     /// once per stroke-start and once per rewind boundary, before any dab.
     pub fn begin_stroke(&mut self, gpu: &mut BrushGpuContext) {
-        self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.begin_stroke(ctx, gpu));
+        self.dispatch_lifecycle(gpu, false, |ev, ctx, gpu| ev.begin_stroke(ctx, gpu));
     }
 
     /// Dispatch `commit` to every GPU node's evaluator in topological
     /// order. Runs once per pen event after that event's dabs have
     /// finished compositing into the scratch.
     pub fn commit(&mut self, gpu: &mut BrushGpuContext) {
-        self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.commit(ctx, gpu));
+        // Gather inputs from the slot table so terminals that read
+        // ports at commit time (e.g. `paint_compiled.opacity` wired
+        // to `pen.pressure` for the Airbrush) see the actual wired
+        // value, not the port default.
+        self.dispatch_lifecycle(gpu, true, |ev, ctx, gpu| ev.commit(ctx, gpu));
     }
 
     /// Dispatch `flush_dabs` to every GPU node's evaluator in
@@ -751,17 +784,23 @@ impl BrushGraphRunner {
     /// dispatch before the phase's `submit_final`. Fragment-path
     /// terminals no-op.
     pub fn flush_dabs(&mut self, gpu: &mut BrushGpuContext) {
-        self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.flush_dabs(ctx, gpu));
+        self.dispatch_lifecycle(gpu, false, |ev, ctx, gpu| ev.flush_dabs(ctx, gpu));
     }
 
-    /// Shared walker for lifecycle hooks. Mirrors `execute_gpu` minus the
-    /// per-dab slot/input plumbing, because lifecycle hooks run *outside*
-    /// any specific dab — they work from port defaults and GPU resources.
-    fn dispatch_lifecycle<F>(&mut self, gpu: &mut BrushGpuContext, mut f: F)
-    where
+    /// Shared walker for lifecycle hooks. When `gather_from_slots` is
+    /// true, each step's inputs are pulled from the live slot table —
+    /// the same plumbing `dispatch_gpu` uses — so commits see the latest
+    /// per-dab wire values. When false, inputs are empty and evaluators
+    /// fall back to port defaults (correct for `begin_stroke`, which
+    /// runs before any dab populates the table).
+    fn dispatch_lifecycle<F>(
+        &mut self,
+        gpu: &mut BrushGpuContext,
+        gather_from_slots: bool,
+        mut f: F,
+    ) where
         F: FnMut(&dyn BrushNodeEvaluator, &EvalContext, &mut BrushGpuContext),
     {
-        let empty_inputs = HashMap::new();
         let empty_params = Vec::new();
         let empty_ports = Vec::new();
         for step in &self.plan.steps {
@@ -771,9 +810,19 @@ impl BrushGraphRunner {
             let Some(evaluator) = self.evaluators.get(&step.type_id) else {
                 continue;
             };
+            let inputs = if gather_from_slots {
+                gather_inputs(
+                    &self.slots,
+                    &step.input_slots,
+                    step.node_id,
+                    &self.node_data,
+                )
+            } else {
+                HashMap::new()
+            };
             let node = self.node_data.get(&step.node_id);
             let ctx = EvalContext {
-                inputs: &empty_inputs,
+                inputs: &inputs,
                 params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
                 port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
                 lut: node.and_then(|n| n.lut.as_ref()),

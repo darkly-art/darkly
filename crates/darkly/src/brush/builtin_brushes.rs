@@ -20,7 +20,7 @@ pub fn all() -> Vec<Brush> {
         rough_watercolor(),
         smudge_brush(),
         liquify_push(),
-        perlin_ink(),
+        rough_ink(),
     ]
 }
 
@@ -32,7 +32,7 @@ pub fn all() -> Vec<Brush> {
 ///
 /// All three Basic brushes (Round, Airbrush, Ink Pen) share the same
 /// `pen_input + paint_color + circle + stamp + paint_compiled` skeleton
-/// — the same shape as Perlin Ink — and only differ in their per-brush
+/// — the same shape as Rough Ink — and only differ in their per-brush
 /// signal wires (pressure → flow vs opacity, optional pressure curve)
 /// and the circle softness default. The closure runs after the bare
 /// graph is built and is responsible for wiring the brush-specific
@@ -225,17 +225,15 @@ fn ink_pen() -> Brush {
             // Curve front-loads the size response — small pressure already
             // produces a recognisable mark, matching the feel of a fine-tipped
             // ink pen.
+            // One bend handle above the diagonal — the natural cubic spline
+            // draws a smooth √x-ish arc through it. Matches the "soft tip
+            // feel" curve tablet drivers and inking presets converge on:
+            // light pressure already produces a recognisable mark.
             wire_pressure_size_curve(
                 graph,
                 pen,
                 terminal,
-                vec![
-                    [0.0, 0.0],
-                    [0.25, 0.5],
-                    [0.5, 0.71],
-                    [0.75, 0.87],
-                    [1.0, 1.0],
-                ],
+                vec![[0.0, 0.0], [0.4, 0.7], [1.0, 1.0]],
             );
             graph
                 .connect(
@@ -582,7 +580,7 @@ fn liquify_push() -> Brush {
     Brush::without_resources(metadata)
 }
 
-/// Perlin Ink — the first 100%-compiled brush.
+/// Rough Ink — the first 100%-compiled brush.
 ///
 /// Wires `pen_input + paint_color + 3×random + circle(perlin) + stamp`
 /// into the `paint_compiled` terminal. Each dab gets a unique
@@ -594,7 +592,7 @@ fn liquify_push() -> Brush {
 ///
 /// This brush is the proving ground for the WGSL compilation
 /// framework — see `crates/darkly/src/brush/wgsl_compile.rs`.
-fn perlin_ink() -> Brush {
+fn rough_ink() -> Brush {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::<BrushWireType>::new();
 
@@ -614,13 +612,8 @@ fn perlin_ink() -> Brush {
     let curve = graph.add_node(
         "curve",
         registry.get("curve").unwrap().ports.clone(),
-        vec![ParamValue::Curve(vec![
-            [0.0, 0.0],
-            [0.25, 0.5],
-            [0.5, 0.71],
-            [0.75, 0.87],
-            [1.0, 1.0],
-        ])],
+        // One bend handle — see ink_pen for the rationale.
+        vec![ParamValue::Curve(vec![[0.0, 0.0], [0.4, 0.7], [1.0, 1.0]])],
     );
     let rand_amp = graph.add_node(
         "random",
@@ -708,7 +701,7 @@ fn perlin_ink() -> Brush {
     // [0, 1] which gets remapped to [0, 0.5] by the wire-boundary
     // remap (circle.amplitude has natural_range = (0, 0.5)).
 
-    let mut metadata = BrushMetadata::from_graph("Perlin Ink", graph);
+    let mut metadata = BrushMetadata::from_graph("Rough Ink", graph);
     metadata.category = "basic".to_string();
     Brush::without_resources(metadata)
 }

@@ -5,13 +5,13 @@
 //! compiled pipeline, and asserts the dab deposited inside its
 //! declared bbox.
 //!
-//! `perlin_ink.rs` exercises the deeper invariants of the compiled
+//! `rough_ink.rs` exercises the deeper invariants of the compiled
 //! pipeline (bbox-correctness on overlapping dabs, flow scaling,
 //! shape parity). These tests only need to verify each migrated
 //! brush's graph wires up cleanly and produces visible output —
 //! per-brush wire bugs (e.g. forgetting `paint_color → stamp.color`)
 //! surface here while the pipeline itself stays covered by
-//! `perlin_ink.rs`.
+//! `rough_ink.rs`.
 
 use std::sync::{Arc, OnceLock};
 
@@ -43,11 +43,20 @@ fn black_canvas() -> Vec<u8> {
     out
 }
 
+fn render_single_dab(brush_name: &str, size_override: f32, color: [f32; 4]) -> Vec<u8> {
+    render_single_dab_with_pressure(brush_name, size_override, color, 1.0)
+}
+
 /// Render one dab of the given builtin brush at canvas centre and
 /// return the resulting RGBA8 readback. `size_override` is forced
 /// onto the terminal's `size` port so the dab fits in our 128px
 /// test canvas regardless of the brush's exposed default.
-fn render_single_dab(brush_name: &str, size_override: f32, color: [f32; 4]) -> Vec<u8> {
+fn render_single_dab_with_pressure(
+    brush_name: &str,
+    size_override: f32,
+    color: [f32; 4],
+    pressure: f32,
+) -> Vec<u8> {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == brush_name)
@@ -111,6 +120,7 @@ fn render_single_dab(brush_name: &str, size_override: f32, color: [f32; 4]) -> V
                 blend_mode: 0,
                 preview_mask_view: None,
                 preview_mask_size: (0, 0),
+                preview_mask_overlay: None,
                 brush_preview_info: None,
                 pre_stroke_texture: Some(pre_stroke_tex),
                 pre_stroke_bind_group: Some(pre_stroke_bg),
@@ -135,7 +145,7 @@ fn render_single_dab(brush_name: &str, size_override: f32, color: [f32; 4]) -> V
         let mut ctx = make_ctx!("paint-compiled-basic-dab");
         let info = PaintInformation {
             pos: [64.0, 64.0],
-            pressure: 1.0,
+            pressure,
             ..Default::default()
         };
         runner.seed_sensors(&info, color, 0xC0FFEE, 0);
@@ -196,6 +206,39 @@ fn airbrush_deposits_softer_than_round() {
         "Airbrush center should be ~green, got {center:?}"
     );
     assert!(count_deposited(&rgba) > 500);
+}
+
+/// Regression: `paint_compiled.opacity` is wired to `pen.pressure` on
+/// the Airbrush, so the deposited color must scale with pressure. The
+/// bug was that `commit()` read `ctx.input_f32("opacity")` from an
+/// empty inputs map (lifecycle hooks weren't pulling slot values),
+/// always returning the port default 1.0 — so every Airbrush stroke
+/// committed at full opacity regardless of pressure.
+#[test]
+fn airbrush_opacity_tracks_pressure() {
+    // Airbrush wires `pen.pressure → terminal.opacity`. The pre-stroke
+    // backdrop is opaque black; the dab is bright green. After commit
+    // with `opacity = pressure × pre_stroke + (1-α) × pre_stroke`,
+    // higher pressure → more green, less black.
+    let full = render_single_dab_with_pressure(
+        "Airbrush",
+        0.15,
+        [0.0, 1.0, 0.0, 1.0],
+        /* pressure */ 1.0,
+    );
+    let low = render_single_dab_with_pressure(
+        "Airbrush",
+        0.15,
+        [0.0, 1.0, 0.0, 1.0],
+        /* pressure */ 0.2,
+    );
+    let full_g = center_rgba(&full)[1] as i32;
+    let low_g = center_rgba(&low)[1] as i32;
+    assert!(
+        full_g - low_g > 50,
+        "Airbrush center green at pressure=1.0 ({full_g}) must be significantly \
+         brighter than at pressure=0.2 ({low_g}) — opacity must track pressure",
+    );
 }
 
 #[test]

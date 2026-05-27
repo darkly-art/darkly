@@ -383,14 +383,70 @@ impl CompileWgslCtx<'_> {
     }
 }
 
+// ── Shader mode ─────────────────────────────────────────────────────────
+
+/// Which of the two compiled shader variants is being assembled.
+///
+/// The upstream graph contributes the same per-fragment shape /
+/// color / flow expressions in both modes — only the outer skeleton
+/// differs:
+///
+/// - **`Stroke`**: instanced quad-per-dab vertex stage; `sel` sampled
+///   from a bound selection texture; terminal `@group(3)` bindings
+///   (scratch mirror, pickup atlas) declared.
+/// - **`Preview`**: single quad centred at `preview_centre`; `sel = 1.0`
+///   inlined; no `@group(2)` selection binding, no `@group(3)`
+///   terminal bindings.
+///
+/// The two modes share `node_decls`, `dab_layout`, and
+/// `uniform_layout` — every brush stores both WGSL strings side-by-side
+/// on [`CompiledBrush`].
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum ShaderMode {
+    Stroke,
+    Preview,
+}
+
+// ── Intrinsic uniforms ──────────────────────────────────────────────────
+
+/// Stroke-constant intrinsic uniforms every compiled brush carries.
+/// Mirrors the WGSL `IntrinsicUniforms` defined in
+/// `_compiled_prelude.wgsl` — every terminal packs this struct at the
+/// front of the uniform buffer (followed by node-contributed
+/// uniforms). Lives here (not on each terminal) so a layout change in
+/// one place can't drift from the rest.
+///
+/// `preview_centre` / `preview_size` are written by the preview path
+/// only; the stroke path writes zero and ignores them.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct IntrinsicUniforms {
+    pub layer_offset: [i32; 2],
+    pub layer_size: [u32; 2],
+    pub canvas_size: [u32; 2],
+    pub preview_centre: [f32; 2],
+    pub preview_size: [u32; 2],
+    pub _pad: [u32; 2],
+}
+
+/// Size in bytes of the WGSL/Rust `IntrinsicUniforms` struct. Read by
+/// the terminal-side flush path when sizing its uniform ring.
+pub const INTRINSIC_UNIFORMS_SIZE: usize = std::mem::size_of::<IntrinsicUniforms>();
+
 // ── Compiled output ─────────────────────────────────────────────────────
 
 /// A fully compiled brush graph: WGSL source + the schemas needed to
 /// pack per-dab records and stroke-constant uniforms.
 #[derive(Clone)]
 pub struct CompiledBrush {
-    /// Full WGSL source for the brush's fragment shader.
-    pub wgsl: String,
+    /// Full WGSL source for the brush's stroke fragment shader.
+    pub stroke_wgsl: String,
+    /// Full WGSL source for the brush's preview (hover-cursor) fragment
+    /// shader. Same dab / uniform layouts as `stroke_wgsl`; differs
+    /// only in the outer skeleton (single-quad vertex stage, `sel =
+    /// 1.0`, no `@group(2)` / `@group(3)` bindings). See
+    /// [`ShaderMode`].
+    pub preview_wgsl: String,
     /// Per-dab record layout, in declaration order. The compiler
     /// includes the intrinsic header fields ([`INTRINSIC_DAB_FIELDS`])
     /// at the front; everything after is contributed by nodes.
@@ -422,7 +478,8 @@ pub struct CompiledBrush {
 impl std::fmt::Debug for CompiledBrush {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompiledBrush")
-            .field("wgsl_bytes", &self.wgsl.len())
+            .field("stroke_wgsl_bytes", &self.stroke_wgsl.len())
+            .field("preview_wgsl_bytes", &self.preview_wgsl.len())
             .field("dab_record_size", &self.dab_record_size)
             .field("uniform_size", &self.uniform_size)
             .field("topology_hash", &self.topology_hash)
@@ -525,13 +582,23 @@ pub fn compile_brush_to_wgsl(
     }
 
     let mut decls = String::new();
-    let mut body = String::new();
+    // Non-terminal node bodies — shared between the stroke and preview
+    // skeletons (they're upstream of the terminal and don't depend on
+    // selection or scratch/atlas bindings).
+    let mut shared_body = String::new();
+    // Terminal node bodies, captured per-mode. `stroke_terminal_body`
+    // comes from the terminal's `compile_wgsl`; `preview_terminal_body`
+    // comes from `compile_preview_body`. For terminals that don't
+    // override the latter, both are the same source.
+    let mut stroke_terminal_body = String::new();
+    let mut preview_terminal_body = String::new();
     let mut dab_fields = intrinsic_dab_header();
     let mut uniform_fields: Vec<UniformField> = Vec::new();
     // Captured from the last (terminal) step. Spliced into the
-    // assembled shader after the framework's three intrinsic bind
-    // groups so the terminal can add its own bindings (e.g.
-    // `watercolor_compiled`'s pickup atlas).
+    // stroke-mode assembled shader after the framework's three
+    // intrinsic bind groups so the terminal can add its own bindings
+    // (e.g. `watercolor_compiled`'s pickup atlas). Preview mode omits
+    // these — the preview body doesn't sample scratch / atlas.
     let mut terminal_bindings = String::new();
 
     // Track each output port's emitted expression so downstream nodes
@@ -626,10 +693,44 @@ pub fn compile_brush_to_wgsl(
                 decls.push('\n');
             }
         }
+        let is_terminal = evaluator.is_compiled_terminal();
         if !result.body.is_empty() {
-            body.push_str(&result.body);
+            // Terminal bodies stay in their per-mode buckets; non-terminal
+            // bodies are spliced into both modes.
+            let target = if is_terminal {
+                &mut stroke_terminal_body
+            } else {
+                &mut shared_body
+            };
+            target.push_str(&result.body);
             if !result.body.ends_with('\n') {
-                body.push('\n');
+                target.push('\n');
+            }
+        }
+        if is_terminal {
+            // Preview body — call the terminal's preview-mode hook. The
+            // default delegate returns the same NodeWgsl as `compile_wgsl`
+            // (paint_compiled's stroke and preview bodies share one
+            // source); watercolor/smudge/liquify override to emit a
+            // neutral-color body that doesn't reference `@group(3)`.
+            //
+            // Only the `body` field is consumed here — decls / dab_fields
+            // / uniform_fields / outputs / terminal_bindings are already
+            // accumulated from the stroke pass and shared across modes
+            // (helper functions a preview body references — e.g. liquify's
+            // `falloff_fn` — live in `decls` and are visible to both
+            // skeletons).
+            let preview_result = evaluator.compile_preview_body(&cctx).map_err(|reason| {
+                CompileError::NodeNotCompilable {
+                    type_id: step.type_id.clone(),
+                    reason,
+                }
+            })?;
+            if !preview_result.body.is_empty() {
+                preview_terminal_body.push_str(&preview_result.body);
+                if !preview_result.body.ends_with('\n') {
+                    preview_terminal_body.push('\n');
+                }
             }
         }
         dab_fields.extend(result.dab_fields);
@@ -674,13 +775,27 @@ pub fn compile_brush_to_wgsl(
     let dab_record_size = compute_struct_size(&dab_fields);
     let uniform_size = compute_struct_size_for_uniforms(&uniform_fields);
 
-    // Assemble the full shader.
-    let wgsl = assemble_shader(
+    // Assemble the two shader variants. The non-terminal body splice
+    // is identical for stroke and preview; the terminal body differs
+    // (and preview drops `@group(2)` selection and `@group(3)`
+    // terminal bindings).
+    let stroke_body = format!("{shared_body}{stroke_terminal_body}");
+    let preview_body = format!("{shared_body}{preview_terminal_body}");
+    let stroke_wgsl = assemble_shader(
+        ShaderMode::Stroke,
         &dab_fields,
         &uniform_fields,
         &decls,
-        &body,
+        &stroke_body,
         &terminal_bindings,
+    );
+    let preview_wgsl = assemble_shader(
+        ShaderMode::Preview,
+        &dab_fields,
+        &uniform_fields,
+        &decls,
+        &preview_body,
+        "",
     );
 
     // Topology hash: stable across runs (uses DefaultHasher; if process
@@ -691,7 +806,8 @@ pub fn compile_brush_to_wgsl(
         compose_brush_extent(graph, plan, evaluators);
 
     Ok(CompiledBrush {
-        wgsl,
+        stroke_wgsl,
+        preview_wgsl,
         dab_layout: dab_fields,
         dab_record_size,
         uniform_layout: uniform_fields,
@@ -783,6 +899,100 @@ pub fn pack_dab_record(
             field.ty.size(),
         );
     }
+}
+
+/// Shared compiled-brush preview render path. Sized, packed, and
+/// dispatched identically across paint / watercolor / smudge /
+/// liquify — the differences (effective_radius derivation, rotation
+/// source) are caller-supplied. Returns `Some(())` on success, `None`
+/// when the brush has no compiled state or the preview mask refuses
+/// to allocate.
+///
+/// What this does:
+/// 1. Grows the preview mask to fit `radius × brush_extent_factor +
+///    brush_extent_extra_px` (rounded to the next power of two).
+/// 2. Packs the intrinsic uniform header — `preview_centre` /
+///    `preview_size` set live; `layer_offset` / `layer_size` /
+///    `canvas_size` aliased to the preview mask so any node that
+///    reads them in its `compile_wgsl` body sees a sane (mask-sized)
+///    target.
+/// 3. Packs node-contributed uniforms via [`pack_uniforms`].
+/// 4. Packs one dab record at the preview centre — intrinsic header
+///    (`pos`, `radius`, `bbox_radius`) plus node-contributed dab
+///    fields via [`pack_dab_record`].
+/// 5. Calls [`crate::brush::pipeline::BrushPipelines::render_preview`]
+///    against the shared preview pipeline cache.
+/// 6. Publishes [`crate::brush::eval::BrushPreviewInfo`] for the
+///    overlay's `KIND_MASKED_STAMP` primitive to consume.
+pub fn render_compiled_preview(
+    gpu: &mut crate::brush::gpu_context::BrushGpuContext,
+    radius: f32,
+    rotation_rad: f32,
+) -> Option<()> {
+    let compiled = gpu.compiled_brush.clone()?;
+    let bbox_radius = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
+    let (target_view, target_w, target_h) = gpu.ensure_preview_mask(bbox_radius)?;
+    if target_w == 0 || target_h == 0 {
+        return None;
+    }
+    let preview_centre = [target_w as f32 * 0.5, target_h as f32 * 0.5];
+
+    // Pack the uniform buffer: intrinsic header first, node-contributed
+    // uniforms after.
+    let intrinsic = IntrinsicUniforms {
+        layer_offset: [0, 0],
+        layer_size: [target_w, target_h],
+        canvas_size: [target_w, target_h],
+        preview_centre,
+        preview_size: [target_w, target_h],
+        _pad: [0, 0],
+    };
+    let total_uniform_size = INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size;
+    let mut uniform_bytes: Vec<u8> = Vec::with_capacity(total_uniform_size);
+    uniform_bytes.extend_from_slice(bytemuck::bytes_of(&intrinsic));
+    let empty_outputs;
+    let outputs = match gpu.slot_outputs_owned.as_ref() {
+        Some(o) => o,
+        None => {
+            empty_outputs = HashMap::new();
+            &empty_outputs
+        }
+    };
+    pack_uniforms(&compiled, outputs, &mut uniform_bytes);
+    if uniform_bytes.len() < total_uniform_size {
+        uniform_bytes.resize(total_uniform_size, 0);
+    }
+
+    // Pack the single preview dab record: intrinsic header + node
+    // fields. `pos = preview_centre` so the vertex stage's quad lands
+    // dead-centre inside the preview mask and the fragment stage's
+    // `local = canvas_pos - d.pos` matches the same `local_uv` /
+    // `theta` the stroke shader would see at the dab's true centre.
+    let mut dab_bytes: Vec<u8> = Vec::with_capacity(compiled.dab_record_size);
+    dab_bytes.extend_from_slice(bytemuck::bytes_of(&preview_centre));
+    dab_bytes.extend_from_slice(bytemuck::bytes_of(&radius));
+    dab_bytes.extend_from_slice(bytemuck::bytes_of(&bbox_radius));
+    pack_dab_record(&compiled, outputs, &mut dab_bytes);
+    if dab_bytes.len() < compiled.dab_record_size {
+        dab_bytes.resize(compiled.dab_record_size, 0);
+    }
+
+    gpu.pipelines.render_preview(
+        gpu.device,
+        gpu.queue,
+        &mut gpu.encoder,
+        &compiled,
+        &target_view,
+        (target_w, target_h),
+        &uniform_bytes,
+        &dab_bytes,
+    );
+
+    gpu.brush_preview_info = Some(crate::brush::eval::BrushPreviewInfo {
+        half_extent_canvas_px: [bbox_radius, bbox_radius],
+        rotation_rad,
+    });
+    Some(())
 }
 
 /// Pack the node-contributed portion of the uniform buffer. The
@@ -925,6 +1135,7 @@ fn hash_graph_topology(graph: &crate::nodegraph::Graph<BrushWireType>) -> u64 {
 }
 
 fn assemble_shader(
+    mode: ShaderMode,
     dab_fields: &[DabField],
     uniform_fields: &[UniformField],
     node_decls: &str,
@@ -962,17 +1173,21 @@ fn assemble_shader(
         out.push_str("};\n\n");
     }
 
-    // Bind groups: group(0) = uniforms, group(1) = dabs storage,
-    // group(2) = selection. Same layout as `paint` so we reuse the
-    // shared selection BGL and the dynamic-uniform ring BGL.
+    // Bind groups: group(0) = uniforms (both modes), group(1) = dabs
+    // storage (both modes). In stroke mode group(2) = selection and
+    // optional terminal `@group(3)` bindings. Preview mode omits both
+    // — the skeleton hard-codes `sel = 1.0` and the preview body never
+    // samples scratch / atlas.
     out.push_str("@group(0) @binding(0) var<uniform> u: Uniforms;\n");
     out.push_str("@group(1) @binding(0) var<storage, read> dabs: array<DabRecord>;\n");
-    out.push_str("@group(2) @binding(0) var sel_tex: texture_2d<f32>;\n");
-    out.push_str("@group(2) @binding(1) var sel_smp: sampler;\n");
-    if !terminal_bindings.is_empty() {
-        out.push_str(terminal_bindings);
-        if !terminal_bindings.ends_with('\n') {
-            out.push('\n');
+    if mode == ShaderMode::Stroke {
+        out.push_str("@group(2) @binding(0) var sel_tex: texture_2d<f32>;\n");
+        out.push_str("@group(2) @binding(1) var sel_smp: sampler;\n");
+        if !terminal_bindings.is_empty() {
+            out.push_str(terminal_bindings);
+            if !terminal_bindings.ends_with('\n') {
+                out.push('\n');
+            }
         }
     }
     out.push('\n');
@@ -981,14 +1196,21 @@ fn assemble_shader(
     out.push_str(node_decls);
     out.push('\n');
 
-    // Vertex stage — identical to paint.wgsl; emits the per-instance
-    // quad and the canvas_pos varying.
-    out.push_str(VERTEX_STAGE_WGSL);
+    // Vertex stage — paint.wgsl-style instanced quad in stroke mode,
+    // single quad at `u.intrinsic.preview_centre ± d.bbox_radius`
+    // mapped into the preview-mask viewport in preview mode.
+    match mode {
+        ShaderMode::Stroke => out.push_str(STROKE_VERTEX_STAGE_WGSL),
+        ShaderMode::Preview => out.push_str(PREVIEW_VERTEX_STAGE_WGSL),
+    }
     out.push('\n');
 
     // Fragment stage — header binds the fragment-local helpers, then
     // splices in the node bodies, then ends with the terminal's
-    // `return` line (emitted into `fs_body`).
+    // `return` line (emitted into `fs_body`). The `sel` binding line
+    // differs between modes: stroke samples a real texture, preview
+    // hard-codes 1.0 (the full footprint, ignoring any active
+    // selection — matches master's preview behavior).
     out.push_str("@fragment\n");
     out.push_str("fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n");
     out.push_str("    let d = dabs[in.dab_idx];\n");
@@ -1005,19 +1227,24 @@ fn assemble_shader(
     out.push_str("        f32(u.intrinsic.canvas_size.x),\n");
     out.push_str("        f32(u.intrinsic.canvas_size.y),\n");
     out.push_str("    );\n");
-    out.push_str(
-        "    let sel = textureSampleLevel(sel_tex, sel_smp, canvas_pos / canvas_size, 0.0).r;\n",
-    );
+    match mode {
+        ShaderMode::Stroke => out.push_str(
+            "    let sel = textureSampleLevel(sel_tex, sel_smp, canvas_pos / canvas_size, 0.0).r;\n",
+        ),
+        ShaderMode::Preview => out.push_str("    let sel: f32 = 1.0;\n"),
+    }
     out.push_str(fs_body);
     out.push_str("}\n");
 
     out
 }
 
-/// Vertex stage WGSL — identical structure to paint.wgsl's
-/// `vs_main`. Embedded as a const because every compiled brush uses
-/// the same instanced quad geometry.
-const VERTEX_STAGE_WGSL: &str = r#"
+/// Stroke-mode vertex stage — instanced quad per dab, mapped against
+/// the layer's NDC viewport. Used by every compiled brush in stroke
+/// mode. Includes `VsOut` + `quad_corner` since the preview vertex
+/// stage uses them too and we splice exactly one of the two stages
+/// into each assembled shader.
+const STROKE_VERTEX_STAGE_WGSL: &str = r#"
 struct VsOut {
     @builtin(position) clip:        vec4<f32>,
     @location(0) canvas_pos:        vec2<f32>,
@@ -1065,6 +1292,54 @@ fn vs_main(
     out.clip       = vec4<f32>(clip, 0.0, 1.0);
     out.canvas_pos = canvas_pos;
     out.dab_idx    = ii;
+    return out;
+}
+"#;
+
+/// Preview-mode vertex stage — single quad centred at
+/// `u.intrinsic.preview_centre`, mapped against the preview mask's
+/// NDC viewport (`u.intrinsic.preview_size`). The fragment shader
+/// reads `dabs[0]` for the (single) record's pose; the per-fragment
+/// math is unchanged from stroke mode. Repeats the `VsOut` /
+/// `quad_corner` declarations so the two vertex stages are
+/// drop-in alternatives — assemble_shader splices exactly one.
+const PREVIEW_VERTEX_STAGE_WGSL: &str = r#"
+struct VsOut {
+    @builtin(position) clip:        vec4<f32>,
+    @location(0) canvas_pos:        vec2<f32>,
+    @location(1) @interpolate(flat) dab_idx: u32,
+};
+
+fn quad_corner(vi: u32) -> vec2<f32> {
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(0.0, 0.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(0.0, 1.0),
+        vec2<f32>(1.0, 0.0),
+        vec2<f32>(1.0, 1.0),
+        vec2<f32>(0.0, 1.0),
+    );
+    return corners[vi];
+}
+
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
+    let dab = dabs[0];
+    let corner = quad_corner(vi);
+    let canvas_pos = u.intrinsic.preview_centre +
+        (corner * 2.0 - vec2<f32>(1.0, 1.0)) * dab.bbox_radius;
+    let preview_size_f = vec2<f32>(
+        f32(u.intrinsic.preview_size.x),
+        f32(u.intrinsic.preview_size.y),
+    );
+    let clip = vec2<f32>(
+        canvas_pos.x / preview_size_f.x * 2.0 - 1.0,
+        1.0 - canvas_pos.y / preview_size_f.y * 2.0,
+    );
+    var out: VsOut;
+    out.clip       = vec4<f32>(clip, 0.0, 1.0);
+    out.canvas_pos = canvas_pos;
+    out.dab_idx    = 0u;
     return out;
 }
 "#;

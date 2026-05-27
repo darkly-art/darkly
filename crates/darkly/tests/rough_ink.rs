@@ -1,4 +1,4 @@
-//! Integration tests for the Perlin Ink brush — the first 100%-
+//! Integration tests for the Rough Ink brush — the first 100%-
 //! compiled brush. Exercises the full `paint_compiled` pipeline
 //! end-to-end on a real GPU device:
 //!
@@ -148,7 +148,7 @@ fn harness(initial: &[u8], graph: Graph<BrushWireType>) -> Harness {
         CANVAS,
     );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("perlin-ink-test-pre-stroke-init"),
+        label: Some("rough-ink-test-pre-stroke-init"),
     });
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke_paint_target);
     queue.submit([enc.finish()]);
@@ -196,6 +196,7 @@ macro_rules! make_ctx {
             blend_mode: 0,
             preview_mask_view: None,
             preview_mask_size: (0, 0),
+            preview_mask_overlay: None,
             brush_preview_info: None,
             pre_stroke_texture: Some(_pre_stroke_texture),
             pre_stroke_bind_group: Some(_pre_stroke_bind_group),
@@ -213,13 +214,13 @@ macro_rules! make_ctx {
 
 impl Harness {
     fn begin_stroke(&mut self) {
-        let mut ctx = make_ctx!(self, "perlin-ink-test-begin");
+        let mut ctx = make_ctx!(self, "rough-ink-test-begin");
         self.runner.begin_stroke(&mut ctx);
         self.queue.submit([ctx.encoder.finish()]);
     }
 
     fn dab_and_flush(&mut self, info: &PaintInformation, color: [f32; 4], dab_index: u32) {
-        let mut ctx = make_ctx!(self, "perlin-ink-test-dab");
+        let mut ctx = make_ctx!(self, "rough-ink-test-dab");
         self.runner.seed_sensors(info, color, 0xC0FFEE, dab_index);
         self.runner.execute_cpu();
         self.runner.execute_gpu(&mut ctx);
@@ -229,7 +230,7 @@ impl Harness {
     }
 
     fn two_dabs_same_phase(&mut self, a: &PaintInformation, b: &PaintInformation, color: [f32; 4]) {
-        let mut ctx = make_ctx!(self, "perlin-ink-test-two-dabs");
+        let mut ctx = make_ctx!(self, "rough-ink-test-two-dabs");
         self.runner.seed_sensors(a, color, 0xC0FFEE, 0);
         self.runner.execute_cpu();
         self.runner.execute_gpu(&mut ctx);
@@ -341,8 +342,8 @@ fn two_dabs_same_flush_both_deposit() {
 }
 
 #[test]
-fn builtin_perlin_ink_brush_renders_within_declared_bbox() {
-    // Render the actual Perlin Ink builtin — exercises `random →
+fn builtin_rough_ink_brush_renders_within_declared_bbox() {
+    // Render the actual Rough Ink builtin — exercises `random →
     // circle` wires that pack per-dab values into the dab record
     // and reference them from the shape evaluator. Regression test
     // for the case where circle's shape eval was emitted as a
@@ -355,10 +356,10 @@ fn builtin_perlin_ink_brush_renders_within_declared_bbox() {
     // writes outside the bbox, the save-point system on rewind
     // truncates previous dabs to the un-inflated square — the bug
     // the protocol was introduced to fix.
-    let perlin = darkly::brush::builtin_brushes::all()
+    let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Perlin Ink")
-        .expect("Perlin Ink registered");
+        .find(|b| b.metadata.name == "Rough Ink")
+        .expect("Rough Ink registered");
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) =
         create_test_texture(&device, &queue, CANVAS, CANVAS, &black_canvas());
@@ -372,14 +373,14 @@ fn builtin_perlin_ink_brush_renders_within_declared_bbox() {
         CANVAS,
     );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("perlin-ink-builtin-pre-stroke"),
+        label: Some("rough-ink-builtin-pre-stroke"),
     });
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke_paint_target);
     queue.submit([enc.finish()]);
 
     // Override the brush's size port so the dab fits in the test
     // canvas — the builtin's exposed size is small by default.
-    let mut graph = perlin.metadata.graph.clone();
+    let mut graph = rough_ink.metadata.graph.clone();
     let term_id = graph
         .nodes
         .iter()
@@ -388,13 +389,13 @@ fn builtin_perlin_ink_brush_renders_within_declared_bbox() {
         .unwrap();
     graph.set_port_default(term_id, "size", 0.15).unwrap();
 
-    let runner = compile_graph(&graph).expect("Perlin Ink compiles");
+    let runner = compile_graph(&graph).expect("Rough Ink compiles");
     let compiled = runner.compiled_brush().expect("compiled brush attached");
-    // Perlin Ink wires `random → circle.amplitude` (natural_range max
+    // Rough Ink wires `random → circle.amplitude` (natural_range max
     // = 0.5) so the brush extent factor composes to 1.5.
     assert!(
         (compiled.brush_extent_factor - 1.5).abs() < 1e-4,
-        "expected perlin-ink extent factor ≈ 1.5, got {}",
+        "expected rough-ink extent factor ≈ 1.5, got {}",
         compiled.brush_extent_factor,
     );
 
@@ -468,7 +469,7 @@ fn builtin_perlin_ink_brush_renders_within_declared_bbox() {
 }
 
 #[test]
-fn perlin_ink_overlapping_dabs_render_without_truncation() {
+fn rough_ink_overlapping_dabs_render_without_truncation() {
     // Regression test for the QUAD_R_MAX-vs-radius divergence bug.
     // Render two overlapping perlin dabs in the same flush. Each dab
     // packs its own `bbox_radius` into the per-instance dab record;
@@ -476,11 +477,11 @@ fn perlin_ink_overlapping_dabs_render_without_truncation() {
     // and the fragment stage discards past it. If the per-instance
     // bbox were globally clamped (the pre-protocol bug), the larger
     // dab would be clipped by the smaller's quad.
-    let perlin = darkly::brush::builtin_brushes::all()
+    let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Perlin Ink")
-        .expect("Perlin Ink registered");
-    let mut graph = perlin.metadata.graph.clone();
+        .find(|b| b.metadata.name == "Rough Ink")
+        .expect("Rough Ink registered");
+    let mut graph = rough_ink.metadata.graph.clone();
     let term_id = graph
         .nodes
         .iter()

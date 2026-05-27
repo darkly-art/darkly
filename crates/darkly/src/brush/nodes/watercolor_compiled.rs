@@ -49,7 +49,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, NodeWgsl, WgslType,
+    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, IntrinsicUniforms, NodeWgsl,
+    WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -66,20 +67,7 @@ const ATLAS_HEIGHT: u32 = 128;
 
 const MAX_UNIFORM_BYTES: usize = 1024;
 
-// ── Intrinsic uniforms ──────────────────────────────────────────────────
-
-/// Same `IntrinsicUniforms` shape as `paint_compiled` — the composite
-/// shader's `Uniforms` struct embeds this as the first field.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct IntrinsicUniforms {
-    layer_offset: [i32; 2],
-    layer_size: [u32; 2],
-    canvas_size: [u32; 2],
-    _pad: [u32; 2],
-}
-
-const INTRINSIC_UNIFORMS_SIZE: usize = std::mem::size_of::<IntrinsicUniforms>();
+// ── Pickup uniforms ─────────────────────────────────────────────────────
 
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -132,7 +120,7 @@ impl PerBrushPipeline {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("watercolor_compiled-composite"),
-                source: wgpu::ShaderSource::Wgsl(compiled.wgsl.clone().into()),
+                source: wgpu::ShaderSource::Wgsl(compiled.stroke_wgsl.clone().into()),
             });
 
         // ── Pickup shader (brush-specific dab record stride) ──
@@ -619,6 +607,14 @@ pub fn register() -> BrushNodeRegistration {
                     ),
                 PortDef::input("color", BrushWireType::Color)
                     .with_description("Brush color (typically wired from paint_color)"),
+                // Cursor-preview rotation in radians. Read only by
+                // `render_preview` and published into
+                // `BrushPreviewInfo.rotation_rad`; the stroke shader
+                // doesn't apply it (rotation in stroke deposit is a
+                // separate concern). Defaults to 0.
+                PortDef::input("rotation", BrushWireType::Scalar)
+                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
+                    .with_description("Cursor-preview rotation (radians)"),
                 // Typed as `Texture` to match the upstream
                 // `circle.texture` output's wire type. In the compiled
                 // path the wire's underlying WGSL expression is `f32`
@@ -848,6 +844,8 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
                 layer_offset,
                 layer_size,
                 canvas_size: [gpu.canvas_width, gpu.canvas_height],
+                preview_centre: [0.0, 0.0],
+                preview_size: [0, 0],
                 _pad: [0, 0],
             },
         );
@@ -974,14 +972,20 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
         );
     }
 
+    /// Hover-cursor preview. Routes through the shared preview helper.
+    /// The brush color × shape (perlin/sine) modulated mask reads
+    /// against `sel = 1.0` (no selection clipping for the cursor) and
+    /// a neutral-load preview body (overridden via
+    /// [`Self::compile_preview_body`] — the stroke body samples the
+    /// `@group(3)` pickup atlas, which the preview skeleton omits).
     fn render_preview(
         &self,
-        _ctx: &EvalContext,
-        _gpu: &mut BrushGpuContext,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        // Compiled-brush previews are a separate handoff
-        // (`handoff-brush-preview.md`). No-op for now — hover cursor
-        // disappears like paint_compiled.
+        let radius = Self::effective_radius(ctx);
+        let rotation_rad = ctx.input_f32("rotation");
+        let _ = crate::brush::wgsl_compile::render_compiled_preview(gpu, radius, rotation_rad);
         vec![]
     }
 
@@ -1042,6 +1046,29 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
         // the import would still compile today; leaving the touch
         // documents intent.
         let _ = std::marker::PhantomData::<WgslType>;
+        Ok(wgsl)
+    }
+
+    /// Preview-mode body. The stroke body samples the `@group(3)`
+    /// pickup atlas — the preview skeleton omits `@group(3)`, so this
+    /// override emits a body that doesn't sample it. We keep the
+    /// shape modulation (so Rough Watercolor shows its bumpy
+    /// silhouette) and the brush color, but drop the atlas pickup /
+    /// wetness blend — preview shows what the brush *would* deposit,
+    /// not what it'd pick up.
+    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        let mask_expr = cctx.input("mask").as_f32();
+        let color_expr = cctx.input("color").as_vec4();
+        let flow_expr = cctx.input("flow").as_f32();
+        wgsl.body = format!(
+            "    let mask = clamp({mask_expr}, 0.0, 1.0);\n\
+             \x20   if (mask <= 0.0) {{ discard; }}\n\
+             \x20   var fg_color: vec4<f32> = {color_expr};\n\
+             \x20   let flow = clamp({flow_expr}, 0.0, 1.0);\n\
+             \x20   let a = mask * flow * fg_color.a;\n\
+             \x20   return vec4<f32>(fg_color.rgb * a, a);\n"
+        );
         Ok(wgsl)
     }
 }

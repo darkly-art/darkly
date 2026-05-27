@@ -54,7 +54,7 @@ const RESOLUTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080), (2560, 1440), (3
 /// `Topology::brush_name` picks the right one for the cell.
 const BRUSH_NAME_INK_PEN: &str = "Ink Pen";
 const BRUSH_NAME_WATERCOLOR: &str = "Smooth Watercolor";
-const BRUSH_NAME_PERLIN_INK: &str = "Perlin Ink";
+const BRUSH_NAME_ROUGH_INK: &str = "Rough Ink";
 const BRUSH_NAME_SMUDGE: &str = "Smudge";
 const BRUSH_NAME_LIQUIFY: &str = "Liquify";
 
@@ -78,11 +78,11 @@ enum Topology {
     /// (sine) → watercolor_compiled`. Two-pass per phase (pickup atlas
     /// + composite), composite shader is per-brush compiled.
     Watercolor,
-    /// Perlin Ink — `pen + 3×random → circle(perlin) → stamp →
+    /// Rough Ink — `pen + 3×random → circle(perlin) → stamp →
     /// paint_compiled`. The original demo brush for the compiled
     /// framework; same terminal as Paint but a more elaborate upstream
     /// graph (per-dab random nodes drive the perlin shape).
-    PerlinInk,
+    RoughInk,
     /// Smudge — `pen → circle → smudge_compiled`. Per-dab fragment
     /// pass with a `copy_texture_to_texture` barrier between dabs so
     /// each dab reads the prior dab's writeback. Stresses the per-dab
@@ -101,7 +101,7 @@ impl Topology {
         match s {
             "paint" => Some(Topology::Paint),
             "watercolor" | "watercolor-compute" | "wet-media" => Some(Topology::Watercolor),
-            "perlin-ink" | "perlin_ink" | "compiled" => Some(Topology::PerlinInk),
+            "rough-ink" | "rough_ink" | "compiled" => Some(Topology::RoughInk),
             "smudge" => Some(Topology::Smudge),
             "liquify" => Some(Topology::Liquify),
             _ => None,
@@ -112,7 +112,7 @@ impl Topology {
         match self {
             Topology::Paint => "paint",
             Topology::Watercolor => "watercolor",
-            Topology::PerlinInk => "perlin-ink",
+            Topology::RoughInk => "rough-ink",
             Topology::Smudge => "smudge",
             Topology::Liquify => "liquify",
         }
@@ -124,7 +124,7 @@ impl Topology {
         match self {
             Topology::Paint => "paint_compiled",
             Topology::Watercolor => "watercolor_compiled",
-            Topology::PerlinInk => "paint_compiled",
+            Topology::RoughInk => "paint_compiled",
             Topology::Smudge => "smudge_compiled",
             Topology::Liquify => "liquify_compiled",
         }
@@ -134,7 +134,7 @@ impl Topology {
         match self {
             Topology::Paint => BRUSH_NAME_INK_PEN,
             Topology::Watercolor => BRUSH_NAME_WATERCOLOR,
-            Topology::PerlinInk => BRUSH_NAME_PERLIN_INK,
+            Topology::RoughInk => BRUSH_NAME_ROUGH_INK,
             Topology::Smudge => BRUSH_NAME_SMUDGE,
             Topology::Liquify => BRUSH_NAME_LIQUIFY,
         }
@@ -167,18 +167,18 @@ fn parse_args() -> Args {
                 let v = argv.next().expect("--topology requires a value");
                 topology = Topology::parse(&v).unwrap_or_else(|| {
                     panic!(
-                        "unknown topology `{v}` — expected `paint`, `watercolor`, or `perlin-ink`"
+                        "unknown topology `{v}` — expected `paint`, `watercolor`, or `rough-ink`"
                     )
                 });
             }
             "-h" | "--help" => {
                 eprintln!(
                     "stroke_replay_matrix --input <path> [--output <tsv>] \
-                     [--topology paint|watercolor|perlin-ink]\n\n\
+                     [--topology paint|watercolor|rough-ink]\n\n\
                      Replays a recording across the configured (dab_radius × resolution) matrix.\n\
                      Axes are constants at the top of stroke_replay_matrix.rs.\n\
                      `paint` = Ink Pen (compiled). `watercolor` = Smooth Watercolor (compiled).\n\
-                     `perlin-ink` = the demo brush with the upstream random graph."
+                     `rough-ink` = the demo brush with the upstream random graph."
                 );
                 std::process::exit(0);
             }

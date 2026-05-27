@@ -10,7 +10,7 @@
 //!    identical graphs (independent of node ID allocation) hash to the
 //!    same `topology_hash` so the per-brush pipeline cache shares
 //!    pipelines.
-//! 3. **The Perlin Ink builtin compiles end-to-end** — the framework
+//! 3. **The Rough Ink builtin compiles end-to-end** — the framework
 //!    handles a real graph with random + curve + circle + stamp +
 //!    paint_compiled and produces non-empty WGSL.
 
@@ -42,23 +42,59 @@ fn empty_graph_errors_cleanly() {
 
 #[test]
 fn non_compilable_node_errors_with_type_id() {
-    // `image` (or any node without a compile_wgsl impl) feeding the
-    // graph should produce NodeNotCompilable with the offending
-    // type_id.
+    // A `stamp` node with `application != AlphaMask` returns Err from
+    // `compile_wgsl` — the only remaining built-in error path after
+    // phase 4 dropped the `image` node and the dispatch-path stamp
+    // modes that relied on sampling a real tip texture. The compiler
+    // must surface a `NodeNotCompilable` carrying the offending
+    // type_id rather than panicking.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
-    let img = graph.add_node(
-        "image",
-        reg.get("image").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::String("dummy".into())],
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
     );
-    let _ = img;
+    let circle = graph.add_node(
+        "circle",
+        reg.get("circle").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        reg.get("stamp").unwrap().ports.clone(),
+        // application = 1 → ImageStamp mode → compile_wgsl errors
+        vec![darkly::gpu::params::ParamValue::Int(1)],
+    );
+    let term = graph.add_node(
+        "paint_compiled",
+        reg.get("paint_compiled").unwrap().ports.clone(),
+        vec![],
+    );
+    for (fnode, fport, tnode, tport) in [
+        (pen, "position", term, "position"),
+        (circle, "texture", stamp, "tip"),
+        (stamp, "dab", term, "rgba"),
+    ] {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
     let plan = compile(&graph, reg.as_map()).unwrap();
-    let err =
-        compile_brush_to_wgsl(&graph, &plan, &evals()).expect_err("image has no compile_wgsl impl");
+    let err = compile_brush_to_wgsl(&graph, &plan, &evals())
+        .expect_err("stamp.application != AlphaMask must fail to compile");
     match err {
         CompileError::NodeNotCompilable { type_id, reason } => {
-            assert_eq!(type_id, "image");
+            assert_eq!(type_id, "stamp");
             assert!(!reason.is_empty());
         }
         other => panic!("expected NodeNotCompilable, got {other:?}"),
@@ -66,24 +102,28 @@ fn non_compilable_node_errors_with_type_id() {
 }
 
 #[test]
-fn perlin_ink_brush_compiles_to_nonempty_wgsl() {
-    // Lift the Perlin Ink graph straight from `builtin_brushes::all()`
+fn rough_ink_brush_compiles_to_nonempty_wgsl() {
+    // Lift the Rough Ink graph straight from `builtin_brushes::all()`
     // — it's the canonical demo brush this framework was built to
     // support, and a quick smoke test that every per-node
     // `compile_wgsl` works in the context of a real graph.
-    let perlin = darkly::brush::builtin_brushes::all()
+    let rough_ink = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Perlin Ink")
-        .expect("Perlin Ink brush registered");
+        .find(|b| b.metadata.name == "Rough Ink")
+        .expect("Rough Ink brush registered");
     let reg = registry();
-    let plan = compile(&perlin.metadata.graph, reg.as_map()).unwrap();
+    let plan = compile(&rough_ink.metadata.graph, reg.as_map()).unwrap();
     let compiled =
-        compile_brush_to_wgsl(&perlin.metadata.graph, &plan, &evals()).expect("compiles");
-    assert!(compiled.wgsl.contains("@fragment"));
-    assert!(compiled.wgsl.contains("fn fs_main"));
-    assert!(compiled.wgsl.contains("shape_r_theta")); // perlin shape
-    assert!(compiled.wgsl.contains("DabRecord"));
-    assert!(compiled.wgsl.contains("Uniforms"));
+        compile_brush_to_wgsl(&rough_ink.metadata.graph, &plan, &evals()).expect("compiles");
+    assert!(compiled.stroke_wgsl.contains("@fragment"));
+    assert!(compiled.stroke_wgsl.contains("fn fs_main"));
+    assert!(compiled.stroke_wgsl.contains("shape_r_theta")); // perlin shape
+    assert!(compiled.stroke_wgsl.contains("DabRecord"));
+    assert!(compiled.stroke_wgsl.contains("Uniforms"));
+    // Preview variant must compile too, with the same upstream shape.
+    assert!(compiled.preview_wgsl.contains("@fragment"));
+    assert!(compiled.preview_wgsl.contains("fn fs_main"));
+    assert!(compiled.preview_wgsl.contains("shape_r_theta"));
     assert!(compiled.dab_record_size >= 16); // intrinsic header + pen
     assert!(compiled.uniform_size > 0); // intrinsic + paint_color
     assert!(compiled.topology_hash != 0);
@@ -91,19 +131,19 @@ fn perlin_ink_brush_compiles_to_nonempty_wgsl() {
 
 #[test]
 fn topology_hash_is_stable_for_identical_graphs() {
-    let perlin_a = darkly::brush::builtin_brushes::all()
+    let rough_a = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Perlin Ink")
+        .find(|b| b.metadata.name == "Rough Ink")
         .unwrap();
-    let perlin_b = darkly::brush::builtin_brushes::all()
+    let rough_b = darkly::brush::builtin_brushes::all()
         .into_iter()
-        .find(|b| b.metadata.name == "Perlin Ink")
+        .find(|b| b.metadata.name == "Rough Ink")
         .unwrap();
     let reg = registry();
-    let plan_a = compile(&perlin_a.metadata.graph, reg.as_map()).unwrap();
-    let plan_b = compile(&perlin_b.metadata.graph, reg.as_map()).unwrap();
-    let a = compile_brush_to_wgsl(&perlin_a.metadata.graph, &plan_a, &evals()).unwrap();
-    let b = compile_brush_to_wgsl(&perlin_b.metadata.graph, &plan_b, &evals()).unwrap();
+    let plan_a = compile(&rough_a.metadata.graph, reg.as_map()).unwrap();
+    let plan_b = compile(&rough_b.metadata.graph, reg.as_map()).unwrap();
+    let a = compile_brush_to_wgsl(&rough_a.metadata.graph, &plan_a, &evals()).unwrap();
+    let b = compile_brush_to_wgsl(&rough_b.metadata.graph, &plan_b, &evals()).unwrap();
     assert_eq!(a.topology_hash, b.topology_hash);
     assert_eq!(a.dab_record_size, b.dab_record_size);
     assert_eq!(a.uniform_size, b.uniform_size);
@@ -262,6 +302,8 @@ fn paint_compiled_only_graph_falls_through_to_disc() {
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals())
         .expect("paint_compiled with no rgba wire still compiles");
-    assert!(compiled.wgsl.contains("local_dist"));
-    assert!(compiled.wgsl.contains("vec4<f32>(1.0, 1.0, 1.0, 1.0)"));
+    assert!(compiled.stroke_wgsl.contains("local_dist"));
+    assert!(compiled
+        .stroke_wgsl
+        .contains("vec4<f32>(1.0, 1.0, 1.0, 1.0)"));
 }

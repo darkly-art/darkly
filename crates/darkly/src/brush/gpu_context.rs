@@ -15,7 +15,19 @@ use super::pipeline::BrushPipelines;
 use super::scratch::Scratch;
 use super::wgsl_compile::CompiledBrush;
 use super::wire::ScalarValue;
+use crate::gpu::overlay::ToolOverlay;
 use crate::gpu::paint_target::GpuPaintTarget;
+
+/// Hard cap on the preview-mask side length. Above this the overlay's
+/// linear sampler upsamples (visible stairstepping on soft edges),
+/// but the cost is bounded — most brushes never reach this. Sized so
+/// a 512² RGBA8 texture is ~1 MB VRAM, acceptable as a hover-only
+/// resource.
+pub const MAX_PREVIEW_MASK_SIDE: u32 = 512;
+
+/// Minimum preview-mask side length. Even tiny brushes get this floor
+/// so the linear-upsampling overlay sample has enough texels to read.
+pub const MIN_PREVIEW_MASK_SIDE: u32 = 128;
 
 /// Brush perf counters. Lives both per-`BrushGpuContext` (drained at
 /// `submit_final`) and per-engine (accumulated across all contexts of a
@@ -184,8 +196,22 @@ pub struct BrushGpuContext<'a> {
     /// Preview mask target. Populated by the engine during preview regen;
     /// terminal `render_preview` hooks blit their preview texture into it.
     /// `None` during stroke evaluation (the preview path isn't running).
+    ///
+    /// Used as the fallback when `preview_mask_overlay` is `None` —
+    /// tests pre-allocate a fixed-size mask and stuff a view in here.
+    /// The engine driver leaves this `None` and grows the mask on
+    /// demand via [`Self::ensure_preview_mask`] through
+    /// `preview_mask_overlay`.
     pub preview_mask_view: Option<&'a wgpu::TextureView>,
     pub preview_mask_size: (u32, u32),
+    /// Mutable handle to the overlay that owns the preview-mask
+    /// texture. Held by the engine driver so a terminal's
+    /// `render_preview` can grow the mask via
+    /// [`Self::ensure_preview_mask`] when the brush's bbox would
+    /// otherwise stairstep through the overlay's linear sampler.
+    /// `None` in tests that build the context manually with a
+    /// fixed-size pre-allocated mask.
+    pub preview_mask_overlay: Option<&'a mut ToolOverlay>,
     /// Set by a terminal's `render_preview` hook to publish overlay
     /// placement info (extent + rotation) to the engine. The engine reads
     /// this after `render_preview_pipeline` returns. `None` outside the
@@ -368,6 +394,38 @@ impl<'a> BrushGpuContext<'a> {
         self.pending_dab_count = 0;
         self.pending_dabs_bbox = None;
         self.pending_dab_meta_bytes.clear();
+    }
+
+    /// Ensure the preview mask is sized to fit a brush footprint of
+    /// `bbox_radius` canvas pixels half-extent. Reallocates if needed,
+    /// rounding the requested side up to the next power of two so
+    /// neighbouring slider-scrub values hit the cache. Returns
+    /// `(view, width, height)`.
+    ///
+    /// When `preview_mask_overlay` is bound (engine driver path), the
+    /// overlay's preview-mask texture grows on demand up to
+    /// [`MAX_PREVIEW_MASK_SIDE`]. When it's `None` (test path), the
+    /// caller's pre-allocated `preview_mask_view` / `preview_mask_size`
+    /// is returned unchanged.
+    pub fn ensure_preview_mask(
+        &mut self,
+        bbox_radius: f32,
+    ) -> Option<(wgpu::TextureView, u32, u32)> {
+        let requested = ((bbox_radius * 2.0).ceil() as u32).max(1);
+        let side = requested
+            .next_power_of_two()
+            .clamp(MIN_PREVIEW_MASK_SIDE, MAX_PREVIEW_MASK_SIDE);
+        if let Some(overlay) = self.preview_mask_overlay.as_mut() {
+            let view = overlay.ensure_preview_mask(self.device, side, side).clone();
+            return Some((view, side, side));
+        }
+        // Test fallback — return the pre-allocated mask as-is.
+        let view = self.preview_mask_view?;
+        Some((
+            view.clone(),
+            self.preview_mask_size.0,
+            self.preview_mask_size.1,
+        ))
     }
 
     /// Union a write-pass footprint into `dab_write_canvas_bbox`. Called by

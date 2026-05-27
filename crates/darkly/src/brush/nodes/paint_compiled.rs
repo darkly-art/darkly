@@ -45,7 +45,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, InputBinding, NodeWgsl,
+    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, InputBinding, IntrinsicUniforms,
+    NodeWgsl, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -59,22 +60,6 @@ const SIZE_REFERENCE_PX: f32 = crate::brush::DAB_REFERENCE_SIZE as f32;
 
 /// Maximum uniform buffer size we'll allocate per brush pipeline.
 const MAX_UNIFORM_BYTES: usize = 1024;
-
-// ── Intrinsic uniforms ──────────────────────────────────────────────────
-
-/// The `IntrinsicUniforms` struct from `_compiled_prelude.wgsl`. The
-/// terminal packs this at the front of every uniform buffer; node-
-/// contributed uniforms follow.
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct IntrinsicUniforms {
-    layer_offset: [i32; 2],
-    layer_size: [u32; 2],
-    canvas_size: [u32; 2],
-    _pad: [u32; 2],
-}
-
-const INTRINSIC_UNIFORMS_SIZE: usize = std::mem::size_of::<IntrinsicUniforms>();
 
 // ── Per-brush pipeline ──────────────────────────────────────────────────
 
@@ -97,7 +82,7 @@ impl PerBrushPipeline {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("paint_compiled-brush"),
-                source: wgpu::ShaderSource::Wgsl(compiled.wgsl.clone().into()),
+                source: wgpu::ShaderSource::Wgsl(compiled.stroke_wgsl.clone().into()),
             });
 
         // group(1): dabs storage buffer. Same VERTEX_FRAGMENT visibility
@@ -354,6 +339,16 @@ pub fn register() -> BrushNodeRegistration {
                     .with_icon("fa-solid fa-fill-drip")
                     .exposed()
                     .with_description("Stroke-level opacity cap (applied at commit)"),
+                // Cursor-preview rotation in radians. Wire from
+                // `pen.tilt_direction` or `pen.drawing_angle` to make
+                // the hover-cursor mask rotate with the pen. The
+                // current paint shader doesn't apply this to the
+                // stroke deposit — it's read only by
+                // `render_preview` for the overlay. Defaults to 0
+                // (no rotation).
+                PortDef::input("rotation", BrushWireType::Scalar)
+                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
+                    .with_description("Cursor-preview rotation (radians)"),
                 // Typed as `Texture` to match the upstream `stamp.dab`
                 // output's wire type — the wire-type label is shared
                 // with the per-dab dispatch model where it'd be a
@@ -579,6 +574,8 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
                 layer_offset,
                 layer_size,
                 canvas_size: [gpu.canvas_width, gpu.canvas_height],
+                preview_centre: [0.0, 0.0],
+                preview_size: [0, 0],
                 _pad: [0, 0],
             },
         );
@@ -664,15 +661,20 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         );
     }
 
-    /// Preview is unimplemented for now — falls through to a no-op so
-    /// the hover cursor disappears for compiled brushes. A shape-aware
-    /// procedural preview (matching what `color_output` does for the
-    /// per-dab dispatch path) is the eventual follow-up.
+    /// Hover-cursor preview — reuses the shared
+    /// [`crate::brush::wgsl_compile::render_compiled_preview`] helper.
+    /// `paint_compiled`'s stroke body and preview body are the same
+    /// source (no `compile_preview_body` override), so the cursor
+    /// shows the brush color × shape × flow as the stroke would
+    /// deposit.
     fn render_preview(
         &self,
-        _ctx: &EvalContext,
-        _gpu: &mut BrushGpuContext,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
+        let radius = Self::effective_radius(ctx);
+        let rotation_rad = ctx.input_f32("rotation");
+        let _ = crate::brush::wgsl_compile::render_compiled_preview(gpu, radius, rotation_rad);
         vec![]
     }
 

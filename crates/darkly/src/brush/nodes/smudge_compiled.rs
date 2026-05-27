@@ -54,7 +54,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField, NodeWgsl, WgslType,
+    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField, IntrinsicUniforms,
+    NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -69,19 +70,6 @@ const MAX_UNIFORM_BYTES: usize = 1024;
 /// stationary and dropped before queueing — `mix(bg, src, _)` is an
 /// identity write when `src == bg`.
 const STATIONARY_THRESHOLD_PX: f32 = 0.5;
-
-// ── Intrinsic uniforms ──────────────────────────────────────────────────
-
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct IntrinsicUniforms {
-    layer_offset: [i32; 2],
-    layer_size: [u32; 2],
-    canvas_size: [u32; 2],
-    _pad: [u32; 2],
-}
-
-const INTRINSIC_UNIFORMS_SIZE: usize = std::mem::size_of::<IntrinsicUniforms>();
 
 // ── Per-dab CPU meta ────────────────────────────────────────────────────
 
@@ -116,7 +104,7 @@ impl PerBrushPipeline {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("smudge_compiled-brush"),
-                source: wgpu::ShaderSource::Wgsl(compiled.wgsl.clone().into()),
+                source: wgpu::ShaderSource::Wgsl(compiled.stroke_wgsl.clone().into()),
             });
 
         let dabs_bgl = ctx
@@ -603,6 +591,8 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
                 layer_offset,
                 layer_size,
                 canvas_size: [gpu.canvas_width, gpu.canvas_height],
+                preview_centre: [0.0, 0.0],
+                preview_size: [0, 0],
                 _pad: [0, 0],
             },
         );
@@ -695,13 +685,17 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
         );
     }
 
+    /// Hover-cursor preview. Routes through the shared preview helper.
+    /// Smudge has no rotation port — the cursor is symmetric, and
+    /// rotating it wouldn't carry meaningful information for the
+    /// user. Publishes `rotation_rad: 0.0`.
     fn render_preview(
         &self,
-        _ctx: &EvalContext,
-        _gpu: &mut BrushGpuContext,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        // Stubbed during phase 4 of the compiled-port migration;
-        // landed-with-phase-5 per-terminal preview interface owns this.
+        let radius = Self::effective_radius(ctx);
+        let _ = crate::brush::wgsl_compile::render_compiled_preview(gpu, radius, 0.0);
         vec![]
     }
 
@@ -746,6 +740,23 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
             copy_origin_field = copy_origin_field,
         );
 
+        Ok(wgsl)
+    }
+
+    /// Preview-mode body. The stroke body samples `scratch_mirror`
+    /// (bound at `@group(3)` in stroke mode, omitted in preview).
+    /// Semantic for the preview: "show the footprint, not the smear"
+    /// — neutral gray, modulated by the upstream shape mask so the
+    /// cursor still reads the brush's actual coverage area.
+    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        let mask_expr = cctx.input("mask").as_f32();
+        wgsl.body = format!(
+            "    let mask = clamp({mask_expr}, 0.0, 1.0);\n\
+             \x20   if (mask <= 0.0) {{ discard; }}\n\
+             \x20   let preview_color = vec3<f32>(0.6, 0.6, 0.6);\n\
+             \x20   return vec4<f32>(preview_color * mask, mask);\n"
+        );
         Ok(wgsl)
     }
 }

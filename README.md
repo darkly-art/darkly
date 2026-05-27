@@ -131,7 +131,7 @@ These are features that are helpful or essential to digital art workflows. They'
 
 ### Transform & canvas
 - [x] Affine transform tool (translate / scale / rotate via floating content)
-- [x] Engine‑level canvas resize
+- [ ] Canvas resize
 - [ ] Crop tool / crop to selection
 - [ ] Trim to content / autocrop
 - [ ] Flip canvas H / V
@@ -216,8 +216,6 @@ I (TheTechromancer) learned to code before AI, and have spent much of my career 
 Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, guarding vigilantly against duplicate/dead code, and writing a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
 
 Note that while we allow AI for coding, we are unlikely to accept any PR implementing generative AI in Darkly itself.
-
-For details on Darkly's stance on AI, see [this blog post]().
 
 ## Acknowledgments
 

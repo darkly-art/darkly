@@ -62,7 +62,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField, NodeWgsl, WgslType,
+    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField, IntrinsicUniforms,
+    NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -101,19 +102,6 @@ const MIN_RADIUS_PX: f32 = 1.0;
 /// (default `drawing_angle = 0`).
 const MIN_DISTANCE_PX: f32 = 0.5;
 
-// ── Intrinsic uniforms ──────────────────────────────────────────────────
-
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct IntrinsicUniforms {
-    layer_offset: [i32; 2],
-    layer_size: [u32; 2],
-    canvas_size: [u32; 2],
-    _pad: [u32; 2],
-}
-
-const INTRINSIC_UNIFORMS_SIZE: usize = std::mem::size_of::<IntrinsicUniforms>();
-
 // ── Per-dab CPU meta ────────────────────────────────────────────────────
 
 #[repr(C)]
@@ -143,7 +131,7 @@ impl PerBrushPipeline {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("liquify_compiled-brush"),
-                source: wgpu::ShaderSource::Wgsl(compiled.wgsl.clone().into()),
+                source: wgpu::ShaderSource::Wgsl(compiled.stroke_wgsl.clone().into()),
             });
 
         let dabs_bgl = ctx
@@ -632,6 +620,8 @@ impl BrushNodeEvaluator for LiquifyCompiledEvaluator {
                 layer_offset,
                 layer_size,
                 canvas_size: [gpu.canvas_width, gpu.canvas_height],
+                preview_centre: [0.0, 0.0],
+                preview_size: [0, 0],
                 _pad: [0, 0],
             },
         );
@@ -710,12 +700,18 @@ impl BrushNodeEvaluator for LiquifyCompiledEvaluator {
         );
     }
 
+    /// Hover-cursor preview. Routes through the shared preview helper.
+    /// Liquify's preview is a soft disc with the same softness
+    /// falloff the stroke applies — scrubbing the softness slider
+    /// visibly reshapes the cursor. Rotation is 0 (the preview is
+    /// radially symmetric).
     fn render_preview(
         &self,
-        _ctx: &EvalContext,
-        _gpu: &mut BrushGpuContext,
+        ctx: &EvalContext,
+        gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        // Stubbed during phase 4; phase 5's per-terminal preview owns this.
+        let radius = Self::effective_radius(ctx);
+        let _ = crate::brush::wgsl_compile::render_compiled_preview(gpu, radius, 0.0);
         vec![]
     }
 
@@ -807,6 +803,26 @@ impl BrushNodeEvaluator for LiquifyCompiledEvaluator {
             copy_origin_field = copy_origin_field,
         );
 
+        Ok(wgsl)
+    }
+
+    /// Preview-mode body. The stroke body samples `scratch_mirror`
+    /// (bound at `@group(3)` in stroke mode, omitted in preview).
+    /// Show the falloff disc in neutral gray — scrubbing the
+    /// softness slider visibly reshapes the cursor, helpful side-
+    /// effect of reusing the same `falloff_fn` the stroke decls
+    /// emit.
+    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        let softness_expr = cctx.input("softness").as_f32();
+        let falloff_fn = cctx.ident("liquify_falloff");
+        wgsl.body = format!(
+            "    if (local_dist >= 1.0) {{ discard; }}\n\
+             \x20   let softness = clamp({softness_expr}, 0.0, 1.0);\n\
+             \x20   let f = {falloff_fn}(local_dist, 1.0 - softness);\n\
+             \x20   let preview_color = vec3<f32>(0.6, 0.6, 0.6);\n\
+             \x20   return vec4<f32>(preview_color * f, f);\n"
+        );
         Ok(wgsl)
     }
 }

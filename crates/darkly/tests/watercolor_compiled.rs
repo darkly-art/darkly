@@ -110,6 +110,7 @@ fn render_dabs(
                 blend_mode: 0,
                 preview_mask_view: None,
                 preview_mask_size: (0, 0),
+                preview_mask_overlay: None,
                 brush_preview_info: None,
                 pre_stroke_texture: Some(pre_stroke_tex),
                 pre_stroke_bind_group: Some(pre_stroke_bg),
