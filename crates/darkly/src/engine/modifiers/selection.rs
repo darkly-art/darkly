@@ -14,6 +14,7 @@
 //!   helpers consumers reach for (`selection_active`, `selection_cpu_cache`,
 //!   `selection_pixel_bounds`, …).
 
+use super::super::rendering::commit_undo_region;
 use super::super::{DarklyEngine, ReadbackContext};
 use crate::coord::CanvasRect;
 use crate::document::SelectionMode;
@@ -543,7 +544,7 @@ impl DarklyEngine {
             None => return,
         };
         let snap = self.gpu.encode_ret("sel-undo-save", |encoder| {
-            self.region_store.save_region(
+            self.region_scratch.save_region(
                 &self.gpu.device,
                 encoder,
                 &frame,
@@ -570,17 +571,17 @@ impl DarklyEngine {
             Some(s) => s.canvas_frame(),
             None => return,
         };
-        let mut entry = None;
-        self.gpu.encode("sel-undo-commit", |encoder| {
-            entry =
-                Some(
-                    self.region_store
-                        .commit_region(encoder, modifier_id, &frame, &snap, rect),
-                );
-        });
-        if let Some(entry) = entry {
-            self.push_undo(Box::new(SelectionAction::new(was_active, entry)));
-        }
+        let entry = commit_undo_region(
+            &self.gpu,
+            &self.region_scratch,
+            &mut self.readbacks,
+            "sel-undo-commit",
+            modifier_id,
+            &frame,
+            &snap,
+            rect,
+        );
+        self.push_undo(Box::new(SelectionAction::new(was_active, entry)));
     }
 
     /// Full-canvas undo rect — used when post-op extent isn't known up-front.

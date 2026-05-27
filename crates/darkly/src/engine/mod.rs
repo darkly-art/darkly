@@ -47,7 +47,7 @@ use crate::gpu::diff_rect::DiffRectPass;
 use crate::gpu::overlay::OverlayPrimitive;
 use crate::gpu::paint_target::PaintPipelines;
 use crate::gpu::readback::ReadbackScheduler;
-use crate::gpu::region_store::RegionStore;
+use crate::gpu::region_store::{EntryPixels, RegionScratch};
 use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::view::ViewTransform;
@@ -212,6 +212,16 @@ pub(crate) enum ReadbackContext {
     ActiveBrushDab {
         topology_version: u64,
     },
+    /// Async readback of an undo-region staging buffer. On completion the
+    /// handler flips the `cell` from `Pending` to `Ready`, dropping the
+    /// staging buffer and moving the pixels onto the host heap.
+    ///
+    /// `cell` is a clone of the [`crate::gpu::region_store::UndoRegionEntry::pixels`]
+    /// produced by `commit_region` / `restore_region`. The other clone lives
+    /// on the entry — see [`crate::gpu::region_store::EntryPixels`].
+    UndoRegionReady {
+        cell: std::rc::Rc<std::cell::RefCell<EntryPixels>>,
+    },
 }
 
 /// Cached thumbnail RGBA bytes per node id. Keyed uniformly across layers,
@@ -263,7 +273,7 @@ pub struct DarklyEngine {
     pub(crate) floating: Option<FloatingContent>,
 
     // --- GPU Paint Infrastructure ---
-    pub(crate) region_store: RegionStore,
+    pub(crate) region_scratch: RegionScratch,
     pub(crate) paint_pipelines: PaintPipelines,
     /// Pre-stroke scratch snapshot for the current stroke. Lazily populated
     /// on the first stroke_to of a stroke; consumed at end_stroke (moved into
@@ -459,7 +469,7 @@ impl DarklyEngine {
             doc.root_id(),
         );
         let undo_stack = UndoStack::new(50);
-        let region_store = RegionStore::new(&gpu.device, doc_width, doc_height);
+        let region_scratch = RegionScratch::new(&gpu.device, doc_width, doc_height);
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
         let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue);
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
@@ -477,7 +487,7 @@ impl DarklyEngine {
             tool_overlay: Vec::new(),
             clipboard: None,
             floating: None,
-            region_store,
+            region_scratch,
             paint_pipelines,
             scratch_snapshot: None,
             pending_selection_snapshot: None,

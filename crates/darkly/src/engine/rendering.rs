@@ -1,10 +1,11 @@
 //! Rendering, view transform, thumbnails, undo/redo, and async readback polling.
 
 use super::{DarklyEngine, ReadbackContext};
+use crate::coord::CanvasRect;
 use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::context::GpuContext;
-use crate::gpu::readback;
-use crate::gpu::region_store::{RegionStore, UndoRegionEntry};
+use crate::gpu::readback::{self, ReadbackScheduler};
+use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
 use crate::gpu::view::ViewTransform;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
@@ -158,19 +159,17 @@ impl DarklyEngine {
                             .node_texture(commit.layer_id)
                             .map(|t| t.canvas_frame())
                         {
-                            let mut entry = None;
-                            self.gpu.encode("brush-stroke-end", |encoder| {
-                                entry = Some(self.region_store.commit_region(
-                                    encoder,
-                                    commit.layer_id,
-                                    &layer_frame,
-                                    &commit.snapshot,
-                                    rect,
-                                ));
-                            });
-                            if let Some(entry) = entry {
-                                self.push_undo(Box::new(GpuRegionAction::new(entry)));
-                            }
+                            let entry = commit_undo_region(
+                                &self.gpu,
+                                &self.region_scratch,
+                                &mut self.readbacks,
+                                "brush-stroke-end",
+                                commit.layer_id,
+                                &layer_frame,
+                                &commit.snapshot,
+                                rect,
+                            );
+                            self.push_undo(Box::new(GpuRegionAction::new(entry)));
                         }
                     }
                     // else: textures identical, no undo entry needed.
@@ -353,6 +352,13 @@ impl DarklyEngine {
                 if !png_bytes.is_empty() {
                     self.brush_library.set_dab_thumbnail(&name, png_bytes);
                 }
+            }
+            ReadbackContext::UndoRegionReady { cell } => {
+                // Flip the entry from VRAM-staging to DRAM-Vec, dropping the
+                // staging buffer. `pixels` here is unpadded (extract_pixels
+                // strips row padding); restore re-pads into a temp upload
+                // buffer.
+                *cell.borrow_mut() = EntryPixels::Ready(pixels);
             }
             ReadbackContext::ActiveBrushDab { topology_version } => {
                 // Drop stale results — but key off topology, not graph
@@ -545,7 +551,14 @@ impl DarklyEngine {
                     UndoDirection::Undo => "undo-restore",
                     UndoDirection::Redo => "redo-restore",
                 };
-                restore_gpu_region(&self.gpu, &mut self.region_store, entry, &frame, label);
+                restore_gpu_region(
+                    &self.gpu,
+                    &self.region_scratch,
+                    &mut self.readbacks,
+                    entry,
+                    &frame,
+                    label,
+                );
                 // Restored pixels — refresh the panel thumbnail.
                 self.compositor.mark_node_pixels_dirty(node_id);
             }
@@ -563,7 +576,14 @@ impl DarklyEngine {
                         UndoDirection::Undo => "undo-sel-restore",
                         UndoDirection::Redo => "redo-sel-restore",
                     };
-                    restore_gpu_region(&self.gpu, &mut self.region_store, entry, &frame, label);
+                    restore_gpu_region(
+                        &self.gpu,
+                        &self.region_scratch,
+                        &mut self.readbacks,
+                        entry,
+                        &frame,
+                        label,
+                    );
                 }
             }
 
@@ -706,19 +726,58 @@ enum UndoDirection {
 /// selection state) and the post-restore side effects differ between
 /// callers. Kept as a free function so the caller can hold a
 /// `CanvasFrame<'_>` borrowed from `self.compositor` while passing
-/// `&mut self.region_store` — field-level borrow splitting that a
-/// `&mut self` method couldn't express.
+/// `&self.region_scratch` and `&mut self.readbacks` alongside — field-level
+/// borrow splitting that a `&mut self` method couldn't express.
 fn restore_gpu_region(
     gpu: &GpuContext,
-    region_store: &mut RegionStore,
+    region_scratch: &RegionScratch,
+    scheduler: &mut ReadbackScheduler<ReadbackContext>,
     entry: &mut UndoRegionEntry,
     frame: &CanvasFrame<'_>,
     label: &str,
 ) {
-    gpu.encode(label, |encoder| {
-        let swapped = region_store.restore_region(encoder, entry, frame);
+    let request = gpu.encode_ret(label, |encoder| {
+        let (swapped, request) = region_scratch.restore_region(encoder, &gpu.device, entry, frame);
         *entry = swapped;
+        request
     });
+    scheduler.submit(
+        request,
+        ReadbackContext::UndoRegionReady {
+            cell: entry.pixels.clone(),
+        },
+    );
+}
+
+/// Commit a saved-scratch sub-rect into a fresh undo entry and submit the
+/// staging-buffer readback that flips it `Pending → Ready`. Returns the
+/// entry for the caller to wrap in whichever action they're pushing (raw
+/// `GpuRegionAction`, selection action, mask compound action, etc).
+///
+/// Free function (not a `&mut self` method) so callers can hold a
+/// `CanvasFrame<'_>` borrowed from `&self.compositor` while passing in
+/// `&self.region_scratch` and `&mut self.readbacks` — three disjoint
+/// field-level borrows that an `&mut self` method couldn't express.
+pub(crate) fn commit_undo_region(
+    gpu: &GpuContext,
+    region_scratch: &RegionScratch,
+    scheduler: &mut ReadbackScheduler<ReadbackContext>,
+    label: &'static str,
+    layer_id: LayerId,
+    frame: &CanvasFrame<'_>,
+    snapshot: &Snapshot,
+    canvas_rect: CanvasRect,
+) -> UndoRegionEntry {
+    let (entry, request) = gpu.encode_ret(label, |encoder| {
+        region_scratch.commit_region(encoder, &gpu.device, layer_id, frame, snapshot, canvas_rect)
+    });
+    scheduler.submit(
+        request,
+        ReadbackContext::UndoRegionReady {
+            cell: entry.pixels.clone(),
+        },
+    );
+    entry
 }
 
 // ---------------------------------------------------------------------------

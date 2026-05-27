@@ -1,7 +1,25 @@
 //! GPU-side undo snapshot storage.
 //!
-//! Manages a shared scratch texture (pre-operation snapshot) and a ring-buffer
-//! undo buffer that stores completed undo entries as raw pixel data.
+//! Manages shared scratch textures (pre-operation snapshot, in-flight workspace
+//! for save+modify+commit) and produces per-action [`UndoRegionEntry`] values
+//! that own their own pixel data — no shared ring buffer.
+//!
+//! # Lifetime model
+//!
+//! Each undo entry owns its pixels via [`EntryPixels`]:
+//!
+//! - **`Pending { staging }`** — VRAM-resident. The `wgpu::Buffer` that backs
+//!   the async readback. Holds until either (a) the readback completes and the
+//!   entry transitions to `Ready`, dropping the buffer, or (b) a restore
+//!   happens first, in which case the buffer feeds `copy_buffer_to_texture`
+//!   directly (GPU-to-GPU, no readback wait).
+//! - **`Ready(Vec<u8>)`** — DRAM-resident, unpadded row layout. The steady
+//!   state for most actions, since most commits' readbacks finish before any
+//!   restore is requested.
+//!
+//! When the action drops (max_steps overflow, byte-cap overflow, redo cleared,
+//! teardown), the staging buffer or `Vec` drops with it. No shared storage, no
+//! eviction at the storage layer, no aliasing.
 //!
 //! # Coordinate frame
 //!
@@ -21,10 +39,12 @@
 
 use crate::coord::CanvasRect;
 use crate::gpu::atlas::CanvasFrame;
+use crate::gpu::readback::ReadbackRequest;
 use crate::layer::LayerId;
-use std::collections::VecDeque;
+use std::cell::RefCell;
+use std::rc::Rc;
 
-/// Token returned by [`RegionStore::save_region`]. Carries the saved
+/// Token returned by [`RegionScratch::save_region`]. Carries the saved
 /// rect (in canvas coords) and format; required to commit or restore from
 /// the scratch.
 ///
@@ -39,55 +59,76 @@ pub struct Snapshot {
 /// Alignment required by wgpu for bytes_per_row in buffer↔texture copies.
 const COPY_ROW_ALIGNMENT: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
 
-/// Default undo buffer capacity: 256 MB.
-const DEFAULT_CAPACITY: u64 = 256 * 1024 * 1024;
-
-/// GPU-side undo snapshot storage.
+/// Per-entry pixel storage, hybrid VRAM/DRAM.
 ///
-/// Two components:
-/// 1. **Scratch textures** — hold pre-operation snapshots of the affected region.
-///    One RGBA8 and one R8, both sized to the canvas. Reused across all operations.
-/// 2. **Undo buffer** — ring buffer of raw pixel data for completed undo entries.
-pub struct RegionStore {
-    // --- Scratch textures (one per format) ---
-    scratch_rgba: wgpu::Texture,
-    scratch_r8: wgpu::Texture,
-    scratch_width: u32,
-    scratch_height: u32,
-
-    // --- Undo ring buffer ---
-    buffer: wgpu::Buffer,
-    capacity: u64,
-    head: u64,
-    entries: VecDeque<UndoRegionEntry>,
+/// Single-threaded — the engine drives commits, restores, and readback
+/// completion from the same thread, so `Rc<RefCell<…>>` rather than
+/// `Arc<Mutex<…>>`. WASM is single-threaded by construction; native tests
+/// run with `--test-threads=1`.
+pub enum EntryPixels {
+    /// Async readback in flight. Holds the committed pixels in two
+    /// sibling buffers — WebGPU disallows combining `MAP_READ` and
+    /// `COPY_SRC` on a single buffer, so the readback and restore paths
+    /// need separate VRAM. Both get filled from the same scratch in the
+    /// commit encoder, so their contents are byte-identical.
+    Pending {
+        /// MAP_READ | COPY_DST — drives the async readback that flips the
+        /// entry to `Ready`.
+        readback: wgpu::Buffer,
+        /// COPY_DST | COPY_SRC — source for the GPU-to-GPU restore path
+        /// when a restore arrives before the readback completes. Both
+        /// buffers drop together when the entry transitions to `Ready`.
+        staging: wgpu::Buffer,
+    },
+    /// Readback completed, pixels live on the host heap (WASM linear memory
+    /// in production, native DRAM in tests). The buffer layout is
+    /// `unpadded_row_bytes * height` — restoring re-pads into a temp upload
+    /// buffer because `copy_buffer_to_texture` requires
+    /// `COPY_BYTES_PER_ROW_ALIGNMENT` rows.
+    Ready(Vec<u8>),
 }
 
-/// Metadata for a single undo region stored in the ring buffer.
-#[derive(Debug, Clone)]
+/// Metadata + owned pixels for a single undo region. No longer `Clone` —
+/// each action owns exactly one entry, and the `Rc<RefCell<…>>` would
+/// duplicate the pixel-ownership relationship if cloned.
 pub struct UndoRegionEntry {
     pub layer_id: LayerId,
     /// Region in canvas-space pixel coords. Stable across layer growth.
     pub canvas_rect: CanvasRect,
     pub format: wgpu::TextureFormat,
-    /// Byte offset into the undo buffer.
-    offset: u64,
     /// Bytes per row in the buffer (padded to COPY_ROW_ALIGNMENT).
-    padded_row_bytes: u32,
-    /// Total bytes occupied in the buffer.
-    byte_size: u64,
+    pub padded_row_bytes: u32,
+    /// Bytes per row without padding (`width * bpp`).
+    pub unpadded_row_bytes: u32,
+    /// VRAM-equivalent byte cost of this entry (padded rows × height). Used
+    /// for the [`crate::undo::UndoStack`] memory cap — treated as an upper
+    /// bound even when the entry has transitioned to `Ready` (whose unpadded
+    /// `Vec` may be slightly smaller). Conservative is correct here.
+    pub byte_size: u64,
+    /// Shared cell so the readback completion handler can flip
+    /// `Pending → Ready` after the action has been pushed onto the undo
+    /// stack. Cloned once into the readback request's context at commit
+    /// time; the handler holds that clone, the entry holds the other.
+    pub pixels: Rc<RefCell<EntryPixels>>,
 }
 
-impl RegionStore {
-    pub fn new(device: &wgpu::Device, canvas_width: u32, canvas_height: u32) -> Self {
-        Self::with_capacity(device, canvas_width, canvas_height, DEFAULT_CAPACITY)
-    }
+/// Shared scratch + per-entry storage producer for GPU undo regions.
+///
+/// Holds only the in-flight workspace textures (one RGBA8, one R8) used as
+/// pre-op snapshots and commit intermediaries. Each undo entry owns its own
+/// pixel data — there is no shared ring buffer. Storage lifetime equals
+/// action lifetime, so eviction happens at the policy layer
+/// ([`crate::undo::UndoStack`]) rather than down here.
+pub struct RegionScratch {
+    // --- Scratch textures (one per format) ---
+    scratch_rgba: wgpu::Texture,
+    scratch_r8: wgpu::Texture,
+    scratch_width: u32,
+    scratch_height: u32,
+}
 
-    pub fn with_capacity(
-        device: &wgpu::Device,
-        canvas_width: u32,
-        canvas_height: u32,
-        capacity: u64,
-    ) -> Self {
+impl RegionScratch {
+    pub fn new(device: &wgpu::Device, canvas_width: u32, canvas_height: u32) -> Self {
         let scratch_rgba = Self::create_scratch(
             device,
             canvas_width,
@@ -103,22 +144,11 @@ impl RegionStore {
             "scratch-r8",
         );
 
-        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("undo-ring-buffer"),
-            size: capacity,
-            usage: wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        RegionStore {
+        RegionScratch {
             scratch_rgba,
             scratch_r8,
             scratch_width: canvas_width,
             scratch_height: canvas_height,
-            buffer,
-            capacity,
-            head: 0,
-            entries: VecDeque::new(),
         }
     }
 
@@ -315,21 +345,51 @@ impl RegionStore {
         }
     }
 
-    /// Copy a sub-rect of the saved scratch region into the undo ring buffer.
-    /// Call this at stroke end. Returns the entry metadata for the undo stack.
+    /// Copy a sub-rect of the saved scratch region into a freshly-allocated
+    /// per-entry staging buffer, returning the new undo entry plus a
+    /// [`ReadbackRequest`] for the async `Pending → Ready` transition.
+    ///
+    /// The caller is responsible for submitting the request to its
+    /// [`crate::gpu::readback::ReadbackScheduler`] paired with a context
+    /// that, on completion, assigns the extracted pixels into
+    /// `entry.pixels`'s `RefCell` — flipping the entry to `Ready` and
+    /// dropping the staging buffer.
+    ///
+    /// # Lifetime contract for the staging buffers
+    ///
+    /// Two VRAM buffers are allocated:
+    /// - **`readback`** (`MAP_READ | COPY_DST`) — fed straight from scratch
+    ///   in this encoder, then handed to the scheduler. When `map_async`
+    ///   resolves, the readback completion handler flips
+    ///   `entry.pixels` to `Ready(vec)`, dropping both buffers.
+    /// - **`staging`** (`COPY_DST | COPY_SRC`) — also fed from scratch in
+    ///   this encoder, kept alive in `entry.pixels` so a restore-while-
+    ///   pending can feed `copy_buffer_to_texture` GPU-to-GPU.
+    ///
+    /// WebGPU forbids combining `MAP_READ` and `COPY_SRC` on a single
+    /// buffer, which is why the split exists. The cost is one extra
+    /// `copy_texture_to_buffer` per commit and one extra `byte_size` of
+    /// VRAM per *pending* entry — both transient (the readback resolves
+    /// in 1-3 frames in production).
+    ///
+    /// `wgpu::Buffer` is Arc-backed; the readback request holds its own
+    /// ref to `readback`, so dropping the original handle on transition
+    /// to `Ready` is safe even if the request's `map_async` callback
+    /// hasn't fully unwound.
     ///
     /// `canvas_rect` must be contained in `snapshot.saved`. In debug builds
     /// this is asserted at runtime; release builds will silently read whatever
     /// scratch contents lie at the rect (likely uninitialised junk from a
     /// prior op), so don't rely on the assert being inert.
     pub fn commit_region(
-        &mut self,
+        &self,
         encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
         layer_id: LayerId,
         source: &CanvasFrame<'_>,
         snapshot: &Snapshot,
         canvas_rect: CanvasRect,
-    ) -> UndoRegionEntry {
+    ) -> (UndoRegionEntry, ReadbackRequest) {
         debug_assert!(
             snapshot.saved.contains(canvas_rect),
             "commit_region rect {:?} not contained in snapshot.saved {:?}",
@@ -340,62 +400,100 @@ impl RegionStore {
             .canvas_to_layer_rect(canvas_rect)
             .expect("commit_region rect must overlap the source's canvas extent");
         let bpp = snapshot.format.block_copy_size(None).unwrap_or(1);
+        let unpadded_row_bytes = layer_rect.width * bpp;
         let padded_row_bytes = padded_row(layer_rect.width, bpp);
         let byte_size = padded_row_bytes as u64 * layer_rect.height as u64;
 
-        let offset = self.allocate(byte_size);
+        let (readback, staging) = allocate_pending_buffers(device, byte_size);
         let scratch = self.scratch_for(snapshot.format);
+        let texel_layout = wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(padded_row_bytes),
+            rows_per_image: Some(layer_rect.height),
+        };
+        let extent = wgpu::Extent3d {
+            width: layer_rect.width,
+            height: layer_rect.height,
+            depth_or_array_layers: 1,
+        };
+        let origin = wgpu::Origin3d {
+            x: layer_rect.x0(),
+            y: layer_rect.y0(),
+            z: 0,
+        };
 
         // Scratch is texture-aligned to the source (see `save_region`): the
         // snapshot of pixels at layer-space `(x, y)` lives at scratch `(x, y)`.
+        // Two writes — one per buffer. WebGPU doesn't let a single buffer be
+        // both MAP_READ and COPY_SRC, so the readback and the in-flight
+        // GPU-to-GPU restore each need their own.
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: scratch,
                 mip_level: 0,
-                origin: wgpu::Origin3d {
-                    x: layer_rect.x0(),
-                    y: layer_rect.y0(),
-                    z: 0,
-                },
+                origin,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &self.buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset,
-                    bytes_per_row: Some(padded_row_bytes),
-                    rows_per_image: Some(layer_rect.height),
-                },
+                buffer: &readback,
+                layout: texel_layout,
             },
-            wgpu::Extent3d {
-                width: layer_rect.width,
-                height: layer_rect.height,
-                depth_or_array_layers: 1,
+            extent,
+        );
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: scratch,
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
             },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: texel_layout,
+            },
+            extent,
+        );
+
+        let pixels = Rc::new(RefCell::new(EntryPixels::Pending {
+            readback: readback.clone(),
+            staging,
+        }));
+        let request = ReadbackRequest::from_buffer(
+            readback,
+            layer_rect.height,
+            padded_row_bytes,
+            unpadded_row_bytes,
         );
 
         let entry = UndoRegionEntry {
             layer_id,
             canvas_rect,
             format: snapshot.format,
-            offset,
             padded_row_bytes,
+            unpadded_row_bytes,
             byte_size,
+            pixels,
         };
-        self.entries.push_back(entry.clone());
-        entry
+        (entry, request)
     }
 
-    /// Restore saved pixels from the undo buffer back to the layer texture.
-    /// Returns a forward entry (the pre-restore state) for redo.
+    /// Restore saved pixels back to the layer texture, producing a forward
+    /// entry (the pre-restore state) plus its async-readback request for
+    /// redo.
     ///
-    /// Uses the scratch texture as a safe intermediate to avoid buffer overlap.
+    /// Both branches encode their commands into the supplied encoder, so the
+    /// forward capture sequences strictly before the restore. The
+    /// `Ready` branch allocates a one-shot upload buffer (mapped at
+    /// creation) so the restore stays in the encoder's command stream —
+    /// `queue.write_texture` would re-order to the start of the next submit
+    /// and stomp the forward capture.
     pub fn restore_region(
-        &mut self,
+        &self,
         encoder: &mut wgpu::CommandEncoder,
+        device: &wgpu::Device,
         entry: &UndoRegionEntry,
         target: &CanvasFrame<'_>,
-    ) -> UndoRegionEntry {
+    ) -> (UndoRegionEntry, ReadbackRequest) {
         let layer_rect = target
             .canvas_to_layer_rect(entry.canvas_rect)
             .expect("restore_region entry must overlap the target's canvas extent");
@@ -409,77 +507,141 @@ impl RegionStore {
             height: layer_rect.height,
             depth_or_array_layers: 1,
         };
+        let padded_row_bytes = entry.padded_row_bytes;
+        let unpadded_row_bytes = entry.unpadded_row_bytes;
+        let byte_size = entry.byte_size;
+        let height = layer_rect.height;
+        let texel_layout = wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(padded_row_bytes),
+            rows_per_image: Some(height),
+        };
 
-        // 1. Copy current texture rect → scratch at the same (x, y).
-        //    Scratch is texture-aligned to the target, so steps 2/3 read it
-        //    back from the same origin without an extra translation.
-        encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: target.texture,
-                mip_level: 0,
-                origin,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: self.scratch_for(entry.format),
-                mip_level: 0,
-                origin,
-                aspect: wgpu::TextureAspect::All,
-            },
-            extent,
-        );
-
-        // 2. Copy saved buffer → texture (restore old state at the layer's rect).
-        encoder.copy_buffer_to_texture(
-            wgpu::TexelCopyBufferInfo {
-                buffer: &self.buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: entry.offset,
-                    bytes_per_row: Some(entry.padded_row_bytes),
-                    rows_per_image: Some(layer_rect.height),
-                },
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: target.texture,
-                mip_level: 0,
-                origin,
-                aspect: wgpu::TextureAspect::All,
-            },
-            extent,
-        );
-
-        // 3. Copy scratch (now holding the pre-restore state) → buffer for redo.
-        let forward_offset = self.allocate(entry.byte_size);
+        // 1. Allocate the forward entry's pair of staging buffers + capture
+        //    the pre-restore target into BOTH. The commands must precede the
+        //    restore-into-target command below so the forward entry contains
+        //    the redo pixels rather than the undone pixels.
+        let (forward_readback, forward_staging) = allocate_pending_buffers(device, byte_size);
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: self.scratch_for(entry.format),
+                texture: target.texture,
                 mip_level: 0,
                 origin,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &self.buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: forward_offset,
-                    bytes_per_row: Some(entry.padded_row_bytes),
-                    rows_per_image: Some(layer_rect.height),
-                },
+                buffer: &forward_readback,
+                layout: texel_layout,
+            },
+            extent,
+        );
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: target.texture,
+                mip_level: 0,
+                origin,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &forward_staging,
+                layout: texel_layout,
             },
             extent,
         );
 
-        UndoRegionEntry {
+        // 2. Restore old pixels into target — same encoder, so this runs
+        //    after the forward capture.
+        let pixels_borrow = entry.pixels.borrow();
+        match &*pixels_borrow {
+            EntryPixels::Pending { staging, .. } => {
+                encoder.copy_buffer_to_texture(
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: staging,
+                        layout: texel_layout,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: target.texture,
+                        mip_level: 0,
+                        origin,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    extent,
+                );
+            }
+            EntryPixels::Ready(vec) => {
+                // Re-pad the unpadded `Vec` into a fresh mapped-at-creation
+                // upload buffer. `copy_buffer_to_texture` requires
+                // bytes_per_row to be COPY_BYTES_PER_ROW_ALIGNMENT-aligned;
+                // the `Ready` storage drops the padding for efficiency, so
+                // we add it back here. The buffer is short-lived — the
+                // encoder's submit takes the Arc-backed ref until the GPU
+                // is done with it; the Rust handle drops at the end of
+                // this scope.
+                let upload = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("undo-region-upload"),
+                    size: byte_size,
+                    usage: wgpu::BufferUsages::COPY_SRC,
+                    mapped_at_creation: true,
+                });
+                {
+                    let mut mapped = upload.slice(..).get_mapped_range_mut();
+                    let unpadded_row = unpadded_row_bytes as usize;
+                    let padded_row = padded_row_bytes as usize;
+                    if unpadded_row == padded_row {
+                        let n = vec.len().min(mapped.len());
+                        mapped[..n].copy_from_slice(&vec[..n]);
+                    } else {
+                        for row in 0..height as usize {
+                            let src_off = row * unpadded_row;
+                            let dst_off = row * padded_row;
+                            mapped[dst_off..dst_off + unpadded_row]
+                                .copy_from_slice(&vec[src_off..src_off + unpadded_row]);
+                        }
+                    }
+                }
+                upload.unmap();
+                encoder.copy_buffer_to_texture(
+                    wgpu::TexelCopyBufferInfo {
+                        buffer: &upload,
+                        layout: texel_layout,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: target.texture,
+                        mip_level: 0,
+                        origin,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    extent,
+                );
+            }
+        }
+        drop(pixels_borrow);
+
+        let forward_pixels = Rc::new(RefCell::new(EntryPixels::Pending {
+            readback: forward_readback.clone(),
+            staging: forward_staging,
+        }));
+        let request = ReadbackRequest::from_buffer(
+            forward_readback,
+            height,
+            padded_row_bytes,
+            unpadded_row_bytes,
+        );
+
+        let forward = UndoRegionEntry {
             layer_id: entry.layer_id,
             canvas_rect: entry.canvas_rect,
             format: entry.format,
-            offset: forward_offset,
-            padded_row_bytes: entry.padded_row_bytes,
-            byte_size: entry.byte_size,
-        }
+            padded_row_bytes,
+            unpadded_row_bytes,
+            byte_size,
+            pixels: forward_pixels,
+        };
+        (forward, request)
     }
 
     /// Restore a region directly from the scratch texture to the target,
-    /// without going through the ring buffer. Used by `cancel_floating()`
+    /// without going through the per-entry buffer. Used by `cancel_floating()`
     /// to undo the source region clear.
     ///
     /// `canvas_rect` must be contained in `snapshot.saved` — the scratch only
@@ -595,40 +757,33 @@ impl RegionStore {
             view_formats: &[],
         })
     }
-
-    /// Allocate `size` bytes in the ring buffer, evicting oldest entries as needed.
-    /// Returns the byte offset of the allocation.
-    fn allocate(&mut self, size: u64) -> u64 {
-        assert!(size <= self.capacity, "undo entry too large for buffer");
-
-        // If the entry doesn't fit at the current head, wrap to start.
-        if self.head + size > self.capacity {
-            self.head = 0;
-        }
-
-        let alloc_start = self.head;
-        let alloc_end = alloc_start + size;
-
-        // Evict entries that overlap with the new allocation.
-        while let Some(front) = self.entries.front() {
-            let entry_end = front.offset + front.byte_size;
-            // Overlap: the new allocation range intersects the front entry's range.
-            if front.offset < alloc_end && entry_end > alloc_start {
-                self.entries.pop_front();
-            } else {
-                break;
-            }
-        }
-
-        self.head = alloc_end;
-        alloc_start
-    }
 }
 
 /// Compute the row byte count padded to wgpu's copy alignment.
 fn padded_row(width: u32, bytes_per_pixel: u32) -> u32 {
     let unpadded = width * bytes_per_pixel;
     unpadded.div_ceil(COPY_ROW_ALIGNMENT) * COPY_ROW_ALIGNMENT
+}
+
+/// Allocate the readback + staging buffer pair for a `Pending` entry.
+/// WebGPU disallows mixing `MAP_READ` and `COPY_SRC` on one buffer, so the
+/// readback (async DRAM transition) and the staging (GPU-to-GPU restore
+/// fallback while the readback is in flight) live in separate VRAM
+/// allocations.
+fn allocate_pending_buffers(device: &wgpu::Device, byte_size: u64) -> (wgpu::Buffer, wgpu::Buffer) {
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("undo-region-readback"),
+        size: byte_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("undo-region-staging"),
+        size: byte_size,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    });
+    (readback, staging)
 }
 
 #[cfg(test)]
@@ -647,57 +802,5 @@ mod tests {
         assert_eq!(padded_row(256, 1), 256);
         // 1 pixel × 4 bpp = 4 bytes → 256.
         assert_eq!(padded_row(1, 4), 256);
-    }
-
-    /// Simulates the ring buffer allocation logic without GPU resources.
-    struct MockRing {
-        capacity: u64,
-        head: u64,
-        entries: VecDeque<(u64, u64)>,
-    }
-
-    impl MockRing {
-        fn new(capacity: u64) -> Self {
-            MockRing {
-                capacity,
-                head: 0,
-                entries: VecDeque::new(),
-            }
-        }
-
-        fn alloc(&mut self, size: u64) -> u64 {
-            if self.head + size > self.capacity {
-                self.head = 0;
-            }
-            let start = self.head;
-            let end = start + size;
-            while let Some(&(offset, byte_size)) = self.entries.front() {
-                if offset < end && offset + byte_size > start {
-                    self.entries.pop_front();
-                } else {
-                    break;
-                }
-            }
-            self.head = end;
-            self.entries.push_back((start, size));
-            start
-        }
-    }
-
-    #[test]
-    fn ring_buffer_allocation_basic() {
-        let mut ring = MockRing::new(1024);
-
-        // Fill buffer with 4 × 256-byte entries.
-        assert_eq!(ring.alloc(256), 0);
-        assert_eq!(ring.alloc(256), 256);
-        assert_eq!(ring.alloc(256), 512);
-        assert_eq!(ring.alloc(256), 768);
-        assert_eq!(ring.entries.len(), 4);
-
-        // Next allocation wraps and evicts the oldest.
-        assert_eq!(ring.alloc(256), 0);
-        assert_eq!(ring.entries.len(), 4); // oldest evicted, new one added
-        assert_eq!(ring.entries.front().unwrap().0, 256); // second entry is now front
     }
 }

@@ -6,7 +6,7 @@
 use darkly::coord::CanvasRect;
 use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
-use darkly::gpu::region_store::RegionStore;
+use darkly::gpu::region_store::RegionScratch;
 use darkly::gpu::test_utils::*;
 
 fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
@@ -98,7 +98,7 @@ fn gpu_gradient_undo() {
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+    let mut store = RegionScratch::new(&device, w, h);
 
     // Save pre-gradient state.
     let mut enc = encoder(&device);
@@ -124,8 +124,9 @@ fn gpu_gradient_undo() {
 
     // Commit for undo.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap,
@@ -143,7 +144,7 @@ fn gpu_gradient_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
+    let (_forward, _req) = store.restore_region(&mut enc, &device, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -323,7 +324,7 @@ fn gpu_flood_fill_undo() {
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 2 * 1024 * 1024);
+    let mut store = RegionScratch::new(&device, w, h);
 
     // Save region for undo.
     let mut enc = encoder(&device);
@@ -389,8 +390,9 @@ fn gpu_flood_fill_undo() {
 
     // Commit undo entry.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap,
@@ -407,7 +409,7 @@ fn gpu_flood_fill_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
+    let (_forward, _req) = store.restore_region(&mut enc, &device, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);

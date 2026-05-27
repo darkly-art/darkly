@@ -8,7 +8,7 @@ use darkly::coord::CanvasRect;
 use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::diff_rect::DiffRectPass;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
-use darkly::gpu::region_store::RegionStore;
+use darkly::gpu::region_store::RegionScratch;
 use darkly::gpu::test_utils::*;
 
 fn cr(x: i32, y: i32, w: u32, h: u32) -> CanvasRect {
@@ -52,7 +52,7 @@ fn gpu_stroke_paint_undo_redo() {
     // Create a transparent layer texture.
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+    let mut store = RegionScratch::new(&device, w, h);
 
     // --- begin_stroke: save full canvas ---
     let mut enc = encoder(&device);
@@ -92,8 +92,9 @@ fn gpu_stroke_paint_undo_redo() {
     // Bounding rect: x=45..65, y=45..55 (approx) — use conservative rect.
     let stroke_rect = cr(43, 43, 24, 14);
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap,
@@ -126,7 +127,7 @@ fn gpu_stroke_paint_undo_redo() {
 
     // --- undo ---
     let mut enc = encoder(&device);
-    let forward_entry = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
+    let (forward_entry, _req) = store.restore_region(&mut enc, &device, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -142,7 +143,8 @@ fn gpu_stroke_paint_undo_redo() {
 
     // --- redo ---
     let mut enc = encoder(&device);
-    let _backward_entry = store.restore_region(&mut enc, &forward_entry, &frame(&tex, w, h));
+    let (_backward_entry, _req) =
+        store.restore_region(&mut enc, &device, &forward_entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -263,7 +265,7 @@ fn gpu_stroke_on_mask_undo() {
     let white = vec![255u8; (w * h) as usize];
     let (tex, view) = create_test_texture_with_format(&device, &queue, w, h, &white, fmt);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+    let mut store = RegionScratch::new(&device, w, h);
 
     // begin_stroke: save full canvas.
     let mut enc = encoder(&device);
@@ -288,8 +290,9 @@ fn gpu_stroke_on_mask_undo() {
 
     // end_stroke: commit.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap,
@@ -309,7 +312,7 @@ fn gpu_stroke_on_mask_undo() {
 
     // Undo: restore mask to 255.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
+    let (_forward, _req) = store.restore_region(&mut enc, &device, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -333,7 +336,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 2 * 1024 * 1024);
+    let mut store = RegionScratch::new(&device, w, h);
 
     // --- Stroke 1: red circle at (30, 30) ---
     let mut enc = encoder(&device);
@@ -355,8 +358,9 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry1 = store.commit_region(
+    let (entry1, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap1,
@@ -386,8 +390,9 @@ fn gpu_two_strokes_sequential_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry2 = store.commit_region(
+    let (entry2, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap2,
@@ -410,7 +415,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Undo stroke 2 → blue gone, red remains ---
     let mut enc = encoder(&device);
-    let forward2 = store.restore_region(&mut enc, &entry2, &frame(&tex, w, h));
+    let (forward2, _req) = store.restore_region(&mut enc, &device, &entry2, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -439,7 +444,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Undo stroke 1 → both gone ---
     let mut enc = encoder(&device);
-    let forward1 = store.restore_region(&mut enc, &entry1, &frame(&tex, w, h));
+    let (forward1, _req) = store.restore_region(&mut enc, &device, &entry1, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -452,7 +457,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Redo stroke 1 → red back ---
     let mut enc = encoder(&device);
-    let _backward1 = store.restore_region(&mut enc, &forward1, &frame(&tex, w, h));
+    let (_backward1, _req) = store.restore_region(&mut enc, &device, &forward1, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -469,7 +474,7 @@ fn gpu_two_strokes_sequential_undo() {
 
     // --- Redo stroke 2 → blue back ---
     let mut enc = encoder(&device);
-    let _backward2 = store.restore_region(&mut enc, &forward2, &frame(&tex, w, h));
+    let (_backward2, _req) = store.restore_region(&mut enc, &device, &forward2, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -502,7 +507,7 @@ fn gpu_region_action_undo_stack() {
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+    let mut store = RegionScratch::new(&device, w, h);
     let mut undo_stack = UndoStack::new(50);
     let mut doc = Document::new(w, h);
 
@@ -526,8 +531,9 @@ fn gpu_region_action_undo_stack() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap,
@@ -546,7 +552,7 @@ fn gpu_region_action_undo_stack() {
 
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
-        let forward = store.restore_region(&mut enc, entry, &frame(&tex, w, h));
+        let (forward, _req) = store.restore_region(&mut enc, &device, entry, &frame(&tex, w, h));
         submit(&queue, enc);
         *entry = forward;
     }
@@ -571,7 +577,7 @@ fn gpu_region_action_undo_stack() {
 
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
-        let backward = store.restore_region(&mut enc, entry, &frame(&tex, w, h));
+        let (backward, _req) = store.restore_region(&mut enc, &device, entry, &frame(&tex, w, h));
         submit(&queue, enc);
         *entry = backward;
     }
@@ -607,7 +613,7 @@ fn gpu_cpu_undo_interleaved() {
 
     let (tex, view) = create_test_texture(&device, &queue, w, h, &vec![0u8; (w * h * 4) as usize]);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+    let mut store = RegionScratch::new(&device, w, h);
     let mut undo_stack = UndoStack::new(50);
     let mut doc = Document::new(w, h);
     let layer_id = doc.add_raster_layer(None);
@@ -632,8 +638,9 @@ fn gpu_cpu_undo_interleaved() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         layer_id,
         &frame(&tex, w, h),
         &snap,
@@ -676,7 +683,7 @@ fn gpu_cpu_undo_interleaved() {
     let _affected = action.undo(&mut doc);
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
-        let forward = store.restore_region(&mut enc, entry, &frame(&tex, w, h));
+        let (forward, _req) = store.restore_region(&mut enc, &device, entry, &frame(&tex, w, h));
         submit(&queue, enc);
         *entry = forward;
     }
@@ -694,7 +701,7 @@ fn gpu_cpu_undo_interleaved() {
     let _affected = action.redo(&mut doc);
     if let Some(entry) = action.gpu_region_entry_mut() {
         let mut enc = encoder(&device);
-        let backward = store.restore_region(&mut enc, entry, &frame(&tex, w, h));
+        let (backward, _req) = store.restore_region(&mut enc, &device, entry, &frame(&tex, w, h));
         submit(&queue, enc);
         *entry = backward;
     }
@@ -732,7 +739,7 @@ fn gpu_erase_stroke_undo() {
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+    let mut store = RegionScratch::new(&device, w, h);
 
     // begin_stroke: save.
     let mut enc = encoder(&device);
@@ -747,8 +754,9 @@ fn gpu_erase_stroke_undo() {
 
     // end_stroke: commit.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap,
@@ -771,7 +779,7 @@ fn gpu_erase_stroke_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
+    let (_forward, _req) = store.restore_region(&mut enc, &device, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
@@ -868,7 +876,7 @@ fn diff_rect_undo_restores_offset_paint() {
     let blank = vec![0u8; (w * h * 4) as usize];
     let (tex, view) = create_test_texture(&device, &queue, w, h, &blank);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionStore::with_capacity(&device, w, h, 1024 * 1024);
+    let mut store = RegionScratch::new(&device, w, h);
 
     // begin_stroke: save full canvas to scratch.
     let mut enc = encoder(&device);
@@ -915,8 +923,9 @@ fn diff_rect_undo_restores_offset_paint() {
 
     // Commit with the diff-derived rect.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap,
@@ -926,7 +935,7 @@ fn diff_rect_undo_restores_offset_paint() {
 
     // Undo: restore the pre-stroke state.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
+    let (_forward, _req) = store.restore_region(&mut enc, &device, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     // The entire canvas should be back to transparent.
@@ -972,7 +981,7 @@ fn negative_direction_grow_crosses_zero() {
         canvas_extent: cr(0, 0, init_w, init_h),
     };
 
-    let mut store = RegionStore::with_capacity(&device, init_w, init_h, 4 * 1024 * 1024);
+    let mut store = RegionScratch::new(&device, init_w, init_h);
 
     // Save the full 256×256 layer (canvas (0, 0) → (256, 256)) as the
     // pre-stroke snapshot.
@@ -1078,8 +1087,9 @@ fn negative_direction_grow_crosses_zero() {
     // local frame at (156, 156, 200, 200).
     let mut enc = encoder(&device);
     let commit_rect = cr(-100, -100, 200, 200);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         darkly::layer::LayerId::from_ffi(1),
         &new_frame,
         &snap,
@@ -1089,7 +1099,7 @@ fn negative_direction_grow_crosses_zero() {
 
     // Undo: restore the pre-stroke pixels at canvas (-100, -100, 200, 200).
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &new_frame);
+    let (_forward, _req) = store.restore_region(&mut enc, &device, &entry, &new_frame);
     submit(&queue, enc);
 
     // After undo, canvas (50, 50) should be back to red (the pre-stroke

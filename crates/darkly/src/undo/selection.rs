@@ -1,4 +1,5 @@
 use crate::document::Document;
+use crate::gpu::compositor::Compositor;
 use crate::gpu::region_store::UndoRegionEntry;
 use crate::layer::LayerId;
 use std::collections::{HashMap, HashSet};
@@ -44,5 +45,18 @@ impl UndoAction for SelectionAction {
         let restore_to = self.was_active;
         self.was_active = current_active;
         Some(restore_to)
+    }
+
+    fn byte_cost(&self) -> u64 {
+        // Same `UndoRegionEntry` byte_size pathway as `GpuRegionAction` —
+        // selection-mask snapshots compete for the same WASM heap budget
+        // and can easily run to 10s of MB on a complex selection edit.
+        self.entry.byte_size
+    }
+
+    fn on_evict(&mut self, _compositor: &mut Compositor) {
+        // See `GpuRegionAction::on_evict` — storage is action-owned, no
+        // shared pool to release. Override exists to document the
+        // contract.
     }
 }

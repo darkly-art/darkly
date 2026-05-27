@@ -111,6 +111,9 @@ fn probe_softness_zero() {
                 row_last = Some(x);
             }
         }
-        eprintln!("y={:>3}: opaque x range: {:?}..={:?}", y, row_first, row_last);
+        eprintln!(
+            "y={:>3}: opaque x range: {:?}..={:?}",
+            y, row_first, row_last
+        );
     }
 }

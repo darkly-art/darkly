@@ -51,4 +51,11 @@ impl UndoAction for CompoundAction {
             action.on_evict(compositor);
         }
     }
+
+    fn byte_cost(&self) -> u64 {
+        self.actions
+            .iter()
+            .map(|a| a.byte_cost())
+            .fold(0u64, u64::saturating_add)
+    }
 }
