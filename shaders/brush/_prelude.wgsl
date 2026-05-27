@@ -1,4 +1,4 @@
-// Common prelude for compiled brush graphs (paint_compiled and any
+// Common prelude for compiled brush graphs (paint and any
 // future compiled terminal). Defines the intrinsic uniform struct
 // shared by every assembled brush.
 //
@@ -6,7 +6,7 @@
 // like:
 //
 //   _shape.wgsl prelude
-//   _compiled_prelude.wgsl (this file)
+//   _prelude.wgsl (this file)
 //   struct DabRecord { ... per-node fields ... }
 //   struct Uniforms  { intrinsic: IntrinsicUniforms, ... per-node ... }
 //   @group bindings (uniforms, dabs storage, selection)

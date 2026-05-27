@@ -1,4 +1,4 @@
-//! Tests for the compiled `smudge_compiled` terminal.
+//! Tests for the compiled `smudge` terminal.
 //!
 //! The load-bearing invariant is that each dab in a phase sees the
 //! *prior* dab's writeback through the scratch read mirror — a single
@@ -73,9 +73,9 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "smudge_compiled")
+        .find(|(_, n)| n.type_id == "smudge")
         .map(|(id, _)| *id)
-        .expect("Smudge brush must terminate in smudge_compiled");
+        .expect("Smudge brush must terminate in smudge");
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();
@@ -96,7 +96,7 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
         CANVAS,
     );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("smudge_compiled-test-pre-stroke"),
+        label: Some("smudge-test-pre-stroke"),
     });
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
     queue.submit([enc.finish()]);
@@ -146,12 +146,12 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
     }
 
     {
-        let mut ctx = make_ctx!("smudge_compiled-test-begin");
+        let mut ctx = make_ctx!("smudge-test-begin");
         runner.begin_stroke(&mut ctx);
         queue.submit([ctx.encoder.finish()]);
     }
     {
-        let mut ctx = make_ctx!("smudge_compiled-test-flush");
+        let mut ctx = make_ctx!("smudge-test-flush");
         for (i, (pos, motion)) in dabs.iter().enumerate() {
             let info = PaintInformation {
                 pos: *pos,

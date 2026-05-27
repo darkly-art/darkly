@@ -22,7 +22,7 @@ fn probe_softness_zero() {
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "liquify_compiled")
+        .find(|(_, n)| n.type_id == "liquify")
         .map(|(id, _)| *id)
         .unwrap();
     graph.set_port_default(term_id, "size", 0.3).unwrap();

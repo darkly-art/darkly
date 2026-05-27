@@ -407,7 +407,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     // Negative control: scrubbing a port the preview *does* read must
     // still bump the version. After the compiled-WGSL migration
     // `softness` lives on the upstream `circle` node (the
-    // `paint_compiled` terminal has no softness port). It has no
+    // `paint` terminal has no softness port). It has no
     // `preview_value`, is read by the preview shader, and is unwired —
     // the perfect canary for "rule too broad". Find its node via the
     // exposed-port listing.

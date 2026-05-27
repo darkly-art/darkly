@@ -148,7 +148,7 @@ impl BrushNodeEvaluator for PenInputEvaluator {
     }
 
     /// Pen-input outputs become per-dab record fields. The compiled
-    /// `paint_compiled` terminal reads the slot table after
+    /// `paint` terminal reads the slot table after
     /// `execute_cpu` and packs the values into the dab record using
     /// the lookup-by-name keys this method registers.
     ///

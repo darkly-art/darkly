@@ -1,10 +1,10 @@
-//! Hover-cursor preview render through `paint_compiled`. Verifies the
+//! Hover-cursor preview render through `paint`. Verifies the
 //! shared `render_compiled_preview` helper produces the brush's
 //! actual color × shape × flow into the preview mask, and publishes
 //! sane placement info via `BrushPreviewInfo`.
 //!
-//! Per the phase-5 plan, runs against the live built-in brush graphs
-//! (no test-only rewiring) so per-brush wire bugs surface here.
+//! Runs against the live built-in brush graphs (no test-only
+//! rewiring) so per-brush wire bugs surface here.
 
 use std::sync::Arc;
 
@@ -52,9 +52,9 @@ fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> Prev
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "paint_compiled")
+        .find(|(_, n)| n.type_id == "paint")
         .map(|(id, _)| *id)
-        .expect("brush terminates in paint_compiled");
+        .expect("brush terminates in paint");
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();
@@ -108,7 +108,7 @@ fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> Prev
     runner.render_preview_pipeline(&mut ctx);
     let published = ctx
         .brush_preview_info
-        .expect("paint_compiled publishes brush_preview_info");
+        .expect("paint publishes brush_preview_info");
     queue.submit([ctx.encoder.finish()]);
 
     let rgba = readback_texture(

@@ -1,7 +1,7 @@
-//! Hover-cursor preview render through `smudge_compiled`.
+//! Hover-cursor preview render through `smudge`.
 //! The stroke body samples the scratch read mirror (bound at
 //! `@group(3)` in stroke mode); preview mode omits that group, so
-//! `smudge_compiled` overrides `compile_preview_body` to emit a
+//! `smudge` overrides `compile_preview_body` to emit a
 //! neutral-gray-modulated-by-mask body. Verifies the override fires
 //! and the resulting preview shows the brush footprint in gray.
 
@@ -52,9 +52,9 @@ fn smudge_preview_shows_neutral_gray_footprint() {
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "smudge_compiled")
+        .find(|(_, n)| n.type_id == "smudge")
         .map(|(id, _)| *id)
-        .expect("brush terminates in smudge_compiled");
+        .expect("brush terminates in smudge");
     graph.set_port_default(term_id, "size", 0.1).unwrap();
 
     let (device, queue) = test_device();
@@ -105,7 +105,7 @@ fn smudge_preview_shows_neutral_gray_footprint() {
     runner.render_preview_pipeline(&mut ctx);
     let published = ctx
         .brush_preview_info
-        .expect("smudge_compiled publishes brush_preview_info");
+        .expect("smudge publishes brush_preview_info");
     queue.submit([ctx.encoder.finish()]);
 
     let rgba = readback_texture(

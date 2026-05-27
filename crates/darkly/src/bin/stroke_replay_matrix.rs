@@ -65,31 +65,28 @@ const STABILIZE: f32 = 1.0;
 // ── CLI ─────────────────────────────────────────────────────────────────
 
 /// Which terminal topology the bench's brush graph uses for each cell.
-/// All topologies run through compiled-WGSL terminals after the great
-/// compiled-port migration — the `StampColorOutput` cross-approach
-/// comparison was retired with the `color_output` dispatch terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Topology {
-    /// Ink Pen brush through the compiled `paint_compiled` terminal —
-    /// `pen → paint_color → circle (disc) → stamp → paint_compiled`.
+    /// Ink Pen brush through the `paint` terminal —
+    /// `pen → paint_color → circle (disc) → stamp → paint`.
     /// Single instanced render pass per phase.
     Paint,
     /// Wet Media (`Smooth Watercolor`) — `pen → paint_color → circle
-    /// (sine) → watercolor_compiled`. Two-pass per phase (pickup atlas
+    /// (sine) → watercolor`. Two-pass per phase (pickup atlas
     /// + composite), composite shader is per-brush compiled.
     Watercolor,
     /// Rough Ink — `pen + 3×random → circle(perlin) → stamp →
-    /// paint_compiled`. The original demo brush for the compiled
+    /// paint`. The original demo brush for the compiled
     /// framework; same terminal as Paint but a more elaborate upstream
     /// graph (per-dab random nodes drive the perlin shape).
     RoughInk,
-    /// Smudge — `pen → circle → smudge_compiled`. Per-dab fragment
+    /// Smudge — `pen → circle → smudge`. Per-dab fragment
     /// pass with a `copy_texture_to_texture` barrier between dabs so
     /// each dab reads the prior dab's writeback. Stresses the per-dab
     /// serialization path; expected dab counts per event are tens
     /// rather than hundreds.
     Smudge,
-    /// Liquify — `pen → liquify_compiled`. Per-dab warp pass with the
+    /// Liquify — `pen → liquify`. Per-dab warp pass with the
     /// same barrier shape as smudge; useful for measuring how the
     /// per-dab regime scales with displacement padding (larger read
     /// footprint vs. smudge).
@@ -122,11 +119,11 @@ impl Topology {
     /// overriding the cell's `size` port.
     fn terminal_id(self) -> &'static str {
         match self {
-            Topology::Paint => "paint_compiled",
-            Topology::Watercolor => "watercolor_compiled",
-            Topology::RoughInk => "paint_compiled",
-            Topology::Smudge => "smudge_compiled",
-            Topology::Liquify => "liquify_compiled",
+            Topology::Paint => "paint",
+            Topology::Watercolor => "watercolor",
+            Topology::RoughInk => "paint",
+            Topology::Smudge => "smudge",
+            Topology::Liquify => "liquify",
         }
     }
 

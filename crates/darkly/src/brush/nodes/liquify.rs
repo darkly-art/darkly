@@ -1,45 +1,52 @@
-//! Smudge Compiled terminal — per-dab fragment-pass smear with a
-//! per-brush compiled WGSL shader.
+//! Liquify terminal — per-dab fragment-pass warp with a per-brush
+//! compiled WGSL shader.
 //!
-//! Same outline as [`paint_compiled`](super::paint_compiled), but with
-//! a per-dab flush loop instead of a single instanced draw. Each smudge
-//! dab samples the scratch read mirror twice — once at `canvas_pos`
-//! (current background) and once at `canvas_pos − motion` (the smear
-//! sample, what was under the brush at the previous dab) — and mixes
-//! the two by `rate × mask × selection × stroke_opacity`. Per-dab
-//! serialization is *semantically required*: each dab must see the
-//! prior dab's output, which a single instanced draw can't express.
+//! Same overall outline as [`smudge`](super::smudge).
+//! Per dab the fragment shader samples the scratch read mirror at a
+//! *displaced* UV inside a circular brush disc and writes the warped
+//! sample back into the scratch. Successive dabs compound because each
+//! reads the cumulatively-warped scratch — the per-dab serialization
+//! is semantically required, not a perf bug.
 //!
-//! ## Per-dab flush
+//! Displacement magnitude is `strength × |pen.motion|` — the cursor's
+//! per-dab travel scaled by strength. With the Liquify brush's fixed
+//! `pen_input.spacing_min_px = LIQUIFY_SPACING_PX`, `|motion|` is the
+//! same constant at any brush size, so:
+//!   * `strength = 1` locks pixels to the cursor (per-dab push =
+//!     per-dab cursor motion);
+//!   * `strength < 1` produces a strength-fraction drag;
+//!   * brush size controls only the warped *extent* (the disc), never
+//!     the *intensity*.
 //!
-//! 1. `evaluate_gpu` packs one record into [`BrushGpuContext::pending_dab_bytes`]
-//!    *and* one [`SmudgeDabMeta`] into the parallel CPU-side
-//!    [`BrushGpuContext::pending_dab_meta_bytes`] queue, plus the
-//!    pre-computed canvas-space `copy_origin` into `slot_outputs_owned`
-//!    so the framework's `pack_dab_record` picks it up via this node's
-//!    `copy_origin` dab field. Stationary dabs (`|motion| < 0.5 px`)
-//!    are skipped before queueing — `mix(bg, src, _)` collapses to
-//!    identity in that regime.
-//! 2. `flush_dabs` walks the queue in lockstep. For each dab it calls
-//!    `prepare_dab_canvas_copy_split` (asymmetric read region around
-//!    the dab's footprint by `±|motion|` per axis) to sync the
-//!    scratch read mirror, then issues one render pass with instance
-//!    index `i..i+1` so the vertex stage reads `dab_records[i]`.
-//!    `wgpu` serializes encoder commands in submission order; the
-//!    `copy_texture_to_texture` between passes carries an implicit
-//!    barrier so each draw sees the prior draw's output once it lands
-//!    in scratch — no `queue.submit()` between dabs needed.
+//! Pen speed enters only via dab density along the path; the per-dab
+//! push is identical for slow and fast drags.
 //!
-//! The read mirror's bind group is re-queried fresh each iteration
-//! because [`crate::brush::scratch::Scratch::sync_read_mirror`] can
-//! grow the mirror and rebuild the bind group mid-phase.
+//! ## Stroke lifecycle
 //!
-//! ## Blend state
+//! - `begin_stroke` — copies `pre_stroke_texture` → scratch so warps
+//!   start against a stable layer snapshot.
+//! - `evaluate_gpu` (per dab) — queues a record + meta; skipped dabs
+//!   (`radius < 1`, `strength < 1e-4`, `distance < 0.5`) never reach
+//!   the queue, so the flush loop doesn't iterate them.
+//! - `flush_dabs` — for each queued dab, `prepare_dab_canvas_copy`
+//!   syncs the read mirror over a symmetric `radius + displacement`
+//!   half-extent (bilinear sampler reaches into the padding); then
+//!   one render pass with instance index `i..i+1`.
+//! - `commit` — `commit_scratch_blit(scratch → layer)`; `blend_mode`
+//!   ignored — warping isn't paint.
 //!
-//! REPLACE — the fragment shader fully composes its output
-//! (`mix(bg, src, amount)`) and writes it straight to scratch. The
-//! framework's `LoadOp::Load` keeps prior scratch pixels intact outside
-//! the dab footprint; the fragment shader discards past `d.bbox_radius`.
+//! ## Softness waveshape
+//!
+//! User-facing slider: `0 = hard` (uniform displacement across the
+//! disc, square edge) ↔ `1 = soft` (sharp peak at the brush centre,
+//! near-zero past the half-radius — only the cursor itself drags
+//! pixels). Internally the falloff helper takes the *opposite*
+//! convention (`0 = spike → 1 = square`), and the WGSL body inverts
+//! the slider value before passing it in. The mapping the user sees:
+//!   0    → uniform / square     (helper input `1.0`)
+//!   0.5  → sine                  (helper input `0.5`)
+//!   0.6  → linear saw            (helper input `0.4`)
+//!   1    → spike (`pow(1-d, 8)`) (helper input `0.0`)
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -54,8 +61,9 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField, IntrinsicUniforms,
-    NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
+    pack_dab_record, pack_intrinsic_dab_header, pack_intrinsic_uniforms, pack_uniforms,
+    CompileWgslCtx, CompiledBrush, DabField, IntrinsicUniforms, NodeWgsl, WgslType,
+    INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -63,29 +71,48 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 // ── Constants ───────────────────────────────────────────────────────────
 
 const SIZE_REFERENCE_PX: f32 = crate::brush::DAB_REFERENCE_SIZE as f32;
-
 const MAX_UNIFORM_BYTES: usize = 1024;
 
-/// Motion magnitude (canvas pixels) below which the dab is treated as
-/// stationary and dropped before queueing — `mix(bg, src, _)` is an
-/// identity write when `src == bg`.
-const STATIONARY_THRESHOLD_PX: f32 = 0.5;
+/// Dab spacing for the Liquify brush, in canvas pixels. The brush
+/// pins `pen_input.spacing_min_px` to this value (and sets ratio to
+/// zero) so spacing stays fixed at any brush size. Per-dab
+/// displacement is then `strength × |pen.motion| ≈ strength ×
+/// LIQUIFY_SPACING_PX`, which makes:
+///   * `strength = 1` lock pixels to the cursor (per-dab push equals
+///     per-dab cursor motion);
+///   * `strength = 0.5` lag the cursor by 50% (the "drag" feel);
+///   * the absolute pixel push size-invariant — the size slider
+///     controls the warped *extent* (the disc), not the *intensity*.
+///
+/// Tuned to 4 px: tight enough for smooth-looking warps without dab
+/// banding, large enough not to blow up the dab count at huge
+/// brushes (perf scales with `diameter / spacing`).
+pub const LIQUIFY_SPACING_PX: f32 = 4.0;
+
+/// Per-dab strength below which the dab is dropped — `mix(orig, warped, _·sel)`
+/// collapses to identity and the per-dab pass would be a no-op.
+const STRENGTH_EPSILON: f32 = 1.0e-4;
+
+/// Brush radius below which the dab is dropped — sub-pixel discs warp
+/// nothing visible.
+const MIN_RADIUS_PX: f32 = 1.0;
+
+/// Cumulative stroke distance below which liquify silently skips the
+/// first dab. Without this, a stationary click would warp rightward
+/// (default `drawing_angle = 0`).
+const MIN_DISTANCE_PX: f32 = 0.5;
 
 // ── Per-dab CPU meta ────────────────────────────────────────────────────
 
-/// CPU-side per-dab footprint info, packed by `evaluate_gpu` in
-/// lockstep with the GPU dab record and drained by `flush_dabs`. Lets
-/// the flush loop call `prepare_dab_canvas_copy_split` without
-/// re-deriving the asymmetric footprint from the upload buffer.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct SmudgeDabMeta {
+struct LiquifyDabMeta {
     position: [f32; 2],
-    write_half: [f32; 2],
-    read_half: [f32; 2],
+    /// Symmetric half-extent of the read region (`radius + displacement`).
+    half: [f32; 2],
 }
 
-const SMUDGE_DAB_META_SIZE: usize = std::mem::size_of::<SmudgeDabMeta>();
+const LIQUIFY_DAB_META_SIZE: usize = std::mem::size_of::<LiquifyDabMeta>();
 
 // ── Per-brush pipeline ──────────────────────────────────────────────────
 
@@ -103,14 +130,14 @@ impl PerBrushPipeline {
         let shader = ctx
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("smudge_compiled-brush"),
+                label: Some("liquify-brush"),
                 source: wgpu::ShaderSource::Wgsl(compiled.stroke_wgsl.clone().into()),
             });
 
         let dabs_bgl = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("smudge_compiled-dabs-bgl"),
+                label: Some("liquify-dabs-bgl"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -123,13 +150,10 @@ impl PerBrushPipeline {
                 }],
             });
 
-        // group(0..2) standard; group(3) is the scratch read mirror —
-        // same layout as `watercolor_compiled`'s atlas binding, only
-        // the binding semantics differ.
         let layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("smudge_compiled-layout"),
+                label: Some("liquify-layout"),
                 bind_group_layouts: &[
                     ctx.uniform_bgl,
                     &dabs_bgl,
@@ -139,13 +163,10 @@ impl PerBrushPipeline {
                 immediate_size: 0,
             });
 
-        // REPLACE blend — the fragment shader writes the final smeared
-        // pixel; outside the disc it discards so LoadOp::Load preserves
-        // the scratch.
         let pipeline = ctx
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("smudge_compiled"),
+                label: Some("liquify"),
                 layout: Some(&layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
@@ -177,12 +198,12 @@ impl PerBrushPipeline {
             (INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size).max(INTRINSIC_UNIFORMS_SIZE);
         let uniform_ring = DynamicUniformRing::new(
             ctx.device,
-            "smudge_compiled-uniforms",
+            "liquify-uniforms",
             uniform_size as u64,
             ctx.min_uniform_align,
         );
         let uniform_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("smudge_compiled-uniform-bg"),
+            label: Some("liquify-uniform-bg"),
             layout: ctx.uniform_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -197,13 +218,13 @@ impl PerBrushPipeline {
         let dab_record_size = compiled.dab_record_size.max(16);
         let dabs_buffer_size = (MAX_DABS_PER_PHASE as u64) * (dab_record_size as u64);
         let dabs_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("smudge_compiled-dabs-buffer"),
+            label: Some("liquify-dabs-buffer"),
             size: dabs_buffer_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let dabs_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("smudge_compiled-dabs-bg"),
+            label: Some("liquify-dabs-bg"),
             layout: &dabs_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -224,11 +245,11 @@ impl PerBrushPipeline {
 
 // ── Pipeline registry entry ─────────────────────────────────────────────
 
-pub struct SmudgeCompiledPipeline {
+pub struct LiquifyPipeline {
     cache: RefCell<HashMap<u64, PerBrushPipeline>>,
 }
 
-impl SmudgeCompiledPipeline {
+impl LiquifyPipeline {
     fn build(_ctx: &BuildContext) -> Self {
         Self {
             cache: RefCell::new(HashMap::new()),
@@ -251,7 +272,7 @@ impl SmudgeCompiledPipeline {
     }
 }
 
-impl BrushPipelineEntry for SmudgeCompiledPipeline {
+impl BrushPipelineEntry for LiquifyPipeline {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -263,10 +284,10 @@ impl BrushPipelineEntry for SmudgeCompiledPipeline {
     }
 }
 
-fn smudge_compiled_pipeline_reg() -> BrushPipelineRegistration {
+fn liquify_pipeline_reg() -> BrushPipelineRegistration {
     BrushPipelineRegistration {
-        id: "smudge_compiled",
-        build: |ctx| Box::new(SmudgeCompiledPipeline::build(ctx)),
+        id: "liquify",
+        build: |ctx| Box::new(LiquifyPipeline::build(ctx)),
     }
 }
 
@@ -274,16 +295,33 @@ fn smudge_compiled_pipeline_reg() -> BrushPipelineRegistration {
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
-        pipelines: vec![smudge_compiled_pipeline_reg()],
+        pipelines: vec![liquify_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "smudge_compiled",
+            type_id: "liquify",
             category: "output",
-            display_name: "Smudge (Compiled)",
+            display_name: "Liquify",
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
-                    .with_description("Canvas-pixel pen tip for this dab"),
+                    .with_description("Where to apply the warp"),
+                // No `natural_range`: radians are a unit, not a normalized
+                // signal. `pen.drawing_angle → direction` (canonical wire)
+                // is a unit-preserving identity.
+                PortDef::input("direction", BrushWireType::Scalar)
+                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
+                    .with_description("Direction to push pixels"),
+                PortDef::input("distance", BrushWireType::Scalar)
+                    .with_description("How far the pen has traveled along the stroke"),
+                // Per-dab cursor motion in canvas pixels. Wire from
+                // `pen.motion`; the magnitude becomes the per-dab
+                // displacement scale (`strength × |motion|`) so 100%
+                // strength locks pixels to the cursor and 50% lets
+                // them drag half-step behind, regardless of brush
+                // size. When unwired, defaults to (0, 0) → no warp.
                 PortDef::input("motion", BrushWireType::Vec2)
-                    .with_description("Per-dab motion vector — the offset to sample from"),
+                    .with_description(
+                        "Per-dab cursor motion vector. Magnitude sets \
+                         the per-dab displacement scale.",
+                    ),
                 PortDef::input("size_input", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
@@ -293,44 +331,43 @@ pub fn register() -> BrushNodeRegistration {
                         "Per-touch size multiplier (wire pressure here for pressure-sensitive size).",
                     ),
                 PortDef::input("size", BrushWireType::Scalar)
-                    .with_range(0.0, 4.0, 0.1)
+                    .with_range(0.0, 4.0, 0.3)
                     .with_label("Size")
                     .with_unit(UnitType::Percent)
                     .with_icon("fa-solid fa-up-right-and-down-left-from-center")
                     .exposed()
                     .with_preview_value(0.1)
-                    .with_description("Overall brush size"),
-                PortDef::input("rate", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 0.6)
+                    .with_description(
+                        "Brush size. Can go above 100% for large-area warps (capped at 400%).",
+                    ),
+                PortDef::input("strength", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.5)
                     .with_natural_range(0.0, 1.0)
-                    .with_label("Smudge")
+                    .with_label("Strength")
                     .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-paint-roller")
+                    .with_icon("fa-solid fa-gauge-high")
+                    .exposed()
+                    .with_description("How far pixels are pushed by each brush touch"),
+                PortDef::input("softness", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.5)
+                    .with_natural_range(0.0, 1.0)
+                    .with_label("Softness")
+                    .with_unit(UnitType::Percent)
+                    .with_icon("fa-solid fa-wave-square")
                     .exposed()
                     .with_description(
-                        "How strongly each touch drags the canvas along the stroke. \
-                         Higher values produce a longer smear trail; lower values \
-                         barely move pixels.",
+                        "Edge shape. Low values concentrate the warp at the brush center; \
+                         high values spread it evenly across the brush.",
                     ),
-                PortDef::input("opacity", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 1.0)
-                    .with_natural_range(0.0, 1.0)
-                    .with_label("Opacity")
-                    .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-droplet")
-                    .exposed()
-                    .with_description(
-                        "Overall stroke strength. Lower values reduce how much the smudge affects the canvas.",
-                    ),
-                // Same `Texture` wire-type as watercolor_compiled.mask
-                // — the upstream compiled `circle.texture` output is a
-                // scalar coverage expression; the wire-type label is
-                // shared with the per-dab dispatch model.
+                // Optional brush-shape modulation. If wired, the warp
+                // strength multiplies by the upstream coverage. If
+                // unwired, defaults to 1.0 (uniform inside the disc).
                 PortDef::input("mask", BrushWireType::Texture).with_description(
-                    "Per-fragment shape coverage (typically wired from circle.texture)",
+                    "Per-fragment shape coverage (typically wired from circle.texture); \
+                     defaults to 1.0 (uniform inside the disc) when unwired.",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
-                    .with_description("Brush mark size in canvas pixels"),
+                    .with_description("Size of the affected area"),
             ],
             params: &[],
             is_gpu: true,
@@ -338,9 +375,9 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
-pub struct SmudgeCompiledEvaluator;
+pub struct LiquifyEvaluator;
 
-impl SmudgeCompiledEvaluator {
+impl LiquifyEvaluator {
     fn effective_radius(ctx: &EvalContext) -> f32 {
         let size_input = ctx.input_f32("size_input").max(0.0);
         let size = ctx.input_f32("size").max(0.0);
@@ -348,20 +385,6 @@ impl SmudgeCompiledEvaluator {
         (effective_size * SIZE_REFERENCE_PX * 0.5).max(0.5)
     }
 
-    fn pack_intrinsic_header(bytes: &mut Vec<u8>, pos: [f32; 2], radius: f32, bbox_radius: f32) {
-        bytes.extend_from_slice(bytemuck::bytes_of(&pos));
-        bytes.extend_from_slice(bytemuck::bytes_of(&radius));
-        bytes.extend_from_slice(bytemuck::bytes_of(&bbox_radius));
-    }
-
-    fn pack_intrinsic_uniforms(bytes: &mut Vec<u8>, intrinsic: IntrinsicUniforms) {
-        bytes.extend_from_slice(bytemuck::bytes_of(&intrinsic));
-    }
-
-    /// Insert `copy_origin` into `slot_outputs_owned` under this
-    /// node's dab-field key so the framework's `pack_dab_record`
-    /// picks it up via the `copy_origin` `DabField` declared in
-    /// `compile_wgsl`.
     fn insert_copy_origin(gpu: &mut BrushGpuContext, node_id: u32, value: [f32; 2]) {
         if let Some(outputs) = gpu.slot_outputs_owned.as_mut() {
             outputs.insert(
@@ -372,13 +395,11 @@ impl SmudgeCompiledEvaluator {
     }
 }
 
-impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
-    fn is_compiled_terminal(&self) -> bool {
+impl BrushNodeEvaluator for LiquifyEvaluator {
+    fn is_terminal(&self) -> bool {
         true
     }
 
-    /// Erase mode (destination-out) on a smear isn't meaningful —
-    /// matches the dispatch-path smudge terminal.
     fn supports_erase(&self) -> bool {
         false
     }
@@ -393,33 +414,40 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let Some(compiled) = gpu.compiled_brush.clone() else {
-            debug_assert!(
-                false,
-                "smudge_compiled requires compiled_brush on gpu_context"
-            );
+            debug_assert!(false, "liquify requires compiled_brush on gpu_context");
             return vec![];
         };
         let Some(paint_target) = gpu.paint_target.as_ref() else {
             return vec![];
         };
         let position = ctx.input("position").as_vec2();
+        let strength = ctx.input_f32("strength").clamp(0.0, 1.0);
+        let distance = ctx.input_f32("distance");
         let motion = ctx.input("motion").as_vec2();
+        let motion_mag = (motion[0] * motion[0] + motion[1] * motion[1]).sqrt();
         let radius = Self::effective_radius(ctx);
         let diameter = radius * 2.0;
-        if diameter <= 0.0 {
+
+        // Three early-outs — skip stationary or sub-pixel dabs whose
+        // warp would be a no-op.
+        if radius < MIN_RADIUS_PX {
+            return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
+        }
+        if strength < STRENGTH_EPSILON {
+            return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
+        }
+        if distance < MIN_DISTANCE_PX {
             return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
         }
 
-        // Stationary-dab early-out — `mix(bg, src, _)` is identity in
-        // this regime. Skipping the queue saves a render pass and a
-        // mirror copy. Matches the dispatch-path early-out at
-        // [`smudge.rs:278`] before the migration.
-        if motion[0].abs() < STATIONARY_THRESHOLD_PX && motion[1].abs() < STATIONARY_THRESHOLD_PX {
-            return vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))];
-        }
+        // Per-dab displacement magnitude — the cursor's per-dab
+        // motion scaled by strength. `strength = 1` pushes pixels by
+        // the full cursor step (lock), `strength = 0.5` pushes them
+        // by half (drag), regardless of brush size. CPU and shader
+        // compute the same value (the shader reads motion + strength
+        // from the dab record).
+        let displacement = motion_mag * strength;
 
-        // Per-brush extent: composed by the framework at compile time.
-        // For smudge this is `1.0` when the upstream is a plain disc.
         let bbox_radius = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
         let canvas_ext = paint_target.canvas_extent();
         let layer_x0 = canvas_ext.x0() as f32;
@@ -456,35 +484,25 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
             None => [local_x0, local_y0, local_x1, local_y1],
         });
 
-        // Asymmetric read region — expanded by `|motion|` per axis so
-        // the smear sample at `canvas_pos − motion` always lies inside
-        // the mirror snapshot. Symmetric expansion (~2× per axis vs. a
-        // signed-motion tight fit) keeps the math simple; the cost is
-        // negligible compared to the per-dab pass.
-        let write_half_w = bbox_radius;
-        let write_half_h = bbox_radius;
-        let read_half_w = write_half_w + motion[0].abs().ceil();
-        let read_half_h = write_half_h + motion[1].abs().ceil();
+        // Symmetric read region — disc inflated by `displacement` per
+        // axis so the warped sample at
+        // `target_pos - direction × displacement × falloff(d)` always
+        // lies inside the mirror snapshot (bilinear sampler reaches
+        // into the inflation margin too).
+        let read_half = radius + displacement;
 
-        // Pre-compute `copy_origin` (canvas-space top-left of the
-        // mirror snapshot) using the same formula
-        // `prepare_dab_canvas_copy_split` will use at flush time. The
-        // CPU compute is deterministic from `position` + `read_half`;
-        // the flush-time call re-derives the same value before issuing
-        // the actual sync.
-        let read_x0 = (position[0] - read_half_w).max(layer_x0);
-        let read_y0 = (position[1] - read_half_h).max(layer_y0);
+        let read_x0 = (position[0] - read_half).max(layer_x0);
+        let read_y0 = (position[1] - read_half).max(layer_y0);
         let copy_canvas_x = read_x0.floor();
         let copy_canvas_y = read_y0.floor();
         Self::insert_copy_origin(gpu, ctx.node_id.0 as u32, [copy_canvas_x, copy_canvas_y]);
 
-        // Pack the GPU dab record: intrinsic header + node fields.
         let record_start = gpu.pending_dab_bytes.len();
-        Self::pack_intrinsic_header(&mut gpu.pending_dab_bytes, position, radius, bbox_radius);
+        pack_intrinsic_dab_header(&mut gpu.pending_dab_bytes, position, bbox_radius, radius);
         let outputs = gpu
             .slot_outputs_owned
             .as_ref()
-            .expect("smudge_compiled requires slot_outputs_owned on gpu_context");
+            .expect("liquify requires slot_outputs_owned on gpu_context");
         pack_dab_record(&compiled, outputs, &mut gpu.pending_dab_bytes);
         let written = gpu.pending_dab_bytes.len() - record_start;
         if written < compiled.dab_record_size {
@@ -494,14 +512,12 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
         gpu.pending_dab_count = gpu.pending_dab_count.saturating_add(1);
         debug_assert!(
             gpu.pending_dab_count <= MAX_DABS_PER_PHASE,
-            "smudge_compiled dab queue overflowed MAX_DABS_PER_PHASE"
+            "liquify dab queue overflowed MAX_DABS_PER_PHASE"
         );
 
-        // Pack the CPU-side meta in lockstep.
-        let meta = SmudgeDabMeta {
+        let meta = LiquifyDabMeta {
             position,
-            write_half: [write_half_w, write_half_h],
-            read_half: [read_half_w, read_half_h],
+            half: [read_half, read_half],
         };
         gpu.pending_dab_meta_bytes
             .extend_from_slice(bytemuck::bytes_of(&meta));
@@ -509,9 +525,6 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
 
-    /// Seed scratch from pre-stroke so commit's scratch→layer blit
-    /// reproduces unchanged pixels outside the dab footprint. Same
-    /// shape as the dispatch-path smudge / watercolor_compiled.
     fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
         gpu.clear_pending_dabs();
 
@@ -550,7 +563,7 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
             return;
         }
         let Some(compiled) = gpu.compiled_brush.clone() else {
-            debug_assert!(false, "smudge_compiled::flush_dabs requires compiled_brush");
+            debug_assert!(false, "liquify::flush_dabs requires compiled_brush");
             return;
         };
 
@@ -564,28 +577,26 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
         }
         debug_assert_eq!(
             meta_bytes.len(),
-            (total_dabs as usize) * SMUDGE_DAB_META_SIZE,
-            "smudge_compiled meta queue out of sync with dab queue"
+            (total_dabs as usize) * LIQUIFY_DAB_META_SIZE,
+            "liquify meta queue out of sync with dab queue"
         );
-        let metas: Vec<SmudgeDabMeta> = bytemuck::cast_slice(&meta_bytes).to_vec();
+        let metas: Vec<LiquifyDabMeta> = bytemuck::cast_slice(&meta_bytes).to_vec();
         gpu.perf
             .record_dab_flush_workload(total_dabs, union_w, union_h);
 
-        let pipeline_ref = gpu
-            .pipelines
-            .get::<SmudgeCompiledPipeline>("smudge_compiled");
+        let pipeline_ref = gpu.pipelines.get::<LiquifyPipeline>("liquify");
         ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled);
 
         let paint_target = gpu
             .paint_target
             .as_ref()
-            .expect("smudge_compiled::flush_dabs requires paint_target");
+            .expect("liquify::flush_dabs requires paint_target");
         let canvas_ext = paint_target.canvas_extent();
         let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
         let layer_size = [canvas_ext.width, canvas_ext.height];
 
         let mut uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
-        Self::pack_intrinsic_uniforms(
+        pack_intrinsic_uniforms(
             &mut uniform_bytes,
             IntrinsicUniforms {
                 layer_offset,
@@ -599,7 +610,7 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
         let outputs = gpu
             .slot_outputs_owned
             .as_ref()
-            .expect("smudge_compiled::flush_dabs requires slot_outputs_owned");
+            .expect("liquify::flush_dabs requires slot_outputs_owned");
         pack_uniforms(&compiled, outputs, &mut uniform_bytes);
 
         pipeline_ref.with_pipeline(compiled.topology_hash, |per_brush| {
@@ -612,28 +623,17 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
                 .write_buffer(&per_brush.dabs_buffer, 0, &dab_bytes);
 
             for (i, meta) in metas.iter().enumerate() {
-                // Sync the mirror snapshot for this dab. The implicit
-                // barrier from this `copy_texture_to_texture` makes
-                // the subsequent render pass see prior dab writes.
-                let _ = gpu.prepare_dab_canvas_copy_split(
-                    meta.position,
-                    meta.write_half[0],
-                    meta.write_half[1],
-                    meta.read_half[0],
-                    meta.read_half[1],
-                );
+                let _ = gpu.prepare_dab_canvas_copy(meta.position, meta.half[0], meta.half[1]);
 
-                // Fresh read-mirror bind group each iteration — a
-                // mid-loop grow can rebuild it.
                 let scratch_ref = gpu
                     .scratch
                     .as_deref()
-                    .expect("smudge_compiled::flush_dabs requires Scratch");
+                    .expect("liquify::flush_dabs requires Scratch");
                 let read_bg = scratch_ref.read_mirror_bind_group();
                 let write_view = scratch_ref.write_view();
 
                 let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("smudge_compiled-flush"),
+                    label: Some("liquify-flush"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: write_view,
                         resolve_target: None,
@@ -666,9 +666,6 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
         gpu.perf.record_dab_flush(total_dabs);
     }
 
-    /// Direct blit scratch → layer. The scratch already holds the
-    /// finished image; commit just copies it across. `gpu.blend_mode`
-    /// is ignored — erase semantics aren't meaningful for a smear.
     fn commit(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
         let Some(paint_target) = gpu.paint_target.as_ref() else {
             return;
@@ -686,9 +683,10 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
     }
 
     /// Hover-cursor preview. Routes through the shared preview helper.
-    /// Smudge has no rotation port — the cursor is symmetric, and
-    /// rotating it wouldn't carry meaningful information for the
-    /// user. Publishes `rotation_rad: 0.0`.
+    /// Liquify's preview is a soft disc with the same softness
+    /// falloff the stroke applies — scrubbing the softness slider
+    /// visibly reshapes the cursor. Rotation is 0 (the preview is
+    /// radially symmetric).
     fn render_preview(
         &self,
         ctx: &EvalContext,
@@ -702,14 +700,18 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
 
-        let mask_expr = cctx.input("mask").as_f32();
+        // `mask` defaults to 1.0 when unwired — uniform warp inside
+        // the disc.
+        let mask_expr = if cctx.input_is_wired("mask") {
+            cctx.input("mask").as_f32()
+        } else {
+            "1.0".to_string()
+        };
+        let strength_expr = cctx.input("strength").as_f32();
+        let softness_expr = cctx.input("softness").as_f32();
+        let direction_expr = cctx.input("direction").as_f32();
         let motion_expr = cctx.input("motion").as_vec2();
-        let rate_expr = cctx.input("rate").as_f32();
-        let opacity_expr = cctx.input("opacity").as_f32();
 
-        // Per-dab `copy_origin` field. The terminal's `evaluate_gpu`
-        // inserts this into `slot_outputs_owned` so the packer reads
-        // it through the standard `pack_dab_record` path.
         let copy_origin_field = cctx.dab_field_name("copy_origin");
         let key = copy_origin_field.clone();
         wgsl.dab_fields.push(DabField {
@@ -725,18 +727,61 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
              @group(3) @binding(1) var scratch_mirror_smp: sampler;\n"
             .to_string();
 
+        // Per-node falloff fn — suffixed by node id so two liquify
+        // terminals (hypothetical) in the same brush don't collide.
+        let falloff_fn = cctx.ident("liquify_falloff");
+        wgsl.decls = format!(
+            "fn {falloff_fn}(d_norm: f32, softness: f32) -> f32 {{\n\
+             \x20   let saw  = 1.0 - d_norm;\n\
+             \x20   let sine = 0.5 + 0.5 * cos(3.14159265 * d_norm);\n\
+             \x20   let saw_break  = 0.4;\n\
+             \x20   let sine_break = 0.5;\n\
+             \x20   let k_max      = 8.0;\n\
+             \x20   if softness <= saw_break {{\n\
+             \x20       let t = softness / saw_break;\n\
+             \x20       let k = mix(k_max, 1.0, t);\n\
+             \x20       return pow(max(saw, 0.0), k);\n\
+             \x20   }} else if softness <= sine_break {{\n\
+             \x20       let t = (softness - saw_break) / (sine_break - saw_break);\n\
+             \x20       return mix(saw, sine, t);\n\
+             \x20   }} else {{\n\
+             \x20       let t = (softness - sine_break) / (1.0 - sine_break);\n\
+             \x20       return mix(sine, 1.0, t);\n\
+             \x20   }}\n\
+             }}\n"
+        );
+
+        // Fragment body: `local_dist` and `target_pos` come from the
+        // framework wrapper; the framework already discards past
+        // `d.bbox_target_px`. We additionally discard past
+        // `local_dist >= 1.0` so the warp stays inside the disc (the
+        // framework's discard kicks in for `bbox_target_px < radius`
+        // cases too, but when extent contribution lands at 1.0 the
+        // two conditions coincide).
+        // The falloff helper takes `0 = spike` / `1 = square`. The
+        // user-facing slider is labelled "Softness" with the opposite
+        // intuition — `1 = soft / feathery` (only the brush centre
+        // pushes, edges fade to nothing), `0 = hard / sharp` (uniform
+        // displacement, square step at the disc edge). Invert before
+        // passing to the helper so the slider matches the label.
         wgsl.body = format!(
-            "    let mask = clamp({mask_expr}, 0.0, 1.0);\n\
-             \x20   let motion_v = {motion_expr};\n\
-             \x20   let rate = clamp({rate_expr}, 0.0, 1.0);\n\
-             \x20   let stroke_opacity = clamp({opacity_expr}, 0.0, 1.0);\n\
+            "    if (local_dist >= 1.0) {{ discard; }}\n\
+             \x20   let warp_mask = clamp({mask_expr}, 0.0, 1.0);\n\
+             \x20   let strength = clamp({strength_expr}, 0.0, 1.0);\n\
+             \x20   let softness = clamp({softness_expr}, 0.0, 1.0);\n\
+             \x20   let falloff_param = 1.0 - softness;\n\
+             \x20   let direction_angle = {direction_expr};\n\
+             \x20   let motion_vec = {motion_expr};\n\
+             \x20   let f = {falloff_fn}(local_dist, falloff_param);\n\
+             \x20   let dir = vec2<f32>(cos(direction_angle), sin(direction_angle));\n\
+             \x20   let displacement = length(motion_vec) * strength;\n\
+             \x20   let source_pos = target_pos - dir * displacement * f;\n\
              \x20   let mirror_dims = vec2<f32>(textureDimensions(scratch_mirror_tex));\n\
-             \x20   let bg_uv = (canvas_pos - d.{copy_origin_field}) / mirror_dims;\n\
-             \x20   let src_uv = (canvas_pos - motion_v - d.{copy_origin_field}) / mirror_dims;\n\
-             \x20   let bg = textureSampleLevel(scratch_mirror_tex, scratch_mirror_smp, bg_uv, 0.0);\n\
-             \x20   let src = textureSampleLevel(scratch_mirror_tex, scratch_mirror_smp, src_uv, 0.0);\n\
-             \x20   let amount = clamp(rate * mask * sel * stroke_opacity, 0.0, 1.0);\n\
-             \x20   return mix(bg, src, amount);\n",
+             \x20   let copy_uv    = (source_pos - d.{copy_origin_field}) / mirror_dims;\n\
+             \x20   let warped     = textureSampleLevel(scratch_mirror_tex, scratch_mirror_smp, copy_uv,    0.0);\n\
+             \x20   let original_uv = (target_pos  - d.{copy_origin_field}) / mirror_dims;\n\
+             \x20   let original   = textureSampleLevel(scratch_mirror_tex, scratch_mirror_smp, original_uv, 0.0);\n\
+             \x20   return mix(original, warped, sel * warp_mask);\n",
             copy_origin_field = copy_origin_field,
         );
 
@@ -744,18 +789,28 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
     }
 
     /// Preview-mode body. The stroke body samples `scratch_mirror`
-    /// (bound at `@group(3)` in stroke mode, omitted in preview).
-    /// Semantic for the preview: "show the footprint, not the smear"
-    /// — neutral gray, modulated by the upstream shape mask so the
-    /// cursor still reads the brush's actual coverage area.
+    /// (bound at `@group(3)` in stroke mode, omitted in preview);
+    /// preview emits the falloff disc so scrubbing the softness slider
+    /// visibly reshapes the cursor — helpful side-effect of reusing
+    /// the same `falloff_fn` the stroke decls emit.
+    ///
+    /// The overlay's `KIND_MASKED_STAMP` reads only the `.r` channel
+    /// of this mask as coverage; the displayed colour comes from
+    /// `fs_snapshot`'s background-shift math, not from anything we
+    /// write here. So `.r = f` puts liquify's peak coverage on par
+    /// with paint's at the centre. An earlier version multiplied by
+    /// `0.6` thinking that emitted "neutral gray", which actually
+    /// just capped peak coverage at 60% — visibly fainter than other
+    /// brushes.
     fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
-        let mask_expr = cctx.input("mask").as_f32();
+        let softness_expr = cctx.input("softness").as_f32();
+        let falloff_fn = cctx.ident("liquify_falloff");
         wgsl.body = format!(
-            "    let mask = clamp({mask_expr}, 0.0, 1.0);\n\
-             \x20   if (mask <= 0.0) {{ discard; }}\n\
-             \x20   let preview_color = vec3<f32>(0.6, 0.6, 0.6);\n\
-             \x20   return vec4<f32>(preview_color * mask, mask);\n"
+            "    if (local_dist >= 1.0) {{ discard; }}\n\
+             \x20   let softness = clamp({softness_expr}, 0.0, 1.0);\n\
+             \x20   let f = {falloff_fn}(local_dist, 1.0 - softness);\n\
+             \x20   return vec4<f32>(f, f, f, f);\n"
         );
         Ok(wgsl)
     }
@@ -765,7 +820,7 @@ impl BrushNodeEvaluator for SmudgeCompiledEvaluator {
 
 fn ensure_per_brush_pipeline(
     gpu: &BrushGpuContext,
-    pipe: &SmudgeCompiledPipeline,
+    pipe: &LiquifyPipeline,
     compiled: &CompiledBrush,
 ) {
     if pipe.cache.borrow().contains_key(&compiled.topology_hash) {

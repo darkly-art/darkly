@@ -1,4 +1,4 @@
-//! Hover-cursor preview render through `liquify_compiled`. The
+//! Hover-cursor preview render through `liquify`. The
 //! preview body shows the brush's softness-shaped disc in neutral
 //! gray — same `falloff_fn` the stroke body emits as a node decl,
 //! so scrubbing softness visibly reshapes the cursor.
@@ -50,9 +50,9 @@ fn liquify_preview_shows_neutral_gray_disc() {
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "liquify_compiled")
+        .find(|(_, n)| n.type_id == "liquify")
         .map(|(id, _)| *id)
-        .expect("brush terminates in liquify_compiled");
+        .expect("brush terminates in liquify");
     graph.set_port_default(term_id, "size", 0.2).unwrap();
 
     let (device, queue) = test_device();
@@ -103,7 +103,7 @@ fn liquify_preview_shows_neutral_gray_disc() {
     runner.render_preview_pipeline(&mut ctx);
     let _published = ctx
         .brush_preview_info
-        .expect("liquify_compiled publishes brush_preview_info");
+        .expect("liquify publishes brush_preview_info");
     queue.submit([ctx.encoder.finish()]);
 
     let rgba = readback_texture(
@@ -153,7 +153,7 @@ fn liquify_preview_softness_reshapes_falloff() {
         let term_id = graph
             .nodes
             .iter()
-            .find(|(_, n)| n.type_id == "liquify_compiled")
+            .find(|(_, n)| n.type_id == "liquify")
             .map(|(id, _)| *id)
             .unwrap();
         graph.set_port_default(term_id, "size", 0.2).unwrap();

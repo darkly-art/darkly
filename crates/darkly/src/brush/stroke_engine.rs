@@ -360,12 +360,7 @@ impl StrokeEngine {
         // it returns — paint/watercolor return `diameter` from the
         // size port; smudge does the same; liquify returns its disc
         // diameter for stroke-engine spacing.
-        for node_type in &[
-            "paint_compiled",
-            "watercolor_compiled",
-            "smudge_compiled",
-            "liquify_compiled",
-        ] {
+        for node_type in &["paint", "watercolor", "smudge", "liquify"] {
             if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
                 if let Some(val) = self.runner.read_slot(slot) {
                     let size = val.as_vec2();
@@ -437,12 +432,11 @@ impl StrokeEngine {
             self.last_point = Some(info);
             self.save_points
                 .finalize_render_state(len - 1, self.capture_render_state());
-            // Compiled terminals queue the dab and rely on `flush_dabs`
-            // to actually run the render pass. Without this, a single-
+            // Terminals queue the dab and rely on `flush_dabs` to
+            // actually run the render pass. Without this, a single-
             // event stroke (one `move_to` + `end_stroke`) leaves the
-            // queued first dab unflushed; the dispatch-path terminals
-            // happened to render synchronously in `evaluate_gpu` so the
-            // bug only surfaces post-migration.
+            // queued first dab unflushed and the stroke renders as
+            // nothing.
             self.runner.flush_dabs(gpu);
             return;
         }

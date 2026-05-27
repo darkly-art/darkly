@@ -220,12 +220,9 @@ impl DarklyEngine {
 
     /// Ensure brush image resources are loaded.
     ///
-    /// **No-op during phase 4.** The image node, dab pool, and
-    /// resource handle plumbing were retired together with the
-    /// dispatch path. Bundles with brush-tip or pattern resources are
-    /// preserved on disk but their bytes aren't uploaded anywhere
-    /// during this transitional phase. Phase 5 reintroduces a dedicated
-    /// texture bank that owns these uploads independently of the
-    /// per-dab pool.
+    /// No-op — image-stamp brushes are unsupported (see
+    /// [`crate::brush::nodes::stamp`]). Bundles with brush-tip or
+    /// pattern resources round-trip on disk but their bytes are not
+    /// uploaded anywhere.
     pub(crate) fn ensure_brush_resources(&mut self, _brush: &Brush) {}
 }

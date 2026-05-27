@@ -1,4 +1,4 @@
-//! Hover-cursor preview render through `watercolor_compiled`.
+//! Hover-cursor preview render through `watercolor`.
 //! Verifies the override `compile_preview_body` (which drops the
 //! `@group(3)` pickup-atlas sample the stroke body uses) produces a
 //! color-modulated mask, and Rough Watercolor's perlin shape
@@ -50,9 +50,9 @@ fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> Prev
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "watercolor_compiled")
+        .find(|(_, n)| n.type_id == "watercolor")
         .map(|(id, _)| *id)
-        .expect("brush terminates in watercolor_compiled");
+        .expect("brush terminates in watercolor");
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();
@@ -106,7 +106,7 @@ fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> Prev
     runner.render_preview_pipeline(&mut ctx);
     let published = ctx
         .brush_preview_info
-        .expect("watercolor_compiled publishes brush_preview_info");
+        .expect("watercolor publishes brush_preview_info");
     queue.submit([ctx.encoder.finish()]);
 
     let rgba = readback_texture(
@@ -173,7 +173,16 @@ fn rough_watercolor_preview_shows_color_and_silhouette_variance() {
     // across the sweep — if the cursor were a perfect disc, every
     // sample at one radius would be either all opaque or all
     // transparent.
-    let bbox_half = out.info.half_extent_canvas_px[0];
+    //
+    // Sample in *target-pixel* space: the preview dab fills the
+    // test mask's inscribed disc (`half_extent_target_px = PREVIEW_SIDE/2`),
+    // not the canvas-px value `out.info.half_extent_canvas_px` (which
+    // is what the overlay's displayed quad consumes — a different
+    // frame). Pre-fix this read `half_extent_canvas_px` and worked
+    // only because canvas px happened to match target px for the
+    // 256² test mask × this brush size; post-fix the dab is scaled
+    // to fill the texture regardless of size.
+    let bbox_half = (PREVIEW_SIDE as f32) * 0.5;
     let mut best_variance = 0_u8;
     for r_frac_x10 in 50..=90 {
         let r_sample = bbox_half * (r_frac_x10 as f32 / 100.0);

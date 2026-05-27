@@ -40,13 +40,10 @@ pub struct Scratch {
     // --- Write side (layer-sized) ---
     write_texture: wgpu::Texture,
     write_view: wgpu::TextureView,
-    /// Bind group over `write_texture` using the canvas-copy BGL — paint
-    /// terminals' `commit_brush_dab` bind this as the composite
-    /// foreground (the in-flight stroke pixels) when blitting the stroke
-    /// onto the layer. The dab pool's BGL was the historical home for
-    /// this binding; after the compiled-port migration the two are the
-    /// same shape (texture_2d<f32> + sampler) and we collapsed on the
-    /// canvas-copy BGL.
+    /// Bind group over `write_texture` using the canvas-copy BGL —
+    /// paint terminals' `commit_brush_dab` bind this as the composite
+    /// foreground (the in-flight stroke pixels) when blitting the
+    /// stroke onto the layer.
     write_bind_group: wgpu::BindGroup,
     write_w: u32,
     write_h: u32,
@@ -55,8 +52,8 @@ pub struct Scratch {
     read_mirror_texture: wgpu::Texture,
     read_mirror_view: wgpu::TextureView,
     /// Bind group over `read_mirror_texture` using the canvas-copy BGL —
-    /// the per-dab composite shaders (`composite.wgsl`, smudge_compiled,
-    /// liquify_compiled) bind this to sample the write side without an
+    /// the per-dab composite shaders (`composite.wgsl`, smudge,
+    /// liquify) bind this to sample the write side without an
     /// R/W hazard.
     read_mirror_bind_group: wgpu::BindGroup,
     read_w: u32,

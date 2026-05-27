@@ -14,7 +14,7 @@ use darkly::gpu::test_utils::test_device;
 use darkly::layer::LayerId;
 use darkly::nodegraph::NodeInstance;
 
-/// Paint a solid-color brush stroke at a given position (test helper replacing legacy PaintCircle).
+/// Paint a solid-color brush stroke at a given position.
 fn paint_at(engine: &mut DarklyEngine, layer_id: LayerId, x: f32, y: f32, r: f32, g: f32, b: f32) {
     engine.begin_stroke(layer_id);
     engine.stroke_to(StrokeOp::BrushStroke {
@@ -2028,9 +2028,8 @@ fn pending_undo_commit_survives_two_grows() {
 // ============================================================================
 // Mask painting — regression tests for brush-stroke-on-mask
 //
-// Tests defend against the bug introduced in `a4443ab stabilization wip` /
-// `2345766 delete legacy paint paths`, where the brush stack was hardcoded
-// to RGBA8 and painting on R8 mask textures silently failed.
+// Defends against silent failure when painting onto R8 mask textures
+// (the brush stack must not assume an RGBA8 destination).
 // ============================================================================
 
 /// Paint a single black brush dab at (x, y) on a mask. Brush color is

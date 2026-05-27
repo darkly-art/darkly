@@ -40,7 +40,7 @@ use wire::BrushWireType;
 /// - `stamp`: the rendered dab's longer axis at `effective_size = 1.0`
 ///   is `DAB_REFERENCE_SIZE` canvas pixels (the slider's "100%" mark).
 /// - `liquify`: `radius = size * DAB_REFERENCE_SIZE * 0.5`.
-/// - `paint_compiled` / `watercolor_compiled`: same `effective_size *
+/// - `paint` / `watercolor`: same `effective_size *
 ///   DAB_REFERENCE_SIZE / 2` formula for `effective_radius`.
 /// - `StrokeEngine::default_diameter() = DAB_REFERENCE_SIZE * 0.5` —
 ///   spacing fallback before any dab has reported its own size.
@@ -157,29 +157,20 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     // GPU nodes.
     map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
+    map.insert("paint".into(), Box::new(nodes::paint::PaintEvaluator));
+    map.insert("liquify".into(), Box::new(nodes::liquify::LiquifyEvaluator));
     map.insert(
-        "paint_compiled".into(),
-        Box::new(nodes::paint_compiled::PaintCompiledEvaluator),
+        "watercolor".into(),
+        Box::new(nodes::watercolor::WatercolorEvaluator),
     );
-    map.insert(
-        "liquify_compiled".into(),
-        Box::new(nodes::liquify_compiled::LiquifyCompiledEvaluator),
-    );
-    map.insert(
-        "watercolor_compiled".into(),
-        Box::new(nodes::watercolor_compiled::WatercolorCompiledEvaluator),
-    );
-    map.insert(
-        "smudge_compiled".into(),
-        Box::new(nodes::smudge_compiled::SmudgeCompiledEvaluator),
-    );
+    map.insert("smudge".into(), Box::new(nodes::smudge::SmudgeEvaluator));
     map
 }
 
 /// Build the default brush graph: pressure-sensitive disc through the
-/// compiled `paint_compiled` terminal. Same shape as Round in
+/// compiled `paint` terminal. Same shape as Round in
 /// [`builtin_brushes`] — `pen → paint_color → circle (sine, amplitude 0)
-/// → stamp → paint_compiled` — minus the per-brush configuration
+/// → stamp → paint` — minus the per-brush configuration
 /// closure (no exposed softness, no flow wire).
 pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     use crate::gpu::params::ParamValue;
@@ -209,8 +200,8 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
         vec![ParamValue::Int(0)], // AlphaMask
     );
     let terminal = graph.add_node(
-        "paint_compiled",
-        registry.get("paint_compiled").unwrap().ports.clone(),
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
         vec![],
     );
 
@@ -242,20 +233,17 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
 
 /// Compile any brush graph into a ready-to-run runner.
 ///
-/// If the graph terminates in a `paint_compiled` node, this also
-/// generates the per-brush WGSL fragment shader and attaches it to
-/// the runner. Brush load fails (with a string-form `GraphError`-ish
-/// error coerced via `panic!` ⇒ TODO) when any upstream node lacks a
-/// `compile_wgsl` implementation. Brushes that terminate in any other
-/// terminal (`paint`, `color_output`, `watercolor_batched`, …) take
-/// the per-dab dispatch path unchanged.
+/// Generates the per-brush WGSL fragment shader and attaches it to
+/// the runner when the graph has a terminal. Brush load fails (with
+/// a string-form `GraphError`-ish error coerced via `panic!` ⇒ TODO)
+/// when any upstream node lacks a `compile_wgsl` implementation.
 pub fn compile_graph(
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
     let registry = BrushNodeRegistry::new();
     let evaluators = default_evaluators();
     let mut runner = eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)?;
-    if runner.has_compiled_terminal() {
+    if runner.has_terminal() {
         let plan = crate::nodegraph::compile(graph, registry.as_map())?;
         // Build a fresh evaluators map for the compiler — the runner
         // owns the live one. Cheap (just trait-object constructors).
@@ -265,7 +253,7 @@ pub fn compile_graph(
                 // Surface the WGSL compile error as a Graph compile
                 // error so the engine's existing error path handles
                 // it. Detail goes through `Display`.
-                eprintln!("paint_compiled WGSL compilation failed: {e}");
+                eprintln!("paint WGSL compilation failed: {e}");
                 crate::nodegraph::GraphError::CycleDetected
             })?;
         runner.set_compiled_brush(std::sync::Arc::new(compiled));

@@ -1,17 +1,14 @@
-//! Smoke tests for the Round / Airbrush / Ink Pen builtins after the
-//! migration from the `paint` dispatch terminal to the compiled
-//! `paint_compiled` terminal. Each test loads the actual builtin
-//! graph (no test-only rewiring), renders one dab through the
-//! compiled pipeline, and asserts the dab deposited inside its
+//! Smoke tests for the Round / Airbrush / Ink Pen builtins. Each
+//! test loads the actual builtin graph (no test-only rewiring),
+//! renders one dab, and asserts the deposit lands inside its
 //! declared bbox.
 //!
-//! `rough_ink.rs` exercises the deeper invariants of the compiled
+//! `rough_ink.rs` covers the deeper invariants of the paint
 //! pipeline (bbox-correctness on overlapping dabs, flow scaling,
-//! shape parity). These tests only need to verify each migrated
-//! brush's graph wires up cleanly and produces visible output —
-//! per-brush wire bugs (e.g. forgetting `paint_color → stamp.color`)
-//! surface here while the pipeline itself stays covered by
-//! `rough_ink.rs`.
+//! shape parity). These tests only need to verify each brush's
+//! graph wires up cleanly and produces visible output — per-brush
+//! wire bugs (e.g. forgetting `paint_color → stamp.color`) surface
+//! here.
 
 use std::sync::{Arc, OnceLock};
 
@@ -66,9 +63,9 @@ fn render_single_dab_with_pressure(
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "paint_compiled")
+        .find(|(_, n)| n.type_id == "paint")
         .map(|(id, _)| *id)
-        .unwrap_or_else(|| panic!("brush `{brush_name}` must terminate in paint_compiled"));
+        .unwrap_or_else(|| panic!("brush `{brush_name}` must terminate in paint"));
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();
@@ -208,7 +205,7 @@ fn airbrush_deposits_softer_than_round() {
     assert!(count_deposited(&rgba) > 500);
 }
 
-/// Regression: `paint_compiled.opacity` is wired to `pen.pressure` on
+/// Regression: `paint.opacity` is wired to `pen.pressure` on
 /// the Airbrush, so the deposited color must scale with pressure. The
 /// bug was that `commit()` read `ctx.input_f32("opacity")` from an
 /// empty inputs map (lifecycle hooks weren't pulling slot values),

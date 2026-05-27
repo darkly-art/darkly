@@ -28,11 +28,11 @@ pub fn all() -> Vec<Brush> {
 // Brush definitions
 // ---------------------------------------------------------------------------
 
-/// Build a Basic brush around the compiled `paint_compiled` terminal.
+/// Build a Basic brush around the `paint` terminal.
 ///
 /// All three Basic brushes (Round, Airbrush, Ink Pen) share the same
-/// `pen_input + paint_color + circle + stamp + paint_compiled` skeleton
-/// — the same shape as Rough Ink — and only differ in their per-brush
+/// `pen_input + paint_color + circle + stamp + paint` skeleton — the
+/// same shape as Rough Ink — and only differ in their per-brush
 /// signal wires (pressure → flow vs opacity, optional pressure curve)
 /// and the circle softness default. The closure runs after the bare
 /// graph is built and is responsible for wiring the brush-specific
@@ -40,7 +40,7 @@ pub fn all() -> Vec<Brush> {
 ///
 /// The `circle` runs in sine algorithm with amplitude 0, producing a
 /// plain disc — its only role here is to be the softness-aware shape
-/// mask. Per-brush softness lives on `circle.softness` (the compiled
+/// mask. Per-brush softness lives on `circle.softness` (the `paint`
 /// terminal has no softness port).
 fn paint_brush(
     name: &str,
@@ -76,18 +76,18 @@ fn paint_brush(
         registry.get("stamp").unwrap().ports.clone(),
         vec![ParamValue::Int(0)], // 0 = Alpha Mask
     );
-    // `paint_compiled` owns the dab dimensions; stamp's `size` port is
-    // inert in the compiled execution model. Hide it so users don't see
-    // two "Size" sliders in the brush properties panel.
+    // `paint` owns the dab dimensions; stamp's `size` port is inert.
+    // Hide it so users don't see two "Size" sliders in the brush
+    // properties panel.
     graph.set_port_exposed(stamp, "size", false).unwrap();
     let terminal = graph.add_node(
-        "paint_compiled",
-        registry.get("paint_compiled").unwrap().ports.clone(),
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
         vec![],
     );
 
     // Shared shape: pen position drives terminal position; paint_color
-    // flows through stamp.color (the compiled terminal has no `color`
+    // flows through stamp.color (the `paint` terminal has no `color`
     // port — color is folded into `rgba` by the stamp); circle is the
     // tip mask for stamp; stamp's premultiplied RGBA is the terminal's
     // input.
@@ -164,7 +164,7 @@ fn round() -> Brush {
             // bespoke response.
             wire_pressure_size_curve(graph, pen, terminal, vec![[0.0, 0.0], [1.0, 1.0]]);
             // Pressure → flow via stamp (folds into per-dab color alpha;
-            // `paint_compiled.flow` stays at its 1.0 default).
+            // `paint.flow` stays at its 1.0 default).
             graph
                 .connect(
                     PortRef {
@@ -260,10 +260,10 @@ fn ink_pen() -> Brush {
 }
 
 /// Build a Wet Media (watercolor) brush around the compiled
-/// `watercolor_compiled` terminal.
+/// `watercolor` terminal.
 ///
 /// All watercolor variants share the same shape — `pen_input +
-/// paint_color + circle → watercolor_compiled` — and only differ in
+/// paint_color + circle → watercolor` — and only differ in
 /// the circle's algorithm + default shape params, plus the per-dab
 /// modulation (random rotation for sine, random seed for perlin).
 /// The closure receives the `circle` node so it can set its
@@ -308,8 +308,8 @@ fn watercolor_brush(
     graph.set_port_default(circle, "softness", 0.2).unwrap();
     graph.set_port_exposed(circle, "softness", true).unwrap();
     let terminal = graph.add_node(
-        "watercolor_compiled",
-        registry.get("watercolor_compiled").unwrap().ports.clone(),
+        "watercolor",
+        registry.get("watercolor").unwrap().ports.clone(),
         vec![],
     );
 
@@ -428,13 +428,13 @@ fn rough_watercolor() -> Brush {
 }
 
 /// Smudge brush. Drags canvas pixels along the stroke — at each dab,
-/// the `smudge_compiled` terminal samples the scratch at `position −
+/// the `smudge` terminal samples the scratch at `position −
 /// motion` and mixes by `rate × mask × selection × opacity`. Built
 /// directly (not via `BrushBuilder`) because the standard builder
 /// pre-wires `color_output`; smudge has its own terminal node with
 /// its own lifecycle.
 ///
-/// Compiled-graph shape: `pen → circle → smudge_compiled` plus
+/// Compiled-graph shape: `pen → circle → smudge` plus
 /// `pen.motion / .position` wired directly into the terminal. The
 /// upstream `circle.texture` compiles inline into the terminal's
 /// fragment shader as the per-fragment brush coverage.
@@ -453,8 +453,8 @@ fn smudge_brush() -> Brush {
         vec![ParamValue::Int(0)], // 0 = Sine Harmonic; amplitude 0 → plain disc
     );
     let smudge = graph.add_node(
-        "smudge_compiled",
-        registry.get("smudge_compiled").unwrap().ports.clone(),
+        "smudge",
+        registry.get("smudge").unwrap().ports.clone(),
         vec![],
     );
 
@@ -470,7 +470,7 @@ fn smudge_brush() -> Brush {
     graph.set_port_default(pen, "spacing", 0.01).unwrap();
 
     // Sharper-than-typical tip. With a softened mask, the read at
-    // `canvas_pos − motion` lands in the falloff ring and smears canvas
+    // `target_pos − motion` lands in the falloff ring and smears canvas
     // pixels into the "outside" of the brush footprint on each dab,
     // producing halo trails. Krita's stock smudge presets use sharper
     // edges for the same reason. Exposed so the user can dial it back
@@ -507,7 +507,7 @@ fn smudge_brush() -> Brush {
 
 /// Liquify warp brush. Pushes pixels along pen motion with a radial
 /// falloff. Unlike paint brushes, the graph has no stamp / paint_color
-/// / color_output — `liquify_compiled` is itself the terminal, with
+/// / color_output — `liquify` is itself the terminal, with
 /// its own `begin_stroke` / `commit` / per-dab pass lifecycle.
 fn liquify_push() -> Brush {
     let registry = BrushNodeRegistry::new();
@@ -519,8 +519,8 @@ fn liquify_push() -> Brush {
         vec![],
     );
     let liquify = graph.add_node(
-        "liquify_compiled",
-        registry.get("liquify_compiled").unwrap().ports.clone(),
+        "liquify",
+        registry.get("liquify").unwrap().ports.clone(),
         vec![],
     );
 
@@ -553,7 +553,7 @@ fn liquify_push() -> Brush {
     }
 
     // size / strength / softness are already `.exposed()` on the
-    // liquify_compiled node-def, so the toolbar picks them up without
+    // liquify node-def, so the toolbar picks them up without
     // extra brush work.
 
     // Pin dab spacing in *absolute canvas pixels*, not as a fraction
@@ -571,7 +571,7 @@ fn liquify_push() -> Brush {
         .set_port_default(
             pen,
             "spacing_min_px",
-            crate::brush::nodes::liquify_compiled::LIQUIFY_SPACING_PX,
+            crate::brush::nodes::liquify::LIQUIFY_SPACING_PX,
         )
         .unwrap();
 
@@ -583,7 +583,7 @@ fn liquify_push() -> Brush {
 /// Rough Ink — the first 100%-compiled brush.
 ///
 /// Wires `pen_input + paint_color + 3×random + circle(perlin) + stamp`
-/// into the `paint_compiled` terminal. Each dab gets a unique
+/// into the `paint` terminal. Each dab gets a unique
 /// perlin-modulated silhouette driven by three independent per-dab
 /// random seeds (amplitude, phase, seed). Pressure controls dab size
 /// through an ink-pen front-loaded curve. The entire graph compiles
@@ -649,15 +649,15 @@ fn rough_ink() -> Brush {
         vec![ParamValue::Int(0)], // 0 = Alpha Mask
     );
     // Stamp's `size` port is exposed by default (because per-dab
-    // dispatch needs it), but `paint_compiled` ignores stamp's
+    // dispatch needs it), but `paint` ignores stamp's
     // dimension knobs — the terminal owns dab dimensions in the
     // compiled execution model. Hide stamp.size from the brush
     // properties panel so the user doesn't see two "Size" sliders
     // and scrub the inert one.
     graph.set_port_exposed(stamp, "size", false).unwrap();
     let terminal = graph.add_node(
-        "paint_compiled",
-        registry.get("paint_compiled").unwrap().ports.clone(),
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
         vec![],
     );
 

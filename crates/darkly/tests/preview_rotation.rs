@@ -1,11 +1,8 @@
 //! End-to-end verification that `pen.tilt_direction` flows through
-//! the runner's sensor-seeding into a compiled terminal's
-//! `render_preview` and onward to `BrushPreviewInfo.rotation_rad`.
-//!
-//! This is the rotation-plumbing test the phase-5 plan calls out as
-//! the prerequisite for the four per-terminal preview tests — if the
-//! rotation port doesn't flow live values, the cursor mask can never
-//! rotate with the pen even though the overlay primitive supports it.
+//! the runner's sensor-seeding into a terminal's `render_preview`
+//! and onward to `BrushPreviewInfo.rotation_rad`. If the rotation
+//! port doesn't flow live values, the cursor mask can never rotate
+//! with the pen even though the overlay primitive supports it.
 
 use std::sync::Arc;
 
@@ -44,7 +41,7 @@ fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
 
 #[test]
 fn pen_tilt_direction_drives_preview_rotation() {
-    // Build a minimal paint_compiled graph that wires
+    // Build a minimal paint graph that wires
     // `pen.tilt_direction → terminal.rotation`. The built-in brushes
     // don't wire rotation today, so the test constructs its own
     // graph rather than mutating a builtin's defaults.
@@ -72,8 +69,8 @@ fn pen_tilt_direction_drives_preview_rotation() {
         vec![darkly::gpu::params::ParamValue::Int(0)],
     );
     let term = graph.add_node(
-        "paint_compiled",
-        registry.get("paint_compiled").unwrap().ports.clone(),
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
         vec![],
     );
 
@@ -156,7 +153,7 @@ fn pen_tilt_direction_drives_preview_rotation() {
 
     let rotation = ctx
         .brush_preview_info
-        .expect("paint_compiled publishes brush_preview_info during preview")
+        .expect("paint publishes brush_preview_info during preview")
         .rotation_rad;
 
     // Without the plumbing this would be 0; with it the seeded

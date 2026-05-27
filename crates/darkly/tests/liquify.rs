@@ -1,6 +1,6 @@
-//! Tests for the compiled `liquify_compiled` terminal.
+//! Tests for the compiled `liquify` terminal.
 //!
-//! The load-bearing invariant — same as smudge_compiled — is the
+//! The load-bearing invariant — same as smudge — is the
 //! per-dab feedback loop: dab 2's warp source samples scratch *after*
 //! dab 1 has written to it. A single instanced draw would have both
 //! dabs reading pre-stroke. The discriminator test places two dabs so
@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock};
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
-use darkly::brush::nodes::liquify_compiled::LIQUIFY_SPACING_PX;
+use darkly::brush::nodes::liquify::LIQUIFY_SPACING_PX;
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::stroke_buffer::StrokeBuffer;
@@ -67,9 +67,9 @@ fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "liquify_compiled")
+        .find(|(_, n)| n.type_id == "liquify")
         .map(|(id, _)| *id)
-        .expect("Liquify brush must terminate in liquify_compiled");
+        .expect("Liquify brush must terminate in liquify");
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();
@@ -90,7 +90,7 @@ fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec
         CANVAS,
     );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("liquify_compiled-test-pre-stroke"),
+        label: Some("liquify-test-pre-stroke"),
     });
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
     queue.submit([enc.finish()]);
@@ -140,12 +140,12 @@ fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec
     }
 
     {
-        let mut ctx = make_ctx!("liquify_compiled-test-begin");
+        let mut ctx = make_ctx!("liquify-test-begin");
         runner.begin_stroke(&mut ctx);
         queue.submit([ctx.encoder.finish()]);
     }
     {
-        let mut ctx = make_ctx!("liquify_compiled-test-flush");
+        let mut ctx = make_ctx!("liquify-test-flush");
         for (i, (pos, dir, dist)) in dabs.iter().enumerate() {
             // Simulate a real stroke's per-dab motion: in a live
             // stroke the engine places dabs `LIQUIFY_SPACING_PX`

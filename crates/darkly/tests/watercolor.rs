@@ -1,5 +1,5 @@
 //! Smoke tests for the watercolor brushes after migration to the
-//! compiled `watercolor_compiled` terminal. Each test loads the actual
+//! compiled `watercolor` terminal. Each test loads the actual
 //! builtin graph, renders a couple of dabs over a non-empty
 //! pre_stroke, and checks the watercolor blend deposits something
 //! reasonable. The pickup atlas pass + per-brush compiled composite
@@ -56,9 +56,9 @@ fn render_dabs(
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "watercolor_compiled")
+        .find(|(_, n)| n.type_id == "watercolor")
         .map(|(id, _)| *id)
-        .unwrap_or_else(|| panic!("brush `{brush_name}` must terminate in watercolor_compiled"));
+        .unwrap_or_else(|| panic!("brush `{brush_name}` must terminate in watercolor"));
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();

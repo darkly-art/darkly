@@ -1,13 +1,13 @@
-//! Watercolor Compiled terminal — two-pass batched watercolor with a
-//! per-brush compiled composite shader.
+//! Watercolor terminal — two-pass batched watercolor with a per-brush
+//! compiled composite shader.
 //!
-//! Structural shape mirrors [`paint_compiled`](super::paint_compiled),
+//! Structural shape mirrors [`paint`](super::paint),
 //! with one extra pass at the front:
 //!
 //! 1. **Pickup atlas pass.** N instances, each writes the 8×8 alpha-
 //!    weighted neighborhood average of `pre_stroke_texture` at the
 //!    dab's footprint into its cell in a 128×128 atlas. The shader
-//!    (`watercolor_compiled_pickup.wgsl`) is brush-agnostic in math
+//!    (`watercolor_pickup.wgsl`) is brush-agnostic in math
 //!    but built per-brush so its `DabRecord` struct stride matches
 //!    the compiled brush's. Cell layout is `(idx % atlas_w, idx /
 //!    atlas_w)`.
@@ -49,8 +49,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, IntrinsicUniforms, NodeWgsl,
-    WgslType, INTRINSIC_UNIFORMS_SIZE,
+    pack_dab_record, pack_intrinsic_dab_header, pack_intrinsic_uniforms, pack_uniforms,
+    CompileWgslCtx, CompiledBrush, IntrinsicUniforms, NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -77,13 +77,15 @@ struct PickupUniforms {
     atlas_width: u32,
     atlas_height: u32,
     /// Fraction of the dab's nominal radius the pickup grid spans
-    /// (half-extent in canvas-pixel terms is `dab.radius * pickup_size`).
-    /// Stroke-constant — see the `pickup_size` port on
-    /// `watercolor_compiled`. Sampling the full bbox produced visibly
-    /// too-large pickup neighborhoods (the bbox is shape-extent-
-    /// inflated, ~1.4× the visible disc for Rough Watercolor); a third
-    /// of the nominal radius matches the "smudge from where the brush
-    /// is now" intuition closer to Krita's defaults.
+    /// (half-extent in canvas-pixel terms is
+    /// `pickup_size / dab.inv_radius_target_px`, valid in stroke mode
+    /// where target px ≡ canvas px). Stroke-constant — see the
+    /// `pickup_size` port on `watercolor`. Sampling the full
+    /// bbox produced visibly too-large pickup neighborhoods (the bbox
+    /// is shape-extent-inflated, ~1.4× the visible disc for Rough
+    /// Watercolor); a third of the nominal radius matches the
+    /// "smudge from where the brush is now" intuition closer to
+    /// Krita's defaults.
     pickup_size: f32,
     _pad: f32,
 }
@@ -119,7 +121,7 @@ impl PerBrushPipeline {
         let composite_shader = ctx
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("watercolor_compiled-composite"),
+                label: Some("watercolor-composite"),
                 source: wgpu::ShaderSource::Wgsl(compiled.stroke_wgsl.clone().into()),
             });
 
@@ -128,7 +130,7 @@ impl PerBrushPipeline {
         let pickup_shader = ctx
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("watercolor_compiled-pickup"),
+                label: Some("watercolor-pickup"),
                 source: wgpu::ShaderSource::Wgsl(pickup_wgsl.into()),
             });
 
@@ -136,7 +138,7 @@ impl PerBrushPipeline {
         let dabs_bgl = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("watercolor_compiled-dabs-bgl"),
+                label: Some("watercolor-dabs-bgl"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -153,7 +155,7 @@ impl PerBrushPipeline {
         let composite_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("watercolor_compiled-composite-layout"),
+                label: Some("watercolor-composite-layout"),
                 bind_group_layouts: &[
                     ctx.uniform_bgl,
                     &dabs_bgl,
@@ -167,7 +169,7 @@ impl PerBrushPipeline {
         let pickup_layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("watercolor_compiled-pickup-layout"),
+                label: Some("watercolor-pickup-layout"),
                 bind_group_layouts: &[
                     ctx.uniform_bgl,
                     &dabs_bgl,
@@ -193,7 +195,7 @@ impl PerBrushPipeline {
         let composite_pipeline =
             ctx.device
                 .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some("watercolor_compiled-composite"),
+                    label: Some("watercolor-composite"),
                     layout: Some(&composite_layout),
                     vertex: wgpu::VertexState {
                         module: &composite_shader,
@@ -224,7 +226,7 @@ impl PerBrushPipeline {
         let pickup_pipeline = ctx
             .device
             .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("watercolor_compiled-pickup"),
+                label: Some("watercolor-pickup"),
                 layout: Some(&pickup_layout),
                 vertex: wgpu::VertexState {
                     module: &pickup_shader,
@@ -257,13 +259,13 @@ impl PerBrushPipeline {
             (INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size).max(INTRINSIC_UNIFORMS_SIZE);
         let composite_uniform_ring = DynamicUniformRing::new(
             ctx.device,
-            "watercolor_compiled-composite-uniforms",
+            "watercolor-composite-uniforms",
             composite_uniform_size as u64,
             ctx.min_uniform_align,
         );
         let composite_uniform_bind_group =
             ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("watercolor_compiled-composite-uniform-bg"),
+                label: Some("watercolor-composite-uniform-bg"),
                 layout: ctx.uniform_bgl,
                 entries: &[wgpu::BindGroupEntry {
                     binding: 0,
@@ -278,12 +280,12 @@ impl PerBrushPipeline {
         // ── Pickup uniform ring ──
         let pickup_uniform_ring = DynamicUniformRing::new(
             ctx.device,
-            "watercolor_compiled-pickup-uniforms",
+            "watercolor-pickup-uniforms",
             std::mem::size_of::<PickupUniforms>() as u64,
             ctx.min_uniform_align,
         );
         let pickup_uniform_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("watercolor_compiled-pickup-uniform-bg"),
+            label: Some("watercolor-pickup-uniform-bg"),
             layout: ctx.uniform_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -299,13 +301,13 @@ impl PerBrushPipeline {
         let dab_record_size = compiled.dab_record_size.max(16);
         let dabs_buffer_size = (MAX_DABS_PER_PHASE as u64) * (dab_record_size as u64);
         let dabs_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("watercolor_compiled-dabs-buffer"),
+            label: Some("watercolor-dabs-buffer"),
             size: dabs_buffer_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let dabs_bind_group_pickup = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("watercolor_compiled-dabs-bg-pickup"),
+            label: Some("watercolor-dabs-bg-pickup"),
             layout: &dabs_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -313,7 +315,7 @@ impl PerBrushPipeline {
             }],
         });
         let dabs_bind_group_composite = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("watercolor_compiled-dabs-bg-composite"),
+            label: Some("watercolor-dabs-bg-composite"),
             layout: &dabs_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -323,7 +325,7 @@ impl PerBrushPipeline {
 
         // ── Pickup atlas texture ──
         let atlas_texture = ctx.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("watercolor_compiled-atlas"),
+            label: Some("watercolor-atlas"),
             size: wgpu::Extent3d {
                 width: ATLAS_WIDTH,
                 height: ATLAS_HEIGHT,
@@ -340,7 +342,7 @@ impl PerBrushPipeline {
             atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let atlas_sample_view = atlas_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let atlas_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("watercolor_compiled-atlas-bg"),
+            label: Some("watercolor-atlas-bg"),
             layout: ctx.canvas_copy_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -376,11 +378,11 @@ impl PerBrushPipeline {
 
 // ── Pipeline registry entry ─────────────────────────────────────────────
 
-pub struct WatercolorCompiledPipeline {
+pub struct WatercolorPipeline {
     cache: RefCell<HashMap<u64, PerBrushPipeline>>,
 }
 
-impl WatercolorCompiledPipeline {
+impl WatercolorPipeline {
     fn build(_ctx: &BuildContext) -> Self {
         Self {
             cache: RefCell::new(HashMap::new()),
@@ -403,7 +405,7 @@ impl WatercolorCompiledPipeline {
     }
 }
 
-impl BrushPipelineEntry for WatercolorCompiledPipeline {
+impl BrushPipelineEntry for WatercolorPipeline {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -416,10 +418,10 @@ impl BrushPipelineEntry for WatercolorCompiledPipeline {
     }
 }
 
-fn watercolor_compiled_pipeline_reg() -> BrushPipelineRegistration {
+fn watercolor_pipeline_reg() -> BrushPipelineRegistration {
     BrushPipelineRegistration {
-        id: "watercolor_compiled",
-        build: |ctx| Box::new(WatercolorCompiledPipeline::build(ctx)),
+        id: "watercolor",
+        build: |ctx| Box::new(WatercolorPipeline::build(ctx)),
     }
 }
 
@@ -489,7 +491,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // should track where the brush is actually marking, not the
     // worst-case shape-bbox footprint. `pickup_size` is the brush
     // property scrub — default ≈ 0.33, exposed on the terminal.
-    let pickup_half = max(dab.radius * u.pickup_size, 0.5);
+    //
+    // STROKE-ONLY: this shader is dispatched only from the stroke
+    // pipeline (it samples `t_pre_stroke`, which is unbound at preview
+    // time). Under the stroke convention the dab record's
+    // `inv_radius_target_px` is `1/radius_canvas_px` (target ≡ canvas),
+    // so `1 / dab.inv_radius_target_px` recovers canvas-px radius and
+    // `pickup_half` ends up in canvas px as the rest of the shader
+    // expects. Do not dispatch this from a preview path — the
+    // conversion is invalid when target ≢ canvas.
+    let pickup_half = max(u.pickup_size / dab.inv_radius_target_px, 0.5);
     let half_extent = vec2<f32>(pickup_half);
 
     var sum_rgb = vec3<f32>(0.0);
@@ -537,11 +548,11 @@ fn build_pickup_shader(compiled: &CompiledBrush) -> String {
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
-        pipelines: vec![watercolor_compiled_pipeline_reg()],
+        pipelines: vec![watercolor_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "watercolor_compiled",
+            type_id: "watercolor",
             category: "output",
-            display_name: "Watercolor (Compiled)",
+            display_name: "Watercolor",
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
@@ -621,7 +632,7 @@ pub fn register() -> BrushNodeRegistration {
                 // (the shape coverage), but the framework checks
                 // wire types for compatibility — so the declared
                 // wire type must match the source. Same pattern as
-                // `paint_compiled.rgba` matching `stamp.dab`.
+                // `paint.rgba` matching `stamp.dab`.
                 PortDef::input("mask", BrushWireType::Texture).with_description(
                     "Per-fragment shape coverage (typically wired from circle.texture)",
                 ),
@@ -634,35 +645,24 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
-pub struct WatercolorCompiledEvaluator;
+pub struct WatercolorEvaluator;
 
-impl WatercolorCompiledEvaluator {
+impl WatercolorEvaluator {
     fn effective_radius(ctx: &EvalContext) -> f32 {
         let size_input = ctx.input_f32("size_input").max(0.0);
         let size = ctx.input_f32("size").max(0.0);
         let effective_size = size_input * size;
         (effective_size * SIZE_REFERENCE_PX * 0.5).max(0.5)
     }
-
-    fn pack_intrinsic_header(bytes: &mut Vec<u8>, pos: [f32; 2], radius: f32, bbox_radius: f32) {
-        bytes.extend_from_slice(bytemuck::bytes_of(&pos));
-        bytes.extend_from_slice(bytemuck::bytes_of(&radius));
-        bytes.extend_from_slice(bytemuck::bytes_of(&bbox_radius));
-    }
-
-    fn pack_intrinsic_uniforms(bytes: &mut Vec<u8>, intrinsic: IntrinsicUniforms) {
-        bytes.extend_from_slice(bytemuck::bytes_of(&intrinsic));
-    }
 }
 
-impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
-    fn is_compiled_terminal(&self) -> bool {
+impl BrushNodeEvaluator for WatercolorEvaluator {
+    fn is_terminal(&self) -> bool {
         true
     }
 
     fn supports_erase(&self) -> bool {
-        // Erase on wet media doesn't read naturally — match the
-        // dispatch-path watercolor terminals.
+        // Erase on wet media doesn't read naturally.
         false
     }
 
@@ -676,10 +676,7 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let Some(compiled) = gpu.compiled_brush.clone() else {
-            debug_assert!(
-                false,
-                "watercolor_compiled requires compiled_brush on gpu_context"
-            );
+            debug_assert!(false, "watercolor requires compiled_brush on gpu_context");
             return vec![];
         };
         let Some(paint_target) = gpu.paint_target.as_ref() else {
@@ -729,11 +726,11 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
         });
 
         let record_start = gpu.pending_dab_bytes.len();
-        Self::pack_intrinsic_header(&mut gpu.pending_dab_bytes, position, radius, bbox_radius);
+        pack_intrinsic_dab_header(&mut gpu.pending_dab_bytes, position, bbox_radius, radius);
         let outputs = gpu
             .slot_outputs_owned
             .as_ref()
-            .expect("watercolor_compiled requires slot_outputs_owned");
+            .expect("watercolor requires slot_outputs_owned");
         pack_dab_record(&compiled, outputs, &mut gpu.pending_dab_bytes);
         let written = gpu.pending_dab_bytes.len() - record_start;
         if written < compiled.dab_record_size {
@@ -743,7 +740,7 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
         gpu.pending_dab_count = gpu.pending_dab_count.saturating_add(1);
         debug_assert!(
             gpu.pending_dab_count <= MAX_DABS_PER_PHASE,
-            "watercolor_compiled dab queue overflowed MAX_DABS_PER_PHASE"
+            "watercolor dab queue overflowed MAX_DABS_PER_PHASE"
         );
 
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
@@ -790,10 +787,7 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
             return;
         }
         let Some(compiled) = gpu.compiled_brush.clone() else {
-            debug_assert!(
-                false,
-                "watercolor_compiled::flush_dabs requires compiled_brush"
-            );
+            debug_assert!(false, "watercolor::flush_dabs requires compiled_brush");
             return;
         };
 
@@ -817,20 +811,18 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
         };
         let pre_stroke_size = [pre_stroke_tex.width(), pre_stroke_tex.height()];
 
-        let pipeline_ref = gpu
-            .pipelines
-            .get::<WatercolorCompiledPipeline>("watercolor_compiled");
+        let pipeline_ref = gpu.pipelines.get::<WatercolorPipeline>("watercolor");
 
         ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled);
 
         let scratch = gpu
             .scratch
             .as_deref()
-            .expect("watercolor_compiled::flush_dabs requires Scratch");
+            .expect("watercolor::flush_dabs requires Scratch");
         let paint_target = gpu
             .paint_target
             .as_ref()
-            .expect("watercolor_compiled::flush_dabs requires paint_target");
+            .expect("watercolor::flush_dabs requires paint_target");
         let canvas_ext = paint_target.canvas_extent();
         let pre_stroke_origin = [canvas_ext.x0(), canvas_ext.y0()];
         let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
@@ -838,7 +830,7 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
 
         // Build composite uniforms (intrinsic + node-contributed).
         let mut composite_uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
-        Self::pack_intrinsic_uniforms(
+        pack_intrinsic_uniforms(
             &mut composite_uniform_bytes,
             IntrinsicUniforms {
                 layer_offset,
@@ -852,7 +844,7 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
         let outputs = gpu
             .slot_outputs_owned
             .as_ref()
-            .expect("watercolor_compiled::flush_dabs requires slot_outputs_owned");
+            .expect("watercolor::flush_dabs requires slot_outputs_owned");
         pack_uniforms(&compiled, outputs, &mut composite_uniform_bytes);
 
         // Pickup size is a stroke-level scrub — the lifecycle context
@@ -889,7 +881,7 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
             // ── Pass 1: pickup atlas ──
             {
                 let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("watercolor_compiled-pickup"),
+                    label: Some("watercolor-pickup"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &per_brush.atlas_attachment_view,
                         resolve_target: None,
@@ -912,7 +904,7 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
             // ── Pass 2: composite ──
             {
                 let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("watercolor_compiled-composite"),
+                    label: Some("watercolor-composite"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: scratch.write_view(),
                         resolve_target: None,
@@ -995,7 +987,7 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
     /// blend, and return premultiplied RGBA.
     ///
     /// The framework's `assemble_shader` provides `d` (DabRecord), `u`
-    /// (Uniforms), `local_uv`, `local_dist`, `theta`, `canvas_pos`,
+    /// (Uniforms), `local_uv`, `local_dist`, `theta`, `target_pos`,
     /// `canvas_size`, `sel`, and the `in: VsOut` fragment input (used
     /// here for `in.dab_idx` → atlas cell).
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
@@ -1077,7 +1069,7 @@ impl BrushNodeEvaluator for WatercolorCompiledEvaluator {
 
 fn ensure_per_brush_pipeline(
     gpu: &BrushGpuContext,
-    pipe: &WatercolorCompiledPipeline,
+    pipe: &WatercolorPipeline,
     compiled: &CompiledBrush,
 ) {
     if pipe.cache.borrow().contains_key(&compiled.topology_hash) {

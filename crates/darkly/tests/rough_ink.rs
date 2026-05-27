@@ -1,5 +1,5 @@
 //! Integration tests for the Rough Ink brush — the first 100%-
-//! compiled brush. Exercises the full `paint_compiled` pipeline
+//! compiled brush. Exercises the full `paint` pipeline
 //! end-to-end on a real GPU device:
 //!
 //! 1. **Single dab renders** — one dab through the compiled pipeline
@@ -55,11 +55,11 @@ struct Harness {
 
 /// Build a minimal compiled-brush graph for testing:
 ///
-///   pen_input.position → paint_compiled.position
-///   pen_input.pressure → curve → paint_compiled.size_input
+///   pen_input.position → paint.position
+///   pen_input.pressure → curve → paint.size_input
 ///   paint_color.color  → stamp.color
 ///   circle.texture     → stamp.tip       (per-dab shape feed)
-///   stamp.dab          → paint_compiled.rgba
+///   stamp.dab          → paint.rgba
 ///
 /// `algorithm` selects the circle's shape function. `amplitude`
 /// defaults to 0 (= disc) unless the caller overrides.
@@ -93,8 +93,8 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
         vec![ParamValue::Int(0)], // Alpha Mask
     );
     let terminal = graph.add_node(
-        "paint_compiled",
-        registry.get("paint_compiled").unwrap().ports.clone(),
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
         vec![],
     );
 
@@ -384,7 +384,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "paint_compiled")
+        .find(|(_, n)| n.type_id == "paint")
         .map(|(id, _)| *id)
         .unwrap();
     graph.set_port_default(term_id, "size", 0.15).unwrap();
@@ -485,7 +485,7 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
     let term_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "paint_compiled")
+        .find(|(_, n)| n.type_id == "paint")
         .map(|(id, _)| *id)
         .unwrap();
     graph.set_port_default(term_id, "size", 0.15).unwrap();
@@ -570,7 +570,7 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
 
 #[test]
 fn terminal_flow_scales_dab_alpha() {
-    // Regression test: `paint_compiled.flow` must fold into the
+    // Regression test: `paint.flow` must fold into the
     // returned rgba's alpha, matching the `paint` terminal's
     // `color[3] *= flow` step. Before the fix, the terminal declared
     // the `flow` port but never read it in `compile_wgsl`, so the
@@ -584,7 +584,7 @@ fn terminal_flow_scales_dab_alpha() {
         let term_id = graph
             .nodes
             .iter()
-            .find(|(_, n)| n.type_id == "paint_compiled")
+            .find(|(_, n)| n.type_id == "paint")
             .map(|(id, _)| *id)
             .unwrap();
         graph.set_port_default(term_id, "flow", flow).unwrap();

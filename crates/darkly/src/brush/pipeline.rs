@@ -127,8 +127,8 @@ pub struct BuildContext<'a> {
     /// fragment output by the selection mask.
     pub selection_bgl: &'a wgpu::BindGroupLayout,
     /// Texture + linear sampler — bound where shaders sample the per-dab
-    /// scratch read mirror snapshot (composite, smudge_compiled,
-    /// liquify_compiled, watercolor_compiled atlas). After the
+    /// scratch read mirror snapshot (composite, smudge,
+    /// liquify, watercolor atlas). After the
     /// `dab_pool` deletion this BGL is the single shape for every
     /// `texture_2d<f32> + sampler` binding in the brush stack — the
     /// scratch's write bind group also lives on it.
@@ -592,7 +592,7 @@ impl BrushPipelines {
     /// buffer (group 0). Exposed so per-brush compiled pipelines
     /// built lazily after `BrushPipelines::new` can bind their own
     /// uniform ring against the same layout. See
-    /// [`crate::brush::nodes::paint_compiled`].
+    /// [`crate::brush::nodes::paint`].
     pub fn uniform_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.uniform_bgl
     }
@@ -733,10 +733,10 @@ impl BrushPipelines {
     /// `uniform_bytes` must contain a fully packed `IntrinsicUniforms`
     /// header followed by any node-contributed uniforms in the order
     /// declared by `compiled.uniform_layout`; `dab_bytes` must contain
-    /// the intrinsic dab header (`pos`, `radius`, `bbox_radius`)
-    /// followed by node-contributed dab fields. The terminal's
-    /// `render_preview` packs both via the same helpers it uses for
-    /// stroke (`pack_uniforms`, `pack_dab_record`).
+    /// the intrinsic dab header (`pos`, `bbox_target_px`,
+    /// `inv_radius_target_px`) followed by node-contributed dab fields.
+    /// Both packers (`pack_intrinsic_dab_header`, `pack_dab_record`)
+    /// are shared with the stroke path.
     #[allow(clippy::too_many_arguments)]
     pub fn render_preview(
         &self,

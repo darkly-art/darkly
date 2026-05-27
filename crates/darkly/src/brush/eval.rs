@@ -284,7 +284,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// Inputs reflect the LAST dab's evaluated slot values — `commit`
     /// runs after `execute_gpu`, so the slot table still holds the most
     /// recent dab's results. Ports declared as "applied at commit"
-    /// (e.g. `paint_compiled.opacity`) read their wired value through
+    /// (e.g. `paint.opacity`) read their wired value through
     /// `ctx.input_*`. `begin_stroke` is different: it runs before any
     /// dab and sees port defaults only.
     fn commit(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
@@ -324,12 +324,12 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// anywhere in the project. This method goes away entirely once
     /// every upstream GPU node implements `compile_wgsl` (then the
     /// dispatch walk has nothing to skip).
-    fn is_compiled_terminal(&self) -> bool {
+    fn is_terminal(&self) -> bool {
         false
     }
 
     /// Emit this node's contribution to a compiled WGSL fragment
-    /// shader. Used only by brushes that terminate in `paint_compiled`
+    /// shader. Used only by brushes that terminate in `paint`
     /// (the compiled execution path); brushes on the per-dab dispatch
     /// path never call this. Returning `Err` makes the whole brush
     /// fail to load when its terminal asks for compilation — there is
@@ -359,7 +359,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// `decls` and are visible to both skeletons).
     ///
     /// Non-terminal nodes never have this called — only nodes for
-    /// which `is_compiled_terminal()` returns `true` invoke the hook.
+    /// which `is_terminal()` returns `true` invoke the hook.
     fn compile_preview_body(
         &self,
         cctx: &crate::brush::wgsl_compile::CompileWgslCtx,
@@ -370,10 +370,10 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// Per-node contribution to the brush's dab bounding-box extent.
     /// Composed by the framework at brush-compile time into a single
     /// `(factor, extra_px)` pair on [`crate::brush::wgsl_compile::CompiledBrush`];
-    /// the `paint_compiled` terminal uses it to size both the per-dab
-    /// rasterized quad (via `dab.bbox_radius`) and the CPU layer-clip
-    /// bbox, ensuring the save-point system tracks exactly what the
-    /// shader writes.
+    /// the `paint` terminal uses it to size both the per-dab
+    /// rasterized quad (via `dab.bbox_target_px`) and the CPU
+    /// layer-clip bbox, ensuring the save-point system tracks exactly
+    /// what the shader writes.
     ///
     /// Default `Identity` — only nodes that change the dab footprint
     /// (shape masks, displacement / warp) override. See
@@ -436,7 +436,7 @@ pub struct BrushGraphRunner {
     /// Index of the current dab, set by `seed_sensors()`.
     dab_index: u32,
     /// Compiled WGSL for this brush, populated by `compile_graph` when
-    /// the graph terminates in `paint_compiled`. `None` for per-dab
+    /// the graph terminates in `paint`. `None` for per-dab
     /// dispatch brushes. The runner copies this into the
     /// `BrushGpuContext` at `dispatch_gpu` time so the terminal can
     /// read its dab/uniform layouts.
@@ -510,28 +510,28 @@ impl BrushGraphRunner {
 
     /// Attach a pre-built [`CompiledBrush`] to this runner. Called by
     /// [`crate::brush::compile_graph`] when the graph terminates in
-    /// `paint_compiled`. Idempotent — overwrites any prior value.
+    /// `paint`. Idempotent — overwrites any prior value.
     pub fn set_compiled_brush(&mut self, compiled: Arc<CompiledBrush>) {
         self.compiled = Some(compiled);
     }
 
     /// Returns the compiled WGSL for this brush, if the graph
-    /// terminates in `paint_compiled`.
+    /// terminates in `paint`.
     pub fn compiled_brush(&self) -> Option<Arc<CompiledBrush>> {
         self.compiled.clone()
     }
 
     /// Returns `true` if the graph terminates in a compiled-WGSL
     /// terminal (any node whose evaluator overrides
-    /// [`BrushNodeEvaluator::is_compiled_terminal`] to return `true`).
+    /// [`BrushNodeEvaluator::is_terminal`] to return `true`).
     /// Type-owned dispatch: no central list of terminal type_ids.
     /// Used by [`crate::brush::compile_graph`] to decide whether to
     /// run the WGSL compile step.
-    pub fn has_compiled_terminal(&self) -> bool {
+    pub fn has_terminal(&self) -> bool {
         self.plan.steps.iter().any(|step| {
             self.evaluators
                 .get(&step.type_id)
-                .map(|ev| ev.is_compiled_terminal())
+                .map(|ev| ev.is_terminal())
                 .unwrap_or(false)
         })
     }
@@ -681,10 +681,9 @@ impl BrushGraphRunner {
             &mut BrushGpuContext,
         ) -> Vec<(String, ScalarValue)>,
     {
-        // Attach the brush's compiled WGSL (if any) and a snapshot of
-        // every output slot keyed by `n{id}_{port}`. The compiled
-        // terminal reads these to pack per-dab records and uniforms;
-        // brushes on the per-dab dispatch path leave both as `None`.
+        // Attach the brush's compiled WGSL and a snapshot of every
+        // output slot keyed by `n{id}_{port}`. The terminal reads
+        // these to pack per-dab records and uniforms.
         let is_compiled = self.compiled.is_some();
         if let Some(compiled) = &self.compiled {
             gpu.compiled_brush = Some(compiled.clone());
@@ -695,20 +694,15 @@ impl BrushGraphRunner {
             if !step.is_gpu {
                 continue;
             }
-            // CRITICAL perf: in compiled mode, every upstream GPU
-            // node's contribution is fused into the terminal's
-            // fragment shader. Skipping their per-dab `evaluate_gpu`
-            // (which would otherwise spend a per-dab render pass into
-            // the dab pool, ignored by the compiled terminal) is what
-            // makes the framework actually faster than the per-dab
-            // dispatch path. The terminal is identified by being the
-            // ONLY node whose `compile_wgsl` emits a body that ends
-            // in `return`; in practice it's whichever step ends the
-            // plan. Walk only the last GPU step.
+            // Every upstream GPU node's contribution is fused into
+            // the terminal's fragment shader, so only the terminal
+            // step needs its `evaluate_gpu` invoked per dab — that's
+            // where the per-dab record gets queued. Skipping the
+            // others is the load-bearing perf win.
             let Some(evaluator) = self.evaluators.get(&step.type_id) else {
                 continue;
             };
-            if is_compiled && !evaluator.is_compiled_terminal() {
+            if is_compiled && !evaluator.is_terminal() {
                 continue;
             }
 
@@ -772,7 +766,7 @@ impl BrushGraphRunner {
     /// finished compositing into the scratch.
     pub fn commit(&mut self, gpu: &mut BrushGpuContext) {
         // Gather inputs from the slot table so terminals that read
-        // ports at commit time (e.g. `paint_compiled.opacity` wired
+        // ports at commit time (e.g. `paint.opacity` wired
         // to `pen.pressure` for the Airbrush) see the actual wired
         // value, not the port default.
         self.dispatch_lifecycle(gpu, true, |ev, ctx, gpu| ev.commit(ctx, gpu));

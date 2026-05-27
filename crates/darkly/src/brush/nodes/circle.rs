@@ -2,8 +2,8 @@
 //!
 //! Compile-only: contributes a per-fragment scalar coverage expression
 //! (`f32` in `[0, 1]`) to the brush's compiled WGSL via [`compile_wgsl`].
-//! Downstream consumers (stamp's AlphaMask mode, watercolor_compiled's
-//! `mask`, smudge_compiled's `mask`, liquify_compiled's `mask`) inline
+//! Downstream consumers (stamp's AlphaMask mode, watercolor's
+//! `mask`, smudge's `mask`, liquify's `mask`) inline
 //! the expression directly into their fragment body — no dab texture,
 //! no separate render pass.
 //!
@@ -252,8 +252,9 @@ impl BrushNodeEvaluator for CircleEvaluator {
 
     /// Worst-case multiplier on the upstream dab extent. The shape's
     /// `r(θ)` is in units of the upstream radius (compiled-path
-    /// `local_dist` is `length(local_uv)` where `local_uv = local /
-    /// d.radius`), so the dab footprint stretches by the algorithm's
+    /// `local_dist` is `length(local_uv)` where
+    /// `local_uv = local * d.inv_radius_target_px`), so the dab
+    /// footprint stretches by the algorithm's
     /// `r_max`. Mirrors [`ShapeParams::r_max_unit`] but uses
     /// [`ExtentCtx::port_max_value`] so the bound covers every value
     /// any wire can deliver, not just the per-dab realisation.

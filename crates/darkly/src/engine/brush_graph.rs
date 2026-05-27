@@ -559,14 +559,11 @@ impl DarklyEngine {
 
     /// Per-node thumbnail of a single GPU node's `texture` output.
     ///
-    /// **Stubbed during the compiled-port migration.** The original
-    /// implementation built a per-node subgraph ending in a synthesised
-    /// `preview_terminal` and rendered it through the same pipeline as
-    /// the full-stroke preview. That machinery is being replaced by a
-    /// per-terminal preview interface in phase 5; until then this
-    /// method returns the empty Vec ("no fresh bytes yet — preserve
-    /// last shown") so the frontend node-card thumbnails fall back to
-    /// their placeholder state instead of crashing.
+    /// Unimplemented — returns the empty Vec ("no fresh bytes yet —
+    /// preserve last shown") so frontend node-card thumbnails fall
+    /// back to their placeholder state. Brush previews are rendered
+    /// per-terminal, not per-node; this entry point remains so the
+    /// frontend's node-card API surface stays stable.
     pub fn brush_node_preview(&mut self, _node_id: u64) -> Vec<u8> {
         Vec::new()
     }
@@ -779,13 +776,11 @@ impl DarklyEngine {
 
     /// Upload an RGBA8 image and associate it with a resource name.
     ///
-    /// **Stubbed during phase 4 of the compiled-port migration.** The
-    /// `image` node and its dab-pool plumbing were deleted together
-    /// with the dispatch path; brushes that try to use image tips fail
-    /// to compile cleanly. This entry point stays around so the
-    /// frontend's upload UI doesn't fault on a missing symbol — it
-    /// silently swallows the bytes. Phase 5 reintroduces image-stamp
-    /// support with a dedicated texture bank.
+    /// Image-stamp brushes are unsupported — `stamp` only accepts
+    /// AlphaMask application, which compiles inline without sampling
+    /// an RGBA tip texture. The entry point remains so the frontend's
+    /// upload UI doesn't fault on a missing symbol; it returns an
+    /// error rather than silently dropping the bytes.
     pub fn brush_upload_image(
         &mut self,
         _resource_name: &str,
@@ -793,8 +788,8 @@ impl DarklyEngine {
         _height: u32,
         _rgba: &[u8],
     ) -> Result<(), String> {
-        Err("image-stamp brushes are temporarily unsupported (phase 4 \
-             of the compiled-port migration — re-enabled in phase 5)"
+        Err("image-stamp brushes are unsupported — stamp accepts \
+             AlphaMask only"
             .to_string())
     }
 

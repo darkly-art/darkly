@@ -3,12 +3,9 @@
 //! background.
 //!
 //! Lives outside `nodes/` because it is module-generic: every brush
-//! terminal's `commit` hook (paint_compiled, watercolor_compiled,
-//! smudge, liquify) routes through [`BrushPaintTargetExt::commit_brush_dab`],
-//! which calls this pipeline. Owning the type in its previously-named
-//! `color_output` node was the "module-generic infrastructure named
-//! after the one consumer that happened to use it first" anti-pattern
-//! AGENTS.md warns about — fixed now by lifting it.
+//! terminal's `commit` hook (paint, watercolor, smudge, liquify)
+//! routes through [`BrushPaintTargetExt::commit_brush_dab`], which
+//! calls this pipeline.
 //!
 //! Owns two render pipelines — one targeting `Rgba8Unorm` (raster
 //! layer destinations) and one targeting `R8Unorm` (mask

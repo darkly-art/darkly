@@ -1,6 +1,6 @@
-//! Stamp dab GPU node — compile-only.
+//! Stamp dab node.
 //!
-//! Inlines `color × mask × flow` into the brush's compiled WGSL via
+//! Inlines `color × mask × flow` into the brush's WGSL via
 //! [`compile_wgsl`]. The upstream `tip` input is a scalar coverage
 //! expression (typically from `circle.texture`'s compile output); the
 //! emitted `dab` output is premultiplied RGBA that downstream paint
@@ -8,21 +8,17 @@
 //!
 //! ## AlphaMask only
 //!
-//! The compiled path supports AlphaMask mode exclusively. The original
-//! ImageStamp / LightnessMap / GradientMap modes relied on sampling a
-//! real RGBA tip texture and were dropped together with the dispatch
-//! pipeline in phase 4 of the compiled-port migration. Setting
-//! `application` to any non-zero value makes brush load fail with a
-//! clear error.
+//! Only AlphaMask `application` is supported — it inlines as a scalar
+//! multiply. ImageStamp / LightnessMap / GradientMap need texture
+//! sampling that the inline-WGSL surface does not offer; any non-zero
+//! `application` value fails brush load with a clear error.
 //!
 //! ## Ignored ports
 //!
 //! `size_input`, `size`, `rotation`, `rotation_input`, `mirror_*`, and
-//! `ratio` are no-ops in compiled mode — dab dimensions, rotation and
-//! mirroring are owned by the terminal (which sizes its quad from
-//! `bbox_radius`). Wiring them has no effect on the rendered dab. A
-//! future revision can reintroduce rotation/mirror by rotating
-//! `local_uv` before the shape evaluator runs.
+//! `ratio` are no-ops — dab dimensions, rotation and mirroring are
+//! owned by the terminal (which sizes its quad from `bbox_target_px`).
+//! Wiring them has no effect on the rendered dab.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
@@ -101,7 +97,7 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in pixels (unused in compiled mode)"),
                 PortDef::output("preview", BrushWireType::Texture)
-                    .with_description("Brush preview (stubbed during phase 4 migration)"),
+                    .with_description("Brush preview (unused)"),
             ],
             params: &[
                 // Enum stored as Int. Only `Alpha Mask` (= 0) is
@@ -127,12 +123,11 @@ impl BrushNodeEvaluator for StampEvaluator {
         vec![]
     }
 
-    /// Inline `color × mask × flow` into the brush's compiled WGSL.
-    /// `tip` carries the upstream scalar coverage expression; the
-    /// emitted `dab` output is premultiplied RGBA. Errors on any
-    /// application mode other than AlphaMask — those relied on
-    /// sampling a real RGBA tip texture and were dropped together
-    /// with the dispatch pipeline.
+    /// Inline `color × mask × flow` into the brush's WGSL. `tip`
+    /// carries the upstream scalar coverage expression; the emitted
+    /// `dab` output is premultiplied RGBA. Errors on any `application`
+    /// mode other than AlphaMask — those would need texture sampling
+    /// which the inline-WGSL surface does not support.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         if !cctx.consumed_outputs.contains("dab") {
@@ -145,9 +140,9 @@ impl BrushNodeEvaluator for StampEvaluator {
         if application != 0 {
             return Err(format!(
                 "stamp.application = {application} (expected AlphaMask = 0); \
-                 ImageStamp / LightnessMap / GradientMap were dropped in the \
-                 compiled-port migration. Use a procedural tip (circle node) \
-                 instead.",
+                 ImageStamp / LightnessMap / GradientMap require a sampled \
+                 RGBA tip texture and are not supported. Use a procedural \
+                 tip (circle node) instead.",
             ));
         }
         let mask = cctx.input("tip").as_f32();

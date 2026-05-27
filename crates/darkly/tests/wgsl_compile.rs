@@ -12,7 +12,7 @@
 //!    pipelines.
 //! 3. **The Rough Ink builtin compiles end-to-end** — the framework
 //!    handles a real graph with random + curve + circle + stamp +
-//!    paint_compiled and produces non-empty WGSL.
+//!    paint and produces non-empty WGSL.
 
 use std::collections::HashMap;
 
@@ -43,11 +43,9 @@ fn empty_graph_errors_cleanly() {
 #[test]
 fn non_compilable_node_errors_with_type_id() {
     // A `stamp` node with `application != AlphaMask` returns Err from
-    // `compile_wgsl` — the only remaining built-in error path after
-    // phase 4 dropped the `image` node and the dispatch-path stamp
-    // modes that relied on sampling a real tip texture. The compiler
-    // must surface a `NodeNotCompilable` carrying the offending
-    // type_id rather than panicking.
+    // `compile_wgsl` — the only built-in node that can fail to
+    // compile. The compiler must surface a `NodeNotCompilable`
+    // carrying the offending type_id rather than panicking.
     let reg = registry();
     let mut graph = Graph::<BrushWireType>::new();
     let pen = graph.add_node(
@@ -66,11 +64,7 @@ fn non_compilable_node_errors_with_type_id() {
         // application = 1 → ImageStamp mode → compile_wgsl errors
         vec![darkly::gpu::params::ParamValue::Int(1)],
     );
-    let term = graph.add_node(
-        "paint_compiled",
-        reg.get("paint_compiled").unwrap().ports.clone(),
-        vec![],
-    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
     for (fnode, fport, tnode, tport) in [
         (pen, "position", term, "position"),
         (circle, "texture", stamp, "tip"),
@@ -152,7 +146,7 @@ fn topology_hash_is_stable_for_identical_graphs() {
 #[test]
 fn extent_protocol_composes_along_chain() {
     // Build the same skeleton the test harness builds for Perlin:
-    // pen + circle(perlin) + stamp + paint_compiled with a wire on
+    // pen + circle(perlin) + stamp + paint with a wire on
     // `amplitude` so it counts as wired. circle's extent must report
     // `1 + amplitude.natural_range.max = 1.5`, and the framework's
     // compose pass must surface it on the CompiledBrush.
@@ -183,11 +177,7 @@ fn extent_protocol_composes_along_chain() {
         reg.get("stamp").unwrap().ports.clone(),
         vec![darkly::gpu::params::ParamValue::Int(0)],
     );
-    let term = graph.add_node(
-        "paint_compiled",
-        reg.get("paint_compiled").unwrap().ports.clone(),
-        vec![],
-    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
     let wires = [
         (rand_amp, "value", circle, "amplitude"),
         (circle, "texture", stamp, "tip"),
@@ -227,7 +217,7 @@ fn extent_protocol_composes_along_chain() {
 
 #[test]
 fn extent_default_identity_when_no_shape() {
-    // pen → paint_compiled with no upstream shape node — every node
+    // pen → paint with no upstream shape node — every node
     // returns the trait-default `Identity`, so the brush extent
     // collapses to (factor=1.0, extra_px=0.0). bbox_radius then
     // equals the dab's effective_radius, matching the existing
@@ -239,11 +229,7 @@ fn extent_default_identity_when_no_shape() {
         reg.get("pen_input").unwrap().ports.clone(),
         vec![],
     );
-    let term = graph.add_node(
-        "paint_compiled",
-        reg.get("paint_compiled").unwrap().ports.clone(),
-        vec![],
-    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
     graph
         .connect(
             PortRef {
@@ -271,8 +257,8 @@ fn extent_default_identity_when_no_shape() {
 }
 
 #[test]
-fn paint_compiled_only_graph_falls_through_to_disc() {
-    // pen_input → paint_compiled with no upstream graph: terminal's
+fn paint_only_graph_falls_through_to_disc() {
+    // pen_input → paint with no upstream graph: terminal's
     // `rgba` input is unwired, so the fallback "opaque white modulated
     // by local_dist" path runs. Smoke test that this compiles too.
     let reg = registry();
@@ -282,11 +268,7 @@ fn paint_compiled_only_graph_falls_through_to_disc() {
         reg.get("pen_input").unwrap().ports.clone(),
         vec![],
     );
-    let term = graph.add_node(
-        "paint_compiled",
-        reg.get("paint_compiled").unwrap().ports.clone(),
-        vec![],
-    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
     graph
         .connect(
             PortRef {
@@ -301,7 +283,7 @@ fn paint_compiled_only_graph_falls_through_to_disc() {
         .unwrap();
     let plan = compile(&graph, reg.as_map()).unwrap();
     let compiled = compile_brush_to_wgsl(&graph, &plan, &evals())
-        .expect("paint_compiled with no rgba wire still compiles");
+        .expect("paint with no rgba wire still compiles");
     assert!(compiled.stroke_wgsl.contains("local_dist"));
     assert!(compiled
         .stroke_wgsl

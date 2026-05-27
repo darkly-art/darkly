@@ -7,19 +7,15 @@
 //!
 //! ## Two execution models, chosen per brush at the terminal
 //!
-//! A brush graph is executed under exactly one of:
-//!
-//! - **Per-dab dispatch** (`paint`, `color_output`, `watercolor`,
-//!   `watercolor_batched`, `liquify`, …): each node runs through
-//!   `evaluate_cpu` / `evaluate_gpu` per dab. Unchanged from before.
-//! - **Compiled** (`paint_compiled` — new): the entire upstream graph
-//!   compiles to one fragment shader. No upstream per-dab GPU dispatch.
+//! A brush graph compiles its entire upstream chain into one fragment
+//! shader per terminal — `circle`, `stamp`, `paint_color`, etc. fuse
+//! inline, evaluated per-fragment-per-dab. No upstream per-dab GPU
+//! dispatch happens.
 //!
 //! There is **no runtime fallback** and **no partial compilation**: a
-//! brush terminating in `paint_compiled` must have every upstream node
-//! implement [`BrushNodeEvaluator::compile_wgsl`] successfully, or
-//! brush load fails. Brushes whose graphs need a non-ported node use
-//! `paint` (or another existing terminal) instead.
+//! brush must have every upstream node implement
+//! [`BrushNodeEvaluator::compile_wgsl`] successfully, or brush load
+//! fails.
 //!
 //! ## The compiler walk
 //!
@@ -163,8 +159,10 @@ pub struct NodeWgsl {
     /// `local_uv: vec2<f32>` (fragment offset from dab centre, normalized
     /// so the unmodulated disc edge is at `length = 1`), `local_dist: f32`
     /// (= `length(local_uv)`), `theta: f32` (= `atan2(local_uv.y, local_uv.x)`),
-    /// `canvas_pos: vec2<f32>` (fragment's canvas-pixel position), and
-    /// any function declared in `decls` or by upstream nodes.
+    /// `target_pos: vec2<f32>` (fragment's position in the target
+    /// texture's pixel space — canvas px for stroke, mask texels for
+    /// preview), and any function declared in `decls` or by upstream
+    /// nodes.
     pub body: String,
     /// Output port name → a WGSL expression downstream nodes substitute
     /// for that port's value. Typically a `let`-binding name introduced
@@ -182,7 +180,7 @@ pub struct NodeWgsl {
     /// should set this — the per-brush pipeline build must match the
     /// declared layout. Empty for every non-terminal node.
     ///
-    /// Use case: terminals like `watercolor_compiled` need bindings
+    /// Use case: terminals like `watercolor` need bindings
     /// the standard fragment-stage prelude doesn't provide (pickup
     /// atlas, pre-stroke canvas). Declaring them here keeps the
     /// extension scoped to the one node that uses it instead of
@@ -252,9 +250,9 @@ impl InputBinding {
 /// The framework walks the graph at brush-compile time and asks every
 /// node for its `extent` contribution. Contributions are composed
 /// along the graph into a single `(factor, extra_px)` pair stored on
-/// [`CompiledBrush`]; the `paint_compiled` terminal multiplies the
+/// [`CompiledBrush`]; the `paint` terminal multiplies the
 /// per-dab effective radius by `factor` and adds `extra_px` to produce
-/// the dab's `bbox_radius`. That value is packed into the per-dab
+/// the dab's `bbox_target_px`. That value is packed into the per-dab
 /// record and read by the WGSL fragment shader to size the rasterized
 /// quad and to clip the dab's write footprint to the layer bbox.
 ///
@@ -281,7 +279,7 @@ pub enum ExtentContribution {
     /// `passthrough` multiplies the upstream extent; `added_px` is the
     /// post-multiply additive padding in canvas pixels.
     AddCanvasPixels { passthrough: f32, added_px: f32 },
-    /// Hard cap below upstream — `bbox_radius` is min'd with
+    /// Hard cap below upstream — `bbox_target_px` is min'd with
     /// `factor * radius`. For clip-to-circle style masks.
     ClipTo(f32),
 }
@@ -411,7 +409,7 @@ pub enum ShaderMode {
 
 /// Stroke-constant intrinsic uniforms every compiled brush carries.
 /// Mirrors the WGSL `IntrinsicUniforms` defined in
-/// `_compiled_prelude.wgsl` — every terminal packs this struct at the
+/// `_prelude.wgsl` — every terminal packs this struct at the
 /// front of the uniform buffer (followed by node-contributed
 /// uniforms). Lives here (not on each terminal) so a layout change in
 /// one place can't drift from the rest.
@@ -463,7 +461,7 @@ pub struct CompiledBrush {
     pub topology_hash: u64,
     /// Multiplier on per-dab `effective_radius` produced by composing
     /// every node's [`ExtentContribution::extent`] over the graph. The
-    /// terminal computes `bbox_radius = effective_radius * factor +
+    /// terminal computes `bbox_target_px = effective_radius * factor +
     /// extra_px` and packs that into the dab record's intrinsic
     /// header. `1.0` for graphs with no shape-modulating upstream
     /// (the disc fallback). See [`ExtentContribution`] for the
@@ -515,23 +513,36 @@ impl std::error::Error for CompileError {}
 
 // ── Intrinsic dab record header ─────────────────────────────────────────
 
-/// Fields the terminal always reads from the per-dab record, regardless
-/// of upstream nodes: pen-tip position (canvas pixels), effective
-/// radius (canvas pixels), and `bbox_radius` — the inflated radius
-/// the WGSL fragment shader uses both for the rasterized quad's half-
-/// extent and for the per-fragment discard test. The terminal packs
-/// these itself in its `evaluate_gpu`; every compiled brush has them.
+/// Fields every per-dab record carries, regardless of upstream nodes:
+/// dab centre (`pos`), bbox half-extent (`bbox_target_px`), and the
+/// reciprocal of the dab's nominal radius (`inv_radius_target_px`).
 ///
-/// `bbox_radius` is computed from [`CompiledBrush::brush_extent_factor`]
-/// and `brush_extent_extra_px` at dab time and is the single source of
-/// truth for the dab's write footprint. The CPU layer-clip bbox and
-/// the GPU shader read the same value, so they cannot diverge — the
-/// rewind/save-point bug fixed by the extent protocol is impossible
-/// to reintroduce as long as the shader keeps reading `d.bbox_radius`.
+/// **Invariant: the dab record describes the dab in the *target
+/// texture's pixel space*.** Whichever texture the brush is rasterizing
+/// into, `pos` is a coordinate in that texture's pixel grid,
+/// `bbox_target_px` is a half-extent in those same pixels, and
+/// `inv_radius_target_px` is `1.0 / radius_in_target_pixels`. Stroke
+/// renders into the layer scratch where target px ≡ canvas px;
+/// preview renders into the preview mask where target px ≢ canvas px.
+/// Both paths pack a well-typed record for their target via
+/// [`pack_intrinsic_dab_header`], and the WGSL is target-agnostic.
+///
+/// Why this matters: an earlier shape of this header carried `radius`
+/// and `bbox_radius` in canvas pixels in both modes, which silently
+/// broke the preview path's discard test when target ≠ canvas (the dab
+/// filled the texture to a square edge on large brushes). Renaming
+/// these fields to declare their frame makes the bug structurally
+/// inexpressible.
+///
+/// `bbox_target_px` is the single source of truth for the dab's write
+/// footprint — the vertex stage sizes the rasterized quad against it,
+/// the fragment stage discards past it, and (in stroke mode) the CPU
+/// layer-clip bbox is derived from the same value so save-points
+/// cannot truncate the GPU writes.
 pub fn intrinsic_dab_header() -> Vec<DabField> {
     // Order matters for std430 alignment: vec2 (8) → f32 (4) → f32 (4)
-    // for total 16 bytes. The terminal packs `pos`, `radius`,
-    // `bbox_radius`.
+    // for total 16 bytes. The terminal packs all three via
+    // `pack_intrinsic_dab_header`.
     vec![
         DabField {
             name: "pos".into(),
@@ -543,17 +554,17 @@ pub fn intrinsic_dab_header() -> Vec<DabField> {
             }),
         },
         DabField {
-            name: "radius".into(),
+            name: "bbox_target_px".into(),
             ty: WgslType::F32,
             pack: Arc::new(|_outputs, _bytes| {
-                unreachable!("intrinsic radius packer should not be invoked");
+                unreachable!("intrinsic bbox_target_px packer should not be invoked");
             }),
         },
         DabField {
-            name: "bbox_radius".into(),
+            name: "inv_radius_target_px".into(),
             ty: WgslType::F32,
             pack: Arc::new(|_outputs, _bytes| {
-                unreachable!("intrinsic bbox_radius packer should not be invoked");
+                unreachable!("intrinsic inv_radius_target_px packer should not be invoked");
             }),
         },
     ]
@@ -563,6 +574,51 @@ pub fn intrinsic_dab_header() -> Vec<DabField> {
 /// before per-node fields begin. Used by the terminal's packer to skip
 /// over the header.
 pub const INTRINSIC_DAB_HEADER_FIELDS: usize = 3;
+
+/// Pack the intrinsic dab header. Single source of truth — every
+/// terminal's `evaluate_gpu` (stroke path) and
+/// [`render_compiled_preview`] (preview path) call this. The fields
+/// are interpreted in the *target texture's pixel space* (see the
+/// docblock on [`intrinsic_dab_header`]). Internally inverts radius
+/// once so the fragment hot path is a multiply, not a divide.
+///
+/// Stroke-only consumers — notably watercolor's pickup shader in
+/// `watercolor.rs` — treat `1 / inv_radius_target_px` as
+/// canvas-px radius. That's valid only because stroke's target ≡
+/// canvas. Any new sampler that derives canvas-px sizes from the dab
+/// record must restrict itself to stroke-mode dispatch.
+pub fn pack_intrinsic_dab_header(
+    bytes: &mut Vec<u8>,
+    pos: [f32; 2],
+    bbox_target_px: f32,
+    radius_target_px: f32,
+) {
+    debug_assert!(radius_target_px > 0.0, "radius_target_px must be > 0");
+    let inv_radius = 1.0 / radius_target_px.max(EPS_RADIUS_TARGET_PX);
+    bytes.extend_from_slice(bytemuck::bytes_of(&pos));
+    bytes.extend_from_slice(bytemuck::bytes_of(&bbox_target_px));
+    bytes.extend_from_slice(bytemuck::bytes_of(&inv_radius));
+}
+
+/// Pack the intrinsic uniforms (layer offset/size, canvas size, preview
+/// centre, preview size) at the front of the uniform buffer. Followed
+/// by node-contributed uniforms via [`pack_uniforms`]. Single source of
+/// truth; collapsed from four duplicated terminal-impl methods.
+pub fn pack_intrinsic_uniforms(bytes: &mut Vec<u8>, intrinsic: IntrinsicUniforms) {
+    bytes.extend_from_slice(bytemuck::bytes_of(&intrinsic));
+}
+
+// Numerical-stability floor for the target-px radius division. Not a
+// physical limit — the post-scale preview radius can legitimately drop
+// below 1 target px on extreme brush sizes (a sub-pixel-radius preview
+// is useless anyway). The clamp prevents 1/0 / huge inv values from
+// poisoning the fragment.
+const EPS_RADIUS_TARGET_PX: f32 = 0.125;
+
+/// Below this canvas-px bbox, the dab has effectively no extent and
+/// `render_compiled_preview` early-returns rather than try to compute
+/// a canvas-to-target scale.
+const EPS_BBOX_CANVAS_PX: f32 = 1e-3;
 
 // ── The compiler ────────────────────────────────────────────────────────
 
@@ -597,7 +653,7 @@ pub fn compile_brush_to_wgsl(
     // Captured from the last (terminal) step. Spliced into the
     // stroke-mode assembled shader after the framework's three
     // intrinsic bind groups so the terminal can add its own bindings
-    // (e.g. `watercolor_compiled`'s pickup atlas). Preview mode omits
+    // (e.g. `watercolor`'s pickup atlas). Preview mode omits
     // these — the preview body doesn't sample scratch / atlas.
     let mut terminal_bindings = String::new();
 
@@ -693,7 +749,7 @@ pub fn compile_brush_to_wgsl(
                 decls.push('\n');
             }
         }
-        let is_terminal = evaluator.is_compiled_terminal();
+        let is_terminal = evaluator.is_terminal();
         if !result.body.is_empty() {
             // Terminal bodies stay in their per-mode buckets; non-terminal
             // bodies are spliced into both modes.
@@ -710,7 +766,7 @@ pub fn compile_brush_to_wgsl(
         if is_terminal {
             // Preview body — call the terminal's preview-mode hook. The
             // default delegate returns the same NodeWgsl as `compile_wgsl`
-            // (paint_compiled's stroke and preview bodies share one
+            // (paint's stroke and preview bodies share one
             // source); watercolor/smudge/liquify override to emit a
             // neutral-color body that doesn't reference `@group(3)`.
             //
@@ -918,8 +974,8 @@ pub fn pack_dab_record(
 ///    target.
 /// 3. Packs node-contributed uniforms via [`pack_uniforms`].
 /// 4. Packs one dab record at the preview centre — intrinsic header
-///    (`pos`, `radius`, `bbox_radius`) plus node-contributed dab
-///    fields via [`pack_dab_record`].
+///    (`pos`, `bbox_target_px`, `inv_radius_target_px`) plus node-
+///    contributed dab fields via [`pack_dab_record`].
 /// 5. Calls [`crate::brush::pipeline::BrushPipelines::render_preview`]
 ///    against the shared preview pipeline cache.
 /// 6. Publishes [`crate::brush::eval::BrushPreviewInfo`] for the
@@ -930,11 +986,27 @@ pub fn render_compiled_preview(
     rotation_rad: f32,
 ) -> Option<()> {
     let compiled = gpu.compiled_brush.clone()?;
-    let bbox_radius = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
-    let (target_view, target_w, target_h) = gpu.ensure_preview_mask(bbox_radius)?;
-    if target_w == 0 || target_h == 0 {
+    // Brush-intrinsic bbox in canvas pixels — this is the dab's
+    // footprint as it will be deposited on the canvas, and what the
+    // overlay quad consumes via `half_extent_canvas_px` below.
+    let bbox_canvas_px = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
+    let (target_view, target_w, target_h) = gpu.ensure_preview_mask(bbox_canvas_px)?;
+    if target_w == 0 || target_h == 0 || bbox_canvas_px < EPS_BBOX_CANVAS_PX {
         return None;
     }
+
+    // Map canvas-px intrinsic frame → texel frame. The dab's bbox
+    // unconditionally fills the inscribed half-side of the preview
+    // mask; the radius scales by the same ratio so the fragment's
+    // `local_uv = local * inv_radius_target_px` is dimensionless and
+    // matches the value the stroke pass would produce at the same
+    // intrinsic point. The overlay's displayed quad still spans
+    // `±bbox_canvas_px`, so UV [0, 1] across that quad maps to UV [0, 1]
+    // across the dab content in the mask.
+    let texture_half = (target_w.min(target_h) as f32) * 0.5;
+    let canvas_to_target = texture_half / bbox_canvas_px;
+    let bbox_target_px = texture_half;
+    let radius_target_px = (radius * canvas_to_target).max(EPS_RADIUS_TARGET_PX);
     let preview_centre = [target_w as f32 * 0.5, target_h as f32 * 0.5];
 
     // Pack the uniform buffer: intrinsic header first, node-contributed
@@ -949,7 +1021,7 @@ pub fn render_compiled_preview(
     };
     let total_uniform_size = INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size;
     let mut uniform_bytes: Vec<u8> = Vec::with_capacity(total_uniform_size);
-    uniform_bytes.extend_from_slice(bytemuck::bytes_of(&intrinsic));
+    pack_intrinsic_uniforms(&mut uniform_bytes, intrinsic);
     let empty_outputs;
     let outputs = match gpu.slot_outputs_owned.as_ref() {
         Some(o) => o,
@@ -964,14 +1036,16 @@ pub fn render_compiled_preview(
     }
 
     // Pack the single preview dab record: intrinsic header + node
-    // fields. `pos = preview_centre` so the vertex stage's quad lands
-    // dead-centre inside the preview mask and the fragment stage's
-    // `local = canvas_pos - d.pos` matches the same `local_uv` /
-    // `theta` the stroke shader would see at the dab's true centre.
+    // fields. The header is in *target-pixel* space (preview mask
+    // texels), so the vertex/fragment math is unit-coherent against
+    // the preview target without needing any mode awareness.
     let mut dab_bytes: Vec<u8> = Vec::with_capacity(compiled.dab_record_size);
-    dab_bytes.extend_from_slice(bytemuck::bytes_of(&preview_centre));
-    dab_bytes.extend_from_slice(bytemuck::bytes_of(&radius));
-    dab_bytes.extend_from_slice(bytemuck::bytes_of(&bbox_radius));
+    pack_intrinsic_dab_header(
+        &mut dab_bytes,
+        preview_centre,
+        bbox_target_px,
+        radius_target_px,
+    );
     pack_dab_record(&compiled, outputs, &mut dab_bytes);
     if dab_bytes.len() < compiled.dab_record_size {
         dab_bytes.resize(compiled.dab_record_size, 0);
@@ -988,8 +1062,12 @@ pub fn render_compiled_preview(
         &dab_bytes,
     );
 
+    // The overlay consumer expects canvas px — its displayed quad
+    // spans `±half_extent_canvas_px`, and the mask sampler maps
+    // UV [0, 1] across the quad. With the dab filling the mask's
+    // inscribed disc by construction (above), this matches.
     gpu.brush_preview_info = Some(crate::brush::eval::BrushPreviewInfo {
-        half_extent_canvas_px: [bbox_radius, bbox_radius],
+        half_extent_canvas_px: [bbox_canvas_px, bbox_canvas_px],
         rotation_rad,
     });
     Some(())
@@ -1145,9 +1223,7 @@ fn assemble_shader(
     let mut out = String::new();
     out.push_str(include_str!("../../../../shaders/brush/_shape.wgsl"));
     out.push('\n');
-    out.push_str(include_str!(
-        "../../../../shaders/brush/_compiled_prelude.wgsl"
-    ));
+    out.push_str(include_str!("../../../../shaders/brush/_prelude.wgsl"));
     out.push('\n');
 
     // Generated DabRecord struct.
@@ -1158,7 +1234,7 @@ fn assemble_shader(
     out.push_str("};\n\n");
 
     // Generated Uniforms struct (always has the intrinsic terminal
-    // uniforms, defined in _compiled_prelude.wgsl as
+    // uniforms, defined in _prelude.wgsl as
     // `IntrinsicUniforms`).
     if uniform_fields.is_empty() {
         out.push_str("struct Uniforms {\n");
@@ -1197,8 +1273,8 @@ fn assemble_shader(
     out.push('\n');
 
     // Vertex stage — paint.wgsl-style instanced quad in stroke mode,
-    // single quad at `u.intrinsic.preview_centre ± d.bbox_radius`
-    // mapped into the preview-mask viewport in preview mode.
+    // single quad at `dab.pos ± dab.bbox_target_px` mapped into the
+    // preview-mask viewport in preview mode.
     match mode {
         ShaderMode::Stroke => out.push_str(STROKE_VERTEX_STAGE_WGSL),
         ShaderMode::Preview => out.push_str(PREVIEW_VERTEX_STAGE_WGSL),
@@ -1214,13 +1290,17 @@ fn assemble_shader(
     out.push_str("@fragment\n");
     out.push_str("fn fs_main(in: VsOut) -> @location(0) vec4<f32> {\n");
     out.push_str("    let d = dabs[in.dab_idx];\n");
-    out.push_str("    let canvas_pos = in.canvas_pos;\n");
-    out.push_str("    let local = canvas_pos - d.pos;\n");
+    // `target_pos` is in the target texture's pixel space — canvas px
+    // for stroke (target ≡ canvas), preview-mask texels for preview.
+    // `d.pos` / `d.bbox_target_px` / `d.inv_radius_target_px` live in
+    // the same frame, so `local` is unit-coherent regardless of mode.
+    out.push_str("    let target_pos = in.target_pos;\n");
+    out.push_str("    let local = target_pos - d.pos;\n");
     out.push_str("    let local_dist_px = length(local);\n");
-    out.push_str("    if (local_dist_px >= d.bbox_radius) {\n");
+    out.push_str("    if (local_dist_px >= d.bbox_target_px) {\n");
     out.push_str("        discard;\n");
     out.push_str("    }\n");
-    out.push_str("    let local_uv = local / d.radius;\n");
+    out.push_str("    let local_uv = local * d.inv_radius_target_px;\n");
     out.push_str("    let local_dist = length(local_uv);\n");
     out.push_str("    let theta = atan2(local_uv.y, local_uv.x);\n");
     out.push_str("    let canvas_size = vec2<f32>(\n");
@@ -1228,8 +1308,10 @@ fn assemble_shader(
     out.push_str("        f32(u.intrinsic.canvas_size.y),\n");
     out.push_str("    );\n");
     match mode {
+        // Stroke: target ≡ canvas, so `target_pos / canvas_size` is the
+        // canvas-space normalized UV the selection texture expects.
         ShaderMode::Stroke => out.push_str(
-            "    let sel = textureSampleLevel(sel_tex, sel_smp, canvas_pos / canvas_size, 0.0).r;\n",
+            "    let sel = textureSampleLevel(sel_tex, sel_smp, target_pos / canvas_size, 0.0).r;\n",
         ),
         ShaderMode::Preview => out.push_str("    let sel: f32 = 1.0;\n"),
     }
@@ -1247,7 +1329,7 @@ fn assemble_shader(
 const STROKE_VERTEX_STAGE_WGSL: &str = r#"
 struct VsOut {
     @builtin(position) clip:        vec4<f32>,
-    @location(0) canvas_pos:        vec2<f32>,
+    @location(0) target_pos:        vec2<f32>,
     @location(1) @interpolate(flat) dab_idx: u32,
 };
 
@@ -1270,18 +1352,18 @@ fn vs_main(
 ) -> VsOut {
     let dab = dabs[ii];
     let corner = quad_corner(vi);
-    // `dab.bbox_radius` is the per-brush extent computed at compile
-    // time by composing every node's `ExtentContribution`. The
-    // fragment stage discards past the same bound, so the quad covers
-    // exactly what the shader can write — no waste, no clipping. The
-    // CPU side packs the same value into the dab record and uses it
-    // for the layer-clip bbox, so the save-point system tracks the
-    // same footprint the shader writes.
-    let quad_half = dab.bbox_radius;
-    let canvas_pos = dab.pos + (corner * 2.0 - vec2<f32>(1.0, 1.0)) * quad_half;
+    // `dab.bbox_target_px` is the dab's bbox half-extent in the target's
+    // pixel space (stroke target ≡ canvas px). The fragment stage
+    // discards past the same bound, so the quad covers exactly what
+    // the shader can write — no waste, no clipping. The CPU side packs
+    // the same value into the dab record and uses it for the
+    // layer-clip bbox, so the save-point system tracks the same
+    // footprint the shader writes.
+    let quad_half = dab.bbox_target_px;
+    let target_pos = dab.pos + (corner * 2.0 - vec2<f32>(1.0, 1.0)) * quad_half;
     let layer_offset = u.intrinsic.layer_offset;
     let layer_size = u.intrinsic.layer_size;
-    let local = canvas_pos - vec2<f32>(f32(layer_offset.x), f32(layer_offset.y));
+    let local = target_pos - vec2<f32>(f32(layer_offset.x), f32(layer_offset.y));
     let layer_w = f32(layer_size.x);
     let layer_h = f32(layer_size.y);
     let clip = vec2<f32>(
@@ -1290,7 +1372,7 @@ fn vs_main(
     );
     var out: VsOut;
     out.clip       = vec4<f32>(clip, 0.0, 1.0);
-    out.canvas_pos = canvas_pos;
+    out.target_pos = target_pos;
     out.dab_idx    = ii;
     return out;
 }
@@ -1306,7 +1388,7 @@ fn vs_main(
 const PREVIEW_VERTEX_STAGE_WGSL: &str = r#"
 struct VsOut {
     @builtin(position) clip:        vec4<f32>,
-    @location(0) canvas_pos:        vec2<f32>,
+    @location(0) target_pos:        vec2<f32>,
     @location(1) @interpolate(flat) dab_idx: u32,
 };
 
@@ -1326,19 +1408,25 @@ fn quad_corner(vi: u32) -> vec2<f32> {
 fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     let dab = dabs[0];
     let corner = quad_corner(vi);
-    let canvas_pos = u.intrinsic.preview_centre +
-        (corner * 2.0 - vec2<f32>(1.0, 1.0)) * dab.bbox_radius;
+    // Read `dab.pos` instead of `u.intrinsic.preview_centre` so the
+    // dab record is the single source of truth for positioning. The
+    // CPU side packs `pos = preview_centre`, making the two equivalent
+    // by construction, but threading through `dab.pos` keeps the
+    // vertex structurally identical to stroke's modulo the clip-space
+    // mapping — the invariant is the same: target-space pos, bbox in
+    // target px.
+    let target_pos = dab.pos + (corner * 2.0 - vec2<f32>(1.0, 1.0)) * dab.bbox_target_px;
     let preview_size_f = vec2<f32>(
         f32(u.intrinsic.preview_size.x),
         f32(u.intrinsic.preview_size.y),
     );
     let clip = vec2<f32>(
-        canvas_pos.x / preview_size_f.x * 2.0 - 1.0,
-        1.0 - canvas_pos.y / preview_size_f.y * 2.0,
+        target_pos.x / preview_size_f.x * 2.0 - 1.0,
+        1.0 - target_pos.y / preview_size_f.y * 2.0,
     );
     var out: VsOut;
     out.clip       = vec4<f32>(clip, 0.0, 1.0);
-    out.canvas_pos = canvas_pos;
+    out.target_pos = target_pos;
     out.dab_idx    = 0u;
     return out;
 }

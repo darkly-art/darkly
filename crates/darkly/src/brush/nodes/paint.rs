@@ -1,11 +1,10 @@
-//! Paint Compiled terminal — single-pass instanced fragment with a
-//! per-brush compiled WGSL shader.
+//! Paint terminal — single-pass instanced fragment with a per-brush
+//! compiled WGSL shader.
 //!
 //! ## What this terminal does
 //!
-//! Same structural shape as [`paint`](super::paint): per-dab records
-//! queue up via [`BrushGpuContext::pending_dab_bytes`], one instanced
-//! render pass drains them at phase end. The differences:
+//! Per-dab records queue up via [`BrushGpuContext::pending_dab_bytes`];
+//! one instanced render pass drains them at phase end.
 //!
 //! - **The fragment shader is generated per-brush at brush load** by
 //!   walking the upstream graph and asking each node to emit WGSL.
@@ -15,14 +14,14 @@
 //! - **The uniform buffer carries stroke-constant values** from any
 //!   upstream nodes that declared `uniform_fields` (e.g. `paint_color`).
 //!
-//! No upstream GPU dispatch happens — `circle`, `stamp`, etc. compile
-//! inline into the fragment shader, evaluated per-fragment-per-dab.
-//! No dab pool slots, no intermediate textures.
+//! Upstream nodes (`circle`, `stamp`, etc.) compile inline into the
+//! fragment shader and evaluate per-fragment-per-dab — no intermediate
+//! textures.
 //!
 //! ## Pipeline cache
 //!
 //! Per-brush pipelines are built lazily on the first `flush_dabs`
-//! call and cached on [`PaintCompiledPipeline`] keyed by the brush
+//! call and cached on [`PaintPipeline`] keyed by the brush
 //! graph's `topology_hash`. Two brushes with identical graph
 //! topologies share a pipeline.
 //!
@@ -45,8 +44,9 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_uniforms, CompileWgslCtx, CompiledBrush, InputBinding, IntrinsicUniforms,
-    NodeWgsl, INTRINSIC_UNIFORMS_SIZE,
+    pack_dab_record, pack_intrinsic_dab_header, pack_intrinsic_uniforms, pack_uniforms,
+    CompileWgslCtx, CompiledBrush, InputBinding, IntrinsicUniforms, NodeWgsl,
+    INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -64,7 +64,7 @@ const MAX_UNIFORM_BYTES: usize = 1024;
 // ── Per-brush pipeline ──────────────────────────────────────────────────
 
 /// Per-brush resources built on the first `flush_dabs` call for a
-/// brush with a given `topology_hash`. Cached on [`PaintCompiledPipeline`].
+/// brush with a given `topology_hash`. Cached on [`PaintPipeline`].
 struct PerBrushPipeline {
     paint_pipeline: wgpu::RenderPipeline,
     erase_pipeline: wgpu::RenderPipeline,
@@ -81,17 +81,17 @@ impl PerBrushPipeline {
         let shader = ctx
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("paint_compiled-brush"),
+                label: Some("paint-brush"),
                 source: wgpu::ShaderSource::Wgsl(compiled.stroke_wgsl.clone().into()),
             });
 
         // group(1): dabs storage buffer. Same VERTEX_FRAGMENT visibility
-        // as `paint` — vertex stage reads `pos`/`radius` to build the
+        // as `paint` — vertex stage reads `pos`/`bbox_target_px` to build the
         // quad, fragment stage reads the rest.
         let dabs_bgl = ctx
             .device
             .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("paint_compiled-dabs-bgl"),
+                label: Some("paint-dabs-bgl"),
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
@@ -107,7 +107,7 @@ impl PerBrushPipeline {
         let layout = ctx
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("paint_compiled-layout"),
+                label: Some("paint-layout"),
                 bind_group_layouts: &[ctx.uniform_bgl, &dabs_bgl, ctx.selection_bgl],
                 immediate_size: 0,
             });
@@ -170,20 +170,20 @@ impl PerBrushPipeline {
                     cache: None,
                 })
         };
-        let paint_pipeline = make_pipeline("paint_compiled", paint_blend);
-        let erase_pipeline = make_pipeline("paint_compiled-erase", erase_blend);
+        let paint_pipeline = make_pipeline("paint", paint_blend);
+        let erase_pipeline = make_pipeline("paint-erase", erase_blend);
 
         // Uniform ring sized for this brush's actual uniform layout.
         let uniform_size =
             (INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size).max(INTRINSIC_UNIFORMS_SIZE);
         let uniform_ring = DynamicUniformRing::new(
             ctx.device,
-            "paint_compiled-uniforms",
+            "paint-uniforms",
             uniform_size as u64,
             ctx.min_uniform_align,
         );
         let uniform_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("paint_compiled-uniform-bg"),
+            label: Some("paint-uniform-bg"),
             layout: ctx.uniform_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -199,13 +199,13 @@ impl PerBrushPipeline {
         let dab_record_size = compiled.dab_record_size.max(16);
         let dabs_buffer_size = (MAX_DABS_PER_PHASE as u64) * (dab_record_size as u64);
         let dabs_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("paint_compiled-dabs-buffer"),
+            label: Some("paint-dabs-buffer"),
             size: dabs_buffer_size,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let dabs_bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("paint_compiled-dabs-bg"),
+            label: Some("paint-dabs-bg"),
             layout: &dabs_bgl,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
@@ -232,14 +232,14 @@ impl PerBrushPipeline {
 
 // ── Pipeline registry entry ─────────────────────────────────────────────
 
-/// The single registry entry for the `paint_compiled` terminal. Holds
+/// The single registry entry for the `paint` terminal. Holds
 /// a cache of per-brush pipelines keyed by `topology_hash`. Pipelines
 /// are built lazily on first use.
-pub struct PaintCompiledPipeline {
+pub struct PaintPipeline {
     cache: RefCell<HashMap<u64, PerBrushPipeline>>,
 }
 
-impl PaintCompiledPipeline {
+impl PaintPipeline {
     fn build(_ctx: &BuildContext) -> Self {
         Self {
             cache: RefCell::new(HashMap::new()),
@@ -269,7 +269,7 @@ impl PaintCompiledPipeline {
     }
 }
 
-impl BrushPipelineEntry for PaintCompiledPipeline {
+impl BrushPipelineEntry for PaintPipeline {
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -288,10 +288,10 @@ impl BrushPipelineEntry for PaintCompiledPipeline {
     }
 }
 
-fn paint_compiled_pipeline_reg() -> BrushPipelineRegistration {
+fn paint_pipeline_reg() -> BrushPipelineRegistration {
     BrushPipelineRegistration {
-        id: "paint_compiled",
-        build: |ctx| Box::new(PaintCompiledPipeline::build(ctx)),
+        id: "paint",
+        build: |ctx| Box::new(PaintPipeline::build(ctx)),
     }
 }
 
@@ -299,11 +299,11 @@ fn paint_compiled_pipeline_reg() -> BrushPipelineRegistration {
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
-        pipelines: vec![paint_compiled_pipeline_reg()],
+        pipelines: vec![paint_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "paint_compiled",
+            type_id: "paint",
             category: "output",
-            display_name: "Paint (Compiled)",
+            display_name: "Paint",
             ports: vec![
                 PortDef::input("position", BrushWireType::Vec2)
                     .with_description("Canvas-pixel pen tip for this dab"),
@@ -367,39 +367,19 @@ pub fn register() -> BrushNodeRegistration {
     }
 }
 
-pub struct PaintCompiledEvaluator;
+pub struct PaintEvaluator;
 
-impl PaintCompiledEvaluator {
+impl PaintEvaluator {
     fn effective_radius(ctx: &EvalContext) -> f32 {
         let size_input = ctx.input_f32("size_input").max(0.0);
         let size = ctx.input_f32("size").max(0.0);
         let effective_size = size_input * size;
         (effective_size * SIZE_REFERENCE_PX * 0.5).max(0.5)
     }
-
-    /// Pack the intrinsic dab header (`pos` + `radius` + `bbox_radius`)
-    /// at the end of the byte buffer. `bbox_radius` is the per-dab
-    /// inflated half-extent — both the WGSL vertex stage's quad size
-    /// and the fragment stage's discard test read this field, so the
-    /// CPU layer-clip bbox computed from the same value cannot
-    /// diverge. Followed by node-contributed fields via
-    /// [`pack_dab_record`].
-    fn pack_intrinsic_header(bytes: &mut Vec<u8>, pos: [f32; 2], radius: f32, bbox_radius: f32) {
-        bytes.extend_from_slice(bytemuck::bytes_of(&pos));
-        bytes.extend_from_slice(bytemuck::bytes_of(&radius));
-        bytes.extend_from_slice(bytemuck::bytes_of(&bbox_radius));
-    }
-
-    /// Pack the intrinsic uniforms (layer offset/size, canvas size)
-    /// at the front of the uniform buffer. Followed by node-
-    /// contributed uniforms via [`pack_uniforms`].
-    fn pack_intrinsic_uniforms(bytes: &mut Vec<u8>, intrinsic: IntrinsicUniforms) {
-        bytes.extend_from_slice(bytemuck::bytes_of(&intrinsic));
-    }
 }
 
-impl BrushNodeEvaluator for PaintCompiledEvaluator {
-    fn is_compiled_terminal(&self) -> bool {
+impl BrushNodeEvaluator for PaintEvaluator {
+    fn is_terminal(&self) -> bool {
         true
     }
 
@@ -416,10 +396,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
             // Compiled brush wasn't attached — programming error in
             // the engine wiring. Panic in debug, drop dab silently in
             // release so we don't blow up an in-flight stroke.
-            debug_assert!(
-                false,
-                "paint_compiled requires compiled_brush on gpu_context"
-            );
+            debug_assert!(false, "paint requires compiled_brush on gpu_context");
             return vec![];
         };
         let Some(paint_target) = gpu.paint_target.as_ref() else {
@@ -435,7 +412,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         // Per-brush extent: composed by the framework at compile time
         // from every upstream node's `ExtentContribution`. This is
         // exactly what the WGSL fragment shader discards past
-        // (`d.bbox_radius`); using the same value here means the
+        // (`d.bbox_target_px`); using the same value here means the
         // layer-clip bbox tracks exactly what the shader writes, and
         // mid-stroke rewinds can't truncate previous dabs.
         let bbox_radius = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
@@ -482,11 +459,11 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         // the HashMap per dab was a multi-millisecond-per-event
         // disaster at high dab counts.
         let record_start = gpu.pending_dab_bytes.len();
-        Self::pack_intrinsic_header(&mut gpu.pending_dab_bytes, position, radius, bbox_radius);
+        pack_intrinsic_dab_header(&mut gpu.pending_dab_bytes, position, bbox_radius, radius);
         let outputs = gpu
             .slot_outputs_owned
             .as_ref()
-            .expect("paint_compiled requires slot_outputs_owned on gpu_context");
+            .expect("paint requires slot_outputs_owned on gpu_context");
         pack_dab_record(&compiled, outputs, &mut gpu.pending_dab_bytes);
         // Pad to the full record size so the next dab starts aligned.
         let written = gpu.pending_dab_bytes.len() - record_start;
@@ -497,7 +474,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         gpu.pending_dab_count = gpu.pending_dab_count.saturating_add(1);
         debug_assert!(
             gpu.pending_dab_count <= MAX_DABS_PER_PHASE,
-            "paint_compiled dab queue overflowed MAX_DABS_PER_PHASE"
+            "paint dab queue overflowed MAX_DABS_PER_PHASE"
         );
 
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
@@ -507,9 +484,9 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         let scratch = gpu
             .scratch
             .as_deref()
-            .expect("paint_compiled::begin_stroke requires Scratch");
+            .expect("paint::begin_stroke requires Scratch");
         let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("paint_compiled-begin_stroke"),
+            label: Some("paint-begin_stroke"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: scratch.write_view(),
                 resolve_target: None,
@@ -529,7 +506,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
             return;
         }
         let Some(compiled) = gpu.compiled_brush.clone() else {
-            debug_assert!(false, "paint_compiled::flush_dabs requires compiled_brush");
+            debug_assert!(false, "paint::flush_dabs requires compiled_brush");
             return;
         };
 
@@ -543,7 +520,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         gpu.perf
             .record_dab_flush_workload(total_dabs, union_w, union_h);
 
-        let pipeline_ref = gpu.pipelines.get::<PaintCompiledPipeline>("paint_compiled");
+        let pipeline_ref = gpu.pipelines.get::<PaintPipeline>("paint");
 
         // Build the per-brush pipeline if this is the first dab for
         // this hash. The BuildContext borrows pieces from
@@ -556,11 +533,11 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         let scratch = gpu
             .scratch
             .as_deref()
-            .expect("paint_compiled::flush_dabs requires Scratch");
+            .expect("paint::flush_dabs requires Scratch");
         let paint_target = gpu
             .paint_target
             .as_ref()
-            .expect("paint_compiled::flush_dabs requires paint_target");
+            .expect("paint::flush_dabs requires paint_target");
         let canvas_ext = paint_target.canvas_extent();
         let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
         let layer_size = [canvas_ext.width, canvas_ext.height];
@@ -568,7 +545,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         // Build the uniform buffer: intrinsic header + node fields.
         // Per-stroke not per-dab, but still no need to clone.
         let mut uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
-        Self::pack_intrinsic_uniforms(
+        pack_intrinsic_uniforms(
             &mut uniform_bytes,
             IntrinsicUniforms {
                 layer_offset,
@@ -582,7 +559,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
         let outputs = gpu
             .slot_outputs_owned
             .as_ref()
-            .expect("paint_compiled::flush_dabs requires slot_outputs_owned");
+            .expect("paint::flush_dabs requires slot_outputs_owned");
         pack_uniforms(&compiled, outputs, &mut uniform_bytes);
 
         pipeline_ref.with_pipeline(compiled.topology_hash, |per_brush| {
@@ -607,7 +584,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
                 &per_brush.paint_pipeline
             };
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("paint_compiled-flush"),
+                label: Some("paint-flush"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: scratch.write_view(),
                     resolve_target: None,
@@ -663,7 +640,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
 
     /// Hover-cursor preview — reuses the shared
     /// [`crate::brush::wgsl_compile::render_compiled_preview`] helper.
-    /// `paint_compiled`'s stroke body and preview body are the same
+    /// `paint`'s stroke body and preview body are the same
     /// source (no `compile_preview_body` override), so the cursor
     /// shows the brush color × shape × flow as the stroke would
     /// deposit.
@@ -683,7 +660,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
     /// selection mask and returns. The framework's
     /// [`crate::brush::wgsl_compile::assemble_shader`] places the
     /// node bodies inside `fs_main` already bound with `d`, `u`,
-    /// `local_uv`, `local_dist`, `theta`, `canvas_pos`, and `sel`.
+    /// `local_uv`, `local_dist`, `theta`, `target_pos`, and `sel`.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         let rgba_expr = match cctx.inputs.get("rgba") {
@@ -692,7 +669,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
                 // Unwired rgba — fall back to opaque white modulated
                 // by the soft-disc that the wrapper's `local_dist`
                 // gives us. This makes a graph with just
-                // pen → paint_compiled still produce something
+                // pen → paint still produce something
                 // visible, mirroring `paint`'s procedural-disc
                 // fallback.
                 "vec4<f32>(1.0, 1.0, 1.0, 1.0) * max(1.0 - local_dist, 0.0)".into()
@@ -721,7 +698,7 @@ impl BrushNodeEvaluator for PaintCompiledEvaluator {
 /// `BrushPipelines::new` time, so the layouts match.
 fn ensure_per_brush_pipeline(
     gpu: &BrushGpuContext,
-    pipe: &PaintCompiledPipeline,
+    pipe: &PaintPipeline,
     compiled: &CompiledBrush,
 ) {
     // Skip the work entirely if the pipeline is already cached.

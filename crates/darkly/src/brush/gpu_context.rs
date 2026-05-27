@@ -269,7 +269,7 @@ pub struct BrushGpuContext<'a> {
     /// Terminal-private per-dab CPU meta, packed by `evaluate_gpu` in
     /// lockstep with [`Self::pending_dab_bytes`] and drained by the
     /// terminal's `flush_dabs` hook. Only used by per-dab-feedback
-    /// terminals (`smudge_compiled`, `liquify_compiled`) that need
+    /// terminals (`smudge`, `liquify`) that need
     /// CPU-side state at flush time to drive mirror-snapshot copies
     /// without re-deriving footprints from GPU memory. The framework
     /// doesn't interpret these bytes — the owning terminal reinterprets
@@ -279,11 +279,9 @@ pub struct BrushGpuContext<'a> {
     pub pending_dab_meta_bytes: Vec<u8>,
 
     /// Compiled WGSL for this brush, populated by the engine before
-    /// stroke evaluation when the brush's graph terminates in
-    /// `paint_compiled`. Read by that terminal's `evaluate_gpu` and
+    /// stroke evaluation. Read by the terminal's `evaluate_gpu` and
     /// `flush_dabs` to know the dab record / uniform layouts and the
-    /// pipeline topology hash. `None` for brushes on the per-dab
-    /// dispatch path.
+    /// pipeline topology hash.
     pub compiled_brush: Option<Arc<CompiledBrush>>,
 
     /// Name → value map of every output slot in the brush graph,
@@ -291,8 +289,8 @@ pub struct BrushGpuContext<'a> {
     /// `execute_cpu` and held for the duration of the dispatch pass.
     /// Keys follow the `n{node_id}_{port_name}` convention used by
     /// [`crate::brush::wgsl_compile::CompileWgslCtx::dab_field_name`].
-    /// The compiled terminal reads from this to pack per-dab records
-    /// and uniforms. `None` for brushes on the per-dab dispatch path.
+    /// The terminal reads from this to pack per-dab records and
+    /// uniforms.
     pub slot_outputs_owned: Option<HashMap<String, ScalarValue>>,
 }
 
