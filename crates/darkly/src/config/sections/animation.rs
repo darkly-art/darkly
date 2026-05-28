@@ -1,4 +1,4 @@
-use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
+use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 // Note: these keep the historic snake_case key names to preserve existing
 // Rust callers. New prefs should use camelCase dot-paths.
@@ -10,7 +10,6 @@ const PREFS: &[Pref] = &[
             "How often animated veils tick, as a fraction of the master frame rate. 1 = every frame, 2 = every other, 4 = every fourth.",
         ),
         kind: PrefKind::Int { min: 1, max: 16 },
-        default: PrefDefault::Int(2),
         widget: WidgetHint::Auto,
     },
     Pref {
@@ -18,7 +17,6 @@ const PREFS: &[Pref] = &[
         display_name: "Overlay animation divisor",
         description: Some("Divisor for marching-ants selection overlays."),
         kind: PrefKind::Int { min: 1, max: 16 },
-        default: PrefDefault::Int(4),
         widget: WidgetHint::Auto,
     },
     Pref {
@@ -29,7 +27,6 @@ const PREFS: &[Pref] = &[
              Voids piggyback on the same clock as veils so ticks line up.",
         ),
         kind: PrefKind::Int { min: 1, max: 16 },
-        default: PrefDefault::Int(2),
         widget: WidgetHint::Auto,
     },
 ];

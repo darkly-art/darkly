@@ -1,4 +1,4 @@
-use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
+use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 const SAMPLE_SOURCE_OPTIONS: &[(&str, &str)] = &[
     ("merged", "All layers merged"),
@@ -18,7 +18,6 @@ const PREFS: &[Pref] = &[Pref {
     kind: PrefKind::Enum {
         options: SAMPLE_SOURCE_OPTIONS,
     },
-    default: PrefDefault::Str("merged"),
     widget: WidgetHint::Auto,
 }];
 

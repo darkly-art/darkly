@@ -3,22 +3,23 @@
     import Modal from './Modal.svelte';
 
     function pick(name: string) {
-        // Auto-creates the user's first writable preset, seeded from this
-        // built-in template, and switches to it. After this, the user is just
-        // editing settings; the template name is forgotten.
-        void config.pickInitialTemplate(name);
+        // Just sets `app.baseSettings` in the user layer. The overlay
+        // resolves live underneath any future user overrides — no file
+        // copy, no "apply preset" step.
+        config.setBase(name);
     }
 </script>
 
 <Modal bind:open={config.needsPresetChoice} size="sm" bare>
     <div class="preset-picker">
         <h2>Choose your starting keybindings</h2>
-        <p>Pick a familiar layout to seed your settings. You can change any binding later, or load another layout from Settings.</p>
+        <p>Pick a familiar layout to seed your settings. Each option is just a
+            base layer — you can rebind anything, and you can switch base
+            layouts later from Settings without losing your customizations.</p>
         <div class="presets">
-            {#each config.builtinPresets as preset (preset.name)}
-                <button type="button" class="preset-btn" onclick={() => pick(preset.name)}>
-                    <span class="preset-name">{preset.name}</span>
-                    <span class="preset-desc">{preset.description}</span>
+            {#each config.baseNames as name (name)}
+                <button type="button" class="preset-btn" onclick={() => pick(name)}>
+                    <span class="preset-name">{name}</span>
                 </button>
             {/each}
         </div>
@@ -72,10 +73,5 @@
         font-size: 15px;
         font-weight: 600;
         color: var(--text);
-    }
-
-    .preset-desc {
-        font-size: 12px;
-        color: var(--text-muted);
     }
 </style>

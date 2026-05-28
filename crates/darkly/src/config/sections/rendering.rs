@@ -1,4 +1,4 @@
-use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
+use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 const PREFS: &[Pref] = &[Pref {
     key: "rendering.veil_scale",
@@ -11,7 +11,6 @@ const PREFS: &[Pref] = &[Pref {
         min: 0.25,
         max: 1.0,
     },
-    default: PrefDefault::Float(1.0),
     widget: WidgetHint::Auto,
 }];
 

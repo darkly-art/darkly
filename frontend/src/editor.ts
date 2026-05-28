@@ -16,7 +16,7 @@ let processInitialized = false;
  *  The multi-tab shell calls this once at boot before opening any tabs.
  *
  *  WASM init happens FIRST because `config.init()` calls into WASM exports
- *  (`config_schema`, `config_preset_names`) — those would throw with
+ *  (`config_schema`, `config_base_names`) — those would throw with
  *  "Cannot read properties of undefined" if the module hadn't loaded yet. */
 export async function ensureProcessInit(): Promise<void> {
     if (processInitialized) return;

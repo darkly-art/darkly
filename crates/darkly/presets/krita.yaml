@@ -1,0 +1,35 @@
+# Krita overlay. Self-contained: every binding that any of the three editors
+# (Krita / Photoshop / GIMP) disagrees on is spelled out here explicitly —
+# nothing about Krita is silently inherited from defaults.yaml when GIMP or
+# Photoshop has its own opinion.
+name: Krita
+description: Krita-style keybindings
+
+hotkeys:
+  # Tools.
+  brushTool: KeyB
+  fillTool: KeyF
+  gradientTool: KeyG
+  colorPickerTool: KeyP
+  rectSelectTool: KeyR
+  ellipseSelectTool: Shift+KeyR
+  magicWandTool: KeyW
+  transformTool: KeyT
+  toggleEraseMode: KeyE
+  # Layers.
+  isolateLayer: KeyI
+  deleteLayer: Shift+Delete
+  duplicateLayer: $mod+KeyJ
+  mergeDown: $mod+KeyE
+  # Selection.
+  clearSelection: $mod+Shift+KeyA
+  invertSelection: $mod+Shift+KeyI
+
+mouse_clicks:
+  # Krita's default color-pick chord on paint tools.
+  sampleColor: canvas@paint:ctrl+drag
+  # Krita's "Change Primary Setting" — shift+drag scrubs brush size.
+  brushSizeAdjust: canvas@paint:shift+drag
+
+settings:
+  tools.colorPickerSampleSource: merged

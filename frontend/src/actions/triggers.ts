@@ -43,25 +43,20 @@ export function dragChord(e: PointerEvent): string {
 }
 
 /**
- * Resolve an action's effective mouse trigger list:
- *   user override (`mouseclicks.<id>`) ?? action.defaultMouseClick ?? [].
+ * Resolve an action's effective mouse trigger list. The binding lives in
+ * `mouseclicks.<id>` under the three-layer config — defaults.yaml +
+ * overlay + user override. Multi-binding entries (e.g. `isolateLayer`
+ * firing from both `layerThumb:alt+click` and `maskThumb:alt+click`) are
+ * joined with `|` in the YAML parser; we split them back here.
  *
- * Format: each entry is `"<site>:<chord>"`. Most actions return a single-
- * element list; actions that ship with the same chord on multiple sites
- * (e.g. `isolateLayer` firing from both `layerThumb:alt+click` and
- * `maskThumb:alt+click`) return all of them. A user override is stored as
- * a single string and fully replaces the defaults — the customization
- * model is "pick one binding", not "edit a list".
+ * Format: each entry is `"<site>:<chord>"`. Empty string means
+ * "no mouse trigger" — used by overlays that explicitly disable a binding.
  */
 export function effectiveMouseClicks(actionId: string): string[] {
-    const override = config.get(`mouseclicks.${actionId}`);
-    if (typeof override === 'string') {
-        return override ? [override] : [];
-    }
-    const def = actions.get(actionId)?.defaultMouseClick;
-    if (!def) return [];
-    if (typeof def === 'string') return def ? [def] : [];
-    return def.filter(Boolean);
+    const v = config.get(`mouseclicks.${actionId}`);
+    if (typeof v !== 'string') return [];
+    if (!v) return [];
+    return v.split('|').filter(Boolean);
 }
 
 /**

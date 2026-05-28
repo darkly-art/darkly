@@ -21,7 +21,6 @@ export interface PrefInfo {
     max?: number;
     /** For enum prefs: `[[value, label], ...]`. */
     options?: [string, string][];
-    default: unknown;
     widget: WidgetName;
 }
 
@@ -32,9 +31,4 @@ export interface SectionInfo {
     icon?: string;
     order: number;
     prefs: PrefInfo[];
-}
-
-export interface Preset {
-    name: string;
-    description: string;
 }

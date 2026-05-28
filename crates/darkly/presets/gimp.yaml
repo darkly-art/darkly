@@ -1,0 +1,36 @@
+# GIMP overlay. Self-contained: every binding that any of the three editors
+# disagrees on is spelled out here.
+name: GIMP
+description: GIMP-style keybindings
+
+hotkeys:
+  # Tools.
+  brushTool: KeyP
+  fillTool: Shift+KeyB
+  gradientTool: KeyG
+  colorPickerTool: KeyO
+  rectSelectTool: KeyR
+  ellipseSelectTool: KeyE
+  magicWandTool: KeyU
+  transformTool: KeyT
+  toggleEraseMode: Shift+KeyE
+  # Layers.
+  isolateLayer: KeyI
+  # GIMP's layers-delete action has no global accelerator (its accel slot is
+  # { NULL } in layers-actions.c); `Delete` deletes the active layer only when
+  # the Layers panel has focus.
+  deleteLayer: layerPanel:Delete
+  # GIMP binds Layer > Duplicate Layer(s) to Ctrl+Shift+D.
+  duplicateLayer: $mod+Shift+KeyD
+  # Selection.
+  clearSelection: $mod+Shift+KeyA
+  invertSelection: $mod+KeyI
+
+mouse_clicks:
+  # GIMP doesn't ship a modifier-held color-pick on paint tools by default;
+  # the eyedropper is reached through the Color Picker tool (KeyO). Match the
+  # Krita ctrl+drag convention so Darkly's chord stays useful.
+  sampleColor: canvas@paint:ctrl+drag
+
+settings:
+  tools.colorPickerSampleSource: merged

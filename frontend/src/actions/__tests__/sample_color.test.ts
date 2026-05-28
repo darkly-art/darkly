@@ -46,12 +46,6 @@ describe('sampleColor action registration', () => {
         expect(action!.type).toBe('hold');
     });
 
-    it('defaults to canvas@paint:ctrl+drag (Krita binding)', () => {
-        registerSampleColorAction();
-        const action = actions.get('sampleColor');
-        expect(action!.defaultMouseClick).toBe('canvas@paint:ctrl+drag');
-    });
-
     it('handler queues a pick at the ctx canvas coordinates', () => {
         registerSampleColorAction();
         const action = actions.get('sampleColor')!;

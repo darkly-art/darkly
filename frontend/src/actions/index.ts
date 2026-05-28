@@ -228,14 +228,12 @@ export function registerActions() {
         id: 'undo',
         displayName: 'Undo',
         category: 'edit',
-        defaultHotkey: '$mod+KeyZ',
         handler: () => { app.handle?.undo(); app.refreshLayerTree(); },
     });
     actions.register({
         id: 'redo',
         displayName: 'Redo',
         category: 'edit',
-        defaultHotkey: '$mod+Shift+KeyZ',
         handler: () => { app.handle?.redo(); app.refreshLayerTree(); },
     });
 
@@ -244,14 +242,12 @@ export function registerActions() {
         id: 'resetColors',
         displayName: 'Reset Colors',
         category: 'colors',
-        defaultHotkey: 'KeyD',
         handler: () => app.resetColors(),
     });
     actions.register({
         id: 'swapColors',
         displayName: 'Swap Colors',
         category: 'colors',
-        defaultHotkey: 'KeyX',
         handler: () => app.swapColors(),
     });
 
@@ -260,21 +256,18 @@ export function registerActions() {
         id: 'selectAll',
         displayName: 'Select All',
         category: 'selection',
-        defaultHotkey: '$mod+KeyA',
         handler: () => app.handle?.select_all(),
     });
     actions.register({
         id: 'clearSelection',
         displayName: 'Clear Selection',
         category: 'selection',
-        defaultHotkey: '$mod+Shift+KeyA',
         handler: () => app.handle?.clear_selection(),
     });
     actions.register({
         id: 'clearSelectionContents',
         displayName: 'Clear Selection Contents',
         category: 'selection',
-        defaultHotkey: 'Delete',
         handler: () => {
             if (app.activeLayerId != null) {
                 app.handle?.clear_selection_contents(app.activeLayerId);
@@ -285,7 +278,6 @@ export function registerActions() {
         id: 'invertSelection',
         displayName: 'Invert Selection',
         category: 'selection',
-        defaultHotkey: '$mod+Shift+KeyI',
         handler: () => app.handle?.invert_selection(),
     });
 
@@ -294,7 +286,6 @@ export function registerActions() {
         id: 'copy',
         displayName: 'Copy',
         category: 'edit',
-        defaultHotkey: '$mod+KeyC',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const handle = app.handle;
@@ -316,7 +307,6 @@ export function registerActions() {
         id: 'cut',
         displayName: 'Cut',
         category: 'edit',
-        defaultHotkey: '$mod+KeyX',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const handle = app.handle;
@@ -337,7 +327,6 @@ export function registerActions() {
         id: 'paste',
         displayName: 'Paste',
         category: 'edit',
-        defaultHotkey: '$mod+KeyV',
         handler: async () => {
             if (!app.handle) return;
 
@@ -420,7 +409,6 @@ export function registerActions() {
         id: 'pasteInPlace',
         displayName: 'Paste in Place',
         category: 'edit',
-        defaultHotkey: '$mod+Shift+KeyV',
         handler: () => {
             if (!app.handle || app.activeLayerId == null) return;
             const activateTransform = config.get('edit.activateTransformAfterPaste') !== false;
@@ -449,7 +437,6 @@ export function registerActions() {
         description:
             'Save the current document as a `.darkly` file. ' +
             'Re-saves to the same file after the first Save As; otherwise prompts.',
-        defaultHotkey: '$mod+KeyS',
         handler: () => {
             if (!app.handle) return;
             void saveDocument({ forceAs: false });
@@ -460,7 +447,6 @@ export function registerActions() {
         displayName: 'Save As',
         category: 'file',
         description: 'Save the current document to a new `.darkly` file.',
-        defaultHotkey: '$mod+Shift+KeyS',
         handler: () => {
             if (!app.handle) return;
             void saveDocument({ forceAs: true });
@@ -485,7 +471,6 @@ export function registerActions() {
         category: 'file',
         description:
             'Open a `.darkly` document or image (PNG / JPEG / WebP) in a new tab.',
-        defaultHotkey: '$mod+KeyO',
         handler: () => {
             void openFlow();
         },
@@ -495,7 +480,6 @@ export function registerActions() {
         displayName: 'Export Image…',
         category: 'file',
         description: 'Export the canvas composite as PNG, JPEG, or WebP.',
-        defaultHotkey: '$mod+Shift+KeyE',
         handler: () => {
             if (!app.handle) return;
             exportImage.open = true;
@@ -506,7 +490,6 @@ export function registerActions() {
         id: 'commitFloating',
         displayName: 'Commit Floating',
         category: 'transform',
-        defaultHotkey: 'Enter',
         handler: () => {
             if (!app.handle) return;
             app.handle.commit_floating();
@@ -517,7 +500,6 @@ export function registerActions() {
         id: 'cancelFloating',
         displayName: 'Cancel Floating',
         category: 'transform',
-        defaultHotkey: 'Escape',
         handler: () => {
             if (!app.handle) return;
             app.handle.cancel_floating();
@@ -526,21 +508,9 @@ export function registerActions() {
     });
 
     // -- Tools (generated from registry) --
-    // Tools' default hotkeys live alongside the action registration here
-    // (rather than on the Tool interface) so all action defaults stay
-    // co-located. Override these via `hotkeys.<toolHotkeyAction>` in config.
-    const TOOL_DEFAULT_HOTKEYS: Record<string, string> = {
-        brushTool: 'KeyB',
-        fillTool: 'KeyF',
-        gradientTool: 'KeyG',
-        colorPickerTool: 'KeyP',
-        rectSelectTool: 'KeyR',
-        ellipseSelectTool: 'Shift+KeyR',
-        lassoSelectTool: 'KeyL',
-        polygonSelectTool: 'Shift+KeyL',
-        magicWandTool: 'KeyW',
-        transformTool: 'KeyT',
-    };
+    // Tool key bindings come from the YAML preset layers (defaults.yaml +
+    // overlay) via `hotkeys.<toolHotkeyAction>` — actions register without
+    // any built-in default; the binding is purely configuration.
     // Tool display names live in Rust (`ToolRegistration`). Resolve through
     // `app.toolDisplayName(id)` which reads the registry map populated by
     // `app.loadRegistries(handle)` during editor init — the frontend never
@@ -552,7 +522,6 @@ export function registerActions() {
             displayName: name,
             category: 'tools',
             description: `Switch to ${name} tool`,
-            defaultHotkey: TOOL_DEFAULT_HOTKEYS[tool.hotkeyAction],
             handler: () => { app.activeToolId = tool.id; },
         });
     }
@@ -565,7 +534,6 @@ export function registerActions() {
         displayName: 'Toggle Erase Mode',
         category: 'tools',
         description: 'Toggle erase mode on the brush tool. Switches to the brush tool first if another tool is active.',
-        defaultHotkey: 'KeyE',
         handler: () => {
             if (app.activeToolId !== 'brush') {
                 app.activeToolId = 'brush';
@@ -619,12 +587,6 @@ export function registerActions() {
         category: 'layers',
         description: 'Solo a layer so only it shows in the canvas. Press again to bring everything else back.',
         accepts: ['layerId'],
-        defaultHotkey: 'KeyI',
-        // Two defaults: one per thumbnail. The dispatching click handler
-        // is responsible for putting the right node id (host vs mask
-        // modifier) in the context — that's what makes "alt+click on a
-        // preview = isolate that preview" work for both.
-        defaultMouseClick: ['layerThumb:alt+click', 'maskThumb:alt+click'],
         handler: (ctx) => {
             const layerId = ctx.layerId ?? app.activeLayerId;
             if (layerId == null || !app.handle) return;
@@ -637,9 +599,6 @@ export function registerActions() {
         displayName: 'Delete Layer',
         category: 'layers',
         description: 'Delete the active layer (or remove the active veil).',
-        // Krita-style global default. Photoshop / GIMP presets override
-        // this to `layerPanel:Delete` (panel-scoped) — see presets/.
-        defaultHotkey: 'Shift+Delete',
         accepts: ['layerId'],
         handler: (ctx) => {
             if (!app.handle) return;
@@ -672,7 +631,6 @@ export function registerActions() {
         displayName: 'Duplicate Layer',
         category: 'layers',
         description: 'Make a copy of the active layer or group directly above it.',
-        defaultHotkey: '$mod+KeyJ',
         accepts: ['layerId'],
         handler: (ctx) => {
             if (!app.handle) return;
@@ -689,7 +647,6 @@ export function registerActions() {
         displayName: 'Merge Down',
         category: 'layers',
         description: 'Merge the active layer or group into the layer below it.',
-        defaultHotkey: '$mod+KeyE',
         accepts: ['layerId'],
         handler: (ctx) => {
             if (!app.handle) return;
@@ -732,7 +689,6 @@ export function registerActions() {
         displayName: 'Open Settings',
         category: 'view',
         description: 'Show the preferences modal.',
-        defaultHotkey: '$mod+Comma',
         handler: () => { settings.open = true; },
     });
 
@@ -741,7 +697,6 @@ export function registerActions() {
         displayName: 'Mirror View',
         category: 'view',
         description: 'Flip the canvas horizontally for fresh-eyes review. View-only — the document is unchanged.',
-        defaultHotkey: 'KeyM',
         handler: () => {
             app.mirrorH = !app.mirrorH;
             app.requestFrame();
@@ -760,7 +715,6 @@ export function registerActions() {
         displayName: 'Add Brush Node',
         category: 'brush',
         description: 'Open the add-node menu at the cursor (brush builder).',
-        defaultHotkey: 'Shift+KeyA',
         handler: () => {
             // No-op if the brush builder isn't visible. The actual placement
             // — at the cursor in canvas coords — happens in NodeCanvas, which

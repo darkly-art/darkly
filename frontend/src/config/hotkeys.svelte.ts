@@ -19,22 +19,21 @@ export { parseBinding, type ChordEntry };
 let cleanup: (() => void) | null = null;
 
 /**
- * Resolve an action's effective keyboard trigger list:
- *   user override (`hotkeys.<id>` in config) ?? action.defaultHotkey ?? [].
+ * Resolve an action's effective keyboard trigger list. The full binding
+ * lives in `hotkeys.<id>` under the three-layer config — defaults.yaml +
+ * overlay + user override. Multi-binding actions (e.g. `isolateLayer` from
+ * `layerThumb:alt+click` + `maskThumb:alt+click`) are joined with `|` in
+ * the YAML parser; we split them back into a list here.
  *
- * Empty string is meaningful — it explicitly means "no keyboard trigger" and
- * suppresses any default. Used by presets that disable a default (e.g.
- * Photoshop sets `hotkeys.isolateLayer = ""` to remove Krita's `KeyI`).
+ * Empty string means "no keyboard trigger" — used by overlays that
+ * explicitly want to disable a binding the previous layer set
+ * (e.g. Photoshop sets `hotkeys.isolateLayer = ""`).
  */
 export function effectiveHotkeys(actionId: string): string[] {
-    const override = config.get(`hotkeys.${actionId}`);
-    if (typeof override === 'string') {
-        return override ? [override] : [];
-    }
-    const def = actions.get(actionId)?.defaultHotkey;
-    if (!def) return [];
-    if (typeof def === 'string') return def ? [def] : [];
-    return def.filter(Boolean);
+    const v = config.get(`hotkeys.${actionId}`);
+    if (typeof v !== 'string') return [];
+    if (!v) return [];
+    return v.split('|').filter(Boolean);
 }
 
 /** Single-string view for callers that show one binding per action

@@ -1,14 +1,13 @@
-//! Contract tests for the modular config schema and built-in presets.
+//! Contract tests for the modular config schema.
 //!
-//! These assert properties that must hold across every registered section
-//! and preset so the schema stays internally consistent as new sections /
-//! presets are added.
+//! These assert properties that must hold across every registered section so
+//! the schema stays internally consistent as new sections are added.
 
 use std::collections::HashMap;
 
 use darkly::config::{
     self,
-    schema::{Pref, PrefDefault, PrefKind},
+    schema::{Pref, PrefKind},
     sections, ConfigValue,
 };
 
@@ -39,65 +38,54 @@ fn no_duplicate_pref_keys() {
     }
 }
 
+/// Every schema-declared pref except `app.baseSettings` must have a value in
+/// `defaults.yaml` or in every overlay — without that, `get_*` would panic
+/// at runtime. `app.baseSettings` itself is the picker choice; it's
+/// legitimately absent before the user picks an editor.
 #[test]
-fn defaults_populated_and_kind_matches() {
-    for pref in all_prefs() {
-        let value = config::get(pref.key)
-            .unwrap_or_else(|| panic!("default missing for pref key {:?}", pref.key));
-        assert_kind_matches(pref.key, &pref.kind, &value);
-        assert_default_matches(pref.key, &pref.kind, &pref.default);
-    }
-}
-
-#[test]
-fn preset_names_unique() {
-    let names = config::preset_names();
-    let mut seen = std::collections::HashSet::new();
-    for name in &names {
-        assert!(
-            seen.insert(name.clone()),
-            "duplicate preset name {:?}",
-            name
-        );
-    }
-    assert!(!names.is_empty(), "expected at least one built-in preset");
-}
-
-#[test]
-fn preset_values_are_strings_for_action_keys() {
-    // Every key in the preset's flattened output that's a hotkey or
-    // mouseclick must be a Str (since both are stored as strings).
-    for name in config::preset_names() {
-        let values = config::preset_values(&name)
-            .unwrap_or_else(|| panic!("preset {name:?} should be known"));
-        for (key, value) in &values {
-            if key.starts_with("hotkeys.") || key.starts_with("mouseclicks.") {
-                assert!(
-                    matches!(value, ConfigValue::Str(_)),
-                    "preset {name:?} key {key:?}: expected Str, got {value:?}"
-                );
+fn every_pref_has_a_resolvable_value() {
+    let names = config::base_names();
+    assert!(!names.is_empty(), "expected at least one overlay");
+    for overlay_name in &names {
+        config::set("app.baseSettings", ConfigValue::Str(overlay_name.clone()));
+        for pref in all_prefs() {
+            if pref.key == "app.baseSettings" {
+                continue;
             }
+            let value = config::get(pref.key).unwrap_or_else(|| {
+                panic!(
+                    "pref {:?} has no value under overlay {:?} — \
+                     missing from defaults.yaml and {:?}.yaml",
+                    pref.key, overlay_name, overlay_name
+                )
+            });
+            assert_kind_matches(pref.key, &pref.kind, &value);
         }
     }
+    // Clean up so we don't leak state into other tests in the same process.
+    config::reset("app.baseSettings");
 }
 
 #[test]
-fn empty_preset_clears_user_settings() {
-    // The Krita preset declares no overrides; loading it produces an empty
-    // values map, and applying that map to user_settings reverts every key
-    // to its default.
-    let values = config::preset_values("Krita").expect("Krita preset");
-    assert!(
-        values.is_empty(),
-        "Krita preset should declare no overrides; got {} entries",
-        values.len()
+fn overlay_names_unique() {
+    let names = config::base_names();
+    let mut seen = std::collections::HashSet::new();
+    for name in &names {
+        assert!(seen.insert(name.clone()), "duplicate overlay name {name:?}");
+    }
+}
+
+#[test]
+fn app_base_settings_options_match_overlays() {
+    let names = config::base_names();
+    let from_const: Vec<String> = config::BASE_SETTINGS_OPTIONS
+        .iter()
+        .map(|(k, _)| (*k).to_string())
+        .collect();
+    assert_eq!(
+        names, from_const,
+        "BASE_SETTINGS_OPTIONS must match the discovered overlay list"
     );
-}
-
-#[test]
-fn unknown_preset_returns_none() {
-    assert!(config::preset_values("Bogus").is_none());
-    assert!(config::preset_values("").is_none());
 }
 
 // --- helpers ---
@@ -120,24 +108,6 @@ fn assert_kind_matches(key: &str, kind: &PrefKind, value: &ConfigValue) {
     );
 }
 
-fn assert_default_matches(key: &str, kind: &PrefKind, default: &PrefDefault) {
-    let ok = match (kind, default) {
-        (PrefKind::Bool, PrefDefault::Bool(_)) => true,
-        (PrefKind::Int { .. }, PrefDefault::Int(_)) => true,
-        (PrefKind::Float { .. }, PrefDefault::Float(_)) => true,
-        (PrefKind::Str, PrefDefault::Str(_)) => true,
-        (PrefKind::Enum { options }, PrefDefault::Str(v)) => options.iter().any(|(k, _)| *k == *v),
-        _ => false,
-    };
-    assert!(
-        ok,
-        "pref {:?}: default {:?} does not match kind {:?}",
-        key,
-        default_name(default),
-        kind_name(kind)
-    );
-}
-
 fn kind_name(kind: &PrefKind) -> &'static str {
     match kind {
         PrefKind::Bool => "bool",
@@ -145,14 +115,5 @@ fn kind_name(kind: &PrefKind) -> &'static str {
         PrefKind::Float { .. } => "float",
         PrefKind::Str => "str",
         PrefKind::Enum { .. } => "enum",
-    }
-}
-
-fn default_name(default: &PrefDefault) -> &'static str {
-    match default {
-        PrefDefault::Bool(_) => "Bool",
-        PrefDefault::Int(_) => "Int",
-        PrefDefault::Float(_) => "Float",
-        PrefDefault::Str(_) => "Str",
     }
 }

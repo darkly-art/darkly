@@ -1,11 +1,10 @@
-use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
+use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 const PREFS: &[Pref] = &[Pref {
     key: "input.fingerPainting",
     display_name: "Finger painting",
     description: Some("Allow touch input to paint (not just pan/zoom)."),
     kind: PrefKind::Bool,
-    default: PrefDefault::Bool(false),
     widget: WidgetHint::Auto,
 }];
 

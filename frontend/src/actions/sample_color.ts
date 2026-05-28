@@ -4,11 +4,11 @@ import { startPick } from '../tools/color_pick_sync';
 import { setColorPickerPressed } from '../tools/colorpicker_cursor';
 import { screenToCanvas } from '../canvas/coordinates';
 
-/** Register the modifier-held "sample color" chord. The action is bound to
- *  `canvas@paint:ctrl+drag` by default (Krita's binding) — the Photoshop
- *  preset overrides to `alt+drag`, GIMP inherits Ctrl. Tools can preempt
- *  this chord by returning `true` from `claimsPointer` (see
- *  `CanvasView.onPointerDown`'s dispatch order). */
+/** Register the modifier-held "sample color" chord. The actual binding
+ *  comes from the YAML preset layers — Krita/GIMP ship `ctrl+drag`,
+ *  Photoshop ships `alt+drag`; the action itself just declares the
+ *  semantics. Tools can preempt this chord by returning `true` from
+ *  `claimsPointer` (see `CanvasView.onPointerDown`'s dispatch order). */
 export function registerSampleColorAction(): void {
     actions.register({
         id: 'sampleColor',
@@ -17,10 +17,6 @@ export function registerSampleColorAction(): void {
         description:
             'Hold the modifier and drag on the canvas to sample a color into the foreground swatch.',
         type: 'hold',
-        // `@paint` scope so this only fires when a paint-group tool is active.
-        // Selection tools have their own Ctrl-modified gestures (subtract /
-        // intersect); without the scope we'd steal those.
-        defaultMouseClick: 'canvas@paint:ctrl+drag',
         handler: (ctx) => {
             if (!app.handle) return;
             const cx = typeof ctx.x === 'number' ? ctx.x : 0;

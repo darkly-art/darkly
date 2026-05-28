@@ -10,23 +10,20 @@
     const hotkeyKey = $derived(`hotkeys.${action.id}`);
     const mouseKey = $derived(`mouseclicks.${action.id}`);
 
-    /** Default expressed as a single string for the row (settings UI
-     *  edits one binding per action, not the full array). */
-    const defaultHotkeyStr = $derived.by(() => {
-        const d = action.defaultHotkey;
-        if (!d) return '';
-        return typeof d === 'string' ? d : (d[0] ?? '');
-    });
+    /** Multi-binding entries are joined with `|` in the YAML parser; the
+     *  capture widget edits a single binding at a time. */
+    function firstPart(v: unknown): string {
+        if (typeof v !== 'string') return '';
+        return v.split('|')[0] ?? '';
+    }
 
-    const hotkeyValue = $derived.by(() => {
-        const v = config.get(hotkeyKey);
-        return typeof v === 'string' ? v : defaultHotkeyStr;
-    });
+    /** Effective (resolved) bindings — drive the capture widget value. */
+    const hotkeyValue = $derived(firstPart(config.get(hotkeyKey)));
+    const mouseValue = $derived(firstPart(config.get(mouseKey)));
 
-    const mouseValue = $derived.by(() => {
-        const v = config.get(mouseKey);
-        return typeof v === 'string' ? v : (action.defaultMouseClick ?? '');
-    });
+    /** Layer-below-user values — what a Reset would reveal. */
+    const baseHotkey = $derived(firstPart(config.baseValue(hotkeyKey)));
+    const baseMouse = $derived(firstPart(config.baseValue(mouseKey)));
 
     const hotkeyOverridden = $derived(config.hasOverride(hotkeyKey));
     const mouseOverridden = $derived(config.hasOverride(mouseKey));
@@ -61,7 +58,7 @@
                 class:visible={hotkeyOverridden}
                 disabled={!hotkeyOverridden}
                 onclick={resetHotkey}
-                title="Reset to default ({formatHotkey(defaultHotkeyStr) ?? 'unbound'})"
+                title="Reset to {formatHotkey(baseHotkey) ?? 'unbound'}"
             >
                 <i class="fa-solid fa-rotate-left"></i>
             </button>
@@ -79,7 +76,7 @@
                 class:visible={mouseOverridden}
                 disabled={!mouseOverridden}
                 onclick={resetMouse}
-                title="Reset to default"
+                title="Reset to {baseMouse || 'unbound'}"
             >
                 <i class="fa-solid fa-rotate-left"></i>
             </button>
