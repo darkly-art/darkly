@@ -1,18 +1,17 @@
 use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
 
 const PIXEL_FILTER_OPTIONS: &[(&str, &str)] = &[
-    ("auto", "Auto (sharp when zoomed in)"),
-    ("linear", "Linear (smooth)"),
-    ("nearest", "Nearest (hard pixels)"),
+    ("auto", "Auto"),
+    ("linear", "Always smooth"),
+    ("nearest", "Always sharp"),
 ];
 
 const PREFS: &[Pref] = &[Pref {
     key: "display.pixelFilter",
-    display_name: "Pixel filter",
+    display_name: "Zoom appearance",
     description: Some(
-        "How canvas pixels are sampled when drawn to screen. \
-         Auto switches to nearest-neighbor (hard pixel edges) when zoomed past 100%, \
-         and linear (smooth) otherwise.",
+        "How the canvas looks when zoomed in or out. \
+         Auto keeps edges smooth at normal zoom and shows crisp pixels when zoomed in past 100%.",
     ),
     kind: PrefKind::Enum {
         options: PIXEL_FILTER_OPTIONS,
