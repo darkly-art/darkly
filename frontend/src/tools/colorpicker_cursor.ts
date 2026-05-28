@@ -1,18 +1,24 @@
 import { app, type Color } from '../state/app.svelte';
 import { toolRegistry } from './registry';
 import { screenToCanvas } from '../canvas/coordinates';
+import { effectiveMouseClicks } from '../actions/triggers';
+import { parseBinding } from '../actions/hotkey_resolve';
+import { config } from '../config/store.svelte';
 // `?raw` is a Vite import suffix: bundles the file's text content at build
 // time. The SVG file is the single source of truth — we extract the
 // `<path d="..."/>` data from it and compose it with the dynamic color
 // indicator below. Swap the file to change the icon; no code edit needed.
 import colorPickerSvg from '../assets/color-picker.svg?raw';
 
-// Color-picker cursor — SVG builder + armed-state tracking + modifier
-// (Ctrl/Meta) chord.
+// Color-picker cursor — SVG builder + armed-state tracking + modifier chord
+// derived from whatever `sampleColor` is bound to in the active config layer
+// (Krita/GIMP ship `ctrl+drag`, Photoshop ships `alt+drag`; user overrides
+// are honored too).
 //
 // Armed conditions:
 //   1. The color-picker tool is the active tool.
-//   2. A paint-group tool is active AND the user holds Ctrl/Meta. The
+//   2. A paint-group tool is active AND the user holds exactly the
+//      modifier set of one of `sampleColor`'s drag bindings. The
 //      chord-bound `sampleColor` action does the actual pick on
 //      pointerdown; this module just owns the cursor.
 //
@@ -163,11 +169,12 @@ export function colorPickerCursor(
 }
 
 // ---------------------------------------------------------------------------
-// Armed-state machine + Ctrl/Meta tracking
+// Armed-state machine + chord-derived modifier tracking
 // ---------------------------------------------------------------------------
 
 let pressed = false;
-let modifierHeld = false;
+let currentMods: string = '';
+let engagementMods: Set<string> = new Set();
 let pointerDown = false;
 let engaged = false;
 let lastKey: string | null = null;
@@ -177,6 +184,72 @@ let lastKey: string | null = null;
 // active tool's hover overlay on disengage so the dab preview reappears
 // without waiting for the next genuine pointermove.
 let lastCanvas: { x: number; y: number } | null = null;
+
+// Drag verbs the picker arms over. Click/doubleClick chords are excluded
+// because they imply a press (there's no pre-press "armed" phase to
+// preview). Bare-drag chords (no modifiers) would arm on hover with
+// nothing held, which would steal the cursor from the active tool — so
+// `''` is filtered out below.
+const DRAG_VERBS = ['drag', 'rightDrag', 'middleDrag'];
+
+// Canonical modifier order — matches `chordName`/`dragChord` in
+// `actions/triggers.ts` so the strings we produce here compare equal to
+// the chord prefixes those helpers emit.
+const MOD_ORDER = ['ctrl', 'alt', 'shift'];
+
+function canonicalMods(parts: string[]): string {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const m of MOD_ORDER) {
+        if (parts.includes(m) && !seen.has(m)) {
+            seen.add(m);
+            out.push(m);
+        }
+    }
+    return out.join('+');
+}
+
+/** Modifier prefix of a chord, or `null` if the chord isn't a drag chord.
+ *  `"ctrl+drag"` → `"ctrl"`, `"ctrl+alt+rightDrag"` → `"ctrl+alt"`,
+ *  `"drag"` → `""`, `"click"` → `null`. Re-canonicalises modifier order so
+ *  YAML authored as `alt+ctrl+drag` still compares equal. */
+export function modPrefixOfChord(chord: string): string | null {
+    for (const verb of DRAG_VERBS) {
+        if (chord === verb) return '';
+        if (chord.endsWith('+' + verb)) {
+            const prefix = chord.slice(0, -verb.length - 1);
+            return canonicalMods(prefix.split('+'));
+        }
+    }
+    return null;
+}
+
+/** The set of modifier prefixes (e.g. `{"ctrl"}`, `{"alt"}`, or `{"ctrl","alt"}`)
+ *  that, when held alone, should arm the picker cursor over a paint tool.
+ *  Derived from the effective `sampleColor` mouseclick bindings — preset
+ *  swaps and user overrides flow through automatically. */
+export function colorPickerEngagementMods(): Set<string> {
+    const out = new Set<string>();
+    for (const raw of effectiveMouseClicks('sampleColor')) {
+        const { site, scope, chord } = parseBinding(raw);
+        if (site !== null && site !== 'canvas') continue;
+        if (scope !== null && scope !== 'paint') continue;
+        const prefix = modPrefixOfChord(chord);
+        // Skip bare-drag bindings — arming on hover with no modifier
+        // held would fight every paint stroke.
+        if (prefix === null || prefix === '') continue;
+        out.add(prefix);
+    }
+    return out;
+}
+
+function modsFromEvent(e: { ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }): string {
+    const mods: string[] = [];
+    if (e.ctrlKey || e.metaKey) mods.push('ctrl');
+    if (e.altKey) mods.push('alt');
+    if (e.shiftKey) mods.push('shift');
+    return mods.join('+');
+}
 
 function isPaintToolActive(): boolean {
     return toolRegistry.get(app.activeToolId)?.group === 'paint';
@@ -230,10 +303,11 @@ export function tickColorPickerCursor(): void {
 
 /** Engage the picker chord. Refuses while a pointer is already down so
  *  we don't tear an in-flight brush stroke; re-evaluated on pointerup
- *  so a "start stroke, press Ctrl, release pointer" sequence still
- *  arms for the next click. */
+ *  so a "start stroke, press the modifier, release pointer" sequence
+ *  still arms for the next click. */
 function tryEngage(): void {
-    if (engaged || !modifierHeld || pointerDown) return;
+    if (engaged || pointerDown) return;
+    if (!engagementMods.has(currentMods)) return;
     if (!isPaintToolActive()) return;
     engaged = true;
     // Clear any in-flight hover overlay (the brush's dab preview, a
@@ -243,6 +317,17 @@ function tryEngage(): void {
     app.handle?.clear_overlay();
     refreshCursor();
     app.requestFrame();
+}
+
+/** Re-check engagement against the currently-held modifier set. Called
+ *  whenever the held set changes, the binding set changes, or a pointer
+ *  release unblocks engagement. */
+function reevaluate(): void {
+    if (engaged) {
+        if (!engagementMods.has(currentMods)) disengage();
+    } else {
+        if (engagementMods.has(currentMods)) tryEngage();
+    }
 }
 
 function disengage(): void {
@@ -279,33 +364,39 @@ function disengage(): void {
 
 let wired = false;
 
-/** Wire global Ctrl/Meta + pointer tracking. Idempotent. Engages the
- *  picker cursor as soon as the user holds the modifier with a paint
- *  tool active and no stroke in flight, so the cursor reflects the
- *  upcoming sample before the first click. */
+/** Wire global modifier + pointer tracking. Idempotent. The set of
+ *  modifier combinations that arm the picker is sourced from the
+ *  `sampleColor` action's effective mouseclick bindings — so swapping
+ *  the Photoshop preset (alt+drag) for the Krita preset (ctrl+drag) or
+ *  user-overriding the chord flows through automatically. */
 export function setupColorPickerModifierTracking(): void {
     if (wired) return;
     wired = true;
 
-    window.addEventListener('keydown', (e) => {
-        if ((e.key === 'Control' || e.key === 'Meta') && !modifierHeld) {
-            modifierHeld = true;
-            tryEngage();
-        }
+    engagementMods = colorPickerEngagementMods();
+    config.onChange(() => {
+        engagementMods = colorPickerEngagementMods();
+        reevaluate();
     });
-    window.addEventListener('keyup', (e) => {
-        if ((e.key === 'Control' || e.key === 'Meta') && modifierHeld) {
-            modifierHeld = false;
-            disengage();
-        }
-    });
-    // Window blur (alt-tab, OS focus change) can strand `modifierHeld`
-    // or `pointerDown` at true when the OS swallows the corresponding
-    // up event. Reset on blur.
+
+    // Any key event (not just the modifier keys themselves) carries the
+    // full modifier state. Read it off the event so we never have to
+    // know which physical keys map to which chord modifier.
+    const onKey = (e: KeyboardEvent) => {
+        const next = modsFromEvent(e);
+        if (next === currentMods) return;
+        currentMods = next;
+        reevaluate();
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+
+    // Window blur (alt-tab, OS focus change) can strand modifier state
+    // at "held" when the OS swallows the corresponding up event. Reset.
     window.addEventListener('blur', () => {
-        if (modifierHeld) {
-            modifierHeld = false;
-            disengage();
+        if (currentMods !== '') {
+            currentMods = '';
+            reevaluate();
         }
         pointerDown = false;
     });
@@ -315,7 +406,7 @@ export function setupColorPickerModifierTracking(): void {
     window.addEventListener('pointerdown', () => { pointerDown = true; });
     window.addEventListener('pointerup', () => {
         pointerDown = false;
-        if (modifierHeld) tryEngage();
+        reevaluate();
     });
     window.addEventListener('pointercancel', () => { pointerDown = false; });
 
@@ -323,7 +414,15 @@ export function setupColorPickerModifierTracking(): void {
     // we keep getting moves while CanvasView suppresses the active tool's
     // dispatch (during modifier-held). Off-canvas → null, so a release
     // outside the canvas doesn't spuriously re-establish an overlay.
+    // Pointer events also expose modifier state, so we use them to pick
+    // up drift if a keydown/keyup was swallowed (focus changes can lose
+    // them).
     window.addEventListener('pointermove', (e) => {
+        const next = modsFromEvent(e);
+        if (next !== currentMods) {
+            currentMods = next;
+            reevaluate();
+        }
         const canvasEl = app.canvasEl;
         if (!canvasEl) {
             lastCanvas = null;

@@ -220,7 +220,10 @@ class ConfigStore {
                         // Tidy: an empty user layer doesn't need a file.
                         await storage.remove(USER_SETTINGS_FILE);
                     } else {
-                        await writeJson(USER_SETTINGS_FILE, snapshot);
+                        await writeJson(USER_SETTINGS_FILE, {
+                            version: config_version(),
+                            values: snapshot,
+                        } satisfies UserSettingsFile);
                     }
                 } catch (e) {
                     console.error('[config] user-settings write failed', e);
