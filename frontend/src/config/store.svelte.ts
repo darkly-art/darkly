@@ -7,6 +7,7 @@ import {
 } from '../storage';
 import type { SectionInfo } from './schema';
 import { validateOverrides } from './validate';
+import { actions } from '../actions/registry';
 
 /**
  * Two layers, no live "preset" layer:
@@ -444,11 +445,21 @@ export function formatHotkey(binding: string | undefined): string | undefined {
 }
 
 /**
- * Build a tooltip combining a label with the action's bound hotkey, if any.
- * Returns "Label (Hotkey)" when bound, just "Label" otherwise. Reactive to
- * `hotkeys.<actionId>` config — re-runs whenever the user rebinds.
+ * Build a tooltip combining a label with the action's effective hotkey, if
+ * any. Resolves user override (`hotkeys.<id>` in config) first, falling back
+ * to the action's registered `defaultHotkey`. An empty-string override means
+ * "explicitly unbound" — same semantics as `effectiveHotkey()`. Reactive to
+ * the config so re-runs whenever the user rebinds.
  */
 export function tooltipForAction(label: string, actionId: string): string {
-    const hk = formatHotkey(config.get(`hotkeys.${actionId}`) as string | undefined);
+    const override = config.get(`hotkeys.${actionId}`);
+    let binding: string | undefined;
+    if (typeof override === 'string') {
+        binding = override || undefined;
+    } else {
+        const def = actions.get(actionId)?.defaultHotkey;
+        binding = Array.isArray(def) ? def.find(Boolean) : def || undefined;
+    }
+    const hk = formatHotkey(binding);
     return hk ? `${label} (${hk})` : label;
 }
