@@ -59,7 +59,7 @@ use std::sync::Arc;
 
 use darkly::brush::paint_info::PaintInformation;
 use darkly::document::{MoveTarget, SelectionMode};
-use darkly::engine::{DarklyEngine, StrokeOp};
+use darkly::engine::{DarklyEngine, PickSource, StrokeOp};
 use darkly::gpu::context::{GpuContext, GpuDevice};
 use darkly::gpu::overlay::OverlayPrimitive;
 use darkly::gpu::params::{ParamDef, ParamValue};
@@ -178,8 +178,11 @@ enum Command {
     SetBrushBlendMode(u32),
     ResetBrushGraph,
 
-    // Color pick (pointer-frequency, starts async readback)
-    PickColor(f32, f32),
+    // Color pick (pointer-frequency, starts async readback).
+    // `layer_id` follows the f64 negative-means-none convention used by
+    // `paste_layer_rich` and friends: `< 0.0` → `PickSource::Merged`;
+    // otherwise → `PickSource::Layer(LayerId::from_ffi(...))`.
+    PickColor(f32, f32, f64),
 
     // Document name (queued — rename is fire-and-forget)
     SetDocumentName(String),
@@ -312,8 +315,13 @@ fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
             Command::SetBrushBlendMode(m) => engine.set_brush_blend_mode(m),
             Command::ResetBrushGraph => engine.reset_brush_graph(),
 
-            Command::PickColor(x, y) => {
-                engine.pick_color(x, y);
+            Command::PickColor(x, y, layer_id) => {
+                let source = if layer_id >= 0.0 {
+                    PickSource::Layer(LayerId::from_ffi(layer_id as u64))
+                } else {
+                    PickSource::Merged
+                };
+                engine.pick_color(x, y, source);
             }
 
             Command::SetDocumentName(name) => engine.set_document_name(name),
@@ -1022,8 +1030,13 @@ impl DarklyHandle {
 
     /// Start an async color pick. Returns the last picked color immediately
     /// for responsive UI — the real result arrives on the next frame.
-    pub fn pick_color(&self, x: f32, y: f32) -> Vec<u8> {
-        self.push(Command::PickColor(x, y));
+    ///
+    /// `layer_id < 0` samples the merged composite. `layer_id >= 0` samples
+    /// that specific layer's raster texture, falling back to the merged
+    /// composite if the layer can't be sampled (group, mask, or point
+    /// outside the layer extent).
+    pub fn pick_color(&self, x: f32, y: f32, layer_id: f64) -> Vec<u8> {
+        self.push(Command::PickColor(x, y, layer_id));
         // Return cached value without flushing — pick_color is pointer-frequency
         // and the cached value provides immediate feedback.
         self.engine.borrow().last_picked_color().to_vec()

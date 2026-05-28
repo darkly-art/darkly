@@ -11,6 +11,7 @@ import { copyToSystemClipboard, readImageFromClipboard, readLayerFromClipboard }
 import { brushGraph } from '../state/brush_graph.svelte';
 import { brushSession } from '../tools/brush.svelte';
 import { registerBrushParamActions } from './brush_params';
+import { registerSampleColorAction } from './sample_color';
 import { screenToCanvas } from '../canvas/coordinates';
 import { pickOpenFile, type OpenedFile } from '../storage/fileHandle';
 import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
@@ -749,6 +750,9 @@ export function registerActions() {
 
     // -- Brush parameters (size hotkeys + shift+drag scrub) --
     registerBrushParamActions();
+
+    // -- Modifier-held eyedropper (Ctrl+drag → sample color) --
+    registerSampleColorAction();
 
     // -- Brush builder --
     actions.register({

@@ -4048,3 +4048,121 @@ fn locked_layer_rejects_modifications() {
     // Keep `other` referenced so the compiler doesn't warn about it.
     let _ = other;
 }
+
+// ============================================================================
+// Eyedropper PickSource — verifies the layer-source path, the merged source
+// path, and the fallback-to-merged behavior when a layer source can't be
+// sampled (point outside the layer's extent).
+// ============================================================================
+
+/// Build a flat RGBA buffer of `width * height` pixels filled with `color`.
+fn flat_rgba(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+    let mut v = Vec::with_capacity((width * height * 4) as usize);
+    for _ in 0..(width * height) {
+        v.extend_from_slice(&color);
+    }
+    v
+}
+
+#[test]
+fn pick_color_layer_vs_merged_vs_outside_extent() {
+    use darkly::engine::PickSource;
+
+    let (w, h) = (128, 128);
+    let mut engine = test_engine(w, h);
+
+    // Bottom layer: solid opaque red, full canvas.
+    let bottom_pixels = flat_rgba(w, h, [200, 0, 0, 255]);
+    let bottom_id = engine.paste_image(w, h, &bottom_pixels, 0, 0, None);
+
+    // Top layer: a 32x32 patch of half-alpha blue at offset (10, 10). The
+    // half-alpha forces the merged composite to differ from either raw
+    // layer pixel — without that, an opaque top would make Merged equal
+    // to Layer(top), and the test would prove nothing about source choice.
+    let top_w = 32;
+    let top_h = 32;
+    let top_off = (10i32, 10i32);
+    let top_pixels = flat_rgba(top_w, top_h, [0, 0, 200, 128]);
+    let top_id = engine.paste_image(
+        top_w,
+        top_h,
+        &top_pixels,
+        top_off.0,
+        top_off.1,
+        Some(bottom_id),
+    );
+
+    // Drive the compositor so `composited_texture()` reflects the layers.
+    // Headless `render()` no-ops the composite; this forces an offscreen pass.
+    let _ = engine.test_readback_canvas();
+
+    // Inside the top layer's extent (canvas 20, 20 → top-local 10, 10).
+    let inside_x = 20.0_f32;
+    let inside_y = 20.0_f32;
+
+    // --- PickSource::Layer(top): raw bytes from the top layer's texture. ---
+    engine.pick_color(inside_x, inside_y, PickSource::Layer(top_id));
+    engine.test_flush_readbacks();
+    let layer_top = engine.last_picked_color();
+    assert_eq!(
+        layer_top,
+        [0, 0, 200, 128],
+        "Layer(top) must return the raw top-layer pixel, not the composite"
+    );
+
+    // --- PickSource::Layer(bottom): raw bytes from the bottom layer. ---
+    engine.pick_color(inside_x, inside_y, PickSource::Layer(bottom_id));
+    engine.test_flush_readbacks();
+    let layer_bottom = engine.last_picked_color();
+    assert_eq!(
+        layer_bottom,
+        [200, 0, 0, 255],
+        "Layer(bottom) must return the raw bottom-layer pixel"
+    );
+
+    // --- PickSource::Merged: blended composite, must differ from both raw layers. ---
+    engine.pick_color(inside_x, inside_y, PickSource::Merged);
+    engine.test_flush_readbacks();
+    let merged = engine.last_picked_color();
+    assert_ne!(
+        merged, layer_top,
+        "Merged must differ from Layer(top); the half-alpha top must blend with red bottom"
+    );
+    assert_ne!(
+        merged, layer_bottom,
+        "Merged must differ from Layer(bottom); the top must contribute to the blend"
+    );
+    // Loose sanity: a half-alpha blue over red blends to purple-ish — red
+    // and blue channels should both be non-trivial. Exact values depend on
+    // the compositor's blend-shader rounding, so don't pin them.
+    assert!(
+        merged[0] > 50 && merged[2] > 50,
+        "Merged should carry both red (from bottom) and blue (from top); got {:?}",
+        merged
+    );
+
+    // --- Outside the top layer's extent: Layer(top) must fall back to Merged. ---
+    // (80, 80) is well outside the top patch (which spans 10..42 in both axes).
+    let outside_x = 80.0_f32;
+    let outside_y = 80.0_f32;
+
+    engine.pick_color(outside_x, outside_y, PickSource::Layer(top_id));
+    engine.test_flush_readbacks();
+    let outside_top = engine.last_picked_color();
+
+    engine.pick_color(outside_x, outside_y, PickSource::Merged);
+    engine.test_flush_readbacks();
+    let outside_merged = engine.last_picked_color();
+
+    assert_eq!(
+        outside_top, outside_merged,
+        "Layer(top) at a point outside the top extent must fall back to Merged, not return [0;4]"
+    );
+    // Bottom is opaque and the top doesn't cover this point, so the
+    // composite there equals the bottom's raw color.
+    assert_eq!(
+        outside_merged,
+        [200, 0, 0, 255],
+        "Where only bottom covers, Merged equals bottom (sanity check on the test setup)"
+    );
+}

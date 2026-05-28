@@ -9,6 +9,7 @@ pub mod edit;
 pub mod input;
 pub mod nav;
 pub mod rendering;
+pub mod tools;
 pub mod ui;
 
 use crate::config::schema::SchemaSection;
@@ -23,6 +24,7 @@ pub fn registrations() -> Vec<SchemaSection> {
         input::register(),
         nav::register(),
         rendering::register(),
+        tools::register(),
         ui::register(),
     ]
 }

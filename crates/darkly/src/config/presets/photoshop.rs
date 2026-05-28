@@ -21,10 +21,11 @@ pub fn register() -> Preset {
             // the global `Delete` → clearSelectionContents binding.
             ("deleteLayer", "layerPanel:Delete"),
         ],
-        // No preset-specific mouse overrides for isolation: the action's
-        // defaults (`layerThumb:alt+click` and `maskThumb:alt+click`)
-        // match the "alt+click on a preview" rule we want everywhere.
-        mouse_clicks: &[],
+        mouse_clicks: &[
+            // Eyedropper modifier: Photoshop uses Alt+drag (not Ctrl+drag,
+            // which is the Krita default we inherit elsewhere).
+            ("sampleColor", "canvas@paint:alt+drag"),
+        ],
         settings: &[],
     }
 }

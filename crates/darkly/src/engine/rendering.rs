@@ -1,14 +1,56 @@
 //! Rendering, view transform, thumbnails, undo/redo, and async readback polling.
 
 use super::{DarklyEngine, ReadbackContext};
-use crate::coord::CanvasRect;
+use crate::coord::{CanvasPoint, CanvasRect, LayerRect};
 use crate::gpu::atlas::CanvasFrame;
+use crate::gpu::compositor::Compositor;
 use crate::gpu::context::GpuContext;
 use crate::gpu::readback::{self, ReadbackScheduler};
 use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
 use crate::gpu::view::ViewTransform;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
+
+/// Which surface the eyedropper samples from. Type-owned dispatch via
+/// `resolve` — `pick_color` never matches on the variant.
+#[derive(Copy, Clone, Debug)]
+pub enum PickSource {
+    /// The merged root composite (default behavior).
+    Merged,
+    /// A specific layer's raster texture, in layer-local space.
+    Layer(LayerId),
+}
+
+impl PickSource {
+    /// Resolve to `(texture, 1x1 read rect)` if the source can be sampled at
+    /// the given canvas pixel. Returns `None` for layer sources whose lookup
+    /// fails: missing texture (groups, voids without a node texture),
+    /// non-Rgba8 formats (masks), or canvas point outside the layer extent.
+    /// Callers fall back to `Merged` in that case.
+    fn resolve<'a>(
+        &self,
+        compositor: &'a Compositor,
+        px: u32,
+        py: u32,
+    ) -> Option<(&'a wgpu::Texture, LayerRect)> {
+        match self {
+            // Composited texture is canvas-aligned: canvas coords == texture
+            // coords, so a 1x1 layer rect at (px, py) names the same pixel.
+            PickSource::Merged => Some((
+                compositor.composited_texture(),
+                LayerRect::from_xywh(px, py, 1, 1),
+            )),
+            PickSource::Layer(id) => {
+                let layer_tex = compositor.node_texture(*id)?;
+                if layer_tex.format() != wgpu::TextureFormat::Rgba8Unorm {
+                    return None;
+                }
+                let p = layer_tex.canvas_to_layer(CanvasPoint::new(px as i32, py as i32))?;
+                Some((layer_tex.texture(), LayerRect::from_xywh(p.x, p.y, 1, 1)))
+            }
+        }
+    }
+}
 
 /// Thumbnail size used for the layer panel previews. Single source of
 /// truth — the frontend reads it via `engine_default_thumb_size()` so
@@ -58,7 +100,12 @@ impl DarklyEngine {
     }
 
     /// Start an async color pick at canvas coordinates.
-    pub fn pick_color(&mut self, x: f32, y: f32) -> [u8; 4] {
+    ///
+    /// `source` selects which surface to sample. If a `Layer` source can't be
+    /// resolved (group with no exposed cache, non-Rgba8 texture, or point
+    /// outside the layer extent), falls back to the merged composite so the
+    /// "current layer" setting never silently no-ops.
+    pub fn pick_color(&mut self, x: f32, y: f32, source: PickSource) -> [u8; 4] {
         let canvas_w = self.compositor.canvas_width();
         let canvas_h = self.compositor.canvas_height();
         let px = x as u32;
@@ -68,17 +115,21 @@ impl DarklyEngine {
             return [0, 0, 0, 0];
         }
 
-        let texture = self.compositor.composited_texture();
+        let resolved = source.resolve(&self.compositor, px, py).or_else(|| {
+            // Layer source couldn't be sampled — fall back to merged.
+            PickSource::Merged.resolve(&self.compositor, px, py)
+        });
+        let Some((texture, rect)) = resolved else {
+            return [0, 0, 0, 0];
+        };
+
         self.gpu.encode("pick-color", |encoder| {
-            // Composited texture is canvas-aligned: canvas coords == texture
-            // coords here, so a single-pixel layer rect at (px, py) names the
-            // same pixel either way.
             let request = readback::request_readback(
                 &self.gpu.device,
                 encoder,
                 texture,
                 wgpu::TextureFormat::Rgba8Unorm,
-                crate::coord::LayerRect::from_xywh(px, py, 1, 1),
+                rect,
             );
             self.readbacks.submit(request, ReadbackContext::ColorPick);
         });

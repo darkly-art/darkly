@@ -6,6 +6,7 @@
     import { nav } from './navigation.svelte';
     import { toolRegistry } from '../tools/registry';
     import type { ToolContext } from '../tools/registry';
+    import { isEyedropperArmed } from '../tools/eyedropper_cursor';
     import { screenToCanvas } from './coordinates';
     import { toast } from '../state/toast.svelte';
     import { theme } from '../state/theme.svelte';
@@ -237,6 +238,23 @@
         if (!ctx) return;
         const pos = getCanvasCoords(e);
         const tool = toolRegistry.get(inst.activeToolId);
+
+        // When the modifier-held eyedropper is armed over a non-colorpicker
+        // paint tool, suppress the tool's hover handler so its preview
+        // overlay (e.g. brush dab) and cursor mutation don't compete with
+        // the eyedropper. Allow the call through if the user is mid-drag
+        // (`buttons & 1`) so a stroke started before the modifier was
+        // pressed keeps going. The colorpicker tool itself stays
+        // unaffected — its onPointerMove drives `startPick`.
+        const armedOverPaintTool =
+            isEyedropperArmed()
+            && tool?.id !== 'colorpicker'
+            && (e.buttons & 1) === 0;
+        if (armedOverPaintTool) {
+            inst.requestFrame();
+            return;
+        }
+
         tool?.onPointerMove(ctx, e, pos.x, pos.y);
         inst.requestFrame();
     }

@@ -44,7 +44,12 @@ export interface Tool {
     /** Optional: return true to consume this pointerdown before global
      *  drag chords (e.g. shift+drag → brush-size scrub) are dispatched.
      *  Tools with their own pointer-driven UI (handles, anchors, gizmos)
-     *  use this to prevent chord interception while their UI is active. */
+     *  use this to prevent chord interception while their UI is active.
+     *
+     *  Also useful for preempting a modifier-held chord — return `true` when
+     *  the relevant modifier is held to stop a global modifier+drag binding
+     *  (e.g. `ctrl+drag` → sample color) from intercepting. `claimsPointer`
+     *  runs before `dispatchDrag` in `CanvasView.onPointerDown`. */
     claimsPointer?(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): boolean;
     onPointerDown(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
     onPointerMove(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
