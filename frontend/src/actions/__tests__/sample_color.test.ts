@@ -92,3 +92,45 @@ describe('sampleColor chord resolution (canvas@paint)', () => {
         expect(resolved).toBeNull();
     });
 });
+
+// `mods.ts` caches the platform at module load, so each test re-imports
+// the module after re-mocking. Mirrors what `rebuildClickIndex` does at
+// runtime: substitute `$mod` in the binding, then build the index.
+describe('sampleColor chord resolution with the preset $mod+drag binding', () => {
+    async function loadModsAs(os: 'linux' | 'windows' | 'macos') {
+        vi.resetModules();
+        vi.doMock('../../platform', () => ({
+            detectPlatform: () => ({ os, browser: 'chromium' }),
+        }));
+        return await import('../mods');
+    }
+
+    it('resolves on a literal ctrl+drag event on Linux (Krita/GIMP preset)', async () => {
+        const { substituteModInBinding } = await loadModsAs('linux');
+        const { buildChordIndex, resolveChord } = await import('../hotkey_resolve');
+        const idx = buildChordIndex([
+            { actionId: 'sampleColor', bindings: [substituteModInBinding('canvas@paint:$mod+drag')] },
+        ]);
+        // On Linux, $mod → ctrl, so the matcher looks up under 'ctrl+drag'.
+        const entries = idx.get('ctrl+drag');
+        expect(entries).toBeDefined();
+        const resolved = resolveChord(entries!, [{ name: 'canvas' }], 'paint');
+        expect(resolved?.entry.actionId).toBe('sampleColor');
+        // And NOT under 'meta+drag' (the Super key on Linux).
+        expect(idx.get('meta+drag')).toBeUndefined();
+    });
+
+    it('resolves on a literal meta+drag event on macOS (Cmd+drag)', async () => {
+        const { substituteModInBinding } = await loadModsAs('macos');
+        const { buildChordIndex, resolveChord } = await import('../hotkey_resolve');
+        const idx = buildChordIndex([
+            { actionId: 'sampleColor', bindings: [substituteModInBinding('canvas@paint:$mod+drag')] },
+        ]);
+        const entries = idx.get('meta+drag');
+        expect(entries).toBeDefined();
+        const resolved = resolveChord(entries!, [{ name: 'canvas' }], 'paint');
+        expect(resolved?.entry.actionId).toBe('sampleColor');
+        // And NOT under 'ctrl+drag' (a literal Ctrl press on Mac).
+        expect(idx.get('ctrl+drag')).toBeUndefined();
+    });
+});

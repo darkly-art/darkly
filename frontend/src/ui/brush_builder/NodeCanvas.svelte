@@ -2,6 +2,7 @@
     import { onMount, setContext, tick } from 'svelte';
     import { brushGraph, WIRE_COLORS } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
+    import { isModEvent } from '../../actions/mods';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
 
@@ -182,7 +183,7 @@
     function onWheel(e: WheelEvent) {
         e.preventDefault();
         wheelBegin();
-        if (e.ctrlKey || e.metaKey) {
+        if (isModEvent(e)) {
             const factor = Math.exp(-e.deltaY * 0.002);
             const newZoom = Math.max(0.2, Math.min(3, zoom * factor));
             const rect = containerEl.getBoundingClientRect();

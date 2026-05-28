@@ -3,6 +3,7 @@ import { toolRegistry } from './registry';
 import { screenToCanvas } from '../canvas/coordinates';
 import { effectiveMouseClicks } from '../actions/triggers';
 import { parseBinding } from '../actions/hotkey_resolve';
+import { canonicalModsFromEvent, substituteMod, MOD_ORDER } from '../actions/mods';
 import { config } from '../config/store.svelte';
 // `?raw` is a Vite import suffix: bundles the file's text content at build
 // time. The SVG file is the single source of truth — we extract the
@@ -192,11 +193,6 @@ let lastCanvas: { x: number; y: number } | null = null;
 // `''` is filtered out below.
 const DRAG_VERBS = ['drag', 'rightDrag', 'middleDrag'];
 
-// Canonical modifier order — matches `chordName`/`dragChord` in
-// `actions/triggers.ts` so the strings we produce here compare equal to
-// the chord prefixes those helpers emit.
-const MOD_ORDER = ['ctrl', 'alt', 'shift'];
-
 function canonicalMods(parts: string[]): string {
     const seen = new Set<string>();
     const out: string[] = [];
@@ -234,7 +230,9 @@ export function colorPickerEngagementMods(): Set<string> {
         const { site, scope, chord } = parseBinding(raw);
         if (site !== null && site !== 'canvas') continue;
         if (scope !== null && scope !== 'paint') continue;
-        const prefix = modPrefixOfChord(chord);
+        // `$mod` → platform primitive (`ctrl`/`meta`) so the result matches
+        // what `modsFromEvent` reports off a real KeyboardEvent.
+        const prefix = modPrefixOfChord(substituteMod(chord));
         // Skip bare-drag bindings — arming on hover with no modifier
         // held would fight every paint stroke.
         if (prefix === null || prefix === '') continue;
@@ -244,11 +242,7 @@ export function colorPickerEngagementMods(): Set<string> {
 }
 
 function modsFromEvent(e: { ctrlKey: boolean; altKey: boolean; shiftKey: boolean; metaKey: boolean }): string {
-    const mods: string[] = [];
-    if (e.ctrlKey || e.metaKey) mods.push('ctrl');
-    if (e.altKey) mods.push('alt');
-    if (e.shiftKey) mods.push('shift');
-    return mods.join('+');
+    return canonicalModsFromEvent(e).join('+');
 }
 
 function isPaintToolActive(): boolean {

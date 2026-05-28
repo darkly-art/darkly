@@ -27,10 +27,11 @@ hotkeys:
   invertSelection: $mod+KeyI
 
 mouse_clicks:
-  # GIMP doesn't ship a modifier-held color-pick on paint tools by default;
-  # the eyedropper is reached through the Color Picker tool (KeyO). Match the
-  # Krita ctrl+drag convention so Darkly's chord stays useful.
-  sampleColor: canvas@paint:ctrl+drag
+  # GIMP's "Sample colour into the foreground swatch" (temporary Color Picker)
+  # is Ctrl+click on paint tools — Cmd+click on macOS, via GTK's `<primary>`
+  # modifier role. Darkly uses drag (continuous sample while held) instead of
+  # click; `$mod` carries the platform swap.
+  sampleColor: canvas@paint:$mod+drag
 
 settings:
   tools.colorPickerSampleSource: merged

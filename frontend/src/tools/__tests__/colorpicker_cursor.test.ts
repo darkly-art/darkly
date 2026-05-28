@@ -63,7 +63,7 @@ describe('modPrefixOfChord', () => {
 });
 
 describe('colorPickerEngagementMods (sampleColor binding → arm set)', () => {
-    it('follows the Krita/GIMP ctrl+drag binding', () => {
+    it('follows a literal ctrl+drag binding', () => {
         fakeConfig._binding = 'canvas@paint:ctrl+drag';
         const mods = colorPickerEngagementMods();
         expect(mods.has('ctrl')).toBe(true);
@@ -112,5 +112,68 @@ describe('colorPickerEngagementMods (sampleColor binding → arm set)', () => {
         fakeConfig._binding = '';
         const mods = colorPickerEngagementMods();
         expect(mods.size).toBe(0);
+    });
+});
+
+// `$mod` resolution is platform-dependent and `mods.ts` caches the platform
+// at module load, so each case re-mocks `platform.ts` and re-imports the
+// module under test. The other mocks (app/config/svg) remain registered
+// from the top-of-file `vi.mock` calls and re-apply after `resetModules`.
+describe('colorPickerEngagementMods — $mod resolution per platform', () => {
+    async function loadAs(os: 'linux' | 'windows' | 'macos') {
+        vi.resetModules();
+        vi.doMock('../../platform', () => ({
+            detectPlatform: () => ({ os, browser: 'chromium' }),
+        }));
+        return await import('../colorpicker_cursor');
+    }
+
+    it('Krita/GIMP $mod+drag binding arms on ctrl (not meta) on Linux', async () => {
+        fakeConfig._binding = 'canvas@paint:$mod+drag';
+        const mod = await loadAs('linux');
+        const mods = mod.colorPickerEngagementMods();
+        expect(mods.has('ctrl')).toBe(true);
+        expect(mods.has('meta')).toBe(false);
+    });
+
+    it('Krita/GIMP $mod+drag binding arms on ctrl (not meta) on Windows', async () => {
+        fakeConfig._binding = 'canvas@paint:$mod+drag';
+        const mod = await loadAs('windows');
+        const mods = mod.colorPickerEngagementMods();
+        expect(mods.has('ctrl')).toBe(true);
+        expect(mods.has('meta')).toBe(false);
+    });
+
+    it('Krita/GIMP $mod+drag binding arms on meta (Cmd, not ctrl) on macOS', async () => {
+        fakeConfig._binding = 'canvas@paint:$mod+drag';
+        const mod = await loadAs('macos');
+        const mods = mod.colorPickerEngagementMods();
+        expect(mods.has('meta')).toBe(true);
+        expect(mods.has('ctrl')).toBe(false);
+    });
+
+    it('regression: Photoshop alt+drag arms on alt on every platform', async () => {
+        fakeConfig._binding = 'canvas@paint:alt+drag';
+        for (const os of ['linux', 'windows', 'macos'] as const) {
+            const mod = await loadAs(os);
+            const mods = mod.colorPickerEngagementMods();
+            expect(mods.has('alt')).toBe(true);
+            expect(mods.has('ctrl')).toBe(false);
+            expect(mods.has('meta')).toBe(false);
+        }
+    });
+
+    it('regression: a literal ctrl binding does NOT match meta (Super key) on Linux', async () => {
+        // The original bug: the metaKey→ctrl fold meant holding the
+        // Windows/Super key on Linux phantom-armed the picker on any
+        // ctrl-based binding. With the fold gone, the engagement set is
+        // {'ctrl'} — and `currentMods` derived from canonicalModsFromEvent
+        // reports `'meta'` (not `'ctrl'`) when only Super is held, so
+        // engagement check fails. We assert the engagement set directly.
+        fakeConfig._binding = 'canvas@paint:ctrl+drag';
+        const mod = await loadAs('linux');
+        const mods = mod.colorPickerEngagementMods();
+        expect(mods.has('ctrl')).toBe(true);
+        expect(mods.has('meta')).toBe(false);
     });
 });

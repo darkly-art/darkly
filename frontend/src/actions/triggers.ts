@@ -1,17 +1,17 @@
 import { actions } from './registry';
 import { config } from '../config/store.svelte';
 import { buildChordIndex, resolveChord, type ChordEntry } from './hotkey_resolve';
+import { canonicalModsFromEvent, substituteModInBinding } from './mods';
 import { app } from '../state/app.svelte';
 import { toolRegistry } from '../tools/registry';
 
 /** Derive a canonical chord from a MouseEvent's modifier state.
  *  Format: sorted modifiers joined with '+', then the interaction type.
- *  Examples: "click", "alt+click", "ctrl+shift+doubleClick" */
+ *  Examples: "click", "alt+click", "ctrl+shift+doubleClick".
+ *  Primitive modifier vocabulary — `$mod` is resolved at chord-index
+ *  build time (see `rebuildClickIndex`), not here. */
 export function chordName(e: MouseEvent): string {
-    const mods: string[] = [];
-    if (e.ctrlKey || e.metaKey) mods.push('ctrl');
-    if (e.altKey) mods.push('alt');
-    if (e.shiftKey) mods.push('shift');
+    const mods = canonicalModsFromEvent(e);
 
     let interaction: string;
     if (e.button === 1) {
@@ -27,12 +27,9 @@ export function chordName(e: MouseEvent): string {
 
 /** Drag chord from a pointerdown event.
  *  Format: sorted modifiers joined with '+', then a button-typed drag verb.
- *  Examples: "drag", "shift+drag", "alt+rightDrag", "middleDrag" */
+ *  Examples: "drag", "shift+drag", "alt+rightDrag", "middleDrag". */
 export function dragChord(e: PointerEvent): string {
-    const mods: string[] = [];
-    if (e.ctrlKey || e.metaKey) mods.push('ctrl');
-    if (e.altKey) mods.push('alt');
-    if (e.shiftKey) mods.push('shift');
+    const mods = canonicalModsFromEvent(e);
 
     const verb =
         e.button === 1 ? 'middleDrag'
@@ -86,7 +83,15 @@ let clickIndex: Map<string, ChordEntry[]> = new Map();
 
 export function rebuildClickIndex() {
     clickIndex = buildChordIndex(
-        actions.all().map(a => ({ actionId: a.id, bindings: effectiveMouseClicks(a.id) })),
+        actions.all().map(a => ({
+            actionId: a.id,
+            // Resolve `$mod` to the platform's primitive (`ctrl`/`meta`) once,
+            // here, so the runtime matcher in `dispatchClick`/`dispatchDrag`
+            // compares literal-vs-literal. Tinykeys does the same for keyboard
+            // bindings internally; mouse chords need their own pass because
+            // they don't go through tinykeys.
+            bindings: effectiveMouseClicks(a.id).map(substituteModInBinding),
+        })),
     );
 }
 
