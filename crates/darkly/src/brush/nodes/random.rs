@@ -21,9 +21,11 @@ use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
+pub const TYPE_ID: &str = "random";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "random",
+        type_id: TYPE_ID,
         category: "input",
         display_name: "Random",
         ports: vec![PortDef::output("value", BrushWireType::Scalar)
@@ -40,6 +42,8 @@ pub fn register() -> BrushNodeRegistration {
             },
         ],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

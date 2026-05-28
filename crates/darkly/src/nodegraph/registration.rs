@@ -28,4 +28,15 @@ pub struct NodeRegistration<W: WireKind> {
     pub params: &'static [ParamDef],
     /// Whether this node requires GPU execution.
     pub is_gpu: bool,
+    /// True for output terminals whose upstream graph fuses into a
+    /// compiled WGSL fragment shader. The dispatch walk in the runner
+    /// skips every upstream GPU node when one of these is present —
+    /// their contribution lives inside the terminal's compiled shader,
+    /// only the terminal itself runs to queue dabs and flush.
+    pub is_terminal: bool,
+    /// Whether this terminal honours erase mode (paint vs. erase).
+    /// Defaults `true`; smear/displace terminals that sample existing
+    /// pixels (smudge, watercolor, liquify) override to `false` so the
+    /// brush-tool options bar hides the erase toggle.
+    pub supports_erase: bool,
 }

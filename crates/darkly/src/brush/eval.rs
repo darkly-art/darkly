@@ -14,6 +14,7 @@ use crate::nodegraph::{
 };
 
 use super::curve_math::CurveLut;
+use super::nodes::{paint_color, pen_input};
 
 use super::gpu_context::BrushGpuContext;
 use super::wgsl_compile::CompiledBrush;
@@ -300,34 +301,6 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// passes inline keep the default no-op.
     fn flush_dabs(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
 
-    /// Does this terminal honor `BrushGpuContext::blend_mode` (paint vs.
-    /// erase)? Default `true` — most terminals do, and non-terminal
-    /// nodes never see blend_mode so the value is unread for them.
-    /// Output terminals that ignore the flag (liquify, watercolor,
-    /// smudge — erase semantics don't apply to warp/smear) override to
-    /// `false` so the brush-tool UI can hide the erase toggle.
-    /// `active_brush_supports_erase` ANDs across each output node's
-    /// flag to decide whether the active brush supports erase at all.
-    fn supports_erase(&self) -> bool {
-        true
-    }
-
-    /// True for every terminal whose upstream graph fuses into a
-    /// compiled WGSL fragment shader. The dispatch walk in
-    /// [`BrushGraphRunner::dispatch_gpu`] skips every upstream GPU
-    /// node when one of these is present (their contribution lives
-    /// inside the terminal's compiled shader) — only the terminal
-    /// itself runs to queue dabs and flush.
-    ///
-    /// Default `false`. Terminals override to `true`. Type-owned
-    /// dispatch — there is no central list of compiled terminals
-    /// anywhere in the project. This method goes away entirely once
-    /// every upstream GPU node implements `compile_wgsl` (then the
-    /// dispatch walk has nothing to skip).
-    fn is_terminal(&self) -> bool {
-        false
-    }
-
     /// Emit this node's contribution to a compiled WGSL fragment
     /// shader. Used only by brushes that terminate in `paint`
     /// (the compiled execution path); brushes on the per-dab dispatch
@@ -483,7 +456,7 @@ impl BrushGraphRunner {
         let pen_input_slots = plan
             .steps
             .iter()
-            .find(|s| s.type_id == "pen_input")
+            .find(|s| s.type_id == pen_input::TYPE_ID)
             .map(|s| s.output_slots.clone())
             .unwrap_or_default();
 
@@ -491,7 +464,7 @@ impl BrushGraphRunner {
         let paint_color_slot = plan
             .steps
             .iter()
-            .find(|s| s.type_id == "paint_color")
+            .find(|s| s.type_id == paint_color::TYPE_ID)
             .and_then(|s| s.output_slots.iter().find(|(name, _)| name == "color"))
             .map(|(_, slot)| *slot);
 
@@ -522,18 +495,13 @@ impl BrushGraphRunner {
     }
 
     /// Returns `true` if the graph terminates in a compiled-WGSL
-    /// terminal (any node whose evaluator overrides
-    /// [`BrushNodeEvaluator::is_terminal`] to return `true`).
-    /// Type-owned dispatch: no central list of terminal type_ids.
-    /// Used by [`crate::brush::compile_graph`] to decide whether to
-    /// run the WGSL compile step.
+    /// terminal (any node whose registration sets `is_terminal: true`).
+    /// Type-owned dispatch: no central list of terminal type_ids — the
+    /// compiler stamps the flag onto every [`ExecStep`] from the
+    /// registry. Used by [`crate::brush::compile_graph`] to decide
+    /// whether to run the WGSL compile step.
     pub fn has_terminal(&self) -> bool {
-        self.plan.steps.iter().any(|step| {
-            self.evaluators
-                .get(&step.type_id)
-                .map(|ev| ev.is_terminal())
-                .unwrap_or(false)
-        })
+        self.plan.steps.iter().any(|step| step.is_terminal)
     }
 
     /// Build a name → value map of every output slot in the graph,
@@ -604,7 +572,10 @@ impl BrushGraphRunner {
     pub fn execute_cpu(&mut self) {
         for step in &self.plan.steps {
             // Skip pen_input (seeded directly) and GPU nodes.
-            if step.type_id == "pen_input" || step.type_id == "paint_color" || step.is_gpu {
+            if step.type_id == pen_input::TYPE_ID
+                || step.type_id == paint_color::TYPE_ID
+                || step.is_gpu
+            {
                 continue;
             }
 
@@ -702,7 +673,7 @@ impl BrushGraphRunner {
             let Some(evaluator) = self.evaluators.get(&step.type_id) else {
                 continue;
             };
-            if is_compiled && !evaluator.is_terminal() {
+            if is_compiled && !step.is_terminal {
                 continue;
             }
 

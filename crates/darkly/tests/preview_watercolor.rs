@@ -47,12 +47,7 @@ fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> Prev
         .find(|b| b.metadata.name == brush_name)
         .unwrap_or_else(|| panic!("builtin brush `{brush_name}` not registered"));
     let mut graph = brush.metadata.graph.clone();
-    let term_id = graph
-        .nodes
-        .iter()
-        .find(|(_, n)| n.type_id == "watercolor")
-        .map(|(id, _)| *id)
-        .expect("brush terminates in watercolor");
+    let term_id = darkly::brush::find_terminal(&graph).expect("brush has a terminal");
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();

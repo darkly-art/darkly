@@ -5,6 +5,7 @@
 //! exercise the same code paths that users hit.
 //! Run with: `cargo test -p darkly --test engine`
 
+use darkly::brush::nodes::{pen_input, stamp};
 use darkly::brush::wire::BrushWireType;
 use darkly::document::SelectionMode;
 use darkly::engine::types::StrokeOp;
@@ -827,7 +828,7 @@ fn pen_input_spacing_port_controls_dab_density() {
     // Baseline: default spacing (port default = 0.10).
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    let pen_id = find_node_id(&engine, "pen_input");
+    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
         .brush_graph_set_port_default(pen_id, "spacing", 0.10)
         .expect("default spacing port must exist");
@@ -837,7 +838,7 @@ fn pen_input_spacing_port_controls_dab_density() {
     // Sparse: 100% spacing — dabs separated by a full diameter.
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    let pen_id = find_node_id(&engine, "pen_input");
+    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
         .brush_graph_set_port_default(pen_id, "spacing", 1.0)
         .expect("spacing port must exist");
@@ -876,11 +877,11 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     // - Stamp size at near-zero, so the dab is clamped to 1×1 px and
     //   the per-iteration step would be `1 * 0.04 = 0.04 px` without
     //   the absolute floor.
-    let pen_id = find_node_id(&engine, "pen_input");
+    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
         .brush_graph_set_port_default(pen_id, "spacing", 0.04)
         .expect("spacing port must exist");
-    let stamp_id = find_node_id(&engine, "stamp");
+    let stamp_id = find_node_id(&engine, stamp::TYPE_ID);
     engine
         .brush_graph_set_port_default(stamp_id, "size", 0.001)
         .expect("stamp size port must exist");
@@ -3838,8 +3839,8 @@ fn long_stabilized_stroke_no_fallback() {
     // Default brush (circle + stamp + color_output) is enough to exercise
     // the checkpoint ring's coverage invariant — this test is about the
     // stabilizer's full-rerender fallback, not anything scatter-specific.
-    let pen_id = find_node_id(&engine, "pen_input");
-    let stamp_id = find_node_id(&engine, "stamp");
+    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
+    let stamp_id = find_node_id(&engine, stamp::TYPE_ID);
     // Full-strength stabilization → max_divergence_window = 11 (iterations=10
     // + 1 from the influence-radius model). Spacing = 11 / 7 = 1.
     engine

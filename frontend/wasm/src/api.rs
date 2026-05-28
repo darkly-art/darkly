@@ -1821,10 +1821,10 @@ impl DarklyHandle {
         self.engine.borrow().brush_topology_version() as f64
     }
 
-    /// Does the active brush's terminal honor erase mode? `false` for
-    /// brushes whose output node declares `supports_erase = false` in
-    /// its registration (smudge, liquify, watercolor). The UI uses this
-    /// to hide the brush-tool erase toggle.
+    /// Does the active brush's terminal honor erase mode? Reflects the
+    /// terminal node's `supports_erase` flag from its registration —
+    /// type-owned dispatch, no central enumeration of which terminals
+    /// opt out. The UI uses this to hide the brush-tool erase toggle.
     pub fn brush_active_supports_erase(&self) -> bool {
         self.engine.borrow().active_brush_supports_erase()
     }

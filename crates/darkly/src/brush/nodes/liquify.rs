@@ -293,11 +293,13 @@ fn liquify_pipeline_reg() -> BrushPipelineRegistration {
 
 // ── Node ────────────────────────────────────────────────────────────────
 
+pub const TYPE_ID: &str = "liquify";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![liquify_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "liquify",
+            type_id: TYPE_ID,
             category: "output",
             display_name: "Liquify",
             ports: vec![
@@ -371,6 +373,8 @@ pub fn register() -> BrushNodeRegistration {
             ],
             params: &[],
             is_gpu: true,
+            is_terminal: true,
+            supports_erase: false,
         },
     }
 }
@@ -396,14 +400,6 @@ impl LiquifyEvaluator {
 }
 
 impl BrushNodeEvaluator for LiquifyEvaluator {
-    fn is_terminal(&self) -> bool {
-        true
-    }
-
-    fn supports_erase(&self) -> bool {
-        false
-    }
-
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }

@@ -546,11 +546,13 @@ fn build_pickup_shader(compiled: &CompiledBrush) -> String {
 
 // ── Node ────────────────────────────────────────────────────────────────
 
+pub const TYPE_ID: &str = "watercolor";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![watercolor_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "watercolor",
+            type_id: TYPE_ID,
             category: "output",
             display_name: "Watercolor",
             ports: vec![
@@ -641,6 +643,8 @@ pub fn register() -> BrushNodeRegistration {
             ],
             params: &[],
             is_gpu: true,
+            is_terminal: true,
+            supports_erase: false,
         },
     }
 }
@@ -657,15 +661,6 @@ impl WatercolorEvaluator {
 }
 
 impl BrushNodeEvaluator for WatercolorEvaluator {
-    fn is_terminal(&self) -> bool {
-        true
-    }
-
-    fn supports_erase(&self) -> bool {
-        // Erase on wet media doesn't read naturally.
-        false
-    }
-
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }

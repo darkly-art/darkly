@@ -297,11 +297,13 @@ fn paint_pipeline_reg() -> BrushPipelineRegistration {
 
 // ── Node ────────────────────────────────────────────────────────────────
 
+pub const TYPE_ID: &str = "paint";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![paint_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "paint",
+            type_id: TYPE_ID,
             category: "output",
             display_name: "Paint",
             ports: vec![
@@ -363,6 +365,8 @@ pub fn register() -> BrushNodeRegistration {
             ],
             params: &[],
             is_gpu: true,
+            is_terminal: true,
+            supports_erase: true,
         },
     }
 }
@@ -379,10 +383,6 @@ impl PaintEvaluator {
 }
 
 impl BrushNodeEvaluator for PaintEvaluator {
-    fn is_terminal(&self) -> bool {
-        true
-    }
-
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }

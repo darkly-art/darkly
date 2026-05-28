@@ -1047,7 +1047,7 @@ fn manifest_entry_bodies_are_opaque_to_central_code() {
     let raster_entry = manifest
         .nodes
         .iter()
-        .find(|e| e.type_id == "raster")
+        .find(|e| e.type_id == crate::document::layer_kinds::raster::TYPE_ID)
         .expect("at least one raster in kitchen sink");
 
     // Add an unknown field to the body and re-serialize the whole

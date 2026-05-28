@@ -25,7 +25,7 @@ impl DarklyEngine {
             .get::<BrushState>()
             .expect("BrushState registered at session init");
         for node in brush.graph.nodes.values() {
-            if node.type_id == "pen_input" {
+            if node.type_id == crate::brush::nodes::pen_input::TYPE_ID {
                 for port in &node.ports {
                     if port.name == "stabilize" && port.dir == PortDir::Input {
                         return port.default;
@@ -48,7 +48,7 @@ impl DarklyEngine {
             .get::<BrushState>()
             .expect("BrushState registered at session init");
         for node in brush.graph.nodes.values() {
-            if node.type_id == "pen_input" {
+            if node.type_id == crate::brush::nodes::pen_input::TYPE_ID {
                 for port in &node.ports {
                     if port.name == port_name && port.dir == PortDir::Input {
                         return Some(port.default);

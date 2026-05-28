@@ -140,16 +140,8 @@ fn brush_graph_json(brush_name: &str, dab_size_px: Option<f32>) -> String {
 
     if let Some(radius_px) = dab_size_px {
         let size_port_value = (2.0 * radius_px) / DAB_REFERENCE_SIZE_PX;
-        let terminal_id = brush
-            .metadata
-            .graph
-            .nodes
-            .iter()
-            .find(|(_, n)| matches!(n.type_id.as_str(), "paint" | "watercolor"))
-            .map(|(id, _)| *id)
-            .unwrap_or_else(|| {
-                panic!("brush `{brush_name}` has no compiled paint/watercolor terminal")
-            });
+        let terminal_id = darkly::brush::find_terminal(&brush.metadata.graph)
+            .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
         brush
             .metadata
             .graph

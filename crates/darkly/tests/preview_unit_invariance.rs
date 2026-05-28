@@ -69,12 +69,7 @@ fn render_big_round() -> Out {
         .find(|b| b.metadata.name == "Round")
         .expect("Round brush is registered");
     let mut graph = brush.metadata.graph.clone();
-    let term_id = graph
-        .nodes
-        .iter()
-        .find(|(_, n)| n.type_id == "paint")
-        .map(|(id, _)| *id)
-        .expect("Round terminates in paint");
+    let term_id = darkly::brush::find_terminal(&graph).expect("Round has a terminal");
     // size 2.0 → effective_radius = 2.0 * 512 * 0.5 = 512 canvas px
     // (extent factor ≥ 1, so bbox_canvas_px is at least 512, far above
     // texture_half = 64).

@@ -13,9 +13,11 @@ use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
+pub const TYPE_ID: &str = "pen_input";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "pen_input",
+        type_id: TYPE_ID,
         category: "input",
         display_name: "Pen Input",
         ports: vec![
@@ -135,6 +137,8 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

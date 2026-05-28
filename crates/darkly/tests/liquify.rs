@@ -64,12 +64,7 @@ fn render_liquify_dabs(size_override: f32, dabs: &[([f32; 2], f32, f32)]) -> Vec
         .unwrap();
 
     let mut graph = brush.metadata.graph.clone();
-    let term_id = graph
-        .nodes
-        .iter()
-        .find(|(_, n)| n.type_id == "liquify")
-        .map(|(id, _)| *id)
-        .expect("Liquify brush must terminate in liquify");
+    let term_id = darkly::brush::find_terminal(&graph).expect("Liquify brush has a terminal");
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();
