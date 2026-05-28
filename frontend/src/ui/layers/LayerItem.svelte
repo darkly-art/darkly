@@ -3,6 +3,7 @@
     import { getNodeThumbnail, THUMB_SIZE } from './thumbnails';
     import { bindingSite } from '../../actions/binding_site';
     import { actions } from '../../actions/registry';
+    import { tooltipForAction } from '../../config/store.svelte';
 
     interface Modifier {
         id: number; kind: string; name: string; visible: boolean; locked: boolean;
@@ -274,7 +275,7 @@
         onpointerdown={(e: PointerEvent) => { e.stopPropagation(); draggable = false; }}
         onpointerup={() => { draggable = true; }}
         onpointerleave={() => { draggable = true; }}
-        title="Toggle visibility"
+        title={tooltipForAction('Toggle visibility', 'toggleVisibility')}
     >
         <i class={layer.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
     </button>
@@ -340,7 +341,7 @@
         onpointerdown={(e: PointerEvent) => { e.stopPropagation(); draggable = false; }}
         onpointerup={() => { draggable = true; }}
         onpointerleave={() => { draggable = true; }}
-        title={layer.locked ? 'Unlock layer' : 'Lock layer'}
+        title={tooltipForAction(layer.locked ? 'Unlock layer' : 'Lock layer', 'toggleLock')}
     >
         <i class={layer.locked ? 'fa-solid fa-lock' : 'fa-solid fa-lock-open'}></i>
     </button>

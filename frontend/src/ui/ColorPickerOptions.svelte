@@ -15,7 +15,7 @@
 
 <ToolBarLayout>
     {#snippet center()}
-        <label class="row" title="What the eyedropper samples from. Also governs the modifier-held Ctrl/Alt+drag temporary pick.">
+        <label class="row" title="What the color picker samples from. Also governs the modifier-held Ctrl/Alt+drag temporary pick.">
             <span>Sample from</span>
             <EnumDropdown
                 value={value}

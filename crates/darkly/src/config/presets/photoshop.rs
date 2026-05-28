@@ -22,7 +22,7 @@ pub fn register() -> Preset {
             ("deleteLayer", "layerPanel:Delete"),
         ],
         mouse_clicks: &[
-            // Eyedropper modifier: Photoshop uses Alt+drag (not Ctrl+drag,
+            // Color picker modifier: Photoshop uses Alt+drag (not Ctrl+drag,
             // which is the Krita default we inherit elsewhere).
             ("sampleColor", "canvas@paint:alt+drag"),
         ],

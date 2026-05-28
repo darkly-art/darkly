@@ -7,6 +7,7 @@
     import LiveBrushPreviewStrip from './brush_picker/LiveBrushPreviewStrip.svelte';
     import Scrub from './Scrub.svelte';
     import ToolBarLayout from './ToolBarLayout.svelte';
+    import { tooltipForAction } from '../config/store.svelte';
 
     let brushPickerOpen = $state(false);
 
@@ -127,7 +128,7 @@
                 valueLabel={brushSession.eraseMode ? 'On' : 'Off'}
                 active={brushSession.eraseMode}
                 onToggle={toggleEraseMode}
-                title="Erase mode (E)"
+                title={tooltipForAction('Erase mode', 'toggleEraseMode')}
             />
         {/if}
     {/snippet}

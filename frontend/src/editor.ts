@@ -6,7 +6,7 @@ import { rebuildClickIndex } from './actions/triggers';
 import { theme } from './state/theme.svelte';
 import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/app.svelte';
 import { createHandle } from './state/session';
-import { setupEyedropperModifierTracking } from './tools/eyedropper_cursor';
+import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
 
 let processInitialized = false;
 
@@ -30,10 +30,10 @@ export async function ensureProcessInit(): Promise<void> {
         rebuildClickIndex();
     });
 
-    // Wire global Ctrl/Meta tracking so the eyedropper cursor armed-state
-    // engages as soon as the user holds the modifier with a paint tool
-    // active (not just on pointerdown). Idempotent.
-    setupEyedropperModifierTracking();
+    // Wire global Ctrl/Meta tracking so the color-picker cursor engages
+    // as soon as the user holds the modifier with a paint tool active
+    // (not just on pointerdown). Idempotent.
+    setupColorPickerModifierTracking();
 
     processInitialized = true;
 }

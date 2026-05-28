@@ -751,7 +751,7 @@ export function registerActions() {
     // -- Brush parameters (size hotkeys + shift+drag scrub) --
     registerBrushParamActions();
 
-    // -- Modifier-held eyedropper (Ctrl+drag → sample color) --
+    // -- Modifier-held color picker (Ctrl+drag → sample color) --
     registerSampleColorAction();
 
     // -- Brush builder --

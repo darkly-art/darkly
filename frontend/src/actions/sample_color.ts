@@ -1,7 +1,7 @@
 import { actions } from './registry';
 import { app } from '../state/app.svelte';
 import { startPick } from '../tools/color_pick_sync';
-import { setEyedropperPressed } from '../tools/eyedropper_cursor';
+import { setColorPickerPressed } from '../tools/colorpicker_cursor';
 import { screenToCanvas } from '../canvas/coordinates';
 
 /** Register the modifier-held "sample color" chord. The action is bound to
@@ -25,7 +25,7 @@ export function registerSampleColorAction(): void {
             if (!app.handle) return;
             const cx = typeof ctx.x === 'number' ? ctx.x : 0;
             const cy = typeof ctx.y === 'number' ? ctx.y : 0;
-            setEyedropperPressed(true);
+            setColorPickerPressed(true);
             startPick(app.handle, cx, cy);
         },
         onMove: (_ctx, e) => {
@@ -38,7 +38,7 @@ export function registerSampleColorAction(): void {
         // write). Without this the cursor would freeze on the "pressed"
         // variant after pointerup.
         deactivate: () => {
-            setEyedropperPressed(false);
+            setColorPickerPressed(false);
         },
     });
 }

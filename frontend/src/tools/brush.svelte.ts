@@ -1,4 +1,4 @@
-import type { Tool, ToolContext } from './registry';
+import type { Tool } from './registry';
 import { app } from '../state/app.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { srgbToLinear } from '../lib/color';
@@ -11,7 +11,6 @@ import {
 } from './selection_helpers';
 import BrushOptions from '../ui/BrushOptions.svelte';
 import BrushBuilderPanel from '../ui/BrushBuilderPanel.svelte';
-import { isSoftSwitching, consumeSoftSwitching } from './eyedropper_cursor';
 
 /** Brush-tool session state. Persists across strokes within the session;
  *  resets on reload. The engine-side blend-mode mirror is pushed by
@@ -197,15 +196,6 @@ export const brushTool: Tool = {
         // fall back to the default cursor so the user has *something* to see.
         const info = ctx.handle.get_brush_preview_info();
         app.toolCursor = info ? 'none' : null;
-
-        // If we're being reactivated after a modifier-held eyedropper
-        // soft-switch, the previous deactivate preserved `lastHover` —
-        // re-push the overlay immediately so the dab preview reappears
-        // without waiting for a pointermove.
-        if (isSoftSwitching()) {
-            refreshHoverOverlay(ctx.handle);
-            consumeSoftSwitching();
-        }
     },
 
     onDeactivate(ctx) {
@@ -214,11 +204,7 @@ export const brushTool: Tool = {
         // direct WASM call) doesn't inherit our erase state.
         ctx.handle.set_brush_blend_mode(0);
         app.toolCursor = null;
-        // Preserve `lastHover` across a modifier-held eyedropper
-        // soft-switch so we can refresh the overlay on the way back.
-        // For real tool changes (hotkey, toolbar click), clear it to
-        // avoid resurrecting a stale preview at the old position.
-        if (!isSoftSwitching()) clearHover();
+        clearHover();
     },
 
     onPointerDown(ctx, e, cx, cy) {
@@ -259,5 +245,18 @@ export const brushTool: Tool = {
         ctx.handle.clear_overlay();
         ctx.handle.clear_brush_preview_pose();
         clearHover();
+    },
+
+    restoreHover(ctx, cx, cy) {
+        // Re-establish the dab preview after an interruption (e.g. the
+        // modifier-held color picker releasing). We don't have a live
+        // PointerEvent, so synthesise a mouse-like pose: full pressure,
+        // no tilt/twist. Real pen poses re-assert on the next genuine
+        // pointermove.
+        pushHoverOverlay(
+            ctx.handle,
+            { pressure: 1.0, tiltX: 0, tiltY: 0, twist: 0, tangentialPressure: 0 },
+            cx, cy,
+        );
     },
 };

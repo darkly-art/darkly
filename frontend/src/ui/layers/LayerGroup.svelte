@@ -3,6 +3,7 @@
     import { getNodeThumbnail, THUMB_SIZE } from './thumbnails';
     import { actions } from '../../actions/registry';
     import { bindingSite } from '../../actions/binding_site';
+    import { tooltipForAction } from '../../config/store.svelte';
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
 
@@ -262,7 +263,7 @@
             use:bindingSite={{ name: 'layerEye', ctx: () => ({ layerId: group.id }) }}
             onclick={toggleVisibility}
             onpointerdown={(e: PointerEvent) => { e.stopPropagation(); }}
-            title="Toggle visibility"
+            title={tooltipForAction('Toggle visibility', 'toggleVisibility')}
         >
             <i class={group.visible ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash'}></i>
         </button>
@@ -309,7 +310,7 @@
             use:bindingSite={{ name: 'layerLock', ctx: () => ({ layerId: group.id }) }}
             onclick={toggleLock}
             onpointerdown={(e: PointerEvent) => { e.stopPropagation(); }}
-            title={group.locked ? 'Unlock group' : 'Lock group'}
+            title={tooltipForAction(group.locked ? 'Unlock group' : 'Lock group', 'toggleLock')}
         >
             <i class={group.locked ? 'fa-solid fa-lock' : 'fa-solid fa-lock-open'}></i>
         </button>

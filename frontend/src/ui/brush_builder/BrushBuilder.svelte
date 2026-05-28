@@ -1,7 +1,7 @@
 <script lang="ts">
     import { app } from '../../state/app.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
-    import { config } from '../../config/store.svelte';
+    import { config, tooltipForAction } from '../../config/store.svelte';
     import LiveBrushPreviewStrip from '../brush_picker/LiveBrushPreviewStrip.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
     import AddNodeMenu from './AddNodeMenu.svelte';
@@ -220,7 +220,7 @@
         <button
             class="add-node-btn"
             onclick={openMenuFromButton}
-            title="Add node (Shift+A)"
+            title={tooltipForAction('Add node', 'addBrushNode')}
         >+ Add Node</button>
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
         <button class="toolbar-btn" onclick={handleAutoLayout} title="Auto-layout nodes">Layout</button>

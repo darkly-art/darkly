@@ -4,6 +4,7 @@
     import VeilPickerModal from '../veils/VeilPickerModal.svelte';
     import VoidPickerModal from '../voids/VoidPickerModal.svelte';
     import { actions } from '../../actions/registry';
+    import { tooltipForAction } from '../../config/store.svelte';
 
     let { onupdate }: { onupdate: () => void } = $props();
 
@@ -143,7 +144,7 @@
         class="footer-btn"
         onclick={duplicate}
         disabled={!canDuplicate}
-        title="Duplicate"
+        title={tooltipForAction('Duplicate', 'duplicateLayer')}
     >
         <i class="fa-solid fa-clone"></i>
     </button>
@@ -152,7 +153,7 @@
         class="footer-btn danger"
         onclick={remove}
         disabled={!canDelete || (app.activeVeilIndex === null && !activeEditable)}
-        title="Delete"
+        title={tooltipForAction('Delete', 'deleteLayer')}
     >
         <i class="fa-solid fa-trash"></i>
     </button>

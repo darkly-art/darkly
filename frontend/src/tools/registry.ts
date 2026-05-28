@@ -57,6 +57,14 @@ export interface Tool {
     /** Pointer left the canvas. Tools with hover overlays should clear them here. */
     onPointerLeave?(ctx: ToolContext): void;
 
+    /** Re-establish hover-time visual feedback (e.g. the brush's dab
+     *  preview) at the given canvas position, without requiring a live
+     *  PointerEvent. Called by systems that briefly steal the pointer
+     *  pipeline and need to hand it back — e.g. the modifier-held color
+     *  picker releasing, where the next genuine pointermove may be far
+     *  off and the user expects the preview to be there immediately. */
+    restoreHover?(ctx: ToolContext, canvasX: number, canvasY: number): void;
+
     /** Handle a key event. Return true if the tool consumed it. */
     onKeyDown?(e: KeyboardEvent): boolean;
 

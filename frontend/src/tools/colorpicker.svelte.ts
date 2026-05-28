@@ -1,9 +1,9 @@
 import type { Tool } from './registry';
 import { startPick } from './color_pick_sync';
 import {
-    tickEyedropperCursor,
-    setEyedropperPressed,
-} from './eyedropper_cursor';
+    tickColorPickerCursor,
+    setColorPickerPressed,
+} from './colorpicker_cursor';
 import ColorPickerOptions from '../ui/ColorPickerOptions.svelte';
 
 export const colorPickerTool: Tool = {
@@ -16,20 +16,20 @@ export const colorPickerTool: Tool = {
     onActivate() {
         // Take ownership of `app.toolCursor` immediately — CanvasView's
         // tool-switch $effect resets it to null right before calling us,
-        // so we need to push the eyedropper cursor now rather than
-        // waiting for the next frame's `tickEyedropperCursor`.
-        tickEyedropperCursor();
+        // so we need to push the picker cursor now rather than waiting
+        // for the next frame's `tickColorPickerCursor`.
+        tickColorPickerCursor();
     },
 
     onDeactivate() {
         // Reset pressed state for cleanliness. The cursor itself is
         // taken over by the next tool's onActivate (CanvasView nulls
         // it before this runs).
-        setEyedropperPressed(false);
+        setColorPickerPressed(false);
     },
 
     onPointerDown(ctx, _e, cx, cy) {
-        setEyedropperPressed(true);
+        setColorPickerPressed(true);
         startPick(ctx.handle, cx, cy);
     },
 
@@ -40,13 +40,13 @@ export const colorPickerTool: Tool = {
     },
 
     onPointerUp() {
-        setEyedropperPressed(false);
+        setColorPickerPressed(false);
     },
 
     onPointerLeave() {
-        setEyedropperPressed(false);
+        setColorPickerPressed(false);
     },
     // No `onFrame` — `pollPick` runs unconditionally from the frame loop in
-    // app.svelte.ts, and `tickEyedropperCursor` next to it keeps the cursor
+    // app.svelte.ts, and `tickColorPickerCursor` next to it keeps the cursor
     // in sync with foreground updates regardless of which tool is active.
 };

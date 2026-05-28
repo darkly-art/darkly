@@ -1,7 +1,7 @@
 import type { DarklyHandle } from '../../wasm/pkg/darkly_wasm';
 import { toolRegistry } from '../tools/registry';
 import { pollPick } from '../tools/color_pick_sync';
-import { tickEyedropperCursor } from '../tools/eyedropper_cursor';
+import { tickColorPickerCursor } from '../tools/colorpicker_cursor';
 import type { SaveBundle } from '../storage/saveDocument';
 import { CameraSource } from '../lib/cameraSource';
 
@@ -559,14 +559,14 @@ export class DarklyInstance {
             // Per-frame tool hook — async state sync (e.g. GPU readback completion).
             toolRegistry.get(this.activeToolId)?.onFrame?.();
 
-            // Global color-pick poll — drives both the eyedropper tool and the
-            // modifier-held `sampleColor` chord. Runs regardless of active
+            // Global color-pick poll — drives both the color-picker tool and
+            // the modifier-held `sampleColor` chord. Runs regardless of active
             // tool so a Ctrl-drag started in (e.g.) the brush tool completes.
             pollPick();
 
-            // Refresh the eyedropper cursor against the latest foreground
+            // Refresh the color-picker cursor against the latest foreground
             // committed by `pollPick`. Cheap when nothing changed.
-            tickEyedropperCursor();
+            tickColorPickerCursor();
 
             // Check for completed async copy/cut readback.
             if (this._copyCallback) {

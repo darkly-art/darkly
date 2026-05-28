@@ -4050,7 +4050,7 @@ fn locked_layer_rejects_modifications() {
 }
 
 // ============================================================================
-// Eyedropper PickSource — verifies the layer-source path, the merged source
+// Color picker PickSource — verifies the layer-source path, the merged source
 // path, and the fallback-to-merged behavior when a layer source can't be
 // sampled (point outside the layer's extent).
 // ============================================================================

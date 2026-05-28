@@ -412,11 +412,17 @@ export const config = new ConfigStore();
 /**
  * Format a tinykeys-style binding (e.g. "Shift+KeyR", "$mod+KeyA") into a
  * human-readable shortcut string (e.g. "Shift+R", "Ctrl+A" / "Cmd+A").
+ * Accepts bindings with an optional site/scope prefix ("layerPanel:Delete",
+ * "@paint:KeyB") and strips it before formatting — only the chord is
+ * user-facing.
  */
 export function formatHotkey(binding: string | undefined): string | undefined {
     if (!binding) return undefined;
+    const colonIdx = binding.indexOf(':');
+    const chord = colonIdx < 0 ? binding : binding.slice(colonIdx + 1);
+    if (!chord) return undefined;
     const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
-    return binding.split('+').map(part => {
+    return chord.split('+').map(part => {
         if (part === '$mod') return isMac ? '⌘' : 'Ctrl';
         if (part === 'Shift') return isMac ? '⇧' : 'Shift';
         if (part === 'Alt') return isMac ? '⌥' : 'Alt';
@@ -435,4 +441,14 @@ export function formatHotkey(binding: string | undefined): string | undefined {
         if (part === 'Backquote') return '`';
         return part;
     }).join('+');
+}
+
+/**
+ * Build a tooltip combining a label with the action's bound hotkey, if any.
+ * Returns "Label (Hotkey)" when bound, just "Label" otherwise. Reactive to
+ * `hotkeys.<actionId>` config — re-runs whenever the user rebinds.
+ */
+export function tooltipForAction(label: string, actionId: string): string {
+    const hk = formatHotkey(config.get(`hotkeys.${actionId}`) as string | undefined);
+    return hk ? `${label} (${hk})` : label;
 }

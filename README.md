@@ -81,13 +81,13 @@ These are features that are helpful or essential to digital art workflows. They'
     - [ ] Dodge/burn
     - [ ] Pencil / Charcoal
     - [ ] Oil / Impasto
-- [x] Brush tool, eraser, fill (flood), gradient (linear), color picker (eyedropper)
+- [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 
 ### Color picking & swatches
 - [x] HSV picker, foreground/background swatches
-- [x] Eyedropper (async GPU readback)
+- [x] Color picker (async GPU readback, Ctrl-held temporary pick)
 - [ ] Recent colors
 - [ ] Saved swatches / palettes
 - [ ] Palette file import (.aco, .gpl)

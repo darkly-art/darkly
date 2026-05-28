@@ -7,9 +7,9 @@ const SAMPLE_SOURCE_OPTIONS: &[(&str, &str)] = &[
 
 const PREFS: &[Pref] = &[Pref {
     key: "tools.colorPickerSampleSource",
-    display_name: "Eyedropper sample source",
+    display_name: "Color picker sample source",
     description: Some(
-        "What the eyedropper (and the modifier-held temporary pick) samples \
+        "What the color picker (and the modifier-held temporary pick) samples \
          from. \"All layers merged\" reads the final composite; \"Current \
          layer only\" reads the active raster layer in isolation, falling \
          back to the composite when the active node is a group or the \

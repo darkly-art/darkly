@@ -11,7 +11,7 @@ use crate::gpu::view::ViewTransform;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
 
-/// Which surface the eyedropper samples from. Type-owned dispatch via
+/// Which surface the color picker samples from. Type-owned dispatch via
 /// `resolve` — `pick_color` never matches on the variant.
 #[derive(Copy, Clone, Debug)]
 pub enum PickSource {
