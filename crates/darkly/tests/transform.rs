@@ -6,7 +6,7 @@
 use darkly::coord::CanvasRect;
 use darkly::gpu::atlas::CanvasFrame;
 use darkly::gpu::paint_target::{GpuPaintTarget, PaintPipelines};
-use darkly::gpu::region_store::RegionStore;
+use darkly::gpu::region_store::RegionScratch;
 use darkly::gpu::test_utils::*;
 use darkly::gpu::transform::{
     affine_inverse, affine_multiply, affine_translate, Affine2D, TransformPass, IDENTITY,
@@ -297,7 +297,7 @@ fn transform_commit_translate_undo() {
 
     let (target_tex, target_view) =
         create_test_texture(&device, &queue, cw, ch, &vec![0u8; (cw * ch * 4) as usize]);
-    let mut store = RegionStore::with_capacity(&device, cw, ch, 2 * 1024 * 1024);
+    let mut store = RegionScratch::new(&device, cw, ch);
 
     let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
@@ -352,8 +352,9 @@ fn transform_commit_translate_undo() {
 
     // Commit undo entry.
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         LayerId::from_ffi(1),
         &frame(&target_tex, cw, ch),
         &snap,
@@ -368,7 +369,8 @@ fn transform_commit_translate_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &frame(&target_tex, cw, ch));
+    let (_forward, _req) =
+        store.restore_region(&mut enc, &device, &entry, &frame(&target_tex, cw, ch));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -578,7 +580,7 @@ fn paste_commit_undo() {
 
     let (target_tex, target_view) =
         create_test_texture(&device, &queue, cw, ch, &vec![0u8; (cw * ch * 4) as usize]);
-    let mut store = RegionStore::with_capacity(&device, cw, ch, 2 * 1024 * 1024);
+    let mut store = RegionScratch::new(&device, cw, ch);
 
     let (mut pass, sampler) = setup_transform_pass(&device, &queue, cw, ch);
 
@@ -631,8 +633,9 @@ fn paste_commit_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         LayerId::from_ffi(1),
         &frame(&target_tex, cw, ch),
         &snap,
@@ -654,7 +657,8 @@ fn paste_commit_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let forward = store.restore_region(&mut enc, &entry, &frame(&target_tex, cw, ch));
+    let (forward, _req) =
+        store.restore_region(&mut enc, &device, &entry, &frame(&target_tex, cw, ch));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -666,7 +670,8 @@ fn paste_commit_undo() {
 
     // Redo.
     let mut enc = encoder(&device);
-    let _backward = store.restore_region(&mut enc, &forward, &frame(&target_tex, cw, ch));
+    let (_backward, _req) =
+        store.restore_region(&mut enc, &device, &forward, &frame(&target_tex, cw, ch));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &target_tex, fmt, cw, ch);
@@ -1005,7 +1010,7 @@ fn cancel_floating_after_layer_grow() {
         canvas_extent: CanvasRect::from_xywh(0, 0, init_w, init_h),
     };
 
-    let mut store = RegionStore::with_capacity(&device, init_w, init_h, 4 * 1024 * 1024);
+    let mut store = RegionScratch::new(&device, init_w, init_h);
 
     // Floating transform setup snapshots a 100×100 region at canvas (50, 50).
     let saved_canvas_rect = CanvasRect::from_xywh(50, 50, 100, 100);

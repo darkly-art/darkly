@@ -1,10 +1,11 @@
 //! Rendering, view transform, thumbnails, undo/redo, and async readback polling.
 
 use super::{DarklyEngine, ReadbackContext};
+use crate::coord::CanvasRect;
 use crate::gpu::atlas::CanvasFrame;
 use crate::gpu::context::GpuContext;
-use crate::gpu::readback;
-use crate::gpu::region_store::{RegionStore, UndoRegionEntry};
+use crate::gpu::readback::{self, ReadbackScheduler};
+use crate::gpu::region_store::{EntryPixels, RegionScratch, Snapshot, UndoRegionEntry};
 use crate::gpu::view::ViewTransform;
 use crate::layer::LayerId;
 use crate::undo::GpuRegionAction;
@@ -54,6 +55,13 @@ impl DarklyEngine {
     /// theme change with the resolved `--canvas-bg` CSS value.
     pub fn set_viewport_bg(&mut self, bg: [f32; 4]) {
         self.compositor.set_viewport_bg(&self.gpu.queue, bg);
+    }
+
+    /// Set the canvas-to-screen pixel filter mode: `"linear"`, `"nearest"`,
+    /// or `"auto"`. Frontend calls this when `display.pixelFilter` changes
+    /// so the new mode takes effect without waiting for a zoom/pan.
+    pub fn set_pixel_filter(&mut self, mode: &str) {
+        self.compositor.set_pixel_filter(&self.gpu.queue, mode);
     }
 
     /// Start an async color pick at canvas coordinates.
@@ -158,19 +166,17 @@ impl DarklyEngine {
                             .node_texture(commit.layer_id)
                             .map(|t| t.canvas_frame())
                         {
-                            let mut entry = None;
-                            self.gpu.encode("brush-stroke-end", |encoder| {
-                                entry = Some(self.region_store.commit_region(
-                                    encoder,
-                                    commit.layer_id,
-                                    &layer_frame,
-                                    &commit.snapshot,
-                                    rect,
-                                ));
-                            });
-                            if let Some(entry) = entry {
-                                self.push_undo(Box::new(GpuRegionAction::new(entry)));
-                            }
+                            let entry = commit_undo_region(
+                                &self.gpu,
+                                &self.region_scratch,
+                                &mut self.readbacks,
+                                "brush-stroke-end",
+                                commit.layer_id,
+                                &layer_frame,
+                                &commit.snapshot,
+                                rect,
+                            );
+                            self.push_undo(Box::new(GpuRegionAction::new(entry)));
                         }
                     }
                     // else: textures identical, no undo entry needed.
@@ -354,6 +360,13 @@ impl DarklyEngine {
                     self.brush_library.set_dab_thumbnail(&name, png_bytes);
                 }
             }
+            ReadbackContext::UndoRegionReady { cell } => {
+                // Flip the entry from VRAM-staging to DRAM-Vec, dropping the
+                // staging buffer. `pixels` here is unpadded (extract_pixels
+                // strips row padding); restore re-pads into a temp upload
+                // buffer.
+                *cell.borrow_mut() = EntryPixels::Ready(pixels);
+            }
             ReadbackContext::ActiveBrushDab { topology_version } => {
                 // Drop stale results — but key off topology, not graph
                 // version: scrub-only changes don't affect the rendered
@@ -364,24 +377,6 @@ impl DarklyEngine {
                     let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
                     if !png_bytes.is_empty() {
                         self.active_dab_preview_cache = Some(png_bytes);
-                    }
-                }
-            }
-            ReadbackContext::NodePreview {
-                node_id,
-                topology_version,
-            } => {
-                // Drop stale results — same shape as `ActiveBrushDab`. If
-                // the topology bumped between submit and now, the user has
-                // changed the graph and another render is queued; this
-                // result is for the old graph and would lie about the
-                // current node output.
-                if topology_version == self.brush_topology_version() {
-                    let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
-                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
-                    if !png_bytes.is_empty() {
-                        self.node_preview_cache
-                            .insert(node_id, (topology_version, png_bytes));
                     }
                 }
             }
@@ -563,7 +558,14 @@ impl DarklyEngine {
                     UndoDirection::Undo => "undo-restore",
                     UndoDirection::Redo => "redo-restore",
                 };
-                restore_gpu_region(&self.gpu, &mut self.region_store, entry, &frame, label);
+                restore_gpu_region(
+                    &self.gpu,
+                    &self.region_scratch,
+                    &mut self.readbacks,
+                    entry,
+                    &frame,
+                    label,
+                );
                 // Restored pixels — refresh the panel thumbnail.
                 self.compositor.mark_node_pixels_dirty(node_id);
             }
@@ -581,7 +583,14 @@ impl DarklyEngine {
                         UndoDirection::Undo => "undo-sel-restore",
                         UndoDirection::Redo => "redo-sel-restore",
                     };
-                    restore_gpu_region(&self.gpu, &mut self.region_store, entry, &frame, label);
+                    restore_gpu_region(
+                        &self.gpu,
+                        &self.region_scratch,
+                        &mut self.readbacks,
+                        entry,
+                        &frame,
+                        label,
+                    );
                 }
             }
 
@@ -724,19 +733,58 @@ enum UndoDirection {
 /// selection state) and the post-restore side effects differ between
 /// callers. Kept as a free function so the caller can hold a
 /// `CanvasFrame<'_>` borrowed from `self.compositor` while passing
-/// `&mut self.region_store` — field-level borrow splitting that a
-/// `&mut self` method couldn't express.
+/// `&self.region_scratch` and `&mut self.readbacks` alongside — field-level
+/// borrow splitting that a `&mut self` method couldn't express.
 fn restore_gpu_region(
     gpu: &GpuContext,
-    region_store: &mut RegionStore,
+    region_scratch: &RegionScratch,
+    scheduler: &mut ReadbackScheduler<ReadbackContext>,
     entry: &mut UndoRegionEntry,
     frame: &CanvasFrame<'_>,
     label: &str,
 ) {
-    gpu.encode(label, |encoder| {
-        let swapped = region_store.restore_region(encoder, entry, frame);
+    let request = gpu.encode_ret(label, |encoder| {
+        let (swapped, request) = region_scratch.restore_region(encoder, &gpu.device, entry, frame);
         *entry = swapped;
+        request
     });
+    scheduler.submit(
+        request,
+        ReadbackContext::UndoRegionReady {
+            cell: entry.pixels.clone(),
+        },
+    );
+}
+
+/// Commit a saved-scratch sub-rect into a fresh undo entry and submit the
+/// staging-buffer readback that flips it `Pending → Ready`. Returns the
+/// entry for the caller to wrap in whichever action they're pushing (raw
+/// `GpuRegionAction`, selection action, mask compound action, etc).
+///
+/// Free function (not a `&mut self` method) so callers can hold a
+/// `CanvasFrame<'_>` borrowed from `&self.compositor` while passing in
+/// `&self.region_scratch` and `&mut self.readbacks` — three disjoint
+/// field-level borrows that an `&mut self` method couldn't express.
+pub(crate) fn commit_undo_region(
+    gpu: &GpuContext,
+    region_scratch: &RegionScratch,
+    scheduler: &mut ReadbackScheduler<ReadbackContext>,
+    label: &'static str,
+    layer_id: LayerId,
+    frame: &CanvasFrame<'_>,
+    snapshot: &Snapshot,
+    canvas_rect: CanvasRect,
+) -> UndoRegionEntry {
+    let (entry, request) = gpu.encode_ret(label, |encoder| {
+        region_scratch.commit_region(encoder, &gpu.device, layer_id, frame, snapshot, canvas_rect)
+    });
+    scheduler.submit(
+        request,
+        ReadbackContext::UndoRegionReady {
+            cell: entry.pixels.clone(),
+        },
+    );
+    entry
 }
 
 // ---------------------------------------------------------------------------
@@ -806,10 +854,10 @@ const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
 /// Brushes that already fill the canvas bbox to the
 /// canvas → just downscaled. Brushes that paint a small dot (Airbrush)
 /// bbox to the dot → upscaled into the frame. Brushes that displace
-/// the dab off-center (Scatter Brush) bbox to wherever the displaced
-/// dab landed → crop re-centers it. Empty renders (degenerate brushes,
-/// or a scatter that hit fully off-canvas) fall through to a centered
-/// square of the bg, which the picker shows as a flat tile.
+/// the dab off-center bbox to wherever the displaced dab landed → crop
+/// re-centers it. Empty renders (degenerate brushes, or a scatter that
+/// hit fully off-canvas) fall through to a centered square of the bg,
+/// which the picker shows as a flat tile.
 fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> Vec<u8> {
     let expected = (width * height * 4) as usize;
     if pixels.len() < expected {

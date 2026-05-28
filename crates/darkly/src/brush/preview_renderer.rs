@@ -14,9 +14,6 @@
 //! `set_preview_theme`), not the active paint color, so all previews
 //! share a consistent palette.
 
-use std::collections::HashMap;
-
-use super::dab_pool::DabTexturePool;
 use super::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use super::paint_info::PaintInformation;
 use super::pipeline::BrushPipelines;
@@ -24,7 +21,7 @@ use super::spacing::SpacingConfig;
 use super::stabilizer::PassThrough;
 use super::stroke_buffer::StrokeBuffer;
 use super::stroke_engine::StrokeEngine;
-use super::wire::{BrushWireType, TextureHandle};
+use super::wire::BrushWireType;
 use crate::nodegraph::Graph;
 
 /// Reusable GPU scratch + layer textures for preview rendering.
@@ -37,13 +34,7 @@ struct PreviewTarget {
 }
 
 impl PreviewTarget {
-    fn new(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        dab_bgl: &wgpu::BindGroupLayout,
-        pipelines: &BrushPipelines,
-    ) -> Self {
+    fn new(device: &wgpu::Device, width: u32, height: u32, pipelines: &BrushPipelines) -> Self {
         let layer_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("brush-preview-layer"),
             size: wgpu::Extent3d {
@@ -62,7 +53,7 @@ impl PreviewTarget {
             view_formats: &[],
         });
         let layer_view = layer_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let stroke_buffer = StrokeBuffer::new(device, width, height, dab_bgl, pipelines);
+        let stroke_buffer = StrokeBuffer::new(device, width, height, pipelines);
         Self {
             width,
             height,
@@ -94,9 +85,7 @@ impl BrushPreviewRenderer {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        dab_pool: &mut DabTexturePool,
         pipelines: &BrushPipelines,
-        resource_handles: &HashMap<String, TextureHandle>,
         graph: &Graph<BrushWireType>,
         path: &[PaintInformation],
         fg_color: [f32; 4],
@@ -116,13 +105,7 @@ impl BrushPreviewRenderer {
             None => true,
         };
         if target_changed {
-            self.target = Some(PreviewTarget::new(
-                device,
-                width,
-                height,
-                dab_pool.bind_group_layout(),
-                pipelines,
-            ));
+            self.target = Some(PreviewTarget::new(device, width, height, pipelines));
         }
         let target = self.target.as_mut().unwrap();
 
@@ -183,9 +166,8 @@ impl BrushPreviewRenderer {
 
         let sel_bg = pipelines.default_selection_bind_group();
 
-        // `BrushGpuContext` borrows `dab_pool` mutably; each block below
-        // creates a fresh context, runs one phase, and submits — the borrow
-        // ends before the next block reborrows the pool.
+        // Each block creates a fresh `BrushGpuContext`, runs one phase,
+        // and submits.
         macro_rules! make_gpu_ctx {
             ($label:expr) => {{
                 let (scratch, pre_stroke_texture, pre_stroke_bind_group) =
@@ -196,7 +178,6 @@ impl BrushPreviewRenderer {
                     }),
                     device,
                     queue,
-                    dab_pool,
                     pipelines,
                     scratch: Some(scratch),
                     canvas_width: width,
@@ -205,15 +186,21 @@ impl BrushPreviewRenderer {
                     paint_target: Some(paint_target),
                     selection_bind_group: sel_bg,
                     preview_target_view: None,
-                    resource_handles,
                     blend_mode: 0,
                     preview_mask_view: None,
                     preview_mask_size: (0, 0),
+                    preview_mask_overlay: None,
                     brush_preview_info: None,
                     pre_stroke_texture: Some(pre_stroke_texture),
                     pre_stroke_bind_group: Some(pre_stroke_bind_group),
                     dab_write_canvas_bbox: None,
                     perf: BrushPerfCounters::default(),
+                    pending_dab_bytes: Vec::new(),
+                    pending_dab_count: 0,
+                    pending_dabs_bbox: None,
+                    pending_dab_meta_bytes: Vec::new(),
+                    compiled_brush: None,
+                    slot_outputs_owned: None,
                 }
             }};
         }

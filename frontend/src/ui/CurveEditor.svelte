@@ -24,6 +24,7 @@
     const POINT_R_HOVER = 5;
 
     let svgEl: SVGSVGElement;
+    let rootEl: HTMLDivElement;
     let w = $state(0);
     let h = $state(0);
     let selectedIndex: number | null = $state(null);
@@ -88,6 +89,11 @@
     function onPointDown(e: PointerEvent, index: number) {
         e.stopPropagation();
         e.preventDefault();
+        // preventDefault above suppresses the default focus behavior on the
+        // tabindex=0 container, so focus it explicitly — otherwise the keydown
+        // handler never fires and Delete/Backspace appear broken until the
+        // user happens to spawn a new point (which doesn't preventDefault).
+        rootEl.focus();
         selectedIndex = index;
         draggingIndex = index;
         localPoints = [...activePoints.map(p => [...p] as Point)];
@@ -175,6 +181,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <div
+    bind:this={rootEl}
     class="curve-editor"
     onkeydown={onKeyDown}
     tabindex="0"

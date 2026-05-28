@@ -1,5 +1,6 @@
 //! Copy, cut, paste operations.
 
+use super::rendering::commit_undo_region;
 use super::types::ClipboardExport;
 use super::{DarklyEngine, PendingCopy, ReadbackContext, RichCopyMask, RichCopyMetadata};
 use crate::clipboard::{
@@ -94,7 +95,7 @@ impl DarklyEngine {
             let cut_snapshot = if is_cut {
                 target_frame.map(|frame| {
                     self.gpu.encode_ret("cut-save", |encoder| {
-                        self.region_store.save_region(
+                        self.region_scratch.save_region(
                             &self.gpu.device,
                             encoder,
                             &frame,
@@ -266,16 +267,17 @@ impl DarklyEngine {
 
             // Commit undo for cut.
             if let (Some(snap), Some(frame)) = (cut_snapshot, target_frame) {
-                let mut entry = None;
-                self.gpu.encode("cut-commit", |encoder| {
-                    entry = Some(
-                        self.region_store
-                            .commit_region(encoder, layer_id, &frame, &snap, undo_rect),
-                    );
-                });
-                if let Some(entry) = entry {
-                    self.push_undo(Box::new(GpuRegionAction::new(entry)));
-                }
+                let entry = commit_undo_region(
+                    &self.gpu,
+                    &self.region_scratch,
+                    &mut self.readbacks,
+                    "cut-commit",
+                    layer_id,
+                    &frame,
+                    &snap,
+                    undo_rect,
+                );
+                self.push_undo(Box::new(GpuRegionAction::new(entry)));
                 self.compositor.mark_node_pixels_dirty(layer_id);
             }
         } else {

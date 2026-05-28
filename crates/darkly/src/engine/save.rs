@@ -543,7 +543,7 @@ mod tests {
         let raster_count = manifest
             .nodes
             .iter()
-            .filter(|e| e.type_id == "raster")
+            .filter(|e| e.type_id == crate::document::layer_kinds::raster::TYPE_ID)
             .count();
         assert_eq!(
             raster_count, 1,

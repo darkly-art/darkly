@@ -6,6 +6,7 @@
 //! target" rule means there's no `editing_mask_layer` redirect — the active
 //! node id directly identifies where strokes are routed.
 
+use super::super::rendering::commit_undo_region;
 use super::super::DarklyEngine;
 use crate::layer::LayerId;
 use crate::undo::{
@@ -81,22 +82,27 @@ impl DarklyEngine {
             None => return,
         };
 
-        // Save mask texture pixels to RegionStore for undo before removing.
+        // Save mask texture pixels to RegionScratch for undo before removing.
         let format = wgpu::TextureFormat::R8Unorm;
-        let gpu_region_entry = if let Some(mask_tex) = self.compositor.node_texture(mask_id) {
-            let frame = mask_tex.canvas_frame();
-            let rect = frame.canvas_extent;
-            let mut entry = None;
-            self.gpu.encode("remove-mask-save", |encoder| {
-                let snap =
-                    self.region_store
-                        .save_region(&self.gpu.device, encoder, &frame, format, rect);
-                entry = Some(
-                    self.region_store
-                        .commit_region(encoder, mask_id, &frame, &snap, rect),
-                );
+        let gpu_region_entry = if let Some((frame, rect)) = self
+            .compositor
+            .node_texture(mask_id)
+            .map(|t| (t.canvas_frame(), t.canvas_extent()))
+        {
+            let snap = self.gpu.encode_ret("remove-mask-save", |encoder| {
+                self.region_scratch
+                    .save_region(&self.gpu.device, encoder, &frame, format, rect)
             });
-            entry
+            Some(commit_undo_region(
+                &self.gpu,
+                &self.region_scratch,
+                &mut self.readbacks,
+                "remove-mask-commit",
+                mask_id,
+                &frame,
+                &snap,
+                rect,
+            ))
         } else {
             None
         };
@@ -150,7 +156,7 @@ impl DarklyEngine {
         let canvas_h = self.doc.height;
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
-        // Save layer texture to region store for undo.
+        // Save layer texture to region scratch for undo.
         let layer_frame = self
             .compositor
             .node_texture(host_id)
@@ -158,7 +164,7 @@ impl DarklyEngine {
         let snap = if let Some(frame) = layer_frame {
             let rect = frame.canvas_extent;
             Some(self.gpu.encode_ret("apply-mask-save", |encoder| {
-                self.region_store
+                self.region_scratch
                     .save_region(&self.gpu.device, encoder, &frame, format, rect)
             }))
         } else {
@@ -180,8 +186,13 @@ impl DarklyEngine {
         let mask_snap = if let Some(frame) = mask_frame {
             let rect = frame.canvas_extent;
             Some(self.gpu.encode_ret("apply-mask-save-mask", |encoder| {
-                self.region_store
-                    .save_region(&self.gpu.device, encoder, &frame, mask_format, rect)
+                self.region_scratch.save_region(
+                    &self.gpu.device,
+                    encoder,
+                    &frame,
+                    mask_format,
+                    rect,
+                )
             }))
         } else {
             None
@@ -222,31 +233,38 @@ impl DarklyEngine {
         // Commit both undo regions (host alpha + mask pixels) before pushing
         // either, because the frames borrow `self.compositor` and `push_undo`
         // needs `&mut self` total. Push order is preserved: host first so
-        // it pops last on undo.
+        // it pops last on undo. Each entry independently lands in the
+        // `Pending → Ready` pipeline; the compound action becomes restorable
+        // once each branch has either flipped to `Ready` or been hit by an
+        // undo that consumes its staging buffer directly.
         let host_entry = if let (Some(snap), Some(frame)) = (snap, layer_frame) {
             let rect = frame.canvas_extent;
-            let mut entry = None;
-            self.gpu.encode("apply-mask-undo", |encoder| {
-                entry = Some(
-                    self.region_store
-                        .commit_region(encoder, host_id, &frame, &snap, rect),
-                );
-            });
-            entry
+            Some(commit_undo_region(
+                &self.gpu,
+                &self.region_scratch,
+                &mut self.readbacks,
+                "apply-mask-undo",
+                host_id,
+                &frame,
+                &snap,
+                rect,
+            ))
         } else {
             None
         };
 
         let mask_entry = if let (Some(snap), Some(frame)) = (mask_snap, mask_frame) {
             let rect = frame.canvas_extent;
-            let mut entry = None;
-            self.gpu.encode("apply-mask-undo-mask", |encoder| {
-                entry = Some(
-                    self.region_store
-                        .commit_region(encoder, mask_id, &frame, &snap, rect),
-                );
-            });
-            entry
+            Some(commit_undo_region(
+                &self.gpu,
+                &self.region_scratch,
+                &mut self.readbacks,
+                "apply-mask-undo-mask",
+                mask_id,
+                &frame,
+                &snap,
+                rect,
+            ))
         } else {
             None
         };

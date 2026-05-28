@@ -10,6 +10,7 @@
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
+use crate::brush::wgsl_compile::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::gpu::params::ParamDef;
@@ -17,9 +18,11 @@ use crate::nodegraph::{NodeRegistration, PortDef};
 
 const DEFAULT_CURVE: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
 
+pub const TYPE_ID: &str = "curve";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "curve",
+        type_id: TYPE_ID,
         category: "modulate",
         display_name: "Curve",
         ports: vec![
@@ -35,6 +38,8 @@ pub fn register() -> BrushNodeRegistration {
             default: DEFAULT_CURVE,
         }],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 
@@ -45,5 +50,49 @@ impl BrushNodeEvaluator for CurveEvaluator {
         let input = ctx.input_f32("input").clamp(0.0, 1.0);
         let output = ctx.curve_lookup(input);
         vec![("output".into(), ScalarValue::Scalar(output))]
+    }
+
+    /// Embeds the precomputed 256-entry LUT as a WGSL `const array<f32, 256>`
+    /// and emits a 2-tap linear lookup function. Per-fragment evaluation
+    /// matches the CPU's `curve_lookup` to within float precision.
+    fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        if !cctx.consumed_outputs.contains("output") {
+            return Ok(wgsl);
+        }
+        let lut = cctx
+            .lut
+            .ok_or_else(|| "curve node missing LUT".to_string())?;
+
+        let fn_name = cctx.ident("curve");
+        let mut decls = format!(
+            "const {}_LUT: array<f32, 256> = array<f32, 256>(\n",
+            fn_name
+        );
+        for (i, v) in lut.table().iter().enumerate() {
+            decls.push_str(&format!("    {:.7},", v));
+            if i % 8 == 7 {
+                decls.push('\n');
+            }
+        }
+        if !decls.ends_with('\n') {
+            decls.push('\n');
+        }
+        decls.push_str(");\n");
+        decls.push_str(&format!(
+            "fn {fn_name}(t: f32) -> f32 {{\n\
+             \x20   let idx = clamp(t, 0.0, 1.0) * 255.0;\n\
+             \x20   let lo = u32(floor(idx));\n\
+             \x20   let hi = min(lo + 1u, 255u);\n\
+             \x20   let f = idx - floor(idx);\n\
+             \x20   return mix({fn_name}_LUT[lo], {fn_name}_LUT[hi], f);\n\
+             }}\n"
+        ));
+
+        wgsl.decls = decls;
+        let input_expr = cctx.input("input").as_f32();
+        wgsl.outputs
+            .insert("output".into(), format!("{}({})", fn_name, input_expr));
+        Ok(wgsl)
     }
 }

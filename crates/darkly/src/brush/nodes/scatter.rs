@@ -18,9 +18,11 @@ use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
+pub const TYPE_ID: &str = "scatter";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "scatter",
+        type_id: TYPE_ID,
         category: "modulate",
         display_name: "Scatter",
         ports: vec![
@@ -57,6 +59,8 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

@@ -9,8 +9,10 @@ import { mount } from 'svelte';
 import { checkGpu } from './gpu';
 import { detectPlatform } from './platform';
 import { suppressButtonKeyboardFocus } from './lib/suppressButtonKeyboardFocus';
+import { strokeRecorder } from './lib/strokeRecorder';
 
 suppressButtonKeyboardFocus();
+strokeRecorder.init();
 
 const target = document.getElementById('app')!;
 

@@ -30,6 +30,10 @@ pub struct ExecStep {
     pub type_id: String,
     /// Whether this node runs on the GPU.
     pub is_gpu: bool,
+    /// Mirrors [`NodeRegistration::is_terminal`]. Sourced from the
+    /// registry at compile time so the runner / WGSL compiler can route
+    /// terminal-specific behaviour without re-querying an evaluator.
+    pub is_terminal: bool,
     /// One entry per **connected** input port — disconnected inputs are
     /// resolved against the port's default at eval time and don't appear here.
     pub input_slots: Vec<InputSlot>,
@@ -153,10 +157,9 @@ pub fn compile<W: WireKind>(
 
     for &node_id in &sorted {
         let node = &graph.nodes[&node_id];
-        let declared_gpu = registry
-            .get(&node.type_id)
-            .map(|r| r.is_gpu)
-            .unwrap_or(false);
+        let registration = registry.get(&node.type_id);
+        let declared_gpu = registration.map(|r| r.is_gpu).unwrap_or(false);
+        let is_terminal = registration.map(|r| r.is_terminal).unwrap_or(false);
 
         // Promote to GPU phase if any upstream producer is already GPU.
         let inherits_gpu = node.ports.iter().any(|p| {
@@ -212,6 +215,7 @@ pub fn compile<W: WireKind>(
             node_id,
             type_id: node.type_id.clone(),
             is_gpu,
+            is_terminal,
             input_slots,
             output_slots,
         });
@@ -241,6 +245,8 @@ mod tests {
                 ports: vec![PortDef::output("out", TestWireKind::Scalar)],
                 params: &[],
                 is_gpu: false,
+                is_terminal: false,
+                supports_erase: true,
             },
         );
         map.insert(
@@ -255,6 +261,8 @@ mod tests {
                 ],
                 params: &[],
                 is_gpu: false,
+                is_terminal: false,
+                supports_erase: true,
             },
         );
         map.insert(
@@ -266,6 +274,8 @@ mod tests {
                 ports: vec![PortDef::input("in", TestWireKind::Scalar)],
                 params: &[],
                 is_gpu: false,
+                is_terminal: false,
+                supports_erase: true,
             },
         );
         map
@@ -521,6 +531,8 @@ mod tests {
                 ],
                 params: &[],
                 is_gpu: false,
+                is_terminal: false,
+                supports_erase: true,
             },
         );
         reg.insert(
@@ -535,6 +547,8 @@ mod tests {
                 ],
                 params: &[],
                 is_gpu: false,
+                is_terminal: false,
+                supports_erase: true,
             },
         );
 

@@ -66,6 +66,10 @@ website/                Astro + Starlight site (splash, docs, /demo/)
 
 ## Modularity Principle
 
+**Default to modular.** When you design anything with more than one variant — or that will plausibly grow one — the first question is "what's the unit, and how does the rest of the code stay ignorant of which one it's looking at?" That mindset applies at every scale: from a small enum where one method per variant beats a `match` at the call site, up to full subsystems with traits, registries, and per-variant files. The cost of designing modularly up front is almost always small; the cost of retrofitting after centralized branching has spread across the codebase is large. Hand-written dispatch should feel like an exception that needs justifying, not the default shape.
+
+This is a stronger claim than the Engineering Principle's "build a proper system for it" — that one says *don't hack*; this one says *the proper system is almost always one where new variants slot in without consumers being edited*.
+
 Module-specific code lives in the module. Module-generic infrastructure — registries, dispatchers, shared state, caches — is generic by name and by shape, never named after any single module that happens to use it today.
 
 When adding a new item to a modular system (filter, tool, brush, etc.):
@@ -84,13 +88,17 @@ The project uses a `build.rs` script that scans module directories and auto-gene
 - `VeilRegistry::new()` calls the generated `registrations()` to populate itself
 - The compositor calls trait methods on `dyn Veil` — it never branches on veil type
 
-**Type-owned dispatch:** This same pattern applies to all modular systems in the project, including types and interfaces, which should own their own dispatch logic. Any time a type has variant-specific behavior — a format-specific GPU pipeline, a color-space-specific blend, a tool-specific cursor — the dispatch lives in the type, behind a uniform interface. Consumers call the interface; they never branch on which variant they got. *Anti-pattern: `if mask { ... } else { ... }` sprinkled across code that consumes a paint surface; the format-specific dispatch is conceptually a paint-surface concern, so it belongs in the paint-surface interface, not at every call site.*
+The "default to modular" stance leads directly to the type-owned dispatch rule below: once a system is modular, the consumer must not re-introduce centralized branching by asking variants what they are.
+
+**Type-owned dispatch:** Anything a type knows about itself — behavior, properties, capabilities, identity — lives on the type, behind a uniform interface. Consumers call methods; they never introspect, classify, or branch on which variant they got. The diagnostic question: *would adding a new variant, or changing what an existing one knows about itself, force me to edit this code?* If yes, the knowledge is misplaced. The violation has one recurring shape — `matches!(type_id, ...)`, `if kind == X`, `fn is_foo(type_id) -> bool`, or any consumer-side helper that routes by type — code outside a type's own module asking questions the type should be answering itself. Replace it with a trait method, defaulted to the common case and overridden per variant, so new variants are purely additive.
 
 ## DRY Principle
 
 Don't Repeat Yourself — and interpret this broadly. If two pieces of code aren't identical but follow a similar enough pattern that they could be generalized, they should be. This applies across modules, layers (Rust, WASM bridge, JS), and systems.
 
 **Place functionality where it generalizes.** Before writing logic, ask: "where does this belong so that it works for all cases, not just this one?" If a behavior applies to any tool, it belongs in the tool system's generic hooks — not inside one specific tool. If a behavior applies to any async operation, it belongs in the async completion pipeline — not special-cased at one call site. Putting the right logic in the right architectural layer eliminates the need to repeat it, and prevents future features from having to rediscover where to plug in. A good signal you've placed something wrong: it only works for one workflow, or a second caller would have to copy-paste the same pattern.
+
+**Stop-sign phrases.** If you find yourself writing "mirrors X", "bit-exact copy of X", "keep in sync with X", or "identical to X" in a comment, you are duplicating code. Pause and consider why you're doing it. If it's not easily factorable into a shared feature, stop executing and raise the issue to the user.
 
 ## Ownership Principle
 
@@ -159,6 +167,8 @@ Every system must be implemented properly. No hacks, no hardcoding, no shortcuts
 **Every bug is a signal that something nearby is awkward or overcomplicated.** Before patching, ask: "is this an elegant solution?" If the answer is no, the bug is telling you the code wants to be restructured — propose a refactor instead of layering a fix on top. The cleanest fix is often the one that makes the bug impossible to express, not the one that handles it.
 
 **Keep the README "Features & Roadmap" checklist in sync with the codebase.** When you ship, remove, or rename a user-visible feature (one with a button and, where appropriate, a hotkey in the frontend) in the same change update the checklist in `README.md` — flip `[ ]` to `[x]`, or add a new line. A Rust helper without a frontend surface does not count as shipped.
+
+**Speculative deletion.** If code looks dead, delete it and see what happens. The compiler and tests are the authoritative check, and a `git checkout` restores it cheaply if you're wrong. Every file read is an opportunity to scan nearby code for vestigial slop. If you're not sure whether to keep an old snippet, err on the side of deleting, and let the user know what was deleted.
 
 ## No Migrations / No Backwards Compatibility (pre-release)
 

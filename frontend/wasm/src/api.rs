@@ -187,16 +187,6 @@ enum Command {
 
 fn drain_commands(commands: &RefCell<Vec<Command>>, engine: &mut DarklyEngine) {
     let cmds: Vec<Command> = commands.borrow_mut().drain(..).collect();
-    // Largest backlog of `BrushStroke` ops in a single drain. High values
-    // mean the engine is falling behind input — each backed-up event will
-    // still be processed in this drain. Fed to the stroke perf summary.
-    let brush_backlog = cmds
-        .iter()
-        .filter(|c| matches!(c, Command::StrokeOp(StrokeOp::BrushStroke { .. })))
-        .count() as u32;
-    if brush_backlog > 0 {
-        engine.record_input_backlog(brush_backlog);
-    }
     for cmd in cmds {
         match cmd {
             Command::BeginStroke(id) => engine.begin_stroke(LayerId::from_ffi(id)),
@@ -892,9 +882,9 @@ impl DarklyHandle {
     /// Values come straight from the PointerEvent; hardware that doesn't
     /// report a sensor passes 0 (which is also the neutral state, so no
     /// conditional-default logic is needed). Pressure = 0 is remapped to
-    /// 0.5 inside the engine because the hover event reports 0 pressure
+    /// 1.0 inside the engine because the hover event reports 0 pressure
     /// (no contact) but the preview should reflect what happens "if the
-    /// pen presses now."
+    /// pen presses now" — at full engagement.
     pub fn refresh_brush_preview(
         &self,
         x: f32,
@@ -909,7 +899,7 @@ impl DarklyHandle {
 
         let mut pen = PaintInformation::preview_dummy();
         pen.pos = [x, y];
-        // Hover reports pressure=0 (no contact) — keep the dummy's 0.5 as
+        // Hover reports pressure=0 (no contact) — keep the dummy's 1.0 as
         // a "what-if-pressed-now" fallback. If the pen is actively pressed
         // during hover (some hardware does this near the surface), use it.
         if pressure > 0.0 {
@@ -1017,6 +1007,14 @@ impl DarklyHandle {
             [0.11, 0.11, 0.11, 1.0]
         };
         self.engine.borrow_mut().set_viewport_bg(bg);
+    }
+
+    /// Set the canvas-to-screen pixel filter mode: `"linear"`, `"nearest"`,
+    /// or `"auto"`. Anything else falls back to auto. Call on
+    /// `display.pixelFilter` config change.
+    pub fn set_pixel_filter(&self, mode: &str) {
+        self.flush_if_needed();
+        self.engine.borrow_mut().set_pixel_filter(mode);
     }
 
     // --- Brush config ---
@@ -1831,10 +1829,10 @@ impl DarklyHandle {
         self.engine.borrow().brush_topology_version() as f64
     }
 
-    /// Does the active brush's terminal honor erase mode? `false` for
-    /// brushes whose output node declares `supports_erase = false` in
-    /// its registration (smudge, liquify, watercolor). The UI uses this
-    /// to hide the brush-tool erase toggle.
+    /// Does the active brush's terminal honor erase mode? Reflects the
+    /// terminal node's `supports_erase` flag from its registration —
+    /// type-owned dispatch, no central enumeration of which terminals
+    /// opt out. The UI uses this to hide the brush-tool erase toggle.
     pub fn brush_active_supports_erase(&self) -> bool {
         self.engine.borrow().active_brush_supports_erase()
     }

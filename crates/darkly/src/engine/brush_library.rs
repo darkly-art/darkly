@@ -126,10 +126,11 @@ impl DarklyEngine {
         let Some(brush) = self.brush_library.get(name).cloned() else {
             return Vec::new();
         };
-        // Image-based brushes (Calligraphy, Textured Ink, Pencil, ...)
-        // need their tip/pattern textures on the GPU before the bake;
-        // without this, picker tiles for inactive image brushes render
-        // bg-only.
+        // Image-based brushes need their tip/pattern textures on the
+        // GPU before the bake; without this, picker tiles for inactive
+        // image brushes render bg-only. (No image-based builtins remain
+        // after the brush-compute port, but the call is still required
+        // for any custom user brushes that bundle resources.)
         self.ensure_brush_resources(&brush);
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
@@ -217,46 +218,11 @@ impl DarklyEngine {
         self.brush_library.import_bytes(bytes)
     }
 
-    /// Ensure every image resource referenced by `brush` is uploaded to
-    /// the GPU and registered in `self.resource_handles`. Idempotent —
-    /// names already present are skipped, so loading the active brush,
-    /// baking inactive picker thumbnails, and reloading the same brush
-    /// all share one cache entry per resource.
+    /// Ensure brush image resources are loaded.
     ///
-    /// Handles both `BrushTip` and `Pattern` resource kinds — both are
-    /// uploaded as static textures and accessed identically by node
-    /// evaluators.
-    ///
-    /// v1 keeps every uploaded resource for the engine's lifetime. With
-    /// only built-in brushes that's a fixed, tiny set; v2 imported
-    /// brushes will need a name-collision strategy and eviction policy.
-    pub(crate) fn ensure_brush_resources(&mut self, brush: &Brush) {
-        for meta in &brush.metadata.resources {
-            if self.resource_handles.contains_key(&meta.name) {
-                continue;
-            }
-            let Some(data) = brush.resource(meta.name.as_str()) else {
-                log::warn!("brush resource '{}' not found in bundle", meta.name);
-                continue;
-            };
-            match image::load_from_memory(data) {
-                Ok(img) => {
-                    let rgba = img.to_rgba8();
-                    let (w, h) = rgba.dimensions();
-                    let handle = self.dab_pool.upload_image(
-                        &self.gpu.device,
-                        &self.gpu.queue,
-                        &meta.name,
-                        w,
-                        h,
-                        rgba.as_raw(),
-                    );
-                    self.resource_handles.insert(meta.name.clone(), handle);
-                }
-                Err(e) => {
-                    log::warn!("failed to decode resource '{}': {e}", meta.name);
-                }
-            }
-        }
-    }
+    /// No-op — image-stamp brushes are unsupported (see
+    /// [`crate::brush::nodes::stamp`]). Bundles with brush-tip or
+    /// pattern resources round-trip on disk but their bytes are not
+    /// uploaded anywhere.
+    pub(crate) fn ensure_brush_resources(&mut self, _brush: &Brush) {}
 }

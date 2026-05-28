@@ -42,25 +42,15 @@ pub struct StrokeBuffer {
 impl StrokeBuffer {
     /// Create a new stroke buffer matching the given canvas dimensions.
     ///
-    /// `dab_bgl` must be the bind group layout from `DabTexturePool` (texture+sampler).
-    /// `pipelines` provides the canvas-copy BGL/sampler/pickup view that
-    /// the embedded `Scratch` needs for its bind groups.
-    pub fn new(
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        dab_bgl: &wgpu::BindGroupLayout,
-        pipelines: &BrushPipelines,
-    ) -> Self {
+    /// `pipelines` provides the canvas-copy BGL/sampler that the embedded
+    /// `Scratch` needs for both its read-mirror and write bind groups.
+    pub fn new(device: &wgpu::Device, width: u32, height: u32, pipelines: &BrushPipelines) -> Self {
         let scratch = Scratch::new(
             device,
             width,
             height,
-            dab_bgl,
             pipelines.canvas_copy_bind_group_layout(),
-            pipelines.watercolor_sources_bind_group_layout(),
             pipelines.canvas_copy_sampler(),
-            pipelines.watercolor_pickup_view(),
         );
 
         let pre_stroke_texture = device.create_texture(&wgpu::TextureDescriptor {

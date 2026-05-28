@@ -12,7 +12,8 @@ mod registration;
 
 pub use compiler::{ExecStep, ExecutionPlan, InputSlot};
 pub use graph::{
-    Connection, Graph, GraphError, NodeId, NodeInstance, PortDef, PortDir, PortRef, UnitType,
+    Connection, FindTerminalError, Graph, GraphError, NodeId, NodeInstance, PortDef, PortDir,
+    PortRef, UnitType,
 };
 pub use layout::NodeLayout;
 pub use registration::NodeRegistration;

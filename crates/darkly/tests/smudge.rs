@@ -1,25 +1,26 @@
-//! Smudge GPU integration tests.
+//! Tests for the compiled `smudge` terminal.
 //!
-//! Verifies the smudge terminal smears canvas pixels along the stroke and
-//! is a true no-op when the dab is stationary (`motion == [0, 0]`). Same
-//! shared-device harness shape as `tests/liquify.rs` and `tests/watercolor.rs`.
-//!
-//! Run with `cargo test -p darkly --test smudge -- --test-threads=1`.
+//! The load-bearing invariant is that each dab in a phase sees the
+//! *prior* dab's writeback through the scratch read mirror — a single
+//! instanced draw can't express that, which is why the terminal runs
+//! a per-dab fragment pass with a `copy_texture_to_texture` between
+//! dabs (the implicit barrier). The discriminator test places two
+//! overlapping dabs where dab 2's smear sample lands *inside* dab 1's
+//! write footprint, and asserts the post-flush pixel under dab 2
+//! reflects dab 1's deposit — not the unmodified pre-stroke. If the
+//! per-dab barrier ever regresses (or someone collapses the flush
+//! into a single instanced draw), dab 2 would read pre-stroke and
+//! the test would fail.
 
-use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 use darkly::brush::compile_graph;
-use darkly::brush::dab_pool::DabTexturePool;
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::stroke_buffer::StrokeBuffer;
-use darkly::brush::wire::{BrushWireType, TextureHandle};
-use darkly::brush::BrushNodeRegistry;
 use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
-use darkly::nodegraph::{Graph, PortRef};
 
 const CANVAS: u32 = 128;
 
@@ -33,105 +34,56 @@ fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         .clone()
 }
 
-// ── Test harness ────────────────────────────────────────────────────────────
-
-struct Harness {
-    device: Arc<wgpu::Device>,
-    queue: Arc<wgpu::Queue>,
-    layer_texture: wgpu::Texture,
-    layer_view: wgpu::TextureView,
-    pipelines: BrushPipelines,
-    dab_pool: DabTexturePool,
-    stroke_buffer: StrokeBuffer,
-    runner: BrushGraphRunner,
-    resource_handles: HashMap<String, TextureHandle>,
-}
-
-/// Build a minimal smudge graph: pen_input.position → smudge.position,
-/// pen_input.motion → smudge.motion, hard-edged circle → stamp.tip,
-/// paint_color → stamp.color, stamp → smudge.{dab,dab_size,brush_preview}.
-/// `size` and `rate` are pinned to the test's requested values.
-fn smudge_graph(size: f32, rate: f32) -> Graph<BrushWireType> {
-    let registry = BrushNodeRegistry::new();
-    let mut graph = Graph::new();
-
-    let pen = graph.add_node(
-        "pen_input",
-        registry.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let paint_color = graph.add_node(
-        "paint_color",
-        registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
-    );
-    let circle = graph.add_node(
-        "circle",
-        registry.get("circle").unwrap().ports.clone(),
-        vec![],
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![],
-    );
-    let smudge = graph.add_node(
-        "smudge",
-        registry.get("smudge").unwrap().ports.clone(),
-        vec![],
-    );
-
-    // Hard edge so the centre pixel has mask = 1 — soft falloff would
-    // attenuate the smear at the centre and obscure the assertion.
-    graph.set_port_default(circle, "softness", 0.0).unwrap();
-    graph.set_port_default(stamp, "size", size).unwrap();
-    graph.set_port_default(smudge, "rate", rate).unwrap();
-    graph.set_port_default(smudge, "opacity", 1.0).unwrap();
-
-    let wires = [
-        (circle, "texture", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        (stamp, "dab", smudge, "dab"),
-        (stamp, "dab_size", smudge, "dab_size"),
-        (pen, "position", smudge, "position"),
-        (pen, "motion", smudge, "motion"),
-        (stamp, "preview", smudge, "brush_preview"),
-    ];
-    for (from_node, from_port, to_node, to_port) in wires {
-        graph
-            .connect(
-                PortRef {
-                    node: from_node,
-                    port: from_port.into(),
-                },
-                PortRef {
-                    node: to_node,
-                    port: to_port.into(),
-                },
-            )
-            .unwrap();
+/// Pre-stroke canvas with a vertical red bar in `x < red_x_threshold`,
+/// everything else opaque black. Gives the smudge a directional source
+/// region: dab 1 (placed to the right of the bar) reads red across its
+/// motion-offset; dab 2 (placed further right) reads dab 1's
+/// recently-written red-tinted black.
+fn two_tone_canvas(red_x_threshold: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
+    for y in 0..CANVAS {
+        for x in 0..CANVAS {
+            let idx = ((y * CANVAS + x) * 4) as usize;
+            if x < red_x_threshold {
+                out[idx] = 220;
+                out[idx + 1] = 20;
+                out[idx + 2] = 20;
+            }
+            out[idx + 3] = 255;
+        }
     }
-
-    graph
+    out
 }
 
-fn harness(initial: &[u8], size: f32, rate: f32) -> Harness {
+fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
+    let idx = ((y * CANVAS + x) * 4) as usize;
+    [rgba[idx], rgba[idx + 1], rgba[idx + 2], rgba[idx + 3]]
+}
+
+/// One `(pos, motion)` tuple per dab. Dabs run inside a single phase —
+/// `execute_gpu` queues each, then one `flush_dabs` drives the
+/// per-dab render-pass loop.
+fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<u8> {
+    let brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Smudge")
+        .unwrap();
+
+    let mut graph = brush.metadata.graph.clone();
+    let term_id = darkly::brush::find_terminal(&graph).expect("Smudge brush has a terminal");
+    graph
+        .set_port_default(term_id, "size", size_override)
+        .unwrap();
+    // Push rate up so the test's red-transfer is unambiguous.
+    graph.set_port_default(term_id, "rate", 0.85).unwrap();
+
     let (device, queue) = shared_device();
+    let (layer_texture, layer_view) =
+        create_test_texture(&device, &queue, CANVAS, CANVAS, &two_tone_canvas(36));
+    let pipelines = BrushPipelines::new(&device, &queue);
+    let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
 
-    let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, initial);
-
-    let dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-
-    let stroke_buffer = StrokeBuffer::new(
-        &device,
-        CANVAS,
-        CANVAS,
-        dab_pool.bind_group_layout(),
-        &pipelines,
-    );
-
-    let pre_stroke_paint_target = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+    let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
         &layer_texture,
         &layer_view,
         wgpu::TextureFormat::Rgba8Unorm,
@@ -139,291 +91,146 @@ fn harness(initial: &[u8], size: f32, rate: f32) -> Harness {
         CANVAS,
     );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("smudge-test-pre-stroke-init"),
+        label: Some("smudge-test-pre-stroke"),
     });
-    stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke_paint_target);
+    stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
     queue.submit([enc.finish()]);
 
-    let graph = smudge_graph(size, rate);
-    let runner = compile_graph(&graph).expect("graph compiles");
-
-    Harness {
-        device,
-        queue,
-        layer_texture,
-        layer_view,
-        pipelines,
-        dab_pool,
-        stroke_buffer,
-        runner,
-        resource_handles: HashMap::new(),
-    }
-}
-
-macro_rules! make_ctx {
-    ($h:ident, $label:expr, $resources:expr) => {{
-        let (_scratch, _pre_stroke_texture, _pre_stroke_bind_group) =
-            $h.stroke_buffer.parts_for_brush_ctx();
-        BrushGpuContext {
-            encoder: $h
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
+    macro_rules! make_ctx {
+        ($label:expr) => {{
+            let (scratch, pre_stroke_tex, pre_stroke_bg) = stroke_buffer.parts_for_brush_ctx();
+            BrushGpuContext {
+                encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some($label),
                 }),
-            device: &$h.device,
-            queue: &$h.queue,
-            dab_pool: &mut $h.dab_pool,
-            pipelines: &$h.pipelines,
-            scratch: Some(_scratch),
-            canvas_width: CANVAS,
-            canvas_height: CANVAS,
-            paint_target: Some(
-                darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
-                    &$h.layer_texture,
-                    &$h.layer_view,
-                    wgpu::TextureFormat::Rgba8Unorm,
-                    CANVAS,
-                    CANVAS,
+                device: &device,
+                queue: &queue,
+                pipelines: &pipelines,
+                scratch: Some(scratch),
+                canvas_width: CANVAS,
+                canvas_height: CANVAS,
+                paint_target: Some(
+                    darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+                        &layer_texture,
+                        &layer_view,
+                        wgpu::TextureFormat::Rgba8Unorm,
+                        CANVAS,
+                        CANVAS,
+                    ),
                 ),
-            ),
-            selection_bind_group: $h.pipelines.default_selection_bind_group(),
-            preview_target_view: None,
-            resource_handles: $resources,
-            blend_mode: 0,
-            preview_mask_view: None,
-            preview_mask_size: (0, 0),
-            brush_preview_info: None,
-            pre_stroke_texture: Some(_pre_stroke_texture),
-            pre_stroke_bind_group: Some(_pre_stroke_bind_group),
-            dab_write_canvas_bbox: None,
-            perf: BrushPerfCounters::default(),
-        }
-    }};
-}
-
-impl Harness {
-    fn begin_stroke(&mut self) {
-        let resources = std::mem::take(&mut self.resource_handles);
-        {
-            let mut ctx = make_ctx!(self, "smudge-test-begin", &resources);
-            self.runner.begin_stroke(&mut ctx);
-            self.queue.submit([ctx.encoder.finish()]);
-        }
-        self.resource_handles = resources;
-    }
-
-    fn dab(&mut self, info: &PaintInformation, paint: [f32; 4]) {
-        self.runner.clear_slots();
-        self.runner.seed_sensors(info, paint, 0, info.index);
-        self.runner.execute_cpu();
-        let resources = std::mem::take(&mut self.resource_handles);
-        {
-            let mut ctx = make_ctx!(self, "smudge-test-dab", &resources);
-            self.runner.execute_gpu(&mut ctx);
-            self.queue.submit([ctx.encoder.finish()]);
-        }
-        self.resource_handles = resources;
-    }
-
-    fn commit(&mut self) {
-        let resources = std::mem::take(&mut self.resource_handles);
-        {
-            let mut ctx = make_ctx!(self, "smudge-test-commit", &resources);
-            self.runner.commit(&mut ctx);
-            self.queue.submit([ctx.encoder.finish()]);
-        }
-        self.resource_handles = resources;
-    }
-
-    fn readback(&self) -> Vec<u8> {
-        readback_texture(
-            &self.device,
-            &self.queue,
-            &self.layer_texture,
-            wgpu::TextureFormat::Rgba8Unorm,
-            CANVAS,
-            CANVAS,
-        )
-    }
-}
-
-fn pixel(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
-    let i = ((y * CANVAS + x) * 4) as usize;
-    [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
-}
-
-/// Layer painted half-red (left of midline) and half-blue (right of
-/// midline), both fully opaque. Midline is at `x = CANVAS / 2`.
-fn red_blue_split() -> Vec<u8> {
-    let mut pixels = vec![0u8; (CANVAS * CANVAS * 4) as usize];
-    let midline = CANVAS / 2;
-    for y in 0..CANVAS {
-        for x in 0..CANVAS {
-            let i = ((y * CANVAS + x) * 4) as usize;
-            if x < midline {
-                pixels[i] = 255; // R
-            } else {
-                pixels[i + 2] = 255; // B
+                selection_bind_group: pipelines.default_selection_bind_group(),
+                preview_target_view: None,
+                blend_mode: 0,
+                preview_mask_view: None,
+                preview_mask_size: (0, 0),
+                preview_mask_overlay: None,
+                brush_preview_info: None,
+                pre_stroke_texture: Some(pre_stroke_tex),
+                pre_stroke_bind_group: Some(pre_stroke_bg),
+                dab_write_canvas_bbox: None,
+                perf: BrushPerfCounters::default(),
+                pending_dab_bytes: Vec::new(),
+                pending_dab_count: 0,
+                pending_dabs_bbox: None,
+                pending_dab_meta_bytes: Vec::new(),
+                compiled_brush: None,
+                slot_outputs_owned: None,
             }
-            pixels[i + 3] = 255; // A
+        }};
+    }
+
+    {
+        let mut ctx = make_ctx!("smudge-test-begin");
+        runner.begin_stroke(&mut ctx);
+        queue.submit([ctx.encoder.finish()]);
+    }
+    {
+        let mut ctx = make_ctx!("smudge-test-flush");
+        for (i, (pos, motion)) in dabs.iter().enumerate() {
+            let info = PaintInformation {
+                pos: *pos,
+                motion: *motion,
+                pressure: 1.0,
+                // distance > 0 so the per-pixel falloff doesn't gate
+                // on the first dab (not used by smudge, but the runner
+                // seeds it regardless).
+                distance: 10.0,
+                ..Default::default()
+            };
+            runner.seed_sensors(&info, [1.0, 1.0, 1.0, 1.0], 0xC0FFEE, i as u32);
+            runner.execute_cpu();
+            runner.execute_gpu(&mut ctx);
         }
+        runner.flush_dabs(&mut ctx);
+        runner.commit(&mut ctx);
+        queue.submit([ctx.encoder.finish()]);
     }
-    pixels
+
+    readback_texture(
+        &device,
+        &queue,
+        &layer_texture,
+        wgpu::TextureFormat::Rgba8Unorm,
+        CANVAS,
+        CANVAS,
+    )
 }
 
-fn solid_red_canvas() -> Vec<u8> {
-    let mut pixels = vec![0u8; (CANVAS * CANVAS * 4) as usize];
-    for chunk in pixels.chunks_exact_mut(4) {
-        chunk[0] = 255;
-        chunk[3] = 255;
-    }
-    pixels
+/// Confidence test: a single dab on a canvas that has red to its
+/// left writes a smeared red tint at the dab centre. Establishes
+/// the baseline so the cross-dab feedback test can compare against
+/// it.
+#[test]
+fn single_smudge_dab_pulls_red_via_motion() {
+    // Dab at (60, 64) with motion (+30, 0) — the pen "moved right by
+    // 30 px", so the smear sample is at (60-30, 64) = (30, 64), inside
+    // the red bar.
+    let rgba = render_smudge_dabs(0.1, &[([60.0, 64.0], [30.0, 0.0])]);
+    let centre = pixel(&rgba, 60, 64);
+    assert!(
+        centre[0] > 80,
+        "single smudge dab pulling from a red region should lift red at \
+         the centre; got {centre:?}"
+    );
+    assert!(
+        centre[0] > centre[1] + 30,
+        "smear pulled from red should leave red > green; got {centre:?}"
+    );
 }
 
-/// PaintInformation with a fixed-magnitude motion vector. Distance is
-/// non-zero so any future stroke-engine-style "first dab" gates don't
-/// skip the dab.
-fn pen(pos: [f32; 2], motion: [f32; 2], index: u32) -> PaintInformation {
-    PaintInformation {
-        pos,
-        motion,
-        distance: 10.0 + index as f32 * 6.0,
-        pressure: 1.0,
-        index,
-        ..Default::default()
-    }
-}
-
-// ── Tests ───────────────────────────────────────────────────────────────────
-
-/// Feature test: stroking the smudge brush from inside the red zone into
-/// the blue zone drags red pixels along the stroke direction.
+/// **Per-dab feedback test.** Two overlapping dabs where dab 2's
+/// smear sample lands inside dab 1's write footprint. Dab 1 deposits
+/// red at (60, 64) by smearing from the red bar; dab 2 at (90, 64)
+/// smears from (60, 64), where dab 1 just wrote.
 ///
-/// Asserts, in order of discrimination:
-///   1. Midway through the blue zone the sampled pixel is a red-blue mix.
-///   2. The red-zone start pixel is unchanged.
-///   3. The bleed trails the stroke direction — red(near midline) > red(far).
-///      A dulling/averaging smudge implementation would deposit ~equal
-///      red across both samples; only true offset-sampled smearing
-///      produces a trailing gradient.
+/// Working barrier: dab 2 reads dab 1's red-tinted black, depositing
+/// red at (90, 64).
+///
+/// Broken barrier (e.g. all dabs collapsed to one instanced draw):
+/// dab 2 reads pre-stroke at (60, 64), which is unmodified BLACK,
+/// and (90, 64) stays nearly black.
 #[test]
-fn smearing_drags_color_along_stroke() {
-    let initial = red_blue_split();
-    // size 0.05 → diameter ~25.6 px, radius ~12.8 px. Small enough that
-    // the brush footprint near the start doesn't touch the midline.
-    let mut h = harness(&initial, 0.05, 0.6);
-    h.begin_stroke();
-
-    // March left-to-right across the midline, fixed y = CANVAS / 2.
-    // 8 px per dab (motion = [8, 0]). Start at x = 24 (red zone, far from
-    // midline by 24+r=36 i.e. >12) and end past the midline well into blue.
-    let y = (CANVAS / 2) as f32;
-    let step = 8.0_f32;
-    let start_x = 24.0_f32;
-    let end_x = 104.0_f32; // covers ~80 px / 8 px = 10 dabs
-    let mut x = start_x;
-    let mut index = 0u32;
-    let mut prev: Option<[f32; 2]> = None;
-    while x <= end_x + 0.5 {
-        let motion = match prev {
-            Some([px, py]) => [x - px, y - py],
-            None => [0.0, 0.0],
-        };
-        h.dab(&pen([x, y], motion, index), [0.0, 0.0, 0.0, 1.0]);
-        prev = Some([x, y]);
-        index += 1;
-        x += step;
-    }
-    h.commit();
-
-    let after = h.readback();
-
-    // 1. Midway through the blue zone, the pixel has been smeared with red.
-    //    Pick (88, 64) — well inside the blue zone (x=88 > midline=64), inside
-    //    the stroke path.
-    let mix_x = 88;
-    let mix_y = CANVAS / 2;
-    let mid = pixel(&after, mix_x, mix_y);
+fn smudge_dab2_reads_dab1_deposit_not_pre_stroke() {
+    let rgba = render_smudge_dabs(
+        0.1,
+        &[([60.0, 64.0], [30.0, 0.0]), ([90.0, 64.0], [30.0, 0.0])],
+    );
+    let centre_2 = pixel(&rgba, 90, 64);
     assert!(
-        mid[0] > 8,
-        "blue-zone pixel at ({mix_x}, {mix_y}) should have red from smudge: \
-         got R={} G={} B={} A={}",
-        mid[0],
-        mid[1],
-        mid[2],
-        mid[3],
+        centre_2[0] > 50,
+        "dab 2 must read dab 1's red-tinted writeback through the per-dab \
+         barrier — got centre {centre_2:?}. Pre-stroke at (60, 64) was \
+         BLACK; if dab 2 sees this value it means the inter-dab \
+         `copy_texture_to_texture` (and thus the per-dab serialization) \
+         is broken."
     );
+    // Sanity: dab 2's centre still has some smear (red > black floor),
+    // and the red channel exceeds the green channel by a margin
+    // consistent with a tinted output rather than a noisy fluke.
     assert!(
-        mid[2] > 8,
-        "blue-zone pixel at ({mix_x}, {mix_y}) should still have blue: \
-         got R={} G={} B={} A={}",
-        mid[0],
-        mid[1],
-        mid[2],
-        mid[3],
-    );
-
-    // 2. Red-zone start pixel (far outside any brush footprint) is unchanged.
-    let pristine = pixel(&after, 4, CANVAS / 2);
-    assert_eq!(
-        pristine,
-        [255, 0, 0, 255],
-        "red-zone start pixel must be unchanged",
-    );
-
-    // 3. Trailing gradient: red is heavier closer to the midline than far
-    //    along the stroke. (72, 64) is just past the midline; (100, 64) is
-    //    deeper into the blue zone, late in the stroke.
-    let near = pixel(&after, 72, CANVAS / 2);
-    let far = pixel(&after, 100, CANVAS / 2);
-    assert!(
-        near[0] > far[0],
-        "smear must trail the stroke direction (red fades along the path): \
-         red(near = (72, 64)) = {}, red(far = (100, 64)) = {}",
-        near[0],
-        far[0],
-    );
-}
-
-/// Regression: a single stationary dab (first dab of a stroke, `motion =
-/// [0, 0]`) must not modify the canvas. The smudge node's stationary-dab
-/// early-out short-circuits before the GPU pass; without it the shader
-/// would still produce identity output (`mix(bg, bg, _) == bg`), but the
-/// early-out is part of the contract.
-#[test]
-fn stationary_click_does_not_clobber_canvas() {
-    let initial = solid_red_canvas();
-    let mut h = harness(&initial, 0.1, 0.6);
-    h.begin_stroke();
-    // `motion = [0, 0]` — the `prev == None` path. Pen-down click,
-    // no movement yet.
-    h.dab(&pen([64.0, 64.0], [0.0, 0.0], 0), [0.0, 0.0, 0.0, 1.0]);
-    h.commit();
-
-    let after = h.readback();
-    assert_eq!(
-        after, initial,
-        "single stationary dab (motion=0) must not modify the canvas",
-    );
-}
-
-/// Regression: two events at the same position must also leave the
-/// canvas untouched. Exercises the `prev=Some(pos), curr=pos, dx=dy=0`
-/// path independently of `prev=None`. Defends against a bug where the
-/// dab-emission chain resurrects motion from a stale field on the
-/// second event.
-#[test]
-fn stationary_two_event_stroke_does_not_clobber_canvas() {
-    let initial = solid_red_canvas();
-    let mut h = harness(&initial, 0.1, 0.6);
-    h.begin_stroke();
-    h.dab(&pen([64.0, 64.0], [0.0, 0.0], 0), [0.0, 0.0, 0.0, 1.0]);
-    h.dab(&pen([64.0, 64.0], [0.0, 0.0], 1), [0.0, 0.0, 0.0, 1.0]);
-    h.commit();
-
-    let after = h.readback();
-    assert_eq!(
-        after, initial,
-        "two stationary dabs at the same position must not modify the canvas",
+        centre_2[0] > centre_2[1] + 30,
+        "dab 2 smear from dab 1's deposit should leave red dominant; \
+         got {centre_2:?}"
     );
 }

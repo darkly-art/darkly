@@ -138,7 +138,9 @@ class InspectorState {
         const bytes = this.file.handle.resource_bytes(index);
         const fmt = this.file.preset.resources[index]?.format.kind;
         const mime = mimeForFormat(fmt);
-        const blob = new Blob([bytes], { type: mime });
+        // WASM-sourced bytes are non-shared; cast satisfies TS 5.7+'s
+        // narrower BlobPart requirement.
+        const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], { type: mime });
         return URL.createObjectURL(blob);
     }
 
@@ -149,7 +151,9 @@ class InspectorState {
         const decoded = this.file.preset.params[paramIndex]?.decoded;
         if (decoded?.kind !== 'embedded_image') return null;
         const bytes = this.file.handle.param_image_bytes(paramIndex);
-        const blob = new Blob([bytes], { type: mimeForFormat(decoded.format.kind) });
+        const blob = new Blob([bytes as Uint8Array<ArrayBuffer>], {
+            type: mimeForFormat(decoded.format.kind),
+        });
         return URL.createObjectURL(blob);
     }
 }

@@ -5,10 +5,7 @@
 //! drawn. Uses the blocking `test_utils::readback_texture` helper — native
 //! only; the wasm path does async readback via the ReadbackScheduler.
 
-use std::collections::HashMap;
-
 use darkly::brush::{
-    dab_pool::DabTexturePool,
     default_graph,
     pipeline::BrushPipelines,
     preview_renderer::{synthesize_preview_stroke, BrushPreviewRenderer},
@@ -18,9 +15,7 @@ use darkly::gpu::test_utils::{readback_texture, test_device};
 #[test]
 fn renders_s_curve_over_black_background() {
     let (device, queue) = test_device();
-    let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-    let resources: HashMap<_, _> = HashMap::new();
+    let pipelines = BrushPipelines::new(&device, &queue);
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();
 
@@ -33,17 +28,7 @@ fn renders_s_curve_over_black_background() {
 
     let texture = renderer
         .render_stroke(
-            &device,
-            &queue,
-            &mut dab_pool,
-            &pipelines,
-            &resources,
-            &graph,
-            &path,
-            fg,
-            bg,
-            width,
-            height,
+            &device, &queue, &pipelines, &graph, &path, fg, bg, width, height,
         )
         .expect("render_stroke should return a texture for the default graph");
 
@@ -106,9 +91,7 @@ fn renders_s_curve_over_black_background() {
 #[test]
 fn renderer_reuses_target_across_renders_of_same_size() {
     let (device, queue) = test_device();
-    let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-    let resources: HashMap<_, _> = HashMap::new();
+    let pipelines = BrushPipelines::new(&device, &queue);
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();
     let path = synthesize_preview_stroke(320.0, 120.0, 20, 0.0);
@@ -118,9 +101,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
     let _ = renderer.render_stroke(
         &device,
         &queue,
-        &mut dab_pool,
         &pipelines,
-        &resources,
         &graph,
         &path,
         [1.0, 1.0, 1.0, 1.0],
@@ -134,9 +115,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
     let _ = renderer.render_stroke(
         &device,
         &queue,
-        &mut dab_pool,
         &pipelines,
-        &resources,
         &graph,
         &path,
         [1.0, 0.0, 0.0, 1.0],
@@ -322,7 +301,7 @@ fn brush_save_bakes_thumbnail_asynchronously() {
 /// the path degenerated. Without an inset, endpoints sit on the canvas
 /// edge and the framer can't recover the clipped half of the dab.
 #[test]
-fn hard_round_endpoint_dabs_not_clipped_against_cache_border() {
+fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
     use darkly::engine::DarklyEngine;
     use darkly::gpu::context::GpuContext;
 
@@ -334,10 +313,11 @@ fn hard_round_endpoint_dabs_not_clipped_against_cache_border() {
     // — black bg, white stroke.
     engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]);
 
-    // Hard Round is a built-in: circle tip, no pressure→size_input wire.
-    engine
-        .brush_load("Hard Round")
-        .expect("Hard Round built-in");
+    // Airbrush is a built-in: circle tip with a fixed `size_input` constant
+    // (no pressure→size_input wire), so the dab radius doesn't scale with
+    // the synthetic stroke's pressure ramp. Same invariant the old
+    // "Hard Round" test exercised before that brush was removed.
+    engine.brush_load("Airbrush").expect("Airbrush built-in");
 
     // Prime + flush + read.
     let _ = engine.brush_editor_preview();
@@ -361,7 +341,7 @@ fn hard_round_endpoint_dabs_not_clipped_against_cache_border() {
                 let i = ((y * width + x) * 4) as usize;
                 assert!(
                     !is_stroke(i),
-                    "Hard Round preview cuts off at the edge — column {x} y={y} \
+                    "Airbrush preview cuts off at the edge — column {x} y={y} \
                      has stroke pixel rgba={:?}",
                     [pixels[i], pixels[i + 1], pixels[i + 2]],
                 );
@@ -425,24 +405,25 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     );
 
     // Negative control: scrubbing a port the preview *does* read must
-    // still bump the version. `stamp.rotation` has no `preview_value`,
-    // is read by the stamp shader, and (for Ink Pen) is unwired — the
-    // perfect canary for "rule too broad". `brush_set_exposed_port`
-    // doesn't gate on the `exposed` flag (only the listing API does),
-    // so we reuse the stamp node id from the exposed `size` port.
-    let size = engine
+    // still bump the version. After the compiled-WGSL migration
+    // `softness` lives on the upstream `circle` node (the
+    // `paint` terminal has no softness port). It has no
+    // `preview_value`, is read by the preview shader, and is unwired —
+    // the perfect canary for "rule too broad". Find its node via the
+    // exposed-port listing.
+    let softness = engine
         .brush_exposed_ports()
         .into_iter()
-        .find(|p| p.port_name == "size")
-        .expect("Ink Pen exposes a `size` port on the stamp node");
-    let v_before_rotation = engine.brush_graph_version();
+        .find(|p| p.port_name == "softness")
+        .expect("Ink Pen exposes a `softness` port (on circle after migration)");
+    let v_before_softness = engine.brush_graph_version();
     engine
-        .brush_set_exposed_port(size.node_id, "rotation", 0.5)
+        .brush_set_exposed_port(softness.node_id, "softness", 0.5)
         .expect("scrub set");
     assert_ne!(
         engine.brush_graph_version(),
-        v_before_rotation,
-        "rotation has no preview_value → it affects the preview output \
+        v_before_softness,
+        "softness has no preview_value → it affects the preview output \
          → its scrub must bump brush_graph_version. If this assertion \
          fails, the preview-irrelevant rule is over-broad and real \
          preview updates would also stall."
@@ -452,18 +433,14 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 #[test]
 fn empty_path_returns_none() {
     let (device, queue) = test_device();
-    let mut dab_pool = DabTexturePool::new(&device);
-    let pipelines = BrushPipelines::new(&device, &queue, dab_pool.bind_group_layout());
-    let resources: HashMap<_, _> = HashMap::new();
+    let pipelines = BrushPipelines::new(&device, &queue);
     let mut renderer = BrushPreviewRenderer::new();
     let graph = default_graph();
 
     let result = renderer.render_stroke(
         &device,
         &queue,
-        &mut dab_pool,
         &pipelines,
-        &resources,
         &graph,
         &[],
         [1.0, 1.0, 1.0, 1.0],

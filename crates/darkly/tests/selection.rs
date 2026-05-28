@@ -213,8 +213,7 @@ fn gpu_clear_selection_undo() {
     let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
     let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
     let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store =
-        darkly::gpu::region_store::RegionStore::with_capacity(&device, w, h, 2 * 1024 * 1024);
+    let mut store = darkly::gpu::region_store::RegionScratch::new(&device, w, h);
 
     // Selection: full canvas.
     let sel_data = vec![255u8; (w * h) as usize];
@@ -246,8 +245,9 @@ fn gpu_clear_selection_undo() {
     submit(&queue, enc);
 
     let mut enc = encoder(&device);
-    let entry = store.commit_region(
+    let (entry, _req) = store.commit_region(
         &mut enc,
+        &device,
         LayerId::from_ffi(1),
         &frame(&tex, w, h),
         &snap,
@@ -261,7 +261,7 @@ fn gpu_clear_selection_undo() {
 
     // Undo.
     let mut enc = encoder(&device);
-    let _forward = store.restore_region(&mut enc, &entry, &frame(&tex, w, h));
+    let (_forward, _req) = store.restore_region(&mut enc, &device, &entry, &frame(&tex, w, h));
     submit(&queue, enc);
 
     let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);

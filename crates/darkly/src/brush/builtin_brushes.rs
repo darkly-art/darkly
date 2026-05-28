@@ -1,11 +1,10 @@
 //! Built-in brushes shipped with the application.
 //!
 //! Each brush is a programmatically constructed node graph wrapped in a
-//! `Brush`.  Image-based brushes embed their tip PNGs via
-//! `include_bytes!`.  All brushes are inserted into the `BrushLibrary`
-//! at engine startup.
+//! `Brush`. All brushes are inserted into the `BrushLibrary` at engine
+//! startup.
 
-use crate::brush::bundle::{Brush, BrushMetadata, BrushResourceMeta, ResourceKind};
+use crate::brush::bundle::{Brush, BrushMetadata};
 use crate::brush::wire::BrushWireType;
 use crate::brush::BrushNodeRegistry;
 use crate::gpu::params::ParamValue;
@@ -14,657 +13,48 @@ use crate::nodegraph::{Graph, NodeId, PortRef};
 /// Return all built-in brushes.
 pub fn all() -> Vec<Brush> {
     vec![
-        soft_round(),
-        hard_round(),
-        ink_pen(),
+        round(),
         airbrush(),
-        scatter_brush(),
-        calligraphy(),
-        textured_ink(),
-        pencil(),
-        charcoal(),
-        canvas_brush(),
+        ink_pen(),
         smooth_watercolor(),
         rough_watercolor(),
         smudge_brush(),
         liquify_push(),
+        rough_ink(),
     ]
-}
-
-// ---------------------------------------------------------------------------
-// BrushBuilder — eliminates boilerplate across brushes
-// ---------------------------------------------------------------------------
-
-struct BrushBuilder {
-    graph: Graph<BrushWireType>,
-    registry: BrushNodeRegistry,
-    pen: NodeId,
-    paint_color: NodeId,
-    stamp: NodeId,
-    #[allow(dead_code)] // Used in new() for wiring, not read afterwards.
-    color_output: NodeId,
-}
-
-impl BrushBuilder {
-    /// Create a new builder with the standard nodes and output wiring.
-    ///
-    /// Pre-wires: stamp.dab → color_output.dab, stamp.dab_size →
-    /// color_output.dab_size, pen_input.position → color_output.position,
-    /// and stamp.preview → color_output.brush_preview (the hover preview
-    /// path — terminal's `render_preview` hook blits this into the
-    /// overlay). Brushes that want jitter call `wire_scatter` to splice
-    /// a `scatter` node onto the position wire.
-    fn new() -> Self {
-        let registry = BrushNodeRegistry::new();
-        let mut graph = Graph::new();
-
-        let pen = graph.add_node(
-            "pen_input",
-            registry.get("pen_input").unwrap().ports.clone(),
-            vec![],
-        );
-        let paint_color = graph.add_node(
-            "paint_color",
-            registry.get("paint_color").unwrap().ports.clone(),
-            vec![],
-        );
-        let stamp = graph.add_node(
-            "stamp",
-            registry.get("stamp").unwrap().ports.clone(),
-            vec![],
-        );
-        let color_output = graph.add_node(
-            "color_output",
-            registry.get("color_output").unwrap().ports.clone(),
-            vec![],
-        );
-
-        // Standard output wiring (every brush needs this).
-        let wires = [
-            (stamp, "dab", color_output, "dab"),
-            (stamp, "dab_size", color_output, "dab_size"),
-            (pen, "position", color_output, "position"),
-            // Hover preview: the terminal's `render_preview` hook blits the
-            // stamp's transform-baked, deposition-stripped preview texture.
-            (stamp, "preview", color_output, "brush_preview"),
-        ];
-        for (from_node, from_port, to_node, to_port) in wires {
-            graph
-                .connect(
-                    PortRef {
-                        node: from_node,
-                        port: from_port.into(),
-                    },
-                    PortRef {
-                        node: to_node,
-                        port: to_port.into(),
-                    },
-                )
-                .unwrap();
-        }
-
-        BrushBuilder {
-            graph,
-            registry,
-            pen,
-            paint_color,
-            stamp,
-            color_output,
-        }
-    }
-
-    /// Set the stabilization strength and expose it in the toolbar.
-    fn set_stabilize(&mut self, strength: f32) {
-        self.expose_port(self.pen, "stabilize", strength);
-    }
-
-    /// Add a circle node with the given softness, wired to stamp.tip.
-    fn add_circle(&mut self, softness: f32) {
-        let circle = self.graph.add_node(
-            "circle",
-            self.registry.get("circle").unwrap().ports.clone(),
-            vec![],
-        );
-        self.graph
-            .set_port_default(circle, "softness", softness)
-            .unwrap();
-        self.wire(circle, "texture", self.stamp, "tip");
-    }
-
-    /// Add an image node with a resource name, wired to stamp.tip.
-    fn add_image(&mut self, resource_name: &str) {
-        let image = self.graph.add_node(
-            "image",
-            self.registry.get("image").unwrap().ports.clone(),
-            vec![ParamValue::String(resource_name.to_string())],
-        );
-        self.wire(image, "texture", self.stamp, "tip");
-    }
-
-    /// Set a port's instance-level default value.
-    ///
-    /// Replaces the old `add_constant` + `wire` pattern for feeding a fixed
-    /// number into a port: the port simply carries the value, no extra node
-    /// or wire needed.  The port's node-def metadata (label, unit, icon,
-    /// range) is reused; only the default changes.
-    fn set_port(&mut self, node: NodeId, port: &str, value: f32) {
-        self.graph.set_port_default(node, port, value).unwrap();
-    }
-
-    /// Set a port's default value and expose it as a user-adjustable control.
-    ///
-    /// The port's existing metadata (label, unit, icon, range) drives the UI.
-    fn expose_port(&mut self, node: NodeId, port: &str, value: f32) {
-        self.graph.set_port_default(node, port, value).unwrap();
-        self.graph.set_port_exposed(node, port, true).unwrap();
-    }
-
-    /// Add a curve node with control points defining the transfer function.
-    fn add_curve(&mut self, points: Vec<[f32; 2]>) -> NodeId {
-        self.graph.add_node(
-            "curve",
-            self.registry.get("curve").unwrap().ports.clone(),
-            vec![ParamValue::Curve(points)],
-        )
-    }
-
-    /// Add a multiply node (Scalar × Scalar → Scalar).
-    fn add_multiply(&mut self) -> NodeId {
-        self.graph.add_node(
-            "multiply",
-            self.registry.get("multiply").unwrap().ports.clone(),
-            vec![],
-        )
-    }
-
-    /// Add a random node. `mode`: 0 = per-dab, 1 = per-stroke.
-    fn add_random(&mut self, mode: i32) -> NodeId {
-        self.graph.add_node(
-            "random",
-            self.registry.get("random").unwrap().ports.clone(),
-            vec![ParamValue::Int(mode)],
-        )
-    }
-
-    /// Splice a `scatter` node onto the position wire feeding
-    /// `color_output.position`, with size-proportional displacement —
-    /// `stamp.dab_size` → `split_vec2.x` → `scatter.dab_size`. The
-    /// amounts are exposed as toolbar knobs. Returns the scatter node id.
-    fn wire_scatter(&mut self, amount_x: f32, amount_y: f32) -> NodeId {
-        let scatter = self.graph.add_node(
-            "scatter",
-            self.registry.get("scatter").unwrap().ports.clone(),
-            vec![],
-        );
-        let split = self.graph.add_node(
-            "split_vec2",
-            self.registry.get("split_vec2").unwrap().ports.clone(),
-            vec![],
-        );
-        self.graph.disconnect(
-            &PortRef {
-                node: self.pen,
-                port: "position".into(),
-            },
-            &PortRef {
-                node: self.color_output,
-                port: "position".into(),
-            },
-        );
-        self.wire(self.pen, "position", scatter, "position");
-        self.wire(scatter, "position", self.color_output, "position");
-        self.wire(self.stamp, "dab_size", split, "vec");
-        self.wire(split, "x", scatter, "dab_size");
-        self.expose_port(scatter, "amount_x", amount_x);
-        self.expose_port(scatter, "amount_y", amount_y);
-        scatter
-    }
-
-    /// Generic wire helper.
-    fn wire(&mut self, from: NodeId, from_port: &str, to: NodeId, to_port: &str) {
-        self.graph
-            .connect(
-                PortRef {
-                    node: from,
-                    port: from_port.into(),
-                },
-                PortRef {
-                    node: to,
-                    port: to_port.into(),
-                },
-            )
-            .unwrap();
-    }
-
-    /// Build the brush (no resources).
-    fn build(self, name: &str, category: &str) -> Brush {
-        let mut metadata = BrushMetadata::from_graph(name, self.graph);
-        metadata.category = category.to_string();
-        Brush::without_resources(metadata)
-    }
-
-    /// Insert a texture_overlay node between stamp and color_output.
-    ///
-    /// Rewires: stamp.dab → texture_overlay.dab → color_output.dab,
-    /// stamp.dab_size → texture_overlay.dab_size → color_output.dab_size.
-    /// Wires pen_input.position → texture_overlay.position for tiling.
-    /// Returns the texture_overlay node ID for further wiring (e.g. pattern input).
-    fn add_texture_overlay(&mut self, blend_mode: i32) -> NodeId {
-        let tex = self.graph.add_node(
-            "texture_overlay",
-            self.registry.get("texture_overlay").unwrap().ports.clone(),
-            vec![ParamValue::Int(blend_mode)],
-        );
-
-        // Disconnect stamp → color_output for dab and dab_size.
-        self.graph.disconnect(
-            &PortRef {
-                node: self.stamp,
-                port: "dab".into(),
-            },
-            &PortRef {
-                node: self.color_output,
-                port: "dab".into(),
-            },
-        );
-        self.graph.disconnect(
-            &PortRef {
-                node: self.stamp,
-                port: "dab_size".into(),
-            },
-            &PortRef {
-                node: self.color_output,
-                port: "dab_size".into(),
-            },
-        );
-
-        // Wire stamp → texture_overlay → color_output.
-        self.wire(self.stamp, "dab", tex, "dab");
-        self.wire(self.stamp, "dab_size", tex, "dab_size");
-        self.wire(tex, "dab", self.color_output, "dab");
-        self.wire(tex, "dab_size", self.color_output, "dab_size");
-
-        // Wire position for pattern tiling.
-        self.wire(self.pen, "position", tex, "position");
-
-        tex
-    }
-
-    /// Add a pattern image node and wire it to a texture_overlay's pattern input.
-    fn add_pattern(&mut self, resource_name: &str, tex_overlay: NodeId) {
-        let image = self.graph.add_node(
-            "image",
-            self.registry.get("image").unwrap().ports.clone(),
-            vec![ParamValue::String(resource_name.to_string())],
-        );
-        self.wire(image, "texture", tex_overlay, "pattern");
-    }
-
-    /// Build the brush with embedded PNG resources.
-    fn build_with_resources(
-        self,
-        name: &str,
-        category: &str,
-        resources: Vec<(&str, ResourceKind, &[u8])>,
-    ) -> Brush {
-        let mut metadata = BrushMetadata::from_graph(name, self.graph);
-        metadata.category = category.to_string();
-
-        let mut resource_data = Vec::new();
-        for (res_name, kind, data) in &resources {
-            metadata.resources.push(BrushResourceMeta {
-                name: res_name.to_string(),
-                kind: kind.clone(),
-                path: format!("resources/{}", res_name),
-            });
-            resource_data.push((res_name.to_string(), data.to_vec()));
-        }
-
-        Brush {
-            metadata,
-            resource_data,
-            thumbnail_png: None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Brush definitions
 // ---------------------------------------------------------------------------
 
-fn soft_round() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(0.7);
-    b.wire(b.paint_color, "color", b.stamp, "color");
-    b.build("Soft Round", "basic")
-}
-
-fn hard_round() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(0.05);
-    b.wire(b.paint_color, "color", b.stamp, "color");
-    b.build("Hard Round", "basic")
-}
-
-fn ink_pen() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(0.1);
-    // pressure → curve (approx sqrt) → stamp.size
-    let curve = b.add_curve(vec![
-        [0.0, 0.0],
-        [0.25, 0.5],
-        [0.5, 0.71],
-        [0.75, 0.87],
-        [1.0, 1.0],
-    ]);
-    b.wire(b.pen, "pressure", curve, "input");
-    b.wire(curve, "output", b.stamp, "size_input");
-    b.wire(b.pen, "pressure", b.stamp, "flow");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-    b.set_stabilize(0.6);
-    b.build("Ink Pen", "inking")
-}
-
-fn airbrush() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(1.0);
-    b.set_port(b.stamp, "size_input", 0.15);
-    b.wire(b.pen, "pressure", b.stamp, "flow");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-    b.build("Airbrush", "basic")
-}
-
-fn scatter_brush() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(0.3);
-    b.wire(b.pen, "pressure", b.stamp, "size_input");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-    b.wire_scatter(1.0, 1.0);
-    b.build("Scatter Brush", "effects")
-}
-
-fn calligraphy() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_image("calligraphy.png");
-    b.wire(b.pen, "pressure", b.stamp, "size_input");
-    // Tilt drives per-stroke orientation; the always-exposed `rotation`
-    // knob biases the nib angle on top.
-    b.wire(b.pen, "tilt_direction", b.stamp, "rotation_input");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-    b.set_stabilize(0.6);
-    // Tighter spacing than the 10% default — calligraphic strokes need
-    // smooth edges as the angled tip rotates with tilt direction.
-    b.set_port(b.pen, "spacing", 0.05);
-
-    let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/calligraphy.png");
-    b.build_with_resources(
-        "Calligraphy",
-        "inking",
-        vec![("calligraphy.png", ResourceKind::BrushTip, tip_bytes)],
-    )
-}
-
-fn textured_ink() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_image("ink_dry.png");
-    b.wire(b.pen, "pressure", b.stamp, "size_input");
-    b.wire(b.pen, "pressure", b.stamp, "flow");
-    // random.value is in -1..1; stamp.rotation_input wants radians. Scale
-    // by π so rotation jitters across a full turn (-π..π). Dynamic signal
-    // → `rotation_input`; `rotation` is reserved for the user's static
-    // offset knob.
-    let rand_rot = b.add_random(0);
-    let scale_rot = b.add_multiply();
-    b.set_port(scale_rot, "b", std::f32::consts::PI);
-    b.wire(rand_rot, "value", scale_rot, "a");
-    b.wire(scale_rot, "result", b.stamp, "rotation_input");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-
-    let tip_bytes: &[u8] = include_bytes!("../../resources/brush_tips/ink_dry.png");
-    b.build_with_resources(
-        "Textured Ink",
-        "effects",
-        vec![("ink_dry.png", ResourceKind::BrushTip, tip_bytes)],
-    )
-}
-
-fn pencil() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(0.15);
-    b.wire(b.pen, "pressure", b.stamp, "size_input");
-    b.wire(b.pen, "pressure", b.stamp, "flow");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-
-    // Insert texture overlay with Multiply blend (pencil grain).
-    let tex = b.add_texture_overlay(0); // 0 = Multiply
-    b.add_pattern("paper_grain.png", tex);
-
-    // Subtle pencil feel.
-    b.set_port(tex, "scale", 0.5);
-    b.set_port(tex, "strength", 0.8);
-
-    let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/paper_grain.png");
-    b.build_with_resources(
-        "Pencil",
-        "sketching",
-        vec![("paper_grain.png", ResourceKind::Pattern, pattern_bytes)],
-    )
-}
-
-fn charcoal() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(0.6);
-    b.wire(b.pen, "pressure", b.stamp, "size_input");
-    b.wire(b.pen, "pressure", b.stamp, "flow");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-
-    // Texture overlay with Subtract blend (charcoal grain — cuts into dab).
-    let tex = b.add_texture_overlay(1); // 1 = Subtract
-    b.add_pattern("canvas_grain.png", tex);
-
-    b.set_port(tex, "scale", 0.7);
-    b.set_port(tex, "strength", 0.9);
-
-    let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/canvas_grain.png");
-    b.build_with_resources(
-        "Charcoal",
-        "sketching",
-        vec![("canvas_grain.png", ResourceKind::Pattern, pattern_bytes)],
-    )
-}
-
-fn canvas_brush() -> Brush {
-    let mut b = BrushBuilder::new();
-    b.add_circle(0.4);
-    b.wire(b.pen, "pressure", b.stamp, "size_input");
-    b.wire(b.paint_color, "color", b.stamp, "color");
-
-    // Texture overlay with Multiply blend and user-adjustable strength.
-    let tex = b.add_texture_overlay(0); // 0 = Multiply
-    b.add_pattern("canvas_grain.png", tex);
-
-    b.set_port(tex, "scale", 1.0);
-    b.expose_port(tex, "strength", 0.6);
-
-    let pattern_bytes: &[u8] = include_bytes!("../../resources/brush_tips/canvas_grain.png");
-    b.build_with_resources(
-        "Canvas Brush",
-        "painting",
-        vec![("canvas_grain.png", ResourceKind::Pattern, pattern_bytes)],
-    )
-}
-
-/// Build a watercolor brush around a procedural `circle` tip.
+/// Build a Basic brush around the `paint` terminal.
 ///
-/// All watercolor variants share the same wiring — pen + paint_color into a
-/// stamp into the `watercolor` terminal, with a per-dab random rotation so
-/// the dab's outline lands at a fresh angle every stamp. The variants only
-/// differ in how the circle is configured, so the caller passes a closure
-/// that sets the algorithm enum and any port defaults on the circle node.
+/// All three Basic brushes (Round, Airbrush, Ink Pen) share the same
+/// `pen_input + paint_color + circle + stamp + paint` skeleton — the
+/// same shape as Rough Ink — and only differ in their per-brush
+/// signal wires (pressure → flow vs opacity, optional pressure curve)
+/// and the circle softness default. The closure runs after the bare
+/// graph is built and is responsible for wiring the brush-specific
+/// signal flow and setting any per-port defaults.
 ///
-/// Built directly rather than via `BrushBuilder` because the standard
-/// builder pre-wires `color_output` as the terminal — watercolor swaps
-/// that for its own `watercolor` terminal node.
-fn watercolor_brush(
+/// The `circle` runs in sine algorithm with amplitude 0, producing a
+/// plain disc — its only role here is to be the softness-aware shape
+/// mask. Per-brush softness lives on `circle.softness` (the `paint`
+/// terminal has no softness port).
+fn paint_brush(
     name: &str,
-    configure: impl FnOnce(&mut Graph<BrushWireType>, NodeId, NodeId),
+    configure: impl FnOnce(
+        &mut Graph<BrushWireType>,
+        NodeId, // pen
+        NodeId, // paint_color
+        NodeId, // circle
+        NodeId, // stamp
+        NodeId, // terminal
+    ),
 ) -> Brush {
     let registry = BrushNodeRegistry::new();
-    let mut graph = Graph::<BrushWireType>::new();
-
-    let pen = graph.add_node(
-        "pen_input",
-        registry.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    // Stabilization: stroke smoothing helps watercolor read as a single
-    // continuous wash rather than a jittery line. 50% is enough to take the
-    // edge off without the brush feeling laggy.
-    graph.set_port_default(pen, "stabilize", 0.5).unwrap();
-    graph.set_port_exposed(pen, "stabilize", true).unwrap();
-    let paint_color = graph.add_node(
-        "paint_color",
-        registry.get("paint_color").unwrap().ports.clone(),
-        vec![],
-    );
-    let circle = graph.add_node(
-        "circle",
-        registry.get("circle").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // overwritten by the closure if needed
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        registry.get("stamp").unwrap().ports.clone(),
-        vec![],
-    );
-    let watercolor = graph.add_node(
-        "watercolor",
-        registry.get("watercolor").unwrap().ports.clone(),
-        vec![],
-    );
-
-    let wires = [
-        // Stamp builds the dab shape and bakes paint color into RGB. The
-        // watercolor terminal reads `dab.a` for the alpha mask and uses the
-        // separately-wired `color` for the paint color in the mix.
-        (circle, "texture", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        (paint_color, "color", watercolor, "color"),
-        // Pressure → flow so light strokes deposit less paint, the way a
-        // real brush carries less pigment with less pressure.
-        (pen, "pressure", stamp, "flow"),
-        (stamp, "dab", watercolor, "dab"),
-        (stamp, "dab_size", watercolor, "dab_size"),
-        (pen, "position", watercolor, "position"),
-        (stamp, "preview", watercolor, "brush_preview"),
-    ];
-    for (from_node, from_port, to_node, to_port) in wires {
-        graph
-            .connect(
-                PortRef {
-                    node: from_node,
-                    port: from_port.into(),
-                },
-                PortRef {
-                    node: to_node,
-                    port: to_port.into(),
-                },
-            )
-            .unwrap();
-    }
-
-    // Variant-specific configuration runs last so the closure can wire
-    // additional nodes to any of the shared nodes (circle for shape
-    // params, stamp for rotation/jitter, etc.).
-    configure(&mut graph, circle, stamp);
-
-    let mut metadata = BrushMetadata::from_graph(name, graph);
-    metadata.category = "painting".to_string();
-    Brush::without_resources(metadata)
-}
-
-/// Smooth watercolor: sine-harmonic dab with gentle bumps for an organic
-/// hand-painted edge.
-fn smooth_watercolor() -> Brush {
-    watercolor_brush("Smooth Watercolor", |graph, circle, stamp| {
-        graph
-            .set_param(circle, 0, ParamValue::Int(0)) // 0 = Sine Harmonic
-            .unwrap();
-        graph.set_port_default(circle, "amplitude", 0.05).unwrap();
-        graph.set_port_default(circle, "frequency", 5.0).unwrap();
-        graph.set_port_default(circle, "phase", 0.0).unwrap();
-        // Per-dab random rotation so the harmonic bumps land at a fresh
-        // angle every stamp — without it, every dab is identical and the
-        // bumps line up along the stroke. (Rough watercolor doesn't need
-        // this because its per-dab seed gives a fresh noise pattern, not
-        // just a fresh rotation of the same pattern.)
-        let registry = BrushNodeRegistry::new();
-        let rand_rot = graph.add_node(
-            "random",
-            registry.get("random").unwrap().ports.clone(),
-            vec![ParamValue::Int(0)], // 0 = per-dab
-        );
-        graph
-            .connect(
-                PortRef {
-                    node: rand_rot,
-                    port: "value".into(),
-                },
-                PortRef {
-                    node: stamp,
-                    port: "rotation_input".into(),
-                },
-            )
-            .unwrap();
-    })
-}
-
-/// Rough watercolor: Perlin-noise dab with a more chaotic, granulated edge.
-fn rough_watercolor() -> Brush {
-    watercolor_brush("Rough Watercolor", |graph, circle, _stamp| {
-        graph
-            .set_param(circle, 0, ParamValue::Int(1)) // 1 = Perlin Noise
-            .unwrap();
-        graph.set_port_default(circle, "softness", 0.05).unwrap();
-        graph.set_port_default(circle, "amplitude", 0.4).unwrap();
-        graph.set_port_default(circle, "frequency", 12.0).unwrap();
-        graph.set_port_default(circle, "persistence", 0.55).unwrap();
-        graph.set_port_default(circle, "octaves", 4.0).unwrap();
-        // Per-dab random seed so every dab gets a fresh Perlin pattern —
-        // without it, every dab has the same bumpy outline and the
-        // repetition reads as a regular texture rather than the chaotic
-        // granulation this brush is meant for. The full per-dab noise
-        // reshuffle subsumes what a rotation-randomizer would add, so
-        // unlike smooth watercolor this variant doesn't wire one.
-        let registry = BrushNodeRegistry::new();
-        let rand_seed = graph.add_node(
-            "random",
-            registry.get("random").unwrap().ports.clone(),
-            vec![ParamValue::Int(0)], // 0 = per-dab
-        );
-        graph
-            .connect(
-                PortRef {
-                    node: rand_seed,
-                    port: "value".into(),
-                },
-                PortRef {
-                    node: circle,
-                    port: "seed".into(),
-                },
-            )
-            .unwrap();
-    })
-}
-
-/// Smudge brush. Drags canvas pixels along the stroke — at each dab, the
-/// `smudge` terminal samples the scratch at `position − motion` and stamps
-/// it back through the brush mask. Built directly (not via `BrushBuilder`)
-/// because the standard builder pre-wires `color_output`; smudge has its
-/// own terminal node with its own lifecycle.
-fn smudge_brush() -> Brush {
-    let registry = BrushNodeRegistry::new();
-    let mut graph = Graph::<BrushWireType>::new();
+    let mut graph = Graph::new();
 
     let pen = graph.add_node(
         "pen_input",
@@ -684,7 +74,383 @@ fn smudge_brush() -> Brush {
     let stamp = graph.add_node(
         "stamp",
         registry.get("stamp").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // 0 = Alpha Mask
+    );
+    // `paint` owns the dab dimensions; stamp's `size` port is inert.
+    // Hide it so users don't see two "Size" sliders in the brush
+    // properties panel.
+    graph.set_port_exposed(stamp, "size", false).unwrap();
+    let terminal = graph.add_node(
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
         vec![],
+    );
+
+    // Shared shape: pen position drives terminal position; paint_color
+    // flows through stamp.color (the `paint` terminal has no `color`
+    // port — color is folded into `rgba` by the stamp); circle is the
+    // tip mask for stamp; stamp's premultiplied RGBA is the terminal's
+    // input.
+    let shared_wires = [
+        (pen, "position", terminal, "position"),
+        (paint_color, "color", stamp, "color"),
+        (circle, "texture", stamp, "tip"),
+        (stamp, "dab", terminal, "rgba"),
+    ];
+    for (from_node, from_port, to_node, to_port) in shared_wires {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    configure(&mut graph, pen, paint_color, circle, stamp, terminal);
+
+    let mut metadata = BrushMetadata::from_graph(name, graph);
+    metadata.category = "basic".to_string();
+    Brush::without_resources(metadata)
+}
+
+/// Wire `pen.pressure → curve → terminal.size_input` with the given
+/// initial curve points. Helper for Basic brushes that want a
+/// user-tunable pressure-to-size transfer function.
+fn wire_pressure_size_curve(
+    graph: &mut Graph<BrushWireType>,
+    pen: NodeId,
+    terminal: NodeId,
+    points: Vec<[f32; 2]>,
+) {
+    let registry = BrushNodeRegistry::new();
+    let curve = graph.add_node(
+        "curve",
+        registry.get("curve").unwrap().ports.clone(),
+        vec![ParamValue::Curve(points)],
+    );
+    for (from_node, from_port, to_node, to_port) in [
+        (pen, "pressure", curve, "input"),
+        (curve, "output", terminal, "size_input"),
+    ] {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+}
+
+/// Round — soft procedural disc, pressure-driven size + flow, identity
+/// pressure curve so the brush feels predictable out of the box.
+fn round() -> Brush {
+    paint_brush(
+        "Round",
+        |graph, pen, _paint_color, circle, stamp, terminal| {
+            // Identity curve so pressure maps 1:1 to size by default — the user
+            // can still scrub the curve node's spline in the brush editor for a
+            // bespoke response.
+            wire_pressure_size_curve(graph, pen, terminal, vec![[0.0, 0.0], [1.0, 1.0]]);
+            // Pressure → flow via stamp (folds into per-dab color alpha;
+            // `paint.flow` stays at its 1.0 default).
+            graph
+                .connect(
+                    PortRef {
+                        node: pen,
+                        port: "pressure".into(),
+                    },
+                    PortRef {
+                        node: stamp,
+                        port: "flow".into(),
+                    },
+                )
+                .unwrap();
+            // Mid-softness — a sensible default between the harder Ink Pen and
+            // the fully-feathered Airbrush.
+            graph.set_port_default(circle, "softness", 0.5).unwrap();
+            graph.set_port_exposed(circle, "softness", true).unwrap();
+        },
+    )
+}
+
+/// Airbrush — fully-soft disc, pressure-driven *opacity* (not flow).
+/// Build-up-with-pressure semantic: every dab deposits at full flow into
+/// the scratch, but the per-event opacity cap (driven by current pressure)
+/// attenuates the commit, so light strokes layer up gradually as the user
+/// passes back over the same area. Pressure does NOT affect dab radius —
+/// `size_input` is left at its 100% port default (no pen wire) so the
+/// airbrush footprint is a fixed soft disc the user controls only via the
+/// Size slider.
+fn airbrush() -> Brush {
+    paint_brush(
+        "Airbrush",
+        |graph, pen, _paint_color, circle, _stamp, terminal| {
+            graph
+                .connect(
+                    PortRef {
+                        node: pen,
+                        port: "pressure".into(),
+                    },
+                    PortRef {
+                        node: terminal,
+                        port: "flow".into(),
+                    },
+                )
+                .unwrap();
+            graph.set_port_default(circle, "softness", 1.0).unwrap();
+            graph.set_port_exposed(circle, "softness", true).unwrap();
+        },
+    )
+}
+
+/// Ink Pen — harder edge than Round, pressure-driven size through a
+/// front-loaded curve (high size at low pressure) and pressure-driven
+/// flow. Stabilizer exposed for clean line work.
+fn ink_pen() -> Brush {
+    paint_brush(
+        "Ink Pen",
+        |graph, pen, _paint_color, circle, stamp, terminal| {
+            // Curve front-loads the size response — small pressure already
+            // produces a recognisable mark, matching the feel of a fine-tipped
+            // ink pen.
+            // One bend handle above the diagonal — the natural cubic spline
+            // draws a smooth √x-ish arc through it. Matches the "soft tip
+            // feel" curve tablet drivers and inking presets converge on:
+            // light pressure already produces a recognisable mark.
+            wire_pressure_size_curve(
+                graph,
+                pen,
+                terminal,
+                vec![[0.0, 0.0], [0.4, 0.7], [1.0, 1.0]],
+            );
+            graph
+                .connect(
+                    PortRef {
+                        node: pen,
+                        port: "pressure".into(),
+                    },
+                    PortRef {
+                        node: stamp,
+                        port: "flow".into(),
+                    },
+                )
+                .unwrap();
+            // Harder edge than Round — matches the prior `paint`-terminal
+            // softness default of 0.1.
+            graph.set_port_default(circle, "softness", 0.1).unwrap();
+            graph.set_port_exposed(circle, "softness", true).unwrap();
+            // Stabilization exposed to the toolbar (matches prior ink-pen
+            // behavior) — line work benefits more than soft-edged brushes.
+            graph.set_port_default(pen, "stabilize", 0.6).unwrap();
+            graph.set_port_exposed(pen, "stabilize", true).unwrap();
+        },
+    )
+}
+
+/// Build a Wet Media (watercolor) brush around the compiled
+/// `watercolor` terminal.
+///
+/// All watercolor variants share the same shape — `pen_input +
+/// paint_color + circle → watercolor` — and only differ in
+/// the circle's algorithm + default shape params, plus the per-dab
+/// modulation (random rotation for sine, random seed for perlin).
+/// The closure receives the `circle` node so it can set its
+/// algorithm/defaults and wire per-dab `random` sources to its
+/// `phase_input` or `seed` ports.
+fn watercolor_brush(
+    name: &str,
+    configure: impl FnOnce(
+        &mut Graph<BrushWireType>,
+        NodeId, // pen
+        NodeId, // paint_color
+        NodeId, // circle
+        NodeId, // terminal
+    ),
+) -> Brush {
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    // Stabilization: stroke smoothing helps watercolor read as a single
+    // continuous wash rather than a jittery line. 50% is enough to take
+    // the edge off without the brush feeling laggy.
+    graph.set_port_default(pen, "stabilize", 0.5).unwrap();
+    graph.set_port_exposed(pen, "stabilize", true).unwrap();
+
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let circle = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // algorithm — closure overwrites
+    );
+    // Soft edge by default — watercolor reads as a wash, not a
+    // hard-edged stamp. Variants can override via `configure`.
+    graph.set_port_default(circle, "softness", 0.2).unwrap();
+    graph.set_port_exposed(circle, "softness", true).unwrap();
+    let terminal = graph.add_node(
+        "watercolor",
+        registry.get("watercolor").unwrap().ports.clone(),
+        vec![],
+    );
+
+    // Pressure → flow folds into the per-dab color alpha (max-deposit
+    // ceiling). Color and shape feed the terminal directly — the
+    // compiled fragment shader inlines the shape evaluator and the
+    // color is a stroke-constant uniform reference.
+    let wires = [
+        (pen, "position", terminal, "position"),
+        (pen, "pressure", terminal, "flow"),
+        (paint_color, "color", terminal, "color"),
+        (circle, "texture", terminal, "mask"),
+    ];
+    for (from_node, from_port, to_node, to_port) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    configure(&mut graph, pen, paint_color, circle, terminal);
+
+    let mut metadata = BrushMetadata::from_graph(name, graph);
+    metadata.category = "wet_media".to_string();
+    Brush::without_resources(metadata)
+}
+
+/// Smooth watercolor: sine-harmonic dab with gentle bumps for an organic
+/// hand-painted edge.
+fn smooth_watercolor() -> Brush {
+    watercolor_brush(
+        "Smooth Watercolor",
+        |graph, _pen, _paint_color, circle, _terminal| {
+            graph
+                .set_param(circle, 0, ParamValue::Int(0)) // 0 = Sine Harmonic
+                .unwrap();
+            graph.set_port_default(circle, "amplitude", 0.05).unwrap();
+            graph.set_port_default(circle, "frequency", 5.0).unwrap();
+            graph.set_port_default(circle, "phase", 0.0).unwrap();
+            // Smooth watercolor leans on a softer edge than the shared
+            // default to keep the harmonic bumps reading as a wash.
+            graph.set_port_default(circle, "softness", 0.5).unwrap();
+
+            // Per-dab random rotation so the harmonic bumps land at a
+            // fresh angle every stamp — without it, every dab is
+            // identical and the bumps line up along the stroke.
+            // (Rough watercolor doesn't need this because its per-dab
+            // seed gives a fresh noise pattern, not just a fresh
+            // rotation of the same pattern.)
+            let registry = BrushNodeRegistry::new();
+            let rand_rot = graph.add_node(
+                "random",
+                registry.get("random").unwrap().ports.clone(),
+                vec![ParamValue::Int(0)], // 0 = per-dab
+            );
+            graph
+                .connect(
+                    PortRef {
+                        node: rand_rot,
+                        port: "value".into(),
+                    },
+                    PortRef {
+                        node: circle,
+                        port: "phase_input".into(),
+                    },
+                )
+                .unwrap();
+        },
+    )
+}
+
+/// Rough watercolor: Perlin-noise dab with a more chaotic, granulated edge.
+fn rough_watercolor() -> Brush {
+    watercolor_brush(
+        "Rough Watercolor",
+        |graph, _pen, _paint_color, circle, _terminal| {
+            graph
+                .set_param(circle, 0, ParamValue::Int(1)) // 1 = Perlin Noise
+                .unwrap();
+            graph.set_port_default(circle, "softness", 0.05).unwrap();
+            graph.set_port_default(circle, "amplitude", 0.4).unwrap();
+            graph.set_port_default(circle, "frequency", 12.0).unwrap();
+            graph.set_port_default(circle, "persistence", 0.55).unwrap();
+            graph.set_port_default(circle, "octaves", 4.0).unwrap();
+            // Per-dab random seed so every dab gets a fresh Perlin
+            // pattern. Full per-dab noise reshuffle subsumes what a
+            // rotation-randomizer would add.
+            let registry = BrushNodeRegistry::new();
+            let rand_seed = graph.add_node(
+                "random",
+                registry.get("random").unwrap().ports.clone(),
+                vec![ParamValue::Int(0)], // 0 = per-dab
+            );
+            graph
+                .connect(
+                    PortRef {
+                        node: rand_seed,
+                        port: "value".into(),
+                    },
+                    PortRef {
+                        node: circle,
+                        port: "seed".into(),
+                    },
+                )
+                .unwrap();
+        },
+    )
+}
+
+/// Smudge brush. Drags canvas pixels along the stroke — at each dab,
+/// the `smudge` terminal samples the scratch at `position −
+/// motion` and mixes by `rate × mask × selection × opacity`. Built
+/// directly (not via `BrushBuilder`) because the standard builder
+/// pre-wires `color_output`; smudge has its own terminal node with
+/// its own lifecycle.
+///
+/// Compiled-graph shape: `pen → circle → smudge` plus
+/// `pen.motion / .position` wired directly into the terminal. The
+/// upstream `circle.texture` compiles inline into the terminal's
+/// fragment shader as the per-fragment brush coverage.
+fn smudge_brush() -> Brush {
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let circle = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // 0 = Sine Harmonic; amplitude 0 → plain disc
     );
     let smudge = graph.add_node(
         "smudge",
@@ -698,12 +464,13 @@ fn smudge_brush() -> Brush {
     graph.set_port_exposed(pen, "stabilize", true).unwrap();
 
     // Tighten spacing well below the paint default. The smear is per-dab,
-    // so the visible drag is dab-density-bound; the liquify-style 4% gives
-    // a continuous trail. The port floor is also 4%.
-    graph.set_port_default(pen, "spacing", 0.04).unwrap();
+    // so the visible drag is dab-density-bound; 1% gives a near-continuous
+    // trail. The single-pass WGSL-compiled brush pipeline keeps this within
+    // frame budget — the port floor is also 1%.
+    graph.set_port_default(pen, "spacing", 0.01).unwrap();
 
     // Sharper-than-typical tip. With a softened mask, the read at
-    // `canvas_pos − motion` lands in the falloff ring and smears canvas
+    // `target_pos − motion` lands in the falloff ring and smears canvas
     // pixels into the "outside" of the brush footprint on each dab,
     // producing halo trails. Krita's stock smudge presets use sharper
     // edges for the same reason. Exposed so the user can dial it back
@@ -712,16 +479,11 @@ fn smudge_brush() -> Brush {
     graph.set_port_exposed(circle, "softness", true).unwrap();
 
     let wires = [
-        (circle, "texture", stamp, "tip"),
-        (paint_color, "color", stamp, "color"),
-        // Pressure shapes the dab — heavier press = larger, fuller smear.
-        (pen, "pressure", stamp, "flow"),
-        (pen, "pressure", stamp, "size_input"),
-        (stamp, "dab", smudge, "dab"),
-        (stamp, "dab_size", smudge, "dab_size"),
+        (circle, "texture", smudge, "mask"),
         (pen, "position", smudge, "position"),
         (pen, "motion", smudge, "motion"),
-        (stamp, "preview", smudge, "brush_preview"),
+        // Pressure shapes the dab — heavier press = larger smear footprint.
+        (pen, "pressure", smudge, "size_input"),
     ];
     for (from_node, from_port, to_node, to_port) in wires {
         graph
@@ -744,9 +506,9 @@ fn smudge_brush() -> Brush {
 }
 
 /// Liquify warp brush. Pushes pixels along pen motion with a radial
-/// falloff. Unlike paint brushes, the graph has no stamp / paint_color /
-/// color_output — the liquify node is itself the terminal, with its own
-/// `begin_stroke` / `commit` / `render_preview` lifecycle.
+/// falloff. Unlike paint brushes, the graph has no stamp / paint_color
+/// / color_output — `liquify` is itself the terminal, with
+/// its own `begin_stroke` / `commit` / per-dab pass lifecycle.
 fn liquify_push() -> Brush {
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::<BrushWireType>::new();
@@ -762,64 +524,185 @@ fn liquify_push() -> Brush {
         vec![],
     );
 
-    // pen_input.position → liquify.position
+    let wires = [
+        (pen, "position", liquify, "position"),
+        // pen.drawing_angle → liquify.direction (radians; shader turns
+        // it into a unit direction vector). Magnitude comes from motion.
+        (pen, "drawing_angle", liquify, "direction"),
+        // pen.distance → liquify.distance (gates the first dab so a
+        // stationary click doesn't smear in the default direction).
+        (pen, "distance", liquify, "distance"),
+        // pen.motion → liquify.motion. The terminal uses |motion| as
+        // the per-dab displacement scale, so 100% strength makes the
+        // pixel travel a full cursor step (lock).
+        (pen, "motion", liquify, "motion"),
+    ];
+    for (from_node, from_port, to_node, to_port) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: from_node,
+                    port: from_port.into(),
+                },
+                PortRef {
+                    node: to_node,
+                    port: to_port.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    // size / strength / softness are already `.exposed()` on the
+    // liquify node-def, so the toolbar picks them up without
+    // extra brush work.
+
+    // Pin dab spacing in *absolute canvas pixels*, not as a fraction
+    // of brush diameter. Setting ratio to 0 disables the diameter
+    // term; `spacing_min_px = LIQUIFY_SPACING_PX` then floors the
+    // engine's `SpacingConfig::distance(...)` at that pixel value
+    // regardless of brush size. Combined with the terminal's
+    // `displacement = strength × |motion|`, this gives:
+    //   * size-invariant per-dab push (the size slider controls only
+    //     the warped extent),
+    //   * `strength = 1` → lock (per-dab push = per-dab cursor motion),
+    //   * `strength = 0.5` → 50% drag.
+    graph.set_port_default(pen, "spacing", 0.0).unwrap();
     graph
-        .connect(
-            PortRef {
-                node: pen,
-                port: "position".into(),
-            },
-            PortRef {
-                node: liquify,
-                port: "position".into(),
-            },
+        .set_port_default(
+            pen,
+            "spacing_min_px",
+            crate::brush::nodes::liquify::LIQUIFY_SPACING_PX,
         )
         .unwrap();
-    // pen_input.drawing_angle → liquify.direction (radians; shader turns
-    // it into a unit direction vector). Magnitude comes from strength.
-    graph
-        .connect(
-            PortRef {
-                node: pen,
-                port: "drawing_angle".into(),
-            },
-            PortRef {
-                node: liquify,
-                port: "direction".into(),
-            },
-        )
-        .unwrap();
-    // pen_input.distance → liquify.distance (gates the first dab so a
-    // stationary click doesn't smear in the default direction).
-    graph
-        .connect(
-            PortRef {
-                node: pen,
-                port: "distance".into(),
-            },
-            PortRef {
-                node: liquify,
-                port: "distance".into(),
-            },
-        )
-        .unwrap();
-
-    // size / strength / softness are already `.exposed()` on the liquify
-    // node-def, so the toolbar picks them up without extra brush work.
-
-    // Tighten dab spacing well below the paint default (10%). Liquify's
-    // per-dab displacement is ~25% of radius (DRAG_FACTOR in liquify.rs),
-    // so spacing must be much smaller for warps to accumulate smoothly.
-    // 4% is the port floor — anything lower kills stabilizer performance.
-    graph.set_port_default(pen, "spacing", 0.04).unwrap();
-
-    // Compensate the per-dab strength for the ~2.5× denser dabs — total
-    // accumulated displacement along the stroke stays roughly what it was
-    // at the old 10% spacing / 0.5 strength combination. Tune empirically.
-    graph.set_port_default(liquify, "strength", 0.2).unwrap();
 
     let mut metadata = BrushMetadata::from_graph("Liquify", graph);
     metadata.category = "effects".to_string();
+    Brush::without_resources(metadata)
+}
+
+/// Rough Ink — the first 100%-compiled brush.
+///
+/// Wires `pen_input + paint_color + 3×random + circle(perlin) + stamp`
+/// into the `paint` terminal. Each dab gets a unique
+/// perlin-modulated silhouette driven by three independent per-dab
+/// random seeds (amplitude, phase, seed). Pressure controls dab size
+/// through an ink-pen front-loaded curve. The entire graph compiles
+/// to one WGSL fragment shader at brush load — no per-dab GPU
+/// dispatch, no inter-node textures.
+///
+/// This brush is the proving ground for the WGSL compilation
+/// framework — see `crates/darkly/src/brush/wgsl_compile.rs`.
+fn rough_ink() -> Brush {
+    let registry = BrushNodeRegistry::new();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    graph.set_port_default(pen, "stabilize", 0.6).unwrap();
+    graph.set_port_exposed(pen, "stabilize", true).unwrap();
+
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let curve = graph.add_node(
+        "curve",
+        registry.get("curve").unwrap().ports.clone(),
+        // One bend handle — see ink_pen for the rationale.
+        vec![ParamValue::Curve(vec![[0.0, 0.0], [0.4, 0.7], [1.0, 1.0]])],
+    );
+    let rand_amp = graph.add_node(
+        "random",
+        registry.get("random").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // per-dab
+    );
+    let rand_phase = graph.add_node(
+        "random",
+        registry.get("random").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)],
+    );
+    let rand_seed = graph.add_node(
+        "random",
+        registry.get("random").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)],
+    );
+    let circle = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![ParamValue::Int(1)], // 1 = Perlin Noise
+    );
+    // Defaults for the perlin shape — these are stroke-constant
+    // unless wired (the random nodes below override amplitude /
+    // phase_input / seed per-dab).
+    graph.set_port_default(circle, "frequency", 8.0).unwrap();
+    graph.set_port_default(circle, "persistence", 0.5).unwrap();
+    graph.set_port_default(circle, "octaves", 4.0).unwrap();
+    graph.set_port_default(circle, "softness", 0.1).unwrap();
+
+    let stamp = graph.add_node(
+        "stamp",
+        registry.get("stamp").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // 0 = Alpha Mask
+    );
+    // Stamp's `size` port is exposed by default (because per-dab
+    // dispatch needs it), but `paint` ignores stamp's
+    // dimension knobs — the terminal owns dab dimensions in the
+    // compiled execution model. Hide stamp.size from the brush
+    // properties panel so the user doesn't see two "Size" sliders
+    // and scrub the inert one.
+    graph.set_port_exposed(stamp, "size", false).unwrap();
+    let terminal = graph.add_node(
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
+        vec![],
+    );
+
+    let wires = [
+        // Pressure → size (via ink-pen curve) on the TERMINAL,
+        // because the terminal owns dab dimensions in the compiled
+        // model.
+        (pen, "pressure", curve, "input"),
+        (curve, "output", terminal, "size_input"),
+        // Pressure → flow on the stamp (modulates per-dab alpha).
+        (pen, "pressure", stamp, "flow"),
+        // 3 random nodes drive the perlin shape per dab.
+        (rand_amp, "value", circle, "amplitude"),
+        (rand_phase, "value", circle, "phase_input"),
+        (rand_seed, "value", circle, "seed"),
+        // Circle (shape) → stamp (tip mask).
+        (circle, "texture", stamp, "tip"),
+        // Paint color → stamp.
+        (paint_color, "color", stamp, "color"),
+        // Stamp.dab → terminal.rgba (premultiplied RGBA).
+        (stamp, "dab", terminal, "rgba"),
+        // Terminal needs position too.
+        (pen, "position", terminal, "position"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    // Amplitude default range is [0, 0.5] — the random nodes output
+    // [0, 1] which gets remapped to [0, 0.5] by the wire-boundary
+    // remap (circle.amplitude has natural_range = (0, 0.5)).
+
+    let mut metadata = BrushMetadata::from_graph("Rough Ink", graph);
+    metadata.category = "basic".to_string();
     Brush::without_resources(metadata)
 }
 
@@ -895,7 +778,7 @@ mod tests {
             .graph
             .nodes
             .values()
-            .find(|n| n.type_id == "pen_input")
+            .find(|n| n.type_id == crate::brush::nodes::pen_input::TYPE_ID)
             .expect("liquify brush has a pen_input node");
         let spacing = pen
             .ports

@@ -81,14 +81,15 @@ const PARAMS: &[ParamDef] = &[
         max: 3.0,
         default: 1.0,
     },
-    // Morph speed. 0 = static; higher values evolve the field in place
-    // through the z-axis of the 3D noise volume (features appear, morph,
-    // and dissolve at fixed canvas positions). The compositor's animation
-    // master-clock divisor throttles how often `update_time` fires.
+    // Time slider — z-coordinate into the 3D noise volume. Each value
+    // produces a different cross-section of the same FBM field; scrub to
+    // explore variations of the current seed without changing pattern
+    // identity. Range chosen so the full slider covers many full noise-cell
+    // crossings at the default Z scale (Z_SCALE = 0.15 in the shader).
     ParamDef::Float {
-        name: "speed",
+        name: "time",
         min: 0.0,
-        max: 1.0,
+        max: 100.0,
         default: 0.0,
     },
 ];
@@ -106,9 +107,9 @@ pub fn register() -> VoidRegistration {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct NoiseUniforms {
-    // User-editable fields. `update_params` writes contiguously through
-    // `time` and stops there — keeps the engine-baked `canvas_scale` after
-    // safe across slider drags.
+    // User-editable fields. `update_params` writes the leading
+    // `USER_PARAMS_BYTES` of the struct and stops there — keeps the
+    // engine-baked `canvas_scale` safe across slider drags.
     seed: u32,
     octaves: i32,
     frequency: f32,
@@ -121,10 +122,11 @@ struct NoiseUniforms {
     _pad0: f32,
 }
 
-/// Byte offset of the `time` field inside `NoiseUniforms`. `update_time`
-/// writes only this field (an offset write) so the per-cache `canvas_scale`
-/// baked at `create_cache` time is not clobbered each tick.
-const TIME_FIELD_OFFSET: u64 = 20;
+/// Byte length of the user-editable prefix of `NoiseUniforms` (fields
+/// `seed` through `time` inclusive). `update_params` writes exactly this
+/// many bytes so the per-cache `canvas_scale` baked at `create_cache`
+/// time is not clobbered when a slider moves.
+const USER_PARAMS_BYTES: usize = 24;
 
 #[derive(Clone, Debug)]
 pub struct Noise {
@@ -135,12 +137,10 @@ pub struct Noise {
     pub size: f32,
     pub warp: f32,
     pub darkness: f32,
-    pub speed: f32,
-    /// Accumulated time for animation. Transient compositor state — not
-    /// undoable, not serialized. The document-side params (above) are the
-    /// authoritative inputs; `time` is just a drift offset that resets to 0
-    /// whenever the void is re-created from params (e.g. on load).
-    time: f32,
+    /// Z-axis offset into the 3D noise volume. User-controlled slider; a
+    /// scrub control for exploring different cross-sections of the field
+    /// without changing the seed.
+    pub time: f32,
     shared: Arc<EffectPipeline>,
 }
 
@@ -166,7 +166,7 @@ impl Noise {
             Some(ParamValue::Float(v)) => *v,
             _ => 1.0,
         };
-        let speed = match params.get(5) {
+        let time = match params.get(5) {
             Some(ParamValue::Float(v)) => *v,
             _ => 0.0,
         };
@@ -176,8 +176,7 @@ impl Noise {
             size,
             warp,
             darkness,
-            speed,
-            time: 0.0,
+            time,
             shared,
         }
     }
@@ -212,21 +211,8 @@ impl Void for Noise {
             ParamValue::Float(self.size),
             ParamValue::Float(self.warp),
             ParamValue::Float(self.darkness),
-            ParamValue::Float(self.speed),
+            ParamValue::Float(self.time),
         ]
-    }
-
-    fn needs_animation(&self) -> bool {
-        self.speed > 0.0
-    }
-
-    fn update_time(&mut self, queue: &wgpu::Queue, cache: &EffectCache, dt: f32) {
-        self.time += dt * self.speed;
-        // Partial write: only the `time` field. `canvas_scale` is baked
-        // into the buffer at `create_cache` time and must not be clobbered.
-        if let Some(buf) = cache.uniform_bufs.first() {
-            queue.write_buffer(buf, TIME_FIELD_OFFSET, bytemuck::bytes_of(&self.time));
-        }
     }
 
     fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]) {
@@ -250,17 +236,14 @@ impl Void for Noise {
             Some(ParamValue::Float(v)) => *v,
             _ => self.darkness,
         };
-        self.speed = match params.get(5) {
+        self.time = match params.get(5) {
             Some(ParamValue::Float(v)) => *v,
-            _ => self.speed,
+            _ => self.time,
         };
         // Partial write: skip `canvas_scale` (baked at create_cache time).
-        // Writes the first 24 bytes — fields seed..time inclusive. The
-        // `time` field is included so the user-visible animation clock
-        // continues uninterrupted across param drags.
         if let Some(buf) = cache.uniform_bufs.first() {
             let scratch = self.uniforms(0.0);
-            let bytes = &bytemuck::bytes_of(&scratch)[..TIME_FIELD_OFFSET as usize + 4];
+            let bytes = &bytemuck::bytes_of(&scratch)[..USER_PARAMS_BYTES];
             queue.write_buffer(buf, 0, bytes);
         }
     }

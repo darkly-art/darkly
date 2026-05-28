@@ -64,11 +64,12 @@ pub const MAX_SPEED_PX_PER_SEC: f32 = 4000.0;
 
 impl PaintInformation {
     /// Synthetic pen input for dry-run previews.
-    /// Neutral tablet state with mid-pressure so pressure-driven sensors
-    /// show the brush at a typical firm stroke.
+    /// Full pressure so pressure-driven sensors show the brush at its
+    /// fully-engaged tip — the silhouette the user expects when previewing
+    /// "what this brush looks like."
     pub fn preview_dummy() -> Self {
         Self {
-            pressure: 0.5,
+            pressure: 1.0,
             ..Default::default()
         }
     }

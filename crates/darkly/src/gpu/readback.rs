@@ -105,6 +105,29 @@ pub fn request_readback(
 }
 
 impl ReadbackRequest {
+    /// Wrap an externally-allocated buffer that the caller has already
+    /// filled via `encoder.copy_texture_to_buffer`. Used by the undo
+    /// region path, where the entry owns the staging buffer so the
+    /// restore-from-Pending branch can copy from it GPU-to-GPU.
+    ///
+    /// Caller is responsible for ensuring the buffer has at least
+    /// `MAP_READ | COPY_DST` usage (plus `COPY_SRC` if the buffer is also
+    /// going to feed `copy_buffer_to_texture`).
+    pub fn from_buffer(
+        buffer: wgpu::Buffer,
+        height: u32,
+        padded_row_bytes: u32,
+        unpadded_row_bytes: u32,
+    ) -> Self {
+        ReadbackRequest {
+            buffer,
+            height,
+            padded_row_bytes,
+            unpadded_row_bytes,
+            rx: None,
+        }
+    }
+
     /// Start the async buffer mapping.
     ///
     /// **Must** be called after `queue.submit()` — the copy command must be

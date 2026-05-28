@@ -82,8 +82,11 @@ export async function pickSaveFile(
 ): Promise<FileSystemFileHandle | null> {
     if (!canSave) return null;
     try {
+        // The File System Access API isn't in the standard lib.dom types, so
+        // go through `unknown` — TS 5.7+ rejects direct casts where neither
+        // type sufficiently overlaps.
         const api = (
-            globalThis as {
+            globalThis as unknown as {
                 showSaveFilePicker: (opts: {
                     suggestedName?: string;
                     types?: typeof SAVE_TYPES;
@@ -104,7 +107,11 @@ export async function writeToHandle(
     bytes: Uint8Array,
 ): Promise<void> {
     const writable = await handle.createWritable();
-    await writable.write(bytes);
+    // FileSystemWriteChunkType requires Uint8Array<ArrayBuffer>; TS 5.7+
+    // defaults Uint8Array to <ArrayBufferLike>. Our callers all produce
+    // non-shared buffers (WASM exports, fflate output, fresh
+    // `new Uint8Array`), so the cast is sound.
+    await writable.write(bytes as Uint8Array<ArrayBuffer>);
     await writable.close();
 }
 

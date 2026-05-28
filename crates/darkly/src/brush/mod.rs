@@ -4,8 +4,8 @@ pub mod brush_tip;
 pub mod builtin_brushes;
 pub mod bundle;
 pub mod checkpoint_ring;
+pub mod composite_pipeline;
 pub mod curve_math;
-pub mod dab_pool;
 pub mod eval;
 pub mod gpu_context;
 pub mod import;
@@ -17,7 +17,6 @@ pub mod paint_info;
 pub mod paint_target_ext;
 pub mod pipeline;
 pub mod preview_renderer;
-pub mod preview_subgraph;
 pub mod save_points;
 pub mod scratch;
 pub mod spacing;
@@ -26,12 +25,34 @@ pub mod stabilizers;
 pub mod state;
 pub mod stroke_buffer;
 pub mod stroke_engine;
+pub mod wgsl_compile;
 pub mod wire;
 
 use std::collections::HashMap;
 
 use crate::nodegraph::NodeRegistration;
 use wire::BrushWireType;
+
+/// Reference dab dimension (width = height), in canvas pixels — the
+/// UI/UX convention that defines what `brush size = 1.0` means in
+/// canvas-pixel terms. Used by:
+///
+/// - `stamp`: the rendered dab's longer axis at `effective_size = 1.0`
+///   is `DAB_REFERENCE_SIZE` canvas pixels (the slider's "100%" mark).
+/// - `liquify`: `radius = size * DAB_REFERENCE_SIZE * 0.5`.
+/// - `paint` / `watercolor`: same `effective_size *
+///   DAB_REFERENCE_SIZE / 2` formula for `effective_radius`.
+/// - `StrokeEngine::default_diameter() = DAB_REFERENCE_SIZE * 0.5` —
+///   spacing fallback before any dab has reported its own size.
+///
+/// **Not a hard cap on dab footprint.** `effective_size` (= `size_input
+/// × size`) can exceed 1.0 unbounded — both the slider and any wired
+/// sensor (pen pressure, random, ...) can push past 100%. The system
+/// must tolerate dab footprints arbitrarily larger than this value.
+///
+/// If you need a hard cap on something, introduce a separately-named
+/// constant. Do not repurpose this one.
+pub const DAB_REFERENCE_SIZE: u32 = 512;
 
 /// Wrapper around `NodeRegistration<BrushWireType>` carrying the GPU
 /// pipelines a brush node owns.  Used by `build.rs` auto-generation for
@@ -135,178 +156,120 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map.insert("scatter".into(), Box::new(nodes::scatter::ScatterEvaluator));
     // GPU nodes.
     map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
-    map.insert("image".into(), Box::new(nodes::image::ImageEvaluator));
     map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
-    map.insert(
-        "color_output".into(),
-        Box::new(nodes::color_output::ColorOutputEvaluator),
-    );
-    map.insert(
-        "texture_overlay".into(),
-        Box::new(nodes::texture_overlay::TextureOverlayEvaluator),
-    );
+    map.insert("paint".into(), Box::new(nodes::paint::PaintEvaluator));
     map.insert("liquify".into(), Box::new(nodes::liquify::LiquifyEvaluator));
     map.insert(
         "watercolor".into(),
         Box::new(nodes::watercolor::WatercolorEvaluator),
     );
     map.insert("smudge".into(), Box::new(nodes::smudge::SmudgeEvaluator));
-    // Internal terminal used by per-node preview pipeline. Not exposed to the
-    // frontend palette (filtered by `category == "internal"`).
-    map.insert(
-        "preview_terminal".into(),
-        Box::new(nodes::preview_terminal::PreviewTerminalEvaluator),
-    );
     map
 }
 
-/// Build the default brush graph: pressure-sensitive dab painting.
-///
-/// Graph topology:
-///   circle ──texture──→     stamp.tip
-///   pen_input ──pressure──→ stamp.size_input
-///   paint_color ──color──→  stamp.color
-///   stamp ──dab──→          color_output.dab
-///   stamp ──dab_size──→     color_output.dab_size
-///   pen_input ──position──→ color_output.position
-///   stamp ──preview──→      color_output.brush_preview
-///
-/// Produces a basic round brush with pressure → size dynamics. Brushes
-/// that want jitter put a `scatter` node between `pen_input.position`
-/// and `color_output.position`.
+/// Convenience over [`crate::nodegraph::Graph::find_terminal`] for
+/// brush graphs: builds a fresh [`BrushNodeRegistry`] and delegates.
+/// Use this from any graph-only call site (benches, tests, the WASM
+/// bridge) where threading the registry through would be noise.
+pub fn find_terminal(
+    graph: &crate::nodegraph::Graph<BrushWireType>,
+) -> Result<crate::nodegraph::NodeId, crate::nodegraph::FindTerminalError> {
+    let registry = BrushNodeRegistry::new();
+    graph.find_terminal(registry.as_map())
+}
+
+/// Build the default brush graph: pressure-sensitive disc through the
+/// compiled `paint` terminal. Same shape as Round in
+/// [`builtin_brushes`] — `pen → paint_color → circle (sine, amplitude 0)
+/// → stamp → paint` — minus the per-brush configuration
+/// closure (no exposed softness, no flow wire).
 pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
+    use crate::gpu::params::ParamValue;
     use crate::nodegraph::{Graph, PortRef};
 
     let registry = BrushNodeRegistry::new();
     let mut graph = Graph::new();
 
-    let pen_reg = registry.get("pen_input").unwrap();
-    let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let circle = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // sine, amplitude 0 → plain disc
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        registry.get("stamp").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // AlphaMask
+    );
+    let terminal = graph.add_node(
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
+        vec![],
+    );
 
-    let color_reg = registry.get("paint_color").unwrap();
-    let paint_color = graph.add_node("paint_color", color_reg.ports.clone(), vec![]);
-
-    let circle_reg = registry.get("circle").unwrap();
-    let circle = graph.add_node("circle", circle_reg.ports.clone(), vec![]);
-
-    let stamp_reg = registry.get("stamp").unwrap();
-    let stamp = graph.add_node("stamp", stamp_reg.ports.clone(), vec![]);
-
-    let out_reg = registry.get("color_output").unwrap();
-    let color_output = graph.add_node("color_output", out_reg.ports.clone(), vec![]);
-
-    // circle.texture → stamp.tip
-    graph
-        .connect(
-            PortRef {
-                node: circle,
-                port: "texture".into(),
-            },
-            PortRef {
-                node: stamp,
-                port: "tip".into(),
-            },
-        )
-        .unwrap();
-
-    // pressure → stamp.size_input
-    graph
-        .connect(
-            PortRef {
-                node: pen,
-                port: "pressure".into(),
-            },
-            PortRef {
-                node: stamp,
-                port: "size_input".into(),
-            },
-        )
-        .unwrap();
-
-    // paint_color → stamp.color
-    graph
-        .connect(
-            PortRef {
-                node: paint_color,
-                port: "color".into(),
-            },
-            PortRef {
-                node: stamp,
-                port: "color".into(),
-            },
-        )
-        .unwrap();
-
-    // stamp.dab → color_output.dab
-    graph
-        .connect(
-            PortRef {
-                node: stamp,
-                port: "dab".into(),
-            },
-            PortRef {
-                node: color_output,
-                port: "dab".into(),
-            },
-        )
-        .unwrap();
-
-    // stamp.dab_size → color_output.dab_size
-    graph
-        .connect(
-            PortRef {
-                node: stamp,
-                port: "dab_size".into(),
-            },
-            PortRef {
-                node: color_output,
-                port: "dab_size".into(),
-            },
-        )
-        .unwrap();
-
-    // pen_input.position → color_output.position
-    graph
-        .connect(
-            PortRef {
-                node: pen,
-                port: "position".into(),
-            },
-            PortRef {
-                node: color_output,
-                port: "position".into(),
-            },
-        )
-        .unwrap();
-
-    // stamp.preview → color_output.brush_preview
-    // The stamp emits a deposition-stripped, transform-baked tip texture
-    // whose dimensions encode the brush's canvas-pixel extent. The
-    // terminal's `render_preview` hook blits it into the overlay's hover
-    // preview mask.
-    graph
-        .connect(
-            PortRef {
-                node: stamp,
-                port: "preview".into(),
-            },
-            PortRef {
-                node: color_output,
-                port: "brush_preview".into(),
-            },
-        )
-        .unwrap();
+    let wires = [
+        (pen, "pressure", stamp, "size_input"),
+        (pen, "pressure", stamp, "flow"),
+        (paint_color, "color", stamp, "color"),
+        (circle, "texture", stamp, "tip"),
+        (stamp, "dab", terminal, "rgba"),
+        (pen, "position", terminal, "position"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
 
     graph
 }
 
 /// Compile any brush graph into a ready-to-run runner.
+///
+/// Generates the per-brush WGSL fragment shader and attaches it to
+/// the runner when the graph has a terminal. Brush load fails (with
+/// a string-form `GraphError`-ish error coerced via `panic!` ⇒ TODO)
+/// when any upstream node lacks a `compile_wgsl` implementation.
 pub fn compile_graph(
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
     let registry = BrushNodeRegistry::new();
     let evaluators = default_evaluators();
-    eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)
+    let mut runner = eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)?;
+    if runner.has_terminal() {
+        let plan = crate::nodegraph::compile(graph, registry.as_map())?;
+        // Build a fresh evaluators map for the compiler — the runner
+        // owns the live one. Cheap (just trait-object constructors).
+        let compile_evals = default_evaluators();
+        let compiled =
+            wgsl_compile::compile_brush_to_wgsl(graph, &plan, &compile_evals).map_err(|e| {
+                // Surface the WGSL compile error as a Graph compile
+                // error so the engine's existing error path handles
+                // it. Detail goes through `Display`.
+                eprintln!("paint WGSL compilation failed: {e}");
+                crate::nodegraph::GraphError::CycleDetected
+            })?;
+        runner.set_compiled_brush(std::sync::Arc::new(compiled));
+    }
+    Ok(runner)
 }
 
 /// Compile the default brush graph into a ready-to-run runner.

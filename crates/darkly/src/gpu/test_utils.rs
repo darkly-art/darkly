@@ -25,6 +25,41 @@ pub fn test_device() -> (wgpu::Device, wgpu::Queue) {
     .expect("failed to create test device")
 }
 
+/// Like [`test_device`], but requests the adapter's full limits rather
+/// than wgpu's downlevel-defaults floor (which caps `max_texture_dimension_2d`
+/// at 2048). For perf benches that need to allocate textures larger than
+/// the portability floor — 4K canvases, large brush dabs, etc. Picks the
+/// `HighPerformance` adapter to match what the real frontend uses.
+///
+/// Also opts in to `TIMESTAMP_QUERY` (plus the inside-pass and
+/// inside-encoder variants) when the adapter supports it, so bench-side
+/// instrumentation can wrap GPU passes in `ComputePassTimestampWrites`
+/// and bracket encoder-scoped sync copies with `write_timestamp`. Pipelines
+/// that record timestamps check the device's features at build time and
+/// degrade gracefully on adapters that don't expose the features.
+pub fn bench_device() -> (wgpu::Device, wgpu::Queue) {
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+    let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .expect("no GPU adapter available for benches");
+    let adapter_features = adapter.features();
+    let optional = wgpu::Features::TIMESTAMP_QUERY
+        | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
+        | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS;
+    let required_features = adapter_features & optional;
+    let limits = adapter.limits();
+    block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("bench-device"),
+        required_features,
+        required_limits: limits,
+        ..Default::default()
+    }))
+    .expect("failed to create bench device")
+}
+
 /// Minimal future executor — blocks the current thread until the future resolves.
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     // wgpu futures resolve after a single poll on native backends.

@@ -56,33 +56,26 @@ impl DarklyEngine {
 
     /// Does the active brush graph's terminal honor erase mode?
     ///
-    /// The brush "supports erase" iff every output-category node in the
-    /// active graph's evaluator returns `supports_erase() = true`. The
-    /// signal lives on the evaluator trait (not on `NodeRegistration`)
-    /// because only output terminals care — non-terminal evaluators
-    /// never see `gpu.blend_mode` and inherit the default `true`.
+    /// True iff every terminal node in the active graph's registration
+    /// has `supports_erase = true`. Type-owned dispatch — there is no
+    /// central list of which terminals don't (smudge, liquify,
+    /// watercolor today); each module's `register()` declares its own
+    /// value.
     ///
     /// Used by the brush-tool options bar to hide the erase button for
-    /// terminals where flipping `gpu.blend_mode` would do nothing (smudge,
-    /// liquify, watercolor).
+    /// terminals where flipping `gpu.blend_mode` would do nothing.
     pub fn active_brush_supports_erase(&self) -> bool {
         let graph = self.active_brush_graph();
         let registry = BrushNodeRegistry::new();
-        let evaluators = crate::brush::default_evaluators();
         for node in graph.nodes.values() {
             let Some(reg) = registry.get(&node.type_id) else {
                 continue;
             };
-            if reg.category != "output" {
-                continue;
-            }
-            if let Some(ev) = evaluators.get(&node.type_id) {
-                if !ev.supports_erase() {
-                    return false;
-                }
+            if reg.node.is_terminal && !reg.node.supports_erase {
+                return false;
             }
         }
-        // No output node, or every output supports erase → keep the
+        // No terminal, or every terminal supports erase → keep the
         // toggle visible.
         true
     }
@@ -240,27 +233,22 @@ impl DarklyEngine {
         };
 
         // Always dispatch `render_preview` — individual terminals decide
-        // whether they produce output this frame. A paint graph with no
-        // `brush_preview` wire has color_output's hook return early and
-        // `brush_preview_info` stays None; a self-previewing terminal
-        // (liquify etc.) fires its hook and publishes placement info. The
-        // post-run `info.is_some()` check below routes both outcomes.
+        // whether they produce output this frame. A graph with no
+        // compiled-terminal hook fires nothing and `brush_preview_info`
+        // stays None; the four compiled terminals each fire their
+        // hook and publish placement info. The post-run
+        // `info.is_some()` check below routes both outcomes.
 
-        // Fixed-size preview mask; overlay's linear sampler handles display
-        // scaling via the primitive's canvas-space half-extent.
-        let target_size = (128_u32, 128_u32);
-        let target_view = self
-            .compositor
-            .ensure_overlay_preview_mask(&self.gpu.device, target_size.0, target_size.1)
-            .clone();
-        let preview_tex = self
-            .compositor
-            .overlay_preview_mask_texture()
-            .expect("ensure_overlay_preview_mask just allocated it");
-
-        let sel_bg = if self.has_selection() {
-            self.compositor
-                .selection_state()
+        // Split-borrow the compositor so we can hold a mutable handle
+        // on `tool_overlay` (for the terminal's `ensure_preview_mask`
+        // grow) alongside an immutable borrow of `selection_state` for
+        // the brush bind group. The two fields are disjoint;
+        // `Compositor::split_overlay_and_selection` documents the
+        // pattern.
+        let (overlay, selection) = self.compositor.split_overlay_and_selection();
+        let has_selection = selection.is_some();
+        let sel_bg = if has_selection {
+            selection
                 .map(|s| s.brush_bind_group())
                 .unwrap_or(&self.brush_pipelines.default_selection_bind_group)
         } else {
@@ -273,37 +261,41 @@ impl DarklyEngine {
                 label: Some("brush-preview-regen"),
             });
 
-        // `preview_tex` is unused in this path (the preview writes to
-        // `preview_mask_view` instead).  We discard the binding to avoid an
-        // unused-variable warning while preserving the caller's lookup.
-        let _ = preview_tex;
         let mut gpu_ctx = BrushGpuContext {
             encoder,
             device: &self.gpu.device,
             queue: &self.gpu.queue,
-            dab_pool: &mut self.dab_pool,
             pipelines: &self.brush_pipelines,
             // The preview pipeline doesn't touch the stroke scratch — the
-            // terminal's `render_preview` writes to `preview_mask_view`
-            // instead. No `Scratch` is needed; any accidental call to a
-            // scratch accessor will panic, exposing the bug.
+            // terminal's `render_preview` writes to the preview mask
+            // through `preview_mask_overlay` instead. No `Scratch` is
+            // needed; any accidental call to a scratch accessor will
+            // panic, exposing the bug.
             scratch: None,
-            canvas_width: target_size.0,
-            canvas_height: target_size.1,
+            canvas_width: 0,
+            canvas_height: 0,
             // No layer / pre-stroke state in preview — commit isn't called,
-            // and `render_preview` writes to `preview_mask_view`.
+            // and `render_preview` writes to the preview mask.
             paint_target: None,
             selection_bind_group: sel_bg,
-            preview_target_view: Some(&target_view),
-            resource_handles: &self.resource_handles,
+            preview_target_view: None,
             blend_mode: 0,
-            preview_mask_view: Some(&target_view),
-            preview_mask_size: target_size,
+            // Tests pre-allocate `preview_mask_view`; the engine path
+            // grows the mask on demand via `preview_mask_overlay`.
+            preview_mask_view: None,
+            preview_mask_size: (0, 0),
+            preview_mask_overlay: Some(overlay),
             brush_preview_info: None,
             pre_stroke_texture: None,
             pre_stroke_bind_group: None,
             dab_write_canvas_bbox: None,
             perf: BrushPerfCounters::default(),
+            pending_dab_bytes: Vec::new(),
+            pending_dab_count: 0,
+            pending_dabs_bbox: None,
+            pending_dab_meta_bytes: Vec::new(),
+            compiled_brush: None,
+            slot_outputs_owned: None,
         };
 
         self.brush_pipelines.reset_uniform_rings();
@@ -313,7 +305,6 @@ impl DarklyEngine {
         runner.render_preview_pipeline(&mut gpu_ctx);
 
         let info = gpu_ctx.brush_preview_info;
-        gpu_ctx.dab_pool.release_all();
         let command_buf = gpu_ctx.encoder.finish();
         self.gpu.queue.submit([command_buf]);
 
@@ -331,8 +322,7 @@ impl DarklyEngine {
         self.brush_preview_info
     }
 
-    /// Compile the active graph in-place, then release any static GPU
-    /// textures that are no longer referenced by an Image node.
+    /// Compile the active graph in-place.
     ///
     /// `kind` selects which version counters to bump:
     /// - [`ChangeKind::Topology`] bumps both the graph version (editor /
@@ -350,34 +340,10 @@ impl DarklyEngine {
     ///
     /// Returns Ok on success or an error string.
     fn compile_active(&mut self, kind: ChangeKind) -> Result<(), String> {
-        // Compile + scan-for-live-resources under one read guard.
-        let live: std::collections::HashSet<String> = {
+        {
             let tool = self.tool_session.read();
             let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
             crate::brush::compile_graph(&brush.graph).map_err(|e| format!("{e}"))?;
-            brush
-                .graph
-                .nodes
-                .values()
-                .filter(|n| n.type_id == "image")
-                .filter_map(|n| match n.params.first() {
-                    Some(ParamValue::String(s)) if !s.is_empty() => Some(s.clone()),
-                    _ => None,
-                })
-                .collect()
-        };
-
-        // Release static textures whose resource name is no longer live.
-        let stale: Vec<String> = self
-            .resource_handles
-            .keys()
-            .filter(|name| !live.contains(name.as_str()))
-            .cloned()
-            .collect();
-        for name in stale {
-            if let Some(handle) = self.resource_handles.remove(&name) {
-                self.dab_pool.release_static(handle);
-            }
         }
 
         // Bump version counters per the change classification — see the
@@ -584,85 +550,15 @@ impl DarklyEngine {
         cached.unwrap_or_default()
     }
 
-    /// Render a thumbnail of a single GPU node's `texture` output and return
-    /// the most recent cached PNG bytes for that node synchronously. Same
-    /// async-readback shape as `brush_active_dab_preview`, but the rendered
-    /// graph is the per-node *subgraph* built by
-    /// [`crate::brush::preview_subgraph::build_node_preview_graph`] (target
-    /// node + transitive predecessors + a synthesised `preview_terminal`).
+    /// Per-node thumbnail of a single GPU node's `texture` output.
     ///
-    /// Returns an empty Vec for nodes that don't have a `Texture` output
-    /// port (the frontend uses empty as "preserve last good bytes / show
-    /// nothing yet" — same convention as `brush_editor_preview`).
-    ///
-    /// Cache key is `(node_id, brush_topology_version)`. Topology bumps on
-    /// any non-scrub change (param edits, port-default edits, rewires) so
-    /// changing a Circle's algorithm or amplitude properly invalidates the
-    /// preview; brush-bar exposed-scrub changes (size, opacity) don't bump
-    /// topology *and* the subgraph runs `apply_preview_overrides()`, so
-    /// scrubbing those leaves per-node previews at cache-hit cost.
-    pub fn brush_node_preview(&mut self, node_id: u64) -> Vec<u8> {
-        let in_stroke = self.brush_stroke_engine.is_some();
-
-        // Same "empty bytes mean preserve last frame" convention as
-        // `brush_active_dab_preview` — see that method's comments.
-        let cached = self
-            .node_preview_cache
-            .get(&node_id)
-            .map(|(_, bytes)| bytes.clone());
-
-        // Cache hit on the current topology version → return immediately.
-        // Mid-stroke we always return the cached bytes (if any) without
-        // queuing a render to avoid trampling the active stroke's GPU state.
-        let current_topology = self.brush_topology_version();
-        let cache_fresh = self
-            .node_preview_cache
-            .get(&node_id)
-            .map(|(v, _)| *v == current_topology)
-            .unwrap_or(false);
-        if cache_fresh || in_stroke {
-            return cached.unwrap_or_default();
-        }
-
-        // Skip if a render for THIS node is already in flight — avoids
-        // double-submit when the frontend polls during the readback gap.
-        let already_pending = self.readbacks.any(
-            |c| matches!(c, ReadbackContext::NodePreview { node_id: nid, .. } if *nid == node_id),
-        );
-        if already_pending {
-            return cached.unwrap_or_default();
-        }
-
-        // Build the per-node preview subgraph under a read guard. Returns
-        // None if `node_id` doesn't exist or the target has no Texture
-        // output — both surface as empty bytes ("no preview to render").
-        let target = crate::nodegraph::NodeId(node_id);
-        let Some(graph) = ({
-            let tool = self.tool_session.read();
-            let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
-            crate::brush::preview_subgraph::build_node_preview_graph(&brush.graph, target)
-        }) else {
-            return Vec::new();
-        };
-
-        let fg = self.preview_theme_fg;
-        let bg = self.preview_theme_bg;
-        let (rw, rh) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_preview_dab(rw as f32, rh as f32);
-        self.render_preview_and_request_readback(
-            &graph,
-            &path,
-            rw,
-            rh,
-            fg,
-            bg,
-            ReadbackContext::NodePreview {
-                node_id,
-                topology_version: current_topology,
-            },
-        );
-
-        cached.unwrap_or_default()
+    /// Unimplemented — returns the empty Vec ("no fresh bytes yet —
+    /// preserve last shown") so frontend node-card thumbnails fall
+    /// back to their placeholder state. Brush previews are rendered
+    /// per-terminal, not per-node; this entry point remains so the
+    /// frontend's node-card API surface stays stable.
+    pub fn brush_node_preview(&mut self, _node_id: u64) -> Vec<u8> {
+        Vec::new()
     }
 
     /// Shared helper: render a preview path into the preview renderer's
@@ -684,9 +580,7 @@ impl DarklyEngine {
         let Some(texture) = self.brush_preview_renderer.render_stroke(
             &self.gpu.device,
             &self.gpu.queue,
-            &mut self.dab_pool,
             &self.brush_pipelines,
-            &self.resource_handles,
             graph,
             path,
             fg,
@@ -875,31 +769,21 @@ impl DarklyEngine {
 
     /// Upload an RGBA8 image and associate it with a resource name.
     ///
-    /// The image is stored as a static GPU texture.  Image nodes that
-    /// reference `resource_name` will output this texture's handle.
-    /// If a resource with the same name already exists, it is replaced.
+    /// Image-stamp brushes are unsupported — `stamp` only accepts
+    /// AlphaMask application, which compiles inline without sampling
+    /// an RGBA tip texture. The entry point remains so the frontend's
+    /// upload UI doesn't fault on a missing symbol; it returns an
+    /// error rather than silently dropping the bytes.
     pub fn brush_upload_image(
         &mut self,
-        resource_name: &str,
-        width: u32,
-        height: u32,
-        rgba: &[u8],
+        _resource_name: &str,
+        _width: u32,
+        _height: u32,
+        _rgba: &[u8],
     ) -> Result<(), String> {
-        // Release the old texture if replacing.
-        if let Some(old) = self.resource_handles.remove(resource_name) {
-            self.dab_pool.release_static(old);
-        }
-        let handle = self.dab_pool.upload_image(
-            &self.gpu.device,
-            &self.gpu.queue,
-            resource_name,
-            width,
-            height,
-            rgba,
-        );
-        self.resource_handles
-            .insert(resource_name.to_string(), handle);
-        Ok(())
+        Err("image-stamp brushes are unsupported — stamp accepts \
+             AlphaMask only"
+            .to_string())
     }
 
     /// Set the composite blend mode: 0 = source-over (paint), 1 = destination-out (erase).

@@ -1,5 +1,6 @@
 //! Floating content — paste-in-place and interactive transforms.
 
+use super::rendering::commit_undo_region;
 use super::{DarklyEngine, PendingTransform};
 use crate::document::MoveTarget;
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -602,30 +603,35 @@ impl DarklyEngine {
             };
         }
         let commit_snap = self.gpu.encode_ret("transform-commit-save", |encoder| {
-            let frame = layer_frame!();
-            self.region_store.save_region(
+            self.region_scratch.save_region(
                 &self.gpu.device,
                 encoder,
-                &frame,
+                &layer_frame!(),
                 format,
                 affected_canvas_rect,
             )
         });
 
+        // The undo entry has to be committed BEFORE the ClearShape + commit
+        // pass writes to the target, because `commit_region` reads from the
+        // scratch (which holds the pre-clear state). Separate encode-and-
+        // submit so the clear/commit pass sees the scratch upload done.
+        let frame = layer_frame!();
+        let entry = commit_undo_region(
+            &self.gpu,
+            &self.region_scratch,
+            &mut self.readbacks,
+            "transform-commit-undo",
+            layer_id,
+            &frame,
+            &commit_snap,
+            affected_canvas_rect,
+        );
+
         // Apply ClearShape to the live target, then run commit. Same
         // sequence the preview applies on every drag, but here it lands
         // on the live texture and survives the floating session.
-        let mut entry = None;
         self.gpu.encode("transform-commit", |encoder| {
-            let frame = layer_frame!();
-            entry = Some(self.region_store.commit_region(
-                encoder,
-                layer_id,
-                &frame,
-                &commit_snap,
-                affected_canvas_rect,
-            ));
-
             if let FloatingMode::Transform {
                 ref clear_shape, ..
             } = fc.mode
@@ -666,9 +672,7 @@ impl DarklyEngine {
                 fc.source_height,
             );
         });
-        if let Some(entry) = entry {
-            self.push_undo(Box::new(GpuRegionAction::new(entry)));
-        }
+        self.push_undo(Box::new(GpuRegionAction::new(entry)));
 
         // Clean up GPU state
         self.compositor.mark_node_pixels_dirty(layer_id);

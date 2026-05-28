@@ -156,10 +156,11 @@ class BrushGraphState {
 
     /** Does the active brush's terminal honor erase (paint vs. erase) mode?
      *  Refreshed from `app.handle.brush_active_supports_erase()` whenever
-     *  the graph topology changes. Signal lives on the brush evaluator
-     *  trait — only output terminals override; non-terminal evaluators
-     *  inherit `true`. False for smudge/liquify/watercolor; the brush-tool
-     *  options bar hides the erase toggle in that case. */
+     *  the graph topology changes. The Rust side reads each terminal
+     *  node's `supports_erase` registration flag — there is no central
+     *  list of which terminals opt out (it lives on each node module's
+     *  `register()`). When `false`, the brush-tool options bar hides
+     *  the erase toggle. */
     supportsErase = $state(true);
 
     /**

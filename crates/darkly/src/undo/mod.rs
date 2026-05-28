@@ -62,16 +62,49 @@ pub trait UndoAction {
     }
 
     /// Called when this action is permanently dropped from both undo and redo
-    /// stacks (max_steps overflow or redo-history clear on a fresh push, or
-    /// teardown). Owners of tombstoned GPU textures dispose them here so the
-    /// compositor's `node_textures` pool never outlives its owning action.
+    /// stacks (max_steps overflow, byte-cap eviction, redo-history clear on a
+    /// fresh push, or teardown). Owners of tombstoned GPU textures dispose
+    /// them here so the compositor's `node_textures` pool never outlives its
+    /// owning action.
     fn on_evict(&mut self, _compositor: &mut Compositor) {}
+
+    /// Approximate memory cost of this action, used by [`UndoStack`]'s memory
+    /// cap to evict oldest actions when the total exceeds the budget.
+    ///
+    /// Defaults to `0` — most actions (layer add/remove, property changes,
+    /// modifier add/remove) hold only structural metadata. GPU region actions
+    /// override this to return the pixel byte_size; compound actions sum
+    /// children.
+    fn byte_cost(&self) -> u64 {
+        0
+    }
 }
+
+/// Memory budget for undo entries. Tiered for WASM vs native because the
+/// binding constraint in production is the 32-bit WASM linear-memory heap
+/// (shared with layer pixel caches, thumbnails, document state, …), not the
+/// host's physical DRAM.
+///
+/// - **WASM: 128 MB.** Defensive against the 4 GB linear-memory ceiling and
+///   stricter per-tab budgets browsers impose. Still admits ~8 full-canvas
+///   2048² commits before the cap kicks in.
+/// - **Native: 512 MB.** Wider headroom for desktop dev / CI / integration
+///   tests so synthetic full-canvas workloads don't fight the budget.
+#[cfg(target_arch = "wasm32")]
+const DEFAULT_MEMORY_CAP: u64 = 128 << 20;
+#[cfg(not(target_arch = "wasm32"))]
+const DEFAULT_MEMORY_CAP: u64 = 512 << 20;
 
 pub struct UndoStack {
     undo_steps: Vec<Box<dyn UndoAction>>,
     redo_steps: Vec<Box<dyn UndoAction>>,
     max_steps: usize,
+    /// Soft cap on `sum(byte_cost) across both stacks`. When exceeded after
+    /// a push, oldest entries are evicted FIFO until the total fits.
+    memory_cap: u64,
+    /// Running sum of `byte_cost` over `undo_steps + redo_steps`. Maintained
+    /// incrementally on push/eviction to avoid an O(n) recompute per push.
+    total_bytes: u64,
 }
 
 impl UndoStack {
@@ -80,6 +113,8 @@ impl UndoStack {
             undo_steps: Vec::new(),
             redo_steps: Vec::new(),
             max_steps,
+            memory_cap: DEFAULT_MEMORY_CAP,
+            total_bytes: 0,
         }
     }
 
@@ -105,12 +140,33 @@ impl UndoStack {
     ) -> Vec<Box<dyn UndoAction>> {
         doc.dirty = true;
         let mut evicted: Vec<Box<dyn UndoAction>> = self.redo_steps.drain(..).collect();
+        for a in &evicted {
+            self.total_bytes = self.total_bytes.saturating_sub(a.byte_cost());
+        }
+        self.total_bytes = self.total_bytes.saturating_add(action.byte_cost());
         self.undo_steps.push(action);
 
+        // Step cap.
         if self.undo_steps.len() > self.max_steps {
             let remove = self.undo_steps.len() - self.max_steps;
-            evicted.extend(self.undo_steps.drain(0..remove));
+            let drained: Vec<_> = self.undo_steps.drain(0..remove).collect();
+            for a in &drained {
+                self.total_bytes = self.total_bytes.saturating_sub(a.byte_cost());
+            }
+            evicted.extend(drained);
         }
+
+        // Memory cap — drop oldest until the running total fits. Only
+        // entries with non-zero byte_cost meaningfully shrink the total;
+        // structural-only actions still leave the stack but contribute zero
+        // to the budget, so the loop terminates after evicting whichever
+        // GPU-region action ends up at the front.
+        while self.total_bytes > self.memory_cap && !self.undo_steps.is_empty() {
+            let a = self.undo_steps.remove(0);
+            self.total_bytes = self.total_bytes.saturating_sub(a.byte_cost());
+            evicted.push(a);
+        }
+
         evicted
     }
 
@@ -146,6 +202,7 @@ impl UndoStack {
     pub fn drain_all(&mut self) -> Vec<Box<dyn UndoAction>> {
         let mut all: Vec<Box<dyn UndoAction>> = self.undo_steps.drain(..).collect();
         all.append(&mut self.redo_steps);
+        self.total_bytes = 0;
         all
     }
 

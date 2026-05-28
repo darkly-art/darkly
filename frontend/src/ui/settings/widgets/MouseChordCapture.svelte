@@ -10,9 +10,15 @@
     let { action, value, onchange }: Props = $props();
 
     /** Sites whose `provides` is a superset of `action.accepts` — the only
-     *  sites a click can dispatch this action without missing context. */
+     *  sites a click can dispatch this action without missing context.
+     *  `keyboard` is excluded because it's not a real DOM site: nothing
+     *  registers it via `use:bindingSite`, so `keyboard:click` would never
+     *  fire. */
     const compatibleSites = $derived.by(() => {
-        return sites.all().filter(site => contextSatisfied(action, site.provides));
+        return sites.all().filter(site =>
+            site.name !== 'keyboard'
+            && contextSatisfied(action, site.provides),
+        );
     });
 
     const parts = $derived.by(() => {
@@ -90,10 +96,10 @@
 </script>
 
 <div class="stack">
-    <select value={parts.site} onchange={pickSite} class="site">
-        <option value="">(no mouse trigger)</option>
+    <select value={parts.site} onchange={pickSite} class="site" title="Where the click triggers this action. Required — no global mouse fallback.">
+        <option value="">(off)</option>
         {#each compatibleSites as site (site.name)}
-            <option value={site.name}>{site.name}</option>
+            <option value={site.name}>On {site.displayName ?? site.name}</option>
         {/each}
     </select>
 

@@ -127,15 +127,12 @@ pub struct BuildContext<'a> {
     /// fragment output by the selection mask.
     pub selection_bgl: &'a wgpu::BindGroupLayout,
     /// Texture + linear sampler — bound where shaders sample the per-dab
-    /// scratch read mirror snapshot (composite, liquify, smudge, ...).
+    /// scratch read mirror snapshot (composite, smudge,
+    /// liquify, watercolor atlas). After the
+    /// `dab_pool` deletion this BGL is the single shape for every
+    /// `texture_2d<f32> + sampler` binding in the brush stack — the
+    /// scratch's write bind group also lives on it.
     pub canvas_copy_bgl: &'a wgpu::BindGroupLayout,
-    /// Read mirror + sampler + 1×1 pickup texture — used only by the
-    /// watercolor pickup and composite passes.
-    pub watercolor_sources_bgl: &'a wgpu::BindGroupLayout,
-    /// Dab-texture layout from the global [`DabTexturePool`].
-    ///
-    /// [`DabTexturePool`]: crate::brush::dab_pool::DabTexturePool
-    pub dab_bgl: &'a wgpu::BindGroupLayout,
     pub canvas_copy_sampler: &'a wgpu::Sampler,
     pub min_uniform_align: u32,
 }
@@ -184,8 +181,20 @@ pub trait BrushPipelineEntry: Any {
     /// registry iterates every entry's ring on frame reset and on overflow
     /// checks; pipelines without per-dab uniforms (`mask_blit`, ...) return
     /// `None`.
+    ///
+    /// Most pipelines have at most one ring; entries that own multiple
+    /// rings (e.g. a terminal that runs both a pickup and a composite
+    /// pass with separate uniform layouts) override [`Self::rings`]
+    /// instead.
     fn ring(&self) -> Option<&DynamicUniformRing> {
         None
+    }
+    /// All dynamic-offset uniform rings the registry must coordinate
+    /// (reset, overflow-check) for this entry. Default returns the
+    /// single [`Self::ring`] wrapped in a `Vec`; override directly when
+    /// the entry holds more than one ring.
+    fn rings(&self) -> Vec<&DynamicUniformRing> {
+        self.ring().into_iter().collect()
     }
 }
 
@@ -214,14 +223,16 @@ pub struct BrushPipelineRegistration {
 /// owner.
 pub struct BrushPipelines {
     // ── Shared bind-group layouts ────────────────────────────────────
-    // `uniform_bgl` lives only for the duration of `new()` — every per-
-    // mode pipeline copies its own uniform bind group out of it before
-    // we drop the local.  The three BGLs below have external consumers
-    // (`Scratch::new`, format-bridging blit-source bind groups, the
-    // composite that wants a shared layout for both R8 and RGBA8 variants).
+    // `uniform_bgl` is stored alongside the others so per-brush
+    // compiled pipelines (built lazily after `new()`) can rebuild
+    // their dynamic-uniform bind group against the same layout the
+    // shared infra was set up with.  The three BGLs below have
+    // external consumers (`Scratch::new`, format-bridging blit-source
+    // bind groups, the composite that wants a shared layout for both
+    // R8 and RGBA8 variants).
+    uniform_bgl: wgpu::BindGroupLayout,
     selection_bgl: wgpu::BindGroupLayout,
     canvas_copy_bgl: wgpu::BindGroupLayout,
-    watercolor_sources_bgl: wgpu::BindGroupLayout,
 
     // ── Shared samplers / default bind groups ────────────────────────
     canvas_copy_sampler: wgpu::Sampler,
@@ -240,32 +251,33 @@ pub struct BrushPipelines {
 
     // ── Per-mode pipelines (modular, looked up by id) ────────────────
     entries: HashMap<&'static str, Box<dyn BrushPipelineEntry>>,
+
+    // ── Shared compiled-brush preview pipeline cache ─────────────────
+    /// One cache for every compiled terminal's hover-cursor preview.
+    /// Pipelines built lazily, keyed by the brush's `topology_hash`.
+    /// See [`PreviewPipelineCache`].
+    preview_pipeline_cache: PreviewPipelineCache,
 }
 
 impl BrushPipelines {
     /// Build all brush pipelines.
     ///
-    /// `dab_bgl` is the dab texture bind group layout from
-    /// [`DabTexturePool`].  No canvas dimensions: the read-mirror texture
-    /// brush composite shaders sample from lives on
-    /// [`Scratch`](crate::brush::scratch::Scratch) (per-stroke, lazy-grown
-    /// to dab footprint), so engine-init no longer needs to know the
-    /// canvas size.
-    ///
-    /// [`DabTexturePool`]: crate::brush::dab_pool::DabTexturePool
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        dab_bgl: &wgpu::BindGroupLayout,
-    ) -> Self {
+    /// No canvas dimensions: the read-mirror texture brush composite
+    /// shaders sample from lives on [`Scratch`](crate::brush::scratch::Scratch)
+    /// (per-stroke, lazy-grown to dab footprint), so engine-init no
+    /// longer needs to know the canvas size.
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let min_uniform_align = device.limits().min_uniform_buffer_offset_alignment;
 
         // ── Bind group layouts ──────────────────────────────────────
+        // Shared layouts are visible in vertex + fragment AND compute so the
+        // dab-batching terminals can reuse them for their
+        // uniform and selection bindings without rebuilding parallel BGLs.
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("brush-uniform-bgl"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: true,
@@ -280,7 +292,7 @@ impl BrushPipelines {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
@@ -290,7 +302,7 @@ impl BrushPipelines {
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
@@ -321,43 +333,6 @@ impl BrushPipelines {
                 },
             ],
         });
-
-        // Watercolor sources: canvas_copy (texture+sampler at 0/1) plus
-        // the 1×1 carried-pickup texture at 2 (no sampler — shader uses
-        // `textureLoad`). Packed into one BGL because WebGPU caps
-        // `max_bind_groups` at 4.
-        let watercolor_sources_bgl =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("brush-watercolor-sources-bgl"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                ],
-            });
 
         // ── Default selection (1×1 white = fully selected) ─────────
         let sel_texture = device.create_texture(&wgpu::TextureDescriptor {
@@ -434,9 +409,12 @@ impl BrushPipelines {
                 include_str!("../../../../shaders/brush/blit.wgsl").into(),
             ),
         });
+        // `canvas_copy_bgl` is the canonical `texture_2d<f32> + sampler`
+        // layout — same shape the old dab-pool BGL had, used here for
+        // the blit's source texture binding.
         let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("brush-blit-layout"),
-            bind_group_layouts: &[&uniform_bgl, dab_bgl],
+            bind_group_layouts: &[&uniform_bgl, &canvas_copy_bgl],
             immediate_size: 0,
         });
         let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -565,8 +543,6 @@ impl BrushPipelines {
             uniform_bgl: &uniform_bgl,
             selection_bgl: &selection_bgl,
             canvas_copy_bgl: &canvas_copy_bgl,
-            watercolor_sources_bgl: &watercolor_sources_bgl,
-            dab_bgl,
             canvas_copy_sampler: &canvas_copy_sampler,
             min_uniform_align,
         };
@@ -578,11 +554,28 @@ impl BrushPipelines {
                 debug_assert!(prev.is_none(), "duplicate brush pipeline id: {id}");
             }
         }
+        // The brush commit pipeline isn't a node — it's the shared
+        // scratch→layer blit used by every terminal's `commit` hook.
+        // Register it manually so it lives outside the auto-discovered
+        // `nodes/` tree.
+        let prev = entries.insert(
+            "composite",
+            Box::new(crate::brush::composite_pipeline::CompositePipeline::build(
+                &build_ctx,
+            )),
+        );
+        debug_assert!(prev.is_none(), "composite pipeline id collided");
+
+        // Shared compiled-brush preview pipeline cache. Owns its own
+        // dabs-storage BGL (single-element binding); reuses the
+        // already-built `uniform_bgl` at render time via the
+        // build_preview_pipeline path.
+        let preview_pipeline_cache = PreviewPipelineCache::new(device);
 
         Self {
+            uniform_bgl,
             selection_bgl,
             canvas_copy_bgl,
-            watercolor_sources_bgl,
             canvas_copy_sampler,
             default_selection_bind_group,
             blit_pipeline,
@@ -591,7 +584,17 @@ impl BrushPipelines {
             mask_blit_pipeline,
             scratch_blit_r8_pipeline,
             entries,
+            preview_pipeline_cache,
         }
+    }
+
+    /// BGL used by every per-mode pipeline's dynamic-offset uniform
+    /// buffer (group 0). Exposed so per-brush compiled pipelines
+    /// built lazily after `BrushPipelines::new` can bind their own
+    /// uniform ring against the same layout. See
+    /// [`crate::brush::nodes::paint`].
+    pub fn uniform_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
+        &self.uniform_bgl
     }
 
     /// Look up a per-mode pipeline by id.  Panics if the id is not
@@ -675,12 +678,6 @@ impl BrushPipelines {
         &self.canvas_copy_bgl
     }
 
-    /// BGL used by the watercolor sources bind group on every `Scratch`
-    /// (read mirror + sampler + pickup texture).
-    pub fn watercolor_sources_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
-        &self.watercolor_sources_bgl
-    }
-
     /// Linear sampler shared by every `Scratch`'s read-mirror bind group.
     pub fn canvas_copy_sampler(&self) -> &wgpu::Sampler {
         &self.canvas_copy_sampler
@@ -693,16 +690,6 @@ impl BrushPipelines {
         &self.default_selection_bind_group
     }
 
-    /// Sampled-side view of the 1×1 watercolor pickup texture.  Embedded
-    /// by `Scratch` in its `watercolor_sources_bind_group` at binding 2.
-    ///
-    /// Forwards to the watercolor pickup pipeline entry, which owns the
-    /// texture.
-    pub fn watercolor_pickup_view(&self) -> &wgpu::TextureView {
-        self.get::<crate::brush::nodes::watercolor::WatercolorPickupPipeline>("watercolor_pickup")
-            .sampled_view()
-    }
-
     // ── Ring coordination ───────────────────────────────────────────
 
     /// True if any ring is close to capacity.  The caller should flush
@@ -713,15 +700,306 @@ impl BrushPipelines {
         }
         self.entries
             .values()
-            .filter_map(|e| e.ring())
+            .flat_map(|e| e.rings())
             .any(|r| r.nearly_full())
     }
 
     /// Reset all uniform rings for a new frame.
     pub fn reset_uniform_rings(&self) {
         self.blit_uniform_ring.reset();
-        for r in self.entries.values().filter_map(|e| e.ring()) {
+        for r in self.entries.values().flat_map(|e| e.rings()) {
             r.reset();
         }
+    }
+
+    /// Shared cache of compiled-brush *preview* pipelines, keyed by
+    /// `topology_hash`. All four compiled terminals (paint, watercolor,
+    /// smudge, liquify) route their hover-cursor preview through this
+    /// single cache — preview pipelines look identical across terminals
+    /// (single-quad vertex stage, no `@group(2)` selection, no
+    /// `@group(3)` terminal bindings, REPLACE blend, `Rgba8Unorm`
+    /// target). Their shape depends only on the brush's
+    /// `uniform_layout` / `dab_layout`, not on which terminal compiled
+    /// the brush.
+    pub fn preview_cache(&self) -> &PreviewPipelineCache {
+        &self.preview_pipeline_cache
+    }
+
+    /// Render the brush's hover-cursor preview via the shared
+    /// [`PreviewPipelineCache`]. Builds the per-brush preview pipeline
+    /// lazily on first invocation per `compiled.topology_hash`; later
+    /// invocations reuse.
+    ///
+    /// `uniform_bytes` must contain a fully packed `IntrinsicUniforms`
+    /// header followed by any node-contributed uniforms in the order
+    /// declared by `compiled.uniform_layout`; `dab_bytes` must contain
+    /// the intrinsic dab header (`pos`, `bbox_target_px`,
+    /// `inv_radius_target_px`) followed by node-contributed dab fields.
+    /// Both packers (`pack_intrinsic_dab_header`, `pack_dab_record`)
+    /// are shared with the stroke path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_preview(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        compiled: &crate::brush::wgsl_compile::CompiledBrush,
+        target_view: &wgpu::TextureView,
+        target_size: (u32, u32),
+        uniform_bytes: &[u8],
+        dab_bytes: &[u8],
+    ) {
+        let min_align = device.limits().min_uniform_buffer_offset_alignment;
+        self.preview_pipeline_cache.with_pipeline(
+            device,
+            &self.uniform_bgl,
+            min_align,
+            compiled,
+            |pp| {
+                pp.render(
+                    queue,
+                    encoder,
+                    target_view,
+                    target_size,
+                    uniform_bytes,
+                    dab_bytes,
+                )
+            },
+        );
+    }
+}
+
+// ── Compiled-brush preview pipeline cache ─────────────────────────────────
+
+/// One built per-brush preview pipeline. Owns its own uniform ring
+/// (per-brush, not shared) plus a single-dab storage buffer + bind
+/// group. The terminal's `render_preview` writes one dab record and
+/// one uniform block per hover refresh; the ring's leftover capacity
+/// is irrelevant because every preview reset reset()s before writing.
+pub struct PreviewPipeline {
+    pipeline: wgpu::RenderPipeline,
+    uniform_ring: DynamicUniformRing,
+    uniform_bind_group: wgpu::BindGroup,
+    dabs_buffer: wgpu::Buffer,
+    dabs_bind_group: wgpu::BindGroup,
+    /// Total uniform-block size for this brush — intrinsic header +
+    /// node-contributed uniforms, rounded to the ring's alignment.
+    uniform_size: usize,
+}
+
+impl PreviewPipeline {
+    /// Render-pass driver. Resets the ring, writes the uniform block
+    /// and the single dab record, encodes one render pass that
+    /// clear-loads the target view and draws the preview's single
+    /// quad. Caller is responsible for packing
+    /// `uniform_bytes` (intrinsic + node uniforms) and `dab_bytes`
+    /// (intrinsic header + node-contributed dab record).
+    pub fn render(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target_view: &wgpu::TextureView,
+        target_size: (u32, u32),
+        uniform_bytes: &[u8],
+        dab_bytes: &[u8],
+    ) {
+        // Pad uniform bytes up to the ring's binding size — the dynamic
+        // offset bind group's `binding_size` is the ring stride, so
+        // writes shorter than the stride leave the tail of the ring
+        // slot whatever it had before. Zeroing keeps reads of node-
+        // contributed fields deterministic when the brush has no
+        // uniforms.
+        let mut bytes = Vec::from(uniform_bytes);
+        if bytes.len() < self.uniform_size {
+            bytes.resize(self.uniform_size, 0);
+        }
+        self.uniform_ring.reset();
+        let uniform_offset = self.uniform_ring.write(queue, &bytes);
+        queue.write_buffer(&self.dabs_buffer, 0, dab_bytes);
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("brush-preview"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        pass.set_viewport(
+            0.0,
+            0.0,
+            target_size.0 as f32,
+            target_size.1 as f32,
+            0.0,
+            1.0,
+        );
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &self.uniform_bind_group, &[uniform_offset]);
+        pass.set_bind_group(1, &self.dabs_bind_group, &[]);
+        pass.draw(0..6, 0..1);
+    }
+}
+
+/// Shared cache of preview pipelines for compiled brushes — see
+/// [`BrushPipelines::preview_cache`].
+///
+/// Pipelines are built on demand. The cache key is `topology_hash`;
+/// two brushes that compile to identical dab/uniform layouts share
+/// one entry. The pipeline shape is derived entirely from
+/// `CompiledBrush::preview_wgsl`, `dab_layout`, and `uniform_layout`
+/// — independent of which terminal compiled the brush.
+pub struct PreviewPipelineCache {
+    pipelines: std::cell::RefCell<HashMap<u64, PreviewPipeline>>,
+    dabs_bgl: wgpu::BindGroupLayout,
+}
+
+impl PreviewPipelineCache {
+    fn new(device: &wgpu::Device) -> Self {
+        let dabs_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("brush-preview-dabs-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        Self {
+            pipelines: std::cell::RefCell::new(HashMap::new()),
+            dabs_bgl,
+        }
+    }
+
+    /// Build (or look up) the preview pipeline for `compiled`. Invoke a
+    /// closure with it. The cache is built lazily on first call for a
+    /// given `topology_hash`; later calls reuse. Per-brush double
+    /// compile cost (stroke + preview WGSL) lives at brush *load*
+    /// time, not preview time.
+    pub fn with_pipeline<R>(
+        &self,
+        device: &wgpu::Device,
+        uniform_bgl: &wgpu::BindGroupLayout,
+        min_uniform_align: u32,
+        compiled: &crate::brush::wgsl_compile::CompiledBrush,
+        f: impl FnOnce(&PreviewPipeline) -> R,
+    ) -> R {
+        let key = compiled.topology_hash;
+        let mut pipelines = self.pipelines.borrow_mut();
+        let entry = pipelines.entry(key).or_insert_with(|| {
+            build_preview_pipeline(
+                device,
+                uniform_bgl,
+                &self.dabs_bgl,
+                min_uniform_align,
+                compiled,
+            )
+        });
+        f(entry)
+    }
+}
+
+fn build_preview_pipeline(
+    device: &wgpu::Device,
+    uniform_bgl: &wgpu::BindGroupLayout,
+    dabs_bgl: &wgpu::BindGroupLayout,
+    min_uniform_align: u32,
+    compiled: &crate::brush::wgsl_compile::CompiledBrush,
+) -> PreviewPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("brush-preview-shader"),
+        source: wgpu::ShaderSource::Wgsl(compiled.preview_wgsl.clone().into()),
+    });
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("brush-preview-layout"),
+        bind_group_layouts: &[uniform_bgl, dabs_bgl],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("brush-preview"),
+        layout: Some(&layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            buffers: &[],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            ..Default::default()
+        },
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
+    let uniform_size = (crate::brush::wgsl_compile::INTRINSIC_UNIFORMS_SIZE
+        + compiled.uniform_size)
+        .max(crate::brush::wgsl_compile::INTRINSIC_UNIFORMS_SIZE);
+    let uniform_ring = DynamicUniformRing::new(
+        device,
+        "brush-preview-uniforms",
+        uniform_size as u64,
+        min_uniform_align,
+    );
+    let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("brush-preview-uniform-bg"),
+        layout: uniform_bgl,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &uniform_ring.buffer,
+                offset: 0,
+                size: Some(uniform_ring.binding_size()),
+            }),
+        }],
+    });
+
+    // Single-dab storage. The preview draws one quad with one record;
+    // the buffer's only sized to that record. `max(16)` mirrors the
+    // safety floor every stroke pipeline uses (zero-sized buffers
+    // aren't valid).
+    let dab_record_size = compiled.dab_record_size.max(16);
+    let dabs_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("brush-preview-dabs-buffer"),
+        size: dab_record_size as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let dabs_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("brush-preview-dabs-bg"),
+        layout: dabs_bgl,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: dabs_buffer.as_entire_binding(),
+        }],
+    });
+
+    PreviewPipeline {
+        pipeline,
+        uniform_ring,
+        uniform_bind_group,
+        dabs_buffer,
+        dabs_bind_group,
+        uniform_size: align_up(uniform_size as u64, min_uniform_align as u64) as usize,
     }
 }

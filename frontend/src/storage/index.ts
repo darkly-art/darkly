@@ -98,7 +98,10 @@ export async function exportRootAsZip(): Promise<Blob> {
             else resolve(out);
         });
     });
-    return new Blob([data], { type: 'application/zip' });
+    // BlobPart requires Uint8Array<ArrayBuffer>; fflate's callback gives us
+    // <ArrayBufferLike> post-TS 5.7. The buffer is in fact freshly allocated
+    // and non-shared. See fileHandle.ts::writeToHandle.
+    return new Blob([data as Uint8Array<ArrayBuffer>], { type: 'application/zip' });
 }
 
 /** Download a Blob as a file by triggering a one-shot anchor click. */

@@ -26,13 +26,12 @@ pub use types::{
     ModifierTypeInfo, ParamInfo, StrokeOp, ToolTypeInfo, VeilInfo, VeilTypeInfo,
 };
 
-pub use perf::FrameRenderPhases;
+pub use perf::{BrushPerfDelta, FrameRenderPhases};
 
 mod perf;
-use perf::StrokePerfStats;
+use crate::brush::gpu_context::BrushPerfCounters;
 
 use crate::brush::checkpoint_ring::CheckpointRing;
-use crate::brush::dab_pool::DabTexturePool;
 use crate::brush::library::BrushLibrary;
 use crate::brush::pipeline::BrushPipelines;
 use crate::brush::preview_renderer::BrushPreviewRenderer;
@@ -48,7 +47,7 @@ use crate::gpu::diff_rect::DiffRectPass;
 use crate::gpu::overlay::OverlayPrimitive;
 use crate::gpu::paint_target::PaintPipelines;
 use crate::gpu::readback::ReadbackScheduler;
-use crate::gpu::region_store::RegionStore;
+use crate::gpu::region_store::{EntryPixels, RegionScratch};
 use crate::gpu::selection::SelectionPipelines;
 use crate::gpu::transform::FloatingContent;
 use crate::gpu::view::ViewTransform;
@@ -213,16 +212,15 @@ pub(crate) enum ReadbackContext {
     ActiveBrushDab {
         topology_version: u64,
     },
-    /// Async readback of a per-node preview rendered via the
-    /// `preview_subgraph` pipeline (target node + transitive predecessors +
-    /// synthesised `preview_terminal`). On completion the pixels are
-    /// PNG-encoded and stored in `node_preview_cache` keyed by `node_id`.
-    /// The `topology_version` travels with the request so stale results
-    /// from an in-flight render that's been superseded by a graph mutation
-    /// get dropped (mirrors `ActiveBrushDab`'s pattern).
-    NodePreview {
-        node_id: u64,
-        topology_version: u64,
+    /// Async readback of an undo-region staging buffer. On completion the
+    /// handler flips the `cell` from `Pending` to `Ready`, dropping the
+    /// staging buffer and moving the pixels onto the host heap.
+    ///
+    /// `cell` is a clone of the [`crate::gpu::region_store::UndoRegionEntry::pixels`]
+    /// produced by `commit_region` / `restore_region`. The other clone lives
+    /// on the entry — see [`crate::gpu::region_store::EntryPixels`].
+    UndoRegionReady {
+        cell: std::rc::Rc<std::cell::RefCell<EntryPixels>>,
     },
 }
 
@@ -275,7 +273,7 @@ pub struct DarklyEngine {
     pub(crate) floating: Option<FloatingContent>,
 
     // --- GPU Paint Infrastructure ---
-    pub(crate) region_store: RegionStore,
+    pub(crate) region_scratch: RegionScratch,
     pub(crate) paint_pipelines: PaintPipelines,
     /// Pre-stroke scratch snapshot for the current stroke. Lazily populated
     /// on the first stroke_to of a stroke; consumed at end_stroke (moved into
@@ -289,7 +287,6 @@ pub struct DarklyEngine {
     pub(crate) pending_selection_snapshot: Option<crate::gpu::region_store::Snapshot>,
 
     // --- Brush Engine ---
-    pub(crate) dab_pool: DabTexturePool,
     pub(crate) brush_pipelines: BrushPipelines,
     /// Active brush stroke engine (only during a BrushStroke operation).
     pub(crate) brush_stroke_engine: Option<StrokeEngine>,
@@ -348,14 +345,6 @@ pub struct DarklyEngine {
     /// Topology version at the last time we issued a dab render. Compared
     /// against `brush_topology_version` to skip redundant dab renders.
     pub(crate) last_rendered_dab_topology_version: u64,
-    /// Per-node preview cache: `node_id → (topology_version, png_bytes)`.
-    /// `brush_node_preview(node_id)` returns the bytes if the version
-    /// matches `brush_topology_version`, otherwise kicks off a fresh render
-    /// via the `preview_subgraph` pipeline. Stale entries become cache-misses
-    /// after the next topology bump and self-invalidate; we keep the old
-    /// bytes around so the UI shows the last-known thumbnail rather than a
-    /// blank gap during the readback gap.
-    pub(crate) node_preview_cache: std::collections::HashMap<u64, (u64, Vec<u8>)>,
     /// Theme colors for brush thumbnails (not the live editor preview —
     /// that uses the caller-supplied fg and auto-picked contrast bg). The
     /// frontend sets these via `set_preview_theme()` when the UI theme
@@ -365,10 +354,6 @@ pub struct DarklyEngine {
 
     // --- Brush Library ---
     pub(crate) brush_library: BrushLibrary,
-    /// Resource name → TextureHandle for images uploaded by the current brush.
-    /// Built by `upload_brush_resources()`, read by Image nodes via BrushGpuContext.
-    pub(crate) resource_handles:
-        std::collections::HashMap<String, crate::brush::wire::TextureHandle>,
 
     /// Stroke buffer for stabilizer-driven rewind + re-render.
     pub(crate) stroke_buffer: Option<StrokeBuffer>,
@@ -435,9 +420,16 @@ pub struct DarklyEngine {
     /// process lifetime.
     pub(crate) layer_growth_capped: bool,
 
-    /// Per-stroke perf accumulator. Reset at `begin_stroke`, emitted at
-    /// `end_stroke`. See `StrokePerfStats` for what each field means.
-    pub(crate) stroke_perf: StrokePerfStats,
+    /// Per-stroke counter accumulator. Reset at `begin_stroke`; each
+    /// per-event `BrushGpuContext` `+=`'s its drained counters into here.
+    pub(crate) brush_perf: BrushPerfCounters,
+
+    /// Snapshot of `brush_perf` taken on the last `drain_brush_perf_delta`
+    /// call. Subtracted from the current accumulator on each drain to
+    /// produce a per-interval delta. Reset to default at `begin_stroke`
+    /// alongside `brush_perf`. Native bench harnesses only — production
+    /// never reads this.
+    pub(crate) last_brush_perf: BrushPerfCounters,
 
     /// Most recent `render()` sub-phase timings. Overwritten every frame;
     /// read by the WASM bridge when it logs a slow frame.
@@ -477,11 +469,9 @@ impl DarklyEngine {
             doc.root_id(),
         );
         let undo_stack = UndoStack::new(50);
-        let region_store = RegionStore::new(&gpu.device, doc_width, doc_height);
+        let region_scratch = RegionScratch::new(&gpu.device, doc_width, doc_height);
         let paint_pipelines = PaintPipelines::new(&gpu.device, &gpu.queue);
-        let dab_pool = DabTexturePool::new(&gpu.device);
-        let brush_pipelines =
-            BrushPipelines::new(&gpu.device, &gpu.queue, dab_pool.bind_group_layout());
+        let brush_pipelines = BrushPipelines::new(&gpu.device, &gpu.queue);
         let selection_pipelines = SelectionPipelines::new(&gpu.device);
         let diff_rect = DiffRectPass::new(&gpu.device);
 
@@ -497,11 +487,10 @@ impl DarklyEngine {
             tool_overlay: Vec::new(),
             clipboard: None,
             floating: None,
-            region_store,
+            region_scratch,
             paint_pipelines,
             scratch_snapshot: None,
             pending_selection_snapshot: None,
-            dab_pool,
             brush_pipelines,
             brush_stroke_engine: None,
             tool_session,
@@ -512,7 +501,6 @@ impl DarklyEngine {
             last_rendered_preview_version: 0,
             active_dab_preview_cache: None,
             last_rendered_dab_topology_version: 0,
-            node_preview_cache: std::collections::HashMap::new(),
             // Default theme: dark (white on dark). Frontend overrides via
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
@@ -524,7 +512,6 @@ impl DarklyEngine {
                 }
                 lib
             },
-            resource_handles: std::collections::HashMap::new(),
             stroke_buffer: None,
             checkpoint_ring: CheckpointRing::new(),
             stabilizer_registry: StabilizerRegistry::new(),
@@ -544,7 +531,8 @@ impl DarklyEngine {
             thumbnail_cache: ThumbnailCache::new(),
             thumbnail_version: 0,
             layer_growth_capped: false,
-            stroke_perf: StrokePerfStats::default(),
+            brush_perf: BrushPerfCounters::default(),
+            last_brush_perf: BrushPerfCounters::default(),
             last_frame_phases: FrameRenderPhases::default(),
         };
 
@@ -586,6 +574,19 @@ impl DarklyEngine {
     /// with them rather than running its own drifting counter.
     pub fn frame_count(&self) -> u64 {
         self.compositor.frame_count()
+    }
+
+    /// Per-event drain of the brush perf accumulator. Returns the delta
+    /// against the previous drain (per-flush vectors taken via `mem::take`,
+    /// scalars `saturating_sub`'d) and resnapshots `last_brush_perf` so the
+    /// next call subtracts against this point.
+    ///
+    /// **Native bench harnesses only.** Mutates `brush_perf`'s per-flush
+    /// vectors via `std::mem::take`. WASM frontends do not call this.
+    pub fn drain_brush_perf_delta(&mut self) -> BrushPerfDelta {
+        let delta = BrushPerfDelta::between(&mut self.brush_perf, &self.last_brush_perf);
+        self.last_brush_perf = self.brush_perf.clone();
+        delta
     }
 
     /// Current overlay preview mask dimensions. Test-only accessor.
@@ -749,18 +750,18 @@ impl DarklyEngine {
     }
 
     /// Count of mid-stroke full-re-render fallbacks observed during the
-    /// most recent stroke (drained at `end_stroke`). Used by integration
-    /// tests to assert that the checkpoint ring's coverage invariant
-    /// kept fallback at zero across a stroke.
+    /// most recent stroke. Used by integration tests to assert that the
+    /// checkpoint ring's coverage invariant kept fallback at zero across
+    /// a stroke.
     pub fn test_stroke_full_rerender_events(&self) -> u32 {
-        self.stroke_perf.full_rerender_events
+        self.brush_perf.full_rerender_events
     }
 
-    /// Total dabs placed during the most recent stroke. `stroke_perf` is
+    /// Total dabs placed during the most recent stroke. `brush_perf` is
     /// reset at `begin_stroke`, so call this between `end_stroke` and the
     /// next `begin_stroke` to read the just-finished stroke's count.
     pub fn test_stroke_total_dabs(&self) -> u64 {
-        self.stroke_perf.total_dabs
+        self.brush_perf.dabs_placed as u64
     }
 
     // -----------------------------------------------------------------

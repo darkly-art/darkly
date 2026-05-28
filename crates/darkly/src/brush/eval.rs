@@ -6,6 +6,7 @@
 //! reused across dabs.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::{
@@ -13,8 +14,10 @@ use crate::nodegraph::{
 };
 
 use super::curve_math::CurveLut;
+use super::nodes::{paint_color, pen_input};
 
 use super::gpu_context::BrushGpuContext;
+use super::wgsl_compile::CompiledBrush;
 use super::wire::{BrushWireType, ScalarValue};
 
 // ── Evaluator trait ─────────────────────────────────────────────────
@@ -279,21 +282,80 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// into the scratch. The terminal pushes the scratch onto the layer
     /// however its semantics require. Non-terminal nodes default to no-op.
     ///
-    /// Like `begin_stroke`, inputs here are port defaults only — the
-    /// committed state is a function of the scratch, which already
-    /// reflects all per-dab CPU input resolution.
+    /// Inputs reflect the LAST dab's evaluated slot values — `commit`
+    /// runs after `execute_gpu`, so the slot table still holds the most
+    /// recent dab's results. Ports declared as "applied at commit"
+    /// (e.g. `paint.opacity`) read their wired value through
+    /// `ctx.input_*`. `begin_stroke` is different: it runs before any
+    /// dab and sees port defaults only.
     fn commit(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
 
-    /// Does this terminal honor `BrushGpuContext::blend_mode` (paint vs.
-    /// erase)? Default `true` — most terminals do, and non-terminal
-    /// nodes never see blend_mode so the value is unread for them.
-    /// Output terminals that ignore the flag (liquify, watercolor,
-    /// smudge — erase semantics don't apply to warp/smear) override to
-    /// `false` so the brush-tool UI can hide the erase toggle.
-    /// `active_brush_supports_erase` ANDs across each output node's
-    /// flag to decide whether the active brush supports erase at all.
-    fn supports_erase(&self) -> bool {
-        true
+    /// Flush any per-rendering-phase work the terminal has queued during
+    /// the preceding `evaluate_gpu` calls. Called at the end of every
+    /// dab-rendering phase (`render_from_stabilized_range_to`,
+    /// `render_from_stabilized_tail`) just before that phase's
+    /// `submit_final`.
+    ///
+    /// Dab-batching terminals (paint, watercolor_batched) use this to dispatch their
+    /// batched work; fragment-path terminals that already record per-dab
+    /// passes inline keep the default no-op.
+    fn flush_dabs(&self, _ctx: &EvalContext, _gpu: &mut BrushGpuContext) {}
+
+    /// Emit this node's contribution to a compiled WGSL fragment
+    /// shader. Used only by brushes that terminate in `paint`
+    /// (the compiled execution path); brushes on the per-dab dispatch
+    /// path never call this. Returning `Err` makes the whole brush
+    /// fail to load when its terminal asks for compilation — there is
+    /// no runtime fallback. See [`crate::brush::wgsl_compile`].
+    fn compile_wgsl(
+        &self,
+        _cctx: &crate::brush::wgsl_compile::CompileWgslCtx,
+    ) -> Result<crate::brush::wgsl_compile::NodeWgsl, String> {
+        Err("node has no WGSL implementation".into())
+    }
+
+    /// Preview-mode replacement for the terminal's `compile_wgsl`
+    /// body. Default delegates to `compile_wgsl`, which is correct for
+    /// terminals whose stroke body doesn't reference `@group(2)` /
+    /// `@group(3)` bindings — the preview skeleton substitutes `sel =
+    /// 1.0` and omits both groups, so the same body works under both
+    /// modes.
+    ///
+    /// Terminals that sample scratch / atlas in their stroke body
+    /// (watercolor's pickup atlas, smudge / liquify's `scratch_mirror`)
+    /// override this to emit a body that doesn't need those bindings —
+    /// typically a neutral-color mask of the brush footprint. Only the
+    /// `body` field of the returned `NodeWgsl` is consumed; decls /
+    /// dab_fields / uniform_fields / outputs come from the stroke pass
+    /// and are shared across both shader variants (helper functions a
+    /// preview body references — e.g. liquify's `falloff_fn` — live in
+    /// `decls` and are visible to both skeletons).
+    ///
+    /// Non-terminal nodes never have this called — only nodes for
+    /// which `is_terminal()` returns `true` invoke the hook.
+    fn compile_preview_body(
+        &self,
+        cctx: &crate::brush::wgsl_compile::CompileWgslCtx,
+    ) -> Result<crate::brush::wgsl_compile::NodeWgsl, String> {
+        self.compile_wgsl(cctx)
+    }
+
+    /// Per-node contribution to the brush's dab bounding-box extent.
+    /// Composed by the framework at brush-compile time into a single
+    /// `(factor, extra_px)` pair on [`crate::brush::wgsl_compile::CompiledBrush`];
+    /// the `paint` terminal uses it to size both the per-dab
+    /// rasterized quad (via `dab.bbox_target_px`) and the CPU
+    /// layer-clip bbox, ensuring the save-point system tracks exactly
+    /// what the shader writes.
+    ///
+    /// Default `Identity` — only nodes that change the dab footprint
+    /// (shape masks, displacement / warp) override. See
+    /// [`crate::brush::wgsl_compile::ExtentContribution`].
+    fn extent(
+        &self,
+        _ctx: &crate::brush::wgsl_compile::ExtentCtx,
+    ) -> crate::brush::wgsl_compile::ExtentContribution {
+        crate::brush::wgsl_compile::ExtentContribution::Identity
     }
 }
 
@@ -346,6 +408,12 @@ pub struct BrushGraphRunner {
     stroke_seed: u32,
     /// Index of the current dab, set by `seed_sensors()`.
     dab_index: u32,
+    /// Compiled WGSL for this brush, populated by `compile_graph` when
+    /// the graph terminates in `paint`. `None` for per-dab
+    /// dispatch brushes. The runner copies this into the
+    /// `BrushGpuContext` at `dispatch_gpu` time so the terminal can
+    /// read its dab/uniform layouts.
+    compiled: Option<Arc<CompiledBrush>>,
 }
 
 struct NodeData {
@@ -388,7 +456,7 @@ impl BrushGraphRunner {
         let pen_input_slots = plan
             .steps
             .iter()
-            .find(|s| s.type_id == "pen_input")
+            .find(|s| s.type_id == pen_input::TYPE_ID)
             .map(|s| s.output_slots.clone())
             .unwrap_or_default();
 
@@ -396,7 +464,7 @@ impl BrushGraphRunner {
         let paint_color_slot = plan
             .steps
             .iter()
-            .find(|s| s.type_id == "paint_color")
+            .find(|s| s.type_id == paint_color::TYPE_ID)
             .and_then(|s| s.output_slots.iter().find(|(name, _)| name == "color"))
             .map(|(_, slot)| *slot);
 
@@ -409,7 +477,49 @@ impl BrushGraphRunner {
             paint_color_slot,
             stroke_seed: 0,
             dab_index: 0,
+            compiled: None,
         })
+    }
+
+    /// Attach a pre-built [`CompiledBrush`] to this runner. Called by
+    /// [`crate::brush::compile_graph`] when the graph terminates in
+    /// `paint`. Idempotent — overwrites any prior value.
+    pub fn set_compiled_brush(&mut self, compiled: Arc<CompiledBrush>) {
+        self.compiled = Some(compiled);
+    }
+
+    /// Returns the compiled WGSL for this brush, if the graph
+    /// terminates in `paint`.
+    pub fn compiled_brush(&self) -> Option<Arc<CompiledBrush>> {
+        self.compiled.clone()
+    }
+
+    /// Returns `true` if the graph terminates in a compiled-WGSL
+    /// terminal (any node whose registration sets `is_terminal: true`).
+    /// Type-owned dispatch: no central list of terminal type_ids — the
+    /// compiler stamps the flag onto every [`ExecStep`] from the
+    /// registry. Used by [`crate::brush::compile_graph`] to decide
+    /// whether to run the WGSL compile step.
+    pub fn has_terminal(&self) -> bool {
+        self.plan.steps.iter().any(|step| step.is_terminal)
+    }
+
+    /// Build a name → value map of every output slot in the graph,
+    /// keyed by `n{node_id}_{port_name}` (matching the convention
+    /// [`crate::brush::wgsl_compile::CompileWgslCtx::dab_field_name`]
+    /// uses). Called by `dispatch_gpu` for compiled brushes; the
+    /// compiled terminal reads from this to pack per-dab records and
+    /// uniforms. Returns an empty map for graphs with no slots.
+    fn build_slot_outputs(&self) -> HashMap<String, ScalarValue> {
+        let mut out = HashMap::with_capacity(self.slots.len());
+        for step in &self.plan.steps {
+            for (port_name, slot_idx) in &step.output_slots {
+                if let Some(val) = self.slots[*slot_idx] {
+                    out.insert(format!("n{}_{}", step.node_id.0, port_name), val);
+                }
+            }
+        }
+        out
     }
 
     /// Seed sensor output slots directly from pen data.
@@ -462,7 +572,10 @@ impl BrushGraphRunner {
     pub fn execute_cpu(&mut self) {
         for step in &self.plan.steps {
             // Skip pen_input (seeded directly) and GPU nodes.
-            if step.type_id == "pen_input" || step.type_id == "paint_color" || step.is_gpu {
+            if step.type_id == pen_input::TYPE_ID
+                || step.type_id == paint_color::TYPE_ID
+                || step.is_gpu
+            {
                 continue;
             }
 
@@ -513,9 +626,6 @@ impl BrushGraphRunner {
     /// their scalar inputs (size, opacity, color, position) from the slot
     /// table populated by CPU nodes.  GPU nodes record render passes into
     /// the encoder and write texture handles back to the slot table.
-    ///
-    /// After this returns, call `gpu.dab_pool.release_all()` to return
-    /// acquired dab textures to the pool.
     pub fn execute_gpu(&mut self, gpu: &mut BrushGpuContext) {
         self.dispatch_gpu(gpu, |ev, ctx, gpu| ev.evaluate_gpu(ctx, gpu));
     }
@@ -542,31 +652,41 @@ impl BrushGraphRunner {
             &mut BrushGpuContext,
         ) -> Vec<(String, ScalarValue)>,
     {
+        // Attach the brush's compiled WGSL and a snapshot of every
+        // output slot keyed by `n{id}_{port}`. The terminal reads
+        // these to pack per-dab records and uniforms.
+        let is_compiled = self.compiled.is_some();
+        if let Some(compiled) = &self.compiled {
+            gpu.compiled_brush = Some(compiled.clone());
+            gpu.slot_outputs_owned = Some(self.build_slot_outputs());
+        }
+
         for step in &self.plan.steps {
             if !step.is_gpu {
                 continue;
             }
-
+            // Every upstream GPU node's contribution is fused into
+            // the terminal's fragment shader, so only the terminal
+            // step needs its `evaluate_gpu` invoked per dab — that's
+            // where the per-dab record gets queued. Skipping the
+            // others is the load-bearing perf win.
             let Some(evaluator) = self.evaluators.get(&step.type_id) else {
                 continue;
             };
-
-            gpu.perf.record_gpu_step();
+            if is_compiled && !step.is_terminal {
+                continue;
+            }
 
             // Gather connected inputs from the slot table, applying
             // wire-boundary range remap where both source and dest ports
             // declare a `natural_range`. Allocates a fresh `HashMap` per
-            // step; under high dab counts the cumulative allocator +
-            // remap-lookup cost shows up in the perf summary.
-            let t_gather = web_time::Instant::now();
+            // step.
             let inputs = gather_inputs(
                 &self.slots,
                 &step.input_slots,
                 step.node_id,
                 &self.node_data,
             );
-            gpu.perf
-                .record_gather_inputs(t_gather.elapsed().as_micros() as u64);
 
             let node = self.node_data.get(&step.node_id);
             let empty_params = Vec::new();
@@ -587,22 +707,13 @@ impl BrushGraphRunner {
             // `evaluate_gpu` closure runs too and no-ops (empty default).
             // Declared-GPU nodes take the opposite path: `evaluate_cpu`
             // returns empty, `evaluate_gpu` does the work.
-            let t_cpu = web_time::Instant::now();
             let mut outputs = evaluator.evaluate_cpu(&ctx);
-            let cpu_us = t_cpu.elapsed().as_micros() as u64;
-            gpu.perf.record_evaluate_cpu_in_gpu(cpu_us);
-
-            let t_gpu_call = web_time::Instant::now();
             let gpu_outputs = f(evaluator.as_ref(), &ctx, gpu);
-            let gpu_call_us = t_gpu_call.elapsed().as_micros() as u64;
-            gpu.perf.record_evaluate_gpu_call(gpu_call_us);
 
             outputs.extend(gpu_outputs);
 
             // Write outputs to their assigned slots. Linear scan with
-            // string compare per produced output × per step × per dab —
-            // a candidate hot spot at high dab counts.
-            let t_outputs = web_time::Instant::now();
+            // string compare per produced output × per step × per dab.
             for (port_name, value) in outputs {
                 for (name, slot_idx) in &step.output_slots {
                     if *name == port_name {
@@ -611,8 +722,6 @@ impl BrushGraphRunner {
                     }
                 }
             }
-            gpu.perf
-                .record_step_outputs(t_outputs.elapsed().as_micros() as u64);
         }
     }
 
@@ -620,24 +729,43 @@ impl BrushGraphRunner {
     /// order. Only terminal nodes override — everything else no-ops. Runs
     /// once per stroke-start and once per rewind boundary, before any dab.
     pub fn begin_stroke(&mut self, gpu: &mut BrushGpuContext) {
-        self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.begin_stroke(ctx, gpu));
+        self.dispatch_lifecycle(gpu, false, |ev, ctx, gpu| ev.begin_stroke(ctx, gpu));
     }
 
     /// Dispatch `commit` to every GPU node's evaluator in topological
     /// order. Runs once per pen event after that event's dabs have
     /// finished compositing into the scratch.
     pub fn commit(&mut self, gpu: &mut BrushGpuContext) {
-        self.dispatch_lifecycle(gpu, |ev, ctx, gpu| ev.commit(ctx, gpu));
+        // Gather inputs from the slot table so terminals that read
+        // ports at commit time (e.g. `paint.opacity` wired
+        // to `pen.pressure` for the Airbrush) see the actual wired
+        // value, not the port default.
+        self.dispatch_lifecycle(gpu, true, |ev, ctx, gpu| ev.commit(ctx, gpu));
     }
 
-    /// Shared walker for lifecycle hooks. Mirrors `execute_gpu` minus the
-    /// per-dab slot/input plumbing, because lifecycle hooks run *outside*
-    /// any specific dab — they work from port defaults and GPU resources.
-    fn dispatch_lifecycle<F>(&mut self, gpu: &mut BrushGpuContext, mut f: F)
-    where
+    /// Dispatch `flush_dabs` to every GPU node's evaluator in
+    /// topological order. Called at the end of each dab-rendering phase
+    /// (segments / tail) so compute-path terminals can issue their batched
+    /// dispatch before the phase's `submit_final`. Fragment-path
+    /// terminals no-op.
+    pub fn flush_dabs(&mut self, gpu: &mut BrushGpuContext) {
+        self.dispatch_lifecycle(gpu, false, |ev, ctx, gpu| ev.flush_dabs(ctx, gpu));
+    }
+
+    /// Shared walker for lifecycle hooks. When `gather_from_slots` is
+    /// true, each step's inputs are pulled from the live slot table —
+    /// the same plumbing `dispatch_gpu` uses — so commits see the latest
+    /// per-dab wire values. When false, inputs are empty and evaluators
+    /// fall back to port defaults (correct for `begin_stroke`, which
+    /// runs before any dab populates the table).
+    fn dispatch_lifecycle<F>(
+        &mut self,
+        gpu: &mut BrushGpuContext,
+        gather_from_slots: bool,
+        mut f: F,
+    ) where
         F: FnMut(&dyn BrushNodeEvaluator, &EvalContext, &mut BrushGpuContext),
     {
-        let empty_inputs = HashMap::new();
         let empty_params = Vec::new();
         let empty_ports = Vec::new();
         for step in &self.plan.steps {
@@ -647,9 +775,19 @@ impl BrushGraphRunner {
             let Some(evaluator) = self.evaluators.get(&step.type_id) else {
                 continue;
             };
+            let inputs = if gather_from_slots {
+                gather_inputs(
+                    &self.slots,
+                    &step.input_slots,
+                    step.node_id,
+                    &self.node_data,
+                )
+            } else {
+                HashMap::new()
+            };
             let node = self.node_data.get(&step.node_id);
             let ctx = EvalContext {
-                inputs: &empty_inputs,
+                inputs: &inputs,
                 params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
                 port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
                 lut: node.and_then(|n| n.lut.as_ref()),

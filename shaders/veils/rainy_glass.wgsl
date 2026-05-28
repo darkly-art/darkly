@@ -150,7 +150,10 @@ fn Drops(uv: vec2f, t: f32, l0: f32, l1: f32, l2: f32) -> vec2f {
 // 13-tap poisson-disk blur approximating the LOD-based fog from the
 // original Shadertoy "Heartfelt" shader. When radius is 0 all samples
 // collapse to the same texel — effectively a no-op.
-fn sample_fog(uv: vec2f, radius: f32, aspect: f32) -> vec3f {
+//
+// `radius` is the disc radius as a fraction of sqrt(area). The per-axis
+// UV offsets are derived so the sampling disc is circular in screen pixels.
+fn sample_fog(uv: vec2f, radius: f32, resolution: vec2f) -> vec3f {
     let offsets = array<vec2f, 12>(
         vec2f(-0.326, -0.406),
         vec2f(-0.840, -0.074),
@@ -166,8 +169,8 @@ fn sample_fog(uv: vec2f, radius: f32, aspect: f32) -> vec3f {
         vec2f(-0.792, -0.598),
     );
 
-    // Correct for aspect ratio so the blur is circular in screen-space.
-    let r = vec2f(radius / aspect, radius);
+    let ref_size = sqrt(resolution.x * resolution.y);
+    let r = radius * ref_size / resolution;
 
     var col = textureSampleLevel(t_input, t_sampler, uv, 0.0).rgb;
     for (var i = 0u; i < 12u; i++) {
@@ -177,15 +180,14 @@ fn sample_fog(uv: vec2f, radius: f32, aspect: f32) -> vec3f {
 }
 
 @fragment fn fs_rainy_glass(in: VertexOutput) -> @location(0) vec4f {
-    let aspect = params.resolution_x / params.resolution_y;
+    let resolution = vec2f(params.resolution_x, params.resolution_y);
+    // Reference size: 1 unit in pattern space = sqrt(area) pixels.
+    // This makes the pattern scale uniformly with screen area instead of
+    // height — shrinking either dimension grows the drops, not their count.
+    let ref_size = sqrt(resolution.x * resolution.y);
     let dir = params.direction;
 
-    // Normalize by height so drop size is fixed relative to screen height
-    // regardless of aspect ratio — wider windows fit more drops across,
-    // narrower windows fit fewer, but each drop stays the same size.
-    // Then rotate into rain-space so the pattern falls in the
-    // configured direction.
-    var uv = (in.uv - 0.5) * vec2f(aspect, 1.0) / params.scale;
+    var uv = (in.uv - 0.5) * resolution / (ref_size * params.scale);
     uv = rotate2d(uv, dir);
 
     let UV = in.uv;
@@ -219,7 +221,7 @@ fn sample_fog(uv: vec2f, radius: f32, aspect: f32) -> vec3f {
     // where each LOD level doubles the blur. This makes the perceptual
     // difference between foggy regions and trail-cleared regions much larger.
     let blur_radius = (pow(2.0, focus) - 1.0) / 2048.0;
-    let col = sample_fog(UV + n, blur_radius, aspect);
+    let col = sample_fog(UV + n, blur_radius, resolution);
 
     return vec4f(col, 1.0);
 }

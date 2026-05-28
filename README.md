@@ -2,7 +2,7 @@
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
 [![Patreon](https://img.shields.io/badge/Patreon-Forbidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
-[![Blog](https://img.shields.io/badge/Blog-Deranged_Texts-orange?logo=substack&logoColor=white&style=for-the-badge&color=4400ff)](https://www.patreon.com/c/DarklyArt)
+[![Blog](https://img.shields.io/badge/Blog-Deranged_Texts-orange?logo=substack&logoColor=white&style=for-the-badge&color=4400ff)](https://darkly.art/blog)
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=9500ff)
 ![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=6914ff)
@@ -15,8 +15,6 @@
 
 [Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital painters. It has everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
-If you're a sane artist who likes rulers, clean vector lines, and predictable outcomes, Darkly may not be for you. Darkly is a chaotic playground for brave explorers, where messes are made and happy accidents abound. Madness isn't a bug, it's a feature.
-
 ### Darkly pledges to:
 
 - 🛐 Honor human imagination
@@ -24,23 +22,29 @@ If you're a sane artist who likes rulers, clean vector lines, and predictable ou
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
 
+If you're a sane artist who likes rulers, guides, and clean vector lines, you may still like Darkly. But it's fundamentally a chaotic playground, for artists who make messes and incur happy accidents. Madness isn't a bug, it's a feature.
+
 **Try the demo [here](https://demo.darkly.art).**
 
 [![darkly](https://github.com/user-attachments/assets/647404d5-c2fe-4f9f-a1f9-7b532c3a3cd0)](https://demo.darkly.art)
 
 ## Upcoming Kickstarter
 
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most, and help us rescue our soulmates from Adobe's iron grip!
+We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, and rescue your friends and colleagues from the iron grip of Adobe!
 
 ## Unique Darkly Features
 
-In addition to the usual paint features, Darkly has some entropic tools to empower you on your dark quests.
+In addition to the usual paint features, Darkly has some entropic tools to empower you in your dark arts.
 
 ### Veils
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By placing your art behind a strange or mysterious filter, they let you look on it with different eyes, and may invite you to see something that wasn't there before.
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By shrouding your art behind a mysterious pane of glass, they invite you to see something that wasn't there before.
 
-Veils have practical uses, too. By non-destructively hiding detail, they can help counteract age-old human tendencies like art fatigue (losing good judgement because you stared at it for too long), destructive self-criticism, and premature fixation on detail. Basically, they give you permission to be messy.
+Veils have practical uses too:
+
+- By hiding fine details, they can prevent **premature fixation on detail**, freeing you to focus on composition.
+- During the ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
+- They can also help remedy **art fatigue** (losing eyes for art by staring at it for too long) by letting you view it through new eyes.
 
 > [!NOTE]
 > Veils live in their own dedicated group, but within that you can stack and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.
@@ -51,7 +55,7 @@ Voids are a special type of layer that specializes in pulling inspiration from o
 
 You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
-Voids are less restricted than veils and can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point other art programs like Blender, which may have dedicated voids in the future 🧡
+Voids can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which may have dedicated voids in the future 🧡
 
 ### Node-Based Brush Engine
 
@@ -67,7 +71,7 @@ These are features that are helpful or essential to digital art workflows. They'
 - [x] Node-based brush engine
 - Brushes
     - [x] Simple round
-    - [x] Calligraphy
+    - [ ] Calligraphy
     - [x] Ink pen
     - [x] Liquify
     - [x] Watercolor
@@ -127,7 +131,7 @@ These are features that are helpful or essential to digital art workflows. They'
 
 ### Transform & canvas
 - [x] Affine transform tool (translate / scale / rotate via floating content)
-- [x] Engine‑level canvas resize
+- [ ] Canvas resize
 - [ ] Crop tool / crop to selection
 - [ ] Trim to content / autocrop
 - [ ] Flip canvas H / V
@@ -144,6 +148,7 @@ These are features that are helpful or essential to digital art workflows. They'
 - [ ] Symmetry / mirror painting (X, Y, radial)
 - [ ] Navigator / overview window
 - [ ] Palette Popup
+- [ ] Snap canvas to right angles (0, 90, 180, 270)
 
 ### File I/O
 - [x] New document (custom canvas size + background color)
@@ -167,17 +172,11 @@ These are features that are helpful or essential to digital art workflows. They'
 - [x] Settings modal, theme system
 - [ ] Per‑brush preset save/load UI
 
-### Text & vector
-- [ ] Text tool / text layers
-- [ ] Vector shapes
-- [ ] Bézier paths
-
 ### Misc
+- [ ] Text tool / text layers
 - [x] Hotkey system + searchable cheatsheet (80+ rebindable actions)
 - [x] Floating layers (transient paste / transform)
 - [ ] Autosave + crash recovery
-- [ ] Animation timeline / onion skin
-- [ ] File browser
 
 ## Getting started
 
@@ -217,8 +216,6 @@ I (TheTechromancer) learned to code before AI, and have spent much of my career 
 Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, guarding vigilantly against duplicate/dead code, and writing a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
 
 Note that while we allow AI for coding, we are unlikely to accept any PR implementing generative AI in Darkly itself.
-
-For details on Darkly's stance on AI, see [this blog post]().
 
 ## Acknowledgments
 
