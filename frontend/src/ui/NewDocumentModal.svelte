@@ -4,6 +4,7 @@
     import { shell } from '../multi_tab/shell.svelte';
     import { config } from '../config/store.svelte';
     import { app } from '../state/app.svelte';
+    import { readImageFromClipboard } from '../clipboard';
 
     // Seeded from the global canvas defaults each time the modal opens, so the
     // user always starts from "what a fresh tab would normally be" but can
@@ -59,6 +60,29 @@
         close();
     }
 
+    let clipboardBusy = $state(false);
+
+    async function fromClipboard() {
+        if (clipboardBusy) return;
+        clipboardBusy = true;
+        try {
+            const clip = await readImageFromClipboard();
+            if (!clip) return;
+            const w = Math.max(1, Math.min(16384, clip.width));
+            const h = Math.max(1, Math.min(16384, clip.height));
+            const inst = shell.open(undefined, { width: w, height: h });
+            inst.onHandleReady = (handle) => {
+                const bg = handle.paste_image(w, h, clip.rgba, 0, 0, -1);
+                inst.activeLayerId = bg;
+                app.refreshLayerTree();
+                app.requestFrame();
+            };
+            close();
+        } finally {
+            clipboardBusy = false;
+        }
+    }
+
     function onKeydown(e: KeyboardEvent) {
         if (e.key === 'Enter') {
             e.preventDefault();
@@ -105,6 +129,13 @@
         </label>
 
         <div class="actions">
+            <button
+                type="button"
+                class="clipboard"
+                onclick={fromClipboard}
+                disabled={clipboardBusy}
+            >From Clipboard</button>
+            <div class="spacer"></div>
             <button type="button" class="cancel" onclick={close}>Cancel</button>
             <button type="button" class="ok" onclick={create}>Create</button>
         </div>
@@ -204,9 +235,13 @@
 
     .actions {
         display: flex;
-        justify-content: flex-end;
+        align-items: center;
         gap: 8px;
         margin-top: 4px;
+    }
+
+    .actions .spacer {
+        flex: 1;
     }
 
     .actions button {

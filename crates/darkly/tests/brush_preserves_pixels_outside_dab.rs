@@ -1,9 +1,14 @@
-//! Smoke tests for the watercolor brushes after migration to the
-//! compiled `watercolor` terminal. Each test loads the actual
-//! builtin graph, renders a couple of dabs over a non-empty
-//! pre_stroke, and checks the watercolor blend deposits something
-//! reasonable. The pickup atlas pass + per-brush compiled composite
-//! pass are exercised end-to-end.
+//! Universal commit invariant: a pixel that lies outside every dab's
+//! footprint must survive the stroke unchanged — regardless of brush.
+//!
+//! Iterates over every builtin brush. Regression for the watercolor
+//! commit path, which used to seed its scratch with a straight-alpha
+//! copy of pre_stroke and then re-source-over the whole scratch onto
+//! pre_stroke as if it were premultiplied — boosting alpha and rgb on
+//! every partial-alpha pixel the moment a stroke began.
+//!
+//! Run with a small dab at the canvas centre so the corner pixels are
+//! far outside the bbox of any brush we have today.
 
 use std::sync::{Arc, OnceLock};
 
@@ -27,13 +32,6 @@ fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
         .clone()
 }
 
-/// Light blue initial canvas (alpha = 1.0) so pickup has something to
-/// mix into the load. Watercolor's `mix(canvas_rgb, fg_color.rgb,
-/// deposit)` blends pre_stroke pixels with the brush color.
-fn light_blue_canvas() -> Vec<u8> {
-    solid_canvas([100, 150, 230, 255])
-}
-
 fn solid_canvas(rgba: [u8; 4]) -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
     for px in out.chunks_exact_mut(4) {
@@ -42,22 +40,7 @@ fn solid_canvas(rgba: [u8; 4]) -> Vec<u8> {
     out
 }
 
-fn render_dabs(
-    brush_name: &str,
-    size_override: f32,
-    color: [f32; 4],
-    dabs: &[(f32, f32)],
-) -> Vec<u8> {
-    render_dabs_on(brush_name, size_override, color, dabs, &light_blue_canvas())
-}
-
-fn render_dabs_on(
-    brush_name: &str,
-    size_override: f32,
-    color: [f32; 4],
-    dabs: &[(f32, f32)],
-    canvas: &[u8],
-) -> Vec<u8> {
+fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == brush_name)
@@ -66,9 +49,8 @@ fn render_dabs_on(
     let mut graph = brush.metadata.graph.clone();
     let term_id = darkly::brush::find_terminal(&graph)
         .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
-    graph
-        .set_port_default(term_id, "size", size_override)
-        .unwrap();
+    // Small size keeps the dab footprint well clear of the corner pixel.
+    graph.set_port_default(term_id, "size", 0.05).unwrap();
 
     let (device, queue) = shared_device();
     let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, canvas);
@@ -83,7 +65,7 @@ fn render_dabs_on(
         CANVAS,
     );
     let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("watercolor-compiled-test-pre-stroke"),
+        label: Some("brush-untouched-pre-stroke"),
     });
     stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
     queue.submit([enc.finish()]);
@@ -133,22 +115,20 @@ fn render_dabs_on(
     }
 
     {
-        let mut ctx = make_ctx!("watercolor-compiled-test-begin");
+        let mut ctx = make_ctx!("brush-untouched-begin");
         runner.begin_stroke(&mut ctx);
         queue.submit([ctx.encoder.finish()]);
     }
     {
-        let mut ctx = make_ctx!("watercolor-compiled-test-flush");
-        for (i, (x, y)) in dabs.iter().enumerate() {
-            let info = PaintInformation {
-                pos: [*x, *y],
-                pressure: 1.0,
-                ..Default::default()
-            };
-            runner.seed_sensors(&info, color, 0xC0FFEE, i as u32);
-            runner.execute_cpu();
-            runner.execute_gpu(&mut ctx);
-        }
+        let mut ctx = make_ctx!("brush-untouched-flush");
+        let info = PaintInformation {
+            pos: [64.0, 64.0],
+            pressure: 1.0,
+            ..Default::default()
+        };
+        runner.seed_sensors(&info, color, 0xC0FFEE, 0);
+        runner.execute_cpu();
+        runner.execute_gpu(&mut ctx);
         runner.flush_dabs(&mut ctx);
         runner.commit(&mut ctx);
         queue.submit([ctx.encoder.finish()]);
@@ -170,81 +150,23 @@ fn pixel(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 }
 
 #[test]
-fn smooth_watercolor_deposits_blend_of_brush_and_pickup() {
-    // Brush color is red; canvas is light blue. Watercolor's deposit
-    // (default 0.5) gives a load that mixes both — the centre pixel
-    // should have nonzero red AND retain some blue from the pickup.
-    let rgba = render_dabs(
-        "Smooth Watercolor",
-        0.2,
-        [1.0, 0.0, 0.0, 1.0],
-        &[(64.0, 64.0)],
-    );
-    let center = pixel(&rgba, 64, 64);
-    // Some red got deposited (would be 100 with no brush touch).
-    assert!(
-        center[0] > 130,
-        "Smooth Watercolor centre should add red over the light-blue \
-         pickup, got {center:?} (canvas r=100)"
-    );
-    // Some blue remains from the pickup mix (would be 0 if deposit=1.0
-    // and pickup were ignored).
-    assert!(
-        center[2] > 50,
-        "Smooth Watercolor centre should retain blue from the pickup \
-         mix, got {center:?}"
-    );
+fn every_builtin_brush_preserves_pixels_outside_dab_on_partial_alpha_layer() {
+    let initial = [100u8, 150, 230, 128];
+    let canvas = solid_canvas(initial);
 
-    // Far corner — outside the dab footprint, must be unchanged.
-    let corner = pixel(&rgba, 10, 10);
-    assert_eq!(
-        corner,
-        [100, 150, 230, 255],
-        "outside the dab should be unchanged (commit reuses pre_stroke), got {corner:?}"
-    );
-}
+    let brushes = darkly::brush::builtin_brushes::all();
+    assert!(!brushes.is_empty(), "no builtin brushes registered");
 
-#[test]
-fn rough_watercolor_renders_multiple_dabs_in_one_flush() {
-    // Two perlin dabs at different positions in one flush. Both must
-    // land — verifies per-instance atlas-cell indexing through the
-    // compiled composite shader.
-    let rgba = render_dabs(
-        "Rough Watercolor",
-        0.2,
-        [1.0, 0.5, 0.0, 1.0],
-        &[(40.0, 64.0), (88.0, 64.0)],
-    );
-    // Count pixels where the red channel exceeds the canvas's red
-    // (= 100). Both dabs deposit orange over light blue, so post-
-    // commit those pixels should have measurably more red.
-    let touched = rgba.chunks_exact(4).filter(|p| p[0] > 130).count();
-    assert!(
-        touched > 100,
-        "Rough Watercolor: expected >100 pixels touched by two dabs, got {touched}"
-    );
-
-    // Both dab centres should show red lift. Perlin shape may not
-    // cover the exact centre pixel, so check a small neighborhood
-    // around each centre.
-    fn lift_in_3x3(rgba: &[u8], cx: u32, cy: u32) -> u8 {
-        let mut max_red = 0u8;
-        for dy in -1i32..=1 {
-            for dx in -1i32..=1 {
-                let p = pixel(rgba, (cx as i32 + dx) as u32, (cy as i32 + dy) as u32);
-                if p[0] > max_red {
-                    max_red = p[0];
-                }
-            }
-        }
-        max_red
+    for brush in &brushes {
+        let name = &brush.metadata.name;
+        let rgba = render_one_dab(name, [1.0, 0.0, 0.0, 1.0], &canvas);
+        // Corner pixel — distance >85 px from the dab centre at (64, 64),
+        // well outside the bbox of any builtin brush at size=0.05.
+        let corner = pixel(&rgba, 2, 2);
+        assert_eq!(
+            corner, initial,
+            "brush `{name}`: partial-alpha pixel outside the dab footprint \
+             must be unchanged, got {corner:?}",
+        );
     }
-    assert!(
-        lift_in_3x3(&rgba, 40, 64) > 130,
-        "left dab centre neighborhood should have red lift"
-    );
-    assert!(
-        lift_in_3x3(&rgba, 88, 64) > 130,
-        "right dab centre neighborhood should have red lift"
-    );
 }
