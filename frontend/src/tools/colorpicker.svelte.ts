@@ -1,7 +1,7 @@
 import type { Tool } from './registry';
 import { startPick } from './color_pick_sync';
 import {
-    setEyedropperToolActive,
+    tickEyedropperCursor,
     setEyedropperPressed,
 } from './eyedropper_cursor';
 import ColorPickerOptions from '../ui/ColorPickerOptions.svelte';
@@ -14,11 +14,18 @@ export const colorPickerTool: Tool = {
     optionsComponent: ColorPickerOptions,
 
     onActivate() {
-        setEyedropperToolActive(true);
+        // Take ownership of `app.toolCursor` immediately — CanvasView's
+        // tool-switch $effect resets it to null right before calling us,
+        // so we need to push the eyedropper cursor now rather than
+        // waiting for the next frame's `tickEyedropperCursor`.
+        tickEyedropperCursor();
     },
 
     onDeactivate() {
-        setEyedropperToolActive(false);
+        // Reset pressed state for cleanliness. The cursor itself is
+        // taken over by the next tool's onActivate (CanvasView nulls
+        // it before this runs).
+        setEyedropperPressed(false);
     },
 
     onPointerDown(ctx, _e, cx, cy) {
