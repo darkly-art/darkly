@@ -1,4 +1,4 @@
-//! Brush stroke GPU integration tests: stroke workflows, undo/redo, erase.
+//! Brush stroke GPU integration tests: stroke workflows, undo/redo.
 //!
 //! Tests the end-to-end GPU brush flow using raw components (RegionStore,
 //! GpuPaintTarget, GpuRegionAction) without a full DarklyEngine.
@@ -723,71 +723,6 @@ fn gpu_cpu_undo_interleaved() {
             "opacity should be 0.5 after redo"
         );
     }
-}
-
-// ============================================================================
-// Erase circle via GPU
-// ============================================================================
-
-/// Fill red → GPU erase circle → undo → verify red is restored.
-#[test]
-fn gpu_erase_stroke_undo() {
-    let (device, queue) = test_device();
-    let (w, h) = (128, 128);
-    let fmt = wgpu::TextureFormat::Rgba8Unorm;
-
-    let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
-    let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
-    let pipelines = PaintPipelines::new(&device, &queue);
-    let mut store = RegionScratch::new(&device, w, h);
-
-    // begin_stroke: save.
-    let mut enc = encoder(&device);
-    let snap = store.save_region(&device, &mut enc, &frame(&tex, w, h), fmt, cr(0, 0, w, h));
-    submit(&queue, enc);
-
-    // stroke_to: erase circle at center.
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
-    let mut enc = encoder(&device);
-    target.erase_circle(&mut enc, &pipelines, &queue, 64.0, 64.0, 10.0);
-    submit(&queue, enc);
-
-    // end_stroke: commit.
-    let mut enc = encoder(&device);
-    let (entry, _req) = store.commit_region(
-        &mut enc,
-        &device,
-        darkly::layer::LayerId::from_ffi(1),
-        &frame(&tex, w, h),
-        &snap,
-        cr(52, 52, 24, 24),
-    );
-    submit(&queue, enc);
-
-    // Verify erased.
-    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(
-        pixel_at(&pixels, w, 64, 64, 4)[3],
-        0,
-        "center should be erased"
-    );
-    assert_eq!(
-        pixel_at(&pixels, w, 0, 0, 4)[3],
-        255,
-        "corner should be unchanged"
-    );
-
-    // Undo.
-    let mut enc = encoder(&device);
-    let (_forward, _req) = store.restore_region(&mut enc, &device, &entry, &frame(&tex, w, h));
-    submit(&queue, enc);
-
-    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    assert_eq!(
-        pixel_at(&pixels, w, 64, 64, 4),
-        &[255, 0, 0, 255],
-        "center should be restored to red"
-    );
 }
 
 // ============================================================================

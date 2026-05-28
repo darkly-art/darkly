@@ -164,33 +164,6 @@ impl<'a> GpuPaintTarget<'a> {
         );
     }
 
-    /// Erase a soft circle from the target.
-    pub fn erase_circle(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        pipelines: &PaintPipelines,
-        queue: &wgpu::Queue,
-        cx: f32,
-        cy: f32,
-        radius: f32,
-    ) {
-        let pipeline = pipelines.erase_pipeline(self.format);
-        // Erase uses white color at full alpha — the blend state does the subtracting.
-        // For R8 targets, luminance(1,1,1) = 1.0 which reduces toward 0.
-        self.draw_circle(
-            encoder,
-            pipeline,
-            pipelines,
-            queue,
-            cx,
-            cy,
-            radius,
-            [255, 255, 255, 255],
-            1.0,
-            None,
-        );
-    }
-
     /// Paint a soft circle with a custom selection mask bind group.
     pub fn composite_circle_with_selection(
         &self,

@@ -907,9 +907,10 @@ impl DarklyEngine {
                         paint_target: Some(paint_target),
                         selection_bind_group: sel_bg,
                         preview_target_view: None,
-                        // blend_mode applies at commit (paint vs. erase). The
-                        // per-dab composite inside `color_output::evaluate_gpu`
-                        // hard-codes source-over regardless of this value.
+                        // blend_mode applies at commit (paint vs. erase).
+                        // Per-dab passes hard-code source-over — the
+                        // scratch is a coverage accumulator, and only the
+                        // commit composite reads this value.
                         blend_mode: self.brush_blend_mode,
                         preview_mask_view: None,
                         preview_mask_size: (0, 0),
