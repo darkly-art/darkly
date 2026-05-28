@@ -12,6 +12,22 @@ use crate::gpu::void::{Void, VoidRegistry};
 use crate::layer::{Layer, LayerId, LayerNode};
 use std::collections::{HashMap, HashSet};
 
+/// Convert a `display.pixelFilter` string value to the float code stamped
+/// into `ViewTransform.flags[0]`. Unknown values fall back to auto.
+fn pixel_filter_from_str(mode: &str) -> f32 {
+    match mode {
+        "linear" => 0.0,
+        "nearest" => 1.0,
+        _ => 2.0,
+    }
+}
+
+/// Read the current `display.pixelFilter` config value. Used at compositor
+/// startup so a fresh session picks up the persisted preference.
+fn pixel_filter_from_config() -> f32 {
+    pixel_filter_from_str(&crate::config::get_str("display.pixelFilter"))
+}
+
 /// Maximum allowed layer texture dimension in either axis. Strokes that
 /// would push the layer past this are clipped to current bounds.
 pub const MAX_LAYER_DIM: u32 = 16384;
@@ -287,6 +303,11 @@ pub struct Compositor {
     /// rectangle. Stamped onto every transform on upload, so changing it
     /// only requires re-uploading the cached transform.
     viewport_bg: [f32; 4],
+    /// Pixel filter mode for the present shader's canvas-to-screen sample.
+    /// 0 = linear (smooth), 1 = nearest (hard pixels), 2 = auto (nearest
+    /// when zoom > 1, linear otherwise — decided in the shader from the
+    /// matrix). Stamped onto `flags[0]` of the transform on upload.
+    pixel_filter: f32,
 
     // --- Content Bounds (GPU compute) ---
     content_bounds: ContentBoundsPass,
@@ -676,6 +697,7 @@ impl Compositor {
             tool_overlay,
             cached_view_transform: identity,
             viewport_bg: DEFAULT_WORKSPACE_BG,
+            pixel_filter: pixel_filter_from_config(),
             frame_count: 0,
             last_wall_time: 0.0,
         }
@@ -1694,11 +1716,12 @@ impl Compositor {
     }
 
     /// Update the view transform uniform buffer. The compositor owns the
-    /// workspace background color, so it stamps it onto the uploaded copy
-    /// rather than relying on every caller to set it.
+    /// workspace background color and the pixel-filter mode, so it stamps
+    /// them onto the uploaded copy rather than relying on every caller.
     pub fn update_view_transform(&mut self, queue: &wgpu::Queue, transform: &ViewTransform) {
         let mut t = *transform;
         t.bg = self.viewport_bg;
+        t.flags[0] = self.pixel_filter;
         queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
         self.cached_view_transform = t;
     }
@@ -1713,6 +1736,23 @@ impl Compositor {
         self.viewport_bg = bg;
         let mut t = self.cached_view_transform;
         t.bg = bg;
+        queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
+        self.cached_view_transform = t;
+        self.needs_present = true;
+    }
+
+    /// Set the pixel filter mode used by the present shader: "linear",
+    /// "nearest", or "auto" (anything else falls back to auto). Re-uploads
+    /// the cached transform and forces a re-present so the change takes
+    /// effect on the next frame.
+    pub fn set_pixel_filter(&mut self, queue: &wgpu::Queue, mode: &str) {
+        let new_mode = pixel_filter_from_str(mode);
+        if (self.pixel_filter - new_mode).abs() < f32::EPSILON {
+            return;
+        }
+        self.pixel_filter = new_mode;
+        let mut t = self.cached_view_transform;
+        t.flags[0] = new_mode;
         queue.write_buffer(&self.view_uniform_buf, 0, bytemuck::bytes_of(&t));
         self.cached_view_transform = t;
         self.needs_present = true;

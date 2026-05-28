@@ -22,7 +22,7 @@
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
 
-If you're a sane artist who likes rulers, guides, and clean vector lines, Darkly may not be for you. Darkly is a chaotic playground for artists who make messes and incur happy accidents. Madness isn't a bug, it's a feature.
+If you're a sane artist who likes rulers, guides, and clean vector lines, you may still like Darkly. But it's fundamentally a chaotic playground, for artists who make messes and incur happy accidents. Madness isn't a bug, it's a feature.
 
 **Try the demo [here](https://demo.darkly.art).**
 

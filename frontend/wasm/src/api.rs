@@ -1009,6 +1009,14 @@ impl DarklyHandle {
         self.engine.borrow_mut().set_viewport_bg(bg);
     }
 
+    /// Set the canvas-to-screen pixel filter mode: `"linear"`, `"nearest"`,
+    /// or `"auto"`. Anything else falls back to auto. Call on
+    /// `display.pixelFilter` config change.
+    pub fn set_pixel_filter(&self, mode: &str) {
+        self.flush_if_needed();
+        self.engine.borrow_mut().set_pixel_filter(mode);
+    }
+
     // --- Brush config ---
 
     pub fn set_brush_blend_mode(&self, mode: u32) {

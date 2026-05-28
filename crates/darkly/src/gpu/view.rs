@@ -19,6 +19,12 @@ pub struct ViewTransform {
     /// (overlay forward-matrix, etc.) ignore this field. Owned by the
     /// compositor and stamped onto every transform on upload.
     pub bg: [f32; 4],
+    /// Per-present flags consumed by the present shader. Stamped by the
+    /// compositor on upload, parallel to `bg`.
+    /// `flags[0]` = pixel filter mode: 0 = linear, 1 = nearest, 2 = auto
+    /// (nearest when zoom > 1, linear otherwise — decided in the shader
+    /// from the inverse-zoom magnitude of `row0.xy`).
+    pub flags: [f32; 4],
 }
 
 impl ViewTransform {
@@ -30,6 +36,7 @@ impl ViewTransform {
                 [0.0, 0.0, 1.0, 0.0],
             ],
             bg: DEFAULT_WORKSPACE_BG,
+            flags: [0.0; 4],
         }
     }
 
@@ -86,6 +93,7 @@ impl ViewTransform {
                 [tx, ty, 1.0, 0.0],
             ],
             bg: DEFAULT_WORKSPACE_BG,
+            flags: [0.0; 4],
         }
     }
 

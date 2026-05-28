@@ -57,6 +57,13 @@ impl DarklyEngine {
         self.compositor.set_viewport_bg(&self.gpu.queue, bg);
     }
 
+    /// Set the canvas-to-screen pixel filter mode: `"linear"`, `"nearest"`,
+    /// or `"auto"`. Frontend calls this when `display.pixelFilter` changes
+    /// so the new mode takes effect without waiting for a zoom/pan.
+    pub fn set_pixel_filter(&mut self, mode: &str) {
+        self.compositor.set_pixel_filter(&self.gpu.queue, mode);
+    }
+
     /// Start an async color pick at canvas coordinates.
     pub fn pick_color(&mut self, x: f32, y: f32) -> [u8; 4] {
         let canvas_w = self.compositor.canvas_width();
