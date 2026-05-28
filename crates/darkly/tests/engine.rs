@@ -4049,3 +4049,86 @@ fn locked_layer_rejects_modifications() {
     // Keep `other` referenced so the compiler doesn't warn about it.
     let _ = other;
 }
+
+/// Regression: copying with an antialiased rectangle selection at pixel-aligned
+/// coordinates must produce a clipboard image whose dimensions exactly match
+/// the selection — no inflated AA-margin border.
+///
+/// Pre-fix, `rasterize_sdf_r8` inflated the buffer by 1 pixel on each side to
+/// evaluate AA gradient samples, and `upload_selection_replace` stored those
+/// inflated dimensions as the selection's pixel bounds. The copy path then
+/// read back a region one pixel larger on each side; the GPU mask multiply
+/// zeroed the margin's alpha and the clipboard came out with a 1-pixel
+/// transparent ring around the actual content.
+#[test]
+fn copy_with_aa_rect_selection_has_no_transparent_border() {
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Solid red fill so every pixel inside the selection should round-trip
+    // as fully opaque after copy.
+    let mut rgba = vec![0u8; (cw * ch * 4) as usize];
+    for i in 0..(cw * ch) as usize {
+        rgba[i * 4] = 255;
+        rgba[i * 4 + 3] = 255;
+    }
+    let layer_id = engine.paste_image(cw, ch, &rgba, 0, 0, None);
+
+    // Pixel-aligned 20×20 selection at (10,10), antialiased — matches the
+    // rect select tool's pre-snap default of `antialias=true`.
+    let sel_x = 10.0_f32;
+    let sel_y = 10.0_f32;
+    let sel_w = 20.0_f32;
+    let sel_h = 20.0_f32;
+    engine.select_rect(
+        sel_x,
+        sel_y,
+        sel_w,
+        sel_h,
+        SelectionMode::Replace,
+        true,
+        0.0,
+    );
+
+    engine.copy(layer_id);
+    // Force the async readback to complete deterministically.
+    engine.test_flush_readbacks();
+    let exported = engine
+        .poll_copy_result()
+        .expect("copy result should be available after flushing readbacks");
+
+    assert_eq!(
+        exported.width, sel_w as u32,
+        "clipboard width must match selection width (got {}×{}, expected {}×{})",
+        exported.width, exported.height, sel_w as u32, sel_h as u32,
+    );
+    assert_eq!(
+        exported.height, sel_h as u32,
+        "clipboard height must match selection height (got {}×{}, expected {}×{})",
+        exported.width, exported.height, sel_w as u32, sel_h as u32,
+    );
+    assert_eq!(
+        exported.offset_x, sel_x as i32,
+        "clipboard offset_x must match selection origin"
+    );
+    assert_eq!(
+        exported.offset_y, sel_y as i32,
+        "clipboard offset_y must match selection origin"
+    );
+
+    // Every pixel of the exported image should be fully opaque red — no
+    // transparent border anywhere on the perimeter.
+    let w = exported.width;
+    let h = exported.height;
+    for y in 0..h {
+        for x in 0..w {
+            let a = exported.rgba[((y * w + x) * 4 + 3) as usize];
+            assert_eq!(
+                a, 255,
+                "pixel ({x},{y}) should be opaque (alpha=255); got {a}. \
+                 A transparent perimeter indicates AA-margin pixels leaked \
+                 into the copy bounds."
+            );
+        }
+    }
+}

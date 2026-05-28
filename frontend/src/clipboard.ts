@@ -92,6 +92,10 @@ export async function readImageFromClipboard(): Promise<{
     rgba: Uint8Array;
     width: number;
     height: number;
+    // Original encoded blob (PNG, JPEG, …). Kept alongside the decoded
+    // pixels so UI surfaces can render a cheap <img src=objectURL> preview
+    // without re-encoding the RGBA.
+    blob: Blob;
 } | null> {
     try {
         const items = await navigator.clipboard.read();
@@ -109,6 +113,7 @@ export async function readImageFromClipboard(): Promise<{
                         rgba: new Uint8Array(imageData.data.buffer),
                         width: canvas.width,
                         height: canvas.height,
+                        blob,
                     };
                 }
             }

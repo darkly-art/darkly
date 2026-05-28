@@ -494,13 +494,19 @@ impl DarklyEngine {
             );
         }
 
-        // Doc-side: tight bounds, CPU cache, active.
-        self.set_selection_pixel_bounds(Some(CanvasRect::from_xywh(
-            mask.x as i32,
-            mask.y as i32,
-            mask.width,
-            mask.height,
-        )));
+        // Doc-side: tight bounds, CPU cache, active. The raster buffer is
+        // inflated by an AA/feather margin (see `rasterize_sdf_r8`); for
+        // pixel-aligned shapes those margin pixels have coverage = 0 exactly.
+        // Reporting the inflated buffer dimensions as the selection bounds
+        // leaks a zero-coverage border into downstream consumers (copy/cut
+        // would read back an oversized region whose perimeter the GPU mask
+        // multiply turns transparent).
+        let tight_bounds = crate::mask::pixel_bounds_r8(&mask.data, mask.width, mask.height).map(
+            |[bx, by, bw, bh]| {
+                CanvasRect::from_xywh((mask.x + bx) as i32, (mask.y + by) as i32, bw, bh)
+            },
+        );
+        self.set_selection_pixel_bounds(tight_bounds);
         self.set_selection_active(true);
 
         let cw = self.doc.width;
