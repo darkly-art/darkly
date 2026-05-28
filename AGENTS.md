@@ -169,7 +169,7 @@ Darkly is in pre-release / alpha. Until the first public release, breaking on-di
 
 ## PR Descriptions
 
-When you finish implementing a plan, emit a concise PR description in a fenced markdown code block as part of your reply. If follow-up work on the same branch changes what would be in the PR, emit an updated version.
+When you finish implementing a plan, emit a concise PR description in a fenced markdown code block as part of your reply. The description must cover the *entire* feature branch (everything since it diverged from its parent), not just the latest change — the user pastes it as the full PR body. On follow-up work, re-emit the complete, updated description as a single block that wholly replaces the previous one; never emit a delta or a partial revision.
 
 ## Lint / CI Checks
 
