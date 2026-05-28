@@ -27,11 +27,13 @@ use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
+pub const TYPE_ID: &str = "stamp";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![],
         node: NodeRegistration {
-            type_id: "stamp",
+            type_id: TYPE_ID,
             category: "shape",
             display_name: "Stamp Tip",
             ports: vec![
@@ -112,6 +114,8 @@ pub fn register() -> BrushNodeRegistration {
                 },
             ],
             is_gpu: true,
+            is_terminal: false,
+            supports_erase: true,
         },
     }
 }

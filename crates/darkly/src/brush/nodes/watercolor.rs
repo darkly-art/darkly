@@ -546,11 +546,13 @@ fn build_pickup_shader(compiled: &CompiledBrush) -> String {
 
 // ── Node ────────────────────────────────────────────────────────────────
 
+pub const TYPE_ID: &str = "watercolor";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![watercolor_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "watercolor",
+            type_id: TYPE_ID,
             category: "output",
             display_name: "Watercolor",
             ports: vec![
@@ -641,6 +643,8 @@ pub fn register() -> BrushNodeRegistration {
             ],
             params: &[],
             is_gpu: true,
+            is_terminal: true,
+            supports_erase: false,
         },
     }
 }
@@ -657,15 +661,6 @@ impl WatercolorEvaluator {
 }
 
 impl BrushNodeEvaluator for WatercolorEvaluator {
-    fn is_terminal(&self) -> bool {
-        true
-    }
-
-    fn supports_erase(&self) -> bool {
-        // Erase on wet media doesn't read naturally.
-        false
-    }
-
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }
@@ -746,40 +741,32 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
 
-    /// Seed scratch from pre_stroke so commit's scratch→layer blit
-    /// reproduces unchanged pixels outside the dab footprint. Lifted
-    /// verbatim from `watercolor_batched::begin_stroke`.
     fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
         gpu.clear_pending_dabs();
 
-        let Some(pre_stroke) = gpu.pre_stroke_texture else {
-            return;
-        };
-        let Some(scratch) = gpu.scratch.as_deref() else {
-            return;
-        };
-        let scratch_tex = scratch.write_texture();
-        let w = scratch_tex.width();
-        let h = scratch_tex.height();
-        gpu.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: pre_stroke,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: scratch_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
+        // Clear the scratch to transparent — its premultiplied source-over
+        // composite accumulates from zero, so a fresh stroke (or a rewind
+        // boundary triggered by the stabilizer) must start from that state.
+        // Without this, partial re-render after divergence leaves the
+        // defunct stroke's pigment in the scratch outside the checkpoint
+        // bbox; commit then composites those stale pixels onto the layer.
+        let scratch = gpu
+            .scratch
+            .as_deref()
+            .expect("watercolor::begin_stroke requires Scratch");
+        let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("watercolor-begin_stroke-clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: scratch.write_view(),
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
     }
 
     fn flush_dabs(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {

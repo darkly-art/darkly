@@ -6,9 +6,11 @@ use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
+pub const TYPE_ID: &str = "multiply";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "multiply",
+        type_id: TYPE_ID,
         category: "math",
         display_name: "Multiply",
         ports: vec![
@@ -23,6 +25,8 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

@@ -273,11 +273,13 @@ fn smudge_pipeline_reg() -> BrushPipelineRegistration {
 
 // ── Node ────────────────────────────────────────────────────────────────
 
+pub const TYPE_ID: &str = "smudge";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![smudge_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "smudge",
+            type_id: TYPE_ID,
             category: "output",
             display_name: "Smudge",
             ports: vec![
@@ -335,6 +337,8 @@ pub fn register() -> BrushNodeRegistration {
             ],
             params: &[],
             is_gpu: true,
+            is_terminal: true,
+            supports_erase: false,
         },
     }
 }
@@ -364,15 +368,6 @@ impl SmudgeEvaluator {
 }
 
 impl BrushNodeEvaluator for SmudgeEvaluator {
-    fn is_terminal(&self) -> bool {
-        true
-    }
-
-    /// Erase mode (destination-out) on a smear isn't meaningful.
-    fn supports_erase(&self) -> bool {
-        false
-    }
-
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }

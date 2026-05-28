@@ -749,7 +749,7 @@ pub fn compile_brush_to_wgsl(
                 decls.push('\n');
             }
         }
-        let is_terminal = evaluator.is_terminal();
+        let is_terminal = step.is_terminal;
         if !result.body.is_empty() {
             // Terminal bodies stay in their per-mode buckets; non-terminal
             // bodies are spliced into both modes.

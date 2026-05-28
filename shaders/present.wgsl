@@ -18,6 +18,8 @@ struct ViewTransform {
     row1: vec4f,
     row2: vec4f,
     bg: vec4f,
+    // flags.x = pixel filter mode (0=linear, 1=nearest, 2=auto)
+    flags: vec4f,
 }
 
 @group(0) @binding(0) var t_source: texture_2d<f32>;
@@ -34,7 +36,22 @@ struct ViewTransform {
     let tex_dims = vec2f(textureDimensions(t_source));
     let uv = vec2f(canvas_x, canvas_y) / tex_dims;
     let clamped_uv = clamp(uv, vec2f(0.0), vec2f(1.0));
-    let color = textureSample(t_source, t_sampler, clamped_uv);
+
+    // Pixel filter selection:
+    //   mode 0 = linear: sample as-is.
+    //   mode 1 = nearest: snap UV to texel center so the bound linear
+    //           sampler returns the unfiltered texel value.
+    //   mode 2 = auto:   nearest when zoomed in past 1:1, otherwise linear.
+    //
+    // The inverse view matrix scales screen→canvas by 1/zoom, so the
+    // magnitude of `row0.xy` (which equals `inv_zoom * (cos, sin)`) is
+    // `inv_zoom`. inv_zoom < 1 means zoom > 1 (zoomed in).
+    let mode = u32(view.flags.x + 0.5);
+    let inv_zoom = length(vec2f(view.row0.x, view.row0.y));
+    let use_nearest = mode == 1u || (mode == 2u && inv_zoom < 1.0);
+    let snapped_uv = (floor(clamped_uv * tex_dims) + vec2f(0.5)) / tex_dims;
+    let sample_uv = select(clamped_uv, snapped_uv, use_nearest);
+    let color = textureSample(t_source, t_sampler, sample_uv);
 
     // OOB check uses actual canvas dimensions (unpadded) so the tile
     // padding area shows as workspace background, not black.

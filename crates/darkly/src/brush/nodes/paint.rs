@@ -66,8 +66,14 @@ const MAX_UNIFORM_BYTES: usize = 1024;
 /// Per-brush resources built on the first `flush_dabs` call for a
 /// brush with a given `topology_hash`. Cached on [`PaintPipeline`].
 struct PerBrushPipeline {
+    /// Per-dab pipeline. Always premultiplied source-over — the scratch
+    /// is a coverage accumulator and only paints alpha *up*. Engine-level
+    /// paint-vs-erase is a stroke decision applied at commit by
+    /// `commit_brush_dab`, not here. (Branching the per-dab pass on
+    /// `blend_mode` to a destination-out blend was a regression: the
+    /// scratch starts at (0,0,0,0), so `dst*(1-src.a)` stays zero and
+    /// the commit's `destination_out` then sees zero alpha and no-ops.)
     paint_pipeline: wgpu::RenderPipeline,
-    erase_pipeline: wgpu::RenderPipeline,
     uniform_ring: DynamicUniformRing,
     uniform_bind_group: wgpu::BindGroup,
     dabs_buffer: wgpu::Buffer,
@@ -112,8 +118,9 @@ impl PerBrushPipeline {
                 immediate_size: 0,
             });
 
-        // Same paint/erase blend states as `paint` — premultiplied
-        // source-over for paint, destination-out for erase.
+        // Premultiplied source-over: scratch accumulates coverage. See
+        // the `paint_pipeline` field doc above for why there's no erase
+        // variant at this stage.
         let paint_blend = wgpu::BlendState {
             color: wgpu::BlendComponent {
                 src_factor: wgpu::BlendFactor::One,
@@ -126,52 +133,37 @@ impl PerBrushPipeline {
                 operation: wgpu::BlendOperation::Add,
             },
         };
-        let erase_blend = wgpu::BlendState {
-            color: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::Zero,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-            alpha: wgpu::BlendComponent {
-                src_factor: wgpu::BlendFactor::Zero,
-                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                operation: wgpu::BlendOperation::Add,
-            },
-        };
 
-        let make_pipeline = |label: &str, blend: wgpu::BlendState| {
-            ctx.device
-                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some(label),
-                    layout: Some(&layout),
-                    vertex: wgpu::VertexState {
-                        module: &shader,
-                        entry_point: Some("vs_main"),
-                        buffers: &[],
-                        compilation_options: Default::default(),
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &shader,
-                        entry_point: Some("fs_main"),
-                        targets: &[Some(wgpu::ColorTargetState {
-                            format: wgpu::TextureFormat::Rgba8Unorm,
-                            blend: Some(blend),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        })],
-                        compilation_options: Default::default(),
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleList,
-                        ..Default::default()
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                    multiview_mask: None,
-                    cache: None,
-                })
-        };
-        let paint_pipeline = make_pipeline("paint", paint_blend);
-        let erase_pipeline = make_pipeline("paint-erase", erase_blend);
+        let paint_pipeline = ctx
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("paint"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(paint_blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
 
         // Uniform ring sized for this brush's actual uniform layout.
         let uniform_size =
@@ -220,7 +212,6 @@ impl PerBrushPipeline {
 
         Self {
             paint_pipeline,
-            erase_pipeline,
             uniform_ring,
             uniform_bind_group,
             dabs_buffer,
@@ -297,11 +288,13 @@ fn paint_pipeline_reg() -> BrushPipelineRegistration {
 
 // ── Node ────────────────────────────────────────────────────────────────
 
+pub const TYPE_ID: &str = "paint";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![paint_pipeline_reg()],
         node: NodeRegistration {
-            type_id: "paint",
+            type_id: TYPE_ID,
             category: "output",
             display_name: "Paint",
             ports: vec![
@@ -363,6 +356,8 @@ pub fn register() -> BrushNodeRegistration {
             ],
             params: &[],
             is_gpu: true,
+            is_terminal: true,
+            supports_erase: true,
         },
     }
 }
@@ -379,10 +374,6 @@ impl PaintEvaluator {
 }
 
 impl BrushNodeEvaluator for PaintEvaluator {
-    fn is_terminal(&self) -> bool {
-        true
-    }
-
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
         vec![]
     }
@@ -578,11 +569,10 @@ impl BrushNodeEvaluator for PaintEvaluator {
             gpu.queue
                 .write_buffer(&per_brush.dabs_buffer, 0, &dab_bytes);
 
-            let pipeline = if gpu.blend_mode == 1 {
-                &per_brush.erase_pipeline
-            } else {
-                &per_brush.paint_pipeline
-            };
+            // Always source-over at per-dab. Paint-vs-erase routes through
+            // `gpu.blend_mode` in `commit_brush_dab`; see `paint_pipeline`'s
+            // doc on `PerBrushPipeline`.
+            let pipeline = &per_brush.paint_pipeline;
             let mut pass = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("paint-flush"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

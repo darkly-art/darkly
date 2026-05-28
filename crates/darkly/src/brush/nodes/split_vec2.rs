@@ -8,9 +8,11 @@ use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
+pub const TYPE_ID: &str = "split_vec2";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "split_vec2",
+        type_id: TYPE_ID,
         category: "math",
         display_name: "Split Vec2",
         ports: vec![
@@ -23,6 +25,8 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

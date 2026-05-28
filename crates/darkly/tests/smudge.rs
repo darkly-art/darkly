@@ -70,12 +70,7 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
         .unwrap();
 
     let mut graph = brush.metadata.graph.clone();
-    let term_id = graph
-        .nodes
-        .iter()
-        .find(|(_, n)| n.type_id == "smudge")
-        .map(|(id, _)| *id)
-        .expect("Smudge brush must terminate in smudge");
+    let term_id = darkly::brush::find_terminal(&graph).expect("Smudge brush has a terminal");
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();

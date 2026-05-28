@@ -4,6 +4,7 @@ import { registerHotkeys } from './config/hotkeys.svelte';
 import { registerActions } from './actions';
 import { rebuildClickIndex } from './actions/triggers';
 import { theme } from './state/theme.svelte';
+import { pixelFilter } from './state/pixelFilter.svelte';
 import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/app.svelte';
 import { createHandle } from './state/session';
 import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
@@ -160,6 +161,7 @@ export async function initEditor(canvas: HTMLCanvasElement): Promise<DarklyHandl
     seedFreshDocument(instance, docWidth, docHeight);
     setActiveInstance(instance);
     theme.pushToWasm();
+    pixelFilter.syncFromConfig();
     return instance.handle!;
 }
 

@@ -198,24 +198,19 @@ fn parse_args() -> Args {
 /// port and the `pen_input` stabilizer.
 fn brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
     let brush_name = topology.brush_name();
-    let terminal_id = topology.terminal_id();
     let mut brush = builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == brush_name)
         .unwrap_or_else(|| panic!("brush `{brush_name}` not found in builtin_brushes::all()"));
+    let term_id = darkly::brush::find_terminal(&brush.metadata.graph)
+        .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
     let graph = &mut brush.metadata.graph;
     let pen_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "pen_input")
+        .find(|(_, n)| n.type_id == darkly::brush::nodes::pen_input::TYPE_ID)
         .map(|(id, _)| *id)
         .expect("brush must have a pen_input node");
-    let term_id = graph
-        .nodes
-        .iter()
-        .find(|(_, n)| n.type_id == terminal_id)
-        .map(|(id, _)| *id)
-        .unwrap_or_else(|| panic!("brush `{brush_name}` must have a `{terminal_id}` terminal"));
     let size_port = (2.0 * dab_radius_px) / DAB_REFERENCE_SIZE_PX;
     graph
         .set_port_default(term_id, "size", size_port)

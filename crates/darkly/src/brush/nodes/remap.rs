@@ -11,9 +11,11 @@ use crate::brush::wire::ScalarValue;
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
+pub const TYPE_ID: &str = "remap";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "remap",
+        type_id: TYPE_ID,
         category: "math",
         display_name: "Remap",
         ports: vec![
@@ -48,6 +50,8 @@ pub fn register() -> BrushNodeRegistration {
             },
         ],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

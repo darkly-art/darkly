@@ -19,12 +19,7 @@ fn probe_softness_zero() {
         .find(|b| b.metadata.name == "Liquify")
         .unwrap();
     let mut graph = brush.metadata.graph.clone();
-    let term_id = graph
-        .nodes
-        .iter()
-        .find(|(_, n)| n.type_id == "liquify")
-        .map(|(id, _)| *id)
-        .unwrap();
+    let term_id = darkly::brush::find_terminal(&graph).unwrap();
     graph.set_port_default(term_id, "size", 0.3).unwrap();
     graph.set_port_default(term_id, "softness", 0.0).unwrap();
 

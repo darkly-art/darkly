@@ -1017,6 +1017,14 @@ impl DarklyHandle {
         self.engine.borrow_mut().set_viewport_bg(bg);
     }
 
+    /// Set the canvas-to-screen pixel filter mode: `"linear"`, `"nearest"`,
+    /// or `"auto"`. Anything else falls back to auto. Call on
+    /// `display.pixelFilter` config change.
+    pub fn set_pixel_filter(&self, mode: &str) {
+        self.flush_if_needed();
+        self.engine.borrow_mut().set_pixel_filter(mode);
+    }
+
     // --- Brush config ---
 
     pub fn set_brush_blend_mode(&self, mode: u32) {
@@ -1834,10 +1842,10 @@ impl DarklyHandle {
         self.engine.borrow().brush_topology_version() as f64
     }
 
-    /// Does the active brush's terminal honor erase mode? `false` for
-    /// brushes whose output node declares `supports_erase = false` in
-    /// its registration (smudge, liquify, watercolor). The UI uses this
-    /// to hide the brush-tool erase toggle.
+    /// Does the active brush's terminal honor erase mode? Reflects the
+    /// terminal node's `supports_erase` flag from its registration —
+    /// type-owned dispatch, no central enumeration of which terminals
+    /// opt out. The UI uses this to hide the brush-tool erase toggle.
     pub fn brush_active_supports_erase(&self) -> bool {
         self.engine.borrow().active_brush_supports_erase()
     }

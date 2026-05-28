@@ -31,12 +31,13 @@ fn shared_device() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
 /// mix into the load. Watercolor's `mix(canvas_rgb, fg_color.rgb,
 /// deposit)` blends pre_stroke pixels with the brush color.
 fn light_blue_canvas() -> Vec<u8> {
+    solid_canvas([100, 150, 230, 255])
+}
+
+fn solid_canvas(rgba: [u8; 4]) -> Vec<u8> {
     let mut out = vec![0u8; (CANVAS * CANVAS * 4) as usize];
     for px in out.chunks_exact_mut(4) {
-        px[0] = 100;
-        px[1] = 150;
-        px[2] = 230;
-        px[3] = 255;
+        px.copy_from_slice(&rgba);
     }
     out
 }
@@ -47,25 +48,30 @@ fn render_dabs(
     color: [f32; 4],
     dabs: &[(f32, f32)],
 ) -> Vec<u8> {
+    render_dabs_on(brush_name, size_override, color, dabs, &light_blue_canvas())
+}
+
+fn render_dabs_on(
+    brush_name: &str,
+    size_override: f32,
+    color: [f32; 4],
+    dabs: &[(f32, f32)],
+    canvas: &[u8],
+) -> Vec<u8> {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == brush_name)
         .unwrap_or_else(|| panic!("builtin brush `{brush_name}` not registered"));
 
     let mut graph = brush.metadata.graph.clone();
-    let term_id = graph
-        .nodes
-        .iter()
-        .find(|(_, n)| n.type_id == "watercolor")
-        .map(|(id, _)| *id)
-        .unwrap_or_else(|| panic!("brush `{brush_name}` must terminate in watercolor"));
+    let term_id = darkly::brush::find_terminal(&graph)
+        .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
     graph
         .set_port_default(term_id, "size", size_override)
         .unwrap();
 
     let (device, queue) = shared_device();
-    let (layer_texture, layer_view) =
-        create_test_texture(&device, &queue, CANVAS, CANVAS, &light_blue_canvas());
+    let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, canvas);
     let pipelines = BrushPipelines::new(&device, &queue);
     let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
 
@@ -240,5 +246,162 @@ fn rough_watercolor_renders_multiple_dabs_in_one_flush() {
     assert!(
         lift_in_3x3(&rgba, 88, 64) > 130,
         "right dab centre neighborhood should have red lift"
+    );
+}
+
+/// Regression for the stabilizer rewind artifact: when the stroke engine
+/// re-enters `begin_stroke` mid-stroke (the path taken on every divergence
+/// boundary — see `engine/painting.rs::brush_stroke_to` rewind branch), the
+/// watercolor scratch must be cleared. The checkpoint ring restores pixels
+/// inside its bbox; without a `begin_stroke` clear, pigment from the now-
+/// defunct dabs persists outside the bbox and bleeds onto the layer at
+/// commit time — visible as artifacts along the tops of curves.
+///
+/// This test reproduces that path without spinning up the full engine:
+/// render a dab at (40, 64), re-enter `begin_stroke`, render a different
+/// dab at (88, 64), commit. The (40, 64) position must remain unchanged
+/// from pre_stroke — its pigment must have been wiped by the second
+/// `begin_stroke`.
+#[test]
+fn begin_stroke_clears_scratch_so_rewind_drops_defunct_pigment() {
+    let brush = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Smooth Watercolor")
+        .expect("Smooth Watercolor brush registered");
+
+    let mut graph = brush.metadata.graph.clone();
+    let term_id = darkly::brush::find_terminal(&graph).expect("watercolor terminal");
+    // Small dab — at `size = 0.05` the dab radius is ~13 px (size *
+    // DAB_REFERENCE_SIZE / 2 ≈ 12.8), so the two dab positions chosen
+    // below (40, 64) and (88, 64) are well isolated and don't overlap.
+    graph.set_port_default(term_id, "size", 0.05).unwrap();
+
+    let canvas = light_blue_canvas();
+    let (device, queue) = shared_device();
+    let (layer_texture, layer_view) = create_test_texture(&device, &queue, CANVAS, CANVAS, &canvas);
+    let pipelines = BrushPipelines::new(&device, &queue);
+    let mut stroke_buffer = StrokeBuffer::new(&device, CANVAS, CANVAS, &pipelines);
+
+    let pre_stroke = darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+        &layer_texture,
+        &layer_view,
+        wgpu::TextureFormat::Rgba8Unorm,
+        CANVAS,
+        CANVAS,
+    );
+    let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("watercolor-rewind-pre-stroke"),
+    });
+    stroke_buffer.save_pre_stroke(&device, &mut enc, &pipelines, &pre_stroke);
+    queue.submit([enc.finish()]);
+
+    let mut runner: BrushGraphRunner = compile_graph(&graph).expect("brush compiles");
+    macro_rules! make_ctx {
+        ($label:expr) => {{
+            let (scratch, pre_stroke_tex, pre_stroke_bg) = stroke_buffer.parts_for_brush_ctx();
+            BrushGpuContext {
+                encoder: device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some($label),
+                }),
+                device: &device,
+                queue: &queue,
+                pipelines: &pipelines,
+                scratch: Some(scratch),
+                canvas_width: CANVAS,
+                canvas_height: CANVAS,
+                paint_target: Some(
+                    darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+                        &layer_texture,
+                        &layer_view,
+                        wgpu::TextureFormat::Rgba8Unorm,
+                        CANVAS,
+                        CANVAS,
+                    ),
+                ),
+                selection_bind_group: pipelines.default_selection_bind_group(),
+                preview_target_view: None,
+                blend_mode: 0,
+                preview_mask_view: None,
+                preview_mask_size: (0, 0),
+                preview_mask_overlay: None,
+                brush_preview_info: None,
+                pre_stroke_texture: Some(pre_stroke_tex),
+                pre_stroke_bind_group: Some(pre_stroke_bg),
+                dab_write_canvas_bbox: None,
+                perf: BrushPerfCounters::default(),
+                pending_dab_bytes: Vec::new(),
+                pending_dab_count: 0,
+                pending_dabs_bbox: None,
+                pending_dab_meta_bytes: Vec::new(),
+                compiled_brush: None,
+                slot_outputs_owned: None,
+            }
+        }};
+    }
+
+    // Phase 1: begin_stroke + render a dab at (40, 64) into the scratch.
+    // Do NOT commit — the painting loop's rewind branch does the same
+    // thing: stale dabs sit in the scratch when the next begin_stroke runs.
+    {
+        let mut ctx = make_ctx!("watercolor-rewind-begin-1");
+        runner.begin_stroke(&mut ctx);
+        let info = PaintInformation {
+            pos: [40.0, 64.0],
+            pressure: 1.0,
+            ..Default::default()
+        };
+        runner.seed_sensors(&info, [1.0, 0.0, 0.0, 1.0], 0xC0FFEE, 0);
+        runner.execute_cpu();
+        runner.execute_gpu(&mut ctx);
+        runner.flush_dabs(&mut ctx);
+        queue.submit([ctx.encoder.finish()]);
+    }
+
+    // Phase 2: simulate stabilizer rewind. begin_stroke again, then a
+    // different dab at (88, 64), then commit. The (40, 64) pigment must
+    // not survive — that's exactly the defunct stroke the rewind throws
+    // away.
+    {
+        let mut ctx = make_ctx!("watercolor-rewind-begin-2");
+        runner.begin_stroke(&mut ctx);
+        let info = PaintInformation {
+            pos: [88.0, 64.0],
+            pressure: 1.0,
+            ..Default::default()
+        };
+        runner.seed_sensors(&info, [1.0, 0.0, 0.0, 1.0], 0xC0FFEE, 1);
+        runner.execute_cpu();
+        runner.execute_gpu(&mut ctx);
+        runner.flush_dabs(&mut ctx);
+        runner.commit(&mut ctx);
+        queue.submit([ctx.encoder.finish()]);
+    }
+
+    let rgba = readback_texture(
+        &device,
+        &queue,
+        &layer_texture,
+        wgpu::TextureFormat::Rgba8Unorm,
+        CANVAS,
+        CANVAS,
+    );
+
+    // The defunct dab at (40, 64) must be wiped. Allow ±1 LSB for rounding.
+    let defunct = pixel(&rgba, 40, 64);
+    let expected = [100u8, 150, 230, 255];
+    for (i, (got, want)) in defunct.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            got.abs_diff(*want) <= 1,
+            "defunct dab pixel (40, 64) channel {i}: expected {want}, got {got} (full pixel {defunct:?}) — \
+             the second begin_stroke must clear stale scratch pigment so the rewind path drops the defunct stroke",
+        );
+    }
+
+    // Sanity: the surviving dab at (88, 64) must still deposit red — the
+    // clear must not have wiped the dab we just rendered.
+    let surviving = pixel(&rgba, 88, 64);
+    assert!(
+        surviving[0] > 130,
+        "surviving dab at (88, 64) should still show red lift, got {surviving:?}"
     );
 }

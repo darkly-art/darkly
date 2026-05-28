@@ -778,7 +778,7 @@ mod tests {
             .graph
             .nodes
             .values()
-            .find(|n| n.type_id == "pen_input")
+            .find(|n| n.type_id == crate::brush::nodes::pen_input::TYPE_ID)
             .expect("liquify brush has a pen_input node");
         let spacing = pen
             .ports

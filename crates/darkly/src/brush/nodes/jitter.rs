@@ -10,9 +10,11 @@ use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef};
 
+pub const TYPE_ID: &str = "jitter";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "jitter",
+        type_id: TYPE_ID,
         category: "modulate",
         display_name: "Jitter",
         ports: vec![
@@ -31,6 +33,8 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

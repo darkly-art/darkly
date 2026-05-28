@@ -34,11 +34,13 @@ const ALGO_SINE: u32 = 0;
 const ALGO_PERLIN: u32 = 1;
 const ALGO_SUPERFORMULA: u32 = 2;
 
+pub const TYPE_ID: &str = "circle";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![],
         node: NodeRegistration {
-        type_id: "circle",
+        type_id: TYPE_ID,
         category: "shape",
         display_name: "Circle",
         ports: vec![
@@ -149,6 +151,8 @@ pub fn register() -> BrushNodeRegistration {
             default: 0,
         }],
         is_gpu: true,
+        is_terminal: false,
+        supports_erase: true,
         },
     }
 }

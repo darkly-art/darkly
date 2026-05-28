@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use super::registration::NodeRegistration;
 use super::WireKind;
 use crate::gpu::params::ParamValue;
 
@@ -391,6 +392,32 @@ impl std::fmt::Display for GraphError {
 
 impl std::error::Error for GraphError {}
 
+/// Result of [`Graph::find_terminal`]. A graph has exactly one terminal
+/// node by construction today; the API surfaces both violations of that
+/// invariant so a regression that compiles two terminals (or none) into
+/// a brush surfaces loudly rather than silently picking one.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FindTerminalError {
+    /// No node in the graph has `is_terminal: true` in its registration.
+    NoTerminal,
+    /// More than one node has `is_terminal: true`. Carries every
+    /// offending id so the caller can report which.
+    MultipleTerminals(Vec<NodeId>),
+}
+
+impl std::fmt::Display for FindTerminalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoTerminal => write!(f, "graph has no terminal node"),
+            Self::MultipleTerminals(ids) => {
+                write!(f, "graph has multiple terminal nodes: {ids:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for FindTerminalError {}
+
 // ── Graph ────────────────────────────────────────────────────────────
 
 /// A directed acyclic graph of nodes connected by typed wires.
@@ -601,6 +628,34 @@ impl<W: WireKind> Graph<W> {
         }
         node.params[index] = value;
         Ok(())
+    }
+
+    /// Find the unique node in this graph whose registration declares
+    /// `is_terminal: true`. By today's invariant a brush graph contains
+    /// exactly one terminal; deviations are reported via
+    /// [`FindTerminalError`] rather than silently arbitrated.
+    pub fn find_terminal(
+        &self,
+        registry: &HashMap<String, NodeRegistration<W>>,
+    ) -> Result<NodeId, FindTerminalError> {
+        let mut terminals: Vec<NodeId> = self
+            .nodes
+            .iter()
+            .filter_map(|(id, node)| {
+                registry
+                    .get(&node.type_id)
+                    .filter(|r| r.is_terminal)
+                    .map(|_| *id)
+            })
+            .collect();
+        match terminals.len() {
+            0 => Err(FindTerminalError::NoTerminal),
+            1 => Ok(terminals.remove(0)),
+            _ => {
+                terminals.sort_by_key(|id| id.0);
+                Err(FindTerminalError::MultipleTerminals(terminals))
+            }
+        }
     }
 
     // ── helpers ──────────────────────────────────────────────────────

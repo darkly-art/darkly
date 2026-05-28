@@ -7,9 +7,11 @@ use crate::brush::wire::ScalarValue;
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
+pub const TYPE_ID: &str = "clamp";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "clamp",
+        type_id: TYPE_ID,
         category: "math",
         display_name: "Clamp",
         ports: vec![
@@ -32,6 +34,8 @@ pub fn register() -> BrushNodeRegistration {
             },
         ],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

@@ -9,6 +9,7 @@
     import { screenToCanvas } from './coordinates';
     import { toast } from '../state/toast.svelte';
     import { theme } from '../state/theme.svelte';
+    import { pixelFilter } from '../state/pixelFilter.svelte';
     import { dispatchDrag } from '../actions/triggers';
     import { bindingSite } from '../actions/binding_site';
     import { handleDroppedFile } from '../actions';
@@ -135,6 +136,7 @@
             // Push the initial UI theme colors so preset-thumbnail bakes
             // match the user's current theme from frame one.
             theme.pushToWasm();
+            pixelFilter.syncFromConfig();
 
             // Observe element resizes to keep GPU surface in sync
             const ro = new ResizeObserver(() => syncCanvasSize());

@@ -116,38 +116,6 @@ fn paint_target_alpha_blending() {
     assert_eq!(g, 0, "green should remain 0, got G={g}");
 }
 
-/// erase_circle: fill red, erase center, verify center alpha is 0.
-#[test]
-fn paint_target_erase_circle() {
-    let (device, queue) = test_device();
-    let (w, h) = (128, 128);
-    let fmt = wgpu::TextureFormat::Rgba8Unorm;
-
-    let red: Vec<u8> = (0..w * h).flat_map(|_| [255u8, 0, 0, 255]).collect();
-    let (tex, view) = create_test_texture(&device, &queue, w, h, &red);
-    let pipelines = PaintPipelines::new(&device, &queue);
-    let target = GpuPaintTarget::from_canvas_texture(&tex, &view, fmt, w, h);
-
-    let mut enc = encoder(&device);
-    target.erase_circle(&mut enc, &pipelines, &queue, 64.0, 64.0, 10.0);
-    submit(&queue, enc);
-
-    let pixels = readback_texture(&device, &queue, &tex, fmt, w, h);
-    let c = ((64 * w + 64) * 4) as usize;
-
-    // Center alpha should be 0 (erased).
-    assert_eq!(
-        pixels[c + 3],
-        0,
-        "center alpha should be 0, got {}",
-        pixels[c + 3]
-    );
-    // RGB should be preserved.
-    assert_eq!(pixels[c], 255, "center R should be 255, got {}", pixels[c]);
-    // Corner should be unchanged.
-    assert_eq!(pixels[3], 255, "corner alpha should be 255");
-}
-
 /// R8 mask target: paint black on fully-revealed mask.
 #[test]
 fn paint_target_r8_mask() {

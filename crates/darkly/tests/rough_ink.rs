@@ -381,12 +381,7 @@ fn builtin_rough_ink_brush_renders_within_declared_bbox() {
     // Override the brush's size port so the dab fits in the test
     // canvas — the builtin's exposed size is small by default.
     let mut graph = rough_ink.metadata.graph.clone();
-    let term_id = graph
-        .nodes
-        .iter()
-        .find(|(_, n)| n.type_id == "paint")
-        .map(|(id, _)| *id)
-        .unwrap();
+    let term_id = darkly::brush::find_terminal(&graph).unwrap();
     graph.set_port_default(term_id, "size", 0.15).unwrap();
 
     let runner = compile_graph(&graph).expect("Rough Ink compiles");
@@ -482,12 +477,7 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
         .find(|b| b.metadata.name == "Rough Ink")
         .expect("Rough Ink registered");
     let mut graph = rough_ink.metadata.graph.clone();
-    let term_id = graph
-        .nodes
-        .iter()
-        .find(|(_, n)| n.type_id == "paint")
-        .map(|(id, _)| *id)
-        .unwrap();
+    let term_id = darkly::brush::find_terminal(&graph).unwrap();
     graph.set_port_default(term_id, "size", 0.15).unwrap();
     // Replace the builtin's pressure-shaping curve (a monotone Hermite
     // spline through `(0,0), (0.4,0.7), (1,1)`) with the identity curve
@@ -498,7 +488,7 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
     let curve_id = graph
         .nodes
         .iter()
-        .find(|(_, n)| n.type_id == "curve")
+        .find(|(_, n)| n.type_id == darkly::brush::nodes::curve::TYPE_ID)
         .map(|(id, _)| *id)
         .unwrap();
     graph
@@ -581,12 +571,7 @@ fn terminal_flow_scales_dab_alpha() {
         );
         // Replace the terminal.flow default. build_test_graph hard-
         // sets it to 1.0 already; override here per-test.
-        let term_id = graph
-            .nodes
-            .iter()
-            .find(|(_, n)| n.type_id == "paint")
-            .map(|(id, _)| *id)
-            .unwrap();
+        let term_id = darkly::brush::find_terminal(&graph).unwrap();
         graph.set_port_default(term_id, "flow", flow).unwrap();
         let mut h = harness(&black_canvas(), graph);
         h.begin_stroke();

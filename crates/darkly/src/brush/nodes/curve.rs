@@ -18,9 +18,11 @@ use crate::nodegraph::{NodeRegistration, PortDef};
 
 const DEFAULT_CURVE: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
 
+pub const TYPE_ID: &str = "curve";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "curve",
+        type_id: TYPE_ID,
         category: "modulate",
         display_name: "Curve",
         ports: vec![
@@ -36,6 +38,8 @@ pub fn register() -> BrushNodeRegistration {
             default: DEFAULT_CURVE,
         }],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

@@ -8,9 +8,11 @@ use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
 
+pub const TYPE_ID: &str = "make_color";
+
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(NodeRegistration {
-        type_id: "make_color",
+        type_id: TYPE_ID,
         category: "color",
         display_name: "Make Color",
         ports: vec![
@@ -35,6 +37,8 @@ pub fn register() -> BrushNodeRegistration {
         ],
         params: &[],
         is_gpu: false,
+        is_terminal: false,
+        supports_erase: true,
     })
 }
 

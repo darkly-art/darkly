@@ -167,6 +167,17 @@ pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>
     map
 }
 
+/// Convenience over [`crate::nodegraph::Graph::find_terminal`] for
+/// brush graphs: builds a fresh [`BrushNodeRegistry`] and delegates.
+/// Use this from any graph-only call site (benches, tests, the WASM
+/// bridge) where threading the registry through would be noise.
+pub fn find_terminal(
+    graph: &crate::nodegraph::Graph<BrushWireType>,
+) -> Result<crate::nodegraph::NodeId, crate::nodegraph::FindTerminalError> {
+    let registry = BrushNodeRegistry::new();
+    graph.find_terminal(registry.as_map())
+}
+
 /// Build the default brush graph: pressure-sensitive disc through the
 /// compiled `paint` terminal. Same shape as Round in
 /// [`builtin_brushes`] — `pen → paint_color → circle (sine, amplitude 0)

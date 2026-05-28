@@ -5,6 +5,7 @@
 //! exercise the same code paths that users hit.
 //! Run with: `cargo test -p darkly --test engine`
 
+use darkly::brush::nodes::{pen_input, stamp};
 use darkly::brush::wire::BrushWireType;
 use darkly::document::SelectionMode;
 use darkly::engine::types::StrokeOp;
@@ -827,7 +828,7 @@ fn pen_input_spacing_port_controls_dab_density() {
     // Baseline: default spacing (port default = 0.10).
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    let pen_id = find_node_id(&engine, "pen_input");
+    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
         .brush_graph_set_port_default(pen_id, "spacing", 0.10)
         .expect("default spacing port must exist");
@@ -837,7 +838,7 @@ fn pen_input_spacing_port_controls_dab_density() {
     // Sparse: 100% spacing — dabs separated by a full diameter.
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
-    let pen_id = find_node_id(&engine, "pen_input");
+    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
         .brush_graph_set_port_default(pen_id, "spacing", 1.0)
         .expect("spacing port must exist");
@@ -876,11 +877,11 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     // - Stamp size at near-zero, so the dab is clamped to 1×1 px and
     //   the per-iteration step would be `1 * 0.04 = 0.04 px` without
     //   the absolute floor.
-    let pen_id = find_node_id(&engine, "pen_input");
+    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
         .brush_graph_set_port_default(pen_id, "spacing", 0.04)
         .expect("spacing port must exist");
-    let stamp_id = find_node_id(&engine, "stamp");
+    let stamp_id = find_node_id(&engine, stamp::TYPE_ID);
     engine
         .brush_graph_set_port_default(stamp_id, "size", 0.001)
         .expect("stamp size port must exist");
@@ -3838,8 +3839,8 @@ fn long_stabilized_stroke_no_fallback() {
     // Default brush (circle + stamp + color_output) is enough to exercise
     // the checkpoint ring's coverage invariant — this test is about the
     // stabilizer's full-rerender fallback, not anything scatter-specific.
-    let pen_id = find_node_id(&engine, "pen_input");
-    let stamp_id = find_node_id(&engine, "stamp");
+    let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
+    let stamp_id = find_node_id(&engine, stamp::TYPE_ID);
     // Full-strength stabilization → max_divergence_window = 11 (iterations=10
     // + 1 from the influence-radius model). Spacing = 11 / 7 = 1.
     engine
@@ -4165,4 +4166,87 @@ fn pick_color_layer_vs_merged_vs_outside_extent() {
         [200, 0, 0, 255],
         "Where only bottom covers, Merged equals bottom (sanity check on the test setup)"
     );
+}
+
+/// Regression: copying with an antialiased rectangle selection at pixel-aligned
+/// coordinates must produce a clipboard image whose dimensions exactly match
+/// the selection — no inflated AA-margin border.
+///
+/// Pre-fix, `rasterize_sdf_r8` inflated the buffer by 1 pixel on each side to
+/// evaluate AA gradient samples, and `upload_selection_replace` stored those
+/// inflated dimensions as the selection's pixel bounds. The copy path then
+/// read back a region one pixel larger on each side; the GPU mask multiply
+/// zeroed the margin's alpha and the clipboard came out with a 1-pixel
+/// transparent ring around the actual content.
+#[test]
+fn copy_with_aa_rect_selection_has_no_transparent_border() {
+    let (cw, ch) = (64u32, 64u32);
+    let mut engine = test_engine(cw, ch);
+
+    // Solid red fill so every pixel inside the selection should round-trip
+    // as fully opaque after copy.
+    let mut rgba = vec![0u8; (cw * ch * 4) as usize];
+    for i in 0..(cw * ch) as usize {
+        rgba[i * 4] = 255;
+        rgba[i * 4 + 3] = 255;
+    }
+    let layer_id = engine.paste_image(cw, ch, &rgba, 0, 0, None);
+
+    // Pixel-aligned 20×20 selection at (10,10), antialiased — matches the
+    // rect select tool's pre-snap default of `antialias=true`.
+    let sel_x = 10.0_f32;
+    let sel_y = 10.0_f32;
+    let sel_w = 20.0_f32;
+    let sel_h = 20.0_f32;
+    engine.select_rect(
+        sel_x,
+        sel_y,
+        sel_w,
+        sel_h,
+        SelectionMode::Replace,
+        true,
+        0.0,
+    );
+
+    engine.copy(layer_id);
+    // Force the async readback to complete deterministically.
+    engine.test_flush_readbacks();
+    let exported = engine
+        .poll_copy_result()
+        .expect("copy result should be available after flushing readbacks");
+
+    assert_eq!(
+        exported.width, sel_w as u32,
+        "clipboard width must match selection width (got {}×{}, expected {}×{})",
+        exported.width, exported.height, sel_w as u32, sel_h as u32,
+    );
+    assert_eq!(
+        exported.height, sel_h as u32,
+        "clipboard height must match selection height (got {}×{}, expected {}×{})",
+        exported.width, exported.height, sel_w as u32, sel_h as u32,
+    );
+    assert_eq!(
+        exported.offset_x, sel_x as i32,
+        "clipboard offset_x must match selection origin"
+    );
+    assert_eq!(
+        exported.offset_y, sel_y as i32,
+        "clipboard offset_y must match selection origin"
+    );
+
+    // Every pixel of the exported image should be fully opaque red — no
+    // transparent border anywhere on the perimeter.
+    let w = exported.width;
+    let h = exported.height;
+    for y in 0..h {
+        for x in 0..w {
+            let a = exported.rgba[((y * w + x) * 4 + 3) as usize];
+            assert_eq!(
+                a, 255,
+                "pixel ({x},{y}) should be opaque (alpha=255); got {a}. \
+                 A transparent perimeter indicates AA-margin pixels leaked \
+                 into the copy bounds."
+            );
+        }
+    }
 }
