@@ -175,7 +175,7 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     let stamp = graph.add_node(
         "stamp",
         registry.get("stamp").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // AlphaMask
+        vec![],
     );
     let terminal = graph.add_node(
         "paint",
@@ -212,9 +212,10 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
 /// Compile any brush graph into a ready-to-run runner.
 ///
 /// Generates the per-brush WGSL fragment shader and attaches it to
-/// the runner when the graph has a terminal. Brush load fails (with
-/// a string-form `GraphError`-ish error coerced via `panic!` ⇒ TODO)
-/// when any upstream node lacks a `compile_wgsl` implementation.
+/// the runner when the graph has a terminal. WGSL compile failures
+/// (e.g. an upstream node with no `compile_wgsl` implementation) are
+/// logged via `eprintln!` and surfaced as `GraphError::CycleDetected`
+/// so the engine's existing error path handles them.
 pub fn compile_graph(
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {

@@ -6,13 +6,6 @@
 //! emitted `dab` output is premultiplied RGBA that downstream paint
 //! terminals consume.
 //!
-//! ## AlphaMask only
-//!
-//! Only AlphaMask `application` is supported — it inlines as a scalar
-//! multiply. ImageStamp / LightnessMap / GradientMap need texture
-//! sampling that the inline-WGSL surface does not offer; any non-zero
-//! `application` value fails brush load with a clear error.
-//!
 //! ## Ignored ports
 //!
 //! `size_input`, `size`, `rotation`, `rotation_input`, `mirror_*`, and
@@ -24,7 +17,6 @@ use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wgsl_compile::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
-use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 
 pub const TYPE_ID: &str = "stamp";
@@ -103,18 +95,7 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::output("preview", BrushWireType::Texture)
                     .with_description("Brush preview (unused)"),
             ],
-            params: &[
-                // Enum stored as Int. Only `Alpha Mask` (= 0) is
-                // supported on the compiled path; the other modes are
-                // listed here so old brush JSON deserializes without a
-                // schema mismatch, but `compile_wgsl` errors on any
-                // non-zero value.
-                ParamDef::Enum {
-                    name: "application",
-                    options: &["Alpha Mask", "Image Stamp", "Lightness Map", "Gradient Map"],
-                    default: 0,
-                },
-            ],
+            params: &[],
             is_gpu: true,
             is_terminal: false,
             supports_erase: true,
@@ -131,25 +112,11 @@ impl BrushNodeEvaluator for StampEvaluator {
 
     /// Inline `color × mask × flow` into the brush's WGSL. `tip`
     /// carries the upstream scalar coverage expression; the emitted
-    /// `dab` output is premultiplied RGBA. Errors on any `application`
-    /// mode other than AlphaMask — those would need texture sampling
-    /// which the inline-WGSL surface does not support.
+    /// `dab` output is premultiplied RGBA.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         if !cctx.consumed_outputs.contains("dab") {
             return Ok(wgsl);
-        }
-        let application = match cctx.params.first() {
-            Some(crate::gpu::params::ParamValue::Int(v)) => *v,
-            _ => 0,
-        };
-        if application != 0 {
-            return Err(format!(
-                "stamp.application = {application} (expected AlphaMask = 0); \
-                 ImageStamp / LightnessMap / GradientMap require a sampled \
-                 RGBA tip texture and are not supported. Use a procedural \
-                 tip (circle node) instead.",
-            ));
         }
         let mask = cctx.input("tip").as_f32();
         let color = cctx.input("color").as_vec4();

@@ -61,9 +61,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_intrinsic_dab_header, pack_intrinsic_uniforms, pack_uniforms,
-    CompileWgslCtx, CompiledBrush, DabField, IntrinsicUniforms, NodeWgsl, WgslType,
-    INTRINSIC_UNIFORMS_SIZE,
+    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField,
+    IntrinsicUniforms, NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -495,23 +494,7 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let copy_canvas_y = read_y0.floor();
         Self::insert_copy_origin(gpu, ctx.node_id.0 as u32, [copy_canvas_x, copy_canvas_y]);
 
-        let record_start = gpu.pending_dab_bytes.len();
-        pack_intrinsic_dab_header(&mut gpu.pending_dab_bytes, position, bbox_radius, radius);
-        let outputs = gpu
-            .slot_outputs_owned
-            .as_ref()
-            .expect("liquify requires slot_outputs_owned on gpu_context");
-        pack_dab_record(&compiled, outputs, &mut gpu.pending_dab_bytes);
-        let written = gpu.pending_dab_bytes.len() - record_start;
-        if written < compiled.dab_record_size {
-            gpu.pending_dab_bytes
-                .resize(record_start + compiled.dab_record_size, 0);
-        }
-        gpu.pending_dab_count = gpu.pending_dab_count.saturating_add(1);
-        debug_assert!(
-            gpu.pending_dab_count <= MAX_DABS_PER_PHASE,
-            "liquify dab queue overflowed MAX_DABS_PER_PHASE"
-        );
+        gpu.queue_dab(&compiled, position, bbox_radius, radius);
 
         let meta = LiquifyDabMeta {
             position,
@@ -588,7 +571,13 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 .write_buffer(&per_brush.dabs_buffer, 0, &dab_bytes);
 
             for (i, meta) in metas.iter().enumerate() {
-                let _ = gpu.prepare_dab_canvas_copy(meta.position, meta.half[0], meta.half[1]);
+                let _ = gpu.prepare_dab_canvas_copy(
+                    meta.position,
+                    meta.half[0],
+                    meta.half[1],
+                    meta.half[0],
+                    meta.half[1],
+                );
 
                 let scratch_ref = gpu
                     .scratch

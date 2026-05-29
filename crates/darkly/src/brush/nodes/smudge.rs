@@ -21,7 +21,7 @@
 //!    are skipped before queueing — `mix(bg, src, _)` collapses to
 //!    identity in that regime.
 //! 2. `flush_dabs` walks the queue in lockstep. For each dab it calls
-//!    `prepare_dab_canvas_copy_split` (asymmetric read region around
+//!    `prepare_dab_canvas_copy` (asymmetric read region around
 //!    the dab's footprint by `±|motion|` per axis) to sync the
 //!    scratch read mirror, then issues one render pass with instance
 //!    index `i..i+1` so the vertex stage reads `dab_records[i]`.
@@ -54,9 +54,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_intrinsic_dab_header, pack_intrinsic_uniforms, pack_uniforms,
-    CompileWgslCtx, CompiledBrush, DabField, IntrinsicUniforms, NodeWgsl, WgslType,
-    INTRINSIC_UNIFORMS_SIZE,
+    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField,
+    IntrinsicUniforms, NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -76,8 +75,8 @@ const STATIONARY_THRESHOLD_PX: f32 = 0.5;
 
 /// CPU-side per-dab footprint info, packed by `evaluate_gpu` in
 /// lockstep with the GPU dab record and drained by `flush_dabs`. Lets
-/// the flush loop call `prepare_dab_canvas_copy_split` without
-/// re-deriving the asymmetric footprint from the upload buffer.
+/// the flush loop call `prepare_dab_canvas_copy` without re-deriving
+/// the asymmetric footprint from the upload buffer.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct SmudgeDabMeta {
@@ -451,7 +450,7 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
 
         // Pre-compute `copy_origin` (canvas-space top-left of the
         // mirror snapshot) using the same formula
-        // `prepare_dab_canvas_copy_split` will use at flush time. The
+        // `prepare_dab_canvas_copy` will use at flush time. The
         // CPU compute is deterministic from `position` + `read_half`;
         // the flush-time call re-derives the same value before issuing
         // the actual sync.
@@ -461,24 +460,7 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
         let copy_canvas_y = read_y0.floor();
         Self::insert_copy_origin(gpu, ctx.node_id.0 as u32, [copy_canvas_x, copy_canvas_y]);
 
-        // Pack the GPU dab record: intrinsic header + node fields.
-        let record_start = gpu.pending_dab_bytes.len();
-        pack_intrinsic_dab_header(&mut gpu.pending_dab_bytes, position, bbox_radius, radius);
-        let outputs = gpu
-            .slot_outputs_owned
-            .as_ref()
-            .expect("smudge requires slot_outputs_owned on gpu_context");
-        pack_dab_record(&compiled, outputs, &mut gpu.pending_dab_bytes);
-        let written = gpu.pending_dab_bytes.len() - record_start;
-        if written < compiled.dab_record_size {
-            gpu.pending_dab_bytes
-                .resize(record_start + compiled.dab_record_size, 0);
-        }
-        gpu.pending_dab_count = gpu.pending_dab_count.saturating_add(1);
-        debug_assert!(
-            gpu.pending_dab_count <= MAX_DABS_PER_PHASE,
-            "smudge dab queue overflowed MAX_DABS_PER_PHASE"
-        );
+        gpu.queue_dab(&compiled, position, bbox_radius, radius);
 
         // Pack the CPU-side meta in lockstep.
         let meta = SmudgeDabMeta {
@@ -560,7 +542,7 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
                 // Sync the mirror snapshot for this dab. The implicit
                 // barrier from this `copy_texture_to_texture` makes
                 // the subsequent render pass see prior dab writes.
-                let _ = gpu.prepare_dab_canvas_copy_split(
+                let _ = gpu.prepare_dab_canvas_copy(
                     meta.position,
                     meta.write_half[0],
                     meta.write_half[1],
