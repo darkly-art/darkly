@@ -15,6 +15,7 @@
 //!    paint and produces non-empty WGSL.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use darkly::brush::eval::BrushNodeEvaluator;
 use darkly::brush::wgsl_compile::{compile_brush_to_wgsl, CompileError};
@@ -26,7 +27,7 @@ fn registry() -> BrushNodeRegistry {
     BrushNodeRegistry::new()
 }
 
-fn evals() -> HashMap<String, Box<dyn BrushNodeEvaluator>> {
+fn evals() -> HashMap<String, Arc<dyn BrushNodeEvaluator>> {
     default_evaluators()
 }
 

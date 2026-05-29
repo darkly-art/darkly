@@ -29,6 +29,7 @@ pub mod wgsl_compile;
 pub mod wire;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::nodegraph::NodeRegistration;
 use wire::BrushWireType;
@@ -121,49 +122,50 @@ impl Default for BrushNodeRegistry {
 /// Separate from `BrushNodeRegistry` because evaluators are trait objects
 /// (runtime behavior) while the registry holds static metadata (compile-
 /// time port/param schemas).  Both are keyed by the same `type_id` string.
-/// The runner takes ownership of the evaluator map and uses it during
-/// `execute_cpu()` and `execute_gpu()` to dispatch each node's computation.
-pub fn default_evaluators() -> HashMap<String, Box<dyn eval::BrushNodeEvaluator>> {
-    let mut map: HashMap<String, Box<dyn eval::BrushNodeEvaluator>> = HashMap::new();
+/// The runner copies an `Arc<dyn ...>` per [`crate::nodegraph::ExecStep`]
+/// at compile time, so a single shared evaluator instance backs every
+/// step that uses that node type — no per-dab map lookup, no Box clone.
+pub fn default_evaluators() -> HashMap<String, Arc<dyn eval::BrushNodeEvaluator>> {
+    let mut map: HashMap<String, Arc<dyn eval::BrushNodeEvaluator>> = HashMap::new();
     // CPU nodes.
     map.insert(
         "pen_input".into(),
-        Box::new(nodes::pen_input::PenInputEvaluator),
+        Arc::new(nodes::pen_input::PenInputEvaluator),
     );
     map.insert(
         "multiply".into(),
-        Box::new(nodes::multiply::MultiplyEvaluator),
+        Arc::new(nodes::multiply::MultiplyEvaluator),
     );
-    map.insert("curve".into(), Box::new(nodes::curve::CurveEvaluator));
+    map.insert("curve".into(), Arc::new(nodes::curve::CurveEvaluator));
     map.insert(
         "paint_color".into(),
-        Box::new(nodes::paint_color::PaintColorEvaluator),
+        Arc::new(nodes::paint_color::PaintColorEvaluator),
     );
-    map.insert("add".into(), Box::new(nodes::add::AddEvaluator));
-    map.insert("clamp".into(), Box::new(nodes::clamp::ClampEvaluator));
-    map.insert("remap".into(), Box::new(nodes::remap::RemapEvaluator));
-    map.insert("mix".into(), Box::new(nodes::mix::MixEvaluator));
+    map.insert("add".into(), Arc::new(nodes::add::AddEvaluator));
+    map.insert("clamp".into(), Arc::new(nodes::clamp::ClampEvaluator));
+    map.insert("remap".into(), Arc::new(nodes::remap::RemapEvaluator));
+    map.insert("mix".into(), Arc::new(nodes::mix::MixEvaluator));
     map.insert(
         "split_vec2".into(),
-        Box::new(nodes::split_vec2::SplitVec2Evaluator),
+        Arc::new(nodes::split_vec2::SplitVec2Evaluator),
     );
     map.insert(
         "make_color".into(),
-        Box::new(nodes::make_color::MakeColorEvaluator),
+        Arc::new(nodes::make_color::MakeColorEvaluator),
     );
-    map.insert("random".into(), Box::new(nodes::random::RandomEvaluator));
-    map.insert("jitter".into(), Box::new(nodes::jitter::JitterEvaluator));
-    map.insert("scatter".into(), Box::new(nodes::scatter::ScatterEvaluator));
+    map.insert("random".into(), Arc::new(nodes::random::RandomEvaluator));
+    map.insert("jitter".into(), Arc::new(nodes::jitter::JitterEvaluator));
+    map.insert("scatter".into(), Arc::new(nodes::scatter::ScatterEvaluator));
     // GPU nodes.
-    map.insert("circle".into(), Box::new(nodes::circle::CircleEvaluator));
-    map.insert("stamp".into(), Box::new(nodes::stamp::StampEvaluator));
-    map.insert("paint".into(), Box::new(nodes::paint::PaintEvaluator));
-    map.insert("liquify".into(), Box::new(nodes::liquify::LiquifyEvaluator));
+    map.insert("circle".into(), Arc::new(nodes::circle::CircleEvaluator));
+    map.insert("stamp".into(), Arc::new(nodes::stamp::StampEvaluator));
+    map.insert("paint".into(), Arc::new(nodes::paint::PaintEvaluator));
+    map.insert("liquify".into(), Arc::new(nodes::liquify::LiquifyEvaluator));
     map.insert(
         "watercolor".into(),
-        Box::new(nodes::watercolor::WatercolorEvaluator),
+        Arc::new(nodes::watercolor::WatercolorEvaluator),
     );
-    map.insert("smudge".into(), Box::new(nodes::smudge::SmudgeEvaluator));
+    map.insert("smudge".into(), Arc::new(nodes::smudge::SmudgeEvaluator));
     map
 }
 

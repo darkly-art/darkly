@@ -207,14 +207,21 @@ impl StrokeEngine {
         start_vector_index: usize,
         end_vector_index: usize,
     ) {
-        // Copy the stabilized polyline to avoid borrow conflict with &mut self.
-        let stabilized: Vec<PaintInformation> = self.stabilizer.stabilized().to_vec();
-        if stabilized.is_empty() {
+        // `stab_len` is cached once: nothing inside the loop mutates the
+        // stabilizer, so the count can't drift. We then scope each
+        // `self.stabilizer.stabilized()` borrow tightly — copying the
+        // handful of `PaintInformation` values we need (it's `Copy`) and
+        // releasing the slice before calling `self.place_dab`, which
+        // takes `&mut self`. This replaces the prior full-polyline
+        // `.to_vec()` clone (one alloc per `render_from_*` call, growing
+        // linearly with stroke length).
+        let stab_len = self.stabilizer.len();
+        if stab_len == 0 {
             return;
         }
 
-        let start = start_vector_index.min(stabilized.len());
-        let end = end_vector_index.min(stabilized.len() - 1);
+        let start = start_vector_index.min(stab_len);
+        let end = end_vector_index.min(stab_len - 1);
 
         // When resuming from a checkpoint, snap last_point.pos to the current
         // stabilized position.  Between checkpoint capture and now, intermediate
@@ -223,16 +230,25 @@ impl StrokeEngine {
         // from the old position to the new next point, creating a tangent
         // discontinuity ("broken chain" artifact at corners).
         if start > 0 {
-            if let Some(ref mut lp) = self.last_point {
-                if let Some(current) = stabilized.get(start - 1) {
-                    lp.pos = current.pos;
-                }
+            let snap_pos = self.stabilizer.stabilized().get(start - 1).map(|p| p.pos);
+            if let (Some(pos), Some(lp)) = (snap_pos, self.last_point.as_mut()) {
+                lp.pos = pos;
             }
         }
 
         // Walk the polyline, computing derived values and placing dabs.
         for i in start..=end {
-            let raw = stabilized[i];
+            let (raw, prev_neighbor, next_neighbor) = {
+                let stab = self.stabilizer.stabilized();
+                let raw = stab[i];
+                let prev = if i >= 2 { Some(stab[i - 2]) } else { None };
+                let next = if i + 1 < stab.len() {
+                    Some(stab[i + 1])
+                } else {
+                    None
+                };
+                (raw, prev, next)
+            };
             let mut info = raw;
 
             // First point of the stroke: no segment to place dabs along.
@@ -250,14 +266,10 @@ impl StrokeEngine {
             // Build Catmull-Rom segment between prev (p1) and info (p2).
             // Outer control points use stabilized neighbours when available;
             // degenerate fallback duplicates the endpoint at stroke edges.
-            let p0_pt = if i >= 2 { stabilized[i - 2] } else { prev };
+            let p0_pt = prev_neighbor.unwrap_or(prev);
             let p1_pt = prev;
             let p2_pt = info;
-            let p3_pt = if i + 1 < stabilized.len() {
-                stabilized[i + 1]
-            } else {
-                info
-            };
+            let p3_pt = next_neighbor.unwrap_or(info);
 
             let seg = CatmullRomSegment::new(&p0_pt, &p1_pt, &p2_pt, &p3_pt);
             let arc_len = seg.arc_length();
@@ -355,21 +367,15 @@ impl StrokeEngine {
         gpu.flush_if_needed();
 
         // Update `last_dab_size` from whichever terminal in the graph
-        // publishes a `dab_size` output. Every compiled terminal does;
-        // the first hit wins. Each terminal owns the unit-of-`dab_size`
-        // it returns — paint/watercolor return `diameter` from the
-        // size port; smudge does the same; liquify returns its disc
-        // diameter for stroke-engine spacing.
-        for node_type in &["paint", "watercolor", "smudge", "liquify"] {
-            if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
-                if let Some(val) = self.runner.read_slot(slot) {
-                    let size = val.as_vec2();
-                    if size[0] > 0.0 && size[1] > 0.0 {
-                        self.last_dab_size = size;
-                        break;
-                    }
-                }
-            }
+        // publishes a `dab_size` output. The slot was resolved at runner
+        // build (type-owned dispatch — any terminal with a `dab_size`
+        // output wins, including ones added after this site was
+        // written). Each terminal owns the unit-of-`dab_size` it
+        // returns: paint/watercolor/smudge use `diameter` from the size
+        // port; liquify returns its disc diameter for stroke-engine
+        // spacing.
+        if let Some(size) = self.runner.read_dab_size() {
+            self.last_dab_size = size;
         }
 
         // Dab bounding box for save points, in canvas coords. Prefer the

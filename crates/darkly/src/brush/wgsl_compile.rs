@@ -631,7 +631,7 @@ const EPS_BBOX_CANVAS_PX: f32 = 1e-3;
 pub fn compile_brush_to_wgsl(
     graph: &crate::nodegraph::Graph<BrushWireType>,
     plan: &ExecutionPlan,
-    evaluators: &HashMap<String, Box<dyn BrushNodeEvaluator>>,
+    evaluators: &HashMap<String, Arc<dyn BrushNodeEvaluator>>,
 ) -> Result<CompiledBrush, CompileError> {
     if plan.steps.is_empty() {
         return Err(CompileError::NoTerminal);
@@ -884,7 +884,7 @@ pub fn compile_brush_to_wgsl(
 fn compose_brush_extent(
     graph: &crate::nodegraph::Graph<BrushWireType>,
     plan: &ExecutionPlan,
-    evaluators: &HashMap<String, Box<dyn BrushNodeEvaluator>>,
+    evaluators: &HashMap<String, Arc<dyn BrushNodeEvaluator>>,
 ) -> (f32, f32) {
     let mut factor: f32 = 1.0;
     let mut extra_px: f32 = 0.0;
