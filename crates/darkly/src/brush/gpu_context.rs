@@ -124,32 +124,6 @@ impl std::ops::AddAssign for BrushPerfCounters {
 /// bumped rather than silently truncating in release.
 pub const MAX_DABS_PER_PHASE: u32 = 16384;
 
-/// One queued dab waiting for the next `paint` terminal flush.
-///
-/// Layout MUST match the `Dab` struct in `shaders/brush/paint.wgsl` —
-/// the WGSL binding reads this verbatim as a storage buffer element.
-/// In std430, `vec2` is 8-byte aligned and `vec4` is 16-byte aligned,
-/// so `vec2 pos + f32 radius + f32 softness + vec4 color` packs cleanly
-/// into 32 bytes with no trailing pad.
-///
-/// Queued via `BrushGpuContext::queue_dab` into the shared byte-buffer
-/// `pending_dab_bytes`. Other dab-batching terminals (watercolor_batched)
-/// push their own record types into the same buffer — the brush graph
-/// has at most one dab-batching terminal at a time, so the bytes are
-/// unambiguous.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct PaintDabRecord {
-    /// Pen tip in **canvas pixels** (subtracted from layer offset in shader).
-    pub pos: [f32; 2],
-    /// Disc radius in canvas pixels (dab covers `pos ± radius`).
-    pub radius: f32,
-    /// Edge softness as fraction of radius. 0 = hard, 1 = fully feathered.
-    pub softness: f32,
-    /// Premultiplied paint color (rgba). Flow already multiplied in upstream.
-    pub color: [f32; 4],
-}
-
 /// Everything a GPU brush node needs to record render passes.
 ///
 /// Created once per rendering batch (per-segment in divergence, per-frame
@@ -295,15 +269,10 @@ pub struct BrushGpuContext<'a> {
 }
 
 impl<'a> BrushGpuContext<'a> {
-    /// Submit the batched encoder and consume the context.
-    ///
-    /// All dab render passes in this batch are submitted in a single
-    /// `queue.submit()` call — no per-dab submission needed thanks to
-    /// dynamic uniform buffer offsets.
-    ///
-    /// Returns the per-context perf counters so the caller can `+=` them
-    /// into the engine's stroke-level accumulator. The final submit's
-    /// wall clock is folded into `submit_us` before returning.
+    /// Submit the batched encoder and consume the context. Returns the
+    /// per-context perf counters so the caller can fold them into the
+    /// stroke-level accumulator; the final submit's wall clock is
+    /// included in `submit_us`.
     pub fn submit_final(mut self) -> BrushPerfCounters {
         let t = web_time::Instant::now();
         self.queue.submit([self.encoder.finish()]);
@@ -346,14 +315,42 @@ impl<'a> BrushGpuContext<'a> {
         }
     }
 
-    /// Queue a dab record into the shared byte buffer. The terminal
-    /// that owns `flush_dabs` reinterprets the bytes as its own record
-    /// type — see [`PaintDabRecord`] for the `paint` layout. The active
-    /// brush has exactly one dab-batching terminal in its graph, so the
-    /// bytes are unambiguous at flush time.
-    pub fn queue_dab<T: bytemuck::Pod>(&mut self, record: &T) {
-        self.pending_dab_bytes
-            .extend_from_slice(bytemuck::bytes_of(record));
+    /// Pack one dab record for the active compiled brush into
+    /// `pending_dab_bytes` and bump `pending_dab_count`. Every terminal
+    /// (paint, watercolor, smudge, liquify) calls this from its
+    /// `evaluate_gpu` after computing the per-dab geometry; the WGSL
+    /// terminal reinterprets the bytes via its dab layout at flush
+    /// time. The active brush has exactly one dab-batching terminal in
+    /// its graph, so the bytes are unambiguous.
+    ///
+    /// `slot_outputs_owned` must have been populated by the runner's
+    /// `dispatch_gpu` before this call — that's the source of the
+    /// per-node field values the compiled record packer reads.
+    pub fn queue_dab(
+        &mut self,
+        compiled: &CompiledBrush,
+        position: [f32; 2],
+        bbox_radius: f32,
+        radius: f32,
+    ) {
+        let record_start = self.pending_dab_bytes.len();
+        super::wgsl_compile::pack_intrinsic_dab_header(
+            &mut self.pending_dab_bytes,
+            position,
+            bbox_radius,
+            radius,
+        );
+        let outputs = self
+            .slot_outputs_owned
+            .as_ref()
+            .expect("queue_dab requires slot_outputs_owned on gpu_context");
+        super::wgsl_compile::pack_dab_record(compiled, outputs, &mut self.pending_dab_bytes);
+        // Pad to the full record size so the next dab starts aligned.
+        let written = self.pending_dab_bytes.len() - record_start;
+        if written < compiled.dab_record_size {
+            self.pending_dab_bytes
+                .resize(record_start + compiled.dab_record_size, 0);
+        }
         self.pending_dab_count = self.pending_dab_count.saturating_add(1);
         debug_assert!(
             self.pending_dab_count <= MAX_DABS_PER_PHASE,
@@ -443,43 +440,25 @@ impl<'a> BrushGpuContext<'a> {
     /// Compute the layer-clipped per-dab footprint, push the canvas-space
     /// write bbox (so save_points / checkpoints cover the real damage
     /// region), and snapshot the scratch under the dab into
-    /// `scratch read mirror`. Returns `None` if the dab footprint doesn't overlap
-    /// the layer (early-out for the caller — typically `return vec![]`).
+    /// `scratch read mirror`. Returns `None` if the dab footprint doesn't
+    /// overlap the layer (early-out for the caller — typically `return
+    /// vec![]`).
     ///
-    /// Centralizes the canvas → layer-local translation that every brush
-    /// terminal needs (color_output, watercolor, liquify). Getting it
-    /// wrong manifests as strokes/warps shifted by `(offset_x, offset_y)`
-    /// on grown / paste-extent layers — see the liquify regression in
-    /// `tests/liquify.rs::warp_position_correct_on_offset_layer`.
-    ///
-    /// `half_w` / `half_h` are the dab's half-extent in canvas pixels,
-    /// pre-clip. For a normal stamp dab pass `dab_w * 0.5` / `dab_h * 0.5`;
-    /// for liquify pass `radius + displacement` (its disc plus the
-    /// bilinear-sample padding).
-    pub fn prepare_dab_canvas_copy(
-        &mut self,
-        position: [f32; 2],
-        half_w: f32,
-        half_h: f32,
-    ) -> Option<DabFootprint> {
-        self.prepare_dab_canvas_copy_split(position, half_w, half_h, half_w, half_h)
-    }
-
-    /// Generalization of [`Self::prepare_dab_canvas_copy`] that lets callers
-    /// pass distinct write and read half-extents. The write region is the
-    /// dab footprint (`position ± write_half`); the read region is the
-    /// scratch-mirror snapshot footprint (`position ± read_half`). Read
-    /// must be at least as large as write, but a brush that samples the
-    /// scratch at an offset (smudge: per-dab `−motion`; clone: a stroke-
-    /// scoped anchor) sizes the read region wider so the offset sample
-    /// always lies inside the snapshot.
+    /// The write region is the dab footprint (`position ± write_half`);
+    /// the read region is the scratch-mirror snapshot footprint
+    /// (`position ± read_half`). Read must be at least as large as write,
+    /// but a brush that samples the scratch at an offset (smudge: per-dab
+    /// `−motion`; clone: a stroke-scoped anchor) sizes the read region
+    /// wider so the offset sample always lies inside the snapshot. For a
+    /// symmetric dab pass equal write/read halves (e.g. `radius`,
+    /// `radius`, `radius`, `radius`).
     ///
     /// The returned `DabFootprint`'s `origin/size` describe the write
     /// region (so the brush's render-pass viewport covers exactly the
     /// dab footprint); `copy_canvas_origin/copy_local_origin/copy_size`
     /// describe the (larger) read region, matching the read-mirror copy
     /// just issued.
-    pub fn prepare_dab_canvas_copy_split(
+    pub fn prepare_dab_canvas_copy(
         &mut self,
         position: [f32; 2],
         write_half_w: f32,

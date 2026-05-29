@@ -35,6 +35,8 @@ pub struct BrushState {
     /// double-click-to-reset on toolbar scrubs — reset returns to the
     /// brush's shipped value, not the node-type registration default.
     /// Keyed by (node_id, port_name); raw values (not display-space).
+    /// Written by `engine::brush_graph::snapshot_brush_defaults`; read
+    /// by the exposed-port query that builds `ExposedPortInfo`.
     pub defaults: HashMap<(NodeId, String), f32>,
 
     /// Bumped on every brush-graph mutation (`compile_active`). Used both

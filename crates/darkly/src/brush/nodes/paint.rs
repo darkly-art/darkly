@@ -44,9 +44,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_intrinsic_dab_header, pack_intrinsic_uniforms, pack_uniforms,
-    CompileWgslCtx, CompiledBrush, InputBinding, IntrinsicUniforms, NodeWgsl,
-    INTRINSIC_UNIFORMS_SIZE,
+    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, InputBinding,
+    IntrinsicUniforms, NodeWgsl, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -444,31 +443,7 @@ impl BrushNodeEvaluator for PaintEvaluator {
             None => [local_x0, local_y0, local_x1, local_y1],
         });
 
-        // Pack one dab record: intrinsic header + per-node fields.
-        // The outputs map for the packer was built by the runner's
-        // dispatch_gpu before this call (keyed by `n{id}_{port}`).
-        // Split-borrow `slot_outputs_owned` and `pending_dab_bytes`
-        // — they're disjoint fields, so no clone is needed. Cloning
-        // the HashMap per dab was a multi-millisecond-per-event
-        // disaster at high dab counts.
-        let record_start = gpu.pending_dab_bytes.len();
-        pack_intrinsic_dab_header(&mut gpu.pending_dab_bytes, position, bbox_radius, radius);
-        let outputs = gpu
-            .slot_outputs_owned
-            .as_ref()
-            .expect("paint requires slot_outputs_owned on gpu_context");
-        pack_dab_record(&compiled, outputs, &mut gpu.pending_dab_bytes);
-        // Pad to the full record size so the next dab starts aligned.
-        let written = gpu.pending_dab_bytes.len() - record_start;
-        if written < compiled.dab_record_size {
-            gpu.pending_dab_bytes
-                .resize(record_start + compiled.dab_record_size, 0);
-        }
-        gpu.pending_dab_count = gpu.pending_dab_count.saturating_add(1);
-        debug_assert!(
-            gpu.pending_dab_count <= MAX_DABS_PER_PHASE,
-            "paint dab queue overflowed MAX_DABS_PER_PHASE"
-        );
+        gpu.queue_dab(&compiled, position, bbox_radius, radius);
 
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }

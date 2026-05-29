@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::{
-    ExecutionPlan, Graph, InputSlot, NodeId, NodeRegistration, PortDef, PortDir, PortRef,
+    ExecStep, ExecutionPlan, Graph, InputSlot, NodeId, NodeRegistration, PortDef, PortDir, PortRef,
 };
 
 use super::curve_math::CurveLut;
@@ -24,13 +24,11 @@ use super::wire::{BrushWireType, ScalarValue};
 
 /// Context passed to each node's CPU evaluator.
 ///
-/// Connected input values arrive as two parallel slices — `input_slots`
-/// gives the port name and wire metadata, `input_values` gives the
-/// post-wire-remap value (or `None` when the upstream slot hasn't been
-/// written yet). [`Self::input`] linearly scans `input_slots` to resolve
-/// a name; the bound that makes this fast is per-node input count
-/// (typically 1–3, never more than ~8), so a `HashMap` would only
-/// trade a per-step heap allocation for no real speedup.
+/// Connected input values arrive as two parallel slices: port name +
+/// metadata in `input_slots`, post-remap value in `input_values`.
+/// [`Self::input`] linearly scans `input_slots` — per-node input count
+/// is small (typically 1–3, never more than ~8), so a `HashMap` would
+/// only trade a per-step heap allocation for no real speedup.
 pub struct EvalContext<'a> {
     /// Connected input ports for this step, in the same order as
     /// `input_values`. Disconnected ports are absent — [`Self::input`]
@@ -484,6 +482,27 @@ struct NodeData {
     lut: Option<CurveLut>,
 }
 
+fn build_eval_ctx<'a>(
+    step: &'a ExecStep,
+    input_slots: &'a [InputSlot],
+    input_values: &'a [Option<ScalarValue>],
+    node_data: &'a HashMap<NodeId, NodeData>,
+    stroke_seed: u32,
+    dab_index: u32,
+) -> EvalContext<'a> {
+    let node = node_data.get(&step.node_id);
+    EvalContext {
+        input_slots,
+        input_values,
+        params: node.map(|n| n.params.as_slice()).unwrap_or(&[]),
+        port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&[]),
+        lut: node.and_then(|n| n.lut.as_ref()),
+        stroke_seed,
+        dab_index,
+        node_id: step.node_id,
+    }
+}
+
 impl BrushGraphRunner {
     /// Build a runner from a graph and a registry of evaluators.
     ///
@@ -679,8 +698,6 @@ impl BrushGraphRunner {
     /// Call `seed_sensors()` first.  After this returns, output slots
     /// contain the final values for this dab.
     pub fn execute_cpu(&mut self) {
-        let empty_params: Vec<ParamValue> = Vec::new();
-        let empty_ports: Vec<PortDef<BrushWireType>> = Vec::new();
         let n = self.plan.steps.len();
         for idx in 0..n {
             // Field accesses below all go through `self.<field>` directly so
@@ -712,17 +729,14 @@ impl BrushGraphRunner {
                 &mut self.inputs_scratch,
             );
 
-            let node = self.node_data.get(&step.node_id);
-            let ctx = EvalContext {
-                input_slots: &step.input_slots,
-                input_values: &self.inputs_scratch,
-                params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
-                port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
-                lut: node.and_then(|n| n.lut.as_ref()),
-                stroke_seed: self.stroke_seed,
-                dab_index: self.dab_index,
-                node_id: step.node_id,
-            };
+            let ctx = build_eval_ctx(
+                step,
+                &step.input_slots,
+                &self.inputs_scratch,
+                &self.node_data,
+                self.stroke_seed,
+                self.dab_index,
+            );
 
             let outputs = evaluator.evaluate_cpu(&ctx);
 
@@ -782,8 +796,6 @@ impl BrushGraphRunner {
             gpu.slot_outputs_owned = Some(self.build_slot_outputs());
         }
 
-        let empty_params: Vec<ParamValue> = Vec::new();
-        let empty_ports: Vec<PortDef<BrushWireType>> = Vec::new();
         let n = self.plan.steps.len();
         for idx in 0..n {
             let step = &self.plan.steps[idx];
@@ -814,17 +826,14 @@ impl BrushGraphRunner {
                 &mut self.inputs_scratch,
             );
 
-            let node = self.node_data.get(&step.node_id);
-            let ctx = EvalContext {
-                input_slots: &step.input_slots,
-                input_values: &self.inputs_scratch,
-                params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
-                port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
-                lut: node.and_then(|n| n.lut.as_ref()),
-                stroke_seed: self.stroke_seed,
-                dab_index: self.dab_index,
-                node_id: step.node_id,
-            };
+            let ctx = build_eval_ctx(
+                step,
+                &step.input_slots,
+                &self.inputs_scratch,
+                &self.node_data,
+                self.stroke_seed,
+                self.dab_index,
+            );
 
             // Pure-math nodes promoted to the GPU phase (because an input
             // depends on a GPU output) only implement `evaluate_cpu`. Run
@@ -915,10 +924,6 @@ impl BrushGraphRunner {
     ) where
         F: FnMut(&str, &dyn BrushNodeEvaluator, &EvalContext, &mut BrushGpuContext),
     {
-        let empty_params: Vec<ParamValue> = Vec::new();
-        let empty_ports: Vec<PortDef<BrushWireType>> = Vec::new();
-        let empty_input_slots: Vec<InputSlot> = Vec::new();
-        let empty_input_values: Vec<Option<ScalarValue>> = Vec::new();
         let n = self.plan.steps.len();
         for idx in 0..n {
             let step = &self.plan.steps[idx];
@@ -942,19 +947,16 @@ impl BrushGraphRunner {
                     );
                     (&step.input_slots, &self.inputs_scratch)
                 } else {
-                    (&empty_input_slots, &empty_input_values)
+                    (&[], &[])
                 };
-            let node = self.node_data.get(&step.node_id);
-            let ctx = EvalContext {
-                input_slots: input_slots_view,
-                input_values: input_values_view,
-                params: node.map(|n| n.params.as_slice()).unwrap_or(&empty_params),
-                port_defs: node.map(|n| n.port_defs.as_slice()).unwrap_or(&empty_ports),
-                lut: node.and_then(|n| n.lut.as_ref()),
-                stroke_seed: self.stroke_seed,
-                dab_index: self.dab_index,
-                node_id: step.node_id,
-            };
+            let ctx = build_eval_ctx(
+                step,
+                input_slots_view,
+                input_values_view,
+                &self.node_data,
+                self.stroke_seed,
+                self.dab_index,
+            );
             f(&step.type_id, evaluator.as_ref(), &ctx, gpu);
         }
     }

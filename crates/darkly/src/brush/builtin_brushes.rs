@@ -73,7 +73,7 @@ fn paint_brush(
     let stamp = graph.add_node(
         "stamp",
         registry.get("stamp").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // 0 = Alpha Mask
+        vec![],
     );
     // `paint` owns the dab dimensions; stamp's `size` port is inert.
     // Hide it so users don't see two "Size" sliders in the brush
@@ -645,7 +645,7 @@ fn rough_ink() -> Brush {
     let stamp = graph.add_node(
         "stamp",
         registry.get("stamp").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // 0 = Alpha Mask
+        vec![],
     );
     // Stamp's `size` port is exposed by default (because per-dab
     // dispatch needs it), but `paint` ignores stamp's

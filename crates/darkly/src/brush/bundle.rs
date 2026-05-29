@@ -13,15 +13,10 @@ use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::nodegraph::Graph;
 
-/// Current format version. Loaders reject any archive whose stored
-/// version is greater than this; older versions are not supported.
-pub const FORMAT_VERSION: u32 = 1;
-
 /// Metadata for a brush — the JSON-serialized envelope inside a
 /// `.darkly-brush` archive.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrushMetadata {
-    pub format_version: u32,
     pub name: String,
     #[serde(default = "default_engine_version")]
     pub engine_version: String,
@@ -81,7 +76,6 @@ impl BrushMetadata {
     /// Create metadata from just a graph (no resources).
     pub fn from_graph(name: impl Into<String>, graph: Graph<BrushWireType>) -> Self {
         BrushMetadata {
-            format_version: FORMAT_VERSION,
             name: name.into(),
             engine_version: default_engine_version(),
             category: String::new(),
@@ -177,13 +171,6 @@ impl Brush {
                 .map_err(|e| format!("invalid {}: {e}", Self::METADATA_JSON_PATH))?
         };
 
-        if metadata.format_version > FORMAT_VERSION {
-            return Err(format!(
-                "brush format version {} is newer than supported version {FORMAT_VERSION}",
-                metadata.format_version
-            ));
-        }
-
         // Read resource data
         let mut resource_data = Vec::new();
         for meta in &metadata.resources {
@@ -260,7 +247,6 @@ mod tests {
         let loaded = Brush::from_bytes(&bytes).unwrap();
 
         assert_eq!(loaded.metadata.name, "Test Brush");
-        assert_eq!(loaded.metadata.format_version, FORMAT_VERSION);
 
         // Verify graph round-trips: same nodes and connections.
         // Compare as serde_json::Value to avoid HashMap key ordering differences.
@@ -292,18 +278,6 @@ mod tests {
         assert_eq!(loaded.metadata.resources.len(), 1);
         assert_eq!(loaded.metadata.resources[0].kind, ResourceKind::BrushTip);
         assert_eq!(loaded.resource("tip.png").unwrap(), &tip_data);
-    }
-
-    #[test]
-    fn future_version_rejected() {
-        let graph = brush::default_graph();
-        let mut metadata = BrushMetadata::from_graph("Future", graph);
-        metadata.format_version = FORMAT_VERSION + 1;
-        let brush = Brush::without_resources(metadata);
-
-        let bytes = brush.to_bytes().unwrap();
-        let err = Brush::from_bytes(&bytes).unwrap_err();
-        assert!(err.contains("newer than supported"), "got: {err}");
     }
 
     #[test]
