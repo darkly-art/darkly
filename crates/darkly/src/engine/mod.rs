@@ -424,6 +424,13 @@ pub struct DarklyEngine {
     /// per-event `BrushGpuContext` `+=`'s its drained counters into here.
     pub(crate) brush_perf: BrushPerfCounters,
 
+    /// Mid-stroke full re-render fallbacks during this stroke (the
+    /// per-engine counterpart to `brush_perf` — see [`BrushPerfCounters`]
+    /// docs on why this isn't a field there). Bumped in `painting.rs`
+    /// when the checkpoint ring's coverage invariant fails; surfaced
+    /// via `test_stroke_full_rerender_events`.
+    pub(crate) brush_full_rerender_events: u32,
+
     /// Snapshot of `brush_perf` taken on the last `drain_brush_perf_delta`
     /// call. Subtracted from the current accumulator on each drain to
     /// produce a per-interval delta. Reset to default at `begin_stroke`
@@ -532,6 +539,7 @@ impl DarklyEngine {
             thumbnail_version: 0,
             layer_growth_capped: false,
             brush_perf: BrushPerfCounters::default(),
+            brush_full_rerender_events: 0,
             last_brush_perf: BrushPerfCounters::default(),
             last_frame_phases: FrameRenderPhases::default(),
         };
@@ -762,7 +770,7 @@ impl DarklyEngine {
     /// checkpoint ring's coverage invariant kept fallback at zero across
     /// a stroke.
     pub fn test_stroke_full_rerender_events(&self) -> u32 {
-        self.brush_perf.full_rerender_events
+        self.brush_full_rerender_events
     }
 
     /// Total dabs placed during the most recent stroke. `brush_perf` is

@@ -498,7 +498,7 @@ pub fn render_compiled_preview(
     radius: f32,
     rotation_rad: f32,
 ) -> Option<()> {
-    let compiled = gpu.compiled_brush.clone()?;
+    let compiled = gpu.dab_batch.compiled_brush.clone()?;
     // Brush-intrinsic bbox in canvas pixels — this is the dab's
     // footprint as it will be deposited on the canvas, and what the
     // overlay quad consumes via `half_extent_canvas_px` below.
@@ -536,7 +536,7 @@ pub fn render_compiled_preview(
     let mut uniform_bytes: Vec<u8> = Vec::with_capacity(total_uniform_size);
     pack_intrinsic_uniforms(&mut uniform_bytes, intrinsic);
     let empty_outputs;
-    let outputs = match gpu.slot_outputs_owned.as_ref() {
+    let outputs = match gpu.dab_batch.slot_outputs.as_ref() {
         Some(o) => o,
         None => {
             empty_outputs = HashMap::new();
@@ -579,10 +579,12 @@ pub fn render_compiled_preview(
     // spans `±half_extent_canvas_px`, and the mask sampler maps
     // UV [0, 1] across the quad. With the dab filling the mask's
     // inscribed disc by construction (above), this matches.
-    gpu.brush_preview_info = Some(crate::brush::eval::BrushPreviewInfo {
-        half_extent_canvas_px: [bbox_canvas_px, bbox_canvas_px],
-        rotation_rad,
-    });
+    if let Some(preview) = gpu.preview.as_mut() {
+        preview.info = Some(crate::brush::eval::BrushPreviewInfo {
+            half_extent_canvas_px: [bbox_canvas_px, bbox_canvas_px],
+            rotation_rad,
+        });
+    }
     Some(())
 }
 
