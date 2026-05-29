@@ -9,11 +9,12 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-000000?style=for-the-badge&logo=typescript&logoColor=6914ff)
 ![WebAssembly](https://img.shields.io/badge/WebAssembly-000000?style=for-the-badge&logo=WebAssembly&logoColor=4400ff)
 ![WebGPU](https://img.shields.io/badge/WebGPU-000000?style=for-the-badge&logo=webgpu&logoColor=4400ff)
+[![Coverage](https://img.shields.io/codecov/c/github/darkly-art/darkly?token=TIIFB7UHAJ&label=Coverage&logo=codecov&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://codecov.io/gh/darkly-art/darkly)
 
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital painters. It has everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
+[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital painters. It aims to have everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
 ### Darkly pledges to:
 
@@ -22,7 +23,7 @@
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
 
-If you're a sane artist who likes rulers, guides, and clean vector lines, you may still like Darkly. But it's fundamentally a chaotic playground, for artists who make messes and incur happy accidents. Madness isn't a bug, it's a feature.
+Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Channel your inner chaos with Darkly, where messes are made and happy incidents incurred. Madness isn't a bug, it's a feature.
 
 **Try the demo [here](https://demo.darkly.art).**
 
@@ -38,18 +39,22 @@ In addition to the usual paint features, Darkly has some entropic tools to empow
 
 ### Veils
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By shrouding your art behind a mysterious pane of glass, they invite you to see something that wasn't there before.
+https://github.com/user-attachments/assets/ee281ac2-37a8-4e52-91b3-78d564420e9d
+
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
 
 Veils have practical uses too:
 
 - By hiding fine details, they can prevent **premature fixation on detail**, freeing you to focus on composition.
-- During the ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
-- They can also help remedy **art fatigue** (losing eyes for art by staring at it for too long) by letting you view it through new eyes.
+- During the sketching / ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
+- They can also help remedy **art fatigue** (losing eyes for art by staring at it for too long) by letting you view it through a new lense.
 
 > [!NOTE]
 > Veils live in their own dedicated group, but within that you can stack and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.
 
 ### Voids
+
+https://github.com/user-attachments/assets/43dac748-d79f-403f-8456-10dad779a6f9
 
 Voids are a special type of layer that specializes in pulling inspiration from outside sources. 
 
@@ -235,9 +240,9 @@ While Darkly's architecture is fundamentally different, it was really insightful
 
 Some of Darkly's veil and void shaders are ports or adaptations of work originally published on [Shadertoy](https://www.shadertoy.com/). I suck at shaders and the creators of these shaders are true artists. Please go see them in their native habitat!
 
-- **Lens Blur** (veil) - based on [ldG3W3](https://www.shadertoy.com/view/ldG3W3) by [Dave Hoskins](https://www.shadertoy.com/user/Dave_Hoskins).
-- **Painting** (veil) - a generalized Kuwahara filter, based on [mlffWf](https://www.shadertoy.com/view/mlffWf) by [p4vv37](https://www.shadertoy.com/user/p4vv37), with technique notes from [Acerola / Garrett Gunnell](https://github.com/GarrettGunnell/Post-Processing/tree/main/Assets/Kuwahara%20Filter).
-- **Rainy glass** (veil) - ported from "Heartfelt" ([ltffzl](https://www.shadertoy.com/view/ltffzl)) by [Martijn Steinrucken / BigWIngs](https://www.shadertoy.com/user/BigWIngs).
-- **VHS** (veil) - ported from [XtBXDt](https://www.shadertoy.com/view/XtBXDt) by [FMS_Cat](https://www.shadertoy.com/user/FMS_Cat).
-- **Watercolor** (veil) - based on [mdlXW2](https://www.shadertoy.com/view/mdlXW2) by [aeva](https://www.shadertoy.com/user/aeva).
-- **Noise** (void) - domain-warp algorithm from Inigo Quilez's ["Domain warping"](https://iquilezles.org/articles/warp/) article; the texture-sampled noise primitive (a 3D volume sampled by the FBM octave loop) is inspired by "Watery" ([MssSRS](https://www.shadertoy.com/view/MssSRS)) by [nimitz](https://www.shadertoy.com/user/nimitz) (twitter: @stormoid).
+- **Lens Blur** (veil) - based on ["Bokeh Venice"](https://www.shadertoy.com/view/ldG3W3) by [Dave Hoskins](https://www.shadertoy.com/user/Dave_Hoskins).
+- **Painting** (veil) - based on ["Generalized Kuwahara shader"](https://www.shadertoy.com/view/mlffWf) by [p4vv37](https://www.shadertoy.com/user/p4vv37), with technique notes from [Acerola / Garrett Gunnell](https://github.com/GarrettGunnell/Post-Processing/tree/main/Assets/Kuwahara%20Filter).
+- **Rainy glass** (veil) - ported from ["Heartfelt"](https://www.shadertoy.com/view/ltffzl) by [Martijn Steinrucken / BigWIngs](https://www.shadertoy.com/user/BigWIngs).
+- **VHS** (veil) - ported from ["20151110_VHS"](https://www.shadertoy.com/view/XtBXDt) by [FMS_Cat](https://www.shadertoy.com/user/FMS_Cat).
+- **Watercolor** (veil) - based on ["watercolor propagation"](https://www.shadertoy.com/view/mdlXW2) by [aeva](https://www.shadertoy.com/user/aeva).
+- **Noise** (void) - domain-warp algorithm from Inigo Quilez's ["Domain warping"](https://iquilezles.org/articles/warp/) article; the texture-sampled noise primitive (a 3D volume sampled by the FBM octave loop) is inspired by ["Watery"](https://www.shadertoy.com/view/MssSRS) by [nimitz](https://www.shadertoy.com/user/nimitz) (twitter: @stormoid).
