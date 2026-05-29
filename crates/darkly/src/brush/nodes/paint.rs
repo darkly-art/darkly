@@ -8,7 +8,7 @@
 //!
 //! - **The fragment shader is generated per-brush at brush load** by
 //!   walking the upstream graph and asking each node to emit WGSL.
-//!   See [`crate::brush::wgsl_compile`].
+//!   See [`crate::brush::wgsl`].
 //! - **The per-dab record schema is dynamic**, sized by what fields
 //!   the brush's nodes contribute. No fixed `PaintDabRecord` struct.
 //! - **The uniform buffer carries stroke-constant values** from any
@@ -30,7 +30,7 @@
 //! Compilation happens in [`crate::brush::compile_graph`]. If any
 //! upstream node returns `Err` from `compile_wgsl`, brush load fails
 //! — there is no runtime fallback. See
-//! [`crate::brush::wgsl_compile::CompileError`].
+//! [`crate::brush::wgsl::CompileError`].
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -43,7 +43,7 @@ use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
-use crate::brush::wgsl_compile::{
+use crate::brush::wgsl::{
     pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, InputBinding,
     IntrinsicUniforms, NodeWgsl, INTRINSIC_UNIFORMS_SIZE,
 };
@@ -585,7 +585,7 @@ impl BrushNodeEvaluator for PaintEvaluator {
     }
 
     /// Hover-cursor preview — reuses the shared
-    /// [`crate::brush::wgsl_compile::render_compiled_preview`] helper.
+    /// [`crate::brush::wgsl::render_compiled_preview`] helper.
     /// `paint`'s stroke body and preview body are the same
     /// source (no `compile_preview_body` override), so the cursor
     /// shows the brush color × shape × flow as the stroke would
@@ -597,14 +597,14 @@ impl BrushNodeEvaluator for PaintEvaluator {
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
         let rotation_rad = ctx.input_f32("rotation");
-        let _ = crate::brush::wgsl_compile::render_compiled_preview(gpu, radius, rotation_rad);
+        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, rotation_rad);
         vec![]
     }
 
     /// Emit the fragment-shader body's terminal — multiplies the
     /// upstream graph's premultiplied RGBA expression by the
     /// selection mask and returns. The framework's
-    /// [`crate::brush::wgsl_compile::assemble_shader`] places the
+    /// [`crate::brush::wgsl::assemble_shader`] places the
     /// node bodies inside `fs_main` already bound with `d`, `u`,
     /// `local_uv`, `local_dist`, `theta`, `target_pos`, and `sel`.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {

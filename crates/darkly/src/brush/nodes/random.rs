@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::wgsl_compile::{CompileWgslCtx, DabField, NodeWgsl, UniformField, WgslType};
+use crate::brush::wgsl::{CompileWgslCtx, DabField, NodeWgsl, UniformField, WgslType};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};

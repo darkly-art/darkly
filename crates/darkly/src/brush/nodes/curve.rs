@@ -10,7 +10,7 @@
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::wgsl_compile::{CompileWgslCtx, NodeWgsl};
+use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::gpu::params::ParamDef;

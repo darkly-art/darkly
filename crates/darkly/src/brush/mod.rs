@@ -25,7 +25,7 @@ pub mod stabilizers;
 pub mod state;
 pub mod stroke_buffer;
 pub mod stroke_engine;
-pub mod wgsl_compile;
+pub mod wgsl;
 pub mod wire;
 
 use std::collections::HashMap;
@@ -227,14 +227,13 @@ pub fn compile_graph(
         // Build a fresh evaluators map for the compiler — the runner
         // owns the live one. Cheap (just trait-object constructors).
         let compile_evals = registry.evaluators();
-        let compiled =
-            wgsl_compile::compile_brush_to_wgsl(graph, &plan, &compile_evals).map_err(|e| {
-                // Surface the WGSL compile error as a Graph compile
-                // error so the engine's existing error path handles
-                // it. Detail goes through `Display`.
-                eprintln!("paint WGSL compilation failed: {e}");
-                crate::nodegraph::GraphError::CycleDetected
-            })?;
+        let compiled = wgsl::compile_brush_to_wgsl(graph, &plan, &compile_evals).map_err(|e| {
+            // Surface the WGSL compile error as a Graph compile
+            // error so the engine's existing error path handles
+            // it. Detail goes through `Display`.
+            eprintln!("paint WGSL compilation failed: {e}");
+            crate::nodegraph::GraphError::CycleDetected
+        })?;
         runner.set_compiled_brush(std::sync::Arc::new(compiled));
     }
     Ok(runner)

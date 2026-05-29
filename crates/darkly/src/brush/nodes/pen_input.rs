@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::wgsl_compile::{CompileWgslCtx, DabField, NodeWgsl, WgslType};
+use crate::brush::wgsl::{CompileWgslCtx, DabField, NodeWgsl, WgslType};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};

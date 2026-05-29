@@ -48,7 +48,7 @@ use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
-use crate::brush::wgsl_compile::{
+use crate::brush::wgsl::{
     pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, IntrinsicUniforms,
     NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
@@ -922,7 +922,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
         let rotation_rad = ctx.input_f32("rotation");
-        let _ = crate::brush::wgsl_compile::render_compiled_preview(gpu, radius, rotation_rad);
+        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, rotation_rad);
         vec![]
     }
 

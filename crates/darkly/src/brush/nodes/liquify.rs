@@ -60,7 +60,7 @@ use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
-use crate::brush::wgsl_compile::{
+use crate::brush::wgsl::{
     pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField,
     IntrinsicUniforms, NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
@@ -647,7 +647,7 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl_compile::render_compiled_preview(gpu, radius, 0.0);
+        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, 0.0);
         vec![]
     }
 

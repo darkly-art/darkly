@@ -590,7 +590,7 @@ fn liquify_push() -> Brush {
 /// dispatch, no inter-node textures.
 ///
 /// This brush is the proving ground for the WGSL compilation
-/// framework — see `crates/darkly/src/brush/wgsl_compile.rs`.
+/// framework — see `crates/darkly/src/brush/wgsl.rs`.
 fn rough_ink() -> Brush {
     let registry = crate::brush::registry();
     let mut graph = Graph::<BrushWireType>::new();

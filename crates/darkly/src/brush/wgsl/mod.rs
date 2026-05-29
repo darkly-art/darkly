@@ -14,8 +14,8 @@
 //!
 //! There is **no runtime fallback** and **no partial compilation**: a
 //! brush must have every upstream node implement
-//! [`BrushNodeEvaluator::compile_wgsl`] successfully, or brush load
-//! fails.
+//! [`crate::brush::eval::BrushNodeEvaluator::compile_wgsl`] successfully,
+//! or brush load fails.
 //!
 //! ## The compiler walk
 //!
@@ -42,394 +42,47 @@
 //! `vec4`/`vec2` are emitted in alignment order (largest first) within
 //! each contributor's block to avoid std430 padding surprises. The CPU
 //! packer asserts the total byte count matches the expected stride.
+//!
+//! ## File map
+//!
+//! - [`type_system`] — `WgslType`, `DabField`, `UniformField` + std430
+//!   layout helpers.
+//! - [`context`] — `CompileWgslCtx`, `NodeWgsl`, `InputBinding`,
+//!   `ShaderMode`.
+//! - [`extent`] — `ExtentContribution` / `ExtentCtx` + the per-graph
+//!   composition walk.
+//! - [`intrinsics`] — `IntrinsicUniforms` `repr(C)` mirror of the
+//!   WGSL prelude's struct, plus its packer.
+//! - [`dab_record`] — fixed-prefix intrinsic dab header + its packer.
+
+pub mod context;
+pub mod dab_record;
+pub mod extent;
+pub mod intrinsics;
+pub mod type_system;
+
+pub use context::{CompileWgslCtx, InputBinding, NodeWgsl, ShaderMode};
+pub use dab_record::{
+    intrinsic_dab_header, pack_intrinsic_dab_header, INTRINSIC_DAB_HEADER_FIELDS,
+};
+pub use extent::{ExtentContribution, ExtentCtx};
+pub use intrinsics::{pack_intrinsic_uniforms, IntrinsicUniforms, INTRINSIC_UNIFORMS_SIZE};
+pub use type_system::{DabField, DabPacker, UniformField, UniformPacker, ValuePacker, WgslType};
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use crate::brush::eval::BrushNodeEvaluator;
 use crate::brush::wire::{BrushWireType, ScalarValue};
-use crate::gpu::params::ParamValue;
-use crate::nodegraph::{ExecutionPlan, NodeId, PortDef, PortDir, PortRef};
+use crate::nodegraph::{ExecutionPlan, NodeId, PortDir, PortRef};
 
-// ── Type system ─────────────────────────────────────────────────────────
+use self::dab_record::EPS_RADIUS_TARGET_PX;
+use self::extent::compose_brush_extent;
+use self::type_system::{compute_struct_size, compute_struct_size_for_uniforms};
 
-/// WGSL scalar/vector types a node may declare for its dab fields and
-/// uniform fields. Restricted to types that have natural std430 alignment
-/// (no vec3 — its 16-byte alignment trips up adjacent f32 packing).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WgslType {
-    F32,
-    U32,
-    I32,
-    Vec2,
-    Vec4,
-}
-
-impl WgslType {
-    /// Size in bytes (matches WGSL std430 size).
-    pub fn size(self) -> usize {
-        match self {
-            Self::F32 | Self::U32 | Self::I32 => 4,
-            Self::Vec2 => 8,
-            Self::Vec4 => 16,
-        }
-    }
-
-    /// std430 alignment in bytes.
-    pub fn align(self) -> usize {
-        match self {
-            Self::F32 | Self::U32 | Self::I32 => 4,
-            Self::Vec2 => 8,
-            Self::Vec4 => 16,
-        }
-    }
-
-    pub fn wgsl_name(self) -> &'static str {
-        match self {
-            Self::F32 => "f32",
-            Self::U32 => "u32",
-            Self::I32 => "i32",
-            Self::Vec2 => "vec2<f32>",
-            Self::Vec4 => "vec4<f32>",
-        }
-    }
-}
-
-/// Closure that serializes one value into a byte buffer. Used for
-/// both per-dab record fields and stroke-constant uniform fields —
-/// the input is a name→value map the terminal builds from the
-/// runner's slot table (keyed by [`CompileWgslCtx::dab_field_name`]
-/// / [`CompileWgslCtx::uniform_field_name`]).
-pub type ValuePacker = Arc<dyn Fn(&HashMap<String, ScalarValue>, &mut Vec<u8>) + Send + Sync>;
-
-/// Alias for the dab-record packer (per-dab).
-pub type DabPacker = ValuePacker;
-
-/// Alias for the uniform-buffer packer (per-stroke).
-pub type UniformPacker = ValuePacker;
-
-/// One field a node contributes to the per-dab record.
-#[derive(Clone)]
-pub struct DabField {
-    /// Field name inside the generated `DabRecord` struct. Must be
-    /// unique across the graph — the compiler suffixes by node id when
-    /// nodes use the helper [`CompileWgslCtx::dab_field_name`].
-    pub name: String,
-    pub ty: WgslType,
-    /// Writes this field's value into the dab record byte buffer.
-    pub pack: DabPacker,
-}
-
-impl std::fmt::Debug for DabField {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DabField")
-            .field("name", &self.name)
-            .field("ty", &self.ty)
-            .finish_non_exhaustive()
-    }
-}
-
-/// One field a node contributes to the stroke-constant uniform buffer.
-#[derive(Clone)]
-pub struct UniformField {
-    pub name: String,
-    pub ty: WgslType,
-    pub pack: UniformPacker,
-}
-
-impl std::fmt::Debug for UniformField {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("UniformField")
-            .field("name", &self.name)
-            .field("ty", &self.ty)
-            .finish_non_exhaustive()
-    }
-}
-
-// ── Per-node compile output ─────────────────────────────────────────────
-
-/// What one node contributes to the compiled fragment shader.
-#[derive(Default, Clone, Debug)]
-pub struct NodeWgsl {
-    /// Module-scope WGSL declarations: helper functions, const arrays,
-    /// structs. Concatenated into the shader before `fs_main`.
-    pub decls: String,
-    /// Lines inserted into the `fs_main` body, in topological order.
-    /// May reference: `d` (the `DabRecord`), `u` (the `Uniforms`),
-    /// `local_uv: vec2<f32>` (fragment offset from dab centre, normalized
-    /// so the unmodulated disc edge is at `length = 1`), `local_dist: f32`
-    /// (= `length(local_uv)`), `theta: f32` (= `atan2(local_uv.y, local_uv.x)`),
-    /// `target_pos: vec2<f32>` (fragment's position in the target
-    /// texture's pixel space — canvas px for stroke, mask texels for
-    /// preview), and any function declared in `decls` or by upstream
-    /// nodes.
-    pub body: String,
-    /// Output port name → a WGSL expression downstream nodes substitute
-    /// for that port's value. Typically a `let`-binding name introduced
-    /// by `body`, but may also be a dab-field reference (`d.foo`), a
-    /// uniform reference (`u.foo`), or a literal.
-    pub outputs: HashMap<String, String>,
-    /// Per-dab record fields this node contributes.
-    pub dab_fields: Vec<DabField>,
-    /// Stroke-constant uniform fields this node contributes.
-    pub uniform_fields: Vec<UniformField>,
-    /// Extra `@group(...) @binding(...) var ...` declarations the
-    /// terminal node owns. Spliced into the assembled shader after
-    /// the framework's three intrinsic bind groups (group 0: uniforms,
-    /// group 1: dabs, group 2: selection). Only the terminal node
-    /// should set this — the per-brush pipeline build must match the
-    /// declared layout. Empty for every non-terminal node.
-    ///
-    /// Use case: terminals like `watercolor` need bindings
-    /// the standard fragment-stage prelude doesn't provide (pickup
-    /// atlas, pre-stroke canvas). Declaring them here keeps the
-    /// extension scoped to the one node that uses it instead of
-    /// extending the `BrushNodeEvaluator` trait surface.
-    pub terminal_bindings: String,
-}
-
-// ── Input binding ───────────────────────────────────────────────────────
-
-/// How an input port resolves when emitting WGSL.
-#[derive(Clone, Debug)]
-pub enum InputBinding {
-    /// Port is wired to an upstream output — substitute this WGSL
-    /// expression at every use site.
-    Wired(String),
-    /// Port is disconnected — embed this literal value as a WGSL
-    /// constant.
-    Default(ScalarValue),
-}
-
-impl InputBinding {
-    /// Emit the WGSL expression for this binding as an `f32`. Wired
-    /// expressions assumed already-f32; `Default(Scalar/Int/Bool)`
-    /// emits a literal.
-    pub fn as_f32(&self) -> String {
-        match self {
-            Self::Wired(expr) => expr.clone(),
-            Self::Default(v) => format!("{:.6}", v.as_f32()),
-        }
-    }
-
-    /// Emit as `u32`. Coerces literals; wired exprs get a runtime cast.
-    pub fn as_u32(&self) -> String {
-        match self {
-            Self::Wired(expr) => format!("u32({})", expr),
-            Self::Default(v) => format!("{}u", v.as_f32().max(0.0) as u32),
-        }
-    }
-
-    /// Emit as `vec2<f32>`.
-    pub fn as_vec2(&self) -> String {
-        match self {
-            Self::Wired(expr) => expr.clone(),
-            Self::Default(v) => {
-                let [x, y] = v.as_vec2();
-                format!("vec2<f32>({:.6}, {:.6})", x, y)
-            }
-        }
-    }
-
-    /// Emit as `vec4<f32>` (color/vec4).
-    pub fn as_vec4(&self) -> String {
-        match self {
-            Self::Wired(expr) => expr.clone(),
-            Self::Default(v) => {
-                let [r, g, b, a] = v.as_color();
-                format!("vec4<f32>({:.6}, {:.6}, {:.6}, {:.6})", r, g, b, a)
-            }
-        }
-    }
-}
-
-// ── Extent protocol ─────────────────────────────────────────────────────
-
-/// One node's contribution to the per-brush dab bounding-box extent.
-///
-/// The framework walks the graph at brush-compile time and asks every
-/// node for its `extent` contribution. Contributions are composed
-/// along the graph into a single `(factor, extra_px)` pair stored on
-/// [`CompiledBrush`]; the `paint` terminal multiplies the
-/// per-dab effective radius by `factor` and adds `extra_px` to produce
-/// the dab's `bbox_target_px`. That value is packed into the per-dab
-/// record and read by the WGSL fragment shader to size the rasterized
-/// quad and to clip the dab's write footprint to the layer bbox.
-///
-/// Because the value flows from the framework into both the CPU bbox
-/// computation and the GPU shader (via the dab record), the CPU bbox
-/// and shader write footprint cannot diverge. The bug this protocol
-/// was introduced to fix: the WGSL prelude inflated the rasterized
-/// quad by a hardcoded `QUAD_R_MAX = 1.6` while the CPU layer-clip
-/// bbox used the un-inflated `radius`. On a mid-stroke save-point
-/// rewind, the save-point system cleared pixels outside the CPU bbox
-/// but only restored into it — so anything the shader wrote in the
-/// inflation margin was lost, visibly truncating previous dabs to a
-/// smaller square as the user kept drawing.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ExtentContribution {
-    /// No effect — bbox passes through unchanged from upstream.
-    Identity,
-    /// Multiplier on upstream extent. `circle` uses `1 + amp_max` for
-    /// sine/perlin (or the superformula's `r_max`) so the bbox covers
-    /// the shape's worst-case rasterized footprint.
-    Multiply(f32),
-    /// Additive canvas-pixel padding on top of upstream. Future
-    /// displacement / warp nodes use this (e.g. warp by ±strength px).
-    /// `passthrough` multiplies the upstream extent; `added_px` is the
-    /// post-multiply additive padding in canvas pixels.
-    AddCanvasPixels { passthrough: f32, added_px: f32 },
-    /// Hard cap below upstream — `bbox_target_px` is min'd with
-    /// `factor * radius`. For clip-to-circle style masks.
-    ClipTo(f32),
-}
-
-/// Per-node context passed to `BrushNodeEvaluator::extent`. Mirrors the
-/// shape of [`CompileWgslCtx`] minus the WGSL plumbing: just port defs,
-/// params, and a wired-input set so [`Self::port_max_value`] can pick
-/// the wire-aware max for each input.
-pub struct ExtentCtx<'a> {
-    pub node_id: NodeId,
-    pub params: &'a [ParamValue],
-    pub port_defs: &'a [PortDef<BrushWireType>],
-    /// Names of input ports on this node that have an inbound wire.
-    /// Used by [`Self::port_max_value`] to decide whether to return
-    /// the port's `natural_range` max (wired) or its default (unwired).
-    pub wired_inputs: HashSet<String>,
-}
-
-impl ExtentCtx<'_> {
-    /// Maximum value the named input port can take, given the wire
-    /// graph. For a wired input, returns the port's `natural_range`
-    /// max (or its slider `max` if no natural range is declared) —
-    /// the wire-boundary remap maps every wire to the dst's natural
-    /// range, so that's the actual ceiling. For an unwired input,
-    /// returns the port's `default` (the only value it can take).
-    /// Unknown ports return `0.0`.
-    pub fn port_max_value(&self, port_name: &str) -> f32 {
-        let Some(port) = self
-            .port_defs
-            .iter()
-            .find(|p| p.name == port_name && p.dir == PortDir::Input)
-        else {
-            return 0.0;
-        };
-        if self.wired_inputs.contains(port_name) {
-            port.natural_range.map(|(_, max)| max).unwrap_or(port.max)
-        } else {
-            port.default
-        }
-    }
-}
-
-// ── Compile context ─────────────────────────────────────────────────────
-
-/// Per-node context passed to `compile_wgsl`.
-pub struct CompileWgslCtx<'a> {
-    pub node_id: NodeId,
-    pub params: &'a [crate::gpu::params::ParamValue],
-    pub port_defs: &'a [PortDef<BrushWireType>],
-    pub inputs: HashMap<String, InputBinding>,
-    /// Curve LUT, if this node has a `Curve` parameter.
-    pub lut: Option<&'a crate::brush::curve_math::CurveLut>,
-    /// Output port names that have at least one downstream consumer
-    /// in the graph. Nodes whose outputs are produced into the dab
-    /// record (pen_input, random) only need to emit fields for
-    /// consumed ports — unwired outputs cost nothing.
-    pub consumed_outputs: HashSet<String>,
-}
-
-impl CompileWgslCtx<'_> {
-    /// Look up an input binding, falling back to the port's default
-    /// when disconnected. The default is materialised as a literal in
-    /// the emitted WGSL.
-    pub fn input(&self, name: &str) -> InputBinding {
-        if let Some(b) = self.inputs.get(name) {
-            return b.clone();
-        }
-        for port in self.port_defs {
-            if port.name == name && port.dir == PortDir::Input {
-                return InputBinding::Default(ScalarValue::Scalar(port.default));
-            }
-        }
-        InputBinding::Default(ScalarValue::Scalar(0.0))
-    }
-
-    /// Returns `true` if a connected wire targets this input port
-    /// (i.e. not falling through to the port default). Useful for
-    /// nodes whose output depends on whether an input was supplied.
-    pub fn input_is_wired(&self, name: &str) -> bool {
-        matches!(self.inputs.get(name), Some(InputBinding::Wired(_)))
-    }
-
-    /// Suffix an identifier with this node's id so per-node WGSL
-    /// symbols don't collide.
-    pub fn ident(&self, base: &str) -> String {
-        format!("{}_{}", base, self.node_id.0)
-    }
-
-    /// Suffix a dab-record field name with this node's id. Use for
-    /// every per-dab field so two instances of the same node type
-    /// don't collide in the generated `DabRecord` struct.
-    pub fn dab_field_name(&self, base: &str) -> String {
-        format!("n{}_{}", self.node_id.0, base)
-    }
-
-    /// Suffix a uniform field name with this node's id.
-    pub fn uniform_field_name(&self, base: &str) -> String {
-        format!("n{}_{}", self.node_id.0, base)
-    }
-}
-
-// ── Shader mode ─────────────────────────────────────────────────────────
-
-/// Which of the two compiled shader variants is being assembled.
-///
-/// The upstream graph contributes the same per-fragment shape /
-/// color / flow expressions in both modes — only the outer skeleton
-/// differs:
-///
-/// - **`Stroke`**: instanced quad-per-dab vertex stage; `sel` sampled
-///   from a bound selection texture; terminal `@group(3)` bindings
-///   (scratch mirror, pickup atlas) declared.
-/// - **`Preview`**: single quad centred at `preview_centre`; `sel = 1.0`
-///   inlined; no `@group(2)` selection binding, no `@group(3)`
-///   terminal bindings.
-///
-/// The two modes share `node_decls`, `dab_layout`, and
-/// `uniform_layout` — every brush stores both WGSL strings side-by-side
-/// on [`CompiledBrush`].
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum ShaderMode {
-    Stroke,
-    Preview,
-}
-
-// ── Intrinsic uniforms ──────────────────────────────────────────────────
-
-/// Stroke-constant intrinsic uniforms every compiled brush carries.
-/// Mirrors the WGSL `IntrinsicUniforms` defined in
-/// `_prelude.wgsl` — every terminal packs this struct at the
-/// front of the uniform buffer (followed by node-contributed
-/// uniforms). Lives here (not on each terminal) so a layout change in
-/// one place can't drift from the rest.
-///
-/// `preview_centre` / `preview_size` are written by the preview path
-/// only; the stroke path writes zero and ignores them.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct IntrinsicUniforms {
-    pub layer_offset: [i32; 2],
-    pub layer_size: [u32; 2],
-    pub canvas_size: [u32; 2],
-    pub preview_centre: [f32; 2],
-    pub preview_size: [u32; 2],
-    pub _pad: [u32; 2],
-}
-
-/// Size in bytes of the WGSL/Rust `IntrinsicUniforms` struct. Read by
-/// the terminal-side flush path when sizing its uniform ring.
-pub const INTRINSIC_UNIFORMS_SIZE: usize = std::mem::size_of::<IntrinsicUniforms>();
+/// Below this canvas-px bbox, the dab has effectively no extent and
+/// `render_compiled_preview` early-returns rather than try to compute
+/// a canvas-to-target scale.
+const EPS_BBOX_CANVAS_PX: f32 = 1e-3;
 
 // ── Compiled output ─────────────────────────────────────────────────────
 
@@ -446,7 +99,7 @@ pub struct CompiledBrush {
     /// [`ShaderMode`].
     pub preview_wgsl: String,
     /// Per-dab record layout, in declaration order. The compiler
-    /// includes the intrinsic header fields ([`INTRINSIC_DAB_FIELDS`])
+    /// includes the intrinsic header fields ([`INTRINSIC_DAB_HEADER_FIELDS`])
     /// at the front; everything after is contributed by nodes.
     pub dab_layout: Vec<DabField>,
     /// Total per-dab record size in bytes (post-alignment padding).
@@ -460,7 +113,7 @@ pub struct CompiledBrush {
     /// pipeline caching.
     pub topology_hash: u64,
     /// Multiplier on per-dab `effective_radius` produced by composing
-    /// every node's [`ExtentContribution::extent`] over the graph. The
+    /// every node's [`ExtentContribution`] over the graph. The
     /// terminal computes `bbox_target_px = effective_radius * factor +
     /// extra_px` and packs that into the dab record's intrinsic
     /// header. `1.0` for graphs with no shape-modulating upstream
@@ -510,115 +163,6 @@ impl std::fmt::Display for CompileError {
 }
 
 impl std::error::Error for CompileError {}
-
-// ── Intrinsic dab record header ─────────────────────────────────────────
-
-/// Fields every per-dab record carries, regardless of upstream nodes:
-/// dab centre (`pos`), bbox half-extent (`bbox_target_px`), and the
-/// reciprocal of the dab's nominal radius (`inv_radius_target_px`).
-///
-/// **Invariant: the dab record describes the dab in the *target
-/// texture's pixel space*.** Whichever texture the brush is rasterizing
-/// into, `pos` is a coordinate in that texture's pixel grid,
-/// `bbox_target_px` is a half-extent in those same pixels, and
-/// `inv_radius_target_px` is `1.0 / radius_in_target_pixels`. Stroke
-/// renders into the layer scratch where target px ≡ canvas px;
-/// preview renders into the preview mask where target px ≢ canvas px.
-/// Both paths pack a well-typed record for their target via
-/// [`pack_intrinsic_dab_header`], and the WGSL is target-agnostic.
-///
-/// Why this matters: an earlier shape of this header carried `radius`
-/// and `bbox_radius` in canvas pixels in both modes, which silently
-/// broke the preview path's discard test when target ≠ canvas (the dab
-/// filled the texture to a square edge on large brushes). Renaming
-/// these fields to declare their frame makes the bug structurally
-/// inexpressible.
-///
-/// `bbox_target_px` is the single source of truth for the dab's write
-/// footprint — the vertex stage sizes the rasterized quad against it,
-/// the fragment stage discards past it, and (in stroke mode) the CPU
-/// layer-clip bbox is derived from the same value so save-points
-/// cannot truncate the GPU writes.
-pub fn intrinsic_dab_header() -> Vec<DabField> {
-    // Order matters for std430 alignment: vec2 (8) → f32 (4) → f32 (4)
-    // for total 16 bytes. The terminal packs all three via
-    // `pack_intrinsic_dab_header`.
-    vec![
-        DabField {
-            name: "pos".into(),
-            ty: WgslType::Vec2,
-            pack: Arc::new(|_outputs, _bytes| {
-                // Terminal packs `pos` directly — placeholder packer
-                // here is unused because the terminal owns this field.
-                unreachable!("intrinsic pos packer should not be invoked");
-            }),
-        },
-        DabField {
-            name: "bbox_target_px".into(),
-            ty: WgslType::F32,
-            pack: Arc::new(|_outputs, _bytes| {
-                unreachable!("intrinsic bbox_target_px packer should not be invoked");
-            }),
-        },
-        DabField {
-            name: "inv_radius_target_px".into(),
-            ty: WgslType::F32,
-            pack: Arc::new(|_outputs, _bytes| {
-                unreachable!("intrinsic inv_radius_target_px packer should not be invoked");
-            }),
-        },
-    ]
-}
-
-/// Compile-time number of intrinsic fields the terminal packs itself
-/// before per-node fields begin. Used by the terminal's packer to skip
-/// over the header.
-pub const INTRINSIC_DAB_HEADER_FIELDS: usize = 3;
-
-/// Pack the intrinsic dab header. Single source of truth — every
-/// terminal's `evaluate_gpu` (stroke path) and
-/// [`render_compiled_preview`] (preview path) call this. The fields
-/// are interpreted in the *target texture's pixel space* (see the
-/// docblock on [`intrinsic_dab_header`]). Internally inverts radius
-/// once so the fragment hot path is a multiply, not a divide.
-///
-/// Stroke-only consumers — notably watercolor's pickup shader in
-/// `watercolor.rs` — treat `1 / inv_radius_target_px` as
-/// canvas-px radius. That's valid only because stroke's target ≡
-/// canvas. Any new sampler that derives canvas-px sizes from the dab
-/// record must restrict itself to stroke-mode dispatch.
-pub fn pack_intrinsic_dab_header(
-    bytes: &mut Vec<u8>,
-    pos: [f32; 2],
-    bbox_target_px: f32,
-    radius_target_px: f32,
-) {
-    debug_assert!(radius_target_px > 0.0, "radius_target_px must be > 0");
-    let inv_radius = 1.0 / radius_target_px.max(EPS_RADIUS_TARGET_PX);
-    bytes.extend_from_slice(bytemuck::bytes_of(&pos));
-    bytes.extend_from_slice(bytemuck::bytes_of(&bbox_target_px));
-    bytes.extend_from_slice(bytemuck::bytes_of(&inv_radius));
-}
-
-/// Pack the intrinsic uniforms (layer offset/size, canvas size, preview
-/// centre, preview size) at the front of the uniform buffer. Followed
-/// by node-contributed uniforms via [`pack_uniforms`]. Single source of
-/// truth; collapsed from four duplicated terminal-impl methods.
-pub fn pack_intrinsic_uniforms(bytes: &mut Vec<u8>, intrinsic: IntrinsicUniforms) {
-    bytes.extend_from_slice(bytemuck::bytes_of(&intrinsic));
-}
-
-// Numerical-stability floor for the target-px radius division. Not a
-// physical limit — the post-scale preview radius can legitimately drop
-// below 1 target px on extreme brush sizes (a sub-pixel-radius preview
-// is useless anyway). The clamp prevents 1/0 / huge inv values from
-// poisoning the fragment.
-const EPS_RADIUS_TARGET_PX: f32 = 0.125;
-
-/// Below this canvas-px bbox, the dab has effectively no extent and
-/// `render_compiled_preview` early-returns rather than try to compute
-/// a canvas-to-target scale.
-const EPS_BBOX_CANVAS_PX: f32 = 1e-3;
 
 // ── The compiler ────────────────────────────────────────────────────────
 
@@ -874,59 +418,6 @@ pub fn compile_brush_to_wgsl(
     })
 }
 
-/// Compose every node's [`ExtentContribution`] into a single
-/// `(factor, extra_px)` pair for the brush. Walks every step in the
-/// execution plan in topological order; each node sees the upstream-
-/// accumulated extent and contributes its own multiplier / additive
-/// padding / clip. Nodes that don't override `extent` (the trait
-/// default returns [`ExtentContribution::Identity`]) leave the running
-/// pair unchanged.
-fn compose_brush_extent(
-    graph: &crate::nodegraph::Graph<BrushWireType>,
-    plan: &ExecutionPlan,
-    evaluators: &HashMap<String, Box<dyn BrushNodeEvaluator>>,
-) -> (f32, f32) {
-    let mut factor: f32 = 1.0;
-    let mut extra_px: f32 = 0.0;
-    for step in &plan.steps {
-        let Some(evaluator) = evaluators.get(&step.type_id) else {
-            continue;
-        };
-        let Some(node) = graph.nodes.get(&step.node_id) else {
-            continue;
-        };
-        let wired_inputs: HashSet<String> = step
-            .input_slots
-            .iter()
-            .map(|s| s.port_name.clone())
-            .collect();
-        let ectx = ExtentCtx {
-            node_id: step.node_id,
-            params: &node.params,
-            port_defs: &node.ports,
-            wired_inputs,
-        };
-        match evaluator.extent(&ectx) {
-            ExtentContribution::Identity => {}
-            ExtentContribution::Multiply(m) => {
-                factor *= m;
-                extra_px *= m;
-            }
-            ExtentContribution::AddCanvasPixels {
-                passthrough,
-                added_px,
-            } => {
-                factor *= passthrough;
-                extra_px = extra_px * passthrough + added_px;
-            }
-            ExtentContribution::ClipTo(cap) => {
-                factor = factor.min(cap);
-            }
-        }
-    }
-    (factor, extra_px)
-}
-
 /// Pack one dab's worth of per-node values into the byte buffer the
 /// terminal will upload as a storage-buffer element. The terminal
 /// writes the intrinsic header (first [`INTRINSIC_DAB_HEADER_FIELDS`]
@@ -950,6 +441,28 @@ pub fn pack_dab_record(
             bytes.len() - before,
             field.ty.size(),
             "DabField `{}` packer wrote {} bytes, expected {}",
+            field.name,
+            bytes.len() - before,
+            field.ty.size(),
+        );
+    }
+}
+
+/// Pack the node-contributed portion of the uniform buffer. The
+/// terminal packs the intrinsic header (`IntrinsicUniforms`) itself
+/// before calling this.
+pub fn pack_uniforms(
+    compiled: &CompiledBrush,
+    outputs: &HashMap<String, ScalarValue>,
+    bytes: &mut Vec<u8>,
+) {
+    for field in &compiled.uniform_layout {
+        let before = bytes.len();
+        (field.pack)(outputs, bytes);
+        debug_assert_eq!(
+            bytes.len() - before,
+            field.ty.size(),
+            "UniformField `{}` packer wrote {} bytes, expected {}",
             field.name,
             bytes.len() - before,
             field.ty.size(),
@@ -1073,58 +586,7 @@ pub fn render_compiled_preview(
     Some(())
 }
 
-/// Pack the node-contributed portion of the uniform buffer. The
-/// terminal packs the intrinsic header (`IntrinsicUniforms`) itself
-/// before calling this.
-pub fn pack_uniforms(
-    compiled: &CompiledBrush,
-    outputs: &HashMap<String, ScalarValue>,
-    bytes: &mut Vec<u8>,
-) {
-    for field in &compiled.uniform_layout {
-        let before = bytes.len();
-        (field.pack)(outputs, bytes);
-        debug_assert_eq!(
-            bytes.len() - before,
-            field.ty.size(),
-            "UniformField `{}` packer wrote {} bytes, expected {}",
-            field.name,
-            bytes.len() - before,
-            field.ty.size(),
-        );
-    }
-}
-
 // ── Helpers ─────────────────────────────────────────────────────────────
-
-fn align_to(value: usize, alignment: usize) -> usize {
-    if alignment == 0 {
-        return value;
-    }
-    (value + alignment - 1) & !(alignment - 1)
-}
-
-fn compute_struct_size(fields: &[DabField]) -> usize {
-    let mut size = 0;
-    let mut max_align = 4;
-    for f in fields {
-        size = align_to(size, f.ty.align());
-        size += f.ty.size();
-        max_align = max_align.max(f.ty.align());
-    }
-    align_to(size, max_align)
-}
-
-fn compute_struct_size_for_uniforms(fields: &[UniformField]) -> usize {
-    let mut size = 0;
-    let mut max_align = 4;
-    for f in fields {
-        size = align_to(size, f.ty.align());
-        size += f.ty.size();
-        max_align = max_align.max(f.ty.align());
-    }
-    align_to(size, max_align)
-}
 
 /// Wire-boundary scalar remap, mirroring [`crate::brush::eval`]'s
 /// `remap_for_wire` but emitted as a WGSL expression. When both ends of
@@ -1212,6 +674,8 @@ fn hash_graph_topology(graph: &crate::nodegraph::Graph<BrushWireType>) -> u64 {
     hasher.finish()
 }
 
+// ── Shader assembly ─────────────────────────────────────────────────────
+
 fn assemble_shader(
     mode: ShaderMode,
     dab_fields: &[DabField],
@@ -1221,9 +685,9 @@ fn assemble_shader(
     terminal_bindings: &str,
 ) -> String {
     let mut out = String::new();
-    out.push_str(include_str!("../../../../shaders/brush/_shape.wgsl"));
+    out.push_str(include_str!("../../../../../shaders/brush/_shape.wgsl"));
     out.push('\n');
-    out.push_str(include_str!("../../../../shaders/brush/_prelude.wgsl"));
+    out.push_str(include_str!("../../../../../shaders/brush/_prelude.wgsl"));
     out.push('\n');
 
     // Generated DabRecord struct.
@@ -1431,75 +895,3 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     return out;
 }
 "#;
-
-// ── Tests ───────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn align_to_basic() {
-        assert_eq!(align_to(0, 4), 0);
-        assert_eq!(align_to(1, 4), 4);
-        assert_eq!(align_to(4, 4), 4);
-        assert_eq!(align_to(5, 4), 8);
-        assert_eq!(align_to(12, 16), 16);
-        assert_eq!(align_to(16, 16), 16);
-    }
-
-    #[test]
-    fn struct_size_simple() {
-        let fields = vec![
-            DabField {
-                name: "pos".into(),
-                ty: WgslType::Vec2,
-                pack: Arc::new(|_, _| {}),
-            },
-            DabField {
-                name: "radius".into(),
-                ty: WgslType::F32,
-                pack: Arc::new(|_, _| {}),
-            },
-            DabField {
-                name: "pad".into(),
-                ty: WgslType::F32,
-                pack: Arc::new(|_, _| {}),
-            },
-        ];
-        // vec2 (8) + f32 (4) + f32 (4) = 16, aligned to 8 = 16.
-        assert_eq!(compute_struct_size(&fields), 16);
-    }
-
-    #[test]
-    fn struct_size_with_vec4() {
-        let fields = vec![
-            DabField {
-                name: "a".into(),
-                ty: WgslType::F32,
-                pack: Arc::new(|_, _| {}),
-            },
-            DabField {
-                name: "color".into(),
-                ty: WgslType::Vec4,
-                pack: Arc::new(|_, _| {}),
-            },
-        ];
-        // f32 (4) → align to 16 (pad 12) → vec4 (16) = 32.
-        assert_eq!(compute_struct_size(&fields), 32);
-    }
-
-    #[test]
-    fn input_binding_emits_default_literal() {
-        let b = InputBinding::Default(ScalarValue::Scalar(0.5));
-        assert!(b.as_f32().starts_with("0.5"));
-        assert!(b.as_vec2().starts_with("vec2<f32>(0.5"));
-    }
-
-    #[test]
-    fn input_binding_passes_wired_through() {
-        let b = InputBinding::Wired("d.foo".into());
-        assert_eq!(b.as_f32(), "d.foo");
-        assert_eq!(b.as_vec2(), "d.foo");
-    }
-}

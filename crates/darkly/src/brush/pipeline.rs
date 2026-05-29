@@ -744,7 +744,7 @@ impl BrushPipelines {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        compiled: &crate::brush::wgsl_compile::CompiledBrush,
+        compiled: &crate::brush::wgsl::CompiledBrush,
         target_view: &wgpu::TextureView,
         target_size: (u32, u32),
         uniform_bytes: &[u8],
@@ -890,7 +890,7 @@ impl PreviewPipelineCache {
         device: &wgpu::Device,
         uniform_bgl: &wgpu::BindGroupLayout,
         min_uniform_align: u32,
-        compiled: &crate::brush::wgsl_compile::CompiledBrush,
+        compiled: &crate::brush::wgsl::CompiledBrush,
         f: impl FnOnce(&PreviewPipeline) -> R,
     ) -> R {
         let key = compiled.topology_hash;
@@ -913,7 +913,7 @@ fn build_preview_pipeline(
     uniform_bgl: &wgpu::BindGroupLayout,
     dabs_bgl: &wgpu::BindGroupLayout,
     min_uniform_align: u32,
-    compiled: &crate::brush::wgsl_compile::CompiledBrush,
+    compiled: &crate::brush::wgsl::CompiledBrush,
 ) -> PreviewPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("brush-preview-shader"),
@@ -953,9 +953,8 @@ fn build_preview_pipeline(
         cache: None,
     });
 
-    let uniform_size = (crate::brush::wgsl_compile::INTRINSIC_UNIFORMS_SIZE
-        + compiled.uniform_size)
-        .max(crate::brush::wgsl_compile::INTRINSIC_UNIFORMS_SIZE);
+    let uniform_size = (crate::brush::wgsl::INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size)
+        .max(crate::brush::wgsl::INTRINSIC_UNIFORMS_SIZE);
     let uniform_ring = DynamicUniformRing::new(
         device,
         "brush-preview-uniforms",
