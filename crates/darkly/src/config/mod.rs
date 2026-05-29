@@ -353,23 +353,25 @@ mod tests {
         assert_eq!(get_i64("canvas.width"), 1920);
         assert_eq!(get_str("hotkeys.nav.trigger"), "Space");
         assert!(!get_bool("input.fingerPainting"));
-        // Universal hotkey defined in defaults.yaml.
-        assert_eq!(get_str("hotkeys.undo"), "$mod+KeyZ");
+        // Darkly-original hotkey defined in defaults.yaml (no reference-editor
+        // prior art, so it stays in the agnostic baseline).
+        assert_eq!(get_str("hotkeys.addBrushNode"), "Shift+KeyA");
     }
 
     #[test]
     fn overlay_resolves_above_defaults() {
         reset_state();
         pick("Krita");
-        // Krita-specific override.
+        // Krita-specific override (defined only in krita.yaml).
         assert_eq!(get_str("hotkeys.brushTool"), "KeyB");
-        // Defaults still show through where the overlay is silent.
-        assert_eq!(get_str("hotkeys.undo"), "$mod+KeyZ");
+        // Defaults still show through where the overlay is silent —
+        // addBrushNode is Darkly-original and no overlay defines it.
+        assert_eq!(get_str("hotkeys.addBrushNode"), "Shift+KeyA");
 
         // Switching to Photoshop swaps the overlay live.
         pick("Photoshop");
         assert_eq!(get_str("hotkeys.rectSelectTool"), "KeyM");
-        assert_eq!(get_str("hotkeys.undo"), "$mod+KeyZ");
+        assert_eq!(get_str("hotkeys.addBrushNode"), "Shift+KeyA");
     }
 
     #[test]

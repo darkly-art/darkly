@@ -4,6 +4,7 @@ mod layer;
 mod modifier;
 pub mod property;
 mod selection;
+mod tombstones;
 
 pub use compound::CompoundAction;
 pub use gpu_region::GpuRegionAction;
@@ -294,7 +295,7 @@ mod tests {
         let node = doc.detach_for_undo(id).unwrap();
         let _ = undo.push(
             &mut doc,
-            Box::new(LayerRemoveAction::new(node, parent, pos)),
+            Box::new(LayerRemoveAction::new(node, parent, pos, Vec::new())),
         );
 
         assert_eq!(doc.flat_layers().len(), 0);

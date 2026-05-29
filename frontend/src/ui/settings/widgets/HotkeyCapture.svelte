@@ -12,8 +12,12 @@
         /** Action this row belongs to — needed to filter compatible binding
          *  sites for the scope dropdown. */
         action?: ActionRegistration;
+        /** When false, the scope `<select>` is suppressed — the caller is
+         *  rendering it separately (e.g. the hotkeys-tab grid has its own
+         *  Scope column owned by `HotkeyScopeSelect`). */
+        showScope?: boolean;
     };
-    let { prefKey, value, onchange, action }: Props = $props();
+    let { prefKey, value, onchange, action, showScope = true }: Props = $props();
 
     // `value` can briefly be undefined when the settings modal opens before
     // the config store is ready — `config.get` returns undefined in that
@@ -104,7 +108,7 @@
 </script>
 
 <div class="hotkey-row">
-    {#if compatibleSites.length > 0}
+    {#if showScope && compatibleSites.length > 0}
         <select class="site" value={parts.site ?? ''} onchange={pickSite} title="Scope this hotkey to a UI region (or leave global)">
             <option value="">(global)</option>
             {#each compatibleSites as s (s.name)}

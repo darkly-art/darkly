@@ -1485,10 +1485,11 @@ fn paste_cancel_cycles_dont_leak_layer_textures() {
     );
 }
 
-/// `Engine::remove_layer` must dispose the layer's compositor state so
-/// repeated add → remove cycles don't leak textures. The undo entry
-/// preserves the doc-side metadata; pixel data is intentionally lost on
-/// remove (re-inserting on undo gives back an empty raster).
+/// `Engine::remove_layer` defers GPU texture disposal to undo-stack
+/// eviction so that an undo of the removal restores the pixels intact.
+/// Repeated add → remove cycles must not leak textures **after** the
+/// owning undo entries leave the stack (forced here via the teardown
+/// drain).
 #[test]
 fn add_remove_cycles_dont_leak_layer_textures() {
     let (cw, ch) = (128, 128);
@@ -1504,11 +1505,60 @@ fn add_remove_cycles_dont_leak_layer_textures() {
         assert!(!engine.has_layer(id));
     }
 
+    // Force eviction of every owning undo entry so the tombstoned
+    // textures release. This is the same shape duplicate/bake leaks
+    // tests rely on.
+    engine.test_drain_undo_for_teardown();
+
     let after_cycles = engine.test_node_texture_count();
     assert_eq!(
         after_cycles, baseline,
         "5 add→remove cycles should leave layer_textures count unchanged \
-         (baseline {baseline}, got {after_cycles})"
+         after undo-stack drain (baseline {baseline}, got {after_cycles})"
+    );
+}
+
+/// Regression: undoing a layer removal must restore the layer's pixel
+/// content, not just its tree slot. Previously `remove_layer` disposed
+/// the GPU texture immediately and `LayerRemoveAction` carried no pixel
+/// state, so undo reattached the node but the compositor allocated a
+/// fresh blank texture.
+#[test]
+fn undo_remove_layer_restores_pixels() {
+    let (cw, ch) = (128u32, 128u32);
+    let mut engine = test_engine(cw, ch);
+    let _base = engine.add_raster_layer(None);
+    let layer_id = engine.add_raster_layer(None);
+
+    // Paint a distinctive mark we can compare byte-for-byte after undo.
+    paint_at(&mut engine, layer_id, 32.0, 32.0, 1.0, 0.0, 0.0);
+    paint_at(&mut engine, layer_id, 96.0, 96.0, 0.0, 1.0, 0.0);
+    let before_remove = engine.test_readback_layer(layer_id);
+    let bounds_before = engine.layer_bounds(layer_id).unwrap();
+    assert!(
+        before_remove.iter().skip(3).step_by(4).any(|&a| a > 0),
+        "sanity: pre-remove layer must contain painted pixels",
+    );
+
+    engine
+        .remove_layer(layer_id)
+        .expect("remove should succeed");
+    assert!(!engine.has_layer(layer_id));
+
+    engine.undo();
+    engine.render(0.0);
+
+    assert!(engine.has_layer(layer_id), "undo must reattach the layer");
+    let bounds_after = engine.layer_bounds(layer_id).unwrap();
+    assert_eq!(
+        bounds_after, bounds_before,
+        "undo must restore the layer's bounds",
+    );
+
+    let after_undo = engine.test_readback_layer(layer_id);
+    assert_eq!(
+        after_undo, before_remove,
+        "undo of remove_layer must restore the layer's pixel content byte-for-byte",
     );
 }
 

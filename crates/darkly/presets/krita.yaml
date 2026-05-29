@@ -1,11 +1,31 @@
 # Krita overlay. Self-contained: every binding that any of the three editors
-# (Krita / Photoshop / GIMP) disagrees on is spelled out here explicitly —
-# nothing about Krita is silently inherited from defaults.yaml when GIMP or
-# Photoshop has its own opinion.
+# (Krita / Photoshop / GIMP) has an opinion on is spelled out here explicitly
+# — nothing about Krita is silently inherited from defaults.yaml when any of
+# the three reference editors would have a binding for the action.
 name: Krita
 description: Krita-style keybindings
 
 hotkeys:
+  # Edit / clipboard / file.
+  undo: $mod+KeyZ
+  redo: $mod+Shift+KeyZ
+  copy: $mod+KeyC
+  cut: $mod+KeyX
+  paste: $mod+KeyV
+  pasteInPlace: $mod+Shift+KeyV
+  saveDocument: $mod+KeyS
+  saveDocumentAs: $mod+Shift+KeyS
+  open: $mod+KeyO
+  selectAll: $mod+KeyA
+  clearSelectionContents: Delete
+  commitFloating: Enter
+  cancelFloating: Escape
+  # Colors.
+  resetColors: KeyD
+  swapColors: KeyX
+  # Brush size.
+  brushSizeUp: BracketRight
+  brushSizeDown: BracketLeft
   # Tools.
   brushTool: KeyB
   fillTool: KeyF

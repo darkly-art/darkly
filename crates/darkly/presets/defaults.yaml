@@ -2,49 +2,42 @@
 #
 #   user override → overlay[active editor] → defaults  (this file)
 #
-# Inclusion rule: a key lives here iff Krita, Photoshop, and GIMP all agree
-# on its value. Any key that differs between any two of the three editors
-# is split into each of the editor YAMLs (krita.yaml / photoshop.yaml /
-# gimp.yaml) — none of those YAMLs may inherit a value from this file when
-# the editor in question would disagree.
+# Hotkeys / mouse_clicks inclusion rule: if all three reference editors
+# (Krita, Photoshop, GIMP) have a binding for an action — whether or not
+# they happen to agree on the key — the binding lives per-editor in
+# krita.yaml / photoshop.yaml / gimp.yaml, NOT here. defaults.yaml only
+# carries:
+#   - Darkly-original actions (no reference-editor prior art), and
+#   - actions where fewer than three reference editors have an opinion
+#     (Darkly picks a sensible default; an overlay may still override).
 #
-# Schema-side defaults that used to live in `config/sections/*.rs` (canvas
-# dimensions, animation rates, theme, …) and TS-side `defaultHotkey` /
-# `defaultMouseClick` registrations are both consolidated here.
+# Settings inclusion rule: Darkly-specific configuration (canvas size,
+# animation rates, theme, …) that has no direct reference-editor analog
+# lives here; settings the editors disagree on (e.g.
+# tools.colorPickerSampleSource) are split into the per-editor overlays.
 
 hotkeys:
-  # Universal edit / clipboard / file / view bindings.
-  undo: $mod+KeyZ
-  redo: $mod+Shift+KeyZ
-  copy: $mod+KeyC
-  cut: $mod+KeyX
-  paste: $mod+KeyV
-  pasteInPlace: $mod+Shift+KeyV
-  saveDocument: $mod+KeyS
-  saveDocumentAs: $mod+Shift+KeyS
-  open: $mod+KeyO
-  exportImage: $mod+Shift+KeyE
-  selectAll: $mod+KeyA
-  clearSelectionContents: Delete
-  commitFloating: Enter
-  cancelFloating: Escape
+  # Photoshop binds Edit > Preferences to $mod+K; Krita/GIMP have no
+  # default. Darkly picks the macOS preferences convention.
   openSettings: $mod+Comma
-  # Tool keys all three editors agree on.
+  # Photoshop & GIMP both have export (Photoshop: $mod+Alt+W for "Export
+  # As"; GIMP: $mod+Shift+E for "Export As…"). Krita's `file_export_file`
+  # is explicitly `none`. Darkly picks GIMP's binding.
+  exportImage: $mod+Shift+KeyE
+  # Photoshop binds Lasso to L and Polygonal Lasso to Shift+L; Krita's
+  # selection-tool .action files have empty <shortcut>; GIMP's analog is
+  # "Free Select" (KeyF) with no polygonal counterpart. Darkly inherits
+  # Photoshop's choice; per-editor overlays can override.
   lassoSelectTool: KeyL
   polygonSelectTool: Shift+KeyL
-  # Colors — D resets, X swaps in every editor we ship.
-  resetColors: KeyD
-  swapColors: KeyX
-  # Brush parameter hotkeys — Darkly inherits Krita/Photoshop/GIMP's `[` / `]`
-  # convention for sizing.
-  brushSizeUp: BracketRight
-  brushSizeDown: BracketLeft
-  # Darkly-original actions (no editor has prior-art opinion).
-  addBrushNode: Shift+KeyA
+  # Krita binds View > Mirror View to M; Photoshop/GIMP have no default.
   mirrorViewH: KeyM
+  # Darkly-original (brush builder).
+  addBrushNode: Shift+KeyA
 
 mouse_clicks:
-  # Alt+click on a layer or mask thumbnail isolates that node.
+  # Photoshop and Krita both use Alt+click on a layer/mask thumbnail to
+  # isolate; GIMP has no direct equivalent.
   isolateLayer:
     - layerThumb:alt+click
     - maskThumb:alt+click

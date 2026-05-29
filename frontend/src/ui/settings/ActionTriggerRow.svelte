@@ -2,6 +2,7 @@
     import { config, formatHotkey } from '../../config/store.svelte';
     import type { ActionRegistration } from '../../actions/registry';
     import HotkeyCapture from './widgets/HotkeyCapture.svelte';
+    import HotkeyScopeSelect from './widgets/HotkeyScopeSelect.svelte';
     import MouseChordCapture from './widgets/MouseChordCapture.svelte';
 
     type Props = { action: ActionRegistration };
@@ -44,12 +45,21 @@
         {#if desc}<div class="desc">{desc}</div>{/if}
     </div>
 
+    <div class="scope-col">
+        <HotkeyScopeSelect
+            value={hotkeyValue}
+            {action}
+            onchange={setHotkey}
+        />
+    </div>
+
     <div class="trigger-col">
         <div class="trigger-cell">
             <HotkeyCapture
                 prefKey={hotkeyKey}
                 value={hotkeyValue}
                 {action}
+                showScope={false}
                 onchange={setHotkey}
             />
             <button
@@ -87,7 +97,7 @@
 <style>
     .row {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto auto;
         gap: 16px;
         align-items: center;
         padding: 10px 12px;
@@ -96,8 +106,19 @@
     .row:last-child { border-bottom: none; }
 
     .label-col { min-width: 0; }
-    .label { font-size: 13px; color: var(--text); }
-    .desc { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .label {
+        font-size: 13px;
+        color: var(--text);
+        overflow-wrap: anywhere;
+    }
+    .desc {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-top: 2px;
+        overflow-wrap: anywhere;
+    }
+
+    .scope-col { display: flex; align-items: center; }
 
     .trigger-col {
         display: flex;
