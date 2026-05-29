@@ -1,4 +1,4 @@
-use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
+use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 const PIXEL_FILTER_OPTIONS: &[(&str, &str)] = &[
     ("auto", "Auto"),
@@ -16,7 +16,6 @@ const PREFS: &[Pref] = &[Pref {
     kind: PrefKind::Enum {
         options: PIXEL_FILTER_OPTIONS,
     },
-    default: PrefDefault::Str("auto"),
     widget: WidgetHint::Auto,
 }];
 

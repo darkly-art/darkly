@@ -1,7 +1,7 @@
 <script lang="ts">
     import { app } from '../state/app.svelte';
     import { toolRegistry, type Tool, type ToolCluster } from '../tools/registry';
-    import { config, formatHotkey } from '../config/store.svelte';
+    import { tooltipForAction } from '../config/store.svelte';
 
     interface Props { cluster: ToolCluster; }
     let { cluster }: Props = $props();
@@ -65,9 +65,7 @@
     });
 
     function toolTitle(t: Tool): string {
-        const hk = formatHotkey(config.get(`hotkeys.${t.hotkeyAction}`) as string | undefined);
-        const name = app.toolDisplayName(t.id);
-        return hk ? `${name} (${hk})` : name;
+        return tooltipForAction(app.toolDisplayName(t.id), t.hotkeyAction);
     }
 
     const clusterTitle = $derived(

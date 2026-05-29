@@ -2,7 +2,7 @@
     import { untrack } from 'svelte';
     import { app } from '../state/app.svelte';
     import { toolRegistry, toolClusterRegistry, type Tool, type ToolCluster as ToolClusterDef } from '../tools/registry';
-    import { config, formatHotkey } from '../config/store.svelte';
+    import { tooltipForAction } from '../config/store.svelte';
     import ColorPicker from './ColorPicker.svelte';
     import HamburgerMenu from './HamburgerMenu.svelte';
     import ToolCluster from './ToolCluster.svelte';
@@ -106,7 +106,7 @@
                         class="tool"
                         class:active={app.activeToolId === item.tool.id}
                         onclick={() => app.activeToolId = item.tool.id}
-                        title={(() => { const hk = formatHotkey(config.get(`hotkeys.${item.tool.hotkeyAction}`) as string | undefined); const name = app.toolDisplayName(item.tool.id); return hk ? `${name} (${hk})` : name; })()}
+                        title={tooltipForAction(app.toolDisplayName(item.tool.id), item.tool.hotkeyAction)}
                     >
                         {#if item.tool.iconSvg}
                             {@html item.tool.iconSvg}
@@ -135,7 +135,7 @@
                 ></div>
             </button>
         </div>
-        <button class="tool swap" onclick={() => app.swapColors()} title={(() => { const hk = formatHotkey(config.get('hotkeys.swapColors') as string | undefined); return hk ? `Swap colors (${hk})` : 'Swap colors'; })()}>
+        <button class="tool swap" onclick={() => app.swapColors()} title={tooltipForAction('Swap colors', 'swapColors')}>
             <i class="fa-solid fa-arrow-right-arrow-left"></i>
         </button>
     </div>

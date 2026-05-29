@@ -1,4 +1,4 @@
-use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
+use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 const PREFS: &[Pref] = &[Pref {
     key: "edit.activateTransformAfterPaste",
@@ -8,7 +8,6 @@ const PREFS: &[Pref] = &[Pref {
          scale, or rotate the pasted content before it commits.",
     ),
     kind: PrefKind::Bool,
-    default: PrefDefault::Bool(true),
     widget: WidgetHint::Auto,
 }];
 

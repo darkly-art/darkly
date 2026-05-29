@@ -44,13 +44,26 @@ export interface Tool {
     /** Optional: return true to consume this pointerdown before global
      *  drag chords (e.g. shift+drag → brush-size scrub) are dispatched.
      *  Tools with their own pointer-driven UI (handles, anchors, gizmos)
-     *  use this to prevent chord interception while their UI is active. */
+     *  use this to prevent chord interception while their UI is active.
+     *
+     *  Also useful for preempting a modifier-held chord — return `true` when
+     *  the relevant modifier is held to stop a global modifier+drag binding
+     *  (e.g. `ctrl+drag` → sample color) from intercepting. `claimsPointer`
+     *  runs before `dispatchDrag` in `CanvasView.onPointerDown`. */
     claimsPointer?(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): boolean;
     onPointerDown(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
     onPointerMove(ctx: ToolContext, e: PointerEvent, canvasX: number, canvasY: number): void;
     onPointerUp(ctx: ToolContext, e: PointerEvent): void;
     /** Pointer left the canvas. Tools with hover overlays should clear them here. */
     onPointerLeave?(ctx: ToolContext): void;
+
+    /** Re-establish hover-time visual feedback (e.g. the brush's dab
+     *  preview) at the given canvas position, without requiring a live
+     *  PointerEvent. Called by systems that briefly steal the pointer
+     *  pipeline and need to hand it back — e.g. the modifier-held color
+     *  picker releasing, where the next genuine pointermove may be far
+     *  off and the user expects the preview to be there immediately. */
+    restoreHover?(ctx: ToolContext, canvasX: number, canvasY: number): void;
 
     /** Handle a key event. Return true if the tool consumed it. */
     onKeyDown?(e: KeyboardEvent): boolean;

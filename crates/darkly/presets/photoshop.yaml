@@ -1,0 +1,33 @@
+# Photoshop overlay. Self-contained: every binding that any of the three
+# editors disagrees on is spelled out here.
+name: Photoshop
+description: Adobe Photoshop-style keybindings
+
+hotkeys:
+  # Tools.
+  brushTool: KeyB
+  fillTool: KeyG
+  gradientTool: Shift+KeyG
+  colorPickerTool: KeyI
+  rectSelectTool: KeyM
+  ellipseSelectTool: Shift+KeyM
+  magicWandTool: KeyW
+  transformTool: $mod+KeyT
+  toggleEraseMode: KeyE
+  # Layers.
+  # Delete on the Layers panel deletes the active layer; the global Delete
+  # binding (clearSelectionContents) coexists via the binding-site scope.
+  deleteLayer: layerPanel:Delete
+  duplicateLayer: $mod+KeyJ
+  mergeDown: $mod+KeyE
+  # Selection.
+  clearSelection: $mod+KeyD
+  invertSelection: $mod+Shift+KeyI
+
+mouse_clicks:
+  # Photoshop's eyedropper modifier is Alt+drag (not Ctrl+drag).
+  sampleColor: canvas@paint:alt+drag
+
+settings:
+  # Photoshop's eyedropper samples the current layer by default.
+  tools.colorPickerSampleSource: currentLayer

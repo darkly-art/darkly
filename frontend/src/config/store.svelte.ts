@@ -1,117 +1,39 @@
 import {
     config_get, config_set, config_reset, config_reset_all,
-    config_preset_names, config_preset_values, config_schema,
+    config_base_names, config_base_value, config_schema, config_version,
 } from '../../wasm/pkg/darkly_wasm';
-import {
-    storage, readJson, readText, writeJson, writeText, sanitizeFilename,
-} from '../storage';
+import { storage, readJson, writeJson } from '../storage';
 import type { SectionInfo } from './schema';
 import { validateOverrides } from './validate';
 
 /**
- * Two layers, no live "preset" layer:
+ * Three layers, all sourced from Rust at runtime:
  *
- *   defaults      ← immutable, baked into Rust binary
- *   settings      ← the user's actual values for any key they've changed
+ *   defaults    ← editor-AGNOSTIC defaults.yaml (always applied)
+ *   overlay     ← one of {Krita, Photoshop, GIMP}, selected by `app.baseSettings`
+ *   user        ← personal customizations on top
  *
- * Resolution: settings[key] ?? defaults[key].
+ * Resolution: `user[key] ?? overlay[active][key] ?? defaults[key]`.
  *
- * Persistence: the user's settings live as a JSON file inside the Darkly
- * directory at `presets/<active-preset-name>.json`. The active preset name
- * itself is stored in `presets/.active`.
+ * Persistence: the user layer is one flat JSON file at `user_settings.json`
+ * in the Darkly storage dir. No named user-presets, no `.active` pointer.
+ * The base-settings choice (`app.baseSettings`) is itself stored in the user
+ * layer, so switching editors is just `config.set('app.baseSettings', ...)`.
  *
- * Built-in templates (Krita / Photoshop / GIMP) are read-only data shipped
- * inside the Rust binary, exposed via `config_preset_values(name)`. They
- * are not stored layers — applying one writes its values into the active
- * preset's file, full stop.
- *
- * User-created presets are saved JSON files under `presets/`. The
- * built-in/user distinction is purely cosmetic from the Settings UI's
- * perspective; both can be applied the same way.
+ * On-disk envelope: `{ "version": <CONFIG_VERSION>, "values": {...} }`.
+ * Pre-release we discard mismatched-version files outright (per CLAUDE.md
+ * "No Migrations"); the field exists so post-release migrations have a
+ * discriminator to key off.
  */
 
-const PRESETS_DIR = 'presets';
-const ACTIVE_FILE = '.active';
-const DEFAULT_PRESET_NAME = 'My Settings';
+const USER_SETTINGS_FILE = 'user_settings.json';
 
-const PRESET_DESCRIPTIONS: Record<string, string> = {
-    'Krita': 'Default Krita-style keybindings',
-    'Photoshop': 'Adobe Photoshop-style keybindings',
-    'GIMP': 'GIMP-style keybindings',
-};
+interface UserSettingsFile {
+    version: number;
+    values: Record<string, unknown>;
+}
 
 type ChangeListener = () => void;
-
-/**
- * Structured on-disk representation of a preset. The runtime config store
- * holds a flat key/value map; we group by namespace at write time and
- * un-group at read time so the JSON file is human-readable / editable.
- */
-interface StructuredPreset {
-    name: string;
-    hotkeys?: Record<string, string>;
-    mouse_clicks?: Record<string, string>;
-    settings?: Record<string, unknown>;
-}
-
-/** Group a flat key/value map into the on-disk facets. */
-function structure(name: string, flat: Record<string, unknown>): StructuredPreset {
-    const hotkeys: Record<string, string> = {};
-    const mouseClicks: Record<string, string> = {};
-    const settings: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(flat)) {
-        if (key.startsWith('hotkeys.') && typeof value === 'string') {
-            hotkeys[key.slice('hotkeys.'.length)] = value;
-        } else if (key.startsWith('mouseclicks.') && typeof value === 'string') {
-            mouseClicks[key.slice('mouseclicks.'.length)] = value;
-        } else {
-            settings[key] = value;
-        }
-    }
-    const out: StructuredPreset = { name };
-    if (Object.keys(hotkeys).length) out.hotkeys = hotkeys;
-    if (Object.keys(mouseClicks).length) out.mouse_clicks = mouseClicks;
-    if (Object.keys(settings).length) out.settings = settings;
-    return out;
-}
-
-/** Flatten a structured preset back into the runtime key/value map. Tolerates
- *  legacy flat-shaped JSON: any key not under a known facet is kept as-is. */
-function unstructure(raw: unknown): Record<string, unknown> {
-    if (!raw || typeof raw !== 'object') return {};
-    const obj = raw as Record<string, unknown>;
-    // If it doesn't have any of the known facets and has no `name`, treat as
-    // a legacy flat map.
-    const looksStructured = 'hotkeys' in obj || 'mouse_clicks' in obj
-        || 'settings' in obj || 'name' in obj;
-    if (!looksStructured) return { ...obj };
-
-    const flat: Record<string, unknown> = {};
-    const hk = obj.hotkeys;
-    if (hk && typeof hk === 'object') {
-        for (const [k, v] of Object.entries(hk as Record<string, unknown>)) {
-            if (typeof v === 'string') flat[`hotkeys.${k}`] = v;
-        }
-    }
-    const mc = obj.mouse_clicks;
-    if (mc && typeof mc === 'object') {
-        for (const [k, v] of Object.entries(mc as Record<string, unknown>)) {
-            if (typeof v === 'string') flat[`mouseclicks.${k}`] = v;
-        }
-    }
-    const s = obj.settings;
-    if (s && typeof s === 'object') {
-        for (const [k, v] of Object.entries(s as Record<string, unknown>)) {
-            flat[k] = v;
-        }
-    }
-    return flat;
-}
-
-export interface BuiltinPreset {
-    name: string;
-    description: string;
-}
 
 class ConfigStore {
     /** Bumped on every mutation to drive Svelte reactivity. */
@@ -120,36 +42,28 @@ class ConfigStore {
     /** Whether init() has finished. */
     #ready = false;
 
-    /** Active preset's value map, mirrored from the file on disk. */
+    /** User-layer overrides mirrored from disk. */
     #values: Record<string, unknown> = {};
 
     /** Pending-write timer for debounced disk persistence. */
     #writeTimer: ReturnType<typeof setTimeout> | null = null;
 
-    /** Subscribers fired after every mutation (set / reset / applyTemplate / etc.). */
+    /** Subscribers fired after every mutation. */
     #listeners: ChangeListener[] = [];
 
-    /** True when no preset has been chosen yet (first launch, or all presets deleted). */
+    /** True when no base editor has been picked yet — drives the
+     *  first-run PresetPicker. */
     needsPresetChoice = $state(false);
 
-    /** Currently active user preset name, or null if none yet. */
-    activePresetName = $state<string | null>(null);
-
-    /** Read-only built-in template descriptors. */
-    builtinPresets = $state<BuiltinPreset[]>([]);
-
-    /** Names of user-created (writable) presets in the Darkly directory. */
-    userPresetNames = $state<string[]>([]);
+    /** Equal-status overlay names (alphabetical), populated from Rust. */
+    baseNames = $state<string[]>([]);
 
     /** Flat preferences schema, loaded once on init. */
     schema = $state<SectionInfo[]>([]);
 
-    /**
-     * Initialize the store. Must be called after WASM init().
-     * Reads the schema and the active preset (if any) from OPFS.
-     */
+    /** Initialize the store. Must be called after WASM init().
+     *  Reads the schema, the overlay list, and the user-settings file. */
     async init() {
-        // Schema (one-shot from Rust).
         try {
             this.schema = JSON.parse(config_schema()) as SectionInfo[];
         } catch (e) {
@@ -157,32 +71,44 @@ class ConfigStore {
             this.schema = [];
         }
 
-        // Built-in template names from Rust.
-        const names: string[] = config_preset_names();
-        this.builtinPresets = names.map(name => ({
-            name,
-            description: PRESET_DESCRIPTIONS[name] ?? '',
-        }));
+        this.baseNames = (config_base_names() as string[]) ?? [];
 
-        // Discover user presets and the active pointer in the Darkly dir.
+        // Load any stored user overrides.
         try {
-            const entries = await storage.list(PRESETS_DIR);
-            this.userPresetNames = entries
-                .filter(e => e.kind === 'file' && e.name.endsWith('.json'))
-                .map(e => e.name.slice(0, -'.json'.length))
-                .sort();
-
-            const active = (await readText(`${PRESETS_DIR}/${ACTIVE_FILE}`))?.trim() || null;
-            if (active && this.userPresetNames.includes(active)) {
-                await this.#loadIntoMemory(active);
+            const raw = await readJson<Partial<UserSettingsFile>>(USER_SETTINGS_FILE);
+            const expectedVersion = config_version();
+            if (raw && raw.version === expectedVersion && raw.values && typeof raw.values === 'object') {
+                const { cleaned, changed } = validateOverrides(this.schema, raw.values);
+                this.#values = cleaned;
+                for (const [k, v] of Object.entries(cleaned)) {
+                    config_set(k, v);
+                }
+                if (changed) {
+                    // Write the cleaned-up file back so we don't keep warning.
+                    await writeJson(USER_SETTINGS_FILE, {
+                        version: expectedVersion,
+                        values: cleaned,
+                    } satisfies UserSettingsFile);
+                }
+            } else if (raw) {
+                // File exists but version doesn't match (or envelope is
+                // malformed). Pre-release: discard and treat as first run.
+                // Post-release: this is the migration entry point.
+                console.warn(
+                    `[config] user_settings.json version ${raw.version} != expected ${expectedVersion} (or malformed); discarding.`,
+                );
+                await storage.remove(USER_SETTINGS_FILE);
+                this.#values = {};
             } else {
-                // First launch (or stale active pointer with no surviving preset).
-                this.needsPresetChoice = true;
+                this.#values = {};
             }
         } catch (e) {
-            console.error('[config] storage init failed', e);
-            this.needsPresetChoice = true;
+            console.error('[config] user-settings load failed', e);
+            this.#values = {};
         }
+
+        const baseChoice = this.#values['app.baseSettings'];
+        this.needsPresetChoice = typeof baseChoice !== 'string';
 
         this.#ready = true;
         this.#version++;
@@ -198,20 +124,28 @@ class ConfigStore {
         };
     }
 
-    /** Read a setting. Returns the default if no setting is present. */
+    /** Resolved value (user → overlay → defaults). */
     get(key: string): unknown {
         void this.#version;
         if (!this.#ready) return undefined;
         return config_get(key);
     }
 
-    /** Whether this key currently has a setting (i.e., differs from default). */
+    /** Layer-below-user value (overlay → defaults). Used by the Settings
+     *  UI to label the Reset button with what would be revealed. */
+    baseValue(key: string): unknown {
+        void this.#version;
+        if (!this.#ready) return undefined;
+        return config_base_value(key);
+    }
+
+    /** Whether this key currently has a user-layer override. */
     hasOverride(key: string): boolean {
         void this.#version;
         return key in this.#values;
     }
 
-    /** Set a setting. Persists to the active preset's file (debounced). */
+    /** Set a user-layer override. Persists to disk (debounced). */
     set(key: string, value: unknown) {
         config_set(key, value);
         this.#values = { ...this.#values, [key]: value };
@@ -220,7 +154,7 @@ class ConfigStore {
         this.#fire();
     }
 
-    /** Remove a setting, reverting the key to its default. */
+    /** Remove a user override, revealing the overlay/default below. */
     resetKey(key: string) {
         config_reset(key);
         const next = { ...this.#values };
@@ -248,153 +182,51 @@ class ConfigStore {
         this.#fire();
     }
 
-    /** First-run completion: user picked a built-in template. Auto-create
-     *  their first writable preset from that template's values, set it as
-     *  active, and start using it. */
-    async pickInitialTemplate(templateName: string) {
-        const values = this.#templateValues(templateName);
-        if (!values) return;
-        // Avoid trampling an existing preset of the same name (eg the user
-        // already has "My Settings" from a previous setup).
-        let name = DEFAULT_PRESET_NAME;
-        let i = 2;
-        while (this.userPresetNames.includes(name)) {
-            name = `${DEFAULT_PRESET_NAME} ${i++}`;
+    /** Clear every user override **except** `app.baseSettings` — the
+     *  picker choice survives a global reset. */
+    resetAllOverrides() {
+        config_reset_all();
+        const next: Record<string, unknown> = {};
+        const base = this.#values['app.baseSettings'];
+        if (typeof base === 'string') next['app.baseSettings'] = base;
+        this.#values = next;
+        this.#scheduleWrite();
+        this.#version++;
+        this.#fire();
+    }
+
+    /** Set the active editor overlay. Sugar for setting `app.baseSettings`
+     *  and dismissing the first-run picker. */
+    setBase(name: string) {
+        if (!this.baseNames.includes(name)) {
+            console.warn(`[config] unknown base name: ${name}`);
+            return;
         }
-        await this.#createPreset(name, values);
-        await this.#switchTo(name);
+        this.set('app.baseSettings', name);
         this.needsPresetChoice = false;
-        this.#version++;
-        this.#fire();
-    }
-
-    /** Apply a built-in template into the active preset (overwrites every
-     *  key the template covers). The preset name is unchanged. */
-    async applyTemplate(templateName: string) {
-        if (!this.activePresetName) return;
-        const values = this.#templateValues(templateName);
-        if (!values) return;
-        await this.#replaceActiveValues(values);
-        this.#version++;
-        this.#fire();
-    }
-
-    /** Snapshot current settings under a new preset name and switch to it. */
-    async saveAsNewPreset(rawName: string) {
-        const name = sanitizeFilename(rawName);
-        if (!name) return;
-        await this.#createPreset(name, this.#values);
-        await this.#switchTo(name);
-        this.#version++;
-        this.#fire();
-    }
-
-    /** Switch the active preset to an existing user preset by name. */
-    async switchPreset(name: string) {
-        if (!this.userPresetNames.includes(name)) return;
-        await this.#switchTo(name);
-        this.#version++;
-        this.#fire();
-    }
-
-    /** Delete a user preset. If it was active, switch to another (or back
-     *  to the picker if none remain). */
-    async deletePreset(name: string) {
-        await storage.remove(`${PRESETS_DIR}/${name}.json`);
-        this.userPresetNames = this.userPresetNames.filter(n => n !== name);
-        if (this.activePresetName === name) {
-            const next = this.userPresetNames[0] ?? null;
-            if (next) {
-                await this.#switchTo(next);
-            } else {
-                // Last preset gone — back to the first-run picker.
-                config_reset_all();
-                this.#values = {};
-                this.activePresetName = null;
-                await this.#flushActiveFile(null);
-                this.needsPresetChoice = true;
-            }
-        }
-        this.#version++;
-        this.#fire();
     }
 
     // ---- internals ----
 
-    /** Look up a built-in template's full snapshot. Validates against the
-     *  schema as a defensive measure (drops keys that no longer exist). */
-    #templateValues(templateName: string): Record<string, unknown> | null {
-        const raw = config_preset_values(templateName) as Record<string, unknown> | null;
-        if (!raw) return null;
-        const { cleaned } = validateOverrides(this.schema, raw);
-        return cleaned;
-    }
-
-    /** Read a preset file and load it as the active value map. */
-    async #loadIntoMemory(name: string) {
-        const raw = (await readJson<unknown>(`${PRESETS_DIR}/${name}.json`)) ?? {};
-        const flat = unstructure(raw);
-        const { cleaned, changed } = validateOverrides(this.schema, flat);
-        this.#values = cleaned;
-        this.activePresetName = name;
-        // Push to Rust.
-        config_reset_all();
-        for (const [k, v] of Object.entries(cleaned)) config_set(k, v);
-        if (changed) {
-            // Write the cleaned-up values back so we don't keep warning.
-            await writeJson(`${PRESETS_DIR}/${name}.json`, structure(name, cleaned));
-        }
-    }
-
-    /** Create a new preset file with the given values. */
-    async #createPreset(name: string, values: Record<string, unknown>) {
-        await writeJson(`${PRESETS_DIR}/${name}.json`, structure(name, values));
-        if (!this.userPresetNames.includes(name)) {
-            this.userPresetNames = [...this.userPresetNames, name].sort();
-        }
-    }
-
-    /** Switch active preset, loading its values and updating .active. */
-    async #switchTo(name: string) {
-        await this.#loadIntoMemory(name);
-        await this.#flushActiveFile(name);
-    }
-
-    /** Replace the active preset's values entirely (used by applyTemplate). */
-    async #replaceActiveValues(values: Record<string, unknown>) {
-        const name = this.activePresetName;
-        if (!name) return;
-        config_reset_all();
-        for (const [k, v] of Object.entries(values)) config_set(k, v);
-        this.#values = values;
-        await writeJson(`${PRESETS_DIR}/${name}.json`, structure(name, values));
-    }
-
-    /** Persist the .active pointer file (or remove it if name is null). */
-    async #flushActiveFile(name: string | null) {
-        const activePath = `${PRESETS_DIR}/${ACTIVE_FILE}`;
-        if (name === null) {
-            await storage.remove(activePath);
-        } else {
-            await writeText(activePath, name);
-        }
-    }
-
-    /** Schedule a debounced write of the active preset's values to disk. */
+    /** Schedule a debounced write of the user layer to disk. */
     #scheduleWrite() {
-        if (!this.activePresetName) return;
         if (this.#writeTimer !== null) return;
         this.#writeTimer = setTimeout(() => {
             this.#writeTimer = null;
-            const name = this.activePresetName;
-            if (!name) return;
-            // Snapshot to avoid races with further mutations during the write.
             const snapshot = this.#values;
             (async () => {
                 try {
-                    await writeJson(`${PRESETS_DIR}/${name}.json`, structure(name, snapshot));
+                    if (Object.keys(snapshot).length === 0) {
+                        // Tidy: an empty user layer doesn't need a file.
+                        await storage.remove(USER_SETTINGS_FILE);
+                    } else {
+                        await writeJson(USER_SETTINGS_FILE, {
+                            version: config_version(),
+                            values: snapshot,
+                        } satisfies UserSettingsFile);
+                    }
                 } catch (e) {
-                    console.error('[config] preset write failed', e);
+                    console.error('[config] user-settings write failed', e);
                 }
             })();
         }, 200);
@@ -412,11 +244,17 @@ export const config = new ConfigStore();
 /**
  * Format a tinykeys-style binding (e.g. "Shift+KeyR", "$mod+KeyA") into a
  * human-readable shortcut string (e.g. "Shift+R", "Ctrl+A" / "Cmd+A").
+ * Accepts bindings with an optional site/scope prefix ("layerPanel:Delete",
+ * "@paint:KeyB") and strips it before formatting — only the chord is
+ * user-facing.
  */
 export function formatHotkey(binding: string | undefined): string | undefined {
     if (!binding) return undefined;
+    const colonIdx = binding.indexOf(':');
+    const chord = colonIdx < 0 ? binding : binding.slice(colonIdx + 1);
+    if (!chord) return undefined;
     const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
-    return binding.split('+').map(part => {
+    return chord.split('+').map(part => {
         if (part === '$mod') return isMac ? '⌘' : 'Ctrl';
         if (part === 'Shift') return isMac ? '⇧' : 'Shift';
         if (part === 'Alt') return isMac ? '⌥' : 'Alt';
@@ -435,4 +273,18 @@ export function formatHotkey(binding: string | undefined): string | undefined {
         if (part === 'Backquote') return '`';
         return part;
     }).join('+');
+}
+
+/**
+ * Build a tooltip combining a label with the action's effective hotkey, if
+ * any. The binding comes straight from the resolved config (no
+ * action-registry default fallback — defaults live in YAML now).
+ * Reactive to the config so the tooltip re-renders whenever the user
+ * rebinds or switches editor overlays.
+ */
+export function tooltipForAction(label: string, actionId: string): string {
+    const v = config.get(`hotkeys.${actionId}`);
+    if (typeof v !== 'string' || !v) return label;
+    const hk = formatHotkey(v.split('|')[0]);
+    return hk ? `${label} (${hk})` : label;
 }

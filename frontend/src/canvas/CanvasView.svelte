@@ -14,6 +14,7 @@
     import { bindingSite } from '../actions/binding_site';
     import { handleDroppedFile } from '../actions';
     import { THUMB_SIZE } from '../ui/layers/thumbnails';
+    import { isColorPickerModifierActive } from '../tools/colorpicker_cursor';
 
     /** Optional pre-built instance. When provided, CanvasView skips the
      *  single-instance bootstrap (`initEditor`) and just wires the canvas
@@ -238,8 +239,17 @@
         const ctx = getToolContext();
         if (!ctx) return;
         const pos = getCanvasCoords(e);
-        const tool = toolRegistry.get(inst.activeToolId);
-        tool?.onPointerMove(ctx, e, pos.x, pos.y);
+        // While the color-picker chord is engaged (Ctrl/Meta + paint tool),
+        // suppress the active tool's hover updates so its overlay (e.g. the
+        // brush's dab preview) can't fight the picker cursor. Pointerdown
+        // is already short-circuited by `dispatchDrag` matching the
+        // `sampleColor` chord; this covers the hover-only case. Still
+        // request a frame — the chord's onMove may have queued a pick
+        // that needs `pollPick` to commit on the next frame.
+        if (!isColorPickerModifierActive()) {
+            const tool = toolRegistry.get(inst.activeToolId);
+            tool?.onPointerMove(ctx, e, pos.x, pos.y);
+        }
         inst.requestFrame();
     }
 

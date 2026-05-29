@@ -14,6 +14,12 @@
 
     const value = $derived(config.get(pref.key));
     const hasOverride = $derived(config.hasOverride(pref.key));
+    /** Layer-below-user value (overlay → defaults). Drives the tooltip's
+     *  "Reset to …" description so the user can see what would be revealed. */
+    const baseValue = $derived(config.baseValue(pref.key));
+    const resetTitle = $derived(
+        baseValue == null ? 'Reset' : `Reset to ${String(baseValue)}`,
+    );
 
     function onchange(v: unknown) {
         config.set(pref.key, v);
@@ -69,7 +75,7 @@
             type="button"
             class="reset"
             class:visible={hasOverride}
-            title="Reset to default"
+            title={resetTitle}
             onclick={reset}
             disabled={!hasOverride}
         >

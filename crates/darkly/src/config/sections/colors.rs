@@ -1,4 +1,4 @@
-use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
+use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 const PREFS: &[Pref] = &[
     Pref {
@@ -6,7 +6,6 @@ const PREFS: &[Pref] = &[
         display_name: "Default foreground",
         description: None,
         kind: PrefKind::Str,
-        default: PrefDefault::Str("#000000"),
         widget: WidgetHint::Color,
     },
     Pref {
@@ -14,7 +13,6 @@ const PREFS: &[Pref] = &[
         display_name: "Default background",
         description: None,
         kind: PrefKind::Str,
-        default: PrefDefault::Str("#ffffff"),
         widget: WidgetHint::Color,
     },
 ];

@@ -1,4 +1,4 @@
-use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
+use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 const PREFS: &[Pref] = &[
     Pref {
@@ -9,7 +9,6 @@ const PREFS: &[Pref] = &[
             min: 0.05,
             max: 4.0,
         },
-        default: PrefDefault::Float(0.5),
         widget: WidgetHint::Auto,
     },
     Pref {
@@ -17,7 +16,6 @@ const PREFS: &[Pref] = &[
         display_name: "Navigation modifier",
         description: Some("Held key that engages canvas pan / zoom / rotate."),
         kind: PrefKind::Str,
-        default: PrefDefault::Str("Space"),
         widget: WidgetHint::Hotkey,
     },
     Pref {
@@ -25,7 +23,6 @@ const PREFS: &[Pref] = &[
         display_name: "Rotate modifier",
         description: None,
         kind: PrefKind::Str,
-        default: PrefDefault::Str("Shift"),
         widget: WidgetHint::Hotkey,
     },
     Pref {
@@ -33,7 +30,6 @@ const PREFS: &[Pref] = &[
         display_name: "Zoom modifier",
         description: None,
         kind: PrefKind::Str,
-        default: PrefDefault::Str("Ctrl"),
         widget: WidgetHint::Hotkey,
     },
 ];

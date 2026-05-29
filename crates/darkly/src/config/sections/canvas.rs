@@ -1,4 +1,4 @@
-use crate::config::schema::{Pref, PrefDefault, PrefKind, SchemaSection, WidgetHint};
+use crate::config::schema::{Pref, PrefKind, SchemaSection, WidgetHint};
 
 const PREFS: &[Pref] = &[
     Pref {
@@ -6,7 +6,6 @@ const PREFS: &[Pref] = &[
         display_name: "Default width",
         description: Some("Width in pixels for new documents."),
         kind: PrefKind::Int { min: 1, max: 16384 },
-        default: PrefDefault::Int(1920),
         widget: WidgetHint::NumberInput,
     },
     Pref {
@@ -14,7 +13,6 @@ const PREFS: &[Pref] = &[
         display_name: "Default height",
         description: Some("Height in pixels for new documents."),
         kind: PrefKind::Int { min: 1, max: 16384 },
-        default: PrefDefault::Int(1080),
         widget: WidgetHint::NumberInput,
     },
     Pref {
@@ -22,7 +20,6 @@ const PREFS: &[Pref] = &[
         display_name: "Background color",
         description: Some("Fill color used for new documents."),
         kind: PrefKind::Str,
-        default: PrefDefault::Str("#1a1a1a"),
         widget: WidgetHint::Color,
     },
 ];

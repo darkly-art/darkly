@@ -13,20 +13,6 @@ export interface ActionRegistration {
     requires?: string[];
     accepts?: string[];
     type?: ActionType;
-    /** Default keyboard trigger(s) in tinykeys notation, optionally prefixed
-     *  by a binding site: `"$mod+KeyZ"` (global) or `"layerPanel:Delete"`
-     *  (fires only when a `layerPanel` binding site is the active site).
-     *  Used when no `hotkeys.<id>` setting is present. Pass an array when
-     *  one action wants to be bound to multiple chords. Empty/undefined =
-     *  no keyboard trigger by default. */
-    defaultHotkey?: string | string[];
-    /** Default mouse trigger(s) ("<site>:<chord>", e.g. "layerEye:alt+click").
-     *  Used when no `mouseclicks.<id>` setting is present. Pass an array
-     *  when one action wants the same chord to fire from multiple sites
-     *  (e.g. alt+click on either the layer thumb or the mask thumb both
-     *  isolating). User overrides remain a single string and fully replace
-     *  the defaults. Empty/undefined = no mouse trigger by default. */
-    defaultMouseClick?: string | string[];
     handler: (ctx: ActionContext) => void;
     /** For drag-bound actions: receives the live pointer event plus the
      *  total displacement from the pointerdown position (client pixels)

@@ -82,7 +82,6 @@ export function registerBrushParamActions() {
         id: 'brushSizeUp',
         displayName: 'Increase Brush Size',
         category: 'brush',
-        defaultHotkey: 'BracketRight',
         handler: () => adjustBrushParam('size', +1),
     });
 
@@ -90,7 +89,6 @@ export function registerBrushParamActions() {
         id: 'brushSizeDown',
         displayName: 'Decrease Brush Size',
         category: 'brush',
-        defaultHotkey: 'BracketLeft',
         handler: () => adjustBrushParam('size', -1),
     });
 
@@ -99,11 +97,6 @@ export function registerBrushParamActions() {
         displayName: 'Adjust Brush Size (drag)',
         category: 'brush',
         type: 'hold',
-        // `@paint` scope so this only fires when a paint-group tool is active.
-        // Selection tools also use shift+drag on the canvas (add-to-selection
-        // via selectionMode(e)); without the scope, brush-size scrub would
-        // steal the pointerdown and selection tools would never see it.
-        defaultMouseClick: 'canvas@paint:shift+drag',
         handler: (ctx) => {
             const found = findScalarPort('size');
             if (!found) {

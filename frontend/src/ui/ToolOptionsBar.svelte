@@ -39,7 +39,15 @@
         padding: 4px 8px;
         background: var(--bg);
         flex-shrink: 0;
-        min-height: 36px;
+        /* Fixed height (not min-height) so the bar stays the same size
+         * across tool switches and the canvas above doesn't shift when
+         * the user swaps tools. Sized to fit the tallest tool's content
+         * — currently the brush picker (preview strip + name + chevron),
+         * which is ~32px tall; 40px total leaves a 4px breather around
+         * it. Shorter content (scrubs, dropdowns) centers within the
+         * extra space. `box-sizing: border-box` is set globally, so this
+         * height is inclusive of padding. */
+        height: 40px;
     }
 
     .tool-name {

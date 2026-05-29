@@ -7,6 +7,7 @@ import { theme } from './state/theme.svelte';
 import { pixelFilter } from './state/pixelFilter.svelte';
 import { DarklyInstance, setActiveInstance, getActiveInstance } from './state/app.svelte';
 import { createHandle } from './state/session';
+import { setupColorPickerModifierTracking } from './tools/colorpicker_cursor';
 
 let processInitialized = false;
 
@@ -15,7 +16,7 @@ let processInitialized = false;
  *  The multi-tab shell calls this once at boot before opening any tabs.
  *
  *  WASM init happens FIRST because `config.init()` calls into WASM exports
- *  (`config_schema`, `config_preset_names`) — those would throw with
+ *  (`config_schema`, `config_base_names`) — those would throw with
  *  "Cannot read properties of undefined" if the module hadn't loaded yet. */
 export async function ensureProcessInit(): Promise<void> {
     if (processInitialized) return;
@@ -29,6 +30,12 @@ export async function ensureProcessInit(): Promise<void> {
         registerHotkeys();
         rebuildClickIndex();
     });
+
+    // Wire global Ctrl/Meta tracking so the color-picker cursor engages
+    // as soon as the user holds the modifier with a paint tool active
+    // (not just on pointerdown). Idempotent.
+    setupColorPickerModifierTracking();
+
     processInitialized = true;
 }
 

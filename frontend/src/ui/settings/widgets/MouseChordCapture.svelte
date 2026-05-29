@@ -48,9 +48,13 @@
         capturing = true;
     }
 
+    /** Capture-time chord builder. Emits `$mod` when Ctrl-or-Meta is held
+     *  (parallel to `HotkeyCapture.svelte` for keyboard) so the stored
+     *  binding is cross-platform: Linux/Win users capturing Ctrl write
+     *  `$mod+…`, which Mac users then trigger with Cmd. */
     function chordFromEvent(e: MouseEvent): string {
         const mods: string[] = [];
-        if (e.ctrlKey || e.metaKey) mods.push('ctrl');
+        if (e.ctrlKey || e.metaKey) mods.push('$mod');
         if (e.altKey) mods.push('alt');
         if (e.shiftKey) mods.push('shift');
         let interaction: string;
@@ -80,12 +84,15 @@
 
     function formatChord(chord: string): string {
         if (!chord) return '(no click)';
+        const isMac = navigator.userAgent.includes('Mac');
         return chord
             .split('+')
             .map(p => {
-                if (p === 'ctrl') return navigator.userAgent.includes('Mac') ? '⌘' : 'Ctrl';
-                if (p === 'alt') return navigator.userAgent.includes('Mac') ? '⌥' : 'Alt';
-                if (p === 'shift') return navigator.userAgent.includes('Mac') ? '⇧' : 'Shift';
+                if (p === '$mod') return isMac ? '⌘' : 'Ctrl';
+                if (p === 'ctrl') return isMac ? '⌃' : 'Ctrl';
+                if (p === 'meta') return isMac ? '⌘' : 'Win';
+                if (p === 'alt') return isMac ? '⌥' : 'Alt';
+                if (p === 'shift') return isMac ? '⇧' : 'Shift';
                 if (p === 'click') return 'click';
                 if (p === 'doubleClick') return 'double-click';
                 if (p === 'middleClick') return 'middle-click';

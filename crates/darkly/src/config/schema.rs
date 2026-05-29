@@ -2,15 +2,15 @@
 //!
 //! Every preference lives in a section. Sections are auto-discovered from
 //! `config/sections/*.rs` via `build.rs` — the same pattern as veils, tools,
-//! and brush nodes. Runtime storage (the three-layer [`super::Config`]) is
-//! built by walking the registered sections; there is no hand-maintained list.
+//! and brush nodes. Runtime storage is the three-layer [`super::Config`]
+//! (user → overlay → defaults). The schema declares only *type/range/widget*
+//! — it does not own values. Defaults come from the bundled YAML presets in
+//! `crates/darkly/presets/`.
 //!
 //! Storage type vs. widget: [`PrefKind`] describes what's stored;
 //! [`WidgetHint`] describes how the Settings modal renders it. They're
 //! orthogonal — `Bool` is always a toggle, but a `Str` might render as plain
 //! text, a hotkey capture, a mouse-binding capture, or a color picker.
-
-use super::ConfigValue;
 
 /// A logical grouping of related preferences — purely a display affordance.
 /// Sections may be reorganized without renaming any pref keys; a key's
@@ -42,8 +42,6 @@ pub struct Pref {
     pub description: Option<&'static str>,
     /// Storage shape + range/option metadata.
     pub kind: PrefKind,
-    /// Default value. Variant must agree with [`Self::kind`].
-    pub default: PrefDefault,
     /// Hint for which widget the Settings UI should render.
     pub widget: WidgetHint,
 }
@@ -66,83 +64,6 @@ pub enum PrefKind {
     Enum {
         options: &'static [(&'static str, &'static str)],
     },
-}
-
-/// Compile-time default literal. Small cousin of [`ConfigValue`] that holds
-/// `&'static str` instead of `String` so prefs can live in `const` tables.
-pub enum PrefDefault {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Str(&'static str),
-}
-
-impl PrefDefault {
-    pub fn to_config_value(&self) -> ConfigValue {
-        match self {
-            PrefDefault::Bool(v) => ConfigValue::Bool(*v),
-            PrefDefault::Int(v) => ConfigValue::Int(*v),
-            PrefDefault::Float(v) => ConfigValue::Float(*v),
-            PrefDefault::Str(v) => ConfigValue::Str((*v).to_string()),
-        }
-    }
-}
-
-/// Compile-time preset-override literal. Same shape as [`PrefDefault`] —
-/// they're distinct types so a future `PresetValue::Inherit` (or similar
-/// semantics) can be added without affecting defaults.
-pub enum PresetValue {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Str(&'static str),
-}
-
-/// A built-in preset: a structured snapshot of overrides, grouped by facet.
-///
-/// Each preset is one self-contained file in `config/presets/<name>.rs`,
-/// auto-discovered by `build.rs`. A preset only declares the keys it
-/// changes; everything else is inherited from defaults (for schema-defined
-/// settings) or from action registrations (for hotkeys/mouseclicks).
-///
-/// At apply time, the structured facets are flattened to a key/value map
-/// and bulk-written into the user's settings:
-/// - `hotkeys[i] = (actionId, key)` -> `hotkeys.<actionId> = key`
-/// - `mouse_clicks[i] = (actionId, "[<site>][@<toolGroup>]:<chord>")` ->
-///   `mouseclicks.<actionId> = "[<site>][@<toolGroup>]:<chord>"`
-/// - `settings[i] = (key, PresetValue)` -> stored as-is (key already namespaced)
-///
-/// Binding-string grammar (frontend-side parsing in `actions/hotkey_resolve.ts`):
-///   * `"<chord>"`                       — global; fires regardless of site/tool.
-///   * `"<site>:<chord>"`                — fires only at the given binding site.
-///   * `"<site>@<toolGroup>:<chord>"`    — fires only at the site AND when the
-///     active tool's group matches (e.g. `"canvas@paint:shift+drag"` for
-///     brush-size scrub, so it doesn't steal shift+drag from selection tools).
-///   * `"@<toolGroup>:<chord>"`          — global wrt site, but only when the
-///     given tool group is active (use sparingly; mostly for keyboard hotkeys
-///     that depend on tool context).
-///
-/// Empty string values are meaningful: they mean "no binding" — use them to
-/// suppress an action's default trigger under a particular preset (e.g.
-/// Photoshop disables the keyboard `KeyI` for `isolateLayer` by setting
-/// `hotkeys: &[("isolateLayer", "")]`).
-pub struct Preset {
-    pub name: &'static str,
-    pub description: Option<&'static str>,
-    pub hotkeys: &'static [(&'static str, &'static str)],
-    pub mouse_clicks: &'static [(&'static str, &'static str)],
-    pub settings: &'static [(&'static str, PresetValue)],
-}
-
-impl PresetValue {
-    pub fn to_config_value(&self) -> ConfigValue {
-        match self {
-            PresetValue::Bool(v) => ConfigValue::Bool(*v),
-            PresetValue::Int(v) => ConfigValue::Int(*v),
-            PresetValue::Float(v) => ConfigValue::Float(*v),
-            PresetValue::Str(v) => ConfigValue::Str((*v).to_string()),
-        }
-    }
 }
 
 /// How the Settings UI should render a pref. Orthogonal to [`PrefKind`] so new
@@ -183,9 +104,10 @@ pub struct SectionInfo {
     pub prefs: Vec<PrefInfo>,
 }
 
-/// Flat view of a single [`Pref`] with kind/range/options/default all inlined.
+/// Flat view of a single [`Pref`] with kind/range/options inlined.
 /// Avoids a tagged enum so the frontend can consume the JSON without
-/// discriminator unwrapping.
+/// discriminator unwrapping. No `default` field — defaults live in
+/// the YAML overlay/agnostic layers, not in the schema.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PrefInfo {
@@ -202,7 +124,6 @@ pub struct PrefInfo {
     /// Populated for `"enum"` kinds only: `[[value, label], ...]`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<serde_json::Value>,
-    pub default: serde_json::Value,
     /// `"auto" | "numberInput" | "hotkey" | "mouseBinding" | "color"`.
     pub widget: &'static str,
 }
@@ -229,12 +150,6 @@ impl PrefInfo {
             PrefKind::Str => ("str", None, None, None),
             PrefKind::Enum { options } => ("enum", None, None, Some(serde_json::json!(options))),
         };
-        let default = match &pref.default {
-            PrefDefault::Bool(v) => serde_json::json!(v),
-            PrefDefault::Int(v) => serde_json::json!(v),
-            PrefDefault::Float(v) => serde_json::json!(v),
-            PrefDefault::Str(v) => serde_json::json!(v),
-        };
         PrefInfo {
             key: pref.key,
             display_name: pref.display_name,
@@ -243,7 +158,6 @@ impl PrefInfo {
             min,
             max,
             options,
-            default,
             widget: widget_hint_str(&pref.widget),
         }
     }

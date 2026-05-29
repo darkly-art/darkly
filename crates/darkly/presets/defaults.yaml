@@ -1,0 +1,81 @@
+# Editor-AGNOSTIC defaults. Bottom layer of the three-layer config resolution:
+#
+#   user override → overlay[active editor] → defaults  (this file)
+#
+# Inclusion rule: a key lives here iff Krita, Photoshop, and GIMP all agree
+# on its value. Any key that differs between any two of the three editors
+# is split into each of the editor YAMLs (krita.yaml / photoshop.yaml /
+# gimp.yaml) — none of those YAMLs may inherit a value from this file when
+# the editor in question would disagree.
+#
+# Schema-side defaults that used to live in `config/sections/*.rs` (canvas
+# dimensions, animation rates, theme, …) and TS-side `defaultHotkey` /
+# `defaultMouseClick` registrations are both consolidated here.
+
+hotkeys:
+  # Universal edit / clipboard / file / view bindings.
+  undo: $mod+KeyZ
+  redo: $mod+Shift+KeyZ
+  copy: $mod+KeyC
+  cut: $mod+KeyX
+  paste: $mod+KeyV
+  pasteInPlace: $mod+Shift+KeyV
+  saveDocument: $mod+KeyS
+  saveDocumentAs: $mod+Shift+KeyS
+  open: $mod+KeyO
+  exportImage: $mod+Shift+KeyE
+  selectAll: $mod+KeyA
+  clearSelectionContents: Delete
+  commitFloating: Enter
+  cancelFloating: Escape
+  openSettings: $mod+Comma
+  # Tool keys all three editors agree on.
+  lassoSelectTool: KeyL
+  polygonSelectTool: Shift+KeyL
+  # Colors — D resets, X swaps in every editor we ship.
+  resetColors: KeyD
+  swapColors: KeyX
+  # Brush parameter hotkeys — Darkly inherits Krita/Photoshop/GIMP's `[` / `]`
+  # convention for sizing.
+  brushSizeUp: BracketRight
+  brushSizeDown: BracketLeft
+  # Darkly-original actions (no editor has prior-art opinion).
+  addBrushNode: Shift+KeyA
+  mirrorViewH: KeyM
+
+mouse_clicks:
+  # Alt+click on a layer or mask thumbnail isolates that node.
+  isolateLayer:
+    - layerThumb:alt+click
+    - maskThumb:alt+click
+
+settings:
+  # Canvas defaults.
+  canvas.width: 1920
+  canvas.height: 1080
+  canvas.backgroundColor: "#000000"
+  # Animation tick divisors.
+  animation.veil_divisor: 2
+  animation.overlay_divisor: 4
+  animation.void_divisor: 2
+  # Rendering.
+  rendering.veil_scale: 1.0
+  # Display.
+  display.pixelFilter: auto
+  # Navigation.
+  nav.panSensitivity: 0.5
+  hotkeys.nav.trigger: Space
+  hotkeys.nav.rotate: Shift
+  hotkeys.nav.zoom: Ctrl
+  # UI.
+  ui.theme: dark
+  ui.brushBuilder.previewVisible: true
+  ui.brushBuilder.previewWidth: 320
+  ui.brushBuilder.previewHeight: 120
+  # Input.
+  input.fingerPainting: false
+  # Editing.
+  edit.activateTransformAfterPaste: true
+  # Colors.
+  colors.defaultForeground: "#ffffff"
+  colors.defaultBackground: "#000000"

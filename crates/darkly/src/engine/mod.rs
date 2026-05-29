@@ -19,7 +19,7 @@ mod veils;
 
 pub use export::ExportImageResult;
 pub use load::LoadDocument;
-pub use rendering::DEFAULT_THUMB_SIZE;
+pub use rendering::{PickSource, DEFAULT_THUMB_SIZE};
 pub use save::{SaveError, SaveJob, SaveReadbackKind};
 pub use types::{
     BlendModeTypeInfo, ClipboardExport, LayerInfo, LayerKindTypeInfo, ModifierInfo,

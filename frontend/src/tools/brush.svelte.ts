@@ -1,4 +1,4 @@
-import type { Tool, ToolContext } from './registry';
+import type { Tool } from './registry';
 import { app } from '../state/app.svelte';
 import { brushGraph } from '../state/brush_graph.svelte';
 import { srgbToLinear } from '../lib/color';
@@ -245,5 +245,18 @@ export const brushTool: Tool = {
         ctx.handle.clear_overlay();
         ctx.handle.clear_brush_preview_pose();
         clearHover();
+    },
+
+    restoreHover(ctx, cx, cy) {
+        // Re-establish the dab preview after an interruption (e.g. the
+        // modifier-held color picker releasing). We don't have a live
+        // PointerEvent, so synthesise a mouse-like pose: full pressure,
+        // no tilt/twist. Real pen poses re-assert on the next genuine
+        // pointermove.
+        pushHoverOverlay(
+            ctx.handle,
+            { pressure: 1.0, tiltX: 0, tiltY: 0, twist: 0, tangentialPressure: 0 },
+            cx, cy,
+        );
     },
 };

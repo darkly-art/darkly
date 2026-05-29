@@ -81,13 +81,13 @@ These are features that are helpful or essential to digital art workflows. They'
     - [ ] Dodge/burn
     - [ ] Pencil / Charcoal
     - [ ] Oil / Impasto
-- [x] Brush tool, eraser, fill (flood), gradient (linear), color picker (eyedropper)
+- [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
 - [x] Pressure / tilt / spacing / distance / angle inputs
 - [x] Laplacian stabilizer
 
 ### Color picking & swatches
 - [x] HSV picker, foreground/background swatches
-- [x] Eyedropper (async GPU readback)
+- [x] Color picker (async GPU readback, Ctrl-held temporary pick)
 - [ ] Recent colors
 - [ ] Saved swatches / palettes
 - [ ] Palette file import (.aco, .gpl)
@@ -209,13 +209,15 @@ You can verify the active backend at `chrome://gpu` - look for "Vulkan" under Gr
 
 ## Use of AI
 
-It's okay to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
+It's acceptable to use AI for this codebase, but careless vibe coding is **strictly forbidden**.
 
 I (TheTechromancer) learned to code before AI, and have spent much of my career maintaining [large codebases](https://github.com/blacklanternsecurity/bbot). The [danger](https://www.reddit.com/r/vibecoding/comments/1su03dk/vibe_coded_for_6_months_my_codebase_is_a_disaster/) of feature creep and architectural bloat is real, which is why whenever a feature is implemented in Darkly, a human must first understand the changes and their long-term implications for the codebase.
 
 Great care is being taken to keep Darkly lean and clean. This means enforcing modularity, guarding vigilantly against duplicate/dead code, and writing a *shit ton* of unit tests, including at least one regression test for every bug. See [AGENTS.md](AGENTS.md) for how we avoid AI slop.
 
-Note that while we allow AI for coding, we are unlikely to accept any PR implementing generative AI in Darkly itself.
+Note that while we allow AI for coding, we are **unlikely to accept any PR implementing generative AI in Darkly itself**. AI features are not off the table; however they must run fully offline and without any reliance on third party APIs. Additionally, any feature that speeds up generation while sacrificing creative input or control from the artist, will be immediately rejected.
+
+We are not sensitive to AI-related questions. If you're unsure, please ask!
 
 ## Acknowledgments
 
