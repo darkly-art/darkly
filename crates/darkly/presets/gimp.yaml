@@ -1,9 +1,33 @@
-# GIMP overlay. Self-contained: every binding that any of the three editors
-# disagrees on is spelled out here.
+# GIMP overlay. Self-contained: every binding that any of the three
+# reference editors has an opinion on is spelled out here explicitly.
 name: GIMP
 description: GIMP-style keybindings
 
 hotkeys:
+  # Edit / clipboard / file.
+  undo: $mod+KeyZ
+  # GIMP binds Redo to <primary>Y; <primary><shift>Z is "Strong Undo".
+  # See gimp/app/actions/edit-actions.c.
+  redo: $mod+KeyY
+  copy: $mod+KeyC
+  cut: $mod+KeyX
+  paste: $mod+KeyV
+  # GIMP's edit-paste-in-place is <primary><alt>V (NOT <shift>V).
+  # See gimp/app/actions/edit-actions.c.
+  pasteInPlace: $mod+Alt+KeyV
+  saveDocument: $mod+KeyS
+  saveDocumentAs: $mod+Shift+KeyS
+  open: $mod+KeyO
+  selectAll: $mod+KeyA
+  clearSelectionContents: Delete
+  commitFloating: Enter
+  cancelFloating: Escape
+  # Colors.
+  resetColors: KeyD
+  swapColors: KeyX
+  # Brush size.
+  brushSizeUp: BracketRight
+  brushSizeDown: BracketLeft
   # Tools.
   brushTool: KeyP
   fillTool: Shift+KeyB

@@ -67,7 +67,7 @@
 
 </script>
 
-<Modal bind:open={settings.open} title="Settings" size="md">
+<Modal bind:open={settings.open} title="Settings" size="lg">
     <div class="settings-body">
         <header class="topbar">
             <button
@@ -77,7 +77,7 @@
                 title="Remove every personal override; the base layout shows through."
             >
                 <i class="fa-solid fa-rotate-left"></i>
-                Reset overrides
+                Reset
             </button>
             <button
                 type="button"
@@ -130,6 +130,7 @@
                     {:else}
                         <header class="trigger-header">
                             <span class="label-col">Action</span>
+                            <span class="scope-col">Scope</span>
                             <span class="trigger-col">
                                 <span>Keyboard</span>
                                 <span>Mouse</span>
@@ -246,7 +247,7 @@
 
     .trigger-header {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 1fr) auto auto;
         gap: 16px;
         padding: 8px 12px;
         font-size: 10px;
@@ -259,6 +260,9 @@
         top: 0;
         background: var(--bg-active);
         z-index: 1;
+    }
+    .trigger-header .scope-col {
+        min-width: 100px;
     }
     .trigger-header .trigger-col {
         display: flex;

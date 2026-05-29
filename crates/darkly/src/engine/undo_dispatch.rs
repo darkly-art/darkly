@@ -39,7 +39,6 @@ impl DarklyEngine {
     /// Drain both stacks and run `on_evict` on everything. For document
     /// close / engine teardown so tombstoned textures don't outlive their
     /// owning engine.
-    #[allow(dead_code)] // Wired in once doc-close plumbing lands.
     pub(crate) fn drain_undo_for_teardown(&mut self) {
         let actions = self.undo_stack.drain_all();
         for mut a in actions {

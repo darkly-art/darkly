@@ -219,13 +219,18 @@ impl DarklyEngine {
         let parent = self.doc.parent_of(layer_id);
         let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
 
+        // Collect tombstones before detaching — `detach_for_undo` severs
+        // the parent links `collect_pixel_node_ids` walks to enumerate the
+        // subtree.
+        let tombstones = self.collect_pixel_node_ids(layer_id);
+
         if self.doc.detach_for_undo(layer_id).is_some() {
-            // Drop per-layer GPU state to avoid leaking textures across
-            // delete-then-add cycles. The orphaned node in the slotmap
-            // keeps the layer's metadata for undo; pixel data does not
-            // survive (see Compositor::dispose_layer).
-            self.compositor.dispose_layer(layer_id);
-            self.push_undo(Box::new(LayerRemoveAction::new(layer_id, parent, pos)));
+            // GPU textures stay alive in the compositor's pool until the
+            // owning undo entry is evicted (LayerRemoveAction::on_evict),
+            // so an undo of the removal restores the pixels intact.
+            self.push_undo(Box::new(LayerRemoveAction::new(
+                layer_id, parent, pos, tombstones,
+            )));
         }
 
         self.compositor.mark_dirty();

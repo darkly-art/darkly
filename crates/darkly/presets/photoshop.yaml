@@ -1,9 +1,29 @@
 # Photoshop overlay. Self-contained: every binding that any of the three
-# editors disagrees on is spelled out here.
+# reference editors has an opinion on is spelled out here explicitly.
 name: Photoshop
 description: Adobe Photoshop-style keybindings
 
 hotkeys:
+  # Edit / clipboard / file.
+  undo: $mod+KeyZ
+  redo: $mod+Shift+KeyZ
+  copy: $mod+KeyC
+  cut: $mod+KeyX
+  paste: $mod+KeyV
+  pasteInPlace: $mod+Shift+KeyV
+  saveDocument: $mod+KeyS
+  saveDocumentAs: $mod+Shift+KeyS
+  open: $mod+KeyO
+  selectAll: $mod+KeyA
+  clearSelectionContents: Delete
+  commitFloating: Enter
+  cancelFloating: Escape
+  # Colors.
+  resetColors: KeyD
+  swapColors: KeyX
+  # Brush size.
+  brushSizeUp: BracketRight
+  brushSizeDown: BracketLeft
   # Tools.
   brushTool: KeyB
   fillTool: KeyG

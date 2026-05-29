@@ -1,3 +1,4 @@
+use super::tombstones::Tombstones;
 use super::UndoAction;
 use crate::document::Document;
 use crate::gpu::compositor::Compositor;
@@ -41,19 +42,37 @@ impl UndoAction for LayerAddAction {
 ///
 /// The node stays in the document's slotmap as an orphan between detach
 /// and reattach — the id (and all attached modifiers/descendants) survives
-/// across undo/redo with no copy. Undo relinks it; redo unlinks again.
+/// across undo/redo with no copy. The subtree's GPU textures are
+/// tombstoned so the pixels survive too; they're disposed only when this
+/// action is evicted from the undo stack while the deletion is still in
+/// effect (i.e. the user never undid it). Undo relinks the node; redo
+/// unlinks again.
 pub struct LayerRemoveAction {
     layer_id: LayerId,
     parent: Option<LayerId>,
     position: usize,
+    /// Pixel-bearing node ids inside the removed subtree. Detached on the
+    /// applied side; disposed by [`UndoAction::on_evict`] only when the
+    /// action is evicted while still applied.
+    tombstones: Tombstones,
+    /// True after construction / `redo`, false after `undo`. Tracks
+    /// whether the removed subtree is currently detached from the tree.
+    applied: bool,
 }
 
 impl LayerRemoveAction {
-    pub fn new(layer_id: LayerId, parent: Option<LayerId>, position: usize) -> Self {
+    pub fn new(
+        layer_id: LayerId,
+        parent: Option<LayerId>,
+        position: usize,
+        tombstones: Vec<LayerId>,
+    ) -> Self {
         LayerRemoveAction {
             layer_id,
             parent,
             position,
+            tombstones: Tombstones::new(tombstones, /* detached_when_applied: */ true),
+            applied: true,
         }
     }
 }
@@ -61,12 +80,19 @@ impl LayerRemoveAction {
 impl UndoAction for LayerRemoveAction {
     fn undo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         doc.reinsert_node(self.layer_id, self.parent, self.position);
+        self.applied = false;
         HashMap::new()
     }
 
     fn redo(&mut self, doc: &mut Document) -> HashMap<LayerId, HashSet<(i32, i32)>> {
         doc.detach_for_undo(self.layer_id);
+        self.applied = true;
         HashMap::new()
+    }
+
+    fn on_evict(&mut self, compositor: &mut Compositor) {
+        self.tombstones
+            .dispose_if_detached(self.applied, compositor);
     }
 }
 
@@ -129,9 +155,9 @@ pub struct DuplicateAction {
     parent: Option<LayerId>,
     position: usize,
     /// Every pixel-bearing node id (raster + mask) inside the duplicated
-    /// subtree. Used by [`UndoAction::on_evict`] to dispose GPU textures
-    /// only when the dup is in the detached (undone) state.
-    tombstones: Vec<LayerId>,
+    /// subtree. Disposed by [`UndoAction::on_evict`] only when the dup is
+    /// in the detached (undone) state.
+    tombstones: Tombstones,
     /// True after construction / `redo`, false after `undo`. Tracks whether
     /// the duplicated subtree is currently in the document tree.
     applied: bool,
@@ -148,7 +174,7 @@ impl DuplicateAction {
             root_new_id,
             parent,
             position,
-            tombstones,
+            tombstones: Tombstones::new(tombstones, /* detached_when_applied: */ false),
             applied: true,
         }
     }
@@ -168,13 +194,8 @@ impl UndoAction for DuplicateAction {
     }
 
     fn on_evict(&mut self, compositor: &mut Compositor) {
-        // Only dispose when the dup is currently detached — otherwise the
-        // tombstones are part of the live document state.
-        if !self.applied {
-            for id in self.tombstones.drain(..) {
-                compositor.dispose_layer(id);
-            }
-        }
+        self.tombstones
+            .dispose_if_detached(self.applied, compositor);
     }
 }
 
@@ -201,7 +222,7 @@ pub struct BakeLayersAction {
     /// Pixel-bearing node ids inside the source subtrees — detached on
     /// the forward (applied) side, reattached on undo. Disposed at evict
     /// time **only if the action was applied** (sources currently detached).
-    source_tombstones: Vec<LayerId>,
+    source_tombstones: Tombstones,
 
     pub result_id: LayerId,
     pub result_parent: Option<LayerId>,
@@ -209,7 +230,7 @@ pub struct BakeLayersAction {
     /// The baked result's pixel-bearing node ids — typically just
     /// `[result_id]`. Disposed at evict time **only if the action was
     /// undone** (result currently detached).
-    result_tombstones: Vec<LayerId>,
+    result_tombstones: Tombstones,
 
     /// True after construction / `redo`, false after `undo`. Determines
     /// which side is currently detached and therefore safe to dispose at
@@ -228,11 +249,17 @@ impl BakeLayersAction {
     ) -> Self {
         BakeLayersAction {
             sources,
-            source_tombstones,
+            source_tombstones: Tombstones::new(
+                source_tombstones,
+                /* detached_when_applied: */ true,
+            ),
             result_id,
             result_parent,
             result_position,
-            result_tombstones,
+            result_tombstones: Tombstones::new(
+                result_tombstones,
+                /* detached_when_applied: */ false,
+            ),
             applied: true,
         }
     }
@@ -277,16 +304,11 @@ impl UndoAction for BakeLayersAction {
     }
 
     fn on_evict(&mut self, compositor: &mut Compositor) {
-        // Dispose only the side currently detached — the opposite side is
-        // live document state and must keep its textures.
-        if self.applied {
-            for id in self.source_tombstones.drain(..) {
-                compositor.dispose_layer(id);
-            }
-        } else {
-            for id in self.result_tombstones.drain(..) {
-                compositor.dispose_layer(id);
-            }
-        }
+        // Each tombstone set carries its own polarity; the helper disposes
+        // the side currently detached and leaves the live side alone.
+        self.source_tombstones
+            .dispose_if_detached(self.applied, compositor);
+        self.result_tombstones
+            .dispose_if_detached(self.applied, compositor);
     }
 }

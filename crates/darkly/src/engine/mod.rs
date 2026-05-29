@@ -657,6 +657,14 @@ impl DarklyEngine {
         self.compositor.test_node_texture_count()
     }
 
+    /// Force-drain both undo stacks and run `on_evict` on every entry,
+    /// releasing any tombstoned GPU textures the actions own. Test-only
+    /// hook for leak-cycle assertions that need to observe the post-
+    /// eviction texture count without rebuilding the engine.
+    pub fn test_drain_undo_for_teardown(&mut self) {
+        self.drain_undo_for_teardown();
+    }
+
     /// Blocking readback of a node's GPU texture (raster layer or mask
     /// modifier). For test assertions only. Format and extent come from the
     /// texture's own metadata — callers don't need to know whether the id
