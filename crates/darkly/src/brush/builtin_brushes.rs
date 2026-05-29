@@ -501,7 +501,7 @@ fn smudge_brush() -> Brush {
     }
 
     let mut metadata = BrushMetadata::from_graph("Smudge", graph);
-    metadata.category = "painting".to_string();
+    metadata.category = "effects".to_string();
     Brush::without_resources(metadata)
 }
 
