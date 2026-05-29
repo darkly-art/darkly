@@ -7,7 +7,7 @@
     import TextInput from './widgets/TextInput.svelte';
     import EnumDropdown from './widgets/EnumDropdown.svelte';
     import ColorInput from './widgets/ColorInput.svelte';
-    import HotkeyCapture from './widgets/HotkeyCapture.svelte';
+    import ChordCapture from './widgets/ChordCapture.svelte';
 
     type Props = { pref: PrefInfo };
     let { pref }: Props = $props();
@@ -40,7 +40,7 @@
             {#if pref.widget === 'color'}
                 <ColorInput value={value as string} {onchange} />
             {:else if pref.widget === 'hotkey'}
-                <HotkeyCapture prefKey={pref.key} value={value as string} {onchange} />
+                <ChordCapture value={value as string} acceptMouse={false} {onchange} />
             {:else if pref.kind === 'bool'}
                 <BoolToggle value={value as boolean} {onchange} />
             {:else if pref.kind === 'enum'}

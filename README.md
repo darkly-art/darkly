@@ -23,7 +23,7 @@
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
 
-Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Channel your inner chaos with Darkly, where messes are made and happy accidents incurred. Madness isn't a bug, it's a feature.
+Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with Darkly, where messes are made and happy accidents incur. Madness isn't a bug, it's a feature.
 
 **Try the demo [here](https://demo.darkly.art).**
 
@@ -31,7 +31,7 @@ Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructi
 
 ## Upcoming Kickstarter
 
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, and rescue your friends and colleagues from the iron grip of Adobe!
+We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, and rescue our friends and colleagues from the iron grip of corporate software!
 
 ## Unique Darkly Features
 

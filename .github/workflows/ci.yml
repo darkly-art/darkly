@@ -108,9 +108,16 @@ jobs:
       - name: npm ci
         working-directory: frontend
         run: npm ci
+      - name: wasm:build
+        working-directory: frontend
+        # Run before vitest so test files that transitively import the
+        # config store (which loads `wasm/pkg/darkly_wasm`) can resolve.
+        # `npm run build` would also rebuild the pkg, but doing it once
+        # explicitly here keeps the test step independent.
+        run: npm run wasm:build
       - name: vitest
         working-directory: frontend
         run: npm test
-      - name: vite build (includes wasm:build + svelte-check via tsc)
+      - name: vite build (includes svelte-check via tsc)
         working-directory: frontend
         run: npm run build

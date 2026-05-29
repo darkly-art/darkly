@@ -1,41 +1,10 @@
 <script lang="ts">
-    import { config, formatHotkey } from '../../config/store.svelte';
     import type { ActionRegistration } from '../../actions/registry';
-    import HotkeyCapture from './widgets/HotkeyCapture.svelte';
-    import HotkeyScopeSelect from './widgets/HotkeyScopeSelect.svelte';
-    import MouseChordCapture from './widgets/MouseChordCapture.svelte';
+    import TriggerListEditor from './TriggerListEditor.svelte';
 
-    type Props = { action: ActionRegistration };
-    let { action }: Props = $props();
+    type Props = { action: ActionRegistration; showScope: boolean };
+    let { action, showScope }: Props = $props();
 
-    const hotkeyKey = $derived(`hotkeys.${action.id}`);
-    const mouseKey = $derived(`mouseclicks.${action.id}`);
-
-    /** Multi-binding entries are joined with `|` in the YAML parser; the
-     *  capture widget edits a single binding at a time. */
-    function firstPart(v: unknown): string {
-        if (typeof v !== 'string') return '';
-        return v.split('|')[0] ?? '';
-    }
-
-    /** Effective (resolved) bindings — drive the capture widget value. */
-    const hotkeyValue = $derived(firstPart(config.get(hotkeyKey)));
-    const mouseValue = $derived(firstPart(config.get(mouseKey)));
-
-    /** Layer-below-user values — what a Reset would reveal. */
-    const baseHotkey = $derived(firstPart(config.baseValue(hotkeyKey)));
-    const baseMouse = $derived(firstPart(config.baseValue(mouseKey)));
-
-    const hotkeyOverridden = $derived(config.hasOverride(hotkeyKey));
-    const mouseOverridden = $derived(config.hasOverride(mouseKey));
-
-    function setHotkey(v: string) { config.set(hotkeyKey, v); }
-    function setMouse(v: string) { config.set(mouseKey, v); }
-
-    function resetHotkey() { config.resetKey(hotkeyKey); }
-    function resetMouse() { config.resetKey(mouseKey); }
-
-    // Description doubles as the help row when present.
     const desc = $derived(action.description ?? null);
 </script>
 
@@ -45,61 +14,17 @@
         {#if desc}<div class="desc">{desc}</div>{/if}
     </div>
 
-    <div class="scope-col">
-        <HotkeyScopeSelect
-            value={hotkeyValue}
-            {action}
-            onchange={setHotkey}
-        />
-    </div>
-
-    <div class="trigger-col">
-        <div class="trigger-cell">
-            <HotkeyCapture
-                prefKey={hotkeyKey}
-                value={hotkeyValue}
-                {action}
-                showScope={false}
-                onchange={setHotkey}
-            />
-            <button
-                type="button"
-                class="reset"
-                class:visible={hotkeyOverridden}
-                disabled={!hotkeyOverridden}
-                onclick={resetHotkey}
-                title="Reset to {formatHotkey(baseHotkey) ?? 'unbound'}"
-            >
-                <i class="fa-solid fa-rotate-left"></i>
-            </button>
-        </div>
-
-        <div class="trigger-cell">
-            <MouseChordCapture
-                {action}
-                value={mouseValue}
-                onchange={setMouse}
-            />
-            <button
-                type="button"
-                class="reset"
-                class:visible={mouseOverridden}
-                disabled={!mouseOverridden}
-                onclick={resetMouse}
-                title="Reset to {baseMouse || 'unbound'}"
-            >
-                <i class="fa-solid fa-rotate-left"></i>
-            </button>
-        </div>
+    <div class="triggers-col">
+        <TriggerListEditor {action} {showScope} />
     </div>
 </div>
 
 <style>
     .row {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-columns: minmax(0, 280px) 1fr;
         gap: 16px;
-        align-items: center;
+        align-items: start;
         padding: 10px 12px;
         border-bottom: 1px solid color-mix(in srgb, var(--bg-hover) 50%, transparent);
     }
@@ -118,32 +43,5 @@
         overflow-wrap: anywhere;
     }
 
-    .scope-col { display: flex; align-items: center; }
-
-    .trigger-col {
-        display: flex;
-        gap: 18px;
-        align-items: flex-start;
-    }
-    .trigger-cell {
-        display: inline-flex;
-        align-items: flex-start;
-        gap: 4px;
-    }
-
-    .reset {
-        width: 22px;
-        height: 22px;
-        border: none;
-        background: transparent;
-        color: var(--text-muted);
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 10px;
-        opacity: 0;
-        transition: opacity 0.15s, background 0.15s, color 0.15s;
-    }
-    .reset.visible { opacity: 1; }
-    .reset:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
-    .reset:disabled { cursor: default; }
+    .triggers-col { min-width: 0; }
 </style>

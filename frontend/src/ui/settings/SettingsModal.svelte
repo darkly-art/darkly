@@ -10,6 +10,10 @@
 
     let search = $state('');
     let activeTab = $state<'settings' | 'hotkeys'>('settings');
+    /** Reveal per-trigger Scope dropdowns in the Hotkeys tab. When off,
+     *  non-global scopes are still surfaced as a read-only chip beside
+     *  the chord so the user isn't blind to them. */
+    let showScopes = $state(false);
 
     /** Settings tab: every visible (non-Hidden) schema-defined pref. */
     const visiblePrefs = $derived.by(() => {
@@ -97,6 +101,12 @@
                     placeholder={activeTab === 'hotkeys' ? 'Search shortcuts…' : 'Search settings…'}
                 />
             </div>
+            {#if activeTab === 'hotkeys'}
+                <label class="scope-toggle" title="Show a Scope dropdown on each trigger row">
+                    <input type="checkbox" bind:checked={showScopes} />
+                    Show scopes
+                </label>
+            {/if}
         </header>
 
         <div class="main">
@@ -130,14 +140,10 @@
                     {:else}
                         <header class="trigger-header">
                             <span class="label-col">Action</span>
-                            <span class="scope-col">Scope</span>
-                            <span class="trigger-col">
-                                <span>Keyboard</span>
-                                <span>Mouse</span>
-                            </span>
+                            <span class="trigger-col">Triggers</span>
                         </header>
                         {#each visibleActions as action (action.id)}
-                            <ActionTriggerRow {action} />
+                            <ActionTriggerRow {action} showScope={showScopes} />
                         {/each}
                     {/if}
                 {/if}
@@ -247,7 +253,7 @@
 
     .trigger-header {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto auto;
+        grid-template-columns: minmax(0, 280px) 1fr;
         gap: 16px;
         padding: 8px 12px;
         font-size: 10px;
@@ -261,16 +267,22 @@
         background: var(--bg-active);
         z-index: 1;
     }
-    .trigger-header .scope-col {
-        min-width: 100px;
-    }
     .trigger-header .trigger-col {
-        display: flex;
-        gap: 18px;
+        min-width: 220px;
+        text-align: right;
     }
-    .trigger-header .trigger-col span {
-        min-width: 170px;
+
+    .scope-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--text-muted);
+        font-size: 12px;
+        cursor: pointer;
+        user-select: none;
+        white-space: nowrap;
     }
+    .scope-toggle input { cursor: pointer; }
 
     .prefs-list {
         flex: 1;
