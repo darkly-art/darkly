@@ -22,7 +22,7 @@
 <style>
     .row {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 280px) 1fr;
         gap: 16px;
         align-items: start;
         padding: 10px 12px;

@@ -45,21 +45,32 @@
         return kbd ? contextSatisfied(action, kbd.provides) : false;
     });
 
-    /** Reactive trigger list — re-reads every time the config store
-     *  version bumps. The `void config.get('')` touches the version rune
-     *  so this derived recomputes on any write. */
-    const triggers = $derived.by(() => {
+    /** Persistent rows — read from config and re-evaluated on every
+     *  store mutation via the `void config.get('')` reactivity tap. */
+    const stored = $derived.by(() => {
         void config.get('');
         return readTriggers(action.id);
     });
+
+    /** Ephemeral rows — added by "+ Add trigger" but not yet captured into.
+     *  Lives in component state instead of config because
+     *  `serializeTriggers` filters out empty-chord rows on write (to keep
+     *  storage clean of ghost overrides). If we wrote a fresh empty row
+     *  through config, it'd be filtered out before the reactive re-read
+     *  could surface it, and "Add trigger" would visibly do nothing.
+     *  Promoted to `stored` the moment the user captures a chord; dropped
+     *  silently on ×, modal close, or reset. */
+    let pending = $state<Trigger[]>([]);
+
+    /** Visible list = persistent rows followed by any pending ones. */
+    const triggers = $derived([...stored, ...pending]);
 
     const overridden = $derived.by(() => {
         void config.get('');
         return hasTriggerOverride(action.id);
     });
 
-    /** One conflict label per trigger (or null). Recomputes per
-     *  trigger-list write. */
+    /** One conflict label per trigger (or null). */
     const conflicts = $derived.by<(string | null)[]>(() => {
         void config.get('');
         return triggers.map(t => {
@@ -87,18 +98,41 @@
         return site ? `${site}:${chord}` : chord;
     }
 
+    /** Index `i` in the combined visible list points to either `stored`
+     *  (i < stored.length) or `pending` (i - stored.length otherwise). */
+    function isPendingIndex(i: number): boolean {
+        return i >= stored.length;
+    }
+
     function updateTrigger(index: number, next: Trigger) {
-        const list = triggers.slice();
-        list[index] = next;
-        writeTriggers(action.id, list);
         pendingAutostart = null;
+        if (isPendingIndex(index)) {
+            // First write to a freshly-added row: promote it into stored.
+            // (If `next.binding` is empty we still promote so the caller
+            // doesn't have to special-case clear-on-pending; serialization
+            // filters it back out before it reaches storage.)
+            const pIdx = index - stored.length;
+            const promoted = [...stored];
+            promoted.push(next);
+            pending = pending.toSpliced(pIdx, 1);
+            writeTriggers(action.id, promoted);
+        } else {
+            const list = stored.slice();
+            list[index] = next;
+            writeTriggers(action.id, list);
+        }
     }
 
     function removeTrigger(index: number) {
-        const list = triggers.slice();
-        list.splice(index, 1);
-        writeTriggers(action.id, list);
         pendingAutostart = null;
+        if (isPendingIndex(index)) {
+            const pIdx = index - stored.length;
+            pending = pending.toSpliced(pIdx, 1);
+        } else {
+            const list = stored.slice();
+            list.splice(index, 1);
+            writeTriggers(action.id, list);
+        }
     }
 
     function addTrigger() {
@@ -106,25 +140,21 @@
         // compatible site (chord empty until captured).
         const initialSite = allowsAnywhere ? null : (compatibleSites[0]?.name ?? null);
         const binding = initialSite ? `${initialSite}:` : '';
-        const list = [...triggers, { kind: 'kbd' as const, binding } satisfies Trigger];
-        writeTriggers(action.id, list);
-        pendingAutostart = list.length - 1;
+        pending = [...pending, { kind: 'kbd', binding } satisfies Trigger];
+        // Autostart index = position in the combined list.
+        pendingAutostart = stored.length + pending.length - 1;
     }
 
     function onCapture(index: number, newChord: string) {
-        const old = triggers[index];
         if (!newChord) {
             // Cleared via Backspace/Delete — drop the row entirely so the
             // user doesn't end up with a ghost row that can't dispatch.
             removeTrigger(index);
             return;
         }
+        const old = triggers[index];
         const newKind = detectKind(newChord);
-        const newSite = newKind === 'mouse'
-            // For mouse chords, preserve the prior site if any, else
-            // composeBinding picks a default.
-            ? siteOf(old.binding)
-            : siteOf(old.binding); // Keyboard preserves its site too.
+        const newSite = siteOf(old.binding);
         const newBinding = composeBinding(newKind, newSite, newChord);
         updateTrigger(index, { kind: newKind, binding: newBinding });
     }
@@ -143,6 +173,7 @@
 
     function reset() {
         resetTriggers(action.id);
+        pending = [];
         pendingAutostart = null;
     }
 
@@ -152,10 +183,6 @@
 </script>
 
 <div class="trigger-list">
-    {#if triggers.length === 0}
-        <div class="empty-hint">No triggers bound.</div>
-    {/if}
-
     {#each triggers as t, i (`${t.kind}:${t.binding}:${i}`)}
         {@const site = siteOf(t.binding)}
         {@const chord = chordOf(t.binding)}
@@ -226,7 +253,7 @@
     .trigger-list {
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 2px;
         align-items: flex-end;
     }
 
@@ -269,15 +296,15 @@
         display: flex;
         align-items: center;
         gap: 6px;
-        margin-top: 2px;
     }
     .add {
         background: transparent;
         border: 1px dashed color-mix(in srgb, var(--text-muted) 50%, transparent);
         color: var(--text-muted);
         border-radius: 4px;
-        padding: 4px 10px;
+        padding: 1px 10px;
         font-size: 11px;
+        line-height: 1.4;
         cursor: pointer;
     }
     .add:hover {
@@ -285,8 +312,8 @@
         color: var(--text);
     }
     .reset {
-        width: 22px;
-        height: 22px;
+        width: 20px;
+        height: 18px;
         border: none;
         background: transparent;
         color: var(--text-muted);
@@ -299,10 +326,4 @@
     .reset.visible { opacity: 1; }
     .reset:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
     .reset:disabled { cursor: default; }
-
-    .empty-hint {
-        font-size: 11px;
-        color: var(--text-muted);
-        font-style: italic;
-    }
 </style>

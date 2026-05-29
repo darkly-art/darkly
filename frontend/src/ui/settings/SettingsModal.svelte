@@ -253,7 +253,7 @@
 
     .trigger-header {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-columns: minmax(0, 280px) 1fr;
         gap: 16px;
         padding: 8px 12px;
         font-size: 10px;
