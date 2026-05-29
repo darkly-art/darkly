@@ -295,8 +295,8 @@ pub trait BrushNodeEvaluator: Send + Sync {
     ///
     /// Terminal nodes that own preview rendering (e.g. `color_output`)
     /// also override this — they read a `brush_preview` input texture and
-    /// blit it into `gpu.preview_mask_view`, then publish placement info
-    /// via `gpu.brush_preview_info`.
+    /// blit it into `gpu.preview.mask_view`, then publish placement info
+    /// via `gpu.preview.info`.
     fn render_preview(
         &self,
         ctx: &EvalContext,
@@ -765,7 +765,7 @@ impl BrushGraphRunner {
     /// produce shape-appropriate outputs (e.g. stamp emits a B&W tip
     /// texture sized to the brush's canvas-pixel extent), terminals
     /// consume them and render into the overlay's preview mask, publishing
-    /// placement info via `gpu.brush_preview_info`.
+    /// placement info via `gpu.preview.info`.
     pub fn render_preview_pipeline(&mut self, gpu: &mut BrushGpuContext) {
         self.dispatch_gpu(gpu, |ev, ctx, gpu| ev.render_preview(ctx, gpu));
     }
