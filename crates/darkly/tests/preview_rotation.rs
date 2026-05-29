@@ -11,8 +11,8 @@ use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
-use darkly::brush::wire::BrushWireType;
 use darkly::brush::registry;
+use darkly::brush::wire::BrushWireType;
 use darkly::gpu::test_utils::test_device;
 use darkly::nodegraph::{Graph, PortRef};
 

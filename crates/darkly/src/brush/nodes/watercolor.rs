@@ -743,34 +743,6 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
 
-    fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        gpu.clear_pending_dabs();
-
-        // Clear the scratch to transparent — its premultiplied source-over
-        // composite accumulates from zero, so a fresh stroke (or a rewind
-        // boundary triggered by the stabilizer) must start from that state.
-        // Without this, partial re-render after divergence leaves the
-        // defunct stroke's pigment in the scratch outside the checkpoint
-        // bbox; commit then composites those stale pixels onto the layer.
-        let scratch = gpu
-            .scratch
-            .as_deref()
-            .expect("watercolor::begin_stroke requires Scratch");
-        let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("watercolor-begin_stroke-clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: scratch.write_view(),
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-    }
-
     fn flush_dabs(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {
         if gpu.pending_dab_count == 0 {
             return;

@@ -473,27 +473,6 @@ impl BrushNodeEvaluator for PaintEvaluator {
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
 
-    fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let scratch = gpu
-            .scratch
-            .as_deref()
-            .expect("paint::begin_stroke requires Scratch");
-        let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("paint-begin_stroke"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: scratch.write_view(),
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-        gpu.clear_pending_dabs();
-    }
-
     fn flush_dabs(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
         if gpu.pending_dab_count == 0 {
             return;

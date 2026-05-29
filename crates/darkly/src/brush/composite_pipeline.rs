@@ -15,7 +15,20 @@
 
 use std::any::Any;
 
-use crate::brush::pipeline::{BrushPipelineEntry, BuildContext, DynamicUniformRing};
+use crate::brush::pipeline::{
+    BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
+};
+
+/// `BrushPipelines::new` harvests this alongside `nodes::registrations()`
+/// so the central registry has a single uniform input. The composite
+/// pipeline isn't tied to any one node — every terminal's `commit` hook
+/// uses it — so it lives here instead of inside `nodes/`.
+pub fn composite_pipeline_registration() -> BrushPipelineRegistration {
+    BrushPipelineRegistration {
+        id: "composite",
+        build: |ctx| Box::new(CompositePipeline::build(ctx)),
+    }
+}
 
 /// Uniform data for the brush commit composite shader.
 #[repr(C)]

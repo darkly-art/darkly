@@ -14,8 +14,8 @@
 
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::paint_info::PaintInformation;
-use darkly::brush::wire::ScalarValue;
 use darkly::brush::registry;
+use darkly::brush::wire::ScalarValue;
 use darkly::gpu::params::ParamValue;
 use darkly::nodegraph::{Graph, PortDef, PortRef};
 

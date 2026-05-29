@@ -10,9 +10,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::registry_io::{deserialize_instance, serialize_instance, InstancePayload};
+use crate::brush::registry;
 use crate::brush::stabilizer::StabilizerRegistry;
 use crate::brush::wire::BrushWireType;
-use crate::brush::registry;
 use crate::document::layer_kind;
 use crate::document::modifier;
 use crate::gpu::blend_mode;
