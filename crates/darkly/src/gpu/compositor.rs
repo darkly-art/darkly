@@ -1679,8 +1679,8 @@ impl Compositor {
         // Voids piggyback on the same master clock as veils and the tool
         // overlay — using a parallel integer divisor keeps tick alignment so
         // an animated void never forces a frame the other systems wouldn't
-        // already produce, matching the `gpu-lessons-learned.md` master-
-        // clock principle.
+        // already produce, matching the `docs/lessons-learned/gpu-lessons-learned.md`
+        // master-clock principle.
         let void_fires = void_divisor > 0
             && self.any_animated_layer(doc)
             && self.frame_count.is_multiple_of(void_divisor);

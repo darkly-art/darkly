@@ -6,7 +6,7 @@
 //! On WebGPU/WASM, you cannot synchronously wait for GPU results. `map_async`
 //! resolves via a JS Promise through the browser event loop. Any form of
 //! blocking (`recv()`, `thread::park()`) prevents the event loop from running,
-//! deadlocking the tab at 100% CPU (see gpu-lessons-learned.md §5).
+//! deadlocking the tab at 100% CPU (see docs/lessons-learned/gpu-lessons-learned.md §5).
 //!
 //! The correct pattern: encode the copy, submit, call `begin_mapping`, then
 //! poll each frame until the data arrives.
@@ -145,7 +145,7 @@ impl ReadbackRequest {
     ///
     /// On WebGPU/WASM this deadlocks: `recv()` spin-waits (Rust's thread
     /// parker is a no-op on wasm32), blocking the JS event loop, so the
-    /// `map_async` Promise can never resolve. See gpu-lessons-learned.md §5.
+    /// `map_async` Promise can never resolve. See docs/lessons-learned/gpu-lessons-learned.md §5.
     pub fn blocking_read(&self, device: &wgpu::Device) -> Vec<u8> {
         let slice = self.buffer.slice(..);
 

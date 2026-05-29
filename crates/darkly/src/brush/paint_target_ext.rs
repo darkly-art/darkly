@@ -43,7 +43,7 @@ pub trait BrushPaintTargetExt {
     ///     premultiplied-alpha pixels (e.g. the `paint` terminal renders
     ///     this way to use hardware source-over blend). `false` for
     ///     straight-alpha producers (`color_output`, watercolor commit).
-    ///     Per `compositing-lessons-learned.md` §4, the shader needs to
+    ///     Per `docs/lessons-learned/compositing-lessons-learned.md` §4, the shader needs to
     ///     know the convention to compute correct Porter-Duff on the
     ///     straight-alpha layer destination.
     ///

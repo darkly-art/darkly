@@ -267,7 +267,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// `dst.rgba *= mask_sample` — produces premultiplied output. Use this when
     /// the result will be sampled with bilinear filtering (e.g. transform sources),
     /// where premultiplied data is required for correct interpolation at alpha
-    /// edges (see compositing-lessons-learned.md §2).
+    /// edges (see docs/lessons-learned/compositing-lessons-learned.md §2).
     ///
     /// **Do not use for straight-alpha destinations** (layer textures, clipboard
     /// staging). Use `multiply_alpha_by_mask` instead — it preserves RGB and only
@@ -349,7 +349,7 @@ impl<'a> GpuPaintTarget<'a> {
     /// `dst.a *= mask_sample`, `dst.rgb` unchanged. Correct for straight-alpha
     /// destinations (layer textures, clipboard staging) where the color channels
     /// represent the actual color independent of opacity. See
-    /// compositing-lessons-learned.md §1: in straight alpha, coverage scaling
+    /// docs/lessons-learned/compositing-lessons-learned.md §1: in straight alpha, coverage scaling
     /// only affects the alpha channel.
     pub fn multiply_alpha_by_mask(
         &self,

@@ -8,7 +8,7 @@
 // Usage: prepend this file to your shader source via concat! in Rust:
 //   concat!(include_str!("source_over.wgsl"), "\n", include_str!("my_shader.wgsl"))
 //
-// See compositing-lessons-learned.md for the full rationale.
+// See docs/lessons-learned/compositing-lessons-learned.md for the full rationale.
 
 fn source_over(fg_pre: vec3f, fg_a: f32, bg: vec4f) -> vec4f {
     let out_a = fg_a + bg.a * (1.0 - fg_a);

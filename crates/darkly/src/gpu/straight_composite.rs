@@ -15,7 +15,7 @@
 //! ```
 //!
 //! This module provides the Rust-side utilities for step 1.
-//! See `compositing-lessons-learned.md` #4 for the full rationale.
+//! See `docs/lessons-learned/compositing-lessons-learned.md` #4 for the full rationale.
 
 /// Create a bind group layout with a single `texture_2d<f32>` at binding 0.
 ///

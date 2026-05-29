@@ -351,7 +351,7 @@ No engine changes needed.
 - Stabilizer divergence triggers partial re-render from the nearest save
   point, not full stroke re-render.
 
-See [gpu-lessons-learned.md](../../gpu-lessons-learned.md) for the specific
+See [gpu-lessons-learned.md](../lessons-learned/gpu-lessons-learned.md) for the specific
 pitfalls (pixel-centre offsets, readback deadlock on WebGPU, NDC stretch on
 padded textures, copy-origin UV math).
 

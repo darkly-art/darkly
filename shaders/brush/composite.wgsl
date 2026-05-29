@@ -7,7 +7,7 @@
 // The fg_premultiplied uniform tells the shader which convention fg uses.
 //
 // Outputs straight alpha with REPLACE blend — no hardware alpha blending.
-// See compositing-lessons-learned.md #4 (why REPLACE) and #6 (why the flag).
+// See docs/lessons-learned/compositing-lessons-learned.md #4 (why REPLACE) and #6 (why the flag).
 
 struct CompositeUniforms {
     origin: vec2f,       // quad top-left in canvas pixels

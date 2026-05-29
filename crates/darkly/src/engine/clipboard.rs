@@ -216,7 +216,7 @@ impl DarklyEngine {
 
                 // 3. Multiply staging alpha by cropped selection: staging.a *= sel.
                 //    RGB stays unchanged — straight-alpha convention (see
-                //    compositing-lessons-learned.md §1).
+                //    docs/lessons-learned/compositing-lessons-learned.md §1).
                 let staging_target = GpuPaintTarget::from_canvas_texture(
                     &staging_tex,
                     &staging_view,

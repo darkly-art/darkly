@@ -137,7 +137,7 @@ Past lessons that illustrate the pattern:
 - **Selection overlay** generated one GPU primitive per boundary pixel (~800 instances for a rectangle). Fix: merge collinear segments and simplify polylines once when the selection changes — down to ~4-30 primitives.
 - **Animation scheduling** had independent per-system timers that forced extra frame renders. Fix: a single master clock with integer divisors so slower systems' ticks always align with faster ones — zero extra renders.
 
-See `gpu-lessons-learned.md` for full details.
+See `docs/lessons-learned/gpu-lessons-learned.md` for full details.
 
 ## Testing Principle
 
@@ -147,7 +147,7 @@ See `gpu-lessons-learned.md` for full details.
 
 ## No Blocking GPU Readbacks
 
-**Never use `device.poll(Wait)`, `blocking_read()`, `readback_texture()`, or any synchronous GPU→CPU readback in production code.** These deadlock on WebGPU/WASM — the browser event loop is the only mechanism for resolving GPU buffer mappings, and any form of blocking (`recv()`, spin-wait, `thread::park()`) prevents it from running. See `gpu-lessons-learned.md` §5 for the full stack trace of why.
+**Never use `device.poll(Wait)`, `blocking_read()`, `readback_texture()`, or any synchronous GPU→CPU readback in production code.** These deadlock on WebGPU/WASM — the browser event loop is the only mechanism for resolving GPU buffer mappings, and any form of blocking (`recv()`, spin-wait, `thread::park()`) prevents it from running. See `docs/lessons-learned/gpu-lessons-learned.md` §5 for the full stack trace of why.
 
 The correct pattern is async readback: `request_readback()` → `readbacks.submit()` → poll on the next frame via `ReadbackScheduler`. If CPU data is needed from a GPU texture that changes infrequently (e.g., the selection mask), maintain a CPU cache populated by the async readback and read from that.
 

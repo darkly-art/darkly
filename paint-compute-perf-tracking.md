@@ -271,7 +271,7 @@ brush stroke the convention is internal to the `paint` terminal —
 it writes premultiplied, then the commit hook flips
 `fg_premultiplied: true` on `commit_brush_dab` so the existing
 composite shader interprets the scratch correctly when blitting to
-the layer. See `compositing-lessons-learned.md` §4 for why hardware
+the layer. See `docs/lessons-learned/compositing-lessons-learned.md` §4 for why hardware
 source-over requires a premultiplied destination; per the same lesson,
 straight-alpha + hardware blend would produce dark-edge artifacts on
 partially transparent backgrounds. The shipped fragment terminal is

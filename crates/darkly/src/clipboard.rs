@@ -128,7 +128,7 @@ pub struct LayerClipboard {
     pub bounds: ClipboardRect,
     /// Base64-encoded raw RGBA8 pixels, row-major, `width * height * 4`
     /// bytes after decode. Straight alpha (Darkly never premultiplies — see
-    /// `compositing-lessons-learned.md §1`).
+    /// `docs/lessons-learned/compositing-lessons-learned.md §1`).
     pub pixels_b64: String,
     /// Mask metadata if the source had one. Pixel data is **not** captured
     /// in v1 — restoring rebuilds an empty (fully opaque) mask with the
