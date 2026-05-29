@@ -11,8 +11,8 @@ use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
+use darkly::brush::registry;
 use darkly::brush::wire::BrushWireType;
-use darkly::brush::BrushNodeRegistry;
 use darkly::gpu::test_utils::test_device;
 use darkly::nodegraph::{Graph, PortRef};
 
@@ -45,7 +45,7 @@ fn pen_tilt_direction_drives_preview_rotation() {
     // `pen.tilt_direction → terminal.rotation`. The built-in brushes
     // don't wire rotation today, so the test constructs its own
     // graph rather than mutating a builtin's defaults.
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::<BrushWireType>::new();
 
     let pen = graph.add_node(

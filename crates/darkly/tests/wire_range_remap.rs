@@ -14,8 +14,8 @@
 
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::paint_info::PaintInformation;
+use darkly::brush::registry;
 use darkly::brush::wire::ScalarValue;
-use darkly::brush::{default_evaluators, BrushNodeRegistry};
 use darkly::gpu::params::ParamValue;
 use darkly::nodegraph::{Graph, PortDef, PortRef};
 
@@ -52,13 +52,13 @@ fn run_one_dab(runner: &mut BrushGraphRunner, pressure: f32, dab_index: u32) {
 /// caused `random → circle.seed` to repeat.
 #[test]
 fn random_outputs_unit_range_and_varies_per_dab() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
     let random_reg = registry.get("random").unwrap();
     graph.add_node("random", random_reg.ports.clone(), random_params());
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     let mut samples = Vec::with_capacity(16);
     for dab in 0..16 {
@@ -95,7 +95,7 @@ fn random_outputs_unit_range_and_varies_per_dab() {
 /// and `b=1`, so `mix.result == factor_after_remap`.
 #[test]
 fn random_to_wide_range_input_remaps() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
@@ -127,7 +127,7 @@ fn random_to_wide_range_input_remaps() {
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     let mut samples = Vec::new();
     for dab in 0..16 {
@@ -153,7 +153,7 @@ fn random_to_wide_range_input_remaps() {
 /// pressure ∈ [0, 1] cast to a frequency in [1, 16] rounded to 1 forever.
 #[test]
 fn pen_pressure_to_frequency_range_remaps() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
@@ -183,7 +183,7 @@ fn pen_pressure_to_frequency_range_remaps() {
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     // pressure 0.0 → factor 1.0
     run_one_dab(&mut runner, 0.0, 0);
@@ -217,7 +217,7 @@ fn pen_pressure_to_frequency_range_remaps() {
 /// any existing math-node-based brush.
 #[test]
 fn math_node_output_passes_through_to_ranged_input() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     // multiply with explicit defaults: a=0.5, b=0.5 → result=0.25.
@@ -257,7 +257,7 @@ fn math_node_output_passes_through_to_ranged_input() {
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     run_one_dab(&mut runner, 0.0, 0);
     let v = read_scalar(&runner, "mix", "result");
@@ -273,7 +273,7 @@ fn math_node_output_passes_through_to_ranged_input() {
 /// of being mapped onto the slider's `[0, 4]` hint.
 #[test]
 fn ranged_source_to_unranged_input_passes_through() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
@@ -304,7 +304,7 @@ fn ranged_source_to_unranged_input_passes_through() {
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     for dab in 0..8 {
         run_one_dab(&mut runner, 0.5, dab);
@@ -322,7 +322,7 @@ fn ranged_source_to_unranged_input_passes_through() {
 /// exactly, so the identity curve's output equals pressure.
 #[test]
 fn identity_range_is_a_noop() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
@@ -352,7 +352,7 @@ fn identity_range_is_a_noop() {
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     for pressure in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
         run_one_dab(&mut runner, pressure, 0);
@@ -377,7 +377,7 @@ fn identity_range_is_a_noop() {
 /// "angular signal."
 #[test]
 fn unit_source_to_bipolar_dest_spans_full_range() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
@@ -407,7 +407,7 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     let mut min = f32::INFINITY;
     let mut max = f32::NEG_INFINITY;
@@ -444,7 +444,7 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
 /// CPU-only test pins the contract at the runner level.
 #[test]
 fn radian_to_radian_wire_passes_through() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
@@ -474,7 +474,7 @@ fn radian_to_radian_wire_passes_through() {
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     // drawing_angle defaults to 0 in PaintInformation. Set it explicitly
     // via a custom PaintInformation to a known radian value and confirm

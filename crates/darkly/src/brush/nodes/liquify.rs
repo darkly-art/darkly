@@ -298,6 +298,8 @@ pub const TYPE_ID: &str = "liquify";
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![liquify_pipeline_reg()],
+        evaluator: || Box::new(LiquifyEvaluator),
+        lifecycle: crate::brush::node::Lifecycle::SeedScratchFromPreStroke,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",
@@ -519,39 +521,6 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             .extend_from_slice(bytemuck::bytes_of(&meta));
 
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
-    }
-
-    fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        gpu.clear_pending_dabs();
-
-        let Some(pre_stroke) = gpu.pre_stroke_texture else {
-            return;
-        };
-        let Some(scratch) = gpu.scratch.as_deref() else {
-            return;
-        };
-        let scratch_tex = scratch.write_texture();
-        let w = scratch_tex.width();
-        let h = scratch_tex.height();
-        gpu.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: pre_stroke,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: scratch_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
     }
 
     fn flush_dabs(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {

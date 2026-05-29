@@ -11,35 +11,38 @@ use crate::nodegraph::{NodeRegistration, PortDef};
 pub const TYPE_ID: &str = "make_color";
 
 pub fn register() -> BrushNodeRegistration {
-    BrushNodeRegistration::compute(NodeRegistration {
-        type_id: TYPE_ID,
-        category: "color",
-        display_name: "Make Color",
-        ports: vec![
-            PortDef::input("r", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Red channel (0\u{2013}1)"),
-            PortDef::input("g", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Green channel (0\u{2013}1)"),
-            PortDef::input("b", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Blue channel (0\u{2013}1)"),
-            PortDef::input("a", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 1.0)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Alpha channel (0 = transparent, 1 = opaque)"),
-            PortDef::output("color", BrushWireType::Color)
-                .with_description("Combined RGBA color value"),
-        ],
-        params: &[],
-        is_gpu: false,
-        is_terminal: false,
-        supports_erase: true,
-    })
+    BrushNodeRegistration::compute(
+        NodeRegistration {
+            type_id: TYPE_ID,
+            category: "color",
+            display_name: "Make Color",
+            ports: vec![
+                PortDef::input("r", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Red channel (0\u{2013}1)"),
+                PortDef::input("g", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Green channel (0\u{2013}1)"),
+                PortDef::input("b", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Blue channel (0\u{2013}1)"),
+                PortDef::input("a", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 1.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Alpha channel (0 = transparent, 1 = opaque)"),
+                PortDef::output("color", BrushWireType::Color)
+                    .with_description("Combined RGBA color value"),
+            ],
+            params: &[],
+            is_gpu: false,
+            is_terminal: false,
+            supports_erase: true,
+        },
+        || Box::new(MakeColorEvaluator),
+    )
 }
 
 pub struct MakeColorEvaluator;

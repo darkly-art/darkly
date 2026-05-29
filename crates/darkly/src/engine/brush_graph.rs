@@ -6,7 +6,6 @@
 use super::{DarklyEngine, ReadbackContext};
 use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
-use crate::brush::BrushNodeRegistry;
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
@@ -50,7 +49,7 @@ impl DarklyEngine {
     /// info) — the wrapper's pipeline metadata is engine-internal and the
     /// frontend doesn't see it.
     pub fn brush_node_types(&self) -> Vec<crate::nodegraph::NodeRegistration<BrushWireType>> {
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         registry.types().map(|r| r.node.clone()).collect()
     }
 
@@ -66,7 +65,7 @@ impl DarklyEngine {
     /// terminals where flipping `gpu.blend_mode` would do nothing.
     pub fn active_brush_supports_erase(&self) -> bool {
         let graph = self.active_brush_graph();
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         for node in graph.nodes.values() {
             let Some(reg) = registry.get(&node.type_id) else {
                 continue;
@@ -622,7 +621,7 @@ impl DarklyEngine {
     /// Add a node to the active graph and compile.
     /// Returns the updated graph JSON on success.
     pub fn brush_graph_add_node(&mut self, type_id: &str) -> Result<String, String> {
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         let reg = registry
             .get(type_id)
             .ok_or_else(|| format!("unknown node type: {type_id}"))?;
@@ -798,7 +797,7 @@ impl DarklyEngine {
     /// The result is ordered by auto-layout position (top-to-bottom,
     /// left-to-right) for a stable order in the properties panel.
     pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         let tool = self.tool_session.read();
         let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
         let layout = brush.graph.auto_layout();
@@ -923,7 +922,7 @@ impl DarklyEngine {
         // the registration. One port lookup pays for all three flags;
         // they determine whether this scrub affects the editor preview
         // and/or the dab thumbnail (see `ChangeKind` docs).
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         let port_meta = registry.get(&type_id).and_then(|r| {
             r.ports
                 .iter()

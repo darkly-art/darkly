@@ -16,11 +16,12 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 pub const TYPE_ID: &str = "pen_input";
 
 pub fn register() -> BrushNodeRegistration {
-    BrushNodeRegistration::compute(NodeRegistration {
-        type_id: TYPE_ID,
-        category: "input",
-        display_name: "Pen Input",
-        ports: vec![
+    BrushNodeRegistration::compute(
+        NodeRegistration {
+            type_id: TYPE_ID,
+            category: "input",
+            display_name: "Pen Input",
+            ports: vec![
             PortDef::output("pressure", BrushWireType::Scalar)
                 .with_natural_range(0.0, 1.0)
                 .with_description("Pen pressure (0 = no pressure, 1 = full pressure)"),
@@ -139,7 +140,9 @@ pub fn register() -> BrushNodeRegistration {
         is_gpu: false,
         is_terminal: false,
         supports_erase: true,
-    })
+    },
+    || Box::new(PenInputEvaluator),
+    )
 }
 
 /// No-op evaluator — `seed_sensors()` handles this node directly.

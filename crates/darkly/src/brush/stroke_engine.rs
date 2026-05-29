@@ -355,21 +355,12 @@ impl StrokeEngine {
         gpu.flush_if_needed();
 
         // Update `last_dab_size` from whichever terminal in the graph
-        // publishes a `dab_size` output. Every compiled terminal does;
-        // the first hit wins. Each terminal owns the unit-of-`dab_size`
-        // it returns — paint/watercolor return `diameter` from the
-        // size port; smudge does the same; liquify returns its disc
-        // diameter for stroke-engine spacing.
-        for node_type in &["paint", "watercolor", "smudge", "liquify"] {
-            if let Some(slot) = self.runner.find_output_slot(node_type, "dab_size") {
-                if let Some(val) = self.runner.read_slot(slot) {
-                    let size = val.as_vec2();
-                    if size[0] > 0.0 && size[1] > 0.0 {
-                        self.last_dab_size = size;
-                        break;
-                    }
-                }
-            }
+        // publishes a `dab_size` output. The runner cached the slot at
+        // build time, so a new terminal that publishes the same port is
+        // picked up automatically — no hand-written terminal-name list
+        // to keep in sync.
+        if let Some(size) = self.runner.last_dab_size() {
+            self.last_dab_size = size;
         }
 
         // Dab bounding box for save points, in canvas coords. Prefer the

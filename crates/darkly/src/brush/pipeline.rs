@@ -208,6 +208,16 @@ pub struct BrushPipelineRegistration {
     pub build: fn(&BuildContext) -> Box<dyn BrushPipelineEntry>,
 }
 
+/// Brush pipelines that aren't owned by any single node — the
+/// commit composite blit, future plumbing — funnel through here so
+/// [`BrushPipelines::new`] has a single uniform input alongside
+/// `nodes::registrations()`. Adding a future plumbing pipeline means
+/// dropping its registration into this list; the harvest loop picks
+/// it up automatically.
+pub fn plumbing_registrations() -> Vec<BrushPipelineRegistration> {
+    vec![crate::brush::composite_pipeline::composite_pipeline_registration()]
+}
+
 // ── BrushPipelines: shared infra + plumbing + per-mode registry ──────────
 
 /// Central brush GPU pipeline owner.
@@ -547,24 +557,15 @@ impl BrushPipelines {
             min_uniform_align,
         };
         let mut entries: HashMap<&'static str, Box<dyn BrushPipelineEntry>> = HashMap::new();
-        for node_reg in crate::brush::nodes::registrations() {
-            for pl_reg in node_reg.pipelines {
-                let id = pl_reg.id;
-                let prev = entries.insert(id, (pl_reg.build)(&build_ctx));
-                debug_assert!(prev.is_none(), "duplicate brush pipeline id: {id}");
-            }
+        let pipeline_regs = crate::brush::nodes::registrations()
+            .into_iter()
+            .flat_map(|node_reg| node_reg.pipelines)
+            .chain(plumbing_registrations());
+        for pl_reg in pipeline_regs {
+            let id = pl_reg.id;
+            let prev = entries.insert(id, (pl_reg.build)(&build_ctx));
+            debug_assert!(prev.is_none(), "duplicate brush pipeline id: {id}");
         }
-        // The brush commit pipeline isn't a node — it's the shared
-        // scratch→layer blit used by every terminal's `commit` hook.
-        // Register it manually so it lives outside the auto-discovered
-        // `nodes/` tree.
-        let prev = entries.insert(
-            "composite",
-            Box::new(crate::brush::composite_pipeline::CompositePipeline::build(
-                &build_ctx,
-            )),
-        );
-        debug_assert!(prev.is_none(), "composite pipeline id collided");
 
         // Shared compiled-brush preview pipeline cache. Owns its own
         // dabs-storage BGL (single-element binding); reuses the
