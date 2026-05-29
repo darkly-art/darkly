@@ -13,7 +13,7 @@ use std::sync::Arc;
 use super::eval::BrushPreviewInfo;
 use super::pipeline::BrushPipelines;
 use super::scratch::Scratch;
-use super::wgsl_compile::CompiledBrush;
+use super::wgsl::CompiledBrush;
 use super::wire::ScalarValue;
 use crate::gpu::overlay::ToolOverlay;
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -262,7 +262,7 @@ pub struct BrushGpuContext<'a> {
     /// built by the runner's `dispatch_gpu` immediately after
     /// `execute_cpu` and held for the duration of the dispatch pass.
     /// Keys follow the `n{node_id}_{port_name}` convention used by
-    /// [`crate::brush::wgsl_compile::CompileWgslCtx::dab_field_name`].
+    /// [`crate::brush::wgsl::CompileWgslCtx::dab_field_name`].
     /// The terminal reads from this to pack per-dab records and
     /// uniforms.
     pub slot_outputs_owned: Option<HashMap<String, ScalarValue>>,
@@ -334,7 +334,7 @@ impl<'a> BrushGpuContext<'a> {
         radius: f32,
     ) {
         let record_start = self.pending_dab_bytes.len();
-        super::wgsl_compile::pack_intrinsic_dab_header(
+        super::wgsl::pack_intrinsic_dab_header(
             &mut self.pending_dab_bytes,
             position,
             bbox_radius,
@@ -344,7 +344,7 @@ impl<'a> BrushGpuContext<'a> {
             .slot_outputs_owned
             .as_ref()
             .expect("queue_dab requires slot_outputs_owned on gpu_context");
-        super::wgsl_compile::pack_dab_record(compiled, outputs, &mut self.pending_dab_bytes);
+        super::wgsl::pack_dab_record(compiled, outputs, &mut self.pending_dab_bytes);
         // Pad to the full record size so the next dab starts aligned.
         let written = self.pending_dab_bytes.len() - record_start;
         if written < compiled.dab_record_size {

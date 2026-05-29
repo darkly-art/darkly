@@ -1,4 +1,4 @@
-//! Framework tests for `crate::brush::wgsl_compile` — the brush-graph
+//! Framework tests for `crate::brush::wgsl` — the brush-graph
 //! → WGSL fragment shader compiler.
 //!
 //! Asserts:
@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use darkly::brush::eval::BrushNodeEvaluator;
-use darkly::brush::wgsl_compile::{compile_brush_to_wgsl, CompileError};
+use darkly::brush::wgsl::{compile_brush_to_wgsl, CompileError};
 use darkly::brush::wire::BrushWireType;
 use darkly::brush::BrushNodeRegistry;
 use darkly::nodegraph::{compile, Graph, PortRef};

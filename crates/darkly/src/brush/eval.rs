@@ -17,7 +17,7 @@ use super::curve_math::CurveLut;
 use super::nodes::{paint_color, pen_input};
 
 use super::gpu_context::BrushGpuContext;
-use super::wgsl_compile::CompiledBrush;
+use super::wgsl::CompiledBrush;
 use super::wire::{BrushWireType, ScalarValue};
 
 // ── Evaluator trait ─────────────────────────────────────────────────
@@ -349,11 +349,11 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// (the compiled execution path); brushes on the per-dab dispatch
     /// path never call this. Returning `Err` makes the whole brush
     /// fail to load when its terminal asks for compilation — there is
-    /// no runtime fallback. See [`crate::brush::wgsl_compile`].
+    /// no runtime fallback. See [`crate::brush::wgsl`].
     fn compile_wgsl(
         &self,
-        _cctx: &crate::brush::wgsl_compile::CompileWgslCtx,
-    ) -> Result<crate::brush::wgsl_compile::NodeWgsl, String> {
+        _cctx: &crate::brush::wgsl::CompileWgslCtx,
+    ) -> Result<crate::brush::wgsl::NodeWgsl, String> {
         Err("node has no WGSL implementation".into())
     }
 
@@ -378,14 +378,14 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// which `is_terminal()` returns `true` invoke the hook.
     fn compile_preview_body(
         &self,
-        cctx: &crate::brush::wgsl_compile::CompileWgslCtx,
-    ) -> Result<crate::brush::wgsl_compile::NodeWgsl, String> {
+        cctx: &crate::brush::wgsl::CompileWgslCtx,
+    ) -> Result<crate::brush::wgsl::NodeWgsl, String> {
         self.compile_wgsl(cctx)
     }
 
     /// Per-node contribution to the brush's dab bounding-box extent.
     /// Composed by the framework at brush-compile time into a single
-    /// `(factor, extra_px)` pair on [`crate::brush::wgsl_compile::CompiledBrush`];
+    /// `(factor, extra_px)` pair on [`crate::brush::wgsl::CompiledBrush`];
     /// the `paint` terminal uses it to size both the per-dab
     /// rasterized quad (via `dab.bbox_target_px`) and the CPU
     /// layer-clip bbox, ensuring the save-point system tracks exactly
@@ -393,12 +393,12 @@ pub trait BrushNodeEvaluator: Send + Sync {
     ///
     /// Default `Identity` — only nodes that change the dab footprint
     /// (shape masks, displacement / warp) override. See
-    /// [`crate::brush::wgsl_compile::ExtentContribution`].
+    /// [`crate::brush::wgsl::ExtentContribution`].
     fn extent(
         &self,
-        _ctx: &crate::brush::wgsl_compile::ExtentCtx,
-    ) -> crate::brush::wgsl_compile::ExtentContribution {
-        crate::brush::wgsl_compile::ExtentContribution::Identity
+        _ctx: &crate::brush::wgsl::ExtentCtx,
+    ) -> crate::brush::wgsl::ExtentContribution {
+        crate::brush::wgsl::ExtentContribution::Identity
     }
 }
 
@@ -634,7 +634,7 @@ impl BrushGraphRunner {
 
     /// Build a name → value map of every output slot in the graph,
     /// keyed by `n{node_id}_{port_name}` (matching the convention
-    /// [`crate::brush::wgsl_compile::CompileWgslCtx::dab_field_name`]
+    /// [`crate::brush::wgsl::CompileWgslCtx::dab_field_name`]
     /// uses). Called by `dispatch_gpu` for compiled brushes; the
     /// compiled terminal reads from this to pack per-dab records and
     /// uniforms. Returns an empty map for graphs with no slots.
