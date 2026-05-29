@@ -9,11 +9,12 @@
 ![TypeScript](https://img.shields.io/badge/TypeScript-000000?style=for-the-badge&logo=typescript&logoColor=6914ff)
 ![WebAssembly](https://img.shields.io/badge/WebAssembly-000000?style=for-the-badge&logo=WebAssembly&logoColor=4400ff)
 ![WebGPU](https://img.shields.io/badge/WebGPU-000000?style=for-the-badge&logo=webgpu&logoColor=4400ff)
+[![Coverage](https://img.shields.io/codecov/c/github/darkly-art/darkly?token=TIIFB7UHAJ&label=Coverage&logo=codecov&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://codecov.io/gh/darkly-art/darkly)
 
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital painters. It has everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
+[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital painters. It aims to have everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
 ### Darkly pledges to:
 
@@ -38,13 +39,13 @@ In addition to the usual paint features, Darkly has some entropic tools to empow
 
 ### Veils
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By shrouding your art behind a mysterious pane of glass, they invite you to see something that wasn't there before.
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
 
 Veils have practical uses too:
 
 - By hiding fine details, they can prevent **premature fixation on detail**, freeing you to focus on composition.
-- During the ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
-- They can also help remedy **art fatigue** (losing eyes for art by staring at it for too long) by letting you view it through new eyes.
+- During the sketching / ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
+- They can also help remedy **art fatigue** (losing eyes for art by staring at it for too long) by letting you view it through a new lense.
 
 > [!NOTE]
 > Veils live in their own dedicated group, but within that you can stack and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.

@@ -2,6 +2,8 @@ name: CI
 
 on:
   pull_request:
+  push:
+    branches: [master]
 
 env:
   CARGO_TERM_COLOR: always
@@ -42,7 +44,7 @@ jobs:
       - run: cargo clippy -p darkly-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
 
   test:
-    name: cargo test
+    name: cargo test + coverage
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -52,11 +54,23 @@ jobs:
           sudo apt-get install -y mesa-vulkan-drivers vulkan-tools libvulkan1
           vulkaninfo --summary || true
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
-      - name: cargo test
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: cargo llvm-cov
         env:
           WGPU_BACKEND: vulkan
-        run: cargo test --workspace --exclude darkly-wasm
+        run: cargo llvm-cov --workspace --exclude darkly-wasm --lcov --output-path lcov.info -- --test-threads=1
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          flags: rust
 
   wasm-build:
     name: wasm-pack build
