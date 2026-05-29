@@ -240,9 +240,9 @@ While Darkly's architecture is fundamentally different, it was really insightful
 
 Some of Darkly's veil and void shaders are ports or adaptations of work originally published on [Shadertoy](https://www.shadertoy.com/). I suck at shaders and the creators of these shaders are true artists. Please go see them in their native habitat!
 
-- **Lens Blur** (veil) - based on [ldG3W3](https://www.shadertoy.com/view/ldG3W3) by [Dave Hoskins](https://www.shadertoy.com/user/Dave_Hoskins).
-- **Painting** (veil) - a generalized Kuwahara filter, based on [mlffWf](https://www.shadertoy.com/view/mlffWf) by [p4vv37](https://www.shadertoy.com/user/p4vv37), with technique notes from [Acerola / Garrett Gunnell](https://github.com/GarrettGunnell/Post-Processing/tree/main/Assets/Kuwahara%20Filter).
-- **Rainy glass** (veil) - ported from "Heartfelt" ([ltffzl](https://www.shadertoy.com/view/ltffzl)) by [Martijn Steinrucken / BigWIngs](https://www.shadertoy.com/user/BigWIngs).
-- **VHS** (veil) - ported from [XtBXDt](https://www.shadertoy.com/view/XtBXDt) by [FMS_Cat](https://www.shadertoy.com/user/FMS_Cat).
-- **Watercolor** (veil) - based on [mdlXW2](https://www.shadertoy.com/view/mdlXW2) by [aeva](https://www.shadertoy.com/user/aeva).
-- **Noise** (void) - domain-warp algorithm from Inigo Quilez's ["Domain warping"](https://iquilezles.org/articles/warp/) article; the texture-sampled noise primitive (a 3D volume sampled by the FBM octave loop) is inspired by "Watery" ([MssSRS](https://www.shadertoy.com/view/MssSRS)) by [nimitz](https://www.shadertoy.com/user/nimitz) (twitter: @stormoid).
+- **Lens Blur** (veil) - based on ["Bokeh Venice"](https://www.shadertoy.com/view/ldG3W3) by [Dave Hoskins](https://www.shadertoy.com/user/Dave_Hoskins).
+- **Painting** (veil) - based on ["Generalized Kuwahara shader"](https://www.shadertoy.com/view/mlffWf) by [p4vv37](https://www.shadertoy.com/user/p4vv37), with technique notes from [Acerola / Garrett Gunnell](https://github.com/GarrettGunnell/Post-Processing/tree/main/Assets/Kuwahara%20Filter).
+- **Rainy glass** (veil) - ported from ["Heartfelt"](https://www.shadertoy.com/view/ltffzl) by [Martijn Steinrucken / BigWIngs](https://www.shadertoy.com/user/BigWIngs).
+- **VHS** (veil) - ported from ["20151110_VHS"](https://www.shadertoy.com/view/XtBXDt) by [FMS_Cat](https://www.shadertoy.com/user/FMS_Cat).
+- **Watercolor** (veil) - based on ["watercolor propagation"](https://www.shadertoy.com/view/mdlXW2) by [aeva](https://www.shadertoy.com/user/aeva).
+- **Noise** (void) - domain-warp algorithm from Inigo Quilez's ["Domain warping"](https://iquilezles.org/articles/warp/) article; the texture-sampled noise primitive (a 3D volume sampled by the FBM octave loop) is inspired by ["Watery"](https://www.shadertoy.com/view/MssSRS) by [nimitz](https://www.shadertoy.com/user/nimitz) (twitter: @stormoid).
