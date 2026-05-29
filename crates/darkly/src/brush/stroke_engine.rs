@@ -358,10 +358,12 @@ impl StrokeEngine {
 
         // Per-dab context state: reset the read-mirror cache so the first
         // node that needs a canvas region this dab actually issues the copy.
-        gpu.reset_per_dab_read_cache();
+        if let Some(stroke) = gpu.stroke.as_mut() {
+            stroke.reset_per_dab_read_cache();
+        }
         // Reset the write-bbox accumulator so each terminal's passes can
         // publish their footprint fresh. Read back after execute_gpu below.
-        gpu.dab_write_canvas_bbox = None;
+        gpu.dab_batch.write_canvas_bbox = None;
         self.runner.execute_gpu(gpu);
 
         gpu.flush_if_needed();
@@ -380,7 +382,7 @@ impl StrokeEngine {
         // else the graph did). Fall back to the `info.pos ± radius`
         // envelope for graphs without a scratch-writing terminal, so they
         // still get sensible checkpoint bounds.
-        let canvas_bbox = gpu.dab_write_canvas_bbox.unwrap_or_else(|| {
+        let canvas_bbox = gpu.dab_batch.write_canvas_bbox.unwrap_or_else(|| {
             let diameter = self.effective_diameter();
             let half = diameter * 0.5;
             let x = (info.pos[0] - half).floor() as i32;

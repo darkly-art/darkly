@@ -12,10 +12,10 @@
 //!
 //! ## Per-dab flush
 //!
-//! 1. `evaluate_gpu` packs one record into [`BrushGpuContext::pending_dab_bytes`]
-//!    *and* one [`SmudgeDabMeta`] into the parallel CPU-side
-//!    [`BrushGpuContext::pending_dab_meta_bytes`] queue, plus the
-//!    pre-computed canvas-space `copy_origin` into `slot_outputs_owned`
+//! 1. `evaluate_gpu` packs one record into [`BrushGpuContext::dab_batch`]'s
+//!    `bytes` *and* one [`SmudgeDabMeta`] into the parallel CPU-side
+//!    `meta_bytes` queue, plus the pre-computed canvas-space
+//!    `copy_origin` into `dab_batch.slot_outputs`
 //!    so the framework's `pack_dab_record` picks it up via this node's
 //!    `copy_origin` dab field. Stationary dabs (`|motion| < 0.5 px`)
 //!    are skipped before queueing — `mix(bg, src, _)` collapses to
@@ -354,12 +354,12 @@ impl SmudgeEvaluator {
         (effective_size * SIZE_REFERENCE_PX * 0.5).max(0.5)
     }
 
-    /// Insert `copy_origin` into `slot_outputs_owned` under this
+    /// Insert `copy_origin` into `dab_batch.slot_outputs` under this
     /// node's dab-field key so the framework's `pack_dab_record`
     /// picks it up via the `copy_origin` `DabField` declared in
     /// `compile_wgsl`.
     fn insert_copy_origin(gpu: &mut BrushGpuContext, node_id: u32, value: [f32; 2]) {
-        if let Some(outputs) = gpu.slot_outputs_owned.as_mut() {
+        if let Some(outputs) = gpu.dab_batch.slot_outputs.as_mut() {
             outputs.insert(
                 format!("n{}_copy_origin", node_id),
                 ScalarValue::Vec2(value),
@@ -378,13 +378,14 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let Some(compiled) = gpu.compiled_brush.clone() else {
+        let Some(compiled) = gpu.dab_batch.compiled_brush.clone() else {
             debug_assert!(false, "smudge requires compiled_brush on gpu_context");
             return vec![];
         };
-        let Some(paint_target) = gpu.paint_target.as_ref() else {
+        let Some(stroke) = gpu.stroke.as_ref() else {
             return vec![];
         };
+        let paint_target = &stroke.paint_target;
         let position = ctx.input("position").as_vec2();
         let motion = ctx.input("motion").as_vec2();
         let radius = Self::effective_radius(ctx);
@@ -419,16 +420,17 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
         let bbox_y = cy0.floor() as i32;
         let bbox_w = (cx1.ceil() as i32 - bbox_x) as u32;
         let bbox_h = (cy1.ceil() as i32 - bbox_y) as u32;
-        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            bbox_x, bbox_y, bbox_w, bbox_h,
-        ));
         let layer_w = canvas_ext.width;
         let layer_h = canvas_ext.height;
         let local_x0 = (bbox_x - canvas_ext.x0()).max(0) as u32;
         let local_y0 = (bbox_y - canvas_ext.y0()).max(0) as u32;
         let local_x1 = (local_x0 + bbox_w).min(layer_w);
         let local_y1 = (local_y0 + bbox_h).min(layer_h);
-        gpu.pending_dabs_bbox = Some(match gpu.pending_dabs_bbox {
+        gpu.dab_batch
+            .push_write_bbox(crate::coord::CanvasRect::from_xywh(
+                bbox_x, bbox_y, bbox_w, bbox_h,
+            ));
+        gpu.dab_batch.bbox = Some(match gpu.dab_batch.bbox {
             Some([x0, y0, x1, y1]) => [
                 x0.min(local_x0),
                 y0.min(local_y0),
@@ -460,7 +462,8 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
         let copy_canvas_y = read_y0.floor();
         Self::insert_copy_origin(gpu, ctx.node_id.0 as u32, [copy_canvas_x, copy_canvas_y]);
 
-        gpu.queue_dab(&compiled, position, bbox_radius, radius);
+        gpu.dab_batch
+            .queue_dab(&compiled, position, bbox_radius, radius);
 
         // Pack the CPU-side meta in lockstep.
         let meta = SmudgeDabMeta {
@@ -468,26 +471,27 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
             write_half: [write_half_w, write_half_h],
             read_half: [read_half_w, read_half_h],
         };
-        gpu.pending_dab_meta_bytes
+        gpu.dab_batch
+            .meta_bytes
             .extend_from_slice(bytemuck::bytes_of(&meta));
 
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
 
     fn flush_dabs(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        if gpu.pending_dab_count == 0 {
+        if gpu.dab_batch.count == 0 {
             return;
         }
-        let Some(compiled) = gpu.compiled_brush.clone() else {
+        let Some(compiled) = gpu.dab_batch.compiled_brush.clone() else {
             debug_assert!(false, "smudge::flush_dabs requires compiled_brush");
             return;
         };
 
-        let bbox = gpu.pending_dabs_bbox.unwrap_or([0, 0, 0, 0]);
+        let bbox = gpu.dab_batch.bbox.unwrap_or([0, 0, 0, 0]);
         let union_w = bbox[2].saturating_sub(bbox[0]);
         let union_h = bbox[3].saturating_sub(bbox[1]);
-        let (dab_bytes, total_dabs) = gpu.take_pending_dabs();
-        let meta_bytes = gpu.take_pending_dab_meta();
+        let (dab_bytes, total_dabs) = gpu.dab_batch.take();
+        let meta_bytes = gpu.dab_batch.take_meta();
         if total_dabs == 0 {
             return;
         }
@@ -503,10 +507,11 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
         let pipeline_ref = gpu.pipelines.get::<SmudgePipeline>("smudge");
         ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled);
 
-        let paint_target = gpu
-            .paint_target
+        let stroke = gpu
+            .stroke
             .as_ref()
-            .expect("smudge::flush_dabs requires paint_target");
+            .expect("smudge::flush_dabs requires stroke resources");
+        let paint_target = &stroke.paint_target;
         let canvas_ext = paint_target.canvas_extent();
         let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
         let layer_size = [canvas_ext.width, canvas_ext.height];
@@ -524,9 +529,10 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
             },
         );
         let outputs = gpu
-            .slot_outputs_owned
+            .dab_batch
+            .slot_outputs
             .as_ref()
-            .expect("smudge::flush_dabs requires slot_outputs_owned");
+            .expect("smudge::flush_dabs requires dab_batch.slot_outputs");
         pack_uniforms(&compiled, outputs, &mut uniform_bytes);
 
         pipeline_ref.with_pipeline(compiled.topology_hash, |per_brush| {
@@ -552,10 +558,11 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
 
                 // Fresh read-mirror bind group each iteration — a
                 // mid-loop grow can rebuild it.
-                let scratch_ref = gpu
-                    .scratch
-                    .as_deref()
-                    .expect("smudge::flush_dabs requires Scratch");
+                let scratch_ref = &*gpu
+                    .stroke
+                    .as_ref()
+                    .expect("smudge::flush_dabs requires stroke resources")
+                    .scratch;
                 let read_bg = scratch_ref.read_mirror_bind_group();
                 let write_view = scratch_ref.write_view();
 
@@ -597,18 +604,15 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
     /// finished image; commit just copies it across. `gpu.blend_mode`
     /// is ignored — erase semantics aren't meaningful for a smear.
     fn commit(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let Some(paint_target) = gpu.paint_target.as_ref() else {
+        let Some(stroke) = gpu.stroke.as_ref() else {
             return;
         };
-        let Some(scratch) = gpu.scratch.as_deref() else {
-            return;
-        };
-        paint_target.commit_scratch_blit(
+        stroke.paint_target.commit_scratch_blit(
             gpu.device,
             &mut gpu.encoder,
             gpu.pipelines,
-            scratch.write_view(),
-            scratch.write_texture(),
+            stroke.scratch.write_view(),
+            stroke.scratch.write_texture(),
         );
     }
 
@@ -635,7 +639,7 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
         let opacity_expr = cctx.input("opacity").as_f32();
 
         // Per-dab `copy_origin` field. The terminal's `evaluate_gpu`
-        // inserts this into `slot_outputs_owned` so the packer reads
+        // inserts this into `dab_batch.slot_outputs` so the packer reads
         // it through the standard `pack_dab_record` path.
         let copy_origin_field = cctx.dab_field_name("copy_origin");
         let key = copy_origin_field.clone();

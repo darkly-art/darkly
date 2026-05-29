@@ -18,10 +18,11 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
 use darkly::brush::pipeline::BrushPipelines;
-use darkly::brush::scratch::Scratch;
+use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::brush::wire::BrushWireType;
+use darkly::gpu::paint_target::GpuPaintTarget;
 use darkly::gpu::test_utils::{readback_texture, test_device};
 use darkly::nodegraph::Graph;
 
@@ -91,24 +92,25 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
     let device = Arc::new(device);
     let queue = Arc::new(queue);
     let pipelines = BrushPipelines::new(&device, &queue);
-    let mut scratch = Scratch::new(
-        &device,
-        W,
-        H,
-        pipelines.canvas_copy_bind_group_layout(),
-        pipelines.canvas_copy_sampler(),
-    );
+    // StrokeBuffer owns scratch + pre_stroke (texture, view, bind group),
+    // which is the exact bundle `StrokeResources` wants. Whichever lifecycle
+    // the terminal declares, only one of the two textures is read — the
+    // other is harmlessly present.
+    let mut stroke_buffer = StrokeBuffer::new(&device, W, H, &pipelines);
+    // Dummy paint target — `apply_lifecycle` never reads it, but the new
+    // `StrokeResources` shape requires it. Reuse the pre-stroke texture as
+    // a stand-in (same RGBA8 / W×H format).
+    let (paint_target_tex, paint_target_view) = make_pre_stroke(&device);
 
     // Build pre-stroke (if needed) and pre-fill scratch (if needed) on
     // the same device/queue the runner uses — wgpu rejects cross-device
     // resource use.
-    let pre_stroke = match &setup {
+    match &setup {
         Setup::PreStrokeWithSentinel => {
-            let (tex, view) = make_pre_stroke(&device);
             paint_solid(
                 &device,
                 &queue,
-                &view,
+                stroke_buffer.pre_stroke_view(),
                 wgpu::Color {
                     r: SENTINEL_RGBA[0] as f64 / 255.0,
                     g: SENTINEL_RGBA[1] as f64 / 255.0,
@@ -116,11 +118,14 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
                     a: SENTINEL_RGBA[3] as f64 / 255.0,
                 },
             );
-            Some(tex)
         }
         Setup::ScratchPrefilled(color) => {
-            paint_solid(&device, &queue, scratch.write_view(), *color);
-            None
+            paint_solid(
+                &device,
+                &queue,
+                stroke_buffer.scratch_mut().write_view(),
+                *color,
+            );
         }
     };
 
@@ -128,32 +133,31 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
     let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("begin-stroke"),
     });
+    let (scratch, pre_stroke_tex, pre_stroke_bg) = stroke_buffer.parts_for_brush_ctx();
     let mut ctx = BrushGpuContext {
         encoder,
         device: &device,
         queue: &queue,
         pipelines: &pipelines,
-        scratch: Some(&mut scratch),
+        selection_bind_group: pipelines.default_selection_bind_group(),
         canvas_width: W,
         canvas_height: H,
-        paint_target: None,
-        selection_bind_group: pipelines.default_selection_bind_group(),
-        preview_target_view: None,
         blend_mode: 0,
-        preview_mask_view: None,
-        preview_mask_size: (0, 0),
-        preview_mask_overlay: None,
-        brush_preview_info: None,
-        pre_stroke_texture: pre_stroke.as_ref(),
-        pre_stroke_bind_group: None,
-        dab_write_canvas_bbox: None,
         perf: BrushPerfCounters::default(),
-        pending_dab_bytes: Vec::new(),
-        pending_dab_count: 0,
-        pending_dabs_bbox: None,
-        pending_dab_meta_bytes: Vec::new(),
-        compiled_brush: None,
-        slot_outputs_owned: None,
+        stroke: Some(StrokeResources {
+            scratch,
+            paint_target: GpuPaintTarget::from_canvas_texture(
+                &paint_target_tex,
+                &paint_target_view,
+                wgpu::TextureFormat::Rgba8Unorm,
+                W,
+                H,
+            ),
+            pre_stroke_texture: pre_stroke_tex,
+            pre_stroke_bind_group: pre_stroke_bg,
+        }),
+        preview: None,
+        dab_batch: DabBatch::default(),
     };
     runner.begin_stroke(&mut ctx);
     queue.submit([ctx.encoder.finish()]);
@@ -161,7 +165,7 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
     readback_texture(
         &device,
         &queue,
-        scratch.write_texture(),
+        stroke_buffer.scratch().write_texture(),
         wgpu::TextureFormat::Rgba8Unorm,
         W,
         H,

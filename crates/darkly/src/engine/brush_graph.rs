@@ -212,7 +212,9 @@ impl DarklyEngine {
         &mut self,
         pen: crate::brush::paint_info::PaintInformation,
     ) {
-        use crate::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+        use crate::brush::gpu_context::{
+            BrushGpuContext, BrushPerfCounters, DabBatch, PreviewState,
+        };
 
         // Compile under a read guard; drop the guard before any GPU
         // work to keep the critical section narrow. The guard is held
@@ -265,36 +267,27 @@ impl DarklyEngine {
             device: &self.gpu.device,
             queue: &self.gpu.queue,
             pipelines: &self.brush_pipelines,
-            // The preview pipeline doesn't touch the stroke scratch — the
-            // terminal's `render_preview` writes to the preview mask
-            // through `preview_mask_overlay` instead. No `Scratch` is
-            // needed; any accidental call to a scratch accessor will
-            // panic, exposing the bug.
-            scratch: None,
+            selection_bind_group: sel_bg,
             canvas_width: 0,
             canvas_height: 0,
-            // No layer / pre-stroke state in preview — commit isn't called,
-            // and `render_preview` writes to the preview mask.
-            paint_target: None,
-            selection_bind_group: sel_bg,
-            preview_target_view: None,
             blend_mode: 0,
-            // Tests pre-allocate `preview_mask_view`; the engine path
-            // grows the mask on demand via `preview_mask_overlay`.
-            preview_mask_view: None,
-            preview_mask_size: (0, 0),
-            preview_mask_overlay: Some(overlay),
-            brush_preview_info: None,
-            pre_stroke_texture: None,
-            pre_stroke_bind_group: None,
-            dab_write_canvas_bbox: None,
             perf: BrushPerfCounters::default(),
-            pending_dab_bytes: Vec::new(),
-            pending_dab_count: 0,
-            pending_dabs_bbox: None,
-            pending_dab_meta_bytes: Vec::new(),
-            compiled_brush: None,
-            slot_outputs_owned: None,
+            // The preview pipeline doesn't touch the stroke scratch / paint
+            // target — the terminal's `render_preview` writes to the
+            // preview mask through `mask_overlay` instead. No
+            // `StrokeResources` is supplied; any accidental scratch /
+            // paint-target access will see `None` and either early-out or
+            // panic, exposing the bug.
+            stroke: None,
+            // Tests pre-allocate `mask_view`; the engine path grows the
+            // mask on demand via `mask_overlay`.
+            preview: Some(PreviewState {
+                mask_view: None,
+                mask_size: (0, 0),
+                mask_overlay: Some(overlay),
+                info: None,
+            }),
+            dab_batch: DabBatch::default(),
         };
 
         self.brush_pipelines.reset_uniform_rings();
@@ -303,7 +296,7 @@ impl DarklyEngine {
         runner.execute_cpu();
         runner.render_preview_pipeline(&mut gpu_ctx);
 
-        let info = gpu_ctx.brush_preview_info;
+        let info = gpu_ctx.preview.as_ref().and_then(|p| p.info);
         let command_buf = gpu_ctx.encoder.finish();
         self.gpu.queue.submit([command_buf]);
 

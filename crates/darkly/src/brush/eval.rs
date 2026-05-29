@@ -225,21 +225,16 @@ fn remap_scalar(value: f32, src: (f32, f32), dst: (f32, f32)) -> f32 {
 /// declaration plus the enum dispatch below.
 fn apply_lifecycle(lifecycle: super::node::Lifecycle, gpu: &mut BrushGpuContext) {
     use super::node::Lifecycle;
+    let Some(stroke) = &gpu.stroke else { return };
     match lifecycle {
         Lifecycle::None => {}
         Lifecycle::ClearScratchToTransparent => {
-            if let Some(scratch) = gpu.scratch.as_deref() {
-                scratch.clear_to_transparent(&mut gpu.encoder);
-            }
+            stroke.scratch.clear_to_transparent(&mut gpu.encoder);
         }
         Lifecycle::SeedScratchFromPreStroke => {
-            let Some(pre_stroke) = gpu.pre_stroke_texture else {
-                return;
-            };
-            let Some(scratch) = gpu.scratch.as_deref() else {
-                return;
-            };
-            scratch.seed_from_pre_stroke(&mut gpu.encoder, pre_stroke);
+            stroke
+                .scratch
+                .seed_from_pre_stroke(&mut gpu.encoder, stroke.pre_stroke_texture);
         }
     }
 }
@@ -792,8 +787,8 @@ impl BrushGraphRunner {
         // these to pack per-dab records and uniforms.
         let is_compiled = self.compiled.is_some();
         if let Some(compiled) = &self.compiled {
-            gpu.compiled_brush = Some(compiled.clone());
-            gpu.slot_outputs_owned = Some(self.build_slot_outputs());
+            gpu.dab_batch.compiled_brush = Some(compiled.clone());
+            gpu.dab_batch.slot_outputs = Some(self.build_slot_outputs());
         }
 
         let n = self.plan.steps.len();
@@ -874,7 +869,7 @@ impl BrushGraphRunner {
     /// needs it cleared at stroke-start; no point copy-pasting that
     /// line per terminal.
     pub fn begin_stroke(&mut self, gpu: &mut BrushGpuContext) {
-        gpu.clear_pending_dabs();
+        gpu.dab_batch.clear();
         let registry = crate::brush::registry();
         self.dispatch_lifecycle(gpu, false, |type_id, ev, ctx, gpu| {
             let lifecycle = registry

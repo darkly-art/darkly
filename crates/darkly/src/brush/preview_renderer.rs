@@ -14,7 +14,7 @@
 //! `set_preview_theme`), not the active paint color, so all previews
 //! share a consistent palette.
 
-use super::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use super::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
 use super::paint_info::PaintInformation;
 use super::pipeline::BrushPipelines;
 use super::spacing::SpacingConfig;
@@ -179,28 +179,20 @@ impl BrushPreviewRenderer {
                     device,
                     queue,
                     pipelines,
-                    scratch: Some(scratch),
+                    selection_bind_group: sel_bg,
                     canvas_width: width,
                     canvas_height: height,
-                    // Preview render target is canvas-aligned RGBA8.
-                    paint_target: Some(paint_target),
-                    selection_bind_group: sel_bg,
-                    preview_target_view: None,
                     blend_mode: 0,
-                    preview_mask_view: None,
-                    preview_mask_size: (0, 0),
-                    preview_mask_overlay: None,
-                    brush_preview_info: None,
-                    pre_stroke_texture: Some(pre_stroke_texture),
-                    pre_stroke_bind_group: Some(pre_stroke_bind_group),
-                    dab_write_canvas_bbox: None,
                     perf: BrushPerfCounters::default(),
-                    pending_dab_bytes: Vec::new(),
-                    pending_dab_count: 0,
-                    pending_dabs_bbox: None,
-                    pending_dab_meta_bytes: Vec::new(),
-                    compiled_brush: None,
-                    slot_outputs_owned: None,
+                    // Preview render target is canvas-aligned RGBA8.
+                    stroke: Some(StrokeResources {
+                        scratch,
+                        paint_target,
+                        pre_stroke_texture,
+                        pre_stroke_bind_group,
+                    }),
+                    preview: None,
+                    dab_batch: DabBatch::default(),
                 }
             }};
         }
