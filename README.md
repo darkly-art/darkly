@@ -23,7 +23,7 @@
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
 
-If you're a sane artist who likes rulers, guides, and clean vector lines, you may still like Darkly. But it's fundamentally a chaotic playground, for artists who make messes and incur happy accidents. Madness isn't a bug, it's a feature.
+Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Channel your suppressed chaotic powers with Darkly, where messes are made and happy incidents incurred. Madness isn't a bug, it's a feature.
 
 **Try the demo [here](https://demo.darkly.art).**
 
@@ -39,6 +39,8 @@ In addition to the usual paint features, Darkly has some entropic tools to empow
 
 ### Veils
 
+https://github.com/user-attachments/assets/44d24a14-4049-4182-bcc8-bc8ef2bc9d1f
+
 Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
 
 Veils have practical uses too:
@@ -51,6 +53,8 @@ Veils have practical uses too:
 > Veils live in their own dedicated group, but within that you can stack and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.
 
 ### Voids
+
+https://github.com/user-attachments/assets/759022be-6135-42b1-b62d-42eda78856a5
 
 Voids are a special type of layer that specializes in pulling inspiration from outside sources. 
 
