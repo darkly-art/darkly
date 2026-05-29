@@ -31,7 +31,7 @@ Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructi
 
 ## Upcoming Kickstarter
 
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, and rescue your friends and colleagues from the iron grip of Adobe!
+We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, and rescue our friends and colleagues from the iron grip of corporate software!
 
 ## Unique Darkly Features
 

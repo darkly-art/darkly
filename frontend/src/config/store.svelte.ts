@@ -242,11 +242,15 @@ class ConfigStore {
 export const config = new ConfigStore();
 
 /**
- * Format a tinykeys-style binding (e.g. "Shift+KeyR", "$mod+KeyA") into a
- * human-readable shortcut string (e.g. "Shift+R", "Ctrl+A" / "Cmd+A").
- * Accepts bindings with an optional site/scope prefix ("layerPanel:Delete",
- * "@paint:KeyB") and strips it before formatting — only the chord is
- * user-facing.
+ * Format a binding (`"Shift+KeyR"`, `"$mod+KeyA"`, `"$mod+click"`, …) into
+ * a human-readable shortcut string (e.g. `"Shift+R"`, `"Ctrl+A"` / `"Cmd+A"`,
+ * `"⌘+click"`). Accepts bindings with an optional site/scope prefix
+ * (`"layerPanel:Delete"`, `"@paint:KeyB"`, `"canvas@paint:$mod+drag"`) and
+ * strips it before formatting — only the chord is user-facing.
+ *
+ * Handles both the keyboard chord vocabulary (`Shift`/`Alt` capitalized, key
+ * codes like `KeyA`/`Comma`) and the mouse chord vocabulary
+ * (`shift`/`alt`/`ctrl`/`meta` lowercase, verbs like `click`/`drag`).
  */
 export function formatHotkey(binding: string | undefined): string | undefined {
     if (!binding) return undefined;
@@ -256,8 +260,16 @@ export function formatHotkey(binding: string | undefined): string | undefined {
     const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent);
     return chord.split('+').map(part => {
         if (part === '$mod') return isMac ? '⌘' : 'Ctrl';
-        if (part === 'Shift') return isMac ? '⇧' : 'Shift';
-        if (part === 'Alt') return isMac ? '⌥' : 'Alt';
+        if (part === 'Shift' || part === 'shift') return isMac ? '⇧' : 'Shift';
+        if (part === 'Alt' || part === 'alt') return isMac ? '⌥' : 'Alt';
+        if (part === 'ctrl') return isMac ? '⌃' : 'Ctrl';
+        if (part === 'meta') return isMac ? '⌘' : 'Win';
+        if (part === 'click') return 'click';
+        if (part === 'doubleClick') return 'double-click';
+        if (part === 'middleClick') return 'middle-click';
+        if (part === 'drag') return 'drag';
+        if (part === 'middleDrag') return 'middle-drag';
+        if (part === 'rightDrag') return 'right-drag';
         if (part.startsWith('Key')) return part.slice(3);
         if (part === 'Delete') return 'Del';
         if (part === 'Comma') return ',';
