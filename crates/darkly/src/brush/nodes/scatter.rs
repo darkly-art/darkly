@@ -21,47 +21,50 @@ use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
 pub const TYPE_ID: &str = "scatter";
 
 pub fn register() -> BrushNodeRegistration {
-    BrushNodeRegistration::compute(NodeRegistration {
-        type_id: TYPE_ID,
-        category: "modulate",
-        display_name: "Scatter",
-        ports: vec![
-            PortDef::input("position", BrushWireType::Vec2)
-                .with_description("Position to displace"),
-            PortDef::input("amount_x", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_natural_range(0.0, 1.0)
-                .with_label("Amount X")
-                .with_unit(UnitType::Percent)
-                .with_icon("fa-solid fa-arrows-left-right")
-                .exposed()
-                .with_description("Fraction of `dab_size` used as max horizontal displacement"),
-            PortDef::input("amount_y", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_natural_range(0.0, 1.0)
-                .with_label("Amount Y")
-                .with_unit(UnitType::Percent)
-                .with_icon("fa-solid fa-arrows-up-down")
-                .exposed()
-                .with_description("Fraction of `dab_size` used as max vertical displacement"),
-            PortDef::input("dab_size", BrushWireType::Scalar)
-                .with_range(0.0, 512.0, 100.0)
-                .with_label("Dab Size")
-                .with_unit(UnitType::Raw)
-                .with_icon("fa-solid fa-ruler")
-                .with_description(
-                    "Pixel reference the amounts are fractions of. \
-                    Wire `stamp.dab_major` for size-proportional scatter, or leave \
-                    unwired and dial it directly for smudge/liquify brushes.",
-                ),
-            PortDef::output("position", BrushWireType::Vec2)
-                .with_description("Input position + random offset"),
-        ],
-        params: &[],
-        is_gpu: false,
-        is_terminal: false,
-        supports_erase: true,
-    })
+    BrushNodeRegistration::compute(
+        NodeRegistration {
+            type_id: TYPE_ID,
+            category: "modulate",
+            display_name: "Scatter",
+            ports: vec![
+                PortDef::input("position", BrushWireType::Vec2)
+                    .with_description("Position to displace"),
+                PortDef::input("amount_x", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_label("Amount X")
+                    .with_unit(UnitType::Percent)
+                    .with_icon("fa-solid fa-arrows-left-right")
+                    .exposed()
+                    .with_description("Fraction of `dab_size` used as max horizontal displacement"),
+                PortDef::input("amount_y", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_natural_range(0.0, 1.0)
+                    .with_label("Amount Y")
+                    .with_unit(UnitType::Percent)
+                    .with_icon("fa-solid fa-arrows-up-down")
+                    .exposed()
+                    .with_description("Fraction of `dab_size` used as max vertical displacement"),
+                PortDef::input("dab_size", BrushWireType::Scalar)
+                    .with_range(0.0, 512.0, 100.0)
+                    .with_label("Dab Size")
+                    .with_unit(UnitType::Raw)
+                    .with_icon("fa-solid fa-ruler")
+                    .with_description(
+                        "Pixel reference the amounts are fractions of. \
+                        Wire `stamp.dab_major` for size-proportional scatter, or leave \
+                        unwired and dial it directly for smudge/liquify brushes.",
+                    ),
+                PortDef::output("position", BrushWireType::Vec2)
+                    .with_description("Input position + random offset"),
+            ],
+            params: &[],
+            is_gpu: false,
+            is_terminal: false,
+            supports_erase: true,
+        },
+        || Box::new(ScatterEvaluator),
+    )
 }
 
 pub struct ScatterEvaluator;

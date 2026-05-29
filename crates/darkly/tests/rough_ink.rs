@@ -26,7 +26,7 @@ use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::brush::wire::BrushWireType;
-use darkly::brush::BrushNodeRegistry;
+use darkly::brush::registry;
 use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
 use darkly::nodegraph::{Graph, PortRef};
@@ -64,7 +64,7 @@ struct Harness {
 /// `algorithm` selects the circle's shape function. `amplitude`
 /// defaults to 0 (= disc) unless the caller overrides.
 fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWireType> {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::<BrushWireType>::new();
 
     let pen = graph.add_node(

@@ -298,6 +298,8 @@ pub const TYPE_ID: &str = "liquify";
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![liquify_pipeline_reg()],
+        evaluator: || Box::new(LiquifyEvaluator),
+        lifecycle: crate::brush::node::Lifecycle::SeedScratchFromPreStroke,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",

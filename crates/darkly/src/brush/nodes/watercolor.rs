@@ -551,6 +551,8 @@ pub const TYPE_ID: &str = "watercolor";
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![watercolor_pipeline_reg()],
+        evaluator: || Box::new(WatercolorEvaluator),
+        lifecycle: crate::brush::node::Lifecycle::ClearScratchToTransparent,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",

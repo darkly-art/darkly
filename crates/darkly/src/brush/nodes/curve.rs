@@ -21,26 +21,29 @@ const DEFAULT_CURVE: &[[f32; 2]] = &[[0.0, 0.0], [1.0, 1.0]];
 pub const TYPE_ID: &str = "curve";
 
 pub fn register() -> BrushNodeRegistration {
-    BrushNodeRegistration::compute(NodeRegistration {
-        type_id: TYPE_ID,
-        category: "modulate",
-        display_name: "Curve",
-        ports: vec![
-            PortDef::input("input", BrushWireType::Scalar)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Input value (0\u{2013}1) to remap through the curve"),
-            PortDef::output("output", BrushWireType::Scalar)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Remapped output from the spline transfer function"),
-        ],
-        params: &[ParamDef::Curve {
-            name: "curve",
-            default: DEFAULT_CURVE,
-        }],
-        is_gpu: false,
-        is_terminal: false,
-        supports_erase: true,
-    })
+    BrushNodeRegistration::compute(
+        NodeRegistration {
+            type_id: TYPE_ID,
+            category: "modulate",
+            display_name: "Curve",
+            ports: vec![
+                PortDef::input("input", BrushWireType::Scalar)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Input value (0\u{2013}1) to remap through the curve"),
+                PortDef::output("output", BrushWireType::Scalar)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Remapped output from the spline transfer function"),
+            ],
+            params: &[ParamDef::Curve {
+                name: "curve",
+                default: DEFAULT_CURVE,
+            }],
+            is_gpu: false,
+            is_terminal: false,
+            supports_erase: true,
+        },
+        || Box::new(CurveEvaluator),
+    )
 }
 
 pub struct CurveEvaluator;

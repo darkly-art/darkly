@@ -278,6 +278,8 @@ pub const TYPE_ID: &str = "smudge";
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![smudge_pipeline_reg()],
+        evaluator: || Box::new(SmudgeEvaluator),
+        lifecycle: crate::brush::node::Lifecycle::SeedScratchFromPreStroke,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",

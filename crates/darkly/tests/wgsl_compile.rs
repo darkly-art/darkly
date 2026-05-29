@@ -19,15 +19,15 @@ use std::collections::HashMap;
 use darkly::brush::eval::BrushNodeEvaluator;
 use darkly::brush::wgsl_compile::{compile_brush_to_wgsl, CompileError};
 use darkly::brush::wire::BrushWireType;
-use darkly::brush::{default_evaluators, BrushNodeRegistry};
+use darkly::brush::BrushNodeRegistry;
 use darkly::nodegraph::{compile, Graph, PortRef};
 
-fn registry() -> BrushNodeRegistry {
-    BrushNodeRegistry::new()
+fn registry() -> &'static BrushNodeRegistry {
+    darkly::brush::registry()
 }
 
 fn evals() -> HashMap<String, Box<dyn BrushNodeEvaluator>> {
-    default_evaluators()
+    darkly::brush::registry().evaluators()
 }
 
 #[test]
