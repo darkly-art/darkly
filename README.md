@@ -5,10 +5,10 @@
 [![Blog](https://img.shields.io/badge/Blog-Deranged_Texts-orange?logo=substack&logoColor=white&style=for-the-badge&color=4400ff)](https://darkly.art/blog)
 
 ![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=9500ff)
-![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=6914ff)
-![TypeScript](https://img.shields.io/badge/TypeScript-000000?style=for-the-badge&logo=typescript&logoColor=6914ff)
-![WebAssembly](https://img.shields.io/badge/WebAssembly-000000?style=for-the-badge&logo=WebAssembly&logoColor=4400ff)
-![WebGPU](https://img.shields.io/badge/WebGPU-000000?style=for-the-badge&logo=webgpu&logoColor=4400ff)
+![Svelte](https://img.shields.io/badge/Svelte-000000?style=for-the-badge&logo=svelte&logoColor=9500ff)
+![WebAssembly](https://img.shields.io/badge/WebAssembly-000000?style=for-the-badge&logo=WebAssembly&logoColor=6914ff)
+![WebGPU](https://img.shields.io/badge/WebGPU-000000?style=for-the-badge&logo=webgpu&logoColor=6914ff)
+[![Tests](https://img.shields.io/github/actions/workflow/status/darkly-art/darkly/ci.yml?branch=master&label=Tests&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/darkly/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/darkly-art/darkly?token=TIIFB7UHAJ&label=Coverage&logo=codecov&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://codecov.io/gh/darkly-art/darkly)
 
 > [!IMPORTANT]
