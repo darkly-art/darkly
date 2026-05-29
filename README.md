@@ -1,4 +1,4 @@
-![darkly](https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7)
+[![darkly](https://github.com/user-attachments/assets/789a7625-27a3-406b-86bf-e476924d6dc8)](https://github.com/darkly-art/darkly)
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
 [![Patreon](https://img.shields.io/badge/Patreon-Forbidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
@@ -23,7 +23,7 @@
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
 
-Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with Darkly, where messes are made and happy accidents incur. Madness isn't a bug, it's a feature.
+Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with Darkly, where messes are made and happy accidents emerge. Madness isn't a bug, it's a feature.
 
 **Try the demo [here](https://demo.darkly.art).**
 
@@ -31,17 +31,15 @@ Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructi
 
 ## Upcoming Kickstarter
 
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, and rescue our friends and colleagues from the iron grip of corporate software!
+We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, so we can rescue our friends and colleagues from the grip of corporate software!
 
 ## Unique Darkly Features
-
-In addition to the usual paint features, Darkly has some entropic tools to empower you in your dark arts.
 
 ### Veils
 
 https://github.com/user-attachments/assets/ee281ac2-37a8-4e52-91b3-78d564420e9d
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
 
 Veils have practical uses too:
 

@@ -367,14 +367,11 @@ impl StrokeEngine {
         gpu.flush_if_needed();
 
         // Update `last_dab_size` from whichever terminal in the graph
-        // publishes a `dab_size` output. The slot was resolved at runner
-        // build (type-owned dispatch — any terminal with a `dab_size`
-        // output wins, including ones added after this site was
-        // written). Each terminal owns the unit-of-`dab_size` it
-        // returns: paint/watercolor/smudge use `diameter` from the size
-        // port; liquify returns its disc diameter for stroke-engine
-        // spacing.
-        if let Some(size) = self.runner.read_dab_size() {
+        // publishes a `dab_size` output. The runner cached the slot at
+        // build time, so a new terminal that publishes the same port is
+        // picked up automatically — no hand-written terminal-name list
+        // to keep in sync.
+        if let Some(size) = self.runner.last_dab_size() {
             self.last_dab_size = size;
         }
 

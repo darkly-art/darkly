@@ -191,3 +191,5 @@ cargo test --workspace --exclude darkly-wasm -- --test-threads=1
 # jsdom via `// @vitest-environment jsdom`.
 (cd frontend && npm test)
 ```
+
+Never run `git commit` — make the changes and leave staging and committing to the user.

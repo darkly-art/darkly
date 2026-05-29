@@ -218,6 +218,34 @@ fn remap_scalar(value: f32, src: (f32, f32), dst: (f32, f32)) -> f32 {
     dst_min + fraction * (dst_max - dst_min)
 }
 
+/// Apply the framework-managed stroke prologue declared on a node's
+/// registration. Called from [`BrushGraphRunner::begin_stroke`] before
+/// the per-node `begin_stroke` hook runs. Centralising this here means
+/// adding a new terminal can never silently drift away from the
+/// established lifecycles — the four-way copy-paste that used to live
+/// in `paint`/`watercolor`/`smudge`/`liquify` collapses into one
+/// declaration plus the enum dispatch below.
+fn apply_lifecycle(lifecycle: super::node::Lifecycle, gpu: &mut BrushGpuContext) {
+    use super::node::Lifecycle;
+    match lifecycle {
+        Lifecycle::None => {}
+        Lifecycle::ClearScratchToTransparent => {
+            if let Some(scratch) = gpu.scratch.as_deref() {
+                scratch.clear_to_transparent(&mut gpu.encoder);
+            }
+        }
+        Lifecycle::SeedScratchFromPreStroke => {
+            let Some(pre_stroke) = gpu.pre_stroke_texture else {
+                return;
+            };
+            let Some(scratch) = gpu.scratch.as_deref() else {
+                return;
+            };
+            scratch.seed_from_pre_stroke(&mut gpu.encoder, pre_stroke);
+        }
+    }
+}
+
 /// Deterministic PRNG: hash seed + index to produce a 0-1 float.
 /// xorshift-style for speed; shared by all nodes via `EvalContext::prng_at`.
 #[inline]
@@ -429,12 +457,14 @@ pub struct BrushGraphRunner {
     /// Pre-resolved slot index for paint_color's output.  Same rationale
     /// as `pen_input_slots` — avoid plan traversal on the hot path.
     paint_color_slot: Option<usize>,
-    /// Pre-resolved slot index for the terminal's `dab_size` output, if
-    /// any. Resolved once at runner build by scanning every terminal step
-    /// for a `dab_size` output port. Avoids the per-dab string-list
-    /// `find_output_slot` ladder the stroke engine used to walk
-    /// (`["paint", "watercolor", "smudge", "liquify"]` would silently
-    /// skip any new terminal that publishes the same port).
+    /// Pre-resolved slot index of the terminal `dab_size` output, used
+    /// by the stroke engine to size spacing and save-point bboxes.
+    /// Resolved by walking `plan.steps` once for any step where
+    /// `is_terminal == true` and the output port `dab_size` exists.
+    /// Replaces a per-dab string-match loop against the hard-coded
+    /// list `["paint", "watercolor", "smudge", "liquify"]`, which
+    /// silently ignored any future terminal that publishes the same
+    /// port.
     dab_size_slot: Option<usize>,
     /// PRNG seed for the current stroke, set by `seed_sensors()`.
     stroke_seed: u32,
@@ -456,13 +486,28 @@ struct NodeData {
 
 impl BrushGraphRunner {
     /// Build a runner from a graph and a registry of evaluators.
+    ///
+    /// The evaluator map is consumed: every entry is converted from
+    /// `Box<dyn ...>` to `Arc<dyn ...>` (a refcount-only transfer of the
+    /// existing heap pointer — no extra allocation), and one `Arc` is
+    /// stored per `ExecStep` so the per-dab path can index by step
+    /// position without a `HashMap` lookup.
     pub fn new(
         graph: &Graph<BrushWireType>,
         registry: &HashMap<String, NodeRegistration<BrushWireType>>,
-        evaluators: HashMap<String, Arc<dyn BrushNodeEvaluator>>,
+        evaluators: HashMap<String, Box<dyn BrushNodeEvaluator>>,
     ) -> Result<Self, crate::nodegraph::GraphError> {
         let plan = crate::nodegraph::compile(graph, registry)?;
         let slots = vec![None; plan.slot_count];
+
+        // Convert the owning `Box<dyn ...>` map to `Arc<dyn ...>` once
+        // so steps that share a node type share one evaluator instance.
+        // `Arc::from(Box<T>)` reuses the existing heap allocation, so
+        // this isn't a fresh allocation per evaluator.
+        let evaluators: HashMap<String, Arc<dyn BrushNodeEvaluator>> = evaluators
+            .into_iter()
+            .map(|(k, v)| (k, Arc::from(v)))
+            .collect();
 
         // Resolve each step's evaluator once at runner-build time. The
         // hot path then indexes by step position; no per-dab string
@@ -509,10 +554,10 @@ impl BrushGraphRunner {
             .and_then(|s| s.output_slots.iter().find(|(name, _)| name == "color"))
             .map(|(_, slot)| *slot);
 
-        // Find the terminal step's `dab_size` output slot, if any. Any
-        // terminal that publishes the port wins (type-owned dispatch:
-        // the stroke engine doesn't keep a list of known terminal type
-        // ids). First hit wins, matching the prior ladder's semantics.
+        // Find the terminal's `dab_size` output slot. Whichever
+        // terminal the graph uses owns the spacing unit; the first
+        // terminal in plan order wins (every built-in terminal is
+        // single-output for `dab_size`).
         let dab_size_slot = plan.steps.iter().filter(|s| s.is_terminal).find_map(|s| {
             s.output_slots
                 .iter()
@@ -805,11 +850,31 @@ impl BrushGraphRunner {
         }
     }
 
-    /// Dispatch `begin_stroke` to every GPU node's evaluator in topological
-    /// order. Only terminal nodes override — everything else no-ops. Runs
-    /// once per stroke-start and once per rewind boundary, before any dab.
+    /// Run the framework-managed stroke prologue, then dispatch
+    /// `begin_stroke` to every GPU node's evaluator in topological order.
+    /// Runs once per stroke-start and once per rewind boundary, before
+    /// any dab.
+    ///
+    /// The prologue is driven by the [`crate::brush::node::Lifecycle`]
+    /// each node's registration declares — clearing the scratch to
+    /// transparent (paint, watercolor) or seeding it from the
+    /// pre-stroke snapshot (smudge, liquify). This lives here, not in
+    /// each terminal's `begin_stroke`, so adding a new terminal can't
+    /// silently drift from the established lifecycles. The pending-dab
+    /// queue is also reset here for the same reason — every terminal
+    /// needs it cleared at stroke-start; no point copy-pasting that
+    /// line per terminal.
     pub fn begin_stroke(&mut self, gpu: &mut BrushGpuContext) {
-        self.dispatch_lifecycle(gpu, false, |ev, ctx, gpu| ev.begin_stroke(ctx, gpu));
+        gpu.clear_pending_dabs();
+        let registry = crate::brush::registry();
+        self.dispatch_lifecycle(gpu, false, |type_id, ev, ctx, gpu| {
+            let lifecycle = registry
+                .get(type_id)
+                .map(|r| r.lifecycle)
+                .unwrap_or(super::node::Lifecycle::None);
+            apply_lifecycle(lifecycle, gpu);
+            ev.begin_stroke(ctx, gpu);
+        });
     }
 
     /// Dispatch `commit` to every GPU node's evaluator in topological
@@ -820,7 +885,7 @@ impl BrushGraphRunner {
         // ports at commit time (e.g. `paint.opacity` wired
         // to `pen.pressure` for the Airbrush) see the actual wired
         // value, not the port default.
-        self.dispatch_lifecycle(gpu, true, |ev, ctx, gpu| ev.commit(ctx, gpu));
+        self.dispatch_lifecycle(gpu, true, |_id, ev, ctx, gpu| ev.commit(ctx, gpu));
     }
 
     /// Dispatch `flush_dabs` to every GPU node's evaluator in
@@ -829,7 +894,7 @@ impl BrushGraphRunner {
     /// dispatch before the phase's `submit_final`. Fragment-path
     /// terminals no-op.
     pub fn flush_dabs(&mut self, gpu: &mut BrushGpuContext) {
-        self.dispatch_lifecycle(gpu, false, |ev, ctx, gpu| ev.flush_dabs(ctx, gpu));
+        self.dispatch_lifecycle(gpu, false, |_id, ev, ctx, gpu| ev.flush_dabs(ctx, gpu));
     }
 
     /// Shared walker for lifecycle hooks. When `gather_from_slots` is
@@ -838,13 +903,17 @@ impl BrushGraphRunner {
     /// per-dab wire values. When false, inputs are empty and evaluators
     /// fall back to port defaults (correct for `begin_stroke`, which
     /// runs before any dab populates the table).
+    ///
+    /// The closure receives the step's `type_id` so framework-managed
+    /// hooks (e.g. the begin-stroke lifecycle) can look up registration
+    /// metadata without each callsite re-fetching the step.
     fn dispatch_lifecycle<F>(
         &mut self,
         gpu: &mut BrushGpuContext,
         gather_from_slots: bool,
         mut f: F,
     ) where
-        F: FnMut(&dyn BrushNodeEvaluator, &EvalContext, &mut BrushGpuContext),
+        F: FnMut(&str, &dyn BrushNodeEvaluator, &EvalContext, &mut BrushGpuContext),
     {
         let empty_params: Vec<ParamValue> = Vec::new();
         let empty_ports: Vec<PortDef<BrushWireType>> = Vec::new();
@@ -886,7 +955,7 @@ impl BrushGraphRunner {
                 dab_index: self.dab_index,
                 node_id: step.node_id,
             };
-            f(evaluator.as_ref(), &ctx, gpu);
+            f(&step.type_id, evaluator.as_ref(), &ctx, gpu);
         }
     }
 
@@ -895,13 +964,18 @@ impl BrushGraphRunner {
         self.slots.get(slot).copied().flatten()
     }
 
-    /// Read the most recently evaluated dab's published `[w, h]` size,
-    /// in canvas pixels. `None` when the graph has no terminal publishing
-    /// `dab_size`, or the slot hasn't been written yet. The slot was
-    /// resolved once at runner build — no per-dab plan traversal.
-    pub fn read_dab_size(&self) -> Option<[f32; 2]> {
+    /// Read the terminal's most recently published `dab_size` as a
+    /// `(width, height)` pair of canvas pixels, or `None` if the graph
+    /// has no terminal that publishes one yet. Each terminal owns the
+    /// unit of dab_size it returns — paint/watercolor/smudge/liquify
+    /// all return the disc diameter for stroke spacing. The stroke
+    /// engine uses this to size both dab spacing and save-point bboxes.
+    ///
+    /// Resolved once at runner build (see `dab_size_slot`); per-dab
+    /// cost is one slot read.
+    pub fn last_dab_size(&self) -> Option<[f32; 2]> {
         let slot = self.dab_size_slot?;
-        let size = self.slots[slot]?.as_vec2();
+        let size = self.read_slot(slot)?.as_vec2();
         (size[0] > 0.0 && size[1] > 0.0).then_some(size)
     }
 

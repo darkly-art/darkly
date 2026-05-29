@@ -138,6 +138,63 @@ impl Scratch {
     pub fn write_texture(&self) -> &wgpu::Texture {
         &self.write_texture
     }
+
+    /// Stroke-prologue helper: clear the write side to fully transparent
+    /// in a single attachment-clear render pass. Used by terminals whose
+    /// composite accumulates from zero (paint, watercolor) — see
+    /// [`crate::brush::node::Lifecycle::ClearScratchToTransparent`]. The
+    /// framework calls this during `BrushGraphRunner::begin_stroke` based
+    /// on the terminal's declared lifecycle, so the four terminals no
+    /// longer carry a copy-pasted prologue each.
+    pub fn clear_to_transparent(&self, encoder: &mut wgpu::CommandEncoder) {
+        let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("scratch-clear-transparent"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.write_view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+
+    /// Stroke-prologue helper: copy a full-canvas pre-stroke snapshot
+    /// into the write side so the eventual scratch→layer commit
+    /// reproduces unchanged pixels verbatim. Used by terminals whose
+    /// commit blits the entire scratch (smudge, liquify) — see
+    /// [`crate::brush::node::Lifecycle::SeedScratchFromPreStroke`].
+    ///
+    /// Caller is responsible for confirming the source matches the
+    /// scratch's dimensions; the copy uses the write side's own size.
+    pub fn seed_from_pre_stroke(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pre_stroke: &wgpu::Texture,
+    ) {
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: pre_stroke,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.write_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: self.write_w,
+                height: self.write_h,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
     pub fn write_view(&self) -> &wgpu::TextureView {
         &self.write_view
     }

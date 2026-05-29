@@ -32,6 +32,8 @@ pub const TYPE_ID: &str = "stamp";
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![],
+        evaluator: || Box::new(StampEvaluator),
+        lifecycle: crate::brush::node::Lifecycle::None,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "shape",

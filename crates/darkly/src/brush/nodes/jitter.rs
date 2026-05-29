@@ -13,29 +13,32 @@ use crate::nodegraph::{NodeRegistration, PortDef};
 pub const TYPE_ID: &str = "jitter";
 
 pub fn register() -> BrushNodeRegistration {
-    BrushNodeRegistration::compute(NodeRegistration {
-        type_id: TYPE_ID,
-        category: "modulate",
-        display_name: "Jitter",
-        ports: vec![
-            PortDef::input("input", BrushWireType::Scalar)
-                .with_description("Base signal to perturb"),
-            PortDef::input("amount", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_label("Amount")
-                .with_icon("fa-solid fa-shuffle")
-                .with_description(
-                    "Magnitude of the added noise, in the same units as the \
-                     target port. Output is input ± amount, uniform.",
-                ),
-            PortDef::output("value", BrushWireType::Scalar)
-                .with_description("input + uniform(-amount, +amount)"),
-        ],
-        params: &[],
-        is_gpu: false,
-        is_terminal: false,
-        supports_erase: true,
-    })
+    BrushNodeRegistration::compute(
+        NodeRegistration {
+            type_id: TYPE_ID,
+            category: "modulate",
+            display_name: "Jitter",
+            ports: vec![
+                PortDef::input("input", BrushWireType::Scalar)
+                    .with_description("Base signal to perturb"),
+                PortDef::input("amount", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_label("Amount")
+                    .with_icon("fa-solid fa-shuffle")
+                    .with_description(
+                        "Magnitude of the added noise, in the same units as the \
+                         target port. Output is input ± amount, uniform.",
+                    ),
+                PortDef::output("value", BrushWireType::Scalar)
+                    .with_description("input + uniform(-amount, +amount)"),
+            ],
+            params: &[],
+            is_gpu: false,
+            is_terminal: false,
+            supports_erase: true,
+        },
+        || Box::new(JitterEvaluator),
+    )
 }
 
 pub struct JitterEvaluator;
