@@ -488,7 +488,7 @@ impl DarklyEngine {
                 let opacity = blend.opacity;
                 let blend_mode_gpu = blend.blend_mode.gpu_value;
                 let isolated = self.host_renders_isolated(layer_id);
-                self.compositor.update_layer_uniforms_full(
+                self.compositor.update_layer_uniforms(
                     &self.gpu.queue,
                     layer_id,
                     opacity,

@@ -673,10 +673,11 @@ impl DarklyEngine {
         merged.extend_from_slice(&self.selection_overlay);
         merged.extend_from_slice(&self.tool_overlay);
         if merged.is_empty() {
-            self.compositor.clear_overlay();
+            self.compositor.tool_overlay_mut().clear_primitives();
         } else {
-            self.compositor.set_overlay_primitives(merged);
+            self.compositor.tool_overlay_mut().set_primitives(merged);
         }
+        self.compositor.mark_needs_present();
     }
 
     // --- Tool Overlay ---
@@ -692,16 +693,23 @@ impl DarklyEngine {
     }
 
     pub fn overlay_hit_test(&self, screen_x: f32, screen_y: f32) -> Option<usize> {
-        self.compositor.overlay_hit_test(screen_x, screen_y)
+        self.compositor.tool_overlay().hit_test(screen_x, screen_y)
     }
 
     /// Upload the mask texture sampled by KIND_MASKED_STAMP overlay primitives.
     pub fn set_overlay_mask(&mut self, width: u32, height: u32, rgba: &[u8]) {
-        self.compositor
-            .set_overlay_mask(&self.gpu.device, &self.gpu.queue, width, height, rgba);
+        self.compositor.tool_overlay_mut().set_mask_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            width,
+            height,
+            rgba,
+        );
+        self.compositor.mark_needs_present();
     }
 
     pub fn clear_overlay_mask(&mut self) {
-        self.compositor.clear_overlay_mask();
+        self.compositor.tool_overlay_mut().clear_mask_texture();
+        self.compositor.mark_needs_present();
     }
 }

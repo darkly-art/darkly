@@ -31,6 +31,7 @@ pub mod content_bounds;
 pub mod context;
 pub mod diff_rect;
 pub mod effect;
+pub mod floating_preview;
 pub mod flood_fill;
 pub mod overlay;
 pub mod paint_target;

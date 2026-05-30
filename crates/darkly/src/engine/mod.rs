@@ -600,7 +600,7 @@ impl DarklyEngine {
     /// Current overlay preview mask dimensions. Test-only accessor.
     #[cfg(any(test, feature = "testing"))]
     pub fn compositor_preview_mask_size(&self) -> (u32, u32) {
-        self.compositor.tool_overlay_ref().preview_mask_size()
+        self.compositor.tool_overlay().preview_mask_size()
     }
 
     /// Blocking readback of the overlay's preview mask texture. Test-only.
@@ -608,7 +608,8 @@ impl DarklyEngine {
     pub fn test_readback_overlay_preview_mask(&self) -> Vec<u8> {
         let tex = self
             .compositor
-            .overlay_preview_mask_texture()
+            .tool_overlay()
+            .preview_mask_texture()
             .expect("preview mask not allocated");
         let (w, h) = self.compositor_preview_mask_size();
         crate::gpu::test_utils::readback_texture(
