@@ -103,9 +103,6 @@ export const WIRE_COLORS: Record<string, string> = {
     Bool: '#ff6b6b',
     Vec2: '#6bff6b',
     Vec4: '#ffaa4a',
-    Color: '#ffd700',
-    Texture: '#ff69b4',
-    Mask: '#b469ff',
 };
 
 // --- State ---

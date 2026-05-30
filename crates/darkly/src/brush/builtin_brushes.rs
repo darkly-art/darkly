@@ -94,7 +94,7 @@ fn paint_brush(
     let shared_wires = [
         (pen, "position", terminal, "position"),
         (paint_color, "color", stamp, "color"),
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         (stamp, "dab", terminal, "rgba"),
     ];
     for (from_node, from_port, to_node, to_port) in shared_wires {
@@ -321,7 +321,7 @@ fn watercolor_brush(
         (pen, "position", terminal, "position"),
         (pen, "pressure", terminal, "flow"),
         (paint_color, "color", terminal, "color"),
-        (circle, "texture", terminal, "mask"),
+        (circle, "mask", terminal, "mask"),
     ];
     for (from_node, from_port, to_node, to_port) in wires {
         graph
@@ -479,7 +479,7 @@ fn smudge_brush() -> Brush {
     graph.set_port_exposed(circle, "softness", true).unwrap();
 
     let wires = [
-        (circle, "texture", smudge, "mask"),
+        (circle, "mask", smudge, "mask"),
         (pen, "position", smudge, "position"),
         (pen, "motion", smudge, "motion"),
         // Pressure shapes the dab — heavier press = larger smear footprint.
@@ -674,7 +674,7 @@ fn rough_ink() -> Brush {
         (rand_phase, "value", circle, "phase_input"),
         (rand_seed, "value", circle, "seed"),
         // Circle (shape) → stamp (tip mask).
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         // Paint color → stamp.
         (paint_color, "color", stamp, "color"),
         // Stamp.dab → terminal.rgba (premultiplied RGBA).
@@ -757,12 +757,7 @@ fn charcoal() -> Brush {
         registry.get("split_color").unwrap().ports.clone(),
         vec![],
     );
-    // The disc that gives the stamp its overall footprint. Drives
-    // stamp.tip as a Texture wire (procedural coverage). The paper
-    // grain + pressure modulation rides through stamp.flow as a
-    // Scalar — stamp's formula `color.a × mask × flow` multiplies
-    // them together either way, so packing the per-fragment scalar
-    // modulators into flow keeps every wire type-correct.
+    // The disc that gives the stamp its overall footprint.
     let shape = graph.add_node(
         "circle",
         registry.get("circle").unwrap().ports.clone(),
@@ -778,10 +773,12 @@ fn charcoal() -> Brush {
         registry.get("multiply").unwrap().ports.clone(),
         vec![],
     );
-    // × pressure: light strokes still get pressure-faded coverage
-    // even where the threshold is fully open, matching real
-    // charcoal darkening monotonically with applied force.
-    let flow_combined = graph.add_node(
+    // × disc mask → final stamp.tip. Folding circle.mask
+    // into the same scalar product as paper×threshold keeps every
+    // per-fragment modulator in one place — stamp computes
+    // `color.a × tip × flow`, so anything multiplicative belongs in
+    // tip and `flow` stays the per-stamp pressure value.
+    let tip_combined = graph.add_node(
         "multiply",
         registry.get("multiply").unwrap().ports.clone(),
         vec![],
@@ -808,12 +805,12 @@ fn charcoal() -> Brush {
         (paper, "color", split, "color"),
         (split, "luminance", paper_threshold, "a"),
         (threshold, "output", paper_threshold, "b"),
-        // (paper × threshold) × pressure → stamp.flow.
-        (paper_threshold, "result", flow_combined, "a"),
-        (pen, "pressure", flow_combined, "b"),
-        (flow_combined, "result", stamp, "flow"),
-        // Disc coverage → stamp.tip (Texture wire).
-        (shape, "texture", stamp, "tip"),
+        // (paper × threshold) × disc coverage → stamp.tip.
+        (paper_threshold, "result", tip_combined, "a"),
+        (shape, "mask", tip_combined, "b"),
+        (tip_combined, "result", stamp, "tip"),
+        // Pressure → flow (per-stamp deposit cap).
+        (pen, "pressure", stamp, "flow"),
         // Per-stamp colour.
         (paint_color, "color", stamp, "color"),
         // Stamp → terminal.

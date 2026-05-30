@@ -620,7 +620,7 @@ pub fn register() -> BrushNodeRegistration {
                          Smaller values keep the smudge influence local to the brush tip; larger \
                          values pull color from a wider area.",
                     ),
-                PortDef::input("color", BrushWireType::Color)
+                PortDef::input("color", BrushWireType::Vec4)
                     .with_description("Brush color (typically wired from paint_color)"),
                 // Cursor-preview rotation in radians. Read only by
                 // `render_preview` and published into
@@ -630,15 +630,8 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::input("rotation", BrushWireType::Scalar)
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                     .with_description("Cursor-preview rotation (radians)"),
-                // Typed as `Texture` to match the upstream
-                // `circle.texture` output's wire type. In the compiled
-                // path the wire's underlying WGSL expression is `f32`
-                // (the shape coverage), but the framework checks
-                // wire types for compatibility — so the declared
-                // wire type must match the source. Same pattern as
-                // `paint.rgba` matching `stamp.dab`.
-                PortDef::input("mask", BrushWireType::Texture).with_description(
-                    "Per-fragment shape coverage (typically wired from circle.texture)",
+                PortDef::input("mask", BrushWireType::Scalar).with_description(
+                    "Per-fragment shape mask (typically wired from circle.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),

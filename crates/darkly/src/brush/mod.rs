@@ -186,7 +186,7 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
         (pen, "pressure", stamp, "size_input"),
         (pen, "pressure", stamp, "flow"),
         (paint_color, "color", stamp, "color"),
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         (stamp, "dab", terminal, "rgba"),
         (pen, "position", terminal, "position"),
     ];
@@ -531,8 +531,8 @@ mod tests {
         let slot = runner.find_node_output_slot(color_node, "color").unwrap();
         let result = runner.read_slot(slot).unwrap();
         match result {
-            ScalarValue::Color(c) => assert_eq!(c, fg_color),
-            other => panic!("expected Color, got {:?}", other),
+            ScalarValue::Vec4(c) => assert_eq!(c, fg_color),
+            other => panic!("expected Vec4, got {:?}", other),
         }
     }
 

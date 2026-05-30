@@ -58,7 +58,7 @@ struct Harness {
 ///   pen_input.position → paint.position
 ///   pen_input.pressure → curve → paint.size_input
 ///   paint_color.color  → stamp.color
-///   circle.texture     → stamp.tip       (per-dab shape feed)
+///   circle.mask    → stamp.tip       (per-dab shape feed)
 ///   stamp.dab          → paint.rgba
 ///
 /// `algorithm` selects the circle's shape function. `amplitude`
@@ -110,7 +110,7 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
         (pen, "pressure", curve, "input"),
         (curve, "output", terminal, "size_input"),
         (pen, "pressure", stamp, "flow"),
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         (paint_color, "color", stamp, "color"),
         (stamp, "dab", terminal, "rgba"),
         (pen, "position", terminal, "position"),

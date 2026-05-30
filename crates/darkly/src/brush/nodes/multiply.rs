@@ -46,7 +46,7 @@ impl BrushNodeEvaluator for MultiplyEvaluator {
     /// Inline scalar product into the compiled fragment shader.
     /// Required so brushes that route scalars through `multiply` on
     /// the way to the `paint` terminal (e.g. Charcoal:
-    /// `paper.luminance * threshold * circle.coverage`) compile —
+    /// `paper.luminance * threshold * circle.mask`) compile —
     /// every upstream node of a compiled terminal must emit WGSL.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();

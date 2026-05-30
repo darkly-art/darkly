@@ -33,7 +33,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
                     .with_description("Alpha channel (0 = transparent, 1 = opaque)"),
-                PortDef::output("color", BrushWireType::Color)
+                PortDef::output("color", BrushWireType::Vec4)
                     .with_description("Combined RGBA color value"),
             ],
             params: &[],
@@ -53,6 +53,6 @@ impl BrushNodeEvaluator for MakeColorEvaluator {
         let g = ctx.input_f32("g");
         let b = ctx.input_f32("b");
         let a = ctx.input_f32("a");
-        vec![("color".into(), ScalarValue::Color([r, g, b, a]))]
+        vec![("color".into(), ScalarValue::Vec4([r, g, b, a]))]
     }
 }

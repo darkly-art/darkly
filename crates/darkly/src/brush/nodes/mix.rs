@@ -30,8 +30,8 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description("Blend factor (0 = all a, 1 = all b)"),
                 PortDef::output("result", BrushWireType::Scalar)
                     .with_description("Interpolated scalar result"),
-                PortDef::output("color_result", BrushWireType::Color)
-                    .with_description("Interpolated color result (when color inputs are wired)"),
+                PortDef::output("color_result", BrushWireType::Vec4)
+                    .with_description("Interpolated color result (when Vec4 inputs are wired)"),
             ],
             params: &[],
             is_gpu: false,
@@ -65,7 +65,7 @@ impl BrushNodeEvaluator for MixEvaluator {
 
         vec![
             ("result".into(), ScalarValue::Scalar(scalar_result)),
-            ("color_result".into(), ScalarValue::Color(color_result)),
+            ("color_result".into(), ScalarValue::Vec4(color_result)),
         ]
     }
 }

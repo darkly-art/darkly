@@ -144,8 +144,9 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Raw)
                 .with_visible_when("algorithm", [ALGO_SUPERFORMULA as i32])
                 .with_description("Shape of bump fall."),
-            PortDef::output("texture", BrushWireType::Texture)
-                .with_description("Procedural mask texture"),
+            PortDef::output("mask", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
+                .with_description("Per-fragment mask value (0..1) — the procedural shape's alpha at this fragment"),
         ],
         params: &[ParamDef::Enum {
             name: "algorithm",
@@ -194,7 +195,7 @@ impl BrushNodeEvaluator for CircleEvaluator {
     /// dab-record fields when modulated, literals when not.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
-        if !cctx.consumed_outputs.contains("texture") {
+        if !cctx.consumed_outputs.contains("mask") {
             return Ok(wgsl);
         }
 
@@ -252,7 +253,7 @@ impl BrushNodeEvaluator for CircleEvaluator {
              \x20   let {shape_ident}: f32 = 1.0 - smoothstep({shape_ident}_r_at - {shape_ident}_band, {shape_ident}_r_at, local_dist);\n",
         );
         wgsl.body = body;
-        wgsl.outputs.insert("texture".into(), shape_ident);
+        wgsl.outputs.insert("mask".into(), shape_ident);
         Ok(wgsl)
     }
 

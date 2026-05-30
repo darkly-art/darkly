@@ -31,8 +31,9 @@ pub fn register() -> BrushNodeRegistration {
             category: "shape",
             display_name: "Stamp Tip",
             ports: vec![
-                PortDef::input("tip", BrushWireType::Texture)
-                    .with_description("Brush tip image (scalar coverage in compiled mode)"),
+                PortDef::input("tip", BrushWireType::Scalar)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Per-fragment tip coverage (0..1)"),
                 PortDef::input("size_input", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
                     .with_natural_range(0.0, 1.0)
@@ -87,12 +88,12 @@ pub fn register() -> BrushNodeRegistration {
                     .with_icon("fa-solid fa-droplet")
                     .exposed()
                     .with_description("Paint deposited per dab"),
-                PortDef::input("color", BrushWireType::Color).with_description("Brush color"),
-                PortDef::output("dab", BrushWireType::Texture)
+                PortDef::input("color", BrushWireType::Vec4).with_description("Brush color (RGBA)"),
+                PortDef::output("dab", BrushWireType::Vec4)
                     .with_description("The stamped brush mark (premultiplied RGBA)"),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in pixels (unused in compiled mode)"),
-                PortDef::output("preview", BrushWireType::Texture)
+                PortDef::output("preview", BrushWireType::Vec4)
                     .with_description("Brush preview (unused)"),
             ],
             params: &[],

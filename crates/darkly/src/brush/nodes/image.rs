@@ -17,9 +17,9 @@
 //! registry's shared sampler is configured for repeat addressing.
 //!
 //! Restoration note: an `image` node existed before the WGSL
-//! migration. That version returned a runtime `TextureHandle`
-//! (`BrushWireType::Texture`) and downstream nodes received the
-//! handle as a per-dab value. The current node is shaped for the
+//! migration. That version returned a runtime texture handle on a
+//! `BrushWireType::Texture` wire and downstream nodes received it
+//! as a per-dab value. The current node is shaped for the
 //! WGSL-compiled pipeline: it doesn't move texture data through
 //! wires — it inlines a `textureSample` call into the compiled
 //! shader and the binding lives in the per-brush pipeline. The
@@ -42,7 +42,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "texture",
             display_name: "Image",
-            ports: vec![PortDef::output("color", BrushWireType::Color)
+            ports: vec![PortDef::output("color", BrushWireType::Vec4)
                 .with_description("RGBA value sampled from the named texture at the fragment's canvas-pixel position")],
             params: &[
                 ParamDef::String {
@@ -73,7 +73,7 @@ impl BrushNodeEvaluator for ImageEvaluator {
     /// that mix CPU and compiled execution don't `NaN` through the
     /// `color` port.
     fn evaluate_cpu(&self, _ctx: &EvalContext) -> Vec<(String, ScalarValue)> {
-        vec![("color".into(), ScalarValue::Color([0.5, 0.5, 0.5, 1.0]))]
+        vec![("color".into(), ScalarValue::Vec4([0.5, 0.5, 0.5, 1.0]))]
     }
 
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {

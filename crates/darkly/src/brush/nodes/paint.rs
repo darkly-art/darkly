@@ -402,7 +402,7 @@ pub fn register() -> BrushNodeRegistration {
                 // texture handle. In the compiled path it's a
                 // `vec4<f32>` expression. Without this match, the
                 // graph compiler rejects the connection at brush load.
-                PortDef::input("rgba", BrushWireType::Texture).with_description(
+                PortDef::input("rgba", BrushWireType::Vec4).with_description(
                     "Premultiplied RGBA from the upstream compiled graph (typically `stamp.dab`)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)

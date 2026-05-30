@@ -326,12 +326,8 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description(
                         "Overall stroke strength. Lower values reduce how much the smudge affects the canvas.",
                     ),
-                // Same `Texture` wire-type as watercolor.mask
-                // — the upstream compiled `circle.texture` output is a
-                // scalar coverage expression; the wire-type label is
-                // shared with the per-dab dispatch model.
-                PortDef::input("mask", BrushWireType::Texture).with_description(
-                    "Per-fragment shape coverage (typically wired from circle.texture)",
+                PortDef::input("mask", BrushWireType::Scalar).with_description(
+                    "Per-fragment shape mask (typically wired from circle.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),

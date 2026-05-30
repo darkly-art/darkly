@@ -25,7 +25,7 @@ pub fn register() -> BrushNodeRegistration {
             category: "math",
             display_name: "Split Color",
             ports: vec![
-                PortDef::input("color", BrushWireType::Color)
+                PortDef::input("color", BrushWireType::Vec4)
                     .with_description("The RGBA color to decompose into channels"),
                 PortDef::output("r", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)

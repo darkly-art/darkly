@@ -365,8 +365,8 @@ pub fn register() -> BrushNodeRegistration {
                 // Optional brush-shape modulation. If wired, the warp
                 // strength multiplies by the upstream coverage. If
                 // unwired, defaults to 1.0 (uniform inside the disc).
-                PortDef::input("mask", BrushWireType::Texture).with_description(
-                    "Per-fragment shape coverage (typically wired from circle.texture); \
+                PortDef::input("mask", BrushWireType::Scalar).with_description(
+                    "Per-fragment shape mask (typically wired from circle.mask); \
                      defaults to 1.0 (uniform inside the disc) when unwired.",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)

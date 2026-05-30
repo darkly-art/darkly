@@ -122,7 +122,7 @@ fn extent_protocol_composes_along_chain() {
     let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
     let wires = [
         (rand_amp, "value", circle, "amplitude"),
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         (paint_color, "color", stamp, "color"),
         (stamp, "dab", term, "rgba"),
         (pen, "position", term, "position"),

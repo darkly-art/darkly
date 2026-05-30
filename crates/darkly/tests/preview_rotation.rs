@@ -78,7 +78,7 @@ fn pen_tilt_direction_drives_preview_rotation() {
         (pen, "position", term, "position"),
         (pen, "tilt_direction", term, "rotation"),
         (paint_color, "color", stamp, "color"),
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         (stamp, "dab", term, "rgba"),
     ];
     for (from_node, from_port, to_node, to_port) in wires {

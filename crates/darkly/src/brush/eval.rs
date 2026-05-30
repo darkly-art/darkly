@@ -684,7 +684,7 @@ impl BrushGraphRunner {
 
         // Seed paint_color if present.
         if let Some(slot) = self.paint_color_slot {
-            self.slots[slot] = Some(ScalarValue::Color(color));
+            self.slots[slot] = Some(ScalarValue::Vec4(color));
         }
     }
 
