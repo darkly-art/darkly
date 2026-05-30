@@ -31,6 +31,7 @@ pub mod content_bounds;
 pub mod context;
 pub mod diff_rect;
 pub mod effect;
+pub mod floating_preview;
 pub mod flood_fill;
 pub mod overlay;
 pub mod paint_target;
@@ -39,6 +40,7 @@ pub mod readback;
 pub mod region_store;
 pub mod selection;
 pub mod straight_composite;
+#[cfg(any(test, feature = "testing"))]
 pub mod test_utils;
 pub mod transform;
 pub mod veil;

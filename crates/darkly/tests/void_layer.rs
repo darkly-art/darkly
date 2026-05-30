@@ -297,6 +297,70 @@ fn noise_void_time_scrub_is_continuous() {
     );
 }
 
+/// Regression: the void owns its own "needs re-render" bit. Mutating one
+/// void's params must not cause an unrelated void to re-encode — the
+/// compositor must not flip dirty for every procedural layer on every
+/// param edit. Verified by reading back two voids' textures, mutating
+/// just one, and confirming the *un-mutated* one's pixels are byte-equal.
+#[test]
+fn void_dirty_is_per_instance() {
+    let mut engine = test_engine(64, 64);
+    let mut params_a = noise_defaults(&engine);
+    let mut params_b = noise_defaults(&engine);
+    // Different seeds so the two voids' textures are visibly distinct —
+    // helps catch any accidental aliasing in addition to the dirty-bit
+    // check.
+    set_int_param(&mut params_a, "seed", 100);
+    set_int_param(&mut params_b, "seed", 200);
+
+    let id_a = engine
+        .add_void_layer("noise", params_a.clone(), None)
+        .expect("noise void should be addable");
+    let id_b = engine
+        .add_void_layer("noise", params_b, None)
+        .expect("second noise void should be addable");
+
+    // Force a render so both voids have produced their first frame and
+    // cleared their dirty flags.
+    let _ = engine.test_readback_canvas();
+    let before_a = engine.test_readback_layer(id_a);
+    let before_b = engine.test_readback_layer(id_b);
+    assert_ne!(
+        before_a, before_b,
+        "two different seeds must produce different textures",
+    );
+
+    // Mutate only A. B must not re-encode — its dirty bit was cleared
+    // above and nothing has touched it since.
+    set_float_param(&mut params_a, "time", 5.0);
+    engine.update_void_params(id_a, params_a);
+    let _ = engine.test_readback_canvas();
+    let after_a = engine.test_readback_layer(id_a);
+    let after_b = engine.test_readback_layer(id_b);
+
+    assert_ne!(
+        before_a, after_a,
+        "mutated void should re-encode and change pixels",
+    );
+    assert_eq!(
+        before_b, after_b,
+        "untouched void must not re-encode — its dirty bit is its own state",
+    );
+}
+
+fn set_int_param(params: &mut [ParamValue], name: &str, value: i32) {
+    let engine = test_engine(1, 1);
+    let defs = engine.void_param_defs("noise");
+    let idx = defs
+        .iter()
+        .position(|d| match d {
+            darkly::gpu::params::ParamDef::Int { name: n, .. } => *n == name,
+            _ => false,
+        })
+        .unwrap_or_else(|| panic!("noise void has no int param '{name}'"));
+    params[idx] = ParamValue::Int(value);
+}
+
 /// Look up a noise-void param slot by name. The schema currently exposes
 /// `seed, octaves, size, warp, darkness, time`, but tests index by name
 /// rather than position so new params don't silently shift them.

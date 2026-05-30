@@ -184,10 +184,13 @@ Run at commit time only — not during iterative debugging. Use `cargo check` fo
 
 ```bash
 cargo fmt --all -- --check
-RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --exclude darkly-wasm -- -D warnings
+RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --exclude darkly-wasm --features darkly/testing -- -D warnings
 RUSTFLAGS="-D warnings" cargo clippy -p darkly-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
+# `--features darkly/testing` exposes `gpu::test_utils`, `blocking_read`, and
+# the engine's `test_readback_*` accessors that integration tests rely on
+# (compile-time gate enforcing CLAUDE.md "No Blocking GPU Readbacks").
 # `--test-threads=1` is mandatory: GPU-touching integration tests (`engine.rs`, `blend_modes.rs`, etc.) share a process-wide wgpu device and SIGSEGV when run in parallel.
-cargo test --workspace --exclude darkly-wasm -- --test-threads=1
+cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test-threads=1
 (cd frontend/wasm && wasm-pack build --release --target web --out-dir pkg)
 # `vite build` only transpiles — `tsc --noEmit` is the actual TS gate.
 (cd frontend && npx tsc --noEmit)
