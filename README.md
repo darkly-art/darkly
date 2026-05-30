@@ -1,4 +1,4 @@
-[![darkly](https://github.com/user-attachments/assets/789a7625-27a3-406b-86bf-e476924d6dc8)](https://github.com/darkly-art/darkly)
+<a href="https://github.com/darkly-art/darkly"><img src="https://github.com/user-attachments/assets/789a7625-27a3-406b-86bf-e476924d6dc8" alt="darkly" width="700"></a>
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
 [![Patreon](https://img.shields.io/badge/Patreon-Forbidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
@@ -45,10 +45,10 @@ Veils have practical uses too:
 
 - By hiding fine details, they can prevent **premature fixation on detail**, freeing you to focus on composition.
 - During the sketching / ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
-- They can also help remedy **art fatigue** (losing eyes for art by staring at it for too long) by letting you view it through a new lense.
+- They can also help remedy **art fatigue** (losing eyes for a piece by staring at it for too long) by helping you view it through a fresh lens.
 
 > [!NOTE]
-> Veils live in their own dedicated group, but within that you can stack and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.
+> Veils live in their own group, but within it you can stack and order them however you like. Remember that adding too many can drain your battery, due to the heavy load on your GPU.
 
 ### Voids
 
