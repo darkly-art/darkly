@@ -1,4 +1,4 @@
-<a href="https://github.com/darkly-art/darkly"><img src="https://github.com/user-attachments/assets/789a7625-27a3-406b-86bf-e476924d6dc8" alt="darkly" width="700"></a>
+<a href="https://github.com/darkly-art/darkly"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="darkly" width="700"></a>
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
 [![Patreon](https://img.shields.io/badge/Patreon-Forbidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
