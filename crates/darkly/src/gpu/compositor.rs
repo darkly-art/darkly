@@ -10,7 +10,14 @@ use crate::gpu::veil_chain::VeilChain;
 use crate::gpu::view::{ViewTransform, DEFAULT_WORKSPACE_BG};
 use crate::gpu::void::{Void, VoidRegistry};
 use crate::layer::{Layer, LayerId, LayerNode};
+use smallvec::SmallVec;
 use std::collections::{HashMap, HashSet};
+
+/// Stack-side capacity for the per-frame `children_of(...)` snapshot used by
+/// the composite walk. Typical documents have single-digit children per group;
+/// wider groups (paste-many-layers, stress tests) spill to the heap without
+/// ceremony.
+type ChildIds = SmallVec<[LayerId; 8]>;
 
 /// Convert a `display.pixelFilter` string value to the float code stamped
 /// into `ViewTransform.flags[0]`. Unknown values fall back to auto.
@@ -219,6 +226,15 @@ pub struct Compositor {
     /// loop (which falls back to `default_mask_bind_group` for hidden masks).
     mask_bind_groups: HashMap<LayerId, wgpu::BindGroup>,
 
+    /// Cached blend bind groups for `compose_children`. Key is
+    /// `(parent_group, child_id, src_accum_idx)` — both ping-pong sides
+    /// get their own entry per child because the source accum view flips
+    /// every layer. Entries are invalidated in `dispose_node_texture` and
+    /// `resize_node_texture` against the affected node id (either as
+    /// parent or child); the floating-target case bypasses the cache so
+    /// preview-state ephemera never leak in.
+    blend_bind_groups: HashMap<(LayerId, LayerId, u8), wgpu::BindGroup>,
+
     /// Pre-built GPU objects per content layer (raster + void). Keyed by
     /// the document's [`LayerId`] — both kinds share the same blend
     /// pipeline path, so collapsing them into one pool means the blend
@@ -318,6 +334,12 @@ pub struct Compositor {
     frame_count: u64,
     /// Last wall-clock time for dt computation.
     last_wall_time: f32,
+
+    /// Reused buffer for the "ids of dirty procedural layers" pass in
+    /// `encode_dirty_layer_content`. Cleared at the top of the pass and
+    /// drained before returning, so the only retained allocation is the
+    /// `Vec` capacity itself.
+    dirty_procedural_scratch: Vec<LayerId>,
 }
 
 impl Compositor {
@@ -671,6 +693,7 @@ impl Compositor {
             node_textures: HashMap::new(),
             default_mask_bind_group,
             mask_bind_groups: HashMap::new(),
+            blend_bind_groups: HashMap::new(),
             layer_cache: HashMap::new(),
             blend_pipelines,
             mask_lerp_pipeline,
@@ -700,6 +723,7 @@ impl Compositor {
             pixel_filter: pixel_filter_from_config(),
             frame_count: 0,
             last_wall_time: 0.0,
+            dirty_procedural_scratch: Vec::new(),
         }
     }
 
@@ -849,6 +873,12 @@ impl Compositor {
         );
 
         self.node_textures.insert(node_id, new_tex);
+
+        // Any cached blend bind groups using this node (as parent or child)
+        // reference the now-replaced texture view; drop them so the next
+        // composite re-creates against the fresh handle.
+        self.blend_bind_groups
+            .retain(|(parent, child, _), _| *parent != node_id && *child != node_id);
 
         // If this node has a cached mask bind group, rebuild it against the
         // freshly-allocated view. The blend stage holds no other reference.
@@ -1372,6 +1402,12 @@ impl Compositor {
     pub fn dispose_node_texture(&mut self, node_id: LayerId) {
         self.node_textures.remove(&node_id);
         self.mask_bind_groups.remove(&node_id);
+        // Blend bind groups that name this node as either the parent (a
+        // group whose accum is gone) or the child (a layer or child-group
+        // whose view is gone) point at a freed texture handle. Evict them
+        // so the next composite rebuilds against current state.
+        self.blend_bind_groups
+            .retain(|(parent, child, _), _| *parent != node_id && *child != node_id);
         self.layer_cache.remove(&node_id);
         self.dirty_node_pixels.remove(&node_id);
         self.mark_dirty();
@@ -1575,16 +1611,24 @@ impl Compositor {
         // Two-phase: collect ids of dirty procedural layers, then drop the
         // mutable borrow and re-acquire per-entry. Keeps the loop body
         // short and avoids borrowing `self.layer_cache` and
-        // `self.node_textures` at the same time.
-        let dirty: Vec<LayerId> = self
-            .layer_cache
-            .iter()
-            .filter_map(|(id, c)| match &c.content {
-                LayerContent::Procedural(p) if p.dirty => Some(*id),
-                _ => None,
-            })
-            .collect();
-        for id in dirty {
+        // `self.node_textures` at the same time. The scratch buffer is
+        // owned by `self` so the per-frame Vec churn vanishes.
+        self.dirty_procedural_scratch.clear();
+        self.dirty_procedural_scratch
+            .extend(
+                self.layer_cache
+                    .iter()
+                    .filter_map(|(id, c)| match &c.content {
+                        LayerContent::Procedural(p) if p.dirty => Some(*id),
+                        _ => None,
+                    }),
+            );
+        // Index-iterate so the loop body can re-borrow `self.layer_cache`
+        // mutably; the LayerIds are `Copy`. The scratch retains its
+        // capacity across frames so the per-frame `Vec` churn vanishes.
+        let count = self.dirty_procedural_scratch.len();
+        for i in 0..count {
+            let id = self.dirty_procedural_scratch[i];
             let dst_view = match self.node_textures.get(&id) {
                 Some(t) => t.view(),
                 None => continue,
@@ -1607,6 +1651,9 @@ impl Compositor {
             proc.void.encode(encoder, &proc.cache, dst_view);
             proc.dirty = false;
         }
+        // Leave the field empty at exit — capacity is retained but no
+        // potentially-stale LayerIds live past dispose.
+        self.dirty_procedural_scratch.clear();
     }
 
     /// Total number of node textures (raster layers + mask modifiers)
@@ -1855,12 +1902,6 @@ impl Compositor {
 
     /// Look up the resolved mask bind group for a modifier id, falling back to
     /// the default (1x1 white = no masking) when no real mask is active.
-    fn mask_bind_group(&self, layer_id: LayerId) -> &wgpu::BindGroup {
-        self.mask_bind_groups
-            .get(&layer_id)
-            .unwrap_or(&self.default_mask_bind_group)
-    }
-
     /// Get the composited output texture (root group's composite cache).
     /// Used by the color picker for readback.
     pub fn composited_texture(&self) -> &wgpu::Texture {
@@ -2354,13 +2395,33 @@ impl Compositor {
         doc: &Document,
         host_id: LayerId,
     ) -> &wgpu::BindGroup {
+        Self::effective_mask_bind_group_fields(
+            &self.mask_bind_groups,
+            &self.default_mask_bind_group,
+            &self.transform_pass,
+            doc,
+            host_id,
+        )
+    }
+
+    /// Field-explicit variant of [`Self::effective_mask_bind_group`] so a
+    /// caller can hold a disjoint `&mut self.blend_bind_groups` borrow
+    /// across this lookup. The method-form takes `&self` whole; the
+    /// borrow checker can't split that.
+    fn effective_mask_bind_group_fields<'a>(
+        mask_bind_groups: &'a HashMap<LayerId, wgpu::BindGroup>,
+        default_mask_bind_group: &'a wgpu::BindGroup,
+        transform_pass: &'a crate::gpu::transform::TransformPass,
+        doc: &Document,
+        host_id: LayerId,
+    ) -> &'a wgpu::BindGroup {
         let live_or_default = doc
             .mask_modifier(host_id)
             .filter(|m| m.common.visible)
-            .map(|m| self.mask_bind_group(m.id))
-            .unwrap_or(&self.default_mask_bind_group);
+            .and_then(|m| mask_bind_groups.get(&m.id))
+            .unwrap_or(default_mask_bind_group);
 
-        if let Some(state) = self.transform_pass.active.as_ref() {
+        if let Some(state) = transform_pass.active.as_ref() {
             if doc.parent_of(state.target_layer) == Some(host_id) {
                 if let Some(bg) = state.preview_mask_bind_group.as_ref() {
                     return bg;
@@ -2579,6 +2640,7 @@ impl Compositor {
     ///
     /// Forces an identity 1:1 view transform so screen pixels map to canvas
     /// pixels and the OOB branch is inactive across the whole target.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_present_to_canvas(
         &mut self,
         device: &wgpu::Device,
@@ -2676,6 +2738,53 @@ impl Compositor {
         })
     }
 
+    /// Cached entry point for `create_blend_bind_group`. The key
+    /// `(parent_group, child, src_accum_idx)` uniquely identifies the bg+layer
+    /// view pair for a given composite — view handles and uniform buffers
+    /// are stable across frames, so caching by key avoids the per-frame
+    /// allocator round-trip. Caller is responsible for bypassing the cache
+    /// when the inputs are not stable (e.g. floating-target preview swap).
+    ///
+    /// Takes the cache field directly rather than `&mut self` so the caller
+    /// can keep other immutable field borrows live across this call. Returns
+    /// a borrow into the cache, valid until the cache is mutated again.
+    fn get_or_create_blend_bind_group<'a>(
+        blend_bind_groups: &'a mut HashMap<(LayerId, LayerId, u8), wgpu::BindGroup>,
+        bgl: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        device: &wgpu::Device,
+        key: (LayerId, LayerId, u8),
+        bg_view: &wgpu::TextureView,
+        layer_view: &wgpu::TextureView,
+        uniform_buf: &wgpu::Buffer,
+        label: &str,
+    ) -> &'a wgpu::BindGroup {
+        blend_bind_groups.entry(key).or_insert_with(|| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout: bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(bg_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(layer_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: uniform_buf.as_entire_binding(),
+                    },
+                ],
+            })
+        })
+    }
+
     /// Recursively composite a group's children into its GroupState.
     ///
     /// For passthrough groups, children are inlined into the parent's accum
@@ -2717,8 +2826,9 @@ impl Compositor {
 
         // Inline children into this group's accumulators. Clone the child
         // ids so the borrow on `doc` doesn't outlive the call into
-        // `compose_children`, which itself re-borrows `doc`.
-        let children: Vec<LayerId> = doc.children_of(group_id).to_vec();
+        // `compose_children`, which itself re-borrows `doc`. `SmallVec`
+        // absorbs the typical single-digit-children case on the stack.
+        let children: ChildIds = ChildIds::from_slice(doc.children_of(group_id));
         self.compose_children(encoder, device, doc, group_id, &children, scissor);
 
         // Copy final accum to this group's composite cache.
@@ -2824,20 +2934,59 @@ impl Compositor {
                     let dst = 1 - src;
                     gs.current_accum = dst;
 
-                    let bind_group = self.create_blend_bind_group(
-                        device,
-                        &self.group_state[&parent_group].accum.views[src],
-                        layer_view,
-                        uniform_buf_ptr,
-                        "blend-layer",
-                    );
+                    // Floating target swaps the bg/layer view per-frame to the
+                    // (canvas-aligned) preview texture; skip the cache so
+                    // preview-state ephemera never leak in. The non-floating
+                    // path uses stable view+uniform handles so the cache key
+                    // `(parent, child, src)` is sufficient.
+                    let fresh_bind_group: Option<wgpu::BindGroup>;
+                    let cached_bind_group: Option<&wgpu::BindGroup>;
+                    if active_floating.is_some() {
+                        fresh_bind_group = Some(self.create_blend_bind_group(
+                            device,
+                            &self.group_state[&parent_group].accum.views[src],
+                            layer_view,
+                            uniform_buf_ptr,
+                            "blend-layer",
+                        ));
+                        cached_bind_group = None;
+                    } else {
+                        // Split-borrow: pull out the views we need so the
+                        // mutable borrow of `blend_bind_groups` doesn't
+                        // overlap with field reads inside the helper.
+                        let bg_view = &self.group_state[&parent_group].accum.views[src];
+                        let bgl = &self.blend_pipelines.bind_group_layout;
+                        let sampler = &self.sampler;
+                        cached_bind_group = Some(Self::get_or_create_blend_bind_group(
+                            &mut self.blend_bind_groups,
+                            bgl,
+                            sampler,
+                            device,
+                            (parent_group, layer_id, src as u8),
+                            bg_view,
+                            layer_view,
+                            uniform_buf_ptr,
+                            "blend-layer",
+                        ));
+                        fresh_bind_group = None;
+                    }
+                    let bind_group: &wgpu::BindGroup = cached_bind_group
+                        .unwrap_or_else(|| fresh_bind_group.as_ref().expect("one branch sets it"));
 
                     {
                         let gs = &self.group_state[&parent_group];
                         // Effective mask bind group: live mask by default,
                         // preview-mask bind group when one of this layer's
-                        // modifiers is the floating target.
-                        let mask_bg = self.effective_mask_bind_group(doc, layer_id);
+                        // modifiers is the floating target. Field-explicit
+                        // form so the cached `bind_group` borrow on
+                        // `self.blend_bind_groups` survives this lookup.
+                        let mask_bg = Self::effective_mask_bind_group_fields(
+                            &self.mask_bind_groups,
+                            &self.default_mask_bind_group,
+                            &self.transform_pass,
+                            doc,
+                            layer_id,
+                        );
                         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("blend-layer"),
                             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2853,7 +3002,7 @@ impl Compositor {
                         });
                         rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
                         rpass.set_pipeline(self.blend_pipelines.pipeline());
-                        rpass.set_bind_group(0, &bind_group, &[]);
+                        rpass.set_bind_group(0, bind_group, &[]);
                         rpass.set_bind_group(1, mask_bg, &[]);
                         rpass.draw(0..3, 0..1);
                     }
@@ -2881,7 +3030,7 @@ impl Compositor {
                             );
                         } else {
                             // Pure passthrough — inline children into parent.
-                            let inner: Vec<LayerId> = doc.children_of(group_id).to_vec();
+                            let inner: ChildIds = ChildIds::from_slice(doc.children_of(group_id));
                             self.compose_children(
                                 encoder,
                                 device,
@@ -2905,12 +3054,29 @@ impl Compositor {
                         let dst = 1 - src;
                         gs_parent.current_accum = dst;
 
+                        // Split-borrow into the cache: bg/layer views and
+                        // uniform buffer live in distinct fields from
+                        // `blend_bind_groups`, so we can hold the mutable
+                        // borrow of the cache and the immutable borrows of
+                        // the views together. Groups never become floating
+                        // targets themselves, so the cache always applies
+                        // here (a modifier-as-floating-target only swaps
+                        // mask_bg via `effective_mask_bind_group`).
+                        let bg_view = &self.group_state[&parent_group].accum.views[src];
                         let gs_child = &self.group_state[&group_id];
-                        let bind_group = self.create_blend_bind_group(
+                        let child_view = &gs_child.composite_cache_view;
+                        let child_uniform = &gs_child.uniform_buf;
+                        let bgl = &self.blend_pipelines.bind_group_layout;
+                        let sampler = &self.sampler;
+                        let bind_group = Self::get_or_create_blend_bind_group(
+                            &mut self.blend_bind_groups,
+                            bgl,
+                            sampler,
                             device,
-                            &self.group_state[&parent_group].accum.views[src],
-                            &gs_child.composite_cache_view,
-                            &gs_child.uniform_buf,
+                            (parent_group, group_id, src as u8),
+                            bg_view,
+                            child_view,
+                            child_uniform,
                             "blend-group",
                         );
 
@@ -2918,8 +3084,16 @@ impl Compositor {
                         // Same effective-mask routing as the raster path —
                         // when the floating target is one of this group's
                         // modifiers, sample the preview-mask bind group
-                        // instead of the live one.
-                        let child_mask_bg = self.effective_mask_bind_group(doc, group_id);
+                        // instead of the live one. Field-explicit form so
+                        // the cached `bind_group` borrow on
+                        // `self.blend_bind_groups` survives this lookup.
+                        let child_mask_bg = Self::effective_mask_bind_group_fields(
+                            &self.mask_bind_groups,
+                            &self.default_mask_bind_group,
+                            &self.transform_pass,
+                            doc,
+                            group_id,
+                        );
                         {
                             let mut rpass =
                                 encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2937,7 +3111,7 @@ impl Compositor {
                                 });
                             rpass.set_scissor_rect(scissor_x, scissor_y, scissor_w, scissor_h);
                             rpass.set_pipeline(self.blend_pipelines.pipeline());
-                            rpass.set_bind_group(0, &bind_group, &[]);
+                            rpass.set_bind_group(0, bind_group, &[]);
                             rpass.set_bind_group(1, child_mask_bg, &[]);
                             rpass.draw(0..3, 0..1);
                         }
@@ -2965,7 +3139,7 @@ impl Compositor {
         // PassthroughMaskState must exist (created when the mask was added).
         if !self.passthrough_mask_state.contains_key(&group_id) {
             // Fallback: just inline children without mask.
-            let inner: Vec<LayerId> = doc.children_of(group_id).to_vec();
+            let inner: ChildIds = ChildIds::from_slice(doc.children_of(group_id));
             self.compose_children(encoder, device, doc, parent_group, &inner, scissor);
             return;
         }
@@ -3004,7 +3178,7 @@ impl Compositor {
         );
 
         // 2. Composite children into parent accumulators (passthrough).
-        let inner: Vec<LayerId> = doc.children_of(group_id).to_vec();
+        let inner: ChildIds = ChildIds::from_slice(doc.children_of(group_id));
         self.compose_children(encoder, device, doc, parent_group, &inner, scissor);
 
         // 3. Lerp pass: mix(snapshot, current_accum, mask).

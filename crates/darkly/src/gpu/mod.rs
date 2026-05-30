@@ -39,6 +39,7 @@ pub mod readback;
 pub mod region_store;
 pub mod selection;
 pub mod straight_composite;
+#[cfg(any(test, feature = "testing"))]
 pub mod test_utils;
 pub mod transform;
 pub mod veil;

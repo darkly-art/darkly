@@ -598,11 +598,13 @@ impl DarklyEngine {
     }
 
     /// Current overlay preview mask dimensions. Test-only accessor.
+    #[cfg(any(test, feature = "testing"))]
     pub fn compositor_preview_mask_size(&self) -> (u32, u32) {
         self.compositor.tool_overlay_ref().preview_mask_size()
     }
 
     /// Blocking readback of the overlay's preview mask texture. Test-only.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_overlay_preview_mask(&self) -> Vec<u8> {
         let tex = self
             .compositor
@@ -677,6 +679,7 @@ impl DarklyEngine {
     /// modifier). For test assertions only. Format and extent come from the
     /// texture's own metadata — callers don't need to know whether the id
     /// refers to a layer or a modifier.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_layer(&self, node_id: LayerId) -> Vec<u8> {
         let tex = self
             .compositor
@@ -697,6 +700,7 @@ impl DarklyEngine {
     /// only. Returns canvas-sized RGBA8 pixels (padding excluded). Forces an
     /// offscreen composite first because headless `render()` skips the
     /// compositor (no surface to present to).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_canvas(&mut self) -> Vec<u8> {
         self.compositor
             .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
@@ -719,6 +723,7 @@ impl DarklyEngine {
     /// handling, the transparency checker, OOB workspace background, etc. —
     /// which `test_readback_canvas` cannot cover because it reads the
     /// pre-present composite cache.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_present(&mut self) -> Vec<u8> {
         self.compositor
             .test_present_to_canvas(&self.gpu.device, &self.gpu.queue, &mut self.doc)
@@ -736,6 +741,7 @@ impl DarklyEngine {
     /// Blocking readback of a mask modifier's R8 texture. For test assertions
     /// only. Resolves the mask modifier on the host and reads its texture
     /// from the unified node-texture pool. Returns one byte per pixel.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_mask(&self, host_id: LayerId) -> Vec<u8> {
         let mask_id = self
             .doc
