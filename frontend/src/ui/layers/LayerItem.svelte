@@ -79,6 +79,12 @@
         return siblingBelowExists(app.layerTree, layer.id);
     });
 
+    let canAddMask = $derived(
+        (layer.type === 'raster' || layer.type === 'void')
+            && !hasMask
+            && editable,
+    );
+
     // Chord dispatch is owned by `use:bindingSite` on each preview
     // element below — `bindingSite` intercepts modifier+click in capture
     // phase and dispatches against its named site. These onclick handlers
@@ -154,6 +160,18 @@
     function menuFlatten() {
         if (!hasMask) return;
         actions.dispatch('flatten', { layerId: layer.id });
+        onupdate();
+    }
+
+    function menuAddMask() {
+        if (!canAddMask) return;
+        actions.dispatch('addMask', { layerId: layer.id });
+        onupdate();
+    }
+
+    function menuDelete() {
+        if (!editable) return;
+        actions.dispatch('deleteLayer', { layerId: layer.id });
         onupdate();
     }
 
@@ -367,12 +385,19 @@
         <button onclick={menuDuplicate}>
             Duplicate layer
         </button>
+        <button onclick={menuAddMask} disabled={!canAddMask}>
+            Add mask
+        </button>
         <button onclick={menuMergeDown} disabled={!canMergeDownForThis || !editable}>
             Merge down
         </button>
         {#if hasMask}
             <button onclick={menuFlatten} disabled={!editable}>Flatten</button>
         {/if}
+        <div class="layer-menu-sep"></div>
+        <button onclick={menuDelete} disabled={!editable}>
+            Delete layer
+        </button>
     </div>
 {/if}
 

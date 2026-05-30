@@ -74,6 +74,8 @@
         return siblingBelowExists(app.layerTree, group.id);
     });
 
+    let canAddMask = $derived(!hasMask && editable);
+
     // Chord dispatch is owned by `use:bindingSite` on each preview element
     // below — `bindingSite` intercepts modifier+click in capture phase
     // and dispatches against its named site. These onclick handlers are
@@ -160,6 +162,18 @@
 
     function menuFlatten() {
         actions.dispatch('flatten', { layerId: group.id });
+        onupdate();
+    }
+
+    function menuAddMask() {
+        if (!canAddMask) return;
+        actions.dispatch('addMask', { layerId: group.id });
+        onupdate();
+    }
+
+    function menuDelete() {
+        if (!editable) return;
+        actions.dispatch('deleteLayer', { layerId: group.id });
         onupdate();
     }
 
@@ -332,10 +346,17 @@
     <div class="layer-menu" style:left="{layerMenuX}px" style:top="{layerMenuY}px">
         <!-- Duplicate doesn't mutate the locked node — allowed. -->
         <button onclick={menuDuplicate}>Duplicate group</button>
+        <button onclick={menuAddMask} disabled={!canAddMask}>
+            Add mask
+        </button>
         <button onclick={menuMergeDown} disabled={!canMergeDownForThis || !editable}>
             Merge down
         </button>
         <button onclick={menuFlatten} disabled={!editable}>Flatten</button>
+        <div class="layer-menu-sep"></div>
+        <button onclick={menuDelete} disabled={!editable}>
+            Delete group
+        </button>
     </div>
 {/if}
 
@@ -547,5 +568,11 @@
     .layer-menu button:disabled {
         color: var(--text-dim);
         cursor: default;
+    }
+
+    .layer-menu-sep {
+        height: 1px;
+        background: var(--bg-hover);
+        margin: 4px 0;
     }
 </style>
