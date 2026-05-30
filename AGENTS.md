@@ -48,9 +48,16 @@ crates/darkly/src/
     blend_modes/  ★     normal, multiply, hue, color_burn, …
     veils/        ★     post-process effects (rainy_glass, VHS, painting, …)
     voids/        ★     procedural fill sources (camera, noise, …)
-  brush/                Stroke engine + node-graph brush engine
-    nodes/        ★     graph nodes (pen_input, stamp, curve, …)
+  brush/                Stroke engine + node-graph brush engine, GPU
+                        compute pipelines, WGSL compilation, brush
+                        bundles + import. Files: stroke_engine, eval,
+                        pipeline, composite_pipeline, gpu_context,
+                        wgsl_compile, bundle, library, save_points,
+                        preview_renderer, checkpoint_ring, …
+    nodes/        ★     graph nodes — input, math, color, shape,
+                        modulation, output terminals
     stabilizers/  ★     stroke stabilizers (laplacian, …)
+    import/             brush-bundle importers (krita)
   config/
     sections/     ★     schema sections (canvas, input, ui, …)
     presets/      ★     bundled presets (gimp, krita, photoshop)
