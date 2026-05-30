@@ -18,6 +18,20 @@ import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
 import { shell } from '../multi_tab/shell.svelte';
 
+/** Walk the layer tree to find a node by id. The layer tree is the
+ *  JSON shape produced by `app.refreshLayerTree`, with `children` on
+ *  groups and `modifiers` on hosts. */
+function findNodeInTree(nodes: any[], id: number): any | null {
+    for (const n of nodes) {
+        if (n.id === id) return n;
+        if (n.children) {
+            const found = findNodeInTree(n.children, id);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
 /** Strip the file extension from a picker-supplied name so we can use
  *  it as a tab title. Matches the basename-only convention already used
  *  by Save As (which seeds `set_document_name` from the chosen filename
@@ -680,6 +694,28 @@ export function registerActions() {
             } catch (e: any) {
                 toast.show('error', e.message ?? String(e));
             }
+        },
+    });
+
+    actions.register({
+        id: 'addMask',
+        displayName: 'Add Mask',
+        category: 'layers',
+        description: 'Add a mask modifier to the active layer or group and activate it for painting.',
+        accepts: ['layerId'],
+        handler: (ctx) => {
+            if (!app.handle) return;
+            const hostId = ctx.layerId ?? app.activeLayerId;
+            if (hostId == null) return;
+            app.handle.add_mask(hostId);
+            // `add_mask` doesn't return the new modifier id, and we want
+            // the mask to be the active paint target after creation —
+            // refresh the tree, then locate the freshly-added mask
+            // modifier on the host and select it.
+            app.refreshLayerTree();
+            const layer = findNodeInTree(app.layerTree, hostId);
+            const mask = layer?.modifiers?.find((m: any) => m.kind === 'mask');
+            if (mask) app.selectLayer(mask.id);
         },
     });
 

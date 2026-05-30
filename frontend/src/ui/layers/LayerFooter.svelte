@@ -70,17 +70,9 @@
     });
 
     function addMask() {
-        if (!app.handle || app.activeLayerId === null) return;
         if (!canAddMask) return;
-        const hostId = app.activeLayerId;
-        app.handle.add_mask(hostId);
-        // After add_mask the host gains a mask modifier; refresh tree, then
-        // activate the modifier id (the new paint target) so strokes land
-        // on the mask without a session redirect.
+        actions.dispatch('addMask');
         onupdate();
-        const layer = findNode(app.layerTree, hostId);
-        const mask = layer?.modifiers?.find((m: any) => m.kind === 'mask');
-        if (mask) app.selectLayer(mask.id);
     }
 
     let canDelete = $derived(
