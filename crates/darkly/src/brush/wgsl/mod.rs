@@ -124,6 +124,13 @@ pub struct CompiledBrush {
     /// contributions (displacement / warp nodes). `0.0` for the
     /// current node set.
     pub brush_extent_extra_px: f32,
+    /// Names of textures sampled by `image`-style nodes in this
+    /// graph, in `@group(3) @binding(1+N)` order. Empty for graphs
+    /// without graph-texture nodes. Resolved against
+    /// [`crate::gpu::texture_registry::TextureRegistry`] at
+    /// pipeline-build time; deduplicated by the compiler so two
+    /// nodes sampling the same paper texture share one binding.
+    pub graph_texture_names: Vec<String>,
 }
 
 impl std::fmt::Debug for CompiledBrush {
@@ -201,6 +208,13 @@ pub fn compile_brush_to_wgsl(
     // these — the preview body doesn't sample scratch / atlas.
     let mut terminal_bindings = String::new();
 
+    // Graph-texture names contributed by `image`-style nodes, in the
+    // order each new name was first requested. Each node mutates
+    // this through `CompileWgslCtx::request_texture`; sharing the
+    // accumulator across the walk gives stable, dedup'd slot indices
+    // so two nodes sampling the same paper share a binding.
+    let graph_textures_cell: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+
     // Track each output port's emitted expression so downstream nodes
     // can substitute.
     let mut output_exprs: HashMap<PortRef, String> = HashMap::new();
@@ -277,6 +291,7 @@ pub fn compile_brush_to_wgsl(
             inputs,
             lut: lut.as_ref(),
             consumed_outputs,
+            graph_textures: &graph_textures_cell,
         };
 
         let result =
@@ -381,6 +396,26 @@ pub fn compile_brush_to_wgsl(
     // terminal bindings).
     let stroke_body = format!("{shared_body}{stroke_terminal_body}");
     let preview_body = format!("{shared_body}{preview_terminal_body}");
+    let graph_texture_names = graph_textures_cell.into_inner();
+    // `@group(3)` collision check. Terminal `terminal_bindings`
+    // (e.g. watercolor's pickup atlas) and the `image` node's
+    // graph textures both target group 3 — the highest slot WebGPU's
+    // default `max_bind_groups = 4` permits. Mixing the two would
+    // need a different binding scheme (pack into a single bind
+    // group with non-overlapping @binding indices, or request a
+    // higher device limit). Reject the combination now so the
+    // failure mode is "brush won't load" rather than a runtime
+    // shader-binding mismatch.
+    if !terminal_bindings.is_empty() && !graph_texture_names.is_empty() {
+        return Err(CompileError::NodeNotCompilable {
+            type_id: "image".into(),
+            reason: format!(
+                "graph combines an `image` node with a terminal that owns @group(3) \
+                 bindings ({} requested); this combination is not yet supported",
+                graph_texture_names.join(", ")
+            ),
+        });
+    }
     let stroke_wgsl = assemble_shader(
         ShaderMode::Stroke,
         &dab_fields,
@@ -388,6 +423,7 @@ pub fn compile_brush_to_wgsl(
         &decls,
         &stroke_body,
         &terminal_bindings,
+        &graph_texture_names,
     );
     let preview_wgsl = assemble_shader(
         ShaderMode::Preview,
@@ -396,6 +432,7 @@ pub fn compile_brush_to_wgsl(
         &decls,
         &preview_body,
         "",
+        &graph_texture_names,
     );
 
     // Topology hash: stable across runs (uses DefaultHasher; if process
@@ -415,6 +452,7 @@ pub fn compile_brush_to_wgsl(
         topology_hash,
         brush_extent_factor,
         brush_extent_extra_px,
+        graph_texture_names,
     })
 }
 
@@ -685,6 +723,7 @@ fn assemble_shader(
     node_decls: &str,
     fs_body: &str,
     terminal_bindings: &str,
+    graph_texture_names: &[String],
 ) -> String {
     let mut out = String::new();
     out.push_str(include_str!("../../../../../shaders/brush/_shape.wgsl"));
@@ -730,6 +769,29 @@ fn assemble_shader(
             if !terminal_bindings.ends_with('\n') {
                 out.push('\n');
             }
+        }
+    }
+    // `@group(3)` — named graph textures (`image` nodes). WebGPU's
+    // default `max_bind_groups` is 4 (groups 0..=3), so this is the
+    // highest slot a shader can use without requesting non-default
+    // device limits. Declared in *both* shader variants so the same
+    // node WGSL works in stroke and preview without the node knowing
+    // which mode it's compiling into; the preview pipeline cache
+    // points at the same registry-owned textures the stroke pipeline
+    // uses, so cursor thumbnails sample the paper grain too.
+    //
+    // Group 3 is the same slot terminals like watercolor use for
+    // their own `terminal_bindings` (pickup atlas). The compile walk
+    // rejects graphs that try to claim both — see the early-return
+    // check in [`compile_brush_to_wgsl`].
+    if !graph_texture_names.is_empty() {
+        out.push_str("@group(3) @binding(0) var graph_smp: sampler;\n");
+        for (i, _) in graph_texture_names.iter().enumerate() {
+            out.push_str(&format!(
+                "@group(3) @binding({}) var graph_tex_{}: texture_2d<f32>;\n",
+                1 + i,
+                i
+            ));
         }
     }
     out.push('\n');

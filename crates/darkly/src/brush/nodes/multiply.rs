@@ -2,6 +2,7 @@
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
+use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
 use crate::nodegraph::{NodeRegistration, PortDef};
@@ -40,5 +41,22 @@ impl BrushNodeEvaluator for MultiplyEvaluator {
         let a = ctx.input_f32("a");
         let b = ctx.input_f32("b");
         vec![("result".into(), ScalarValue::Scalar(a * b))]
+    }
+
+    /// Inline scalar product into the compiled fragment shader.
+    /// Required so brushes that route scalars through `multiply` on
+    /// the way to the `paint` terminal (e.g. Charcoal:
+    /// `paper.luminance * threshold * circle.coverage`) compile —
+    /// every upstream node of a compiled terminal must emit WGSL.
+    fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+        let mut wgsl = NodeWgsl::default();
+        if !cctx.consumed_outputs.contains("result") {
+            return Ok(wgsl);
+        }
+        let a = cctx.input("a").as_f32();
+        let b = cctx.input("b").as_f32();
+        wgsl.outputs
+            .insert("result".into(), format!("(({a}) * ({b}))"));
+        Ok(wgsl)
     }
 }

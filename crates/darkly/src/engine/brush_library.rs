@@ -36,17 +36,12 @@ impl DarklyEngine {
     }
 
     /// Load a brush by name and set it as the active brush graph.
-    ///
-    /// Also uploads any brush tip resources to the GPU dab pool cache.
     pub fn brush_load(&mut self, name: &str) -> Result<(), String> {
         let brush = self
             .brush_library
             .get(name)
             .ok_or_else(|| format!("brush '{}' not found", name))?
             .clone();
-
-        // Upload brush tip resources to the GPU.
-        self.ensure_brush_resources(&brush);
 
         let json = serde_json::to_string(&brush.metadata.graph)
             .map_err(|e| format!("failed to serialize graph: {e}"))?;
@@ -67,8 +62,7 @@ impl DarklyEngine {
     pub fn brush_save(&mut self, name: &str, category: &str) -> Result<(), String> {
         let mut metadata = BrushMetadata::from_graph(name, self.active_brush_graph());
         metadata.category = category.to_string();
-        self.brush_library
-            .insert(Brush::without_resources(metadata));
+        self.brush_library.insert(Brush::from_metadata(metadata));
         // Saving establishes a new "brush baseline" — what the user just
         // saved IS what reset-to-default should now return to.
         self.snapshot_brush_defaults();
@@ -126,12 +120,6 @@ impl DarklyEngine {
         let Some(brush) = self.brush_library.get(name).cloned() else {
             return Vec::new();
         };
-        // Image-based brushes need their tip/pattern textures on the
-        // GPU before the bake; without this, picker tiles for inactive
-        // image brushes render bg-only. (No image-based builtins remain
-        // after the brush-compute port, but the call is still required
-        // for any custom user brushes that bundle resources.)
-        self.ensure_brush_resources(&brush);
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
         let mut graph = brush.metadata.graph.clone();
@@ -177,9 +165,6 @@ impl DarklyEngine {
         let Some(brush) = self.brush_library.get(name).cloned() else {
             return Vec::new();
         };
-        // Image-based brushes need their tip texture on the GPU before
-        // the bake — same path as the stroke thumbnail.
-        self.ensure_brush_resources(&brush);
         let (w, h) = BRUSH_DAB_RENDER_SIZE;
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
@@ -212,17 +197,7 @@ impl DarklyEngine {
     }
 
     /// Import a brush from `.darkly-brush` ZIP bytes into the library.
-    ///
-    /// Uploads brush tip resources to the GPU if the brush is loaded.
     pub fn brush_import(&mut self, bytes: &[u8]) -> Result<String, String> {
         self.brush_library.import_bytes(bytes)
     }
-
-    /// Ensure brush image resources are loaded.
-    ///
-    /// No-op — image-stamp brushes are unsupported (see
-    /// [`crate::brush::nodes::stamp`]). Bundles with brush-tip or
-    /// pattern resources round-trip on disk but their bytes are not
-    /// uploaded anywhere.
-    pub(crate) fn ensure_brush_resources(&mut self, _brush: &Brush) {}
 }
