@@ -6,7 +6,6 @@
 use super::{DarklyEngine, ReadbackContext};
 use crate::brush::state::BrushState;
 use crate::brush::wire::BrushWireType;
-use crate::brush::BrushNodeRegistry;
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::Graph;
 use crate::nodegraph::{NodeId, PortDir, PortRef, UnitType};
@@ -50,7 +49,7 @@ impl DarklyEngine {
     /// info) — the wrapper's pipeline metadata is engine-internal and the
     /// frontend doesn't see it.
     pub fn brush_node_types(&self) -> Vec<crate::nodegraph::NodeRegistration<BrushWireType>> {
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         registry.types().map(|r| r.node.clone()).collect()
     }
 
@@ -66,7 +65,7 @@ impl DarklyEngine {
     /// terminals where flipping `gpu.blend_mode` would do nothing.
     pub fn active_brush_supports_erase(&self) -> bool {
         let graph = self.active_brush_graph();
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         for node in graph.nodes.values() {
             let Some(reg) = registry.get(&node.type_id) else {
                 continue;
@@ -213,7 +212,9 @@ impl DarklyEngine {
         &mut self,
         pen: crate::brush::paint_info::PaintInformation,
     ) {
-        use crate::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+        use crate::brush::gpu_context::{
+            BrushGpuContext, BrushPerfCounters, DabBatch, PreviewState,
+        };
 
         // Compile under a read guard; drop the guard before any GPU
         // work to keep the critical section narrow. The guard is held
@@ -225,7 +226,8 @@ impl DarklyEngine {
                 Ok(r) => r,
                 Err(_) => {
                     drop(tool);
-                    self.compositor.clear_overlay_preview_mask();
+                    self.compositor.tool_overlay_mut().clear_preview_mask();
+                    self.compositor.mark_needs_present();
                     self.brush_preview_info = None;
                     return;
                 }
@@ -266,36 +268,27 @@ impl DarklyEngine {
             device: &self.gpu.device,
             queue: &self.gpu.queue,
             pipelines: &self.brush_pipelines,
-            // The preview pipeline doesn't touch the stroke scratch — the
-            // terminal's `render_preview` writes to the preview mask
-            // through `preview_mask_overlay` instead. No `Scratch` is
-            // needed; any accidental call to a scratch accessor will
-            // panic, exposing the bug.
-            scratch: None,
+            selection_bind_group: sel_bg,
             canvas_width: 0,
             canvas_height: 0,
-            // No layer / pre-stroke state in preview — commit isn't called,
-            // and `render_preview` writes to the preview mask.
-            paint_target: None,
-            selection_bind_group: sel_bg,
-            preview_target_view: None,
             blend_mode: 0,
-            // Tests pre-allocate `preview_mask_view`; the engine path
-            // grows the mask on demand via `preview_mask_overlay`.
-            preview_mask_view: None,
-            preview_mask_size: (0, 0),
-            preview_mask_overlay: Some(overlay),
-            brush_preview_info: None,
-            pre_stroke_texture: None,
-            pre_stroke_bind_group: None,
-            dab_write_canvas_bbox: None,
             perf: BrushPerfCounters::default(),
-            pending_dab_bytes: Vec::new(),
-            pending_dab_count: 0,
-            pending_dabs_bbox: None,
-            pending_dab_meta_bytes: Vec::new(),
-            compiled_brush: None,
-            slot_outputs_owned: None,
+            // The preview pipeline doesn't touch the stroke scratch / paint
+            // target — the terminal's `render_preview` writes to the
+            // preview mask through `mask_overlay` instead. No
+            // `StrokeResources` is supplied; any accidental scratch /
+            // paint-target access will see `None` and either early-out or
+            // panic, exposing the bug.
+            stroke: None,
+            // Tests pre-allocate `mask_view`; the engine path grows the
+            // mask on demand via `mask_overlay`.
+            preview: Some(PreviewState {
+                mask_view: None,
+                mask_size: (0, 0),
+                mask_overlay: Some(overlay),
+                info: None,
+            }),
+            dab_batch: DabBatch::default(),
         };
 
         self.brush_pipelines.reset_uniform_rings();
@@ -304,15 +297,18 @@ impl DarklyEngine {
         runner.execute_cpu();
         runner.render_preview_pipeline(&mut gpu_ctx);
 
-        let info = gpu_ctx.brush_preview_info;
+        let info = gpu_ctx.preview.as_ref().and_then(|p| p.info);
         let command_buf = gpu_ctx.encoder.finish();
         self.gpu.queue.submit([command_buf]);
 
         if info.is_some() {
-            self.compositor.use_overlay_preview_mask();
+            self.compositor
+                .tool_overlay_mut()
+                .use_preview_mask_as_mask();
         } else {
-            self.compositor.clear_overlay_preview_mask();
+            self.compositor.tool_overlay_mut().clear_preview_mask();
         }
+        self.compositor.mark_needs_present();
         self.brush_preview_info = info;
     }
 
@@ -622,7 +618,7 @@ impl DarklyEngine {
     /// Add a node to the active graph and compile.
     /// Returns the updated graph JSON on success.
     pub fn brush_graph_add_node(&mut self, type_id: &str) -> Result<String, String> {
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         let reg = registry
             .get(type_id)
             .ok_or_else(|| format!("unknown node type: {type_id}"))?;
@@ -798,7 +794,7 @@ impl DarklyEngine {
     /// The result is ordered by auto-layout position (top-to-bottom,
     /// left-to-right) for a stable order in the properties panel.
     pub fn brush_exposed_ports(&self) -> Vec<ExposedPortInfo> {
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         let tool = self.tool_session.read();
         let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
         let layout = brush.graph.auto_layout();
@@ -923,7 +919,7 @@ impl DarklyEngine {
         // the registration. One port lookup pays for all three flags;
         // they determine whether this scrub affects the editor preview
         // and/or the dab thumbnail (see `ChangeKind` docs).
-        let registry = BrushNodeRegistry::new();
+        let registry = crate::brush::registry();
         let port_meta = registry.get(&type_id).and_then(|r| {
             r.ports
                 .iter()

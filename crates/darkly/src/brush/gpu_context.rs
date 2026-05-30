@@ -13,7 +13,7 @@ use std::sync::Arc;
 use super::eval::BrushPreviewInfo;
 use super::pipeline::BrushPipelines;
 use super::scratch::Scratch;
-use super::wgsl_compile::CompiledBrush;
+use super::wgsl::CompiledBrush;
 use super::wire::ScalarValue;
 use crate::gpu::overlay::ToolOverlay;
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -29,11 +29,10 @@ pub const MAX_PREVIEW_MASK_SIDE: u32 = 512;
 /// so the linear-upsampling overlay sample has enough texels to read.
 pub const MIN_PREVIEW_MASK_SIDE: u32 = 128;
 
-/// Brush perf counters. Lives both per-`BrushGpuContext` (drained at
-/// `submit_final`) and per-engine (accumulated across all contexts of a
-/// stroke via [`AddAssign`]). The bench harness reads interval-deltas
-/// against the engine-side accumulator via
-/// [`crate::engine::BrushPerfDelta::between`].
+/// Per-context brush perf counters. Drained at `submit_final` and folded
+/// into the engine-side accumulator via [`AddAssign`]. Engine-only events
+/// (mid-stroke full re-renders) live directly on `DarklyEngine`, not on
+/// this struct — the per-context value would always be zero.
 ///
 /// `submit_us` is wall-clock around `queue.submit()`. The per-flush
 /// counters describe workload (dab volume, union-bbox area), not host
@@ -43,10 +42,6 @@ pub struct BrushPerfCounters {
     /// Number of `place_dab` invocations during this counter's lifetime.
     /// Exposed by `engine.test_stroke_total_dabs()` for integration tests.
     pub dabs_placed: u32,
-    /// Number of mid-stroke full-re-render fallbacks. Per-engine only —
-    /// per-context value is always zero. Exposed by
-    /// `engine.test_stroke_full_rerender_events()`.
-    pub full_rerender_events: u32,
     /// Wall-clock microseconds inside `queue.submit()` (final + ring-flush).
     pub submit_us: u64,
     /// Number of `queue.submit()` calls.
@@ -95,13 +90,9 @@ impl BrushPerfCounters {
 impl std::ops::AddAssign for BrushPerfCounters {
     /// Merge per-context counters into the engine-side stroke accumulator
     /// (or any two accumulators in general). Scalars saturating-add;
-    /// per-flush vectors append in order. `full_rerender_events` is
-    /// per-engine state; per-context counters always contribute zero.
+    /// per-flush vectors append in order.
     fn add_assign(&mut self, mut rhs: Self) {
         self.dabs_placed = self.dabs_placed.saturating_add(rhs.dabs_placed);
-        self.full_rerender_events = self
-            .full_rerender_events
-            .saturating_add(rhs.full_rerender_events);
         self.submit_us = self.submit_us.saturating_add(rhs.submit_us);
         self.submits = self.submits.saturating_add(rhs.submits);
         self.dab_flushes = self.dab_flushes.saturating_add(rhs.dab_flushes);
@@ -119,35 +110,221 @@ impl std::ops::AddAssign for BrushPerfCounters {
 /// any dab-batching terminal. Sized so the per-phase dab buffer is
 /// trivial VRAM cost (16384 records × ~32-byte typical record ≈ 512
 /// KB) and well above what any realistic stroke phase will reach
-/// (~30 dabs even at high stabilisation). `queue_dab` debug-asserts
-/// on this — overflow panics loudly in test/dev so the constant gets
-/// bumped rather than silently truncating in release.
+/// (~30 dabs even at high stabilisation). `DabBatch::queue_dab`
+/// debug-asserts on this — overflow panics loudly in test/dev so the
+/// constant gets bumped rather than silently truncating in release.
 pub const MAX_DABS_PER_PHASE: u32 = 16384;
 
-/// One queued dab waiting for the next `paint` terminal flush.
+/// Resources needed to render to a real paint target — present during a
+/// real stroke and during the palette-thumbnail render, absent during a
+/// cursor-hover preview where the terminal writes to the overlay mask
+/// instead.
 ///
-/// Layout MUST match the `Dab` struct in `shaders/brush/paint.wgsl` —
-/// the WGSL binding reads this verbatim as a storage buffer element.
-/// In std430, `vec2` is 8-byte aligned and `vec4` is 16-byte aligned,
-/// so `vec2 pos + f32 radius + f32 softness + vec4 color` packs cleanly
-/// into 32 bytes with no trailing pad.
+/// Bundling these four fields together makes their joint Some-ness a
+/// type-level invariant: a code path that holds a `&StrokeResources`
+/// can rely on the scratch *and* the pre-stroke snapshot being live.
+/// Read-mirror / write-bbox helpers hang off this struct so consumers
+/// reach for "the stroke" rather than picking individual fields out of a
+/// flat bag.
+pub struct StrokeResources<'a> {
+    /// The stroke scratch (write side + R/W-hazard read mirror).
+    /// Held mutably so the read mirror can lazy-grow to fit the current
+    /// dab's footprint.
+    pub scratch: &'a mut Scratch,
+    /// The paint target the terminal is committing to: a layer (RGBA8)
+    /// or mask (R8). Format awareness lives in `GpuPaintTarget`'s brush
+    /// extension (`commit_brush_dab`, `save_pre_stroke_snapshot`,
+    /// `commit_scratch_blit`) — terminals call uniform methods on the
+    /// paint target and never branch on R8 vs RGBA8.
+    pub paint_target: GpuPaintTarget<'a>,
+    /// Pre-stroke layer snapshot. Supplied by `StrokeBuffer::save_pre_stroke`
+    /// at the start of a stroke.
+    pub pre_stroke_texture: &'a wgpu::Texture,
+    /// Bind group (canvas-copy BGL) over `pre_stroke_texture`, pre-built
+    /// by `StrokeBuffer` so `color_output::commit` can bind it as the
+    /// composite background without recreating bind groups every event.
+    pub pre_stroke_bind_group: &'a wgpu::BindGroup,
+}
+
+/// Cursor-hover preview state. Populated by `brush_graph::regenerate_brush_preview`
+/// to drive the overlay's preview-mask texture; absent during a real stroke.
+pub struct PreviewState<'a> {
+    /// Preview mask target. Populated by the engine during preview regen;
+    /// terminal `render_preview` hooks blit their preview texture into it.
+    ///
+    /// Used as the fallback when `mask_overlay` is `None` — tests
+    /// pre-allocate a fixed-size mask and stuff a view in here. The
+    /// engine driver leaves this `None` and grows the mask on demand
+    /// via [`BrushGpuContext::ensure_preview_mask`] through
+    /// `mask_overlay`.
+    pub mask_view: Option<&'a wgpu::TextureView>,
+    pub mask_size: (u32, u32),
+    /// Mutable handle to the overlay that owns the preview-mask texture.
+    /// Held by the engine driver so a terminal's `render_preview` can
+    /// grow the mask via [`BrushGpuContext::ensure_preview_mask`] when
+    /// the brush's bbox would otherwise stairstep through the overlay's
+    /// linear sampler. `None` in tests that build the context manually
+    /// with a fixed-size pre-allocated mask.
+    pub mask_overlay: Option<&'a mut ToolOverlay>,
+    /// Set by a terminal's `render_preview` hook to publish overlay
+    /// placement info (extent + rotation) to the engine. The engine reads
+    /// this after `render_preview_pipeline` returns. `None` outside the
+    /// preview path; first-write-wins if multiple terminals try to publish
+    /// (unusual — typically one terminal owns the preview).
+    pub info: Option<BrushPreviewInfo>,
+}
+
+/// Per-batch dab ledger. Populated by whichever dab-batching terminal is
+/// active in the graph during a single pen event and drained by that
+/// terminal's `flush_dabs` hook. Always present on `BrushGpuContext`
+/// (empty when no terminal queues anything — cursor-hover, no-op
+/// strokes); methods hang off it so the per-batch lifecycle is visible
+/// at the call site.
 ///
-/// Queued via `BrushGpuContext::queue_dab` into the shared byte-buffer
-/// `pending_dab_bytes`. Other dab-batching terminals (watercolor_batched)
-/// push their own record types into the same buffer — the brush graph
-/// has at most one dab-batching terminal at a time, so the bytes are
-/// unambiguous.
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct PaintDabRecord {
-    /// Pen tip in **canvas pixels** (subtracted from layer offset in shader).
-    pub pos: [f32; 2],
-    /// Disc radius in canvas pixels (dab covers `pos ± radius`).
-    pub radius: f32,
-    /// Edge softness as fraction of radius. 0 = hard, 1 = fully feathered.
-    pub softness: f32,
-    /// Premultiplied paint color (rgba). Flow already multiplied in upstream.
-    pub color: [f32; 4],
+/// A brush graph has at most one dab-batching terminal at a time, so
+/// the byte layouts of `bytes` and `meta_bytes` are unambiguous — each
+/// terminal reinterprets via `bytemuck::cast_slice` against its own
+/// record type.
+#[derive(Default)]
+pub struct DabBatch {
+    /// Dabs queued during a single pen event. Bytes written by
+    /// `bytemuck::bytes_of` on each terminal's own record struct — the
+    /// WGSL binding reinterprets them as that terminal's `Dab` type.
+    /// Empty for brushes that don't use a dab-batching terminal.
+    pub bytes: Vec<u8>,
+    /// Number of dab records currently in `bytes`. Each terminal's
+    /// record size is constant per terminal, so `bytes.len() == count *
+    /// sizeof(Record)`; the count is tracked explicitly so flush code
+    /// doesn't need to know the record size.
+    pub count: u32,
+    /// Layer-local bounding box covered by the queued dabs, as
+    /// `[x0, y0, x1, y1]`. The terminal's `flush_dabs` reads it as a
+    /// workload metric (recorded into `BrushPerfCounters` for the bench
+    /// harness). `None` when the queue is empty.
+    pub bbox: Option<[u32; 4]>,
+    /// Terminal-private per-dab CPU meta, packed by `evaluate_gpu` in
+    /// lockstep with [`Self::bytes`] and drained by the terminal's
+    /// `flush_dabs` hook. Only used by per-dab-feedback terminals
+    /// (`smudge`, `liquify`) that need CPU-side state at flush time to
+    /// drive mirror-snapshot copies without re-deriving footprints from
+    /// GPU memory. The framework doesn't interpret these bytes — the
+    /// owning terminal reinterprets them via `bytemuck::cast_slice`
+    /// against its own meta record struct.
+    pub meta_bytes: Vec<u8>,
+    /// Union of canvas-pixel rects the current dab's passes write to.
+    /// The node that issues the write is the only thing that knows the
+    /// real footprint — `stroke_engine` can't derive it from `info.pos`
+    /// because the graph may offset the dab (scatter, wobble, future
+    /// position-modulating nodes). Each pass unions its rect into this
+    /// via [`Self::push_write_bbox`]; `stroke_engine` reads it after
+    /// `execute_gpu` for the save-point bbox and resets it before the
+    /// next dab.
+    pub write_canvas_bbox: Option<crate::coord::CanvasRect>,
+    /// Compiled WGSL for this brush, populated by the engine before
+    /// stroke evaluation. Read by the terminal's `evaluate_gpu` and
+    /// `flush_dabs` to know the dab record / uniform layouts and the
+    /// pipeline topology hash.
+    pub compiled_brush: Option<Arc<CompiledBrush>>,
+    /// Name → value map of every output slot in the brush graph, built
+    /// by the runner's `dispatch_gpu` immediately after `execute_cpu`
+    /// and held for the duration of the dispatch pass. Keys follow the
+    /// `n{node_id}_{port_name}` convention used by
+    /// [`crate::brush::wgsl::CompileWgslCtx::dab_field_name`]. The
+    /// terminal reads from this to pack per-dab records and uniforms.
+    pub slot_outputs: Option<HashMap<String, ScalarValue>>,
+}
+
+impl DabBatch {
+    /// Pack one dab record for the active compiled brush into [`Self::bytes`]
+    /// and bump [`Self::count`]. Every terminal (paint, watercolor, smudge,
+    /// liquify) calls this from its `evaluate_gpu` after computing the
+    /// per-dab geometry; the WGSL terminal reinterprets the bytes via its
+    /// dab layout at flush time.
+    ///
+    /// [`Self::slot_outputs`] must have been populated by the runner's
+    /// `dispatch_gpu` before this call — that's the source of the per-node
+    /// field values the compiled record packer reads.
+    pub fn queue_dab(
+        &mut self,
+        compiled: &CompiledBrush,
+        position: [f32; 2],
+        bbox_radius: f32,
+        radius: f32,
+    ) {
+        let record_start = self.bytes.len();
+        super::wgsl::pack_intrinsic_dab_header(&mut self.bytes, position, bbox_radius, radius);
+        let outputs = self
+            .slot_outputs
+            .as_ref()
+            .expect("queue_dab requires slot_outputs on DabBatch");
+        super::wgsl::pack_dab_record(compiled, outputs, &mut self.bytes);
+        // Pad to the full record size so the next dab starts aligned.
+        let written = self.bytes.len() - record_start;
+        if written < compiled.dab_record_size {
+            self.bytes
+                .resize(record_start + compiled.dab_record_size, 0);
+        }
+        self.count = self.count.saturating_add(1);
+        debug_assert!(
+            self.count <= MAX_DABS_PER_PHASE,
+            "dab queue overflowed MAX_DABS_PER_PHASE ({MAX_DABS_PER_PHASE}); \
+             bump the constant or flush more often",
+        );
+    }
+
+    /// Drain the compute-dab queue. Returns the raw bytes (caller
+    /// reinterprets via `bytemuck::cast_slice`) and the dab count. Also
+    /// clears [`Self::bbox`]. The terminal-private [`Self::meta_bytes`]
+    /// is *not* drained here — the caller drains it directly via
+    /// [`Self::take_meta`] when it needs to walk per-dab meta inside its
+    /// `flush_dabs` loop. Called from a terminal's `flush_dabs` hook
+    /// once the dispatch is encoded.
+    pub fn take(&mut self) -> (Vec<u8>, u32) {
+        let bytes = std::mem::take(&mut self.bytes);
+        let count = std::mem::take(&mut self.count);
+        self.bbox = None;
+        (bytes, count)
+    }
+
+    /// Drain the per-dab CPU meta queue. Symmetric with [`Self::take`];
+    /// callers `bytemuck::cast_slice` the returned bytes against their
+    /// meta record type.
+    pub fn take_meta(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.meta_bytes)
+    }
+
+    /// Discard the compute-dab queue without dispatching. Used at stroke
+    /// begin / rewind to drop any state from a prior context, and by
+    /// `flush_dabs` when its early-out path runs (empty queue, no
+    /// scratch, etc.) so a follow-up dispatch doesn't see stale state.
+    pub fn clear(&mut self) {
+        self.bytes.clear();
+        self.count = 0;
+        self.bbox = None;
+        self.meta_bytes.clear();
+    }
+
+    /// Union a write-pass footprint into [`Self::write_canvas_bbox`].
+    /// Called by any GPU node whose pass writes to the stroke scratch,
+    /// so `stroke_engine` can record a save-point bbox that matches what
+    /// was actually drawn.
+    pub fn push_write_bbox(&mut self, bbox: crate::coord::CanvasRect) {
+        if bbox.is_empty() {
+            return;
+        }
+        self.write_canvas_bbox = Some(match self.write_canvas_bbox {
+            Some(prev) => prev.union(bbox),
+            None => bbox,
+        });
+    }
+}
+
+impl<'a> StrokeResources<'a> {
+    /// Reset the per-dab read-mirror cache so the first node that needs
+    /// the read mirror this dab actually issues a fresh copy.
+    pub fn reset_per_dab_read_cache(&mut self) {
+        self.scratch.reset_read_origin_cache();
+    }
 }
 
 /// Everything a GPU brush node needs to record render passes.
@@ -157,153 +334,54 @@ pub struct PaintDabRecord {
 /// records its render passes into the encoder.  Dynamic uniform buffer
 /// offsets allow all dabs to share one encoder without per-dab submission.
 /// Call `submit_final()` when the batch is complete.
+///
+/// Fields fall into three groups:
+///
+/// - **Always-present GPU primitives** (encoder, device, queue, pipelines,
+///   selection bind group, canvas dims, blend mode, perf): used by every
+///   path; live flat on the struct because there's no mode-dependence to
+///   encode.
+/// - **Mode-dependent state** (`stroke`, `preview`): grouped into
+///   `Option`-wrapped sub-structs. `stroke` is `Some` during a real
+///   stroke or palette-thumbnail render; `preview` is `Some` during
+///   cursor-hover preview regen. The two are mutually exclusive in
+///   practice, but the type does not enforce it — only their joint
+///   construction at the engine boundary does.
+/// - **Per-batch ledger** (`dab_batch`): the dab-queueing machinery the
+///   compiled brush populates. Always present; default-empty when no
+///   terminal queues anything.
 pub struct BrushGpuContext<'a> {
     pub encoder: wgpu::CommandEncoder,
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
     pub pipelines: &'a BrushPipelines,
-    /// The stroke scratch (write side + R/W-hazard read mirror).
-    /// `Some` during stroke evaluation and palette-thumbnail rendering;
-    /// `None` in cursor-preview mode where only `render_preview_pipeline`
-    /// runs (no scratch is needed because the preview writes to
-    /// `preview_mask_view` instead).
-    ///
-    /// Held mutably so `prepare_dab_canvas_copy` can lazy-grow the read
-    /// mirror to fit the current dab's footprint.
-    pub scratch: Option<&'a mut Scratch>,
-    pub canvas_width: u32,
-    pub canvas_height: u32,
-    /// The paint target the terminal is committing to: a layer (RGBA8) or
-    /// mask (R8). `None` in preview mode (no commit happens).
-    ///
-    /// Replaces the loose `layer_view` / `layer_texture` / `layer_width` /
-    /// `layer_height` / `layer_offset_x` / `layer_offset_y` fields. All those
-    /// values are now `gpu.paint_target.X`. Format awareness lives in
-    /// `GpuPaintTarget`'s brush extension (`commit_brush_dab`,
-    /// `save_pre_stroke_snapshot`, `commit_scratch_blit`) — terminals call
-    /// uniform methods on the paint target and never branch on R8 vs RGBA8.
-    pub paint_target: Option<GpuPaintTarget<'a>>,
     /// Selection mask bind group (or default 1x1 white when no selection).
     pub selection_bind_group: &'a wgpu::BindGroup,
-    /// In cursor-preview mode where `scratch` is `None`, this is the
-    /// preview render target view that terminals' `render_preview` hooks
-    /// write into.  Aliased only for codepaths that need *some* texture
-    /// view (e.g. early-out checks).  `None` in stroke mode.
-    pub preview_target_view: Option<&'a wgpu::TextureView>,
+    pub canvas_width: u32,
+    pub canvas_height: u32,
     /// Composite blend mode override: 0 = source-over (paint), 1 = destination-out (erase).
     /// Set per-stroke by the engine based on the active tool.
     pub blend_mode: u32,
-    /// Preview mask target. Populated by the engine during preview regen;
-    /// terminal `render_preview` hooks blit their preview texture into it.
-    /// `None` during stroke evaluation (the preview path isn't running).
-    ///
-    /// Used as the fallback when `preview_mask_overlay` is `None` —
-    /// tests pre-allocate a fixed-size mask and stuff a view in here.
-    /// The engine driver leaves this `None` and grows the mask on
-    /// demand via [`Self::ensure_preview_mask`] through
-    /// `preview_mask_overlay`.
-    pub preview_mask_view: Option<&'a wgpu::TextureView>,
-    pub preview_mask_size: (u32, u32),
-    /// Mutable handle to the overlay that owns the preview-mask
-    /// texture. Held by the engine driver so a terminal's
-    /// `render_preview` can grow the mask via
-    /// [`Self::ensure_preview_mask`] when the brush's bbox would
-    /// otherwise stairstep through the overlay's linear sampler.
-    /// `None` in tests that build the context manually with a
-    /// fixed-size pre-allocated mask.
-    pub preview_mask_overlay: Option<&'a mut ToolOverlay>,
-    /// Set by a terminal's `render_preview` hook to publish overlay
-    /// placement info (extent + rotation) to the engine. The engine reads
-    /// this after `render_preview_pipeline` returns. `None` outside the
-    /// preview path; first-write-wins if multiple terminals try to publish
-    /// (unusual — typically one terminal owns the preview).
-    pub brush_preview_info: Option<BrushPreviewInfo>,
-    /// Pre-stroke layer snapshot. Supplied by `StrokeBuffer::save_pre_stroke`
-    /// at the start of a stroke. `Some` during a stroke, `None` in preview.
-    pub pre_stroke_texture: Option<&'a wgpu::Texture>,
-    /// Bind group (canvas-copy BGL) over `pre_stroke_texture`, pre-built
-    /// by `StrokeBuffer` so `color_output::commit` can bind it as the
-    /// composite background without recreating bind groups every event.
-    pub pre_stroke_bind_group: Option<&'a wgpu::BindGroup>,
-    /// Union of canvas-pixel rects the current dab's passes write to. The
-    /// node that issues the write is the only thing that knows the real
-    /// footprint — stroke_engine can't derive it from `info.pos` because
-    /// the graph may offset the dab (scatter, wobble, future
-    /// position-modulating nodes). Each pass unions its rect into this via
-    /// `push_dab_write_bbox`; stroke_engine reads it after `execute_gpu`
-    /// for the save-point bbox and resets it before the next dab. `None`
-    /// outside stroke evaluation.
-    pub dab_write_canvas_bbox: Option<crate::coord::CanvasRect>,
-
     /// Host-side counters for this context's lifetime. Written by the
     /// stroke engine + compute terminals via `record_*` helpers; drained
     /// by `submit_final` so the engine can `+= ` the result into its own
     /// stroke-level accumulator.
     pub perf: BrushPerfCounters,
 
-    /// Dabs queued by whichever dab-batching terminal is active in the
-    /// graph during a single pen event. Drained by that terminal's
-    /// `flush_dabs` hook (one render pass for `paint`; two render
-    /// passes — pickup atlas + composite — for `watercolor_batched`).
-    /// The bytes are written by `bytemuck::bytes_of` on each terminal's
-    /// own record struct — the WGSL binding reinterprets them as that
-    /// terminal's `Dab` type. A brush graph has at most one
-    /// dab-batching terminal at a time, so the bytes are unambiguous.
-    ///
-    /// Empty for brushes that don't use a dab-batching terminal.
-    pub pending_dab_bytes: Vec<u8>,
-    /// Number of dab records currently in `pending_dab_bytes`.
-    /// Each terminal's record size is constant per terminal, so
-    /// `bytes.len() == count * sizeof(Record)`; the count is tracked
-    /// explicitly so flush code doesn't need to know the record size.
-    pub pending_dab_count: u32,
-    /// Layer-local bounding box covered by the queued dabs, as
-    /// `[x0, y0, x1, y1]`. The terminal's `flush_dabs` reads it as a
-    /// workload metric (recorded into `BrushPerfCounters` for the bench
-    /// harness). `None` when the queue is empty. Per-flush `flush_dabs`
-    /// implementations may also use it for a discriminator-or-clip
-    /// decision, but neither shipped terminal does today —
-    /// hardware-blend writes scale per-fragment, not per-bbox-pixel.
-    pub pending_dabs_bbox: Option<[u32; 4]>,
-
-    /// Terminal-private per-dab CPU meta, packed by `evaluate_gpu` in
-    /// lockstep with [`Self::pending_dab_bytes`] and drained by the
-    /// terminal's `flush_dabs` hook. Only used by per-dab-feedback
-    /// terminals (`smudge`, `liquify`) that need
-    /// CPU-side state at flush time to drive mirror-snapshot copies
-    /// without re-deriving footprints from GPU memory. The framework
-    /// doesn't interpret these bytes — the owning terminal reinterprets
-    /// them via `bytemuck::cast_slice` against its own meta record
-    /// struct. Cleared together with `pending_dab_bytes` by
-    /// [`Self::clear_pending_dabs`] and [`Self::take_pending_dabs`].
-    pub pending_dab_meta_bytes: Vec<u8>,
-
-    /// Compiled WGSL for this brush, populated by the engine before
-    /// stroke evaluation. Read by the terminal's `evaluate_gpu` and
-    /// `flush_dabs` to know the dab record / uniform layouts and the
-    /// pipeline topology hash.
-    pub compiled_brush: Option<Arc<CompiledBrush>>,
-
-    /// Name → value map of every output slot in the brush graph,
-    /// built by the runner's `dispatch_gpu` immediately after
-    /// `execute_cpu` and held for the duration of the dispatch pass.
-    /// Keys follow the `n{node_id}_{port_name}` convention used by
-    /// [`crate::brush::wgsl_compile::CompileWgslCtx::dab_field_name`].
-    /// The terminal reads from this to pack per-dab records and
-    /// uniforms.
-    pub slot_outputs_owned: Option<HashMap<String, ScalarValue>>,
+    /// Stroke-mode resources (real stroke + palette-thumbnail render).
+    /// `None` in cursor-hover preview where no commit happens.
+    pub stroke: Option<StrokeResources<'a>>,
+    /// Cursor-hover preview state. `None` during a real stroke.
+    pub preview: Option<PreviewState<'a>>,
+    /// Per-batch dab ledger — see [`DabBatch`].
+    pub dab_batch: DabBatch,
 }
 
 impl<'a> BrushGpuContext<'a> {
-    /// Submit the batched encoder and consume the context.
-    ///
-    /// All dab render passes in this batch are submitted in a single
-    /// `queue.submit()` call — no per-dab submission needed thanks to
-    /// dynamic uniform buffer offsets.
-    ///
-    /// Returns the per-context perf counters so the caller can `+=` them
-    /// into the engine's stroke-level accumulator. The final submit's
-    /// wall clock is folded into `submit_us` before returning.
+    /// Submit the batched encoder and consume the context. Returns the
+    /// per-context perf counters so the caller can fold them into the
+    /// stroke-level accumulator; the final submit's wall clock is
+    /// included in `submit_us`.
     pub fn submit_final(mut self) -> BrushPerfCounters {
         let t = web_time::Instant::now();
         self.queue.submit([self.encoder.finish()]);
@@ -311,15 +389,6 @@ impl<'a> BrushGpuContext<'a> {
         self.perf.submit_us = self.perf.submit_us.saturating_add(us);
         self.perf.submits = self.perf.submits.saturating_add(1);
         self.perf
-    }
-
-    /// Reset per-dab read-mirror state.  Called by the stroke engine
-    /// before each dab so the first node that needs the read mirror this
-    /// dab actually issues a fresh copy.  No-op in cursor-preview mode.
-    pub fn reset_per_dab_read_cache(&mut self) {
-        if let Some(scratch) = self.scratch.as_deref_mut() {
-            scratch.reset_read_origin_cache();
-        }
     }
 
     /// If any uniform ring is nearly full, submit the current encoder,
@@ -346,140 +415,57 @@ impl<'a> BrushGpuContext<'a> {
         }
     }
 
-    /// Queue a dab record into the shared byte buffer. The terminal
-    /// that owns `flush_dabs` reinterprets the bytes as its own record
-    /// type — see [`PaintDabRecord`] for the `paint` layout. The active
-    /// brush has exactly one dab-batching terminal in its graph, so the
-    /// bytes are unambiguous at flush time.
-    pub fn queue_dab<T: bytemuck::Pod>(&mut self, record: &T) {
-        self.pending_dab_bytes
-            .extend_from_slice(bytemuck::bytes_of(record));
-        self.pending_dab_count = self.pending_dab_count.saturating_add(1);
-        debug_assert!(
-            self.pending_dab_count <= MAX_DABS_PER_PHASE,
-            "dab queue overflowed MAX_DABS_PER_PHASE ({MAX_DABS_PER_PHASE}); \
-             bump the constant or flush more often",
-        );
-    }
-
-    /// Drain the compute-dab queue. Returns the raw bytes (caller
-    /// reinterprets via `bytemuck::cast_slice`) and the dab count. Also
-    /// clears `pending_dabs_bbox`. The terminal-private
-    /// `pending_dab_meta_bytes` is *not* drained here — the caller
-    /// drains it directly via [`Self::take_pending_dab_meta`] when it
-    /// needs to walk per-dab meta inside its `flush_dabs` loop. Called
-    /// from a terminal's `flush_dabs` hook once the dispatch is encoded.
-    pub fn take_pending_dabs(&mut self) -> (Vec<u8>, u32) {
-        let bytes = std::mem::take(&mut self.pending_dab_bytes);
-        let count = std::mem::take(&mut self.pending_dab_count);
-        self.pending_dabs_bbox = None;
-        (bytes, count)
-    }
-
-    /// Drain the per-dab CPU meta queue. Symmetric with
-    /// [`Self::take_pending_dabs`]; callers `bytemuck::cast_slice` the
-    /// returned bytes against their meta record type.
-    pub fn take_pending_dab_meta(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.pending_dab_meta_bytes)
-    }
-
-    /// Discard the compute-dab queue without dispatching. Used at stroke
-    /// begin / rewind to drop any state from a prior context, and by
-    /// `flush_dabs` when its early-out path runs (empty queue, no
-    /// scratch, etc.) so a follow-up dispatch doesn't see stale state.
-    pub fn clear_pending_dabs(&mut self) {
-        self.pending_dab_bytes.clear();
-        self.pending_dab_count = 0;
-        self.pending_dabs_bbox = None;
-        self.pending_dab_meta_bytes.clear();
-    }
-
     /// Ensure the preview mask is sized to fit a brush footprint of
     /// `bbox_radius` canvas pixels half-extent. Reallocates if needed,
     /// rounding the requested side up to the next power of two so
     /// neighbouring slider-scrub values hit the cache. Returns
     /// `(view, width, height)`.
     ///
-    /// When `preview_mask_overlay` is bound (engine driver path), the
+    /// When `preview.mask_overlay` is bound (engine driver path), the
     /// overlay's preview-mask texture grows on demand up to
     /// [`MAX_PREVIEW_MASK_SIDE`]. When it's `None` (test path), the
-    /// caller's pre-allocated `preview_mask_view` / `preview_mask_size`
-    /// is returned unchanged.
+    /// caller's pre-allocated `preview.mask_view` / `preview.mask_size`
+    /// is returned unchanged. Returns `None` if there is no preview state.
     pub fn ensure_preview_mask(
         &mut self,
         bbox_radius: f32,
     ) -> Option<(wgpu::TextureView, u32, u32)> {
+        let preview = self.preview.as_mut()?;
         let requested = ((bbox_radius * 2.0).ceil() as u32).max(1);
         let side = requested
             .next_power_of_two()
             .clamp(MIN_PREVIEW_MASK_SIDE, MAX_PREVIEW_MASK_SIDE);
-        if let Some(overlay) = self.preview_mask_overlay.as_mut() {
+        if let Some(overlay) = preview.mask_overlay.as_mut() {
             let view = overlay.ensure_preview_mask(self.device, side, side).clone();
             return Some((view, side, side));
         }
         // Test fallback — return the pre-allocated mask as-is.
-        let view = self.preview_mask_view?;
-        Some((
-            view.clone(),
-            self.preview_mask_size.0,
-            self.preview_mask_size.1,
-        ))
-    }
-
-    /// Union a write-pass footprint into `dab_write_canvas_bbox`. Called by
-    /// any GPU node whose pass writes to the stroke scratch, so
-    /// stroke_engine can record a save-point bbox that matches what was
-    /// actually drawn.
-    pub fn push_dab_write_bbox(&mut self, bbox: crate::coord::CanvasRect) {
-        if bbox.is_empty() {
-            return;
-        }
-        self.dab_write_canvas_bbox = Some(match self.dab_write_canvas_bbox {
-            Some(prev) => prev.union(bbox),
-            None => bbox,
-        });
+        let view = preview.mask_view?;
+        Some((view.clone(), preview.mask_size.0, preview.mask_size.1))
     }
 
     /// Compute the layer-clipped per-dab footprint, push the canvas-space
     /// write bbox (so save_points / checkpoints cover the real damage
     /// region), and snapshot the scratch under the dab into
-    /// `scratch read mirror`. Returns `None` if the dab footprint doesn't overlap
-    /// the layer (early-out for the caller — typically `return vec![]`).
+    /// `scratch read mirror`. Returns `None` if the dab footprint doesn't
+    /// overlap the layer (early-out for the caller — typically `return
+    /// vec![]`) or if there is no stroke context.
     ///
-    /// Centralizes the canvas → layer-local translation that every brush
-    /// terminal needs (color_output, watercolor, liquify). Getting it
-    /// wrong manifests as strokes/warps shifted by `(offset_x, offset_y)`
-    /// on grown / paste-extent layers — see the liquify regression in
-    /// `tests/liquify.rs::warp_position_correct_on_offset_layer`.
-    ///
-    /// `half_w` / `half_h` are the dab's half-extent in canvas pixels,
-    /// pre-clip. For a normal stamp dab pass `dab_w * 0.5` / `dab_h * 0.5`;
-    /// for liquify pass `radius + displacement` (its disc plus the
-    /// bilinear-sample padding).
-    pub fn prepare_dab_canvas_copy(
-        &mut self,
-        position: [f32; 2],
-        half_w: f32,
-        half_h: f32,
-    ) -> Option<DabFootprint> {
-        self.prepare_dab_canvas_copy_split(position, half_w, half_h, half_w, half_h)
-    }
-
-    /// Generalization of [`Self::prepare_dab_canvas_copy`] that lets callers
-    /// pass distinct write and read half-extents. The write region is the
-    /// dab footprint (`position ± write_half`); the read region is the
-    /// scratch-mirror snapshot footprint (`position ± read_half`). Read
-    /// must be at least as large as write, but a brush that samples the
-    /// scratch at an offset (smudge: per-dab `−motion`; clone: a stroke-
-    /// scoped anchor) sizes the read region wider so the offset sample
-    /// always lies inside the snapshot.
+    /// The write region is the dab footprint (`position ± write_half`);
+    /// the read region is the scratch-mirror snapshot footprint
+    /// (`position ± read_half`). Read must be at least as large as write,
+    /// but a brush that samples the scratch at an offset (smudge: per-dab
+    /// `−motion`; clone: a stroke-scoped anchor) sizes the read region
+    /// wider so the offset sample always lies inside the snapshot. For a
+    /// symmetric dab pass equal write/read halves (e.g. `radius`,
+    /// `radius`, `radius`, `radius`).
     ///
     /// The returned `DabFootprint`'s `origin/size` describe the write
     /// region (so the brush's render-pass viewport covers exactly the
     /// dab footprint); `copy_canvas_origin/copy_local_origin/copy_size`
     /// describe the (larger) read region, matching the read-mirror copy
     /// just issued.
-    pub fn prepare_dab_canvas_copy_split(
+    pub fn prepare_dab_canvas_copy(
         &mut self,
         position: [f32; 2],
         write_half_w: f32,
@@ -491,8 +477,8 @@ impl<'a> BrushGpuContext<'a> {
             read_half_w >= write_half_w && read_half_h >= write_half_h,
             "read region must enclose write region",
         );
-        let pt = self.paint_target.as_ref()?;
-        let pt_canvas = pt.canvas_extent();
+        let stroke = self.stroke.as_mut()?;
+        let pt_canvas = stroke.paint_target.canvas_extent();
 
         let layer_x0 = pt_canvas.x0() as f32;
         let layer_y0 = pt_canvas.y0() as f32;
@@ -536,19 +522,30 @@ impl<'a> BrushGpuContext<'a> {
         let write_bbox_y = write_y0.floor() as i32;
         let write_bbox_w = (write_x1.ceil() as i32 - write_bbox_x) as u32;
         let write_bbox_h = (write_y1.ceil() as i32 - write_bbox_y) as u32;
-        self.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            write_bbox_x,
-            write_bbox_y,
-            write_bbox_w,
-            write_bbox_h,
-        ));
+        self.dab_batch
+            .push_write_bbox(crate::coord::CanvasRect::from_xywh(
+                write_bbox_x,
+                write_bbox_y,
+                write_bbox_w,
+                write_bbox_h,
+            ));
 
         // The read mirror is filled from the stroke scratch, which is
         // layer-sized and indexed in layer-local pixels — translate
         // before issuing the copy.
+        // Re-borrow stroke for the scratch copy (push_write_bbox above
+        // took `&mut self.dab_batch`, which is disjoint from `self.stroke`).
+        let stroke = self.stroke.as_mut().expect("stroke just observed Some");
         let copy_local_x = (copy_canvas_x - pt_canvas.x0()) as u32;
         let copy_local_y = (copy_canvas_y - pt_canvas.y0()) as u32;
-        self.sync_scratch_read_mirror(copy_local_x, copy_local_y, copy_w, copy_h);
+        stroke.scratch.sync_read_mirror(
+            self.device,
+            &mut self.encoder,
+            copy_local_x,
+            copy_local_y,
+            copy_w,
+            copy_h,
+        );
 
         Some(DabFootprint {
             layer_offset: [pt_canvas.x0(), pt_canvas.y0()],
@@ -573,7 +570,7 @@ impl<'a> BrushGpuContext<'a> {
     /// bg) need this, and both compute the same footprint from the same
     /// position — the cache prevents a redundant copy per dab.
     ///
-    /// No-op in cursor-preview mode (no scratch).
+    /// No-op in cursor-preview mode (no stroke resources).
     pub fn sync_scratch_read_mirror(
         &mut self,
         origin_x: u32,
@@ -581,8 +578,8 @@ impl<'a> BrushGpuContext<'a> {
         width: u32,
         height: u32,
     ) {
-        if let Some(scratch) = self.scratch.as_deref_mut() {
-            scratch.sync_read_mirror(
+        if let Some(stroke) = self.stroke.as_mut() {
+            stroke.scratch.sync_read_mirror(
                 self.device,
                 &mut self.encoder,
                 origin_x,

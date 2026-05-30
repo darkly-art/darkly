@@ -1,6 +1,6 @@
 //! Central brush pipeline registry, plumbing pipelines, and shared infra.
 //!
-//! Each terminal-mode brush node (stamp, liquify, watercolor, …) declares
+//! Each brush terminal node (paint, liquify, watercolor, smudge) declares
 //! its own GPU pipeline alongside its node `register()` — see
 //! [`crate::brush::nodes`].  Their `BrushPipelineRegistration`s are
 //! harvested at [`BrushPipelines::new`] time and stored in a typed map.
@@ -8,9 +8,9 @@
 //! `scratch_blit_r8` — are format-bridging plumbing and live directly on
 //! [`BrushPipelines`].
 //!
-//! ## Per-mode pipeline contract
+//! ## Per-node pipeline contract
 //!
-//! Each per-mode pipeline:
+//! Each per-node pipeline:
 //!
 //! - is a `struct` implementing [`BrushPipelineEntry`];
 //! - is built by a `fn build(ctx: &BuildContext) -> Self` constructor;
@@ -112,16 +112,16 @@ pub fn align_up(value: u64, alignment: u64) -> u64 {
     (value + alignment - 1) & !(alignment - 1)
 }
 
-// ── Per-mode pipeline contract ───────────────────────────────────────────
+// ── Per-node pipeline contract ───────────────────────────────────────────
 
-/// Borrowed view of all shared brush infra a per-mode pipeline can read
+/// Borrowed view of all shared brush infra a per-node pipeline can read
 /// while it builds itself.  Constructed once by [`BrushPipelines::new`]
 /// and passed to every `BrushPipelineRegistration::build`.
 pub struct BuildContext<'a> {
     pub device: &'a wgpu::Device,
     pub queue: &'a wgpu::Queue,
     /// `group(0)` layout — single dynamic-offset uniform buffer.  Every
-    /// per-mode pipeline binds its dab uniforms here.
+    /// per-node pipeline binds its dab uniforms here.
     pub uniform_bgl: &'a wgpu::BindGroupLayout,
     /// Texture + linear sampler — bound where composites need to modulate
     /// fragment output by the selection mask.
@@ -141,7 +141,7 @@ impl<'a> BuildContext<'a> {
     /// Allocate the standard `(ring, bind_group)` pair every pipeline uses
     /// to feed its dynamic-offset uniform buffer.  Concentrates the
     /// `DynamicUniformRing::new` + `uniform_bgl` create_bind_group dance in
-    /// one place so per-mode `build()` functions don't repeat it.
+    /// one place so per-node `build()` functions don't repeat it.
     pub fn make_uniform_ring<U>(
         &self,
         label_ring: &str,
@@ -169,10 +169,10 @@ impl<'a> BuildContext<'a> {
     }
 }
 
-/// One per-mode brush pipeline, type-erased so the registry can store many
+/// One per-node brush pipeline, type-erased so the registry can store many
 /// kinds in a single map.  Consumers downcast via [`BrushPipelines::get`].
 ///
-/// Not `Sync`: per-mode pipelines own a [`DynamicUniformRing`] backed by
+/// Not `Sync`: per-node pipelines own a [`DynamicUniformRing`] backed by
 /// a `Cell<u32>` write cursor (intentional — see `DynamicUniformRing`'s
 /// doc).  The brush engine is single-threaded.
 pub trait BrushPipelineEntry: Any {
@@ -208,14 +208,24 @@ pub struct BrushPipelineRegistration {
     pub build: fn(&BuildContext) -> Box<dyn BrushPipelineEntry>,
 }
 
-// ── BrushPipelines: shared infra + plumbing + per-mode registry ──────────
+/// Brush pipelines that aren't owned by any single node — the
+/// commit composite blit, future plumbing — funnel through here so
+/// [`BrushPipelines::new`] has a single uniform input alongside
+/// `nodes::registrations()`. Adding a future plumbing pipeline means
+/// dropping its registration into this list; the harvest loop picks
+/// it up automatically.
+pub fn plumbing_registrations() -> Vec<BrushPipelineRegistration> {
+    vec![crate::brush::composite_pipeline::composite_pipeline_registration()]
+}
+
+// ── BrushPipelines: shared infra + plumbing + per-node registry ──────────
 
 /// Central brush GPU pipeline owner.
 ///
 /// Holds the bind-group layouts and samplers every brush composite
 /// shares, the three plumbing pipelines (`blit`, `mask_blit`,
 /// `scratch_blit_r8`) that have no owning node, and a typed map of
-/// per-mode pipelines harvested from every brush node's
+/// per-node pipelines harvested from every brush node's
 /// [`BrushNodeRegistration::pipelines`](crate::brush::node::BrushNodeRegistration).
 ///
 /// Constructed once at engine init.  See
@@ -249,7 +259,7 @@ pub struct BrushPipelines {
     mask_blit_pipeline: wgpu::RenderPipeline,
     scratch_blit_r8_pipeline: wgpu::RenderPipeline,
 
-    // ── Per-mode pipelines (modular, looked up by id) ────────────────
+    // ── Per-node pipelines (modular, looked up by id) ────────────────
     entries: HashMap<&'static str, Box<dyn BrushPipelineEntry>>,
 
     // ── Shared compiled-brush preview pipeline cache ─────────────────
@@ -536,7 +546,7 @@ impl BrushPipelines {
                 cache: None,
             });
 
-        // ── Per-mode pipelines: harvested from node registrations ──
+        // ── Per-node pipelines: harvested from node registrations ──
         let build_ctx = BuildContext {
             device,
             queue,
@@ -547,24 +557,15 @@ impl BrushPipelines {
             min_uniform_align,
         };
         let mut entries: HashMap<&'static str, Box<dyn BrushPipelineEntry>> = HashMap::new();
-        for node_reg in crate::brush::nodes::registrations() {
-            for pl_reg in node_reg.pipelines {
-                let id = pl_reg.id;
-                let prev = entries.insert(id, (pl_reg.build)(&build_ctx));
-                debug_assert!(prev.is_none(), "duplicate brush pipeline id: {id}");
-            }
+        let pipeline_regs = crate::brush::nodes::registrations()
+            .into_iter()
+            .flat_map(|node_reg| node_reg.pipelines)
+            .chain(plumbing_registrations());
+        for pl_reg in pipeline_regs {
+            let id = pl_reg.id;
+            let prev = entries.insert(id, (pl_reg.build)(&build_ctx));
+            debug_assert!(prev.is_none(), "duplicate brush pipeline id: {id}");
         }
-        // The brush commit pipeline isn't a node — it's the shared
-        // scratch→layer blit used by every terminal's `commit` hook.
-        // Register it manually so it lives outside the auto-discovered
-        // `nodes/` tree.
-        let prev = entries.insert(
-            "composite",
-            Box::new(crate::brush::composite_pipeline::CompositePipeline::build(
-                &build_ctx,
-            )),
-        );
-        debug_assert!(prev.is_none(), "composite pipeline id collided");
 
         // Shared compiled-brush preview pipeline cache. Owns its own
         // dabs-storage BGL (single-element binding); reuses the
@@ -588,7 +589,7 @@ impl BrushPipelines {
         }
     }
 
-    /// BGL used by every per-mode pipeline's dynamic-offset uniform
+    /// BGL used by every per-node pipeline's dynamic-offset uniform
     /// buffer (group 0). Exposed so per-brush compiled pipelines
     /// built lazily after `BrushPipelines::new` can bind their own
     /// uniform ring against the same layout. See
@@ -597,7 +598,7 @@ impl BrushPipelines {
         &self.uniform_bgl
     }
 
-    /// Look up a per-mode pipeline by id.  Panics if the id is not
+    /// Look up a per-node pipeline by id.  Panics if the id is not
     /// registered or the type doesn't match — both are programming
     /// errors discovered at the first paint.
     pub fn get<P: BrushPipelineEntry>(&self, id: &'static str) -> &P {
@@ -743,7 +744,7 @@ impl BrushPipelines {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        compiled: &crate::brush::wgsl_compile::CompiledBrush,
+        compiled: &crate::brush::wgsl::CompiledBrush,
         target_view: &wgpu::TextureView,
         target_size: (u32, u32),
         uniform_bytes: &[u8],
@@ -889,7 +890,7 @@ impl PreviewPipelineCache {
         device: &wgpu::Device,
         uniform_bgl: &wgpu::BindGroupLayout,
         min_uniform_align: u32,
-        compiled: &crate::brush::wgsl_compile::CompiledBrush,
+        compiled: &crate::brush::wgsl::CompiledBrush,
         f: impl FnOnce(&PreviewPipeline) -> R,
     ) -> R {
         let key = compiled.topology_hash;
@@ -912,7 +913,7 @@ fn build_preview_pipeline(
     uniform_bgl: &wgpu::BindGroupLayout,
     dabs_bgl: &wgpu::BindGroupLayout,
     min_uniform_align: u32,
-    compiled: &crate::brush::wgsl_compile::CompiledBrush,
+    compiled: &crate::brush::wgsl::CompiledBrush,
 ) -> PreviewPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("brush-preview-shader"),
@@ -952,9 +953,8 @@ fn build_preview_pipeline(
         cache: None,
     });
 
-    let uniform_size = (crate::brush::wgsl_compile::INTRINSIC_UNIFORMS_SIZE
-        + compiled.uniform_size)
-        .max(crate::brush::wgsl_compile::INTRINSIC_UNIFORMS_SIZE);
+    let uniform_size = (crate::brush::wgsl::INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size)
+        .max(crate::brush::wgsl::INTRINSIC_UNIFORMS_SIZE);
     let uniform_ring = DynamicUniformRing::new(
         device,
         "brush-preview-uniforms",

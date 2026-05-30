@@ -48,9 +48,16 @@ crates/darkly/src/
     blend_modes/  ★     normal, multiply, hue, color_burn, …
     veils/        ★     post-process effects (rainy_glass, VHS, painting, …)
     voids/        ★     procedural fill sources (camera, noise, …)
-  brush/                Stroke engine + node-graph brush engine
-    nodes/        ★     graph nodes (pen_input, stamp, curve, …)
+  brush/                Stroke engine + node-graph brush engine, GPU
+                        compute pipelines, WGSL compilation, brush
+                        bundles + import. Files: stroke_engine, eval,
+                        pipeline, composite_pipeline, gpu_context,
+                        wgsl_compile, bundle, library, save_points,
+                        preview_renderer, checkpoint_ring, …
+    nodes/        ★     graph nodes — input, math, color, shape,
+                        modulation, output terminals
     stabilizers/  ★     stroke stabilizers (laplacian, …)
+    import/             brush-bundle importers (krita)
   config/
     sections/     ★     schema sections (canvas, input, ui, …)
     presets/      ★     bundled presets (gimp, krita, photoshop)
@@ -177,10 +184,13 @@ Run at commit time only — not during iterative debugging. Use `cargo check` fo
 
 ```bash
 cargo fmt --all -- --check
-RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --exclude darkly-wasm -- -D warnings
+RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets --exclude darkly-wasm --features darkly/testing -- -D warnings
 RUSTFLAGS="-D warnings" cargo clippy -p darkly-wasm --target wasm32-unknown-unknown --all-targets -- -D warnings
+# `--features darkly/testing` exposes `gpu::test_utils`, `blocking_read`, and
+# the engine's `test_readback_*` accessors that integration tests rely on
+# (compile-time gate enforcing CLAUDE.md "No Blocking GPU Readbacks").
 # `--test-threads=1` is mandatory: GPU-touching integration tests (`engine.rs`, `blend_modes.rs`, etc.) share a process-wide wgpu device and SIGSEGV when run in parallel.
-cargo test --workspace --exclude darkly-wasm -- --test-threads=1
+cargo test --workspace --exclude darkly-wasm --features darkly/testing -- --test-threads=1
 (cd frontend/wasm && wasm-pack build --release --target web --out-dir pkg)
 # `vite build` only transpiles — `tsc --noEmit` is the actual TS gate.
 (cd frontend && npx tsc --noEmit)
@@ -191,3 +201,5 @@ cargo test --workspace --exclude darkly-wasm -- --test-threads=1
 # jsdom via `// @vitest-environment jsdom`.
 (cd frontend && npm test)
 ```
+
+Never run `git commit` — make the changes and leave staging and committing to the user.

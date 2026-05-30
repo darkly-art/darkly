@@ -1,33 +1,30 @@
-//! Framework tests for `crate::brush::wgsl_compile` — the brush-graph
+//! Framework tests for `crate::brush::wgsl` — the brush-graph
 //! → WGSL fragment shader compiler.
 //!
 //! Asserts:
 //!
-//! 1. **Non-compilable graphs fail cleanly** — a graph wiring a node
-//!    that returns `Err` from `compile_wgsl` produces a `CompileError`
-//!    rather than panicking.
-//! 2. **Identical topologies hash to the same id** — two structurally
+//! 1. **Identical topologies hash to the same id** — two structurally
 //!    identical graphs (independent of node ID allocation) hash to the
 //!    same `topology_hash` so the per-brush pipeline cache shares
 //!    pipelines.
-//! 3. **The Rough Ink builtin compiles end-to-end** — the framework
+//! 2. **The Rough Ink builtin compiles end-to-end** — the framework
 //!    handles a real graph with random + curve + circle + stamp +
 //!    paint and produces non-empty WGSL.
 
 use std::collections::HashMap;
 
 use darkly::brush::eval::BrushNodeEvaluator;
-use darkly::brush::wgsl_compile::{compile_brush_to_wgsl, CompileError};
+use darkly::brush::wgsl::{compile_brush_to_wgsl, CompileError};
 use darkly::brush::wire::BrushWireType;
-use darkly::brush::{default_evaluators, BrushNodeRegistry};
+use darkly::brush::BrushNodeRegistry;
 use darkly::nodegraph::{compile, Graph, PortRef};
 
-fn registry() -> BrushNodeRegistry {
-    BrushNodeRegistry::new()
+fn registry() -> &'static BrushNodeRegistry {
+    darkly::brush::registry()
 }
 
 fn evals() -> HashMap<String, Box<dyn BrushNodeEvaluator>> {
-    default_evaluators()
+    darkly::brush::registry().evaluators()
 }
 
 #[test]
@@ -38,61 +35,6 @@ fn empty_graph_errors_cleanly() {
     let err = compile_brush_to_wgsl(&graph, &plan, &evals())
         .expect_err("empty graph has no terminal — must error");
     assert!(matches!(err, CompileError::NoTerminal));
-}
-
-#[test]
-fn non_compilable_node_errors_with_type_id() {
-    // A `stamp` node with `application != AlphaMask` returns Err from
-    // `compile_wgsl` — the only built-in node that can fail to
-    // compile. The compiler must surface a `NodeNotCompilable`
-    // carrying the offending type_id rather than panicking.
-    let reg = registry();
-    let mut graph = Graph::<BrushWireType>::new();
-    let pen = graph.add_node(
-        "pen_input",
-        reg.get("pen_input").unwrap().ports.clone(),
-        vec![],
-    );
-    let circle = graph.add_node(
-        "circle",
-        reg.get("circle").unwrap().ports.clone(),
-        vec![darkly::gpu::params::ParamValue::Int(0)],
-    );
-    let stamp = graph.add_node(
-        "stamp",
-        reg.get("stamp").unwrap().ports.clone(),
-        // application = 1 → ImageStamp mode → compile_wgsl errors
-        vec![darkly::gpu::params::ParamValue::Int(1)],
-    );
-    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
-    for (fnode, fport, tnode, tport) in [
-        (pen, "position", term, "position"),
-        (circle, "texture", stamp, "tip"),
-        (stamp, "dab", term, "rgba"),
-    ] {
-        graph
-            .connect(
-                PortRef {
-                    node: fnode,
-                    port: fport.into(),
-                },
-                PortRef {
-                    node: tnode,
-                    port: tport.into(),
-                },
-            )
-            .unwrap();
-    }
-    let plan = compile(&graph, reg.as_map()).unwrap();
-    let err = compile_brush_to_wgsl(&graph, &plan, &evals())
-        .expect_err("stamp.application != AlphaMask must fail to compile");
-    match err {
-        CompileError::NodeNotCompilable { type_id, reason } => {
-            assert_eq!(type_id, "stamp");
-            assert!(!reason.is_empty());
-        }
-        other => panic!("expected NodeNotCompilable, got {other:?}"),
-    }
 }
 
 #[test]

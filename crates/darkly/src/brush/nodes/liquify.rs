@@ -60,10 +60,9 @@ use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
-use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_intrinsic_dab_header, pack_intrinsic_uniforms, pack_uniforms,
-    CompileWgslCtx, CompiledBrush, DabField, IntrinsicUniforms, NodeWgsl, WgslType,
-    INTRINSIC_UNIFORMS_SIZE,
+use crate::brush::wgsl::{
+    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField,
+    IntrinsicUniforms, NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -298,6 +297,8 @@ pub const TYPE_ID: &str = "liquify";
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![liquify_pipeline_reg()],
+        evaluator: || Box::new(LiquifyEvaluator),
+        lifecycle: crate::brush::node::Lifecycle::SeedScratchFromPreStroke,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",
@@ -390,7 +391,7 @@ impl LiquifyEvaluator {
     }
 
     fn insert_copy_origin(gpu: &mut BrushGpuContext, node_id: u32, value: [f32; 2]) {
-        if let Some(outputs) = gpu.slot_outputs_owned.as_mut() {
+        if let Some(outputs) = gpu.dab_batch.slot_outputs.as_mut() {
             outputs.insert(
                 format!("n{}_copy_origin", node_id),
                 ScalarValue::Vec2(value),
@@ -409,13 +410,14 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let Some(compiled) = gpu.compiled_brush.clone() else {
+        let Some(compiled) = gpu.dab_batch.compiled_brush.clone() else {
             debug_assert!(false, "liquify requires compiled_brush on gpu_context");
             return vec![];
         };
-        let Some(paint_target) = gpu.paint_target.as_ref() else {
+        let Some(stroke) = gpu.stroke.as_ref() else {
             return vec![];
         };
+        let paint_target = &stroke.paint_target;
         let position = ctx.input("position").as_vec2();
         let strength = ctx.input_f32("strength").clamp(0.0, 1.0);
         let distance = ctx.input_f32("distance");
@@ -461,16 +463,17 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let bbox_y = cy0.floor() as i32;
         let bbox_w = (cx1.ceil() as i32 - bbox_x) as u32;
         let bbox_h = (cy1.ceil() as i32 - bbox_y) as u32;
-        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            bbox_x, bbox_y, bbox_w, bbox_h,
-        ));
         let layer_w = canvas_ext.width;
         let layer_h = canvas_ext.height;
         let local_x0 = (bbox_x - canvas_ext.x0()).max(0) as u32;
         let local_y0 = (bbox_y - canvas_ext.y0()).max(0) as u32;
         let local_x1 = (local_x0 + bbox_w).min(layer_w);
         let local_y1 = (local_y0 + bbox_h).min(layer_h);
-        gpu.pending_dabs_bbox = Some(match gpu.pending_dabs_bbox {
+        gpu.dab_batch
+            .push_write_bbox(crate::coord::CanvasRect::from_xywh(
+                bbox_x, bbox_y, bbox_w, bbox_h,
+            ));
+        gpu.dab_batch.bbox = Some(match gpu.dab_batch.bbox {
             Some([x0, y0, x1, y1]) => [
                 x0.min(local_x0),
                 y0.min(local_y0),
@@ -493,81 +496,34 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let copy_canvas_y = read_y0.floor();
         Self::insert_copy_origin(gpu, ctx.node_id.0 as u32, [copy_canvas_x, copy_canvas_y]);
 
-        let record_start = gpu.pending_dab_bytes.len();
-        pack_intrinsic_dab_header(&mut gpu.pending_dab_bytes, position, bbox_radius, radius);
-        let outputs = gpu
-            .slot_outputs_owned
-            .as_ref()
-            .expect("liquify requires slot_outputs_owned on gpu_context");
-        pack_dab_record(&compiled, outputs, &mut gpu.pending_dab_bytes);
-        let written = gpu.pending_dab_bytes.len() - record_start;
-        if written < compiled.dab_record_size {
-            gpu.pending_dab_bytes
-                .resize(record_start + compiled.dab_record_size, 0);
-        }
-        gpu.pending_dab_count = gpu.pending_dab_count.saturating_add(1);
-        debug_assert!(
-            gpu.pending_dab_count <= MAX_DABS_PER_PHASE,
-            "liquify dab queue overflowed MAX_DABS_PER_PHASE"
-        );
+        gpu.dab_batch
+            .queue_dab(&compiled, position, bbox_radius, radius);
 
         let meta = LiquifyDabMeta {
             position,
             half: [read_half, read_half],
         };
-        gpu.pending_dab_meta_bytes
+        gpu.dab_batch
+            .meta_bytes
             .extend_from_slice(bytemuck::bytes_of(&meta));
 
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
 
-    fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        gpu.clear_pending_dabs();
-
-        let Some(pre_stroke) = gpu.pre_stroke_texture else {
-            return;
-        };
-        let Some(scratch) = gpu.scratch.as_deref() else {
-            return;
-        };
-        let scratch_tex = scratch.write_texture();
-        let w = scratch_tex.width();
-        let h = scratch_tex.height();
-        gpu.encoder.copy_texture_to_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: pre_stroke,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyTextureInfo {
-                texture: scratch_tex,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-    }
-
     fn flush_dabs(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        if gpu.pending_dab_count == 0 {
+        if gpu.dab_batch.count == 0 {
             return;
         }
-        let Some(compiled) = gpu.compiled_brush.clone() else {
+        let Some(compiled) = gpu.dab_batch.compiled_brush.clone() else {
             debug_assert!(false, "liquify::flush_dabs requires compiled_brush");
             return;
         };
 
-        let bbox = gpu.pending_dabs_bbox.unwrap_or([0, 0, 0, 0]);
+        let bbox = gpu.dab_batch.bbox.unwrap_or([0, 0, 0, 0]);
         let union_w = bbox[2].saturating_sub(bbox[0]);
         let union_h = bbox[3].saturating_sub(bbox[1]);
-        let (dab_bytes, total_dabs) = gpu.take_pending_dabs();
-        let meta_bytes = gpu.take_pending_dab_meta();
+        let (dab_bytes, total_dabs) = gpu.dab_batch.take();
+        let meta_bytes = gpu.dab_batch.take_meta();
         if total_dabs == 0 {
             return;
         }
@@ -583,10 +539,11 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let pipeline_ref = gpu.pipelines.get::<LiquifyPipeline>("liquify");
         ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled);
 
-        let paint_target = gpu
-            .paint_target
+        let stroke = gpu
+            .stroke
             .as_ref()
-            .expect("liquify::flush_dabs requires paint_target");
+            .expect("liquify::flush_dabs requires stroke resources");
+        let paint_target = &stroke.paint_target;
         let canvas_ext = paint_target.canvas_extent();
         let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
         let layer_size = [canvas_ext.width, canvas_ext.height];
@@ -604,9 +561,10 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
             },
         );
         let outputs = gpu
-            .slot_outputs_owned
+            .dab_batch
+            .slot_outputs
             .as_ref()
-            .expect("liquify::flush_dabs requires slot_outputs_owned");
+            .expect("liquify::flush_dabs requires dab_batch.slot_outputs");
         pack_uniforms(&compiled, outputs, &mut uniform_bytes);
 
         pipeline_ref.with_pipeline(compiled.topology_hash, |per_brush| {
@@ -619,12 +577,19 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 .write_buffer(&per_brush.dabs_buffer, 0, &dab_bytes);
 
             for (i, meta) in metas.iter().enumerate() {
-                let _ = gpu.prepare_dab_canvas_copy(meta.position, meta.half[0], meta.half[1]);
+                let _ = gpu.prepare_dab_canvas_copy(
+                    meta.position,
+                    meta.half[0],
+                    meta.half[1],
+                    meta.half[0],
+                    meta.half[1],
+                );
 
-                let scratch_ref = gpu
-                    .scratch
-                    .as_deref()
-                    .expect("liquify::flush_dabs requires Scratch");
+                let scratch_ref = &*gpu
+                    .stroke
+                    .as_ref()
+                    .expect("liquify::flush_dabs requires stroke resources")
+                    .scratch;
                 let read_bg = scratch_ref.read_mirror_bind_group();
                 let write_view = scratch_ref.write_view();
 
@@ -663,18 +628,15 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
     }
 
     fn commit(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let Some(paint_target) = gpu.paint_target.as_ref() else {
+        let Some(stroke) = gpu.stroke.as_ref() else {
             return;
         };
-        let Some(scratch) = gpu.scratch.as_deref() else {
-            return;
-        };
-        paint_target.commit_scratch_blit(
+        stroke.paint_target.commit_scratch_blit(
             gpu.device,
             &mut gpu.encoder,
             gpu.pipelines,
-            scratch.write_view(),
-            scratch.write_texture(),
+            stroke.scratch.write_view(),
+            stroke.scratch.write_texture(),
         );
     }
 
@@ -689,7 +651,7 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl_compile::render_compiled_preview(gpu, radius, 0.0);
+        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, 0.0);
         vec![]
     }
 

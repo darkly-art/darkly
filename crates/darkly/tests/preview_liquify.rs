@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, PreviewState};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::gpu::test_utils::{readback_texture, test_device};
@@ -65,27 +65,19 @@ fn liquify_preview_shows_neutral_gray_disc() {
         device: &device,
         queue: &queue,
         pipelines: &pipelines,
-        scratch: None,
+        selection_bind_group: pipelines.default_selection_bind_group(),
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
-        paint_target: None,
-        selection_bind_group: pipelines.default_selection_bind_group(),
-        preview_target_view: Some(&target_view),
         blend_mode: 0,
-        preview_mask_view: Some(&target_view),
-        preview_mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
-        preview_mask_overlay: None,
-        brush_preview_info: None,
-        pre_stroke_texture: None,
-        pre_stroke_bind_group: None,
-        dab_write_canvas_bbox: None,
         perf: BrushPerfCounters::default(),
-        pending_dab_bytes: Vec::new(),
-        pending_dab_count: 0,
-        pending_dabs_bbox: None,
-        pending_dab_meta_bytes: Vec::new(),
-        compiled_brush: None,
-        slot_outputs_owned: None,
+        stroke: None,
+        preview: Some(PreviewState {
+            mask_view: Some(&target_view),
+            mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
+            mask_overlay: None,
+            info: None,
+        }),
+        dab_batch: DabBatch::default(),
     };
 
     let info = PaintInformation {
@@ -97,7 +89,9 @@ fn liquify_preview_shows_neutral_gray_disc() {
     runner.execute_cpu();
     runner.render_preview_pipeline(&mut ctx);
     let _published = ctx
-        .brush_preview_info
+        .preview
+        .as_ref()
+        .and_then(|p| p.info)
         .expect("liquify publishes brush_preview_info");
     queue.submit([ctx.encoder.finish()]);
 
@@ -165,27 +159,19 @@ fn liquify_preview_softness_reshapes_falloff() {
             device: &device,
             queue: &queue,
             pipelines: &pipelines,
-            scratch: None,
+            selection_bind_group: pipelines.default_selection_bind_group(),
             canvas_width: PREVIEW_SIDE,
             canvas_height: PREVIEW_SIDE,
-            paint_target: None,
-            selection_bind_group: pipelines.default_selection_bind_group(),
-            preview_target_view: Some(&target_view),
             blend_mode: 0,
-            preview_mask_view: Some(&target_view),
-            preview_mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
-            preview_mask_overlay: None,
-            brush_preview_info: None,
-            pre_stroke_texture: None,
-            pre_stroke_bind_group: None,
-            dab_write_canvas_bbox: None,
             perf: BrushPerfCounters::default(),
-            pending_dab_bytes: Vec::new(),
-            pending_dab_count: 0,
-            pending_dabs_bbox: None,
-            pending_dab_meta_bytes: Vec::new(),
-            compiled_brush: None,
-            slot_outputs_owned: None,
+            stroke: None,
+            preview: Some(PreviewState {
+                mask_view: Some(&target_view),
+                mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
+                mask_overlay: None,
+                info: None,
+            }),
+            dab_batch: DabBatch::default(),
         };
         let info = PaintInformation {
             pos: [PREVIEW_SIDE as f32 * 0.5, PREVIEW_SIDE as f32 * 0.5],
@@ -196,7 +182,9 @@ fn liquify_preview_softness_reshapes_falloff() {
         runner.execute_cpu();
         runner.render_preview_pipeline(&mut ctx);
         let half_extent = ctx
-            .brush_preview_info
+            .preview
+            .as_ref()
+            .and_then(|p| p.info)
             .expect("liquify publishes preview info")
             .half_extent_canvas_px[0];
         queue.submit([ctx.encoder.finish()]);

@@ -21,6 +21,20 @@ pub struct SelectionPipelines {
     combine_bgl: wgpu::BindGroupLayout,
     mode_buf: wgpu::Buffer,
     sampler: wgpu::Sampler,
+    /// Recyclable R8 texture used as `combine`'s `shape_tex` binding.
+    /// Sized to exactly the selection's `(width, height)` because the
+    /// combine shader samples with UV in `[0, 1]` over the full texture
+    /// extent — a larger scratch would shift the UV mapping and miss the
+    /// uploaded shape data. Re-allocated only when the selection's
+    /// dimensions change (canvas resize, document load).
+    shape_scratch: Option<ShapeScratch>,
+}
+
+struct ShapeScratch {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
 }
 
 #[repr(C)]
@@ -137,13 +151,49 @@ impl SelectionPipelines {
             combine_bgl,
             mode_buf,
             sampler,
+            shape_scratch: None,
         }
+    }
+
+    /// Ensure `shape_scratch` is exactly `(w, h)` and return its view. The
+    /// combine shader's UV must map `(0, 1)` to the uploaded data, so the
+    /// scratch dimensions cannot be larger than the selection — when the
+    /// selection's dims change we reallocate.
+    fn ensure_shape_scratch(&mut self, device: &wgpu::Device, w: u32, h: u32) -> &ShapeScratch {
+        let needs_alloc = match &self.shape_scratch {
+            Some(s) => s.width != w || s.height != h,
+            None => true,
+        };
+        if needs_alloc {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("sel-shape-scratch"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.shape_scratch = Some(ShapeScratch {
+                texture,
+                view,
+                width: w,
+                height: h,
+            });
+        }
+        self.shape_scratch.as_ref().unwrap()
     }
 
     /// Run the combine shader: reads `state.textures[current]` + shape → writes
     /// to `state.textures[1 - current]`, then swaps and rebuilds bind groups.
     pub fn combine(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -156,24 +206,11 @@ impl SelectionPipelines {
         let w = state.width;
         let h = state.height;
 
-        // Upload shape to a temp texture.
-        let shape_tex = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("sel-shape-temp"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::R8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
+        self.ensure_shape_scratch(device, w, h);
+        let scratch = self.shape_scratch.as_ref().expect("just ensured");
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: &shape_tex,
+                texture: &scratch.texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -190,7 +227,7 @@ impl SelectionPipelines {
                 depth_or_array_layers: 1,
             },
         );
-        let shape_view = shape_tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let shape_view = &scratch.view;
 
         queue.write_buffer(
             &self.mode_buf,
@@ -211,7 +248,7 @@ impl SelectionPipelines {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&shape_view),
+                    resource: wgpu::BindingResource::TextureView(shape_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,

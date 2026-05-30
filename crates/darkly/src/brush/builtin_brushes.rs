@@ -6,7 +6,6 @@
 
 use crate::brush::bundle::{Brush, BrushMetadata};
 use crate::brush::wire::BrushWireType;
-use crate::brush::BrushNodeRegistry;
 use crate::gpu::params::ParamValue;
 use crate::nodegraph::{Graph, NodeId, PortRef};
 
@@ -53,7 +52,7 @@ fn paint_brush(
         NodeId, // terminal
     ),
 ) -> Brush {
-    let registry = BrushNodeRegistry::new();
+    let registry = crate::brush::registry();
     let mut graph = Graph::new();
 
     let pen = graph.add_node(
@@ -74,7 +73,7 @@ fn paint_brush(
     let stamp = graph.add_node(
         "stamp",
         registry.get("stamp").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // 0 = Alpha Mask
+        vec![],
     );
     // `paint` owns the dab dimensions; stamp's `size` port is inert.
     // Hide it so users don't see two "Size" sliders in the brush
@@ -128,7 +127,7 @@ fn wire_pressure_size_curve(
     terminal: NodeId,
     points: Vec<[f32; 2]>,
 ) {
-    let registry = BrushNodeRegistry::new();
+    let registry = crate::brush::registry();
     let curve = graph.add_node(
         "curve",
         registry.get("curve").unwrap().ports.clone(),
@@ -279,7 +278,7 @@ fn watercolor_brush(
         NodeId, // terminal
     ),
 ) -> Brush {
-    let registry = BrushNodeRegistry::new();
+    let registry = crate::brush::registry();
     let mut graph = Graph::<BrushWireType>::new();
 
     let pen = graph.add_node(
@@ -367,7 +366,7 @@ fn smooth_watercolor() -> Brush {
             // (Rough watercolor doesn't need this because its per-dab
             // seed gives a fresh noise pattern, not just a fresh
             // rotation of the same pattern.)
-            let registry = BrushNodeRegistry::new();
+            let registry = crate::brush::registry();
             let rand_rot = graph.add_node(
                 "random",
                 registry.get("random").unwrap().ports.clone(),
@@ -405,7 +404,7 @@ fn rough_watercolor() -> Brush {
             // Per-dab random seed so every dab gets a fresh Perlin
             // pattern. Full per-dab noise reshuffle subsumes what a
             // rotation-randomizer would add.
-            let registry = BrushNodeRegistry::new();
+            let registry = crate::brush::registry();
             let rand_seed = graph.add_node(
                 "random",
                 registry.get("random").unwrap().ports.clone(),
@@ -439,7 +438,7 @@ fn rough_watercolor() -> Brush {
 /// upstream `circle.texture` compiles inline into the terminal's
 /// fragment shader as the per-fragment brush coverage.
 fn smudge_brush() -> Brush {
-    let registry = BrushNodeRegistry::new();
+    let registry = crate::brush::registry();
     let mut graph = Graph::<BrushWireType>::new();
 
     let pen = graph.add_node(
@@ -510,7 +509,7 @@ fn smudge_brush() -> Brush {
 /// / color_output — `liquify` is itself the terminal, with
 /// its own `begin_stroke` / `commit` / per-dab pass lifecycle.
 fn liquify_push() -> Brush {
-    let registry = BrushNodeRegistry::new();
+    let registry = crate::brush::registry();
     let mut graph = Graph::<BrushWireType>::new();
 
     let pen = graph.add_node(
@@ -591,9 +590,9 @@ fn liquify_push() -> Brush {
 /// dispatch, no inter-node textures.
 ///
 /// This brush is the proving ground for the WGSL compilation
-/// framework — see `crates/darkly/src/brush/wgsl_compile.rs`.
+/// framework — see `crates/darkly/src/brush/wgsl.rs`.
 fn rough_ink() -> Brush {
-    let registry = BrushNodeRegistry::new();
+    let registry = crate::brush::registry();
     let mut graph = Graph::<BrushWireType>::new();
 
     let pen = graph.add_node(
@@ -646,7 +645,7 @@ fn rough_ink() -> Brush {
     let stamp = graph.add_node(
         "stamp",
         registry.get("stamp").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // 0 = Alpha Mask
+        vec![],
     );
     // Stamp's `size` port is exposed by default (because per-dab
     // dispatch needs it), but `paint` ignores stamp's

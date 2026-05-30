@@ -21,12 +21,12 @@ use std::sync::{Arc, OnceLock};
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
+use darkly::brush::registry;
 use darkly::brush::stroke_buffer::StrokeBuffer;
 use darkly::brush::wire::BrushWireType;
-use darkly::brush::BrushNodeRegistry;
 use darkly::gpu::params::ParamValue;
 use darkly::gpu::test_utils::{create_test_texture, readback_texture, test_device};
 use darkly::nodegraph::{Graph, PortRef};
@@ -64,7 +64,7 @@ struct Harness {
 /// `algorithm` selects the circle's shape function. `amplitude`
 /// defaults to 0 (= disc) unless the caller overrides.
 fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWireType> {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::<BrushWireType>::new();
 
     let pen = graph.add_node(
@@ -179,35 +179,25 @@ macro_rules! make_ctx {
             device: &$h.device,
             queue: &$h.queue,
             pipelines: &$h.pipelines,
-            scratch: Some(_scratch),
+            selection_bind_group: $h.pipelines.default_selection_bind_group(),
             canvas_width: CANVAS,
             canvas_height: CANVAS,
-            paint_target: Some(
-                darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
+            blend_mode: 0,
+            perf: BrushPerfCounters::default(),
+            stroke: Some(StrokeResources {
+                scratch: _scratch,
+                paint_target: darkly::gpu::paint_target::GpuPaintTarget::from_canvas_texture(
                     &$h.layer_texture,
                     &$h.layer_view,
                     wgpu::TextureFormat::Rgba8Unorm,
                     CANVAS,
                     CANVAS,
                 ),
-            ),
-            selection_bind_group: $h.pipelines.default_selection_bind_group(),
-            preview_target_view: None,
-            blend_mode: 0,
-            preview_mask_view: None,
-            preview_mask_size: (0, 0),
-            preview_mask_overlay: None,
-            brush_preview_info: None,
-            pre_stroke_texture: Some(_pre_stroke_texture),
-            pre_stroke_bind_group: Some(_pre_stroke_bind_group),
-            dab_write_canvas_bbox: None,
-            perf: BrushPerfCounters::default(),
-            pending_dab_bytes: Vec::new(),
-            pending_dab_count: 0,
-            pending_dabs_bbox: None,
-            pending_dab_meta_bytes: Vec::new(),
-            compiled_brush: None,
-            slot_outputs_owned: None,
+                pre_stroke_texture: _pre_stroke_texture,
+                pre_stroke_bind_group: _pre_stroke_bind_group,
+            }),
+            preview: None,
+            dab_batch: DabBatch::default(),
         }
     }};
 }

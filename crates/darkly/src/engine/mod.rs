@@ -424,6 +424,13 @@ pub struct DarklyEngine {
     /// per-event `BrushGpuContext` `+=`'s its drained counters into here.
     pub(crate) brush_perf: BrushPerfCounters,
 
+    /// Mid-stroke full re-render fallbacks during this stroke (the
+    /// per-engine counterpart to `brush_perf` — see [`BrushPerfCounters`]
+    /// docs on why this isn't a field there). Bumped in `painting.rs`
+    /// when the checkpoint ring's coverage invariant fails; surfaced
+    /// via `test_stroke_full_rerender_events`.
+    pub(crate) brush_full_rerender_events: u32,
+
     /// Snapshot of `brush_perf` taken on the last `drain_brush_perf_delta`
     /// call. Subtracted from the current accumulator on each drain to
     /// produce a per-interval delta. Reset to default at `begin_stroke`
@@ -532,6 +539,7 @@ impl DarklyEngine {
             thumbnail_version: 0,
             layer_growth_capped: false,
             brush_perf: BrushPerfCounters::default(),
+            brush_full_rerender_events: 0,
             last_brush_perf: BrushPerfCounters::default(),
             last_frame_phases: FrameRenderPhases::default(),
         };
@@ -590,15 +598,18 @@ impl DarklyEngine {
     }
 
     /// Current overlay preview mask dimensions. Test-only accessor.
+    #[cfg(any(test, feature = "testing"))]
     pub fn compositor_preview_mask_size(&self) -> (u32, u32) {
-        self.compositor.tool_overlay_ref().preview_mask_size()
+        self.compositor.tool_overlay().preview_mask_size()
     }
 
     /// Blocking readback of the overlay's preview mask texture. Test-only.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_overlay_preview_mask(&self) -> Vec<u8> {
         let tex = self
             .compositor
-            .overlay_preview_mask_texture()
+            .tool_overlay()
+            .preview_mask_texture()
             .expect("preview mask not allocated");
         let (w, h) = self.compositor_preview_mask_size();
         crate::gpu::test_utils::readback_texture(
@@ -669,6 +680,7 @@ impl DarklyEngine {
     /// modifier). For test assertions only. Format and extent come from the
     /// texture's own metadata — callers don't need to know whether the id
     /// refers to a layer or a modifier.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_layer(&self, node_id: LayerId) -> Vec<u8> {
         let tex = self
             .compositor
@@ -689,6 +701,7 @@ impl DarklyEngine {
     /// only. Returns canvas-sized RGBA8 pixels (padding excluded). Forces an
     /// offscreen composite first because headless `render()` skips the
     /// compositor (no surface to present to).
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_canvas(&mut self) -> Vec<u8> {
         self.compositor
             .render_offscreen(&self.gpu.device, &self.gpu.queue, &mut self.doc);
@@ -711,6 +724,7 @@ impl DarklyEngine {
     /// handling, the transparency checker, OOB workspace background, etc. —
     /// which `test_readback_canvas` cannot cover because it reads the
     /// pre-present composite cache.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_present(&mut self) -> Vec<u8> {
         self.compositor
             .test_present_to_canvas(&self.gpu.device, &self.gpu.queue, &mut self.doc)
@@ -728,6 +742,7 @@ impl DarklyEngine {
     /// Blocking readback of a mask modifier's R8 texture. For test assertions
     /// only. Resolves the mask modifier on the host and reads its texture
     /// from the unified node-texture pool. Returns one byte per pixel.
+    #[cfg(any(test, feature = "testing"))]
     pub fn test_readback_mask(&self, host_id: LayerId) -> Vec<u8> {
         let mask_id = self
             .doc
@@ -762,7 +777,7 @@ impl DarklyEngine {
     /// checkpoint ring's coverage invariant kept fallback at zero across
     /// a stroke.
     pub fn test_stroke_full_rerender_events(&self) -> u32 {
-        self.brush_perf.full_rerender_events
+        self.brush_full_rerender_events
     }
 
     /// Total dabs placed during the most recent stroke. `brush_perf` is

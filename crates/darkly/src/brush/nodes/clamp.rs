@@ -10,33 +10,37 @@ use crate::nodegraph::{NodeRegistration, PortDef};
 pub const TYPE_ID: &str = "clamp";
 
 pub fn register() -> BrushNodeRegistration {
-    BrushNodeRegistration::compute(NodeRegistration {
-        type_id: TYPE_ID,
-        category: "math",
-        display_name: "Clamp",
-        ports: vec![
-            PortDef::input("value", BrushWireType::Scalar).with_description("Input value to clamp"),
-            PortDef::output("result", BrushWireType::Scalar)
-                .with_description("Clamped output value"),
-        ],
-        params: &[
-            ParamDef::Float {
-                name: "min",
-                min: 0.0,
-                max: 1.0,
-                default: 0.0,
-            },
-            ParamDef::Float {
-                name: "max",
-                min: 0.0,
-                max: 1.0,
-                default: 1.0,
-            },
-        ],
-        is_gpu: false,
-        is_terminal: false,
-        supports_erase: true,
-    })
+    BrushNodeRegistration::compute(
+        NodeRegistration {
+            type_id: TYPE_ID,
+            category: "math",
+            display_name: "Clamp",
+            ports: vec![
+                PortDef::input("value", BrushWireType::Scalar)
+                    .with_description("Input value to clamp"),
+                PortDef::output("result", BrushWireType::Scalar)
+                    .with_description("Clamped output value"),
+            ],
+            params: &[
+                ParamDef::Float {
+                    name: "min",
+                    min: 0.0,
+                    max: 1.0,
+                    default: 0.0,
+                },
+                ParamDef::Float {
+                    name: "max",
+                    min: 0.0,
+                    max: 1.0,
+                    default: 1.0,
+                },
+            ],
+            is_gpu: false,
+            is_terminal: false,
+            supports_erase: true,
+        },
+        || Box::new(ClampEvaluator),
+    )
 }
 
 pub struct ClampEvaluator;

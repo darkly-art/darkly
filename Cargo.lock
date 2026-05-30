@@ -222,6 +222,7 @@ dependencies = [
  "serde_json",
  "serde_yml",
  "slotmap",
+ "smallvec",
  "syn",
  "thiserror 1.0.69",
  "web-time",

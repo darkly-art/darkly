@@ -2,19 +2,18 @@
 //!
 //! Hardware alpha blending (`SrcAlpha`/`OneMinusSrcAlpha`) produces premultiplied
 //! output, which corrupts straight-alpha layer textures. Any render pass that
-//! composites onto a straight-alpha target must:
-//!
-//! 1. Copy the destination region to a temp texture
-//! 2. Have the shader read both source and dest, compute Porter-Duff manually
-//!    using the `source_over()` function from `shaders/source_over.wgsl`
-//! 3. Output with REPLACE blend (`blend: None`)
+//! composites onto a straight-alpha target must copy the destination region
+//! into a temp texture, sample both source and dest in the shader to compute
+//! Porter-Duff manually via the `source_over()` helper from
+//! `shaders/source_over.wgsl`, and emit with REPLACE blend (`blend: None`).
 //!
 //! The WGSL `source_over()` function is included via `concat!` at shader load:
 //! ```ignore
 //! concat!(include_str!("source_over.wgsl"), "\n", include_str!("my_shader.wgsl"))
 //! ```
 //!
-//! This module provides the Rust-side utilities for step 1.
+//! Provides the bind-group-layout and destination-copy helpers used by any
+//! pass that composites onto a straight-alpha target.
 //! See `docs/lessons-learned/compositing-lessons-learned.md` #4 for the full rationale.
 
 /// Create a bind group layout with a single `texture_2d<f32>` at binding 0.

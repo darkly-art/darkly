@@ -12,31 +12,34 @@ use crate::nodegraph::{NodeRegistration, PortDef};
 pub const TYPE_ID: &str = "mix";
 
 pub fn register() -> BrushNodeRegistration {
-    BrushNodeRegistration::compute(NodeRegistration {
-        type_id: TYPE_ID,
-        category: "math",
-        display_name: "Mix",
-        ports: vec![
-            PortDef::input("a", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.0)
-                .with_description("Value at factor = 0"),
-            PortDef::input("b", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 1.0)
-                .with_description("Value at factor = 1"),
-            PortDef::input("factor", BrushWireType::Scalar)
-                .with_range(0.0, 1.0, 0.5)
-                .with_natural_range(0.0, 1.0)
-                .with_description("Blend factor (0 = all a, 1 = all b)"),
-            PortDef::output("result", BrushWireType::Scalar)
-                .with_description("Interpolated scalar result"),
-            PortDef::output("color_result", BrushWireType::Color)
-                .with_description("Interpolated color result (when color inputs are wired)"),
-        ],
-        params: &[],
-        is_gpu: false,
-        is_terminal: false,
-        supports_erase: true,
-    })
+    BrushNodeRegistration::compute(
+        NodeRegistration {
+            type_id: TYPE_ID,
+            category: "math",
+            display_name: "Mix",
+            ports: vec![
+                PortDef::input("a", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.0)
+                    .with_description("Value at factor = 0"),
+                PortDef::input("b", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 1.0)
+                    .with_description("Value at factor = 1"),
+                PortDef::input("factor", BrushWireType::Scalar)
+                    .with_range(0.0, 1.0, 0.5)
+                    .with_natural_range(0.0, 1.0)
+                    .with_description("Blend factor (0 = all a, 1 = all b)"),
+                PortDef::output("result", BrushWireType::Scalar)
+                    .with_description("Interpolated scalar result"),
+                PortDef::output("color_result", BrushWireType::Color)
+                    .with_description("Interpolated color result (when color inputs are wired)"),
+            ],
+            params: &[],
+            is_gpu: false,
+            is_terminal: false,
+            supports_erase: true,
+        },
+        || Box::new(MixEvaluator),
+    )
 }
 
 pub struct MixEvaluator;

@@ -4,7 +4,7 @@ use super::rendering::commit_undo_region;
 use super::types::StrokeOp;
 use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use crate::brush::checkpoint_ring::CheckpointRing;
-use crate::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use crate::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
 use crate::brush::paint_info::PaintInformation;
 use crate::brush::spacing::SpacingConfig;
 use crate::brush::stroke_buffer::StrokeBuffer;
@@ -285,6 +285,7 @@ impl DarklyEngine {
         // post-`begin_stroke` drain subtracts against zero rather than
         // the previous stroke's totals.
         self.brush_perf = BrushPerfCounters::default();
+        self.brush_full_rerender_events = 0;
         self.last_brush_perf = BrushPerfCounters::default();
         // GPU setup is deferred to first stroke_to (lazy init).
     }
@@ -692,7 +693,7 @@ impl DarklyEngine {
 
         // Refresh the blend-uniform buffer so the composite pass sees the
         // new offset/size on the next render.
-        self.compositor.update_layer_uniforms_full(
+        self.compositor.update_layer_uniforms(
             &self.gpu.queue,
             layer_id,
             opacity,
@@ -901,31 +902,23 @@ impl DarklyEngine {
                         device: &self.gpu.device,
                         queue: &self.gpu.queue,
                         pipelines: &self.brush_pipelines,
-                        scratch: Some(scratch),
+                        selection_bind_group: sel_bg,
                         canvas_width: canvas_w,
                         canvas_height: canvas_h,
-                        paint_target: Some(paint_target),
-                        selection_bind_group: sel_bg,
-                        preview_target_view: None,
                         // blend_mode applies at commit (paint vs. erase).
                         // Per-dab passes hard-code source-over — the
                         // scratch is a coverage accumulator, and only the
                         // commit composite reads this value.
                         blend_mode: self.brush_blend_mode,
-                        preview_mask_view: None,
-                        preview_mask_size: (0, 0),
-                        preview_mask_overlay: None,
-                        brush_preview_info: None,
-                        pre_stroke_texture: Some(pre_stroke_texture),
-                        pre_stroke_bind_group: Some(pre_stroke_bind_group),
-                        dab_write_canvas_bbox: None,
                         perf: BrushPerfCounters::default(),
-                        pending_dab_bytes: Vec::new(),
-                        pending_dab_count: 0,
-                        pending_dabs_bbox: None,
-                        pending_dab_meta_bytes: Vec::new(),
-                        compiled_brush: None,
-                        slot_outputs_owned: None,
+                        stroke: Some(StrokeResources {
+                            scratch,
+                            paint_target,
+                            pre_stroke_texture,
+                            pre_stroke_bind_group,
+                        }),
+                        preview: None,
+                        dab_batch: DabBatch::default(),
                     }
                 }};
             }
@@ -982,7 +975,7 @@ impl DarklyEngine {
                     // Only the former is a "mid-stroke full re-render
                     // fallback" worth counting.
                     if self.checkpoint_ring.has_any_valid() {
-                        self.brush_perf.full_rerender_events += 1;
+                        self.brush_full_rerender_events += 1;
                     }
                     engine.reset_render_state();
                     self.checkpoint_ring.clear();
@@ -1096,8 +1089,7 @@ impl DarklyEngine {
             // field level, leaving `&mut self.dab_pool` free.
             let layer_tex = self.compositor.node_texture(layer_id);
             if let Some(layer_tex) = layer_tex {
-                let canvas_view = layer_tex.view();
-                let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
+                let _paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
                 let mut gpu_ctx = BrushGpuContext {
                     encoder: self.gpu.device.create_command_encoder(
                         &wgpu::CommandEncoderDescriptor {
@@ -1107,31 +1099,18 @@ impl DarklyEngine {
                     device: &self.gpu.device,
                     queue: &self.gpu.queue,
                     pipelines: &self.brush_pipelines,
-                    // No stroke buffer in this defensive fallback — `move_to`
-                    // only updates stabilizer state and never reaches into
-                    // scratch.  Anything that does would panic, which is the
-                    // correct signal that the fallback was reached.
-                    scratch: None,
+                    selection_bind_group: sel_bg,
                     canvas_width: canvas_w,
                     canvas_height: canvas_h,
-                    paint_target: Some(paint_target),
-                    selection_bind_group: sel_bg,
-                    preview_target_view: Some(canvas_view),
                     blend_mode: self.brush_blend_mode,
-                    preview_mask_view: None,
-                    preview_mask_size: (0, 0),
-                    preview_mask_overlay: None,
-                    brush_preview_info: None,
-                    pre_stroke_texture: None,
-                    pre_stroke_bind_group: None,
-                    dab_write_canvas_bbox: None,
                     perf: BrushPerfCounters::default(),
-                    pending_dab_bytes: Vec::new(),
-                    pending_dab_count: 0,
-                    pending_dabs_bbox: None,
-                    pending_dab_meta_bytes: Vec::new(),
-                    compiled_brush: None,
-                    slot_outputs_owned: None,
+                    // No stroke buffer in this defensive fallback — `move_to`
+                    // only updates stabilizer state and never reaches into
+                    // scratch. Anything that does would panic, which is the
+                    // correct signal that the fallback was reached.
+                    stroke: None,
+                    preview: None,
+                    dab_batch: DabBatch::default(),
                 };
                 self.brush_pipelines.reset_uniform_rings();
                 engine.move_to(info, &mut gpu_ctx);

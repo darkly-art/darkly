@@ -6,6 +6,11 @@ license.workspace = true
 
 [features]
 profile = []
+# Enables blocking GPU readbacks, `gpu::test_utils`, and `*::test_readback_*`
+# accessors. WebGPU/WASM deadlocks on these (see CLAUDE.md "No Blocking GPU
+# Readbacks"); the feature exists so `cargo test` and the bench bins can opt
+# in while production / WASM builds cannot reach the API at all.
+testing = []
 
 [dependencies]
 wgpu = { workspace = true }
@@ -22,11 +27,20 @@ quick-xml = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
 slotmap = { workspace = true }
+smallvec = { workspace = true }
 
 [dev-dependencies]
 pollster = "0.4"
 naga = { version = "28.0", features = ["wgsl-in"] }
 syn = { version = "2", features = ["visit", "full"] }
+
+[[bin]]
+name = "stroke_replay_bench"
+required-features = ["testing"]
+
+[[bin]]
+name = "stroke_replay_matrix"
+required-features = ["testing"]
 
 [lints]
 workspace = true

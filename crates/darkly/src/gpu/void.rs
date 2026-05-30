@@ -1,4 +1,4 @@
-//! Void layer effects — the procedural counterpart to [`Veil`].
+//! Void layer effects — procedural per-layer content.
 //!
 //! A void is a GPU effect that *generates* a layer's pixel content from a
 //! shader (noise, screenshare, future portals), rather than storing static
@@ -6,19 +6,15 @@
 //! [`crate::layer::Layer::Void`] variant, participating in normal blending,
 //! masking, and undo.
 //!
-//! The trait shape mirrors [`super::veil::Veil`] but the output contract is
-//! different: a void [`Void::encode`] takes no ping-pong source view, because
-//! a void has no upstream input — it writes the layer's color content into
-//! `dst_view` from scratch. The compositor then composites the void's texture
-//! through the normal raster blend pipeline, so opacity / blend mode / mask
-//! work uniformly with raster layers.
+//! A void [`Void::encode`] writes the layer's color content into `dst_view`
+//! from scratch — there is no upstream input texture. The compositor then
+//! composites the void's texture through the normal raster blend pipeline,
+//! so opacity / blend mode / mask work uniformly with raster layers.
 //!
 //! Adding a new void type is one new file under [`super::voids`]: the
 //! module's `register()` returns a [`VoidRegistration`] with everything the
 //! engine needs — display name, parameter schema, pipeline constructor, and
 //! a factory that builds the trait object from a parameter slice.
-//!
-//! [`Veil`]: super::veil::Veil
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -56,6 +52,37 @@ impl ExternalImageSource {
     }
 }
 
+/// Sticky "needs re-encode" flag every void embeds.
+///
+/// Implementations call [`Self::mark`] from inside the state-changing methods
+/// (`update_params`, `update_time`, `upload_external_image`, …). The
+/// compositor's render pass clears it via [`Self::take`] right before
+/// invoking [`Void::encode`], so a void re-renders exactly once per state
+/// change. Defaulting `true` at construction time means the first
+/// compositor pass after `ensure_void_layer` always produces a fresh
+/// texture, even if no param edits have happened yet.
+#[derive(Debug)]
+pub struct DirtyFlag(bool);
+
+impl DirtyFlag {
+    pub fn new_dirty() -> Self {
+        DirtyFlag(true)
+    }
+    pub fn mark(&mut self) {
+        self.0 = true;
+    }
+    /// Return whether the flag was set and clear it.
+    pub fn take(&mut self) -> bool {
+        std::mem::replace(&mut self.0, false)
+    }
+}
+
+impl Default for DirtyFlag {
+    fn default() -> Self {
+        Self::new_dirty()
+    }
+}
+
 /// Layer-level procedural-content effect ("void"). Renders the layer's
 /// pixels from a shader instead of storing them.
 ///
@@ -72,6 +99,18 @@ pub trait Void: std::fmt::Debug {
     /// Return the current parameter values, in the same order as the
     /// type's [`ParamDef`] array in [`VoidRegistration`].
     fn param_values(&self) -> Vec<ParamValue>;
+
+    /// Return whether the void needs re-encoding into its destination
+    /// texture and clear the flag. The compositor calls this once per
+    /// frame; voids embed a [`DirtyFlag`] and forward to it. Implementations
+    /// must initialise the flag dirty so the first compositor pass after
+    /// `ensure_void_layer` produces a fresh texture.
+    fn take_dirty(&mut self) -> bool;
+
+    /// Re-mark this void as needing a fresh encode. Voids call this from
+    /// their own state-mutating methods (`update_params`, `update_time`,
+    /// `upload_external_image`); rarely needed externally.
+    fn mark_dirty(&mut self);
 
     /// Allocate per-instance GPU resources. The compositor passes the
     /// destination view (the void's own texture) so the void can build
@@ -181,10 +220,11 @@ pub struct VoidRegistration {
     pub from_params: fn(&[ParamValue], Arc<EffectPipeline>) -> Box<dyn Void>,
 }
 
-/// Auto-discovered void registry with lazy pipeline caching. Modeled on
-/// [`super::veil::VeilRegistry`]; the two could in principle share a
-/// generic registry, but keeping them separate avoids stamping out an
-/// extra layer of generics for the modest amount of code involved.
+/// Auto-discovered void registry with lazy pipeline caching. Each void
+/// kind contributes one [`VoidRegistration`] via its module's `register()`;
+/// `build.rs` collects them into [`super::voids::registrations`] and the
+/// registry pulls them in at startup. Pipelines build on first use and are
+/// shared via [`Arc`] across instances of the same kind.
 pub struct VoidRegistry {
     entries: HashMap<&'static str, RegistryEntry>,
 }
@@ -285,5 +325,31 @@ impl VoidRegistry {
             .get_or_insert_with(|| Arc::new((entry.create_pipeline)(device, format)))
             .clone();
         (entry.from_params)(params, pipeline)
+    }
+}
+
+#[cfg(test)]
+mod dirty_flag_tests {
+    use super::DirtyFlag;
+
+    #[test]
+    fn starts_dirty_so_first_encode_fires() {
+        let mut flag = DirtyFlag::new_dirty();
+        assert!(flag.take(), "fresh flag must report dirty on first take");
+    }
+
+    #[test]
+    fn take_clears() {
+        let mut flag = DirtyFlag::new_dirty();
+        assert!(flag.take());
+        assert!(!flag.take(), "take must clear the flag");
+    }
+
+    #[test]
+    fn mark_re_arms() {
+        let mut flag = DirtyFlag::new_dirty();
+        flag.take();
+        flag.mark();
+        assert!(flag.take(), "mark after clear must re-arm");
     }
 }

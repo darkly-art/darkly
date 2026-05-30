@@ -21,7 +21,7 @@
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::wgsl_compile::{CompileWgslCtx, ExtentContribution, ExtentCtx, NodeWgsl};
+use crate::brush::wgsl::{CompileWgslCtx, ExtentContribution, ExtentCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -39,6 +39,8 @@ pub const TYPE_ID: &str = "circle";
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![],
+        evaluator: || Box::new(CircleEvaluator),
+        lifecycle: crate::brush::node::Lifecycle::None,
         node: NodeRegistration {
         type_id: TYPE_ID,
         category: "shape",

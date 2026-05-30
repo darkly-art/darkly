@@ -1,4 +1,4 @@
-![darkly](https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7)
+<a href="https://github.com/darkly-art/darkly"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="darkly" width="675"></a>
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
 [![Patreon](https://img.shields.io/badge/Patreon-Forbidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
@@ -23,7 +23,7 @@
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
 
-Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with Darkly, where messes are made and happy accidents incur. Madness isn't a bug, it's a feature.
+Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with Darkly, where messes are made and happy accidents emerge. Madness isn't a bug, it's a feature.
 
 **Try the demo [here](https://demo.darkly.art).**
 
@@ -31,26 +31,24 @@ Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructi
 
 ## Upcoming Kickstarter
 
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, and rescue our friends and colleagues from the iron grip of corporate software!
+We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, so we can rescue our friends and colleagues from the grip of corporate software!
 
 ## Unique Darkly Features
-
-In addition to the usual paint features, Darkly has some entropic tools to empower you in your dark arts.
 
 ### Veils
 
 https://github.com/user-attachments/assets/ee281ac2-37a8-4e52-91b3-78d564420e9d
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
 
 Veils have practical uses too:
 
 - By hiding fine details, they can prevent **premature fixation on detail**, freeing you to focus on composition.
 - During the sketching / ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
-- They can also help remedy **art fatigue** (losing eyes for art by staring at it for too long) by letting you view it through a new lense.
+- They can also help remedy **art fatigue** (losing eyes for a piece by staring at it for too long) by helping you view it through a fresh lens.
 
 > [!NOTE]
-> Veils live in their own dedicated group, but within that you can stack and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.
+> Veils live in their own group, but within it you can stack and order them however you like. Remember that adding too many can drain your battery, due to the heavy load on your GPU.
 
 ### Voids
 

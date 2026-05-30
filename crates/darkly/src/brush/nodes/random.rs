@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
-use crate::brush::wgsl_compile::{CompileWgslCtx, DabField, NodeWgsl, UniformField, WgslType};
+use crate::brush::wgsl::{CompileWgslCtx, DabField, NodeWgsl, UniformField, WgslType};
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::gpu::params::ParamDef;
 use crate::nodegraph::{NodeRegistration, PortDef};
@@ -24,27 +24,30 @@ use crate::nodegraph::{NodeRegistration, PortDef};
 pub const TYPE_ID: &str = "random";
 
 pub fn register() -> BrushNodeRegistration {
-    BrushNodeRegistration::compute(NodeRegistration {
-        type_id: TYPE_ID,
-        category: "input",
-        display_name: "Random",
-        ports: vec![PortDef::output("value", BrushWireType::Scalar)
-            .with_natural_range(0.0, 1.0)
-            .with_description("Random value in [0, 1)")],
-        params: &[
-            // Enum stored as Int — 0 = per-dab, 1 = per-stroke. Surfaced
-            // as a labeled dropdown so users don't have to memorize
-            // indices; the evaluator's match arms read the same i32.
-            ParamDef::Enum {
-                name: "mode",
-                options: &["Per-Dab", "Per-Stroke"],
-                default: 0,
-            },
-        ],
-        is_gpu: false,
-        is_terminal: false,
-        supports_erase: true,
-    })
+    BrushNodeRegistration::compute(
+        NodeRegistration {
+            type_id: TYPE_ID,
+            category: "input",
+            display_name: "Random",
+            ports: vec![PortDef::output("value", BrushWireType::Scalar)
+                .with_natural_range(0.0, 1.0)
+                .with_description("Random value in [0, 1)")],
+            params: &[
+                // Enum stored as Int — 0 = per-dab, 1 = per-stroke. Surfaced
+                // as a labeled dropdown so users don't have to memorize
+                // indices; the evaluator's match arms read the same i32.
+                ParamDef::Enum {
+                    name: "mode",
+                    options: &["Per-Dab", "Per-Stroke"],
+                    default: 0,
+                },
+            ],
+            is_gpu: false,
+            is_terminal: false,
+            supports_erase: true,
+        },
+        || Box::new(RandomEvaluator),
+    )
 }
 
 pub struct RandomEvaluator;

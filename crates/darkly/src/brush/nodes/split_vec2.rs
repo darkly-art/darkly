@@ -11,23 +11,26 @@ use crate::nodegraph::{NodeRegistration, PortDef};
 pub const TYPE_ID: &str = "split_vec2";
 
 pub fn register() -> BrushNodeRegistration {
-    BrushNodeRegistration::compute(NodeRegistration {
-        type_id: TYPE_ID,
-        category: "math",
-        display_name: "Split Vec2",
-        ports: vec![
-            PortDef::input("vec", BrushWireType::Vec2)
-                .with_description("The 2D vector to split into components"),
-            PortDef::output("x", BrushWireType::Scalar)
-                .with_description("Horizontal (X) component of the vector"),
-            PortDef::output("y", BrushWireType::Scalar)
-                .with_description("Vertical (Y) component of the vector"),
-        ],
-        params: &[],
-        is_gpu: false,
-        is_terminal: false,
-        supports_erase: true,
-    })
+    BrushNodeRegistration::compute(
+        NodeRegistration {
+            type_id: TYPE_ID,
+            category: "math",
+            display_name: "Split Vec2",
+            ports: vec![
+                PortDef::input("vec", BrushWireType::Vec2)
+                    .with_description("The 2D vector to split into components"),
+                PortDef::output("x", BrushWireType::Scalar)
+                    .with_description("Horizontal (X) component of the vector"),
+                PortDef::output("y", BrushWireType::Scalar)
+                    .with_description("Vertical (Y) component of the vector"),
+            ],
+            params: &[],
+            is_gpu: false,
+            is_terminal: false,
+            supports_erase: true,
+        },
+        || Box::new(SplitVec2Evaluator),
+    )
 }
 
 pub struct SplitVec2Evaluator;
