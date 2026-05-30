@@ -727,13 +727,6 @@ fn charcoal() -> Brush {
         registry.get("paint_color").unwrap().ports.clone(),
         vec![],
     );
-    // Identity-default pressure-to-size curve, like Round — gives a
-    // tunable response without baking in a specific shape.
-    let size_curve = graph.add_node(
-        "curve",
-        registry.get("curve").unwrap().ports.clone(),
-        vec![ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])],
-    );
     // Levels acts as a soft pressure threshold against the paper.
     // The 0.1 / 0.9 window means very light pressure produces zero
     // ink (paper > pressure threshold everywhere), heavy pressure
@@ -757,15 +750,23 @@ fn charcoal() -> Brush {
         registry.get("split_color").unwrap().ports.clone(),
         vec![],
     );
-    // The disc that gives the stamp its overall footprint.
+    // Perlin-noise tip: an irregular procedural shape per dab.
+    // Slight softness (10%) feathers the edge enough to avoid
+    // aliasing without losing the grainy crispness; amplitude 0.5
+    // gives a visibly noisy silhouette; the seed is randomised per
+    // dab so no two stamps land on the same silhouette.
     let shape = graph.add_node(
         "circle",
         registry.get("circle").unwrap().ports.clone(),
-        vec![ParamValue::Int(0)], // Sine harmonic, amp=0 → plain disc
+        vec![ParamValue::Int(1)], // Perlin Noise
     );
-    // A small softness so the stroke edges feather rather than
-    // producing a hard mathematical disc edge.
-    graph.set_port_default(shape, "softness", 0.3).unwrap();
+    graph.set_port_default(shape, "amplitude", 0.5).unwrap();
+    graph.set_port_default(shape, "softness", 0.1).unwrap();
+    let rand_seed = graph.add_node(
+        "random",
+        registry.get("random").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // 0 = per-dab
+    );
     // paper.luminance × threshold(pressure): the paper grain gated
     // by the per-stamp pressure threshold.
     let paper_threshold = graph.add_node(
@@ -773,11 +774,11 @@ fn charcoal() -> Brush {
         registry.get("multiply").unwrap().ports.clone(),
         vec![],
     );
-    // × disc mask → final stamp.tip. Folding circle.mask
-    // into the same scalar product as paper×threshold keeps every
+    // × circle.mask → final stamp.tip. Folding the shape mask into
+    // the same scalar product as paper×threshold keeps every
     // per-fragment modulator in one place — stamp computes
     // `color.a × tip × flow`, so anything multiplicative belongs in
-    // tip and `flow` stays the per-stamp pressure value.
+    // tip and `flow` stays a per-stamp deposit cap.
     let tip_combined = graph.add_node(
         "multiply",
         registry.get("multiply").unwrap().ports.clone(),
@@ -789,6 +790,10 @@ fn charcoal() -> Brush {
         vec![],
     );
     graph.set_port_exposed(stamp, "size", false).unwrap();
+    // Flow stays at a fixed 50% by default; pressure already
+    // modulates deposit through the paper-threshold chain, so wiring
+    // pressure into flow as well would double-count it.
+    graph.set_port_default(stamp, "flow", 0.5).unwrap();
     let terminal = graph.add_node(
         "paint",
         registry.get("paint").unwrap().ports.clone(),
@@ -797,20 +802,22 @@ fn charcoal() -> Brush {
 
     let wires = [
         // Pressure → size on the terminal (compiled-paint owns size).
-        (pen, "pressure", size_curve, "input"),
-        (size_curve, "output", terminal, "size_input"),
+        // No intermediate curve — identity transfer; the user can
+        // insert a curve in the brush editor if they want a custom
+        // response.
+        (pen, "pressure", terminal, "size_input"),
         // Pressure → soft threshold.
         (pen, "pressure", threshold, "input"),
         // Paper sample → split → luminance, multiplied by threshold.
         (paper, "color", split, "color"),
         (split, "luminance", paper_threshold, "a"),
         (threshold, "output", paper_threshold, "b"),
-        // (paper × threshold) × disc coverage → stamp.tip.
+        // (paper × threshold) × circle.mask → stamp.tip.
         (paper_threshold, "result", tip_combined, "a"),
         (shape, "mask", tip_combined, "b"),
         (tip_combined, "result", stamp, "tip"),
-        // Pressure → flow (per-stamp deposit cap).
-        (pen, "pressure", stamp, "flow"),
+        // Per-dab random seed → noisy silhouette varies per stamp.
+        (rand_seed, "value", shape, "seed"),
         // Per-stamp colour.
         (paint_color, "color", stamp, "color"),
         // Stamp → terminal.
