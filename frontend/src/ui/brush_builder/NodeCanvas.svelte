@@ -5,6 +5,7 @@
     import { isModEvent } from '../../actions/mods';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
+    import { portOffsetInGraph } from './port_layout';
 
     interface Props {
         /** Fires when the user requests "add node" from inside the canvas
@@ -39,6 +40,13 @@
         }
     });
 
+    // --- Pan / zoom ---
+
+    let containerEl: HTMLDivElement;
+    let panX = $state(0);
+    let panY = $state(0);
+    let zoom = $state(1);
+
     // --- Port offset registration ---
     // PortWidget measures its dot's offset relative to its node on mount
     // and registers it here.  Wire paths use the node's auto-layout
@@ -47,6 +55,9 @@
     export interface PortRegistration {
         register(nodeId: number, portName: string, dir: string, offset: { x: number; y: number }): void;
         unregister(nodeId: number, portName: string, dir: string): void;
+        /** Current canvas zoom — PortWidget reads this to convert its
+         *  screen-pixel measurement into graph space before registering. */
+        getZoom(): number;
     }
 
     const portOffsets = new Map<string, { x: number; y: number }>();
@@ -62,14 +73,8 @@
             portOffsets.delete(`${nodeId}:${portName}:${dir}`);
             portVersion++;
         },
+        getZoom: () => zoom,
     });
-
-    // --- Pan / zoom ---
-
-    let containerEl: HTMLDivElement;
-    let panX = $state(0);
-    let panY = $state(0);
-    let zoom = $state(1);
 
     // --- Interaction state ---
 
@@ -113,12 +118,11 @@
             ) as HTMLElement | null;
             const nodeEl = dotEl?.closest('[data-node-id]') as HTMLElement | null;
             if (dotEl && nodeEl) {
-                const dotRect = dotEl.getBoundingClientRect();
-                const nodeRect = nodeEl.getBoundingClientRect();
-                offset = {
-                    x: (dotRect.left + dotRect.width / 2) - nodeRect.left,
-                    y: (dotRect.top + dotRect.height / 2) - nodeRect.top,
-                };
+                offset = portOffsetInGraph(
+                    dotEl.getBoundingClientRect(),
+                    nodeEl.getBoundingClientRect(),
+                    zoom,
+                );
                 portOffsets.set(key, offset);
             }
         }

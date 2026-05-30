@@ -3,6 +3,7 @@
     import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import type { PortRegistration } from './NodeCanvas.svelte';
+    import { portOffsetInGraph } from './port_layout';
 
     interface Props {
         nodeId: number;
@@ -32,19 +33,21 @@
     );
 
     // --- Port offset registration ---
-    const { register, unregister } = getContext<PortRegistration>('port-registration');
+    const { register, unregister, getZoom } = getContext<PortRegistration>('port-registration');
     let dotEl = $state<HTMLDivElement>();
 
     onMount(() => {
         // Measure offset of dot center relative to the ancestor node-widget.
+        // getBoundingClientRect returns screen pixels; the node-layer is
+        // scaled by zoom, so divide to land in graph space (the coordinate
+        // system wire paths render in).
         const nodeEl = dotEl.closest('[data-node-id]') as HTMLElement;
         if (!nodeEl) return;
-        const dotRect = dotEl.getBoundingClientRect();
-        const nodeRect = nodeEl.getBoundingClientRect();
-        register(nodeId, port.name, port.dir, {
-            x: (dotRect.left + dotRect.width / 2) - nodeRect.left,
-            y: (dotRect.top + dotRect.height / 2) - nodeRect.top,
-        });
+        register(nodeId, port.name, port.dir, portOffsetInGraph(
+            dotEl.getBoundingClientRect(),
+            nodeEl.getBoundingClientRect(),
+            getZoom(),
+        ));
     });
 
     onDestroy(() => {
