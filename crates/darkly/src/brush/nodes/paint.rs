@@ -79,6 +79,13 @@ struct PerBrushPipeline {
     dabs_bind_group: wgpu::BindGroup,
     /// Total size of the uniform block (intrinsic + node fields), in bytes.
     uniform_size: usize,
+    /// `@group(3)` graph-texture bind group, present when the brush
+    /// graph contains `image`-style nodes. Built once at pipeline
+    /// build from the engine's
+    /// [`crate::gpu::texture_registry::TextureRegistry`]; reused for
+    /// every dab. `None` when the brush requests no graph textures
+    /// (the pipeline layout also omits group 3 in that case).
+    graph_textures_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl PerBrushPipeline {
@@ -109,13 +116,43 @@ impl PerBrushPipeline {
                 }],
             });
 
-        let layout = ctx
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("paint-layout"),
-                bind_group_layouts: &[ctx.uniform_bgl, &dabs_bgl, ctx.selection_bgl],
-                immediate_size: 0,
-            });
+        // Optional `@group(3)` graph-texture bind group. Present only
+        // when the brush graph requested at least one `image`-style
+        // texture. Paint has no terminal bindings of its own, so the
+        // graph-textures layout sits at slot 3 directly — WebGPU's
+        // default `max_bind_groups = 4` rules out anything higher.
+        // The compile walk rejects graphs that combine an `image`
+        // node with a terminal that also claims @group(3) (e.g.
+        // watercolor's pickup atlas).
+        let graph_layout = if compiled.graph_texture_names.is_empty() {
+            None
+        } else {
+            Some(
+                ctx.texture_registry
+                    .layout_for_count(ctx.device, compiled.graph_texture_names.len()),
+            )
+        };
+        let layout = match &graph_layout {
+            None => ctx
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("paint-layout"),
+                    bind_group_layouts: &[ctx.uniform_bgl, &dabs_bgl, ctx.selection_bgl],
+                    immediate_size: 0,
+                }),
+            Some(gl) => ctx
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("paint-layout-with-graph-textures"),
+                    bind_group_layouts: &[
+                        ctx.uniform_bgl,
+                        &dabs_bgl,
+                        ctx.selection_bgl,
+                        gl.as_ref(),
+                    ],
+                    immediate_size: 0,
+                }),
+        };
 
         // Premultiplied source-over: scratch accumulates coverage. See
         // the `paint_pipeline` field doc above for why there's no erase
@@ -209,6 +246,21 @@ impl PerBrushPipeline {
         // `dabs_buffer_size` above.
         let _ = dab_record_size;
 
+        // Resolve the brush's named graph textures against the
+        // engine registry and build the `@group(3)` bind group.
+        // Missing names fall back to the registry's `_fallback`
+        // texture so the pipeline always builds — surfaces a
+        // `log::warn` instead of crashing while the user types in
+        // the node editor.
+        let graph_textures_bind_group = if compiled.graph_texture_names.is_empty() {
+            None
+        } else {
+            let (_layout, bg) = ctx
+                .texture_registry
+                .make_bind_group(ctx.device, &compiled.graph_texture_names);
+            Some(bg)
+        };
+
         Self {
             paint_pipeline,
             uniform_ring,
@@ -216,6 +268,7 @@ impl PerBrushPipeline {
             dabs_buffer,
             dabs_bind_group,
             uniform_size,
+            graph_textures_bind_group,
         }
     }
 }
@@ -556,6 +609,12 @@ impl BrushNodeEvaluator for PaintEvaluator {
             pass.set_bind_group(0, &per_brush.uniform_bind_group, &[uniform_offset]);
             pass.set_bind_group(1, &per_brush.dabs_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
+            // `@group(3)` holds the brush's graph textures (paper
+            // grain etc.) when any are requested. Paint never uses
+            // group 3 for anything else.
+            if let Some(graph_bg) = per_brush.graph_textures_bind_group.as_ref() {
+                pass.set_bind_group(3, graph_bg, &[]);
+            }
             pass.draw(0..6, 0..total_dabs);
         });
 
@@ -655,6 +714,7 @@ fn ensure_per_brush_pipeline(
         canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
+        texture_registry: gpu.pipelines.texture_registry(),
     };
     pipe.ensure_pipeline(&ctx, compiled);
 }

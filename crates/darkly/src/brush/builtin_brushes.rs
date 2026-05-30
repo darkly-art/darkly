@@ -20,6 +20,7 @@ pub fn all() -> Vec<Brush> {
         smudge_brush(),
         liquify_push(),
         rough_ink(),
+        charcoal(),
     ]
 }
 
@@ -115,7 +116,7 @@ fn paint_brush(
 
     let mut metadata = BrushMetadata::from_graph(name, graph);
     metadata.category = "basic".to_string();
-    Brush::without_resources(metadata)
+    Brush::from_metadata(metadata)
 }
 
 /// Wire `pen.pressure → curve → terminal.size_input` with the given
@@ -341,7 +342,7 @@ fn watercolor_brush(
 
     let mut metadata = BrushMetadata::from_graph(name, graph);
     metadata.category = "wet_media".to_string();
-    Brush::without_resources(metadata)
+    Brush::from_metadata(metadata)
 }
 
 /// Smooth watercolor: sine-harmonic dab with gentle bumps for an organic
@@ -501,7 +502,7 @@ fn smudge_brush() -> Brush {
 
     let mut metadata = BrushMetadata::from_graph("Smudge", graph);
     metadata.category = "effects".to_string();
-    Brush::without_resources(metadata)
+    Brush::from_metadata(metadata)
 }
 
 /// Liquify warp brush. Pushes pixels along pen motion with a radial
@@ -576,7 +577,7 @@ fn liquify_push() -> Brush {
 
     let mut metadata = BrushMetadata::from_graph("Liquify", graph);
     metadata.category = "effects".to_string();
-    Brush::without_resources(metadata)
+    Brush::from_metadata(metadata)
 }
 
 /// Rough Ink — the first 100%-compiled brush.
@@ -702,7 +703,141 @@ fn rough_ink() -> Brush {
 
     let mut metadata = BrushMetadata::from_graph("Rough Ink", graph);
     metadata.category = "basic".to_string();
-    Brush::without_resources(metadata)
+    Brush::from_metadata(metadata)
+}
+
+/// Charcoal — first `dry_media` brush. Wires a registry-owned paper
+/// texture into the stamp coverage so the stroke darkens with pressure:
+/// `levels(pressure)` softly thresholds the paper grain, so low
+/// pressure only registers on the high points (sparse marks), and
+/// higher pressure fills into the valleys (denser, darker marks). The
+/// texture is canvas-anchored — overlapping strokes share one
+/// coherent sheet of paper.
+fn charcoal() -> Brush {
+    let registry = crate::brush::registry();
+    let mut graph = Graph::<BrushWireType>::new();
+
+    let pen = graph.add_node(
+        "pen_input",
+        registry.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        registry.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    // Identity-default pressure-to-size curve, like Round — gives a
+    // tunable response without baking in a specific shape.
+    let size_curve = graph.add_node(
+        "curve",
+        registry.get("curve").unwrap().ports.clone(),
+        vec![ParamValue::Curve(vec![[0.0, 0.0], [1.0, 1.0]])],
+    );
+    // Levels acts as a soft pressure threshold against the paper.
+    // The 0.1 / 0.9 window means very light pressure produces zero
+    // ink (paper > pressure threshold everywhere), heavy pressure
+    // saturates (paper < threshold everywhere), and the middle is a
+    // smooth ramp where the paper grain becomes visible.
+    let threshold = graph.add_node(
+        "levels",
+        registry.get("levels").unwrap().ports.clone(),
+        vec![ParamValue::Float(0.1), ParamValue::Float(0.9)],
+    );
+    let paper = graph.add_node(
+        "image",
+        registry.get("image").unwrap().ports.clone(),
+        vec![
+            ParamValue::String("paper-charcoal".into()),
+            ParamValue::Float(512.0),
+        ],
+    );
+    let split = graph.add_node(
+        "split_color",
+        registry.get("split_color").unwrap().ports.clone(),
+        vec![],
+    );
+    // The disc that gives the stamp its overall footprint. Drives
+    // stamp.tip as a Texture wire (procedural coverage). The paper
+    // grain + pressure modulation rides through stamp.flow as a
+    // Scalar — stamp's formula `color.a × mask × flow` multiplies
+    // them together either way, so packing the per-fragment scalar
+    // modulators into flow keeps every wire type-correct.
+    let shape = graph.add_node(
+        "circle",
+        registry.get("circle").unwrap().ports.clone(),
+        vec![ParamValue::Int(0)], // Sine harmonic, amp=0 → plain disc
+    );
+    // A small softness so the stroke edges feather rather than
+    // producing a hard mathematical disc edge.
+    graph.set_port_default(shape, "softness", 0.3).unwrap();
+    // paper.luminance × threshold(pressure): the paper grain gated
+    // by the per-stamp pressure threshold.
+    let paper_threshold = graph.add_node(
+        "multiply",
+        registry.get("multiply").unwrap().ports.clone(),
+        vec![],
+    );
+    // × pressure: light strokes still get pressure-faded coverage
+    // even where the threshold is fully open, matching real
+    // charcoal darkening monotonically with applied force.
+    let flow_combined = graph.add_node(
+        "multiply",
+        registry.get("multiply").unwrap().ports.clone(),
+        vec![],
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        registry.get("stamp").unwrap().ports.clone(),
+        vec![],
+    );
+    graph.set_port_exposed(stamp, "size", false).unwrap();
+    let terminal = graph.add_node(
+        "paint",
+        registry.get("paint").unwrap().ports.clone(),
+        vec![],
+    );
+
+    let wires = [
+        // Pressure → size on the terminal (compiled-paint owns size).
+        (pen, "pressure", size_curve, "input"),
+        (size_curve, "output", terminal, "size_input"),
+        // Pressure → soft threshold.
+        (pen, "pressure", threshold, "input"),
+        // Paper sample → split → luminance, multiplied by threshold.
+        (paper, "color", split, "color"),
+        (split, "luminance", paper_threshold, "a"),
+        (threshold, "output", paper_threshold, "b"),
+        // (paper × threshold) × pressure → stamp.flow.
+        (paper_threshold, "result", flow_combined, "a"),
+        (pen, "pressure", flow_combined, "b"),
+        (flow_combined, "result", stamp, "flow"),
+        // Disc coverage → stamp.tip (Texture wire).
+        (shape, "texture", stamp, "tip"),
+        // Per-stamp colour.
+        (paint_color, "color", stamp, "color"),
+        // Stamp → terminal.
+        (stamp, "dab", terminal, "rgba"),
+        (pen, "position", terminal, "position"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+
+    let mut metadata = BrushMetadata::from_graph("Charcoal", graph);
+    metadata.category = "dry_media".to_string();
+    Brush::from_metadata(metadata)
 }
 
 // ---------------------------------------------------------------------------
@@ -722,6 +857,43 @@ mod tests {
                 "brush '{}' failed to compile: {:?}",
                 brush.metadata.name,
                 result.err(),
+            );
+        }
+    }
+
+    /// Charcoal exercises the `image` node, which requests an
+    /// `@group(3)` graph-texture binding for the paper grain. The
+    /// compiled stroke shader must declare the shared sampler and
+    /// the one texture in `graph_texture_names`; preview-mode WGSL
+    /// gets the same declarations so cursor thumbnails sample the
+    /// same registry-owned texture.
+    #[test]
+    fn charcoal_emits_group_three_graph_texture_bindings() {
+        let runner = crate::brush::compile_graph(&charcoal().metadata.graph)
+            .expect("charcoal must compile to WGSL");
+        let compiled = runner
+            .compiled_brush()
+            .expect("compile_graph should populate CompiledBrush for charcoal");
+        assert_eq!(
+            compiled.graph_texture_names,
+            vec!["paper-charcoal".to_string()],
+            "charcoal should request exactly one graph texture",
+        );
+        for (label, wgsl) in [
+            ("stroke", &compiled.stroke_wgsl),
+            ("preview", &compiled.preview_wgsl),
+        ] {
+            assert!(
+                wgsl.contains("@group(3) @binding(0) var graph_smp:"),
+                "{label} WGSL missing @group(3) sampler binding",
+            );
+            assert!(
+                wgsl.contains("@group(3) @binding(1) var graph_tex_0:"),
+                "{label} WGSL missing @group(3) texture binding at slot 0",
+            );
+            assert!(
+                wgsl.contains("textureSample(graph_tex_0, graph_smp"),
+                "{label} WGSL missing textureSample of graph_tex_0",
             );
         }
     }

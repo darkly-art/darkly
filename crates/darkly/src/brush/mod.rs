@@ -1,6 +1,5 @@
 //! Node-graph composable brush engine.
 
-pub mod brush_tip;
 pub mod builtin_brushes;
 pub mod bundle;
 pub mod checkpoint_ring;

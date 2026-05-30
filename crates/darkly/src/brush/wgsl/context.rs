@@ -8,6 +8,7 @@
 //! expression vs. a literalized default). [`ShaderMode`] tags which of
 //! the two assembled shader variants the compiler is producing.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use crate::brush::wgsl::type_system::{DabField, UniformField};
@@ -126,6 +127,14 @@ pub struct CompileWgslCtx<'a> {
     /// record (pen_input, random) only need to emit fields for
     /// consumed ports — unwired outputs cost nothing.
     pub consumed_outputs: HashSet<String>,
+    /// Shared accumulator of named graph textures requested by
+    /// `image`-style nodes. Mutated through
+    /// [`Self::request_texture`]; the compiler reads the final
+    /// list out after walking every node and copies it onto
+    /// [`crate::brush::wgsl::CompiledBrush::graph_texture_names`].
+    /// `RefCell` so `compile_wgsl(&self)` can append without forcing
+    /// a `&mut CompileWgslCtx` rewrite across every existing node.
+    pub graph_textures: &'a RefCell<Vec<String>>,
 }
 
 impl CompileWgslCtx<'_> {
@@ -167,6 +176,26 @@ impl CompileWgslCtx<'_> {
     /// Suffix a uniform field name with this node's id.
     pub fn uniform_field_name(&self, base: &str) -> String {
         format!("n{}_{}", self.node_id.0, base)
+    }
+
+    /// Reserve (or look up) a `@group(4)` binding slot for the named
+    /// graph texture. Returns the slot index — `0` for the first
+    /// distinct texture in the graph, `1` for the second, and so on.
+    /// Re-requesting the same name returns the existing slot.
+    ///
+    /// Use the returned index to reference the texture in emitted
+    /// WGSL as `graph_tex_{slot}` (the shared sampler is always
+    /// `graph_smp`). The compiler resolves the textures against
+    /// [`crate::gpu::texture_registry::TextureRegistry`] at
+    /// per-brush pipeline-build time.
+    pub fn request_texture(&self, name: &str) -> u32 {
+        let mut list = self.graph_textures.borrow_mut();
+        if let Some(idx) = list.iter().position(|n| n == name) {
+            return idx as u32;
+        }
+        let idx = list.len() as u32;
+        list.push(name.to_string());
+        idx
     }
 }
 

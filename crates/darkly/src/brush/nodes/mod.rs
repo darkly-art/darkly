@@ -6,7 +6,9 @@ pub mod add;
 pub mod circle;
 pub mod clamp;
 pub mod curve;
+pub mod image;
 pub mod jitter;
+pub mod levels;
 pub mod liquify;
 pub mod make_color;
 pub mod mix;
@@ -18,6 +20,7 @@ pub mod random;
 pub mod remap;
 pub mod scatter;
 pub mod smudge;
+pub mod split_color;
 pub mod split_vec2;
 pub mod stamp;
 pub mod watercolor;
@@ -31,7 +34,9 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         circle::register(),
         clamp::register(),
         curve::register(),
+        image::register(),
         jitter::register(),
+        levels::register(),
         liquify::register(),
         make_color::register(),
         mix::register(),
@@ -43,6 +48,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         remap::register(),
         scatter::register(),
         smudge::register(),
+        split_color::register(),
         split_vec2::register(),
         stamp::register(),
         watercolor::register(),
