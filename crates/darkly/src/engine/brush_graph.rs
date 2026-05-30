@@ -226,7 +226,8 @@ impl DarklyEngine {
                 Ok(r) => r,
                 Err(_) => {
                     drop(tool);
-                    self.compositor.clear_overlay_preview_mask();
+                    self.compositor.tool_overlay_mut().clear_preview_mask();
+                    self.compositor.mark_needs_present();
                     self.brush_preview_info = None;
                     return;
                 }
@@ -301,10 +302,13 @@ impl DarklyEngine {
         self.gpu.queue.submit([command_buf]);
 
         if info.is_some() {
-            self.compositor.use_overlay_preview_mask();
+            self.compositor
+                .tool_overlay_mut()
+                .use_preview_mask_as_mask();
         } else {
-            self.compositor.clear_overlay_preview_mask();
+            self.compositor.tool_overlay_mut().clear_preview_mask();
         }
+        self.compositor.mark_needs_present();
         self.brush_preview_info = info;
     }
 

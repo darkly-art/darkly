@@ -18,7 +18,9 @@
 //! frame is supplied — which only the browser bridge can do.
 
 use crate::gpu::effect::{EffectCache, EffectPipeline};
-use crate::gpu::void::{ExternalImageSource, ParamDef, ParamValue, Void, VoidRegistration};
+use crate::gpu::void::{
+    DirtyFlag, ExternalImageSource, ParamDef, ParamValue, Void, VoidRegistration,
+};
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -124,7 +126,7 @@ struct CameraUniforms {
     _pad1: f32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Camera {
     scale: f32,
     rotation_deg: f32,
@@ -149,6 +151,31 @@ pub struct Camera {
     canvas_w: Cell<u32>,
     canvas_h: Cell<u32>,
     shared: Arc<EffectPipeline>,
+    dirty: DirtyFlag,
+}
+
+impl Clone for Camera {
+    fn clone(&self) -> Self {
+        // `clone_boxed` is called for undo / clone_subtree. The clone gets a
+        // fresh `EffectCache` from `ensure_void_layer` with the 1×1
+        // placeholder aux texture, so start dirty.
+        Camera {
+            scale: self.scale,
+            rotation_deg: self.rotation_deg,
+            pan_x: self.pan_x,
+            pan_y: self.pan_y,
+            mirror_h: self.mirror_h,
+            mirror_v: self.mirror_v,
+            freeze: self.freeze,
+            frame_divisor: self.frame_divisor,
+            webcam_w: self.webcam_w,
+            webcam_h: self.webcam_h,
+            canvas_w: Cell::new(self.canvas_w.get()),
+            canvas_h: Cell::new(self.canvas_h.get()),
+            shared: self.shared.clone(),
+            dirty: DirtyFlag::new_dirty(),
+        }
+    }
 }
 
 impl Camera {
@@ -199,6 +226,7 @@ impl Camera {
             canvas_w: Cell::new(1),
             canvas_h: Cell::new(1),
             shared,
+            dirty: DirtyFlag::new_dirty(),
         }
     }
 
@@ -339,6 +367,14 @@ impl Void for Camera {
         ]
     }
 
+    fn take_dirty(&mut self) -> bool {
+        self.dirty.take()
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty.mark();
+    }
+
     fn needs_animation(&self) -> bool {
         // The camera doesn't accumulate time on its own, but the compositor
         // uses `needs_animation()` as the "keep the rAF loop alive" signal.
@@ -393,6 +429,7 @@ impl Void for Camera {
         if let Some(buf) = cache.uniform_bufs.first() {
             queue.write_buffer(buf, 0, bytemuck::bytes_of(&self.uniforms()));
         }
+        self.dirty.mark();
     }
 
     fn wants_external_input(&self) -> bool {
@@ -455,6 +492,7 @@ impl Void for Camera {
             0,
             bytemuck::bytes_of(&self.uniforms()),
         );
+        self.dirty.mark();
     }
 
     fn upload_external_image(
@@ -509,6 +547,7 @@ impl Void for Camera {
                     depth_or_array_layers: 1,
                 },
             );
+            self.dirty.mark();
         }
 
         #[cfg(not(target_arch = "wasm32"))]

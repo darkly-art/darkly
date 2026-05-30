@@ -687,7 +687,7 @@ impl DarklyEngine {
             self.compositor
                 .ensure_layer(&self.gpu.device, &self.gpu.queue, layer);
             let blend = layer.blend();
-            self.compositor.update_layer_uniforms_full(
+            self.compositor.update_layer_uniforms(
                 &self.gpu.queue,
                 layer.id(),
                 blend.opacity,

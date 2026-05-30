@@ -61,13 +61,18 @@ impl DarklyEngine {
         let id =
             self.doc
                 .add_void_layer(void_type.to_string(), display_label, params.clone(), anchor);
-        self.compositor.ensure_void_layer(
-            &self.gpu.device,
-            &self.gpu.queue,
-            id,
+        // Build the trait object here (engine), then hand it to the
+        // compositor — the compositor stops caring about `(type_id,
+        // params)` as a pair, owning only the constructed `Box<dyn Void>`.
+        let format = self.compositor.canvas_content_format();
+        let void = self.compositor.void_registry_mut().create_void(
             void_type,
             &params,
+            &self.gpu.device,
+            format,
         );
+        self.compositor
+            .ensure_void_layer(&self.gpu.device, &self.gpu.queue, id, void);
         self.compositor.mark_dirty();
 
         let parent = self.doc.parent_of(id);
@@ -88,20 +93,15 @@ impl DarklyEngine {
         if !self.doc.is_node_editable(layer_id) {
             return;
         }
-        let (old_params, void_type) = match self.doc.find_node(layer_id) {
-            Some(LayerNode::Layer(Layer::Void(v))) => (v.params.clone(), v.void_type.clone()),
+        let old_params = match self.doc.find_node(layer_id) {
+            Some(LayerNode::Layer(Layer::Void(v))) => v.params.clone(),
             _ => return,
         };
         if let Some(LayerNode::Layer(Layer::Void(v))) = self.doc.find_node_mut(layer_id) {
             v.params = new_params.clone();
         }
-        self.compositor.update_void_layer_params(
-            &self.gpu.device,
-            &self.gpu.queue,
-            layer_id,
-            &void_type,
-            &new_params,
-        );
+        self.compositor
+            .update_void_layer_params(&self.gpu.queue, layer_id, &new_params);
         self.compositor.mark_dirty();
 
         self.coalesce_property_undo(PropertyAction::new(
@@ -488,7 +488,7 @@ impl DarklyEngine {
                 let opacity = blend.opacity;
                 let blend_mode_gpu = blend.blend_mode.gpu_value;
                 let isolated = self.host_renders_isolated(layer_id);
-                self.compositor.update_layer_uniforms_full(
+                self.compositor.update_layer_uniforms(
                     &self.gpu.queue,
                     layer_id,
                     opacity,

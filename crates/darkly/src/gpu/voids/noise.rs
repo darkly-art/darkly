@@ -12,7 +12,7 @@
 use crate::gpu::effect::{
     create_blit_bind_group, create_blit_pipeline, EffectCache, EffectPipeline,
 };
-use crate::gpu::void::{ParamDef, ParamValue, Void, VoidRegistration};
+use crate::gpu::void::{DirtyFlag, ParamDef, ParamValue, Void, VoidRegistration};
 use std::sync::Arc;
 
 /// Procedural-render downscale factor. The FBM shader runs into an aux
@@ -128,7 +128,7 @@ struct NoiseUniforms {
 /// time is not clobbered when a slider moves.
 const USER_PARAMS_BYTES: usize = 24;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Noise {
     pub seed: i32,
     pub octaves: i32,
@@ -142,6 +142,25 @@ pub struct Noise {
     /// without changing the seed.
     pub time: f32,
     shared: Arc<EffectPipeline>,
+    dirty: DirtyFlag,
+}
+
+impl Clone for Noise {
+    fn clone(&self) -> Self {
+        // Clones come up via `clone_boxed` (used by undo / clone_subtree).
+        // The clone owns a fresh `EffectCache` from `ensure_void_layer`, so
+        // start dirty to force a first encode.
+        Noise {
+            seed: self.seed,
+            octaves: self.octaves,
+            size: self.size,
+            warp: self.warp,
+            darkness: self.darkness,
+            time: self.time,
+            shared: self.shared.clone(),
+            dirty: DirtyFlag::new_dirty(),
+        }
+    }
 }
 
 impl Noise {
@@ -178,6 +197,7 @@ impl Noise {
             darkness,
             time,
             shared,
+            dirty: DirtyFlag::new_dirty(),
         }
     }
 
@@ -215,6 +235,14 @@ impl Void for Noise {
         ]
     }
 
+    fn take_dirty(&mut self) -> bool {
+        self.dirty.take()
+    }
+
+    fn mark_dirty(&mut self) {
+        self.dirty.mark();
+    }
+
     fn update_params(&mut self, queue: &wgpu::Queue, cache: &EffectCache, params: &[ParamValue]) {
         self.seed = match params.first() {
             Some(ParamValue::Int(v)) => *v,
@@ -246,6 +274,7 @@ impl Void for Noise {
             let bytes = &bytemuck::bytes_of(&scratch)[..USER_PARAMS_BYTES];
             queue.write_buffer(buf, 0, bytes);
         }
+        self.dirty.mark();
     }
 
     fn create_cache(

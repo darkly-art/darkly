@@ -146,6 +146,9 @@ impl ReadbackRequest {
     /// On WebGPU/WASM this deadlocks: `recv()` spin-waits (Rust's thread
     /// parker is a no-op on wasm32), blocking the JS event loop, so the
     /// `map_async` Promise can never resolve. See docs/lessons-learned/gpu-lessons-learned.md §5.
+    /// Gated behind the `testing` cargo feature (or `cfg(test)`) so production
+    /// and WASM builds cannot link against it.
+    #[cfg(any(test, feature = "testing"))]
     pub fn blocking_read(&self, device: &wgpu::Device) -> Vec<u8> {
         let slice = self.buffer.slice(..);
 
