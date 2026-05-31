@@ -408,9 +408,9 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     // still bump the version. After the compiled-WGSL migration
     // `softness` lives on the upstream `circle` node (the
     // `paint` terminal has no softness port). It has no
-    // `preview_value`, is read by the preview shader, and is unwired —
-    // the perfect canary for "rule too broad". Find its node via the
-    // exposed-port listing.
+    // `preview_irrelevant_scrub` flag, is read by the preview shader,
+    // and is unwired — the perfect canary for "rule too broad". Find
+    // its node via the exposed-port listing.
     let softness = engine
         .brush_exposed_ports()
         .into_iter()
@@ -423,10 +423,10 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     assert_ne!(
         engine.brush_graph_version(),
         v_before_softness,
-        "softness has no preview_value → it affects the preview output \
-         → its scrub must bump brush_graph_version. If this assertion \
-         fails, the preview-irrelevant rule is over-broad and real \
-         preview updates would also stall."
+        "softness is not flagged preview_irrelevant_scrub → it affects \
+         the preview output → its scrub must bump brush_graph_version. \
+         If this assertion fails, the preview-irrelevant rule is \
+         over-broad and real preview updates would also stall."
     );
 }
 

@@ -188,6 +188,24 @@ pub fn compile_brush_to_wgsl(
         return Err(CompileError::NoTerminal);
     }
 
+    // Preview-time view of the graph: ports flagged with
+    // `PortDef::preview_value` have their incoming wires dropped and
+    // their `default` replaced with the preview constant. The stroke
+    // pass walks the original graph; the preview pass reuses every
+    // upstream node body but rebuilds the terminal step's
+    // `CompileWgslCtx` against this clone so the emitted preview body
+    // literalizes the preview defaults regardless of what the live
+    // user-facing scrubs are set to. Encoding the override inside the
+    // compiler (rather than at every caller) means the active-brush
+    // compile and `regenerate_brush_preview_with_pen_internal` — which
+    // intentionally do not pre-mutate the user's graph — still emit a
+    // correct preview shader.
+    let preview_graph = {
+        let mut g = graph.clone();
+        g.apply_preview_overrides();
+        g
+    };
+
     let mut decls = String::new();
     // Non-terminal node bodies — shared between the stroke and preview
     // skeletons (they're upstream of the terminal and don't depend on
@@ -284,6 +302,33 @@ pub fn compile_brush_to_wgsl(
             .map(|pr| pr.port.clone())
             .collect();
 
+        // For terminal steps, build the preview-mode cctx alongside the
+        // stroke-mode one so `compile_preview_body` sees the overridden
+        // port defaults. Non-terminals never have `compile_preview_body`
+        // called, so we skip the extra work.
+        let preview_cctx_parts = if step.is_terminal {
+            let preview_node = preview_graph
+                .nodes
+                .get(&step.node_id)
+                .expect("preview-graph clone has the same node set as the original");
+            // Drop wired bindings the override removed — those ports
+            // must fall through to the preview-overridden defaults in
+            // the cloned graph.
+            let preview_inputs: HashMap<String, InputBinding> = inputs
+                .iter()
+                .filter(|(port_name, _)| {
+                    preview_graph
+                        .connections
+                        .iter()
+                        .any(|c| c.to.node == step.node_id && &c.to.port == *port_name)
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            Some((preview_node, preview_inputs, consumed_outputs.clone()))
+        } else {
+            None
+        };
+
         let cctx = CompileWgslCtx {
             node_id: step.node_id,
             params: &node.params,
@@ -329,18 +374,36 @@ pub fn compile_brush_to_wgsl(
             // source); watercolor/smudge/liquify override to emit a
             // neutral-color body that doesn't reference `@group(3)`.
             //
+            // The preview cctx wraps the cloned graph (preview overrides
+            // applied) so any `cctx.input(name).as_f32()` for a flagged
+            // port literalizes the preview constant — regardless of
+            // whether the caller pre-applied the override on the graph
+            // they handed in.
+            //
             // Only the `body` field is consumed here — decls / dab_fields
             // / uniform_fields / outputs / terminal_bindings are already
             // accumulated from the stroke pass and shared across modes
             // (helper functions a preview body references — e.g. liquify's
             // `falloff_fn` — live in `decls` and are visible to both
             // skeletons).
-            let preview_result = evaluator.compile_preview_body(&cctx).map_err(|reason| {
-                CompileError::NodeNotCompilable {
-                    type_id: step.type_id.clone(),
-                    reason,
-                }
-            })?;
+            let (preview_node, preview_inputs, preview_consumed) =
+                preview_cctx_parts.expect("preview_cctx_parts built above for every terminal step");
+            let preview_cctx = CompileWgslCtx {
+                node_id: step.node_id,
+                params: &preview_node.params,
+                port_defs: &preview_node.ports,
+                inputs: preview_inputs,
+                lut: lut.as_ref(),
+                consumed_outputs: preview_consumed,
+                graph_textures: &graph_textures_cell,
+            };
+            let preview_result =
+                evaluator
+                    .compile_preview_body(&preview_cctx)
+                    .map_err(|reason| CompileError::NodeNotCompilable {
+                        type_id: step.type_id.clone(),
+                        reason,
+                    })?;
             if !preview_result.body.is_empty() {
                 preview_terminal_body.push_str(&preview_result.body);
                 if !preview_result.body.ends_with('\n') {

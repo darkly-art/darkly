@@ -34,11 +34,11 @@ enum ChangeKind {
     /// scrubs via `reset_exposed_scrubs`, so its cache stays valid.
     ScrubOnly,
     /// Exposed-port scrub on a port the editor preview pipeline
-    /// ignores — declared via `PortDef::preview_value`, applied by
-    /// `Graph::apply_preview_overrides` before the preview renders. The
-    /// rendered output cannot change, so neither cache needs to bump.
-    /// Used for `pen_input.stabilize`, `pen_input.spacing`, and
-    /// `stamp.size` (preview overrides them all to fixed values).
+    /// ignores — declared via `PortDef::preview_irrelevant_scrub`. The
+    /// synthetic-stroke preview's rendered output cannot change in
+    /// response to the scrub, so neither cache needs to bump. Current
+    /// use: `pen_input.stabilize` (the preview's stroke engine is
+    /// hard-wired to `PassThrough`).
     PreviewIrrelevantScrub,
 }
 
@@ -328,11 +328,12 @@ impl DarklyEngine {
     ///   [`crate::brush::reset_exposed_scrubs`], so a scrub change can't
     ///   change its rendered output — no point invalidating its cache.
     /// - [`ChangeKind::PreviewIrrelevantScrub`] bumps neither. The
-    ///   scrubbed port is overridden by
-    ///   [`crate::nodegraph::Graph::apply_preview_overrides`] before
-    ///   every editor-preview render, so its rendered output is
-    ///   independent of the user's port value — invalidating the cache
-    ///   would just cause a wasted full-stroke re-render.
+    ///   scrubbed port is declared
+    ///   [`crate::nodegraph::PortDef::preview_irrelevant_scrub`] — the
+    ///   synthetic-stroke editor preview ignores it (e.g. stabilize is
+    ///   neutralized by the preview's hard-wired `PassThrough`), so
+    ///   invalidating the cache would just cause a wasted full-stroke
+    ///   re-render.
     ///
     /// Returns Ok on success or an error string.
     fn compile_active(&mut self, kind: ChangeKind) -> Result<(), String> {
@@ -427,13 +428,11 @@ impl DarklyEngine {
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
 
-        // Clone the active graph and neutralize any ports flagged with
-        // `preview_max` so the rendered stroke fits the fixed render
-        // canvas regardless of the user's working brush parameters.
-        // Per-node knowledge about what to neutralize lives on the port
-        // registrations; this pipeline doesn't introspect node types.
-        let mut graph = self.active_brush_graph();
-        graph.apply_preview_overrides();
+        // Stroke previews render the user's brush exactly — no
+        // preview-value overrides applied. The editor dock exists for
+        // dialing in a brush; what the user sees here must match what
+        // they would paint on the canvas.
+        let graph = self.active_brush_graph();
         let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_preview_stroke(
             rw as f32,
@@ -915,8 +914,8 @@ impl DarklyEngine {
             }
         };
 
-        // Look up UnitType + preview_value + persist_in_thumbnail from
-        // the registration. One port lookup pays for all three flags;
+        // Look up UnitType + preview_irrelevant_scrub + persist_in_thumbnail
+        // from the registration. One port lookup pays for all three flags;
         // they determine whether this scrub affects the editor preview
         // and/or the dab thumbnail (see `ChangeKind` docs).
         let registry = crate::brush::registry();
@@ -926,7 +925,7 @@ impl DarklyEngine {
                 .find(|rp| rp.name == port_name && rp.dir == PortDir::Input)
         });
         let unit_type = port_meta.map_or(UnitType::default(), |rp| rp.unit_type);
-        let preview_irrelevant = port_meta.is_some_and(|rp| rp.preview_value.is_some());
+        let preview_irrelevant = port_meta.is_some_and(|rp| rp.preview_irrelevant_scrub);
         let thumbnail_relevant = port_meta.is_some_and(|rp| rp.persist_in_thumbnail);
 
         let port_value = unit_type.from_display(display_value);

@@ -106,10 +106,12 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     graph.set_port_default(terminal, "opacity", 1.0).unwrap();
     graph.set_port_default(terminal, "flow", 1.0).unwrap();
 
+    // No `pen.pressure → terminal.flow` wire — tests that scale alpha by
+    // flow rely on the per-test `set_port_default(terminal, "flow", …)`
+    // override, which a wire would shadow.
     let wires = [
         (pen, "pressure", curve, "input"),
         (curve, "output", terminal, "size_input"),
-        (pen, "pressure", stamp, "flow"),
         (circle, "mask", stamp, "tip"),
         (paint_color, "color", stamp, "color"),
         (stamp, "dab", terminal, "rgba"),

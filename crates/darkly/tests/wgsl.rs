@@ -199,6 +199,46 @@ fn extent_default_identity_when_no_shape() {
 }
 
 #[test]
+fn preview_wgsl_overrides_terminal_flow_default() {
+    // Regression: Charcoal sets the paint terminal's `flow` default to
+    // 0.5 (no wire on `flow`), and `paint.flow` carries
+    // `with_preview_value(1.0)`. Before the compiler internalised
+    // `apply_preview_overrides`, the preview shader literalised the
+    // user-set 0.5 — so the cursor-following dab preview rendered at
+    // half brightness. The fix clones the graph inside
+    // `compile_brush_to_wgsl`, applies the override on the clone, and
+    // emits the terminal's preview body against it. The stroke shader
+    // must still see the user-set 0.5 (real strokes honour the
+    // configured flow); only the preview WGSL should literalise 1.0.
+    let charcoal = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Charcoal")
+        .expect("Charcoal brush registered");
+    let reg = registry();
+    let plan = compile(&charcoal.metadata.graph, reg.as_map()).unwrap();
+    let compiled =
+        compile_brush_to_wgsl(&charcoal.metadata.graph, &plan, &evals()).expect("compiles");
+    assert!(
+        compiled.stroke_wgsl.contains("clamp(0.500000"),
+        "stroke shader must still see the user-set flow default (0.5); \
+         emitted stroke_wgsl: {}",
+        compiled.stroke_wgsl,
+    );
+    assert!(
+        compiled.preview_wgsl.contains("clamp(1.000000"),
+        "preview shader must literalise the preview_value override (1.0); \
+         emitted preview_wgsl: {}",
+        compiled.preview_wgsl,
+    );
+    assert!(
+        !compiled.preview_wgsl.contains("clamp(0.500000"),
+        "preview shader must not carry the user-set flow default (0.5); \
+         emitted preview_wgsl: {}",
+        compiled.preview_wgsl,
+    );
+}
+
+#[test]
 fn paint_only_graph_falls_through_to_disc() {
     // pen_input → paint with no upstream graph: terminal's
     // `rgba` input is unwired, so the fallback "opaque white modulated

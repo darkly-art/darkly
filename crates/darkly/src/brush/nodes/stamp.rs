@@ -1,10 +1,12 @@
 //! Stamp dab node.
 //!
-//! Inlines `color × mask × flow` into the brush's WGSL via
-//! [`compile_wgsl`]. The upstream `tip` input is a scalar coverage
-//! expression (typically from `circle.texture`'s compile output); the
-//! emitted `dab` output is premultiplied RGBA that downstream paint
-//! terminals consume.
+//! Inlines `color × mask` into the brush's WGSL via [`compile_wgsl`].
+//! The upstream `tip` input is a scalar coverage expression (typically
+//! from `circle.texture`'s compile output); the emitted `dab` output is
+//! premultiplied RGBA that downstream paint terminals consume.
+//!
+//! Flow lives on the `paint` terminal — that is the single, authoritative
+//! per-stroke deposit knob.
 //!
 //! ## Ignored ports
 //!
@@ -80,14 +82,6 @@ pub fn register() -> BrushNodeRegistration {
                     .with_unit(UnitType::Percent)
                     .with_icon("fa-solid fa-arrows-left-right")
                     .with_description("Aspect ratio (ignored in compiled mode)"),
-                PortDef::input("flow", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 1.0)
-                    .with_natural_range(0.0, 1.0)
-                    .with_label("Flow")
-                    .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-droplet")
-                    .exposed()
-                    .with_description("Paint deposited per dab"),
                 PortDef::input("color", BrushWireType::Vec4).with_description("Brush color (RGBA)"),
                 PortDef::output("dab", BrushWireType::Vec4)
                     .with_description("The stamped brush mark (premultiplied RGBA)"),
@@ -111,9 +105,9 @@ impl BrushNodeEvaluator for StampEvaluator {
         vec![]
     }
 
-    /// Inline `color × mask × flow` into the brush's WGSL. `tip`
-    /// carries the upstream scalar coverage expression; the emitted
-    /// `dab` output is premultiplied RGBA.
+    /// Inline `color × mask` into the brush's WGSL. `tip` carries the
+    /// upstream scalar coverage expression; the emitted `dab` output is
+    /// premultiplied RGBA. Flow is applied later by the `paint` terminal.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         if !cctx.consumed_outputs.contains("dab") {
@@ -121,20 +115,17 @@ impl BrushNodeEvaluator for StampEvaluator {
         }
         let mask = cctx.input("tip").as_f32();
         let color = cctx.input("color").as_vec4();
-        let flow = cctx.input("flow").as_f32();
 
         let fn_name = cctx.ident("stamp");
         let decls = format!(
-            "fn {fn_name}(mask: f32, color: vec4<f32>, flow: f32) -> vec4<f32> {{\n\
-             \x20   let a = color.a * mask * flow;\n\
+            "fn {fn_name}(mask: f32, color: vec4<f32>) -> vec4<f32> {{\n\
+             \x20   let a = color.a * mask;\n\
              \x20   return vec4<f32>(color.rgb * a, a);\n\
              }}\n"
         );
         wgsl.decls = decls;
-        wgsl.outputs.insert(
-            "dab".into(),
-            format!("{}({}, {}, {})", fn_name, mask, color, flow),
-        );
+        wgsl.outputs
+            .insert("dab".into(), format!("{}({}, {})", fn_name, mask, color));
         Ok(wgsl)
     }
 }

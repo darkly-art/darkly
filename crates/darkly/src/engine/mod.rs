@@ -11,7 +11,7 @@ mod load;
 mod merge;
 mod modifiers;
 mod painting;
-mod rendering;
+pub mod rendering;
 pub mod save;
 pub mod types;
 mod undo_dispatch;
@@ -511,7 +511,7 @@ impl DarklyEngine {
             // Default theme: dark (white on dark). Frontend overrides via
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
-            preview_theme_bg: [0.08, 0.08, 0.08, 1.0],
+            preview_theme_bg: [0.0, 0.0, 0.0, 1.0],
             brush_library: {
                 let mut lib = BrushLibrary::new();
                 for brush in crate::brush::builtin_brushes::all() {
@@ -601,6 +601,45 @@ impl DarklyEngine {
     #[cfg(any(test, feature = "testing"))]
     pub fn compositor_preview_mask_size(&self) -> (u32, u32) {
         self.compositor.tool_overlay().preview_mask_size()
+    }
+
+    /// Debug helper for the dab-preview-debug binary: render the named
+    /// builtin brush's dab into the preview renderer and blocking-read the
+    /// raw pre-frame RGBA8 bytes (BRUSH_DAB_RENDER_SIZE). Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn debug_brush_dab_raw_pixels(&mut self, name: &str) -> Option<(Vec<u8>, u32, u32)> {
+        let brush = self.brush_library.get(name)?.clone();
+        let mut graph = brush.metadata.graph.clone();
+        crate::brush::reset_exposed_scrubs(&mut graph);
+        let (w, h) = brush_library::BRUSH_DAB_RENDER_SIZE;
+        let path = crate::brush::preview_renderer::synthesize_preview_dab(w as f32, h as f32);
+        let _ = self.brush_preview_renderer.render_stroke(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &self.brush_pipelines,
+            &graph,
+            &path,
+            self.preview_theme_fg,
+            self.preview_theme_bg,
+            w,
+            h,
+        )?;
+        let tex = self.brush_preview_renderer.current_texture()?;
+        let bytes = crate::gpu::test_utils::readback_texture(
+            &self.gpu.device,
+            &self.gpu.queue,
+            tex,
+            wgpu::TextureFormat::Rgba8Unorm,
+            w,
+            h,
+        );
+        Some((bytes, w, h))
+    }
+
+    /// Preview-theme bg color used by the dab/stroke framers. Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn debug_preview_theme_bg(&self) -> [f32; 4] {
+        self.preview_theme_bg
     }
 
     /// Blocking readback of the overlay's preview mask texture. Test-only.

@@ -406,7 +406,8 @@ impl DarklyEngine {
                 width,
                 height,
             } => {
-                let png_bytes = frame_dab_thumbnail(&pixels, width, height, self.preview_theme_bg);
+                let png_bytes =
+                    frame_dab_thumbnail(&pixels, width, height, self.preview_theme_bg, true);
                 if !png_bytes.is_empty() {
                     self.brush_library.set_dab_thumbnail(&name, png_bytes);
                 }
@@ -425,7 +426,7 @@ impl DarklyEngine {
                 // queued before a scrub change is still valid.
                 if topology_version == self.brush_topology_version() {
                     let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
-                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
+                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg, true);
                     if !png_bytes.is_empty() {
                         self.active_dab_preview_cache = Some(png_bytes);
                     }
@@ -893,6 +894,19 @@ fn generate_rgba_thumbnail_from_pixels(
 /// place its stamp.
 const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
 
+/// Target mean luminance the dab tile gets normalized to. Sized to
+/// roughly match what a "natural full-coverage" brush like Ink Pen
+/// produces unboosted (framed mean ~132), so attenuated brushes
+/// (Charcoal: paper texture × shape masks → ~50 unboosted) land at the
+/// same apparent brightness in the picker. Multiplier-only against bg=0
+/// — preserves true black, saturates highlights at 255. Photoshop
+/// Levels with the input white slider auto-pulled to `255 / scale`.
+const TARGET_DAB_MEAN_LUMINANCE: f32 = 130.0;
+
+/// Cap on the boost multiplier so a near-empty dab can't get an extreme
+/// scale that amplifies noise.
+const MAX_DAB_LUMINANCE_BOOST: f32 = 8.0;
+
 /// Frame a rendered dab into a centered, content-fitted PNG.
 ///
 /// Generic across every brush — no per-brush logic. The procedure:
@@ -909,7 +923,13 @@ const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
 /// re-centers it. Empty renders (degenerate brushes, or a scatter that
 /// hit fully off-canvas) fall through to a centered square of the bg,
 /// which the picker shows as a flat tile.
-fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> Vec<u8> {
+pub fn frame_dab_thumbnail(
+    pixels: &[u8],
+    width: u32,
+    height: u32,
+    bg: [f32; 4],
+    apply_luminance_clamp: bool,
+) -> Vec<u8> {
     let expected = (width * height * 4) as usize;
     if pixels.len() < expected {
         log::error!(
@@ -984,12 +1004,35 @@ fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> 
         image::imageops::crop_imm(&src, crop_x, crop_y, side, side).to_image()
     };
 
-    let resized = image::imageops::resize(
+    let mut resized = image::imageops::resize(
         &cropped,
         DAB_THUMBNAIL_OUTPUT_SIZE,
         DAB_THUMBNAIL_OUTPUT_SIZE,
         image::imageops::FilterType::Triangle,
     );
+
+    // Photoshop Levels (composite, black_in=0) on the cropped+resized tile:
+    // measure mean luminance of the dab-dominated tile, drag the input white
+    // slider leftward to `255 / scale` so the mean hits the target floor.
+    // bg is 0 in the preview path, so `scale * 0 = 0` preserves true black
+    // exactly — only the dab content lifts.
+    if found && apply_luminance_clamp {
+        let mut lum_sum = 0.0_f32;
+        for p in resized.pixels() {
+            lum_sum += 0.2126 * p.0[0] as f32
+                + 0.7152 * p.0[1] as f32
+                + 0.0722 * p.0[2] as f32;
+        }
+        let mean = lum_sum / (resized.width() * resized.height()) as f32;
+        if mean > 0.0 && mean < TARGET_DAB_MEAN_LUMINANCE {
+            let scale = (TARGET_DAB_MEAN_LUMINANCE / mean).min(MAX_DAB_LUMINANCE_BOOST);
+            for p in resized.pixels_mut() {
+                p.0[0] = (p.0[0] as f32 * scale).clamp(0.0, 255.0) as u8;
+                p.0[1] = (p.0[1] as f32 * scale).clamp(0.0, 255.0) as u8;
+                p.0[2] = (p.0[2] as f32 * scale).clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
 
     let mut out = Vec::new();
     let cursor = std::io::Cursor::new(&mut out);

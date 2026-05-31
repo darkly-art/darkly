@@ -80,19 +80,19 @@ pub fn register() -> BrushNodeRegistration {
             // Stabilization strength — input port read at stroke start,
             // not per-dab.  Exposed via the eye toggle like any other port.
             //
-            // `preview_value(0.0)` opts this port out of the editor-preview
-            // pipeline: the synthetic stroke is a pre-cooked Bezier and is
-            // rendered through `PassThrough` regardless. Marking it here
-            // makes that fact declarative — and keeps the editor preview's
-            // cache valid when the user scrubs stabilize, instead of
-            // re-rendering a full stroke for an output-irrelevant change.
+            // `preview_irrelevant_scrub` marks this port as not affecting
+            // editor-preview output: the synthetic preview stroke is a
+            // pre-cooked Bezier rendered through `PassThrough` regardless
+            // of the graph's stabilize value. Declaring it here keeps the
+            // editor preview's cache valid when the user scrubs stabilize,
+            // instead of re-rendering a full stroke for no visible effect.
             PortDef::input("stabilize", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.0)
                 .with_natural_range(0.0, 1.0)
                 .with_unit(UnitType::Percent)
                 .with_icon("fa-solid fa-wave-square")
                 .with_label("Stabilize")
-                .with_preview_value(0.0)
+                .preview_irrelevant_scrub()
                 .with_description(
                     "Stroke stabilization strength (0 = off, 100% = maximum smoothing)",
                 ),

@@ -158,13 +158,12 @@ fn wire_pressure_size_curve(
 fn round() -> Brush {
     paint_brush(
         "Round",
-        |graph, pen, _paint_color, circle, stamp, terminal| {
+        |graph, pen, _paint_color, circle, _stamp, terminal| {
             // Identity curve so pressure maps 1:1 to size by default — the user
             // can still scrub the curve node's spline in the brush editor for a
             // bespoke response.
             wire_pressure_size_curve(graph, pen, terminal, vec![[0.0, 0.0], [1.0, 1.0]]);
-            // Pressure → flow via stamp (folds into per-dab color alpha;
-            // `paint.flow` stays at its 1.0 default).
+            // Pressure → flow on the terminal (folds into per-dab alpha at commit).
             graph
                 .connect(
                     PortRef {
@@ -172,7 +171,7 @@ fn round() -> Brush {
                         port: "pressure".into(),
                     },
                     PortRef {
-                        node: stamp,
+                        node: terminal,
                         port: "flow".into(),
                     },
                 )
@@ -221,7 +220,7 @@ fn airbrush() -> Brush {
 fn ink_pen() -> Brush {
     paint_brush(
         "Ink Pen",
-        |graph, pen, _paint_color, circle, stamp, terminal| {
+        |graph, pen, _paint_color, circle, _stamp, terminal| {
             // Curve front-loads the size response — small pressure already
             // produces a recognisable mark, matching the feel of a fine-tipped
             // ink pen.
@@ -242,7 +241,7 @@ fn ink_pen() -> Brush {
                         port: "pressure".into(),
                     },
                     PortRef {
-                        node: stamp,
+                        node: terminal,
                         port: "flow".into(),
                     },
                 )
@@ -667,8 +666,8 @@ fn rough_ink() -> Brush {
         // model.
         (pen, "pressure", curve, "input"),
         (curve, "output", terminal, "size_input"),
-        // Pressure → flow on the stamp (modulates per-dab alpha).
-        (pen, "pressure", stamp, "flow"),
+        // Pressure → flow on the terminal (modulates per-dab alpha).
+        (pen, "pressure", terminal, "flow"),
         // 3 random nodes drive the perlin shape per dab.
         (rand_amp, "value", circle, "amplitude"),
         (rand_phase, "value", circle, "phase_input"),
@@ -790,15 +789,15 @@ fn charcoal() -> Brush {
         vec![],
     );
     graph.set_port_exposed(stamp, "size", false).unwrap();
-    // Flow stays at a fixed 50% by default; pressure already
-    // modulates deposit through the paper-threshold chain, so wiring
-    // pressure into flow as well would double-count it.
-    graph.set_port_default(stamp, "flow", 0.5).unwrap();
     let terminal = graph.add_node(
         "paint",
         registry.get("paint").unwrap().ports.clone(),
         vec![],
     );
+    // Flow stays at a fixed 50% by default; pressure already
+    // modulates deposit through the paper-threshold chain, so wiring
+    // pressure into flow as well would double-count it.
+    graph.set_port_default(terminal, "flow", 0.5).unwrap();
 
     let wires = [
         // Pressure → size on the terminal (compiled-paint owns size).

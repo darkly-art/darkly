@@ -184,7 +184,7 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
 
     let wires = [
         (pen, "pressure", stamp, "size_input"),
-        (pen, "pressure", stamp, "flow"),
+        (pen, "pressure", terminal, "flow"),
         (paint_color, "color", stamp, "color"),
         (circle, "mask", stamp, "tip"),
         (stamp, "dab", terminal, "rgba"),

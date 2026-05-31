@@ -156,7 +156,6 @@ These are features that are helpful or essential to digital art workflows. They'
 ### File I/O
 - [x] New document (custom canvas size + background color)
 - [x] Clipboard copy / cut / paste (PNG via browser clipboard)
-- [x] Brush export / import (binary bundle)
 - [x] Export to PNG / JPEG / WebP file
 - [x] Open image from file
 - [x] Save / Open native `.darkly` document
@@ -173,7 +172,7 @@ These are features that are helpful or essential to digital art workflows. They'
 - [x] Config schema with 8 sections, typed widgets, hotkey capture
 - [x] Krita / Photoshop / GIMP hotkey presets
 - [x] Settings modal, theme system
-- [ ] Per‑brush preset save/load UI
+- [ ] Brush save/load + editable nodes/wires (e.g. YAML) 
 
 ### Misc
 - [ ] Text tool / text layers

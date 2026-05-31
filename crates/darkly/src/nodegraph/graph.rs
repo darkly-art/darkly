@@ -125,20 +125,42 @@ pub struct PortDef<W: WireKind> {
     /// Whether this port is exposed in the brush properties panel.
     #[serde(default)]
     pub exposed: bool,
-    /// Value substituted for this port during preview rendering. When
-    /// set, the preview pipeline calls `apply_preview_overrides`, which
-    /// drops any incoming wire on this port and replaces `default`
-    /// with this constant. The user's actual port value (defaults,
-    /// scrubs, wired modulators) is excluded from the preview entirely.
+    /// Value substituted for this port in the **cursor-following dab
+    /// overlay** (the `preview_wgsl` shader). The brush WGSL compiler
+    /// clones the graph, drops incoming wires on flagged ports, and
+    /// replaces `default` with this constant — so the cursor overlay
+    /// reads as a "showcase" of the brush regardless of the user's
+    /// working scrub values.
     ///
-    /// This is how a node opts its port out of preview rendering — the
-    /// pipeline never inspects the port itself, never knows what it
-    /// means, and never branches on its value. Use it for ports whose
-    /// value is irrelevant to a brush's *identity* and would distort
-    /// the preview if surfaced (canonical example: `stamp.size`, which
-    /// is a working scaling factor, not part of how a brush looks).
+    /// Has **no effect** on stroke previews (brush editor dock, library
+    /// thumbnails, picker dab tiles): those render the user's graph
+    /// exactly. If you want a scrub of this port to skip the editor
+    /// preview re-render, use [`PortDef::preview_irrelevant_scrub`] —
+    /// that's a separate concern from cursor-overlay showcase values.
+    ///
+    /// Canonical examples: `paint.size` (0.1, so a huge brush still
+    /// fits the small cursor mask), `paint.flow` (1.0, so flow doesn't
+    /// dim the cursor preview).
     #[serde(default)]
     pub preview_value: Option<f32>,
+    /// Declares that scrubbing this port's value does **not** change
+    /// what the synthetic-stroke editor preview produces, so the
+    /// preview cache and version counter should not bump on its scrub.
+    ///
+    /// Used by ports whose value the preview *pipeline* (not the
+    /// shader) ignores. Canonical example: `pen_input.stabilize` —
+    /// the editor preview's stroke engine is hard-wired to use
+    /// `PassThrough` as the stabilizer (the path is pre-cooked), so
+    /// the live `stabilize` value never reaches it. Marking this
+    /// declaratively avoids re-rendering a full stroke every ~100 ms
+    /// while the user drags the slider for no visible effect.
+    ///
+    /// Distinct from [`PortDef::preview_value`]: that one substitutes
+    /// values into the *cursor overlay shader*; this one skips a
+    /// version bump on the *editor stroke preview*. A port can carry
+    /// either, both, or neither.
+    #[serde(default)]
+    pub preview_irrelevant_scrub: bool,
     /// Conditional visibility: the port is only shown in the UI when the
     /// value of the named param is one of the listed integer values. The
     /// param is referenced by its registration name (e.g. `"algorithm"`)
@@ -200,6 +222,7 @@ impl<W: WireKind> PortDef<W> {
             label: String::new(),
             exposed: false,
             preview_value: None,
+            preview_irrelevant_scrub: false,
             visible_when: None,
             step: 0.0,
             natural_range: None,
@@ -221,6 +244,7 @@ impl<W: WireKind> PortDef<W> {
             label: String::new(),
             exposed: false,
             preview_value: None,
+            preview_irrelevant_scrub: false,
             visible_when: None,
             step: 0.0,
             natural_range: None,
@@ -308,6 +332,15 @@ impl<W: WireKind> PortDef<W> {
     /// (size, position, time) rather than part of the brush's identity.
     pub fn with_preview_value(mut self, value: f32) -> Self {
         self.preview_value = Some(value);
+        self
+    }
+
+    /// Declare that this port's value is ignored by the synthetic-stroke
+    /// editor preview pipeline, so the editor preview's cache need not
+    /// rebuild on its scrub. See [`PortDef::preview_irrelevant_scrub`]
+    /// for the contract.
+    pub fn preview_irrelevant_scrub(mut self) -> Self {
+        self.preview_irrelevant_scrub = true;
         self
     }
 
@@ -528,18 +561,19 @@ impl<W: WireKind> Graph<W> {
     }
 
     /// Neutralize ports annotated with [`PortDef::preview_value`] so
-    /// the graph renders representably as a preview.
+    /// the graph compiles to a cursor-overlay-friendly preview shader.
     ///
-    /// For each port carrying a `preview_value`, this drops any
-    /// incoming wire on the port and replaces its `default` with the
-    /// annotated constant. The user's runtime value (whatever scrub
-    /// or modulator drove that port) is excluded from the preview.
-    /// Ports without a `preview_value` are left alone.
+    /// For each port carrying a `preview_value`, this drops any incoming
+    /// wire on the port and replaces its `default` with the annotated
+    /// constant. Ports without a `preview_value` are left alone.
     ///
-    /// This is the only place the preview pipeline mutates the graph.
-    /// Per-node knowledge — "the preview-time value of *my* port" —
-    /// lives on the port registration; the pipeline is brush-agnostic.
-    pub fn apply_preview_overrides(&mut self) {
+    /// **Internal to the WGSL compiler.** The compiler clones the input
+    /// graph and calls this on the clone before emitting the cursor-
+    /// overlay shader (`CompiledBrush::preview_wgsl`). Bake-path
+    /// renderers (editor stroke, library thumbnails, picker dab tiles)
+    /// render the user's graph as-given — they must not call this, or
+    /// the previews stop reflecting what the user would actually paint.
+    pub(crate) fn apply_preview_overrides(&mut self) {
         let mut overrides: Vec<(NodeId, String, f32)> = Vec::new();
         for node in self.nodes.values() {
             for port in &node.ports {

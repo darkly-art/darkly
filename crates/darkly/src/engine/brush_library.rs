@@ -9,11 +9,11 @@ use crate::brush::library::BrushInfo;
 pub(crate) const BRUSH_THUMBNAIL_SIZE: (u32, u32) = (320, 120);
 
 /// Render canvas for stroke previews. Sized once, statically, with
-/// enough headroom around `BRUSH_THUMBNAIL_SIZE` to fit endpoint dabs
-/// at the largest preview-time radius any port's `preview_max` allows
-/// (currently `stamp.size` ≤ 0.1 → ≤ 26 px radius). The pipeline never
-/// inspects the brush graph to size this canvas — `apply_preview_overrides`
-/// has already neutralized any port that would otherwise blow it out.
+/// enough headroom around `BRUSH_THUMBNAIL_SIZE` to fit endpoint dabs at
+/// typical brush radii. Stroke previews render the user's brush exactly
+/// — so a brush configured at the high end of `paint.size` may run off
+/// canvas. That's the right trade: the preview must match what the user
+/// would actually paint, not a constrained "showcase" view.
 pub(crate) const BRUSH_STROKE_RENDER_SIZE: (u32, u32) = (384, 192);
 
 /// Inset reserved on every edge of the stroke render canvas so endpoint
@@ -68,11 +68,12 @@ impl DarklyEngine {
         self.snapshot_brush_defaults();
 
         // Kick off the thumbnail bake. Uses theme colors (not the active
-        // fg) so the picker grid looks consistent across brushes.
+        // fg) so the picker grid looks consistent across brushes. The
+        // graph renders as-saved — no preview-value overrides — so the
+        // library thumbnail reflects what the brush will actually paint.
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
-        let mut graph = self.active_brush_graph();
-        graph.apply_preview_overrides();
+        let graph = self.active_brush_graph();
         let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_preview_stroke(
             rw as f32,
@@ -122,8 +123,7 @@ impl DarklyEngine {
         };
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
-        let mut graph = brush.metadata.graph.clone();
-        graph.apply_preview_overrides();
+        let graph = brush.metadata.graph.clone();
         let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_preview_stroke(
             rw as f32,

@@ -377,6 +377,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_unit(UnitType::Percent)
                     .with_icon("fa-solid fa-droplet")
                     .exposed()
+                    .with_preview_value(1.0)
                     .with_description("Stroke-level flow cap (folded into rgba alpha)"),
                 PortDef::input("opacity", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)
