@@ -726,23 +726,15 @@ fn charcoal() -> Brush {
         registry.get("paint_color").unwrap().ports.clone(),
         vec![],
     );
-    // Levels acts as a soft pressure threshold against the paper.
-    // The 0.1 / 0.9 window means very light pressure produces zero
-    // ink (paper > pressure threshold everywhere), heavy pressure
-    // saturates (paper < threshold everywhere), and the middle is a
-    // smooth ramp where the paper grain becomes visible.
-    let threshold = graph.add_node(
-        "levels",
-        registry.get("levels").unwrap().ports.clone(),
-        vec![ParamValue::Float(0.1), ParamValue::Float(0.9)],
-    );
+    // Procedural paper grain — value noise sampled in canvas-pixel
+    // space so multiple overlapping strokes share the same grain
+    // phase. Scale 8 px per cell gives a fine grainy texture; a
+    // fixed seed pins the pattern across reloads (the per-dab
+    // randomness comes from `rand_seed` on the shape).
     let paper = graph.add_node(
-        "image",
-        registry.get("image").unwrap().ports.clone(),
-        vec![
-            ParamValue::String("paper-charcoal".into()),
-            ParamValue::Float(512.0),
-        ],
+        "noise",
+        registry.get("noise").unwrap().ports.clone(),
+        vec![ParamValue::Float(8.0), ParamValue::Int(1)],
     );
     let split = graph.add_node(
         "split_color",
@@ -766,22 +758,41 @@ fn charcoal() -> Brush {
         registry.get("random").unwrap().ports.clone(),
         vec![ParamValue::Int(0)], // 0 = per-dab
     );
-    // paper.luminance × threshold(pressure): the paper grain gated
-    // by the per-stamp pressure threshold.
-    let paper_threshold = graph.add_node(
+    // paper.luminance × circle.mask — the paper grain shaped by
+    // the per-dab silhouette. Wiring at the upstream end of the
+    // tip chain keeps the bright pixels of the paper inside the
+    // dab outline, dark pixels suppressed in both.
+    let paper_shape = graph.add_node(
         "multiply",
         registry.get("multiply").unwrap().ports.clone(),
         vec![],
     );
-    // × circle.mask → final stamp.tip. Folding the shape mask into
-    // the same scalar product as paper×threshold keeps every
-    // per-fragment modulator in one place — stamp computes
-    // `color.a × tip × flow`, so anything multiplicative belongs in
-    // tip and `flow` stays a per-stamp deposit cap.
+    // (paper × shape) × pressure — heavier strokes saturate the
+    // grain, lighter strokes only register on the bright high
+    // points of the noise field. Folding pressure into the same
+    // scalar product as paper×shape keeps every per-fragment
+    // modulator in one place — `stamp` computes
+    // `color.a × tip × flow`, so anything multiplicative belongs
+    // in tip and `flow` stays a per-stamp deposit cap.
     let tip_combined = graph.add_node(
         "multiply",
         registry.get("multiply").unwrap().ports.clone(),
         vec![],
+    );
+    // Levels caps the combined product into the visible charcoal
+    // range: input < 0.10 clips to zero (white paper stays untouched
+    // by light pressure), input == 1.0 maps to 0.60 (charcoal is
+    // never solid black). Replaces the old caller-side flow=0.5 cap
+    // — same intent, declared in the graph where it can be edited.
+    let tone = graph.add_node(
+        "levels",
+        registry.get("levels").unwrap().ports.clone(),
+        vec![
+            ParamValue::Float(0.10), // in_low — clip darkest grain
+            ParamValue::Float(1.00), // in_high
+            ParamValue::Float(0.00), // out_low
+            ParamValue::Float(0.60), // out_high — brightness ceiling
+        ],
     );
     let stamp = graph.add_node(
         "stamp",
@@ -794,10 +805,6 @@ fn charcoal() -> Brush {
         registry.get("paint").unwrap().ports.clone(),
         vec![],
     );
-    // Flow stays at a fixed 50% by default; pressure already
-    // modulates deposit through the paper-threshold chain, so wiring
-    // pressure into flow as well would double-count it.
-    graph.set_port_default(terminal, "flow", 0.5).unwrap();
 
     let wires = [
         // Pressure → size on the terminal (compiled-paint owns size).
@@ -805,16 +812,17 @@ fn charcoal() -> Brush {
         // insert a curve in the brush editor if they want a custom
         // response.
         (pen, "pressure", terminal, "size_input"),
-        // Pressure → soft threshold.
-        (pen, "pressure", threshold, "input"),
-        // Paper sample → split → luminance, multiplied by threshold.
+        // Paper sample → split → luminance.
         (paper, "color", split, "color"),
-        (split, "luminance", paper_threshold, "a"),
-        (threshold, "output", paper_threshold, "b"),
-        // (paper × threshold) × circle.mask → stamp.tip.
-        (paper_threshold, "result", tip_combined, "a"),
-        (shape, "mask", tip_combined, "b"),
-        (tip_combined, "result", stamp, "tip"),
+        // luminance × circle.mask → paper_shape.
+        (split, "luminance", paper_shape, "a"),
+        (shape, "mask", paper_shape, "b"),
+        // paper_shape × pen.pressure → tip_combined.
+        (paper_shape, "result", tip_combined, "a"),
+        (pen, "pressure", tip_combined, "b"),
+        // levels caps the product into [0, 0.60] with a 0.10 floor.
+        (tip_combined, "result", tone, "input"),
+        (tone, "output", stamp, "tip"),
         // Per-dab random seed → noisy silhouette varies per stamp.
         (rand_seed, "value", shape, "seed"),
         // Per-stamp colour.
@@ -864,39 +872,43 @@ mod tests {
         }
     }
 
-    /// Charcoal exercises the `image` node, which requests an
-    /// `@group(3)` graph-texture binding for the paper grain. The
-    /// compiled stroke shader must declare the shared sampler and
-    /// the one texture in `graph_texture_names`; preview-mode WGSL
-    /// gets the same declarations so cursor thumbnails sample the
-    /// same registry-owned texture.
+    /// Charcoal switched from a `paper-charcoal.jpg` texture sample
+    /// to a procedural `noise` node, so it no longer requests any
+    /// `@group(3)` graph-texture binding. The compiled shader still
+    /// has to compose the noise helpers (`node_noise_value`, hash,
+    /// fade) from `_noise.wgsl` — assert both ends of the migration
+    /// in one place: no texture binding requested, noise prelude
+    /// reachable to the emitted call.
     #[test]
-    fn charcoal_emits_group_three_graph_texture_bindings() {
+    fn charcoal_uses_procedural_noise_no_texture_binding() {
         let runner = crate::brush::compile_graph(&charcoal().metadata.graph)
             .expect("charcoal must compile to WGSL");
         let compiled = runner
             .compiled_brush()
             .expect("compile_graph should populate CompiledBrush for charcoal");
-        assert_eq!(
+        assert!(
+            compiled.graph_texture_names.is_empty(),
+            "charcoal must not request any graph textures after the \
+             paper-charcoal → noise migration, got {:?}",
             compiled.graph_texture_names,
-            vec!["paper-charcoal".to_string()],
-            "charcoal should request exactly one graph texture",
         );
         for (label, wgsl) in [
             ("stroke", &compiled.stroke_wgsl),
             ("preview", &compiled.preview_wgsl),
         ] {
             assert!(
-                wgsl.contains("@group(3) @binding(0) var graph_smp:"),
-                "{label} WGSL missing @group(3) sampler binding",
+                !wgsl.contains("@group(3) @binding(1) var graph_tex_0:"),
+                "{label} WGSL must not declare a graph_tex_0 binding for charcoal",
             );
             assert!(
-                wgsl.contains("@group(3) @binding(1) var graph_tex_0:"),
-                "{label} WGSL missing @group(3) texture binding at slot 0",
+                wgsl.contains("node_noise_value("),
+                "{label} WGSL must call node_noise_value — the noise \
+                 node's emitted call site",
             );
             assert!(
-                wgsl.contains("textureSample(graph_tex_0, graph_smp"),
-                "{label} WGSL missing textureSample of graph_tex_0",
+                wgsl.contains("fn node_noise_value("),
+                "{label} WGSL must link the noise prelude (\
+                 fn node_noise_value definition from _noise.wgsl)",
             );
         }
     }

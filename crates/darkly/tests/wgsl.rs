@@ -200,24 +200,45 @@ fn extent_default_identity_when_no_shape() {
 
 #[test]
 fn preview_wgsl_overrides_terminal_flow_default() {
-    // Regression: Charcoal sets the paint terminal's `flow` default to
-    // 0.5 (no wire on `flow`), and `paint.flow` carries
-    // `with_preview_value(1.0)`. Before the compiler internalised
-    // `apply_preview_overrides`, the preview shader literalised the
-    // user-set 0.5 — so the cursor-following dab preview rendered at
-    // half brightness. The fix clones the graph inside
-    // `compile_brush_to_wgsl`, applies the override on the clone, and
-    // emits the terminal's preview body against it. The stroke shader
-    // must still see the user-set 0.5 (real strokes honour the
-    // configured flow); only the preview WGSL should literalise 1.0.
-    let charcoal = darkly::brush::builtin_brushes::all()
-        .into_iter()
-        .find(|b| b.metadata.name == "Charcoal")
-        .expect("Charcoal brush registered");
+    // Regression: any brush that leaves `paint.flow` unwired with a
+    // non-1.0 default used to bleed its user value into the cursor
+    // preview shader, producing a dim hover halo. `paint.flow` carries
+    // `with_preview_value(1.0)`; the fix clones the input graph inside
+    // `compile_brush_to_wgsl`, applies `apply_preview_overrides` on the
+    // clone, and emits the terminal's preview body against it. Stroke
+    // shader still sees the user-set default (real strokes honour the
+    // configured flow); only the preview WGSL literalises 1.0.
+    //
+    // Synthesised graph rather than borrowed from a builtin brush so
+    // the assertion can't drift when a built-in's flow default is
+    // tuned away.
     let reg = registry();
-    let plan = compile(&charcoal.metadata.graph, reg.as_map()).unwrap();
-    let compiled =
-        compile_brush_to_wgsl(&charcoal.metadata.graph, &plan, &evals()).expect("compiles");
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let terminal = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    // Wire position so the terminal compiles. Leave `flow` unwired
+    // with an explicit non-1.0 default — that's the exact shape that
+    // triggered the original bug.
+    graph.set_port_default(terminal, "flow", 0.5).unwrap();
+    graph
+        .connect(
+            PortRef {
+                node: pen,
+                port: "position".into(),
+            },
+            PortRef {
+                node: terminal,
+                port: "position".into(),
+            },
+        )
+        .unwrap();
+
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
     assert!(
         compiled.stroke_wgsl.contains("clamp(0.500000"),
         "stroke shader must still see the user-set flow default (0.5); \

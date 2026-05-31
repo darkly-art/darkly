@@ -13,6 +13,7 @@ pub mod liquify;
 pub mod make_color;
 pub mod mix;
 pub mod multiply;
+pub mod noise;
 pub mod paint;
 pub mod paint_color;
 pub mod pen_input;
@@ -41,6 +42,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         make_color::register(),
         mix::register(),
         multiply::register(),
+        noise::register(),
         paint::register(),
         paint_color::register(),
         pen_input::register(),

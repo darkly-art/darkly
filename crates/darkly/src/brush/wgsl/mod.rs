@@ -791,6 +791,8 @@ fn assemble_shader(
     let mut out = String::new();
     out.push_str(include_str!("../../../../../shaders/brush/_shape.wgsl"));
     out.push('\n');
+    out.push_str(include_str!("../../../../../shaders/brush/_noise.wgsl"));
+    out.push('\n');
     out.push_str(include_str!("../../../../../shaders/brush/_prelude.wgsl"));
     out.push('\n');
 
