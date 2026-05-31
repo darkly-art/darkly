@@ -57,7 +57,7 @@ fn main() {
         let raw_img = image::RgbaImage::from_raw(w, h, raw.clone()).expect("raw -> RgbaImage");
         raw_img.save(&raw_path).expect("save raw");
 
-        let framed = frame_dab_thumbnail(&raw, w, h, bg, true);
+        let framed = frame_dab_thumbnail(&raw, w, h, bg);
         fs::write(&framed_path, &framed).expect("write framed");
 
         let framed_mean = decoded_mean_luminance(&framed);

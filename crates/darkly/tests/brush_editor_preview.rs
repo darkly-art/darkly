@@ -430,6 +430,61 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
     );
 }
 
+/// Regression: scrubbing `paint.size` (or any port flagged with
+/// `preview_value`) must not invalidate the editor-preview cache.
+///
+/// The previous "continued charcoal debugging" attempt deleted the
+/// caller-side `graph.apply_preview_overrides()` on the stroke-preview
+/// path and rewrote the `ChangeKind` classifier to key off
+/// `preview_irrelevant_scrub` only, with the rationale "the preview
+/// must match what the user would actually paint". That made the
+/// brush picker tile and the editor stroke preview inconsistent —
+/// the tile stayed size-invariant via `reset_exposed_scrubs`, but the
+/// stroke preview now mutated visibly on every size scrub.
+///
+/// Both previews share the same intent: brush identity, not momentary
+/// scrub state. This test pins the restored behavior: a size scrub
+/// on the active brush must not bump `brush_graph_version` (which
+/// is what gates the editor preview cache) — because the renderer
+/// neutralizes `preview_value` ports before rendering, so the output
+/// is identical anyway.
+#[test]
+fn size_scrub_does_not_bump_editor_preview_version() {
+    use darkly::engine::DarklyEngine;
+    use darkly::gpu::context::GpuContext;
+
+    let (device, queue) = test_device();
+    let gpu = GpuContext::new_headless(device, queue);
+    let mut engine = DarklyEngine::new(gpu, 1024, 768);
+
+    engine.brush_load("Ink Pen").expect("Ink Pen built-in");
+    let _ = engine.brush_editor_preview();
+    engine.test_flush_readbacks();
+    let v_before = engine.brush_graph_version();
+
+    let size = engine
+        .brush_exposed_ports()
+        .into_iter()
+        .find(|p| p.port_name == "size")
+        .expect("Ink Pen exposes a `size` port");
+    engine
+        .brush_set_exposed_port(size.node_id, "size", 90.0)
+        .expect("scrub set");
+
+    assert_eq!(
+        engine.brush_graph_version(),
+        v_before,
+        "scrubbing `size` must not bump brush_graph_version. \
+         `paint.size` is flagged `preview_value` (= 0.1), and the \
+         stroke-preview render path applies `apply_preview_overrides` \
+         to neutralize it before rendering — so the editor preview's \
+         output cannot change in response to the scrub, and \
+         invalidating its cache would just trigger a wasted \
+         full-stroke re-render and a visible blink as the new size \
+         briefly shows."
+    );
+}
+
 #[test]
 fn empty_path_returns_none() {
     let (device, queue) = test_device();

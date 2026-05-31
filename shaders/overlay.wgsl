@@ -23,7 +23,11 @@
 struct OverlayUniforms {
     screen_size: vec2f,
     time: f32,
-    _pad: f32,
+    // Multiplier applied to KIND_MASKED_STAMP sampled coverage. Lifts
+    // attenuated brushes (paper × shape masks) up to natural full-coverage
+    // visibility; clamped at 1.0 in the shader so the boost can't push
+    // alpha beyond the legal range. Default 1.0 (no boost).
+    preview_coverage_scale: f32,
     fwd_row0: vec4f,  // canvas → screen transform
     fwd_row1: vec4f,
     fwd_row2: vec4f,
@@ -373,7 +377,12 @@ fn eval_prim(prim: OverlayPrimitive, screen_pos: vec2f) -> f32 {
                 return 0.0;
             }
             // Red channel = grayscale coverage. Matches brush AlphaMask convention.
-            return textureSampleLevel(t_mask, t_sampler, uv, 0.0).r;
+            // Scaled by `preview_coverage_scale` so attenuated brushes (charcoal:
+            // paper × shape ≈ 0.2) reach the same apparent visibility as natural
+            // full-coverage brushes (ink pen ≈ 1.0); saturating clamp keeps alpha
+            // in [0, 1] for the downstream blend.
+            let raw = textureSampleLevel(t_mask, t_sampler, uv, 0.0).r;
+            return min(raw * u.preview_coverage_scale, 1.0);
         }
         default: {
             dist = 1e6;

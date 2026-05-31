@@ -212,6 +212,21 @@ pub(crate) enum ReadbackContext {
     ActiveBrushDab {
         topology_version: u64,
     },
+    /// Async readback of the freshly-rendered `preview_mask` (the GPU
+    /// texture sampled by the overlay's KIND_MASKED_STAMP) used to derive
+    /// the cursor-preview coverage scale. Completion measures mean alpha
+    /// and pushes the resulting normalize multiplier into the overlay
+    /// uniform via `set_preview_coverage_scale`. Carries the topology
+    /// version at request time so stale results from superseded
+    /// compilations are dropped.
+    ///
+    /// `width` / `height` are the preview_mask dimensions at readback
+    /// time — used to walk the row-padded buffer the GPU returned.
+    BrushCursorPreviewScale {
+        topology_version: u64,
+        width: u32,
+        height: u32,
+    },
     /// Async readback of an undo-region staging buffer. On completion the
     /// handler flips the `cell` from `Pending` to `Ready`, dropping the
     /// staging buffer and moving the pixels onto the host heap.
@@ -345,6 +360,12 @@ pub struct DarklyEngine {
     /// Topology version at the last time we issued a dab render. Compared
     /// against `brush_topology_version` to skip redundant dab renders.
     pub(crate) last_rendered_dab_topology_version: u64,
+    /// Topology version of the brush whose cursor-preview coverage scale
+    /// we last requested a readback for. Compared against the current
+    /// topology to skip re-issuing the readback when the brush hasn't
+    /// changed shape — the scale is a property of the graph topology,
+    /// not the cursor pose.
+    pub(crate) last_requested_cursor_scale_topology_version: u64,
     /// Theme colors for brush thumbnails (not the live editor preview —
     /// that uses the caller-supplied fg and auto-picked contrast bg). The
     /// frontend sets these via `set_preview_theme()` when the UI theme
@@ -508,6 +529,7 @@ impl DarklyEngine {
             last_rendered_preview_version: 0,
             active_dab_preview_cache: None,
             last_rendered_dab_topology_version: 0,
+            last_requested_cursor_scale_topology_version: 0,
             // Default theme: dark (white on dark). Frontend overrides via
             // `set_preview_theme()` as soon as the UI loads.
             preview_theme_fg: [1.0, 1.0, 1.0, 1.0],
@@ -601,6 +623,14 @@ impl DarklyEngine {
     #[cfg(any(test, feature = "testing"))]
     pub fn compositor_preview_mask_size(&self) -> (u32, u32) {
         self.compositor.tool_overlay().preview_mask_size()
+    }
+
+    /// Current cursor-preview coverage scale uniform — the multiplier the
+    /// overlay shader applies to KIND_MASKED_STAMP sampled coverage.
+    /// Test-only.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn cursor_preview_coverage_scale(&self) -> f32 {
+        self.compositor.tool_overlay().preview_coverage_scale()
     }
 
     /// Debug helper for the dab-preview-debug binary: render the named

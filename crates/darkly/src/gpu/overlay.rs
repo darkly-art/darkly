@@ -72,7 +72,13 @@ impl OverlayPrimitive {
 struct OverlayUniforms {
     screen_size: [f32; 2],
     time: f32,
-    _pad: f32,
+    /// Multiplier applied to KIND_MASKED_STAMP sampled coverage. Lifts
+    /// attenuated brushes (paper × shape masks) to the same apparent
+    /// visibility as natural full-coverage brushes — the cursor-follow
+    /// analogue of the dab-tile auto-brighten that used to live in
+    /// `frame_dab_thumbnail`. Set per cursor-preview re-compile via
+    /// `set_preview_coverage_scale`; defaults to 1.0 (no boost).
+    preview_coverage_scale: f32,
     fwd_row0: [f32; 4],
     fwd_row1: [f32; 4],
     fwd_row2: [f32; 4],
@@ -118,6 +124,11 @@ pub struct ToolOverlay {
     surface_format: wgpu::TextureFormat,
     primitives: Vec<OverlayPrimitive>,
     time: f32,
+    /// Live coverage scale for the KIND_MASKED_STAMP preview-mask path.
+    /// Updated by the engine after each brush re-compile via
+    /// `set_preview_coverage_scale`; uploaded into the overlay uniform on
+    /// every `prepare()`.
+    preview_coverage_scale: f32,
     /// Cached bind group from prepare(), valid until next prepare() call.
     bind_group: Option<wgpu::BindGroup>,
     /// Partition counts set by prepare().
@@ -356,6 +367,7 @@ impl ToolOverlay {
             surface_format,
             primitives: Vec::new(),
             time: 0.0,
+            preview_coverage_scale: 1.0,
             bind_group: None,
             solid_count: 0,
             snapshot_count: 0,
@@ -472,9 +484,28 @@ impl ToolOverlay {
 
     /// Stop using the preview mask as the overlay mask source (falls back
     /// to the 1×1 white default). Does not free the preview texture.
+    /// Also resets `preview_coverage_scale` to 1.0 so a stale boost can't
+    /// leak into a subsequent CPU-uploaded mask render.
     pub fn clear_preview_mask(&mut self) {
         self.mask = None;
         self.mask_view = None;
+        self.preview_coverage_scale = 1.0;
+    }
+
+    /// Set the coverage scale applied to KIND_MASKED_STAMP samples. Used
+    /// by the engine to normalize attenuated cursor-preview masks (e.g.
+    /// charcoal's paper × shape product) up to natural full-coverage
+    /// visibility — the GPU-resident analogue of the dab-tile auto-bright
+    /// that used to live in `frame_dab_thumbnail`. Set to 1.0 to disable.
+    pub fn set_preview_coverage_scale(&mut self, scale: f32) {
+        self.preview_coverage_scale = scale;
+    }
+
+    /// Read the currently-applied coverage scale. Test-only — the
+    /// production overlay shader reads this from the uniform buffer.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn preview_coverage_scale(&self) -> f32 {
+        self.preview_coverage_scale
     }
 
     /// Current preview mask dimensions (0,0 if never allocated).
@@ -595,7 +626,7 @@ impl ToolOverlay {
         let uniforms = OverlayUniforms {
             screen_size: [viewport_w as f32, viewport_h as f32],
             time: self.time,
-            _pad: 0.0,
+            preview_coverage_scale: self.preview_coverage_scale,
             fwd_row0: fwd[0],
             fwd_row1: fwd[1],
             fwd_row2: fwd[2],

@@ -34,11 +34,18 @@ enum ChangeKind {
     /// scrubs via `reset_exposed_scrubs`, so its cache stays valid.
     ScrubOnly,
     /// Exposed-port scrub on a port the editor preview pipeline
-    /// ignores — declared via `PortDef::preview_irrelevant_scrub`. The
-    /// synthetic-stroke preview's rendered output cannot change in
-    /// response to the scrub, so neither cache needs to bump. Current
-    /// use: `pen_input.stabilize` (the preview's stroke engine is
-    /// hard-wired to `PassThrough`).
+    /// ignores. Two declaration mechanisms route here:
+    /// - `PortDef::preview_value` — caller-side
+    ///   `Graph::apply_preview_overrides` replaces the scrubbed value
+    ///   with a preview-mode constant before rendering (used by
+    ///   `paint.size`, `paint.flow`, `stamp.size`, …).
+    /// - `PortDef::preview_irrelevant_scrub` — the preview pipeline
+    ///   structurally ignores the port (used by `pen_input.stabilize`,
+    ///   which the synthetic-stroke preview's hard-wired `PassThrough`
+    ///   never reads).
+    ///
+    /// Either way the rendered output cannot change in response to the
+    /// scrub, so neither cache needs to bump.
     PreviewIrrelevantScrub,
 }
 
@@ -305,11 +312,64 @@ impl DarklyEngine {
             self.compositor
                 .tool_overlay_mut()
                 .use_preview_mask_as_mask();
+            self.request_brush_cursor_preview_scale_readback();
         } else {
             self.compositor.tool_overlay_mut().clear_preview_mask();
         }
         self.compositor.mark_needs_present();
         self.brush_preview_info = info;
+    }
+
+    /// Queue a readback of the freshly-rendered preview-mask so the
+    /// completion handler can normalize the cursor overlay's coverage
+    /// scale to the bake's target mean. Skips when:
+    ///   - the current topology matches the one we already requested a
+    ///     readback for (scale is a property of the graph shape, not
+    ///     the cursor pose);
+    ///   - another `BrushCursorPreviewScale` is already in flight;
+    ///   - the preview-mask texture hasn't been allocated yet.
+    fn request_brush_cursor_preview_scale_readback(&mut self) {
+        let current_topology = self.brush_topology_version();
+        if self.last_requested_cursor_scale_topology_version == current_topology {
+            return;
+        }
+        if self
+            .readbacks
+            .any(|c| matches!(c, ReadbackContext::BrushCursorPreviewScale { .. }))
+        {
+            return;
+        }
+        let overlay = self.compositor.tool_overlay_mut();
+        let (width, height) = overlay.preview_mask_size();
+        if width == 0 || height == 0 {
+            return;
+        }
+        let Some(texture) = overlay.preview_mask_texture() else {
+            return;
+        };
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("brush-cursor-preview-scale-readback"),
+            });
+        let request = crate::gpu::readback::request_readback(
+            &self.gpu.device,
+            &mut encoder,
+            texture,
+            wgpu::TextureFormat::Rgba8Unorm,
+            crate::coord::LayerRect::from_xywh(0, 0, width, height),
+        );
+        self.gpu.queue.submit([encoder.finish()]);
+        self.readbacks.submit(
+            request,
+            ReadbackContext::BrushCursorPreviewScale {
+                topology_version: current_topology,
+                width,
+                height,
+            },
+        );
+        self.last_requested_cursor_scale_topology_version = current_topology;
     }
 
     /// Read-only snapshot of the current brush preview info, for the
@@ -328,12 +388,11 @@ impl DarklyEngine {
     ///   [`crate::brush::reset_exposed_scrubs`], so a scrub change can't
     ///   change its rendered output — no point invalidating its cache.
     /// - [`ChangeKind::PreviewIrrelevantScrub`] bumps neither. The
-    ///   scrubbed port is declared
-    ///   [`crate::nodegraph::PortDef::preview_irrelevant_scrub`] — the
-    ///   synthetic-stroke editor preview ignores it (e.g. stabilize is
-    ///   neutralized by the preview's hard-wired `PassThrough`), so
-    ///   invalidating the cache would just cause a wasted full-stroke
-    ///   re-render.
+    ///   scrubbed port is overridden by
+    ///   [`crate::nodegraph::Graph::apply_preview_overrides`] before
+    ///   every editor-preview render, so its rendered output is
+    ///   independent of the user's port value — invalidating the cache
+    ///   would just cause a wasted full-stroke re-render.
     ///
     /// Returns Ok on success or an error string.
     fn compile_active(&mut self, kind: ChangeKind) -> Result<(), String> {
@@ -428,11 +487,17 @@ impl DarklyEngine {
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
 
-        // Stroke previews render the user's brush exactly — no
-        // preview-value overrides applied. The editor dock exists for
-        // dialing in a brush; what the user sees here must match what
-        // they would paint on the canvas.
-        let graph = self.active_brush_graph();
+        // Neutralize ports flagged `preview_value` (paint.size, paint.flow,
+        // …) on a clone so the stroke preview matches the brush picker's
+        // tile-shape thumbnail: size-invariant, flow at the preview-mode
+        // constant, fits the fixed render canvas regardless of the user's
+        // working scrubs. Same generalization the dab path relies on via
+        // `reset_exposed_scrubs`; both previews show brush identity, not
+        // momentary parameter state. Per-node knowledge about what to
+        // neutralize lives on the port registrations — this pipeline
+        // doesn't introspect node types.
+        let mut graph = self.active_brush_graph();
+        graph.apply_preview_overrides();
         let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
         let path = crate::brush::preview_renderer::synthesize_preview_stroke(
             rw as f32,
@@ -914,8 +979,8 @@ impl DarklyEngine {
             }
         };
 
-        // Look up UnitType + preview_irrelevant_scrub + persist_in_thumbnail
-        // from the registration. One port lookup pays for all three flags;
+        // Look up UnitType + preview_value + persist_in_thumbnail from
+        // the registration. One port lookup pays for all three flags;
         // they determine whether this scrub affects the editor preview
         // and/or the dab thumbnail (see `ChangeKind` docs).
         let registry = crate::brush::registry();
@@ -925,7 +990,8 @@ impl DarklyEngine {
                 .find(|rp| rp.name == port_name && rp.dir == PortDir::Input)
         });
         let unit_type = port_meta.map_or(UnitType::default(), |rp| rp.unit_type);
-        let preview_irrelevant = port_meta.is_some_and(|rp| rp.preview_irrelevant_scrub);
+        let preview_irrelevant =
+            port_meta.is_some_and(|rp| rp.preview_value.is_some() || rp.preview_irrelevant_scrub);
         let thumbnail_relevant = port_meta.is_some_and(|rp| rp.persist_in_thumbnail);
 
         let port_value = unit_type.from_display(display_value);

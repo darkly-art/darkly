@@ -406,10 +406,25 @@ impl DarklyEngine {
                 width,
                 height,
             } => {
-                let png_bytes =
-                    frame_dab_thumbnail(&pixels, width, height, self.preview_theme_bg, true);
+                let png_bytes = frame_dab_thumbnail(&pixels, width, height, self.preview_theme_bg);
                 if !png_bytes.is_empty() {
                     self.brush_library.set_dab_thumbnail(&name, png_bytes);
+                }
+            }
+            ReadbackContext::BrushCursorPreviewScale {
+                topology_version,
+                width,
+                height,
+            } => {
+                // Drop stale results — a later compile may have already
+                // queued its own readback, and the one in hand is no
+                // longer descriptive of the active brush.
+                if topology_version == self.brush_topology_version() {
+                    let scale = cursor_preview_scale_from_mask(&pixels, width, height);
+                    self.compositor
+                        .tool_overlay_mut()
+                        .set_preview_coverage_scale(scale);
+                    self.compositor.mark_needs_present();
                 }
             }
             ReadbackContext::UndoRegionReady { cell } => {
@@ -426,7 +441,7 @@ impl DarklyEngine {
                 // queued before a scrub change is still valid.
                 if topology_version == self.brush_topology_version() {
                     let (w, h) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
-                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg, true);
+                    let png_bytes = frame_dab_thumbnail(&pixels, w, h, self.preview_theme_bg);
                     if !png_bytes.is_empty() {
                         self.active_dab_preview_cache = Some(png_bytes);
                     }
@@ -894,18 +909,19 @@ fn generate_rgba_thumbnail_from_pixels(
 /// place its stamp.
 const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
 
-/// Target mean luminance the dab tile gets normalized to. Sized to
-/// roughly match what a "natural full-coverage" brush like Ink Pen
-/// produces unboosted (framed mean ~132), so attenuated brushes
-/// (Charcoal: paper texture × shape masks → ~50 unboosted) land at the
-/// same apparent brightness in the picker. Multiplier-only against bg=0
-/// — preserves true black, saturates highlights at 255. Photoshop
-/// Levels with the input white slider auto-pulled to `255 / scale`.
-const TARGET_DAB_MEAN_LUMINANCE: f32 = 130.0;
+/// Target mean luminance the cursor-preview mask gets normalized to,
+/// expressed in the 0..1 range the GPU mask uses (130/255 ≈ 0.51).
+/// Sized to roughly match what a natural full-coverage brush like
+/// Ink Pen produces unboosted, so attenuated brushes (Charcoal: paper
+/// texture × shape masks → ~0.2 unboosted) land at the same apparent
+/// visibility under the cursor. Multiplier-only against an empty
+/// background — preserves true zero coverage exactly; the shader
+/// saturates highlights at 1.0.
+const CURSOR_PREVIEW_TARGET_COVERAGE: f32 = 130.0 / 255.0;
 
-/// Cap on the boost multiplier so a near-empty dab can't get an extreme
+/// Cap on the boost so a near-empty preview mask can't get an extreme
 /// scale that amplifies noise.
-const MAX_DAB_LUMINANCE_BOOST: f32 = 8.0;
+const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
 
 /// Frame a rendered dab into a centered, content-fitted PNG.
 ///
@@ -923,13 +939,7 @@ const MAX_DAB_LUMINANCE_BOOST: f32 = 8.0;
 /// re-centers it. Empty renders (degenerate brushes, or a scatter that
 /// hit fully off-canvas) fall through to a centered square of the bg,
 /// which the picker shows as a flat tile.
-pub fn frame_dab_thumbnail(
-    pixels: &[u8],
-    width: u32,
-    height: u32,
-    bg: [f32; 4],
-    apply_luminance_clamp: bool,
-) -> Vec<u8> {
+pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> Vec<u8> {
     let expected = (width * height * 4) as usize;
     if pixels.len() < expected {
         log::error!(
@@ -1004,35 +1014,12 @@ pub fn frame_dab_thumbnail(
         image::imageops::crop_imm(&src, crop_x, crop_y, side, side).to_image()
     };
 
-    let mut resized = image::imageops::resize(
+    let resized = image::imageops::resize(
         &cropped,
         DAB_THUMBNAIL_OUTPUT_SIZE,
         DAB_THUMBNAIL_OUTPUT_SIZE,
         image::imageops::FilterType::Triangle,
     );
-
-    // Photoshop Levels (composite, black_in=0) on the cropped+resized tile:
-    // measure mean luminance of the dab-dominated tile, drag the input white
-    // slider leftward to `255 / scale` so the mean hits the target floor.
-    // bg is 0 in the preview path, so `scale * 0 = 0` preserves true black
-    // exactly — only the dab content lifts.
-    if found && apply_luminance_clamp {
-        let mut lum_sum = 0.0_f32;
-        for p in resized.pixels() {
-            lum_sum += 0.2126 * p.0[0] as f32
-                + 0.7152 * p.0[1] as f32
-                + 0.0722 * p.0[2] as f32;
-        }
-        let mean = lum_sum / (resized.width() * resized.height()) as f32;
-        if mean > 0.0 && mean < TARGET_DAB_MEAN_LUMINANCE {
-            let scale = (TARGET_DAB_MEAN_LUMINANCE / mean).min(MAX_DAB_LUMINANCE_BOOST);
-            for p in resized.pixels_mut() {
-                p.0[0] = (p.0[0] as f32 * scale).clamp(0.0, 255.0) as u8;
-                p.0[1] = (p.0[1] as f32 * scale).clamp(0.0, 255.0) as u8;
-                p.0[2] = (p.0[2] as f32 * scale).clamp(0.0, 255.0) as u8;
-            }
-        }
-    }
 
     let mut out = Vec::new();
     let cursor = std::io::Cursor::new(&mut out);
@@ -1048,6 +1035,85 @@ pub fn frame_dab_thumbnail(
         return Vec::new();
     }
     out
+}
+
+/// Compute the coverage scale to apply to the cursor-preview overlay
+/// from a freshly-rendered preview-mask readback. Same content-bbox +
+/// 10% margin shape as `frame_dab_thumbnail` (so attenuated brushes
+/// hit the same target mean coverage they hit pre-removal) — only the
+/// post-process changes: instead of multiplying RGB bytes we hand the
+/// scale to the overlay shader as a uniform.
+///
+/// `pixels` is the unpadded RGBA8 readback of the preview mask
+/// (`width × height × 4` bytes). The runner forces `paint_color.color`
+/// to white in the preview path, so alpha and red channels carry the
+/// same coverage signal; we read alpha as the canonical one.
+pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: u32) -> f32 {
+    let expected = (width * height * 4) as usize;
+    if pixels.len() < expected || width == 0 || height == 0 {
+        return 1.0;
+    }
+
+    // Content bbox via the same alpha tolerance the bake's bg detection
+    // uses (matched against the bake's clear-to-zero, which makes the
+    // "no content" pixel value 0 exactly).
+    const TOLERANCE: u8 = 12;
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+    for y in 0..height {
+        for x in 0..width {
+            let alpha = pixels[((y * width + x) * 4 + 3) as usize];
+            if alpha > TOLERANCE {
+                if x < min_x {
+                    min_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+                found = true;
+            }
+        }
+    }
+    if !found {
+        return 1.0;
+    }
+
+    let bbox_w = max_x - min_x + 1;
+    let bbox_h = max_y - min_y + 1;
+    let raw_side = bbox_w.max(bbox_h);
+    let margin = (raw_side / 10).max(2);
+    let side = (raw_side + 2 * margin).min(width.min(height));
+    let cx = min_x + bbox_w / 2;
+    let cy = min_y + bbox_h / 2;
+    let half = side / 2;
+    let crop_x = cx.saturating_sub(half).min(width - side);
+    let crop_y = cy.saturating_sub(half).min(height - side);
+
+    let mut sum: u64 = 0;
+    let mut count: u64 = 0;
+    for y in crop_y..(crop_y + side) {
+        for x in crop_x..(crop_x + side) {
+            sum += pixels[((y * width + x) * 4 + 3) as usize] as u64;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return 1.0;
+    }
+    let mean = (sum as f32 / count as f32) / 255.0;
+    if mean <= 0.0 || mean >= CURSOR_PREVIEW_TARGET_COVERAGE {
+        return 1.0;
+    }
+    (CURSOR_PREVIEW_TARGET_COVERAGE / mean).min(CURSOR_PREVIEW_MAX_BOOST)
 }
 
 /// Frame a rendered stroke into the cache aspect ratio and resize.
