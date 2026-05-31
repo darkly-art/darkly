@@ -42,9 +42,5 @@ required-features = ["testing"]
 name = "stroke_replay_matrix"
 required-features = ["testing"]
 
-[[bin]]
-name = "dab_preview_debug"
-required-features = ["testing"]
-
 [lints]
 workspace = true

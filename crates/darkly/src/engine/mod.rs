@@ -633,64 +633,6 @@ impl DarklyEngine {
         self.compositor.tool_overlay().preview_coverage_scale()
     }
 
-    /// Debug helper for the dab-preview-debug binary: render the named
-    /// builtin brush's dab into the preview renderer and blocking-read the
-    /// raw pre-frame RGBA8 bytes (BRUSH_DAB_RENDER_SIZE). Test-only.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn debug_brush_dab_raw_pixels(&mut self, name: &str) -> Option<(Vec<u8>, u32, u32)> {
-        let brush = self.brush_library.get(name)?.clone();
-        let mut graph = brush.metadata.graph.clone();
-        crate::brush::reset_exposed_scrubs(&mut graph);
-        let (w, h) = brush_library::BRUSH_DAB_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_preview_dab(w as f32, h as f32);
-        let _ = self.brush_preview_renderer.render_stroke(
-            &self.gpu.device,
-            &self.gpu.queue,
-            &self.brush_pipelines,
-            &graph,
-            &path,
-            self.preview_theme_fg,
-            self.preview_theme_bg,
-            w,
-            h,
-        )?;
-        let tex = self.brush_preview_renderer.current_texture()?;
-        let bytes = crate::gpu::test_utils::readback_texture(
-            &self.gpu.device,
-            &self.gpu.queue,
-            tex,
-            wgpu::TextureFormat::Rgba8Unorm,
-            w,
-            h,
-        );
-        Some((bytes, w, h))
-    }
-
-    /// Preview-theme bg color used by the dab/stroke framers. Test-only.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn debug_preview_theme_bg(&self) -> [f32; 4] {
-        self.preview_theme_bg
-    }
-
-    /// Blocking readback of the overlay's preview mask texture. Test-only.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn test_readback_overlay_preview_mask(&self) -> Vec<u8> {
-        let tex = self
-            .compositor
-            .tool_overlay()
-            .preview_mask_texture()
-            .expect("preview mask not allocated");
-        let (w, h) = self.compositor_preview_mask_size();
-        crate::gpu::test_utils::readback_texture(
-            &self.gpu.device,
-            &self.gpu.queue,
-            tex,
-            wgpu::TextureFormat::Rgba8Unorm,
-            w,
-            h,
-        )
-    }
-
     /// Test-only view of the selection mask's CPU cache. Returns `None`
     /// when no selection is active or when the cache hasn't been populated.
     pub fn test_selection_cpu_cache(&self) -> Option<&[u8]> {

@@ -47,7 +47,7 @@ pub fn register() -> BrushNodeRegistration {
             params: &[
                 ParamDef::String {
                     name: "texture_name",
-                    default: "paper-charcoal",
+                    default: "",
                 },
                 ParamDef::Float {
                     name: "scale",
