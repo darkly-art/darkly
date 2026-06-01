@@ -26,7 +26,7 @@ enum ChangeKind {
     /// Exposed-port scrub on a port marked `persist_in_thumbnail` — its
     /// value bleeds through to the dab thumbnail render, so both
     /// version counters need to bump to invalidate both preview caches.
-    /// Used for orientation knobs like `stamp.rotation`.
+    /// Used for orientation knobs like `circle.phase`.
     ThumbnailRelevantScrub,
     /// User-facing exposed-port scrub on a port the editor preview
     /// pipeline actually reads (size, opacity, hardness, …). Bumps only
@@ -38,7 +38,7 @@ enum ChangeKind {
     /// - `PortDef::preview_value` — caller-side
     ///   `Graph::apply_preview_overrides` replaces the scrubbed value
     ///   with a preview-mode constant before rendering (used by
-    ///   `paint.size`, `stamp.size`, `watercolor.size`, …).
+    ///   `paint.size`, `watercolor.size`, …).
     /// - `PortDef::preview_irrelevant_scrub` — the preview pipeline
     ///   structurally ignores the port (used by `pen_input.stabilize`,
     ///   which the synthetic-stroke preview's hard-wired `PassThrough`
@@ -488,7 +488,7 @@ impl DarklyEngine {
         let bg = self.preview_theme_bg;
 
         // Neutralize ports flagged `preview_value` (paint.size,
-        // stamp.size, …) on a clone so the stroke preview matches the
+        // watercolor.size, …) on a clone so the stroke preview matches the
         // brush picker's tile-shape thumbnail: size-invariant, fits
         // the fixed render canvas regardless of the user's working
         // scrubs. Same generalization the dab path relies on via

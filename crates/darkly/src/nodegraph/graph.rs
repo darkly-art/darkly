@@ -188,7 +188,7 @@ pub struct PortDef<W: WireKind> {
     /// stays "UI hint only, not enforced", and `with_natural_range` is the
     /// separate, explicit opt-in for wire-boundary range mapping. Most
     /// ports declare both with the same numbers; the two diverge for
-    /// over-drag sliders like `stamp.size`, where the slider range is
+    /// over-drag sliders like `paint.size`, where the slider range is
     /// a hint but the wire-side semantics are passthrough.
     #[serde(default)]
     pub natural_range: Option<(f32, f32)>,

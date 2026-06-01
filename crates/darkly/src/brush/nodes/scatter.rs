@@ -10,8 +10,7 @@
 //! seeds with their own `node_id`, so they produce uncorrelated streams.
 //!
 //! The node is pure math — the compiler auto-promotes it to the GPU
-//! phase when `dab_size` is wired from a GPU-produced output (e.g. via
-//! `split_vec2` on `stamp.dab_size`).
+//! phase when `dab_size` is wired from a GPU-produced output.
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
@@ -52,8 +51,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_icon("fa-solid fa-ruler")
                     .with_description(
                         "Pixel reference the amounts are fractions of. \
-                        Wire `stamp.dab_major` for size-proportional scatter, or leave \
-                        unwired and dial it directly for smudge/liquify brushes.",
+                        Leave unwired and dial it directly for smudge/liquify brushes.",
                     ),
                 PortDef::output("position", BrushWireType::Vec2)
                     .with_description("Input position + random offset"),
