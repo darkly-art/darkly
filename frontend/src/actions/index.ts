@@ -566,6 +566,43 @@ export function registerActions() {
 
     // -- Layers --
     actions.register({
+        id: 'newLayer',
+        displayName: 'New Layer',
+        category: 'layers',
+        description: 'Add a new layer above the active one.',
+        handler: () => {
+            if (!app.handle) return;
+            const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
+            app.selectLayer(id);
+            app.refreshLayerTree();
+        },
+    });
+
+    actions.register({
+        id: 'newGroup',
+        displayName: 'New Group',
+        category: 'layers',
+        description: 'Group the selected layers together, or add an empty group if nothing is selected.',
+        handler: () => {
+            if (!app.handle) return;
+            if (app.selectedLayerIds.size > 0) {
+                try {
+                    const groupId = app.handle.group_layers(
+                        Float64Array.from([...app.selectedLayerIds]),
+                    );
+                    if (groupId) app.selectLayer(groupId);
+                } catch (e: any) {
+                    toast.show('error', e.message ?? String(e));
+                }
+            } else {
+                const id = app.handle.add_group(app.activeLayerId ?? -1);
+                app.selectLayer(id);
+            }
+            app.refreshLayerTree();
+        },
+    });
+
+    actions.register({
         id: 'toggleVisibility',
         displayName: 'Toggle Layer Visibility',
         category: 'layers',
@@ -659,7 +696,7 @@ export function registerActions() {
         id: 'duplicateLayer',
         displayName: 'Duplicate Layer',
         category: 'layers',
-        description: 'Duplicate the selected layers; each copy lands directly above its original.',
+        description: 'Make a copy of each selected layer.',
         handler: () => {
             if (!app.handle) return;
             const targets = app.selectedLayerIds.size > 0
@@ -684,34 +721,25 @@ export function registerActions() {
         id: 'mergeDown',
         displayName: 'Merge Down',
         category: 'layers',
-        description: 'Merge the active layer or group into the layer below it.',
+        description: 'Merge the active layer into the one below it, or combine multiple selected layers into a single layer.',
         handler: () => {
             if (!app.handle) return;
-            // Single-layer merge_down: merges with the sibling below. The
-            // menu item routes here only when the selection size is 1.
+            if (app.selectedLayerIds.size >= 2) {
+                try {
+                    const newId = app.handle.merge_layers(
+                        Float64Array.from([...app.selectedLayerIds]),
+                    );
+                    app.refreshLayerTree();
+                    if (newId) app.selectLayer(newId);
+                } catch (e: any) {
+                    toast.show('error', e.message ?? String(e));
+                }
+                return;
+            }
             const sourceId = app.activeLayerId;
             if (sourceId == null) return;
             try {
                 const newId = app.handle.merge_down(sourceId);
-                app.refreshLayerTree();
-                if (newId) app.selectLayer(newId);
-            } catch (e: any) {
-                toast.show('error', e.message ?? String(e));
-            }
-        },
-    });
-
-    actions.register({
-        id: 'mergeSelected',
-        displayName: 'Merge Selected Layers',
-        category: 'layers',
-        description: 'Bake every selected layer into a single raster at the panel-topmost selection slot. Cross-parent selections are supported.',
-        handler: () => {
-            if (!app.handle) return;
-            const targets = [...app.selectedLayerIds];
-            if (targets.length < 2) return;
-            try {
-                const newId = app.handle.merge_layers(Float64Array.from(targets));
                 app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } catch (e: any) {

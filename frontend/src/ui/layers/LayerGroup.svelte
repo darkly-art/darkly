@@ -172,12 +172,9 @@
     }
 
     function menuMerge() {
-        if (isMulti) {
-            actions.dispatch('mergeSelected');
-        } else {
-            if (!canMergeDownForThis) return;
-            actions.dispatch('mergeDown');
-        }
+        // `mergeDown` is selection-aware (see LayerItem.svelte's menuMerge).
+        if (!isMulti && !canMergeDownForThis) return;
+        actions.dispatch('mergeDown');
         onupdate();
     }
 

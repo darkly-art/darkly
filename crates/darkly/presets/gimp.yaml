@@ -46,6 +46,8 @@ hotkeys:
   deleteLayer: layerPanel:Delete
   # GIMP binds Layer > Duplicate Layer(s) to Ctrl+Shift+D.
   duplicateLayer: $mod+Shift+KeyD
+  # GIMP's "New Layer…" is bound to Ctrl+Shift+N (host docs line 298).
+  newLayer: $mod+Shift+KeyN
   # Selection.
   clearSelection: $mod+Shift+KeyA
   invertSelection: $mod+KeyI

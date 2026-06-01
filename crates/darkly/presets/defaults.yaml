@@ -34,6 +34,29 @@ hotkeys:
   mirrorViewH: KeyM
   # Darkly-original (brush builder).
   addBrushNode: Shift+KeyA
+  # PS + Krita both bind Quick Group to Ctrl+G. GIMP has no default
+  # (the Layer menu's group commands aren't bound). With layers
+  # selected, the action handler wraps them in the new group; with
+  # nothing selected, creates an empty group.
+  newGroup: $mod+KeyG
+  # PS + Krita both bind Merge Down to Ctrl+E. GIMP's only layer-merge
+  # default is Ctrl+M for "Merge Visible Layers" — semantically
+  # different. The `mergeDown` action handler is selection-aware:
+  # with ≥2 selected it bakes the selection via merge_layers, with 1
+  # it does the classic single-layer merge-down. One hotkey, two ops.
+  mergeDown: $mod+KeyE
+  # `flatten` and `addMask` are intentionally left unbound here:
+  #   - addMask: no reference editor has a default key (PS, Krita,
+  #     and GIMP all expose mask creation through a button click).
+  #     Inventing a Darkly-only binding would surprise users with no
+  #     prior-art expectation, and commit a key slot we'd later have
+  #     to fight if we register e.g. GIMP's Ctrl+M "Merge Visible".
+  #   - flatten: Krita binds Ctrl+Shift+E to "Flatten image" (the
+  #     whole-canvas composite, which is Darkly's `flatten_image`
+  #     engine op — not yet a registered action). Borrowing that key
+  #     for Darkly's single-layer flatten (apply-mask / flatten-group)
+  #     would mislead Krita users. If someone registers `flattenImage`
+  #     as an action, that's where Ctrl+Shift+E belongs.
 
 mouse_clicks:
   # Photoshop and Krita both use Alt+click on a layer/mask thumbnail to

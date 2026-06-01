@@ -172,15 +172,12 @@
     }
 
     function menuMerge() {
-        // With 1 selected, route to the existing single-layer merge_down
-        // op (merges with the sibling below). With ≥2, route to the
-        // new merge_layers op (bakes the selection into one raster).
-        if (isMulti) {
-            actions.dispatch('mergeSelected');
-        } else {
-            if (!canMergeDownForThis) return;
-            actions.dispatch('mergeDown');
-        }
+        // `mergeDown` is selection-aware: with ≥2 selected it bakes the
+        // selection via merge_layers; with 1, it does the classic
+        // single-layer merge-down. Guard only the single-layer case
+        // where there's no sibling below.
+        if (!isMulti && !canMergeDownForThis) return;
+        actions.dispatch('mergeDown');
         onupdate();
     }
 

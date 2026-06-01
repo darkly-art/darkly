@@ -5,7 +5,6 @@
     import VoidPickerModal from '../voids/VoidPickerModal.svelte';
     import { actions } from '../../actions/registry';
     import { tooltipForAction } from '../../config/store.svelte';
-    import { toast } from '../../state/toast.svelte';
 
     let { onupdate }: { onupdate: () => void } = $props();
 
@@ -25,33 +24,17 @@
     }
 
 
+    // The new-layer / new-group footer buttons route through the action
+    // registry so their tooltips can surface the bound hotkey (resolved
+    // via `tooltipForAction`). The selection-aware "wrap or empty group"
+    // logic lives on the action handler in actions/index.ts.
     function addNormalLayer() {
-        if (!app.handle) return;
-        const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
-        app.selectLayer(id);
+        actions.dispatch('newLayer');
         onupdate();
     }
 
     function addGroup() {
-        if (!app.handle) return;
-        // With layers selected, wrap them in a new group at the panel-
-        // topmost selected layer's slot. With nothing selected, fall
-        // back to the legacy "empty group at the active layer's anchor"
-        // behavior so the gesture still works in an empty / unfocused
-        // panel.
-        if (app.selectedLayerIds.size > 0) {
-            try {
-                const groupId = app.handle.group_layers(
-                    Float64Array.from([...app.selectedLayerIds]),
-                );
-                if (groupId) app.selectLayer(groupId);
-            } catch (e: any) {
-                toast.show('error', e.message ?? String(e));
-            }
-        } else {
-            const id = app.handle.add_group(app.activeLayerId ?? -1);
-            app.selectLayer(id);
-        }
+        actions.dispatch('newGroup');
         onupdate();
     }
 

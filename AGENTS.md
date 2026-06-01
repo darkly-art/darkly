@@ -178,6 +178,10 @@ Darkly is in pre-release / alpha. Until the first public release, breaking on-di
 
 When you finish implementing a plan, emit a concise PR description in a fenced markdown code block as part of your reply. The description must cover the *entire* feature branch (everything since it diverged from its parent), not just the latest change — the user pastes it as the full PR body. On follow-up work, re-emit the complete, updated description as a single block that wholly replaces the previous one; never emit a delta or a partial revision.
 
+## Hotkey & Config Presets
+
+Three-layer resolution: `user → overlay[active editor] → defaults`. Placement rule is documented in [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml)'s header; host-editor reference hotkeys live in [`docs/*-default-hotkeys.md`](docs/).
+
 ## Lint / CI Checks
 
 Run at commit time only — not during iterative debugging. Use `cargo check` for mid-iteration build sanity. All must pass:
