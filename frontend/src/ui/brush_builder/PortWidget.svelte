@@ -2,8 +2,7 @@
     import { onMount, onDestroy, getContext } from 'svelte';
     import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
-    import type { PortRegistration } from './NodeCanvas.svelte';
-    import { portOffsetInGraph } from './port_layout';
+    import type { NodeCanvasContext } from './NodeCanvas.svelte';
 
     interface Props {
         nodeId: number;
@@ -33,21 +32,16 @@
     );
 
     // --- Port offset registration ---
-    const { register, unregister, getZoom } = getContext<PortRegistration>('port-registration');
+    const { register, unregister, coords } = getContext<NodeCanvasContext>('node-canvas');
     let dotEl = $state<HTMLDivElement>();
 
     onMount(() => {
-        // Measure offset of dot center relative to the ancestor node-widget.
-        // getBoundingClientRect returns screen pixels; the node-layer is
-        // scaled by zoom, so divide to land in graph space (the coordinate
-        // system wire paths render in).
+        // Wire paths render in graph space; the coord system returns the
+        // dot's center in the node's pre-transform layout coords regardless
+        // of the canvas zoom.
         const nodeEl = dotEl.closest('[data-node-id]') as HTMLElement;
         if (!nodeEl) return;
-        register(nodeId, port.name, port.dir, portOffsetInGraph(
-            dotEl.getBoundingClientRect(),
-            nodeEl.getBoundingClientRect(),
-            getZoom(),
-        ));
+        register(nodeId, port.name, port.dir, coords.elementCenterInParent(dotEl, nodeEl));
     });
 
     onDestroy(() => {
@@ -112,8 +106,8 @@
 
     /** Normalized position (0–1) from a pointer event relative to the slider bar. */
     function sliderFraction(e: PointerEvent): number {
-        const rect = sliderEl.getBoundingClientRect();
-        return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const local = coords.clientToElementLocal(sliderEl, e.clientX, e.clientY);
+        return Math.max(0, Math.min(1, local.x / sliderEl.clientWidth));
     }
 
     /** Quantize a value to multiples of `port.step` from `port.min`. Returns

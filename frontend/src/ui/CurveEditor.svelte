@@ -1,5 +1,7 @@
 <script lang="ts">
+    import { getContext } from 'svelte';
     import { sampleCurve, evaluateCurve } from '../lib/curve_math';
+    import type { NodeCanvasContext } from './brush_builder/NodeCanvas.svelte';
 
     type Point = [number, number];
 
@@ -9,12 +11,6 @@
         oninput?: (points: Point[]) => void;
         pinEndpoints?: boolean;
         gridDivisions?: number;
-        /** Ancestor CSS `scale(zoom)` factor. Pointer event coords come
-         *  back in visual screen pixels but the SVG's internal layout
-         *  (clientWidth/clientHeight, used to size the drawing area) is
-         *  in unscaled layout pixels — divide the screen-pixel delta by
-         *  zoom to convert. Same correction as `portOffsetInGraph`. */
-        zoom?: number;
     }
 
     let {
@@ -23,8 +19,9 @@
         oninput,
         pinEndpoints = true,
         gridDivisions = 4,
-        zoom = 1,
     }: Props = $props();
+
+    const { coords } = getContext<NodeCanvasContext>('node-canvas');
 
     const PAD = 6; // padding in px so edge points aren't clipped
     const POINT_R = 4;
@@ -87,10 +84,8 @@
     });
 
     function svgToNorm(e: PointerEvent | MouseEvent): Point {
-        const rect = svgEl.getBoundingClientRect();
-        const px = (e.clientX - rect.left) / zoom;
-        const py = (e.clientY - rect.top) / zoom;
-        return toNorm(px, py);
+        const { x, y } = coords.clientToElementLocal(svgEl, e.clientX, e.clientY);
+        return toNorm(x, y);
     }
 
     function onPointDown(e: PointerEvent, index: number) {

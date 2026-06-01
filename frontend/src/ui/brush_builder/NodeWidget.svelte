@@ -1,16 +1,19 @@
 <script lang="ts">
+    import { getContext } from 'svelte';
     import { brushGraph, type NodeInstance, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
     import CurveEditor from '../CurveEditor.svelte';
     import NodePreview from './NodePreview.svelte';
+    import type { NodeCanvasContext } from './NodeCanvas.svelte';
 
     interface Props {
         node: NodeInstance;
-        zoom: number;
     }
 
-    let { node, zoom }: Props = $props();
+    let { node }: Props = $props();
+
+    const { coords } = getContext<NodeCanvasContext>('node-canvas');
 
     let isSelected = $derived(brushGraph.selectedNode === node.id);
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
@@ -75,9 +78,8 @@
 
     function onNodeMove(e: PointerEvent) {
         if (!dragging) return;
-        const dx = (e.clientX - dragStartX) / zoom;
-        const dy = (e.clientY - dragStartY) / zoom;
-        brushGraph.moveNode(node.id, nodeStartX + dx, nodeStartY + dy);
+        const d = coords.clientDeltaToGraph(e.clientX - dragStartX, e.clientY - dragStartY);
+        brushGraph.moveNode(node.id, nodeStartX + d.x, nodeStartY + d.y);
     }
 
     function onNodeUp(e: PointerEvent) {
@@ -109,8 +111,8 @@
 
     function paramScrubFraction(e: PointerEvent): number {
         if (!scrubEl) return 0;
-        const rect = scrubEl.getBoundingClientRect();
-        return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const local = coords.clientToElementLocal(scrubEl, e.clientX, e.clientY);
+        return Math.max(0, Math.min(1, local.x / scrubEl.clientWidth));
     }
 
     function paramValueFromFraction(frac: number, def: any): number {
@@ -275,7 +277,6 @@
                     {#if pdef.kind === 'curve'}
                         <CurveEditor
                             points={node.params[i] ?? pdef.default}
-                            {zoom}
                             oninput={(pts) => brushGraph.setParamLocal(node.id, i, pts)}
                             onchange={(pts) => brushGraph.setParam(node.id, i, 'curve', JSON.stringify(pts))}
                         />
