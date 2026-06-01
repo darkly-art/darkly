@@ -1237,8 +1237,10 @@ fn frame_stroke_thumbnail(
 }
 
 /// Encode an RGBA8 buffer as a PNG. Used for baking brush thumbnails —
-/// the PNG goes into the `.darkly-brush` ZIP as `preview.png`.
-fn encode_rgba_as_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
+/// the PNG goes into the `.darkly-brush` ZIP as `preview.png`. Also
+/// reused by per-node CPU-rendered previews (the brush builder's
+/// in-card thumbnails).
+pub(crate) fn encode_rgba_as_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
     let expected = (width * height * 4) as usize;
     if pixels.len() < expected {
         log::error!(

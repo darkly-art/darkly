@@ -76,10 +76,6 @@ fn paint_brush(
         registry.get("stamp").unwrap().ports.clone(),
         vec![],
     );
-    // `paint` owns the dab dimensions; stamp's `size` port is inert.
-    // Hide it so users don't see two "Size" sliders in the brush
-    // properties panel.
-    graph.set_port_exposed(stamp, "size", false).unwrap();
     let terminal = graph.add_node(
         "paint",
         registry.get("paint").unwrap().ports.clone(),
@@ -647,13 +643,6 @@ fn rough_ink() -> Brush {
         registry.get("stamp").unwrap().ports.clone(),
         vec![],
     );
-    // Stamp's `size` port is exposed by default (because per-dab
-    // dispatch needs it), but `paint` ignores stamp's
-    // dimension knobs — the terminal owns dab dimensions in the
-    // compiled execution model. Hide stamp.size from the brush
-    // properties panel so the user doesn't see two "Size" sliders
-    // and scrub the inert one.
-    graph.set_port_exposed(stamp, "size", false).unwrap();
     let terminal = graph.add_node(
         "paint",
         registry.get("paint").unwrap().ports.clone(),
@@ -728,13 +717,14 @@ fn charcoal() -> Brush {
     );
     // Procedural paper grain — value noise sampled in canvas-pixel
     // space so multiple overlapping strokes share the same grain
-    // phase. Scale 8 px per cell gives a fine grainy texture; a
-    // fixed seed pins the pattern across reloads (the per-dab
-    // randomness comes from `rand_seed` on the shape).
+    // phase. Scale 2 px per cell gives a fine paper-fiber grain
+    // without dropping into pixel-grade dither; a fixed seed pins
+    // the pattern across reloads (the per-dab randomness comes from
+    // `rand_seed` on the shape).
     let paper = graph.add_node(
         "noise",
         registry.get("noise").unwrap().ports.clone(),
-        vec![ParamValue::Float(8.0), ParamValue::Int(1)],
+        vec![ParamValue::Float(2.0), ParamValue::Int(1)],
     );
     let split = graph.add_node(
         "split_color",
@@ -779,27 +769,31 @@ fn charcoal() -> Brush {
         registry.get("multiply").unwrap().ports.clone(),
         vec![],
     );
-    // Levels caps the combined product into the visible charcoal
-    // range: input < 0.10 clips to zero (white paper stays untouched
-    // by light pressure), input == 1.0 maps to 0.60 (charcoal is
-    // never solid black). Replaces the old caller-side flow=0.5 cap
-    // — same intent, declared in the graph where it can be edited.
+    // Levels clips input < 0.10 to zero (white paper untouched by
+    // light pressure) and stretches [0.10, 1.0] back across [0, 1].
+    // The brightness cap (charcoal is never solid black) is a
+    // separate multiply downstream so the levels primitive stays
+    // minimal.
     let tone = graph.add_node(
         "levels",
         registry.get("levels").unwrap().ports.clone(),
-        vec![
-            ParamValue::Float(0.10), // in_low — clip darkest grain
-            ParamValue::Float(1.00), // in_high
-            ParamValue::Float(0.00), // out_low
-            ParamValue::Float(0.60), // out_high — brightness ceiling
-        ],
+        vec![],
     );
+    graph.set_port_default(tone, "in_low", 0.10).unwrap();
+    graph.set_port_default(tone, "in_high", 1.00).unwrap();
+    // Caps the leveled tone at 0.60 — replaces the old caller-side
+    // flow=0.5 cap, expressed in the graph where it can be edited.
+    let brightness_cap = graph.add_node(
+        "multiply",
+        registry.get("multiply").unwrap().ports.clone(),
+        vec![],
+    );
+    graph.set_port_default(brightness_cap, "b", 0.60).unwrap();
     let stamp = graph.add_node(
         "stamp",
         registry.get("stamp").unwrap().ports.clone(),
         vec![],
     );
-    graph.set_port_exposed(stamp, "size", false).unwrap();
     let terminal = graph.add_node(
         "paint",
         registry.get("paint").unwrap().ports.clone(),
@@ -820,9 +814,11 @@ fn charcoal() -> Brush {
         // paper_shape × pen.pressure → tip_combined.
         (paper_shape, "result", tip_combined, "a"),
         (pen, "pressure", tip_combined, "b"),
-        // levels caps the product into [0, 0.60] with a 0.10 floor.
+        // levels clips at 0.10 and stretches to [0, 1].
         (tip_combined, "result", tone, "input"),
-        (tone, "output", stamp, "tip"),
+        // multiply by 0.60 default caps the brightest deposit at 60%.
+        (tone, "output", brightness_cap, "a"),
+        (brightness_cap, "result", stamp, "tip"),
         // Per-dab random seed → noisy silhouette varies per stamp.
         (rand_seed, "value", shape, "seed"),
         // Per-stamp colour.

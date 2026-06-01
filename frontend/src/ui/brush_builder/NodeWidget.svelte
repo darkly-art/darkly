@@ -15,12 +15,13 @@
     let isSelected = $derived(brushGraph.selectedNode === node.id);
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
     let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
-    /** Any GPU node that produces a texture output gets an in-node preview
-     *  thumbnail. The engine<< Updated upstream's `brush_node_preview` walks the predecessor
-     *  closure of the node and renders it through the existing async
-     *  preview path; this gate keeps us from showing previews for nodes
-     *  whose output isn't visualisable (Scalar, Vec2, etc.). */
-    let hasTextureOutput = $derived(outputPorts.some(p => p.wire_type === 'Texture'));
+    /** Nodes opt in to an in-card preview thumbnail by type id. The
+     *  engine's `brush_node_preview` matches on the same id and returns
+     *  PNG bytes (or an empty Vec, which the NodePreview component
+     *  treats as "no preview"). Add new entries here as their backend
+     *  arm in `brush_graph.rs::brush_node_preview` lands. */
+    const PREVIEWABLE_NODE_TYPES = new Set(['noise']);
+    let isPreviewable = $derived(PREVIEWABLE_NODE_TYPES.has(node.type_id));
 
     // Node type info for display name and params.
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));
@@ -409,7 +410,7 @@
             </div>
         {/if}
 
-        {#if hasTextureOutput}
+        {#if isPreviewable}
             <NodePreview nodeId={node.id} width={96} height={96} />
         {/if}
     </div>

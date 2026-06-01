@@ -183,7 +183,6 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     );
 
     let wires = [
-        (pen, "pressure", stamp, "size_input"),
         (pen, "pressure", terminal, "flow"),
         (paint_color, "color", stamp, "color"),
         (circle, "mask", stamp, "tip"),
@@ -211,35 +210,32 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
 /// Compile any brush graph into a ready-to-run runner.
 ///
 /// Generates the per-brush WGSL fragment shader and attaches it to
-/// the runner when the graph has a terminal. WGSL compile failures
-/// (e.g. an upstream node with no `compile_wgsl` implementation) are
-/// logged via `eprintln!` and surfaced as `GraphError::CycleDetected`
-/// so the engine's existing error path handles them.
+/// the runner when the graph has a terminal. Errors from the
+/// topological compile or the WGSL compile (e.g. an upstream node
+/// with no `compile_wgsl` implementation) are returned verbatim as
+/// human-readable strings.
 pub fn compile_graph(
     graph: &crate::nodegraph::Graph<BrushWireType>,
-) -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
+) -> Result<eval::BrushGraphRunner, String> {
     let registry = registry();
     let evaluators = registry.evaluators();
-    let mut runner = eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)?;
+    let mut runner = eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)
+        .map_err(|e| format!("{e}"))?;
     if runner.has_terminal() {
-        let plan = crate::nodegraph::compile(graph, registry.as_map())?;
+        let plan =
+            crate::nodegraph::compile(graph, registry.as_map()).map_err(|e| format!("{e}"))?;
         // Build a fresh evaluators map for the compiler — the runner
         // owns the live one. Cheap (just trait-object constructors).
         let compile_evals = registry.evaluators();
-        let compiled = wgsl::compile_brush_to_wgsl(graph, &plan, &compile_evals).map_err(|e| {
-            // Surface the WGSL compile error as a Graph compile
-            // error so the engine's existing error path handles
-            // it. Detail goes through `Display`.
-            eprintln!("paint WGSL compilation failed: {e}");
-            crate::nodegraph::GraphError::CycleDetected
-        })?;
+        let compiled = wgsl::compile_brush_to_wgsl(graph, &plan, &compile_evals)
+            .map_err(|e| format!("paint WGSL compilation failed: {e}"))?;
         runner.set_compiled_brush(std::sync::Arc::new(compiled));
     }
     Ok(runner)
 }
 
 /// Compile the default brush graph into a ready-to-run runner.
-pub fn default_runner() -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
+pub fn default_runner() -> Result<eval::BrushGraphRunner, String> {
     compile_graph(&default_graph())
 }
 
@@ -249,7 +245,7 @@ pub fn default_runner() -> Result<eval::BrushGraphRunner, crate::nodegraph::Grap
 pub fn compile_from_json(json: &str) -> Result<eval::BrushGraphRunner, String> {
     let graph: crate::nodegraph::Graph<BrushWireType> =
         serde_json::from_str(json).map_err(|e| format!("invalid graph JSON: {e}"))?;
-    compile_graph(&graph).map_err(|e| format!("graph compilation failed: {e}"))
+    compile_graph(&graph)
 }
 
 /// Reset every exposed input port on every node back to its registration

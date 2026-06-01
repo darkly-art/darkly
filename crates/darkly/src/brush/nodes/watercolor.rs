@@ -583,7 +583,6 @@ pub fn register() -> BrushNodeRegistration {
                     .with_unit(UnitType::Percent)
                     .with_icon("fa-solid fa-droplet")
                     .exposed()
-                    .with_preview_value(1.0)
                     .with_description("Per-dab flow (folded into color alpha → max-deposit ceiling)"),
                 PortDef::input("opacity", BrushWireType::Scalar)
                     .with_range(0.0, 1.0, 1.0)

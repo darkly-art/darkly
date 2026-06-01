@@ -5,7 +5,7 @@
 //! exercise the same code paths that users hit.
 //! Run with: `cargo test -p darkly --test engine`
 
-use darkly::brush::nodes::{pen_input, stamp};
+use darkly::brush::nodes::pen_input;
 use darkly::brush::wire::BrushWireType;
 use darkly::document::SelectionMode;
 use darkly::engine::types::StrokeOp;
@@ -872,19 +872,14 @@ fn small_brush_does_not_emit_subpixel_dab_spacing() {
     let mut engine = test_engine(w, h);
     let layer_id = engine.add_raster_layer(None);
 
-    // Force the densest configuration the UI allows:
-    // - Spacing ratio at its 4 % floor (any lower swamps the stabilizer).
-    // - Stamp size at near-zero, so the dab is clamped to 1×1 px and
-    //   the per-iteration step would be `1 * 0.04 = 0.04 px` without
-    //   the absolute floor.
+    // Force the densest configuration the UI allows: spacing ratio at
+    // its 4 % floor (any lower swamps the stabilizer). With a normal
+    // dab size, 4 % spacing falls below the absolute 1 px floor — so
+    // this exercises the spacing-floor path end-to-end.
     let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
     engine
         .brush_graph_set_port_default(pen_id, "spacing", 0.04)
         .expect("spacing port must exist");
-    let stamp_id = find_node_id(&engine, stamp::TYPE_ID);
-    engine
-        .brush_graph_set_port_default(stamp_id, "size", 0.001)
-        .expect("stamp size port must exist");
 
     // Horizontal stroke from x=16 to x=(w-16) at y = h/2. Same shape
     // as `paint_horizontal_stroke`, repeated here so the stroke length
@@ -3890,15 +3885,10 @@ fn long_stabilized_stroke_no_fallback() {
     // the checkpoint ring's coverage invariant — this test is about the
     // stabilizer's full-rerender fallback, not anything scatter-specific.
     let pen_id = find_node_id(&engine, pen_input::TYPE_ID);
-    let stamp_id = find_node_id(&engine, stamp::TYPE_ID);
     // Full-strength stabilization → max_divergence_window = 11 (iterations=10
     // + 1 from the influence-radius model). Spacing = 11 / 7 = 1.
     engine
         .brush_graph_set_port_default(pen_id, "stabilize", 1.0)
-        .unwrap();
-    // Smallish dab so the bbox stays cheap.
-    engine
-        .brush_graph_set_port_default(stamp_id, "size", 0.08)
         .unwrap();
 
     engine.begin_stroke(layer_id);

@@ -6,20 +6,15 @@
 //! premultiplied RGBA that downstream paint terminals consume.
 //!
 //! Flow lives on the `paint` terminal — that is the single, authoritative
-//! per-stroke deposit knob.
-//!
-//! ## Ignored ports
-//!
-//! `size_input`, `size`, `rotation`, `rotation_input`, `mirror_*`, and
-//! `ratio` are no-ops — dab dimensions, rotation and mirroring are
-//! owned by the terminal (which sizes its quad from `bbox_target_px`).
-//! Wiring them has no effect on the rendered dab.
+//! per-stroke deposit knob. Dab dimensions, rotation, and mirroring are
+//! likewise owned by the terminal (which sizes its quad from
+//! `bbox_target_px`).
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
 use crate::brush::wgsl::{CompileWgslCtx, NodeWgsl};
 use crate::brush::wire::{BrushWireType, ScalarValue};
-use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
+use crate::nodegraph::{NodeRegistration, PortDef};
 
 pub const TYPE_ID: &str = "stamp";
 
@@ -36,59 +31,9 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::input("tip", BrushWireType::Scalar)
                     .with_natural_range(0.0, 1.0)
                     .with_description("Per-fragment tip coverage (0..1)"),
-                PortDef::input("size_input", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 1.0)
-                    .with_natural_range(0.0, 1.0)
-                    .with_label("Size Input")
-                    .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-circle")
-                    .with_description(
-                        "Per-touch size multiplier. Ignored in compiled mode — \
-                         the terminal owns the dab dimensions.",
-                    ),
-                PortDef::input("size", BrushWireType::Scalar)
-                    .with_range(0.0, 4.0, 0.1)
-                    .with_label("Size")
-                    .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-up-right-and-down-left-from-center")
-                    .exposed()
-                    .with_preview_value(0.1)
-                    .with_description("Overall brush size (ignored — terminal owns size)"),
-                PortDef::input("rotation_input", BrushWireType::Scalar)
-                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                    .with_label("Rotation Input")
-                    .with_unit(UnitType::Degrees)
-                    .with_icon("fa-solid fa-rotate")
-                    .with_description("Per-dab rotation (ignored in compiled mode)"),
-                PortDef::input("rotation", BrushWireType::Scalar)
-                    .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                    .with_label("Rotation")
-                    .with_unit(UnitType::Degrees)
-                    .with_icon("fa-solid fa-rotate")
-                    .persist_in_thumbnail()
-                    .with_description("Static rotation (ignored in compiled mode)"),
-                PortDef::input("mirror_x", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 0.0)
-                    .with_natural_range(0.0, 1.0)
-                    .with_description("Flip horizontally (ignored in compiled mode)"),
-                PortDef::input("mirror_y", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 0.0)
-                    .with_natural_range(0.0, 1.0)
-                    .with_description("Flip vertically (ignored in compiled mode)"),
-                PortDef::input("ratio", BrushWireType::Scalar)
-                    .with_range(0.0, 1.0, 1.0)
-                    .with_natural_range(0.0, 1.0)
-                    .with_label("Ratio")
-                    .with_unit(UnitType::Percent)
-                    .with_icon("fa-solid fa-arrows-left-right")
-                    .with_description("Aspect ratio (ignored in compiled mode)"),
                 PortDef::input("color", BrushWireType::Vec4).with_description("Brush color (RGBA)"),
                 PortDef::output("dab", BrushWireType::Vec4)
                     .with_description("The stamped brush mark (premultiplied RGBA)"),
-                PortDef::output("dab_size", BrushWireType::Vec2)
-                    .with_description("Brush mark size in pixels (unused in compiled mode)"),
-                PortDef::output("preview", BrushWireType::Vec4)
-                    .with_description("Brush preview (unused)"),
             ],
             params: &[],
             is_gpu: true,

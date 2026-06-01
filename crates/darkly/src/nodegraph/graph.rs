@@ -125,22 +125,25 @@ pub struct PortDef<W: WireKind> {
     /// Whether this port is exposed in the brush properties panel.
     #[serde(default)]
     pub exposed: bool,
-    /// Value substituted for this port in the **cursor-following dab
-    /// overlay** (the `preview_wgsl` shader). The brush WGSL compiler
-    /// clones the graph, drops incoming wires on flagged ports, and
-    /// replaces `default` with this constant — so the cursor overlay
-    /// reads as a "showcase" of the brush regardless of the user's
-    /// working scrub values.
+    /// Value substituted for this port in every "brush identity"
+    /// render: the cursor-following dab overlay, the editor stroke
+    /// preview, and the library thumbnail bake. The brush WGSL
+    /// compiler clones the graph, drops incoming wires on flagged
+    /// ports, and replaces `default` with this constant — so all
+    /// previews read as a showcase of the brush regardless of the
+    /// user's working scrub. Real strokes still honour the
+    /// configured value.
     ///
-    /// Has **no effect** on stroke previews (brush editor dock, library
-    /// thumbnails, picker dab tiles): those render the user's graph
-    /// exactly. If you want a scrub of this port to skip the editor
-    /// preview re-render, use [`PortDef::preview_irrelevant_scrub`] —
-    /// that's a separate concern from cursor-overlay showcase values.
+    /// Use when the port is something the user actively scrubs but
+    /// the preview must stay at a canonical value (otherwise the
+    /// preview becomes a moving target as the user dials in their
+    /// brush). The picker dab tile uses a more aggressive
+    /// neutralizer (`reset_exposed_scrubs`) that targets every
+    /// exposed scrub regardless of `preview_value`.
     ///
-    /// Canonical examples: `paint.size` (0.1, so a huge brush still
-    /// fits the small cursor mask), `paint.flow` (1.0, so flow doesn't
-    /// dim the cursor preview).
+    /// Canonical example: `paint.size` (0.1, so a huge brush's
+    /// preview still fits the small cursor mask and the editor
+    /// preview doesn't redraw on every size scrub).
     #[serde(default)]
     pub preview_value: Option<f32>,
     /// Declares that scrubbing this port's value does **not** change
@@ -567,12 +570,18 @@ impl<W: WireKind> Graph<W> {
     /// wire on the port and replaces its `default` with the annotated
     /// constant. Ports without a `preview_value` are left alone.
     ///
-    /// **Internal to the WGSL compiler.** The compiler clones the input
-    /// graph and calls this on the clone before emitting the cursor-
-    /// overlay shader (`CompiledBrush::preview_wgsl`). Bake-path
-    /// renderers (editor stroke, library thumbnails, picker dab tiles)
-    /// render the user's graph as-given — they must not call this, or
-    /// the previews stop reflecting what the user would actually paint.
+    /// Called by every renderer that wants brush-identity output rather
+    /// than the user's momentary scrub state:
+    /// - the WGSL compiler, on a clone, before emitting
+    ///   `CompiledBrush::preview_wgsl` (the cursor halo);
+    /// - the brush-editor stroke preview;
+    /// - the library thumbnail bake (`brush_save`, `brush_thumbnail`).
+    ///
+    /// The picker dab tile uses a different, more aggressive neutralizer
+    /// (`reset_exposed_scrubs`) that resets every exposed scrub to its
+    /// registration default. Both kinds of preview want the same end:
+    /// scrubbing any `preview_value`-tagged port shouldn't redraw the
+    /// preview, because the rendered output is identical by construction.
     pub(crate) fn apply_preview_overrides(&mut self) {
         let mut overrides: Vec<(NodeId, String, f32)> = Vec::new();
         for node in self.nodes.values() {

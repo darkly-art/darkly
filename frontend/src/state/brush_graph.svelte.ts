@@ -402,12 +402,17 @@ class BrushGraphState {
     }
 
     /** Add a node of the given type. The new node is placed at `(x, y)` in
-     *  the local positions map. Returns the new node's ID. */
+     *  the local positions map. Returns the new node's ID, or null if the
+     *  add failed (e.g. the Rust compile step rejected the new graph). */
     addNode(typeId: string, x: number, y: number): number | null {
         if (!app.handle) return null;
         this.applyResult(app.handle.brush_graph_add_node(typeId));
-        // brush_graph_add_node assigns the pre-increment value of next_id,
-        // so the new node's ID is next_id - 1 after the result is applied.
+        // applyResult records the error and leaves `this.graph` unchanged
+        // on failure. If we didn't bail here, the code below would write
+        // `(x, y)` into nodePositions[next_id - 1] — and that id still
+        // points at the *previously*-added node (typically Paint), making
+        // it visibly warp to the cursor.
+        if (this.error) return null;
         if (!this.graph) return null;
         const id = this.graph.next_id - 1;
         // Position assignment is local-only — auto-layout would
