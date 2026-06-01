@@ -14,7 +14,7 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital painters. It aims to have everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
+[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital artists. It aims to have everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
 
 ### Darkly pledges to:
 
@@ -56,7 +56,7 @@ Veils have practical uses too:
 
 https://github.com/user-attachments/assets/43dac748-d79f-403f-8456-10dad779a6f9
 
-Voids are a special type of layer that specializes in pulling inspiration from outside sources. 
+Voids are a type of layer that specializes in pulling inspiration from outside sources.
 
 You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
