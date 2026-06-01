@@ -15,6 +15,7 @@ pub mod nodes;
 pub mod paint_info;
 pub mod paint_target_ext;
 pub mod pipeline;
+pub mod portable;
 pub mod preview_renderer;
 pub mod save_points;
 pub mod scratch;
@@ -264,7 +265,7 @@ pub fn compile_from_json(json: &str) -> Result<eval::BrushGraphRunner, String> {
 pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) {
     let registry = registry();
     let mut resets: Vec<(crate::nodegraph::NodeId, String, f32)> = Vec::new();
-    for (id, node) in &graph.nodes {
+    for (id, node) in graph.nodes() {
         let Some(reg) = registry.get(&node.type_id) else {
             continue;
         };

@@ -478,7 +478,7 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
     // vs-radius divergence we're guarding against is independent of the
     // curve shape.
     let curve_id = graph
-        .nodes
+        .nodes()
         .iter()
         .find(|(_, n)| n.type_id == darkly::brush::nodes::curve::TYPE_ID)
         .map(|(id, _)| *id)

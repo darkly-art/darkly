@@ -275,6 +275,7 @@
                     {#if pdef.kind === 'curve'}
                         <CurveEditor
                             points={node.params[i] ?? pdef.default}
+                            {zoom}
                             oninput={(pts) => brushGraph.setParamLocal(node.id, i, pts)}
                             onchange={(pts) => brushGraph.setParam(node.id, i, 'curve', JSON.stringify(pts))}
                         />

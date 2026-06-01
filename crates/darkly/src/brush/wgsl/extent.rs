@@ -105,7 +105,7 @@ pub(crate) fn compose_brush_extent(
         let Some(evaluator) = evaluators.get(&step.type_id) else {
             continue;
         };
-        let Some(node) = graph.nodes.get(&step.node_id) else {
+        let Some(node) = graph.nodes().get(&step.node_id) else {
             continue;
         };
         let wired_inputs: HashSet<String> = step

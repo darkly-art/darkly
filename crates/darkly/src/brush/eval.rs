@@ -536,7 +536,7 @@ impl BrushGraphRunner {
         // Precompute curve LUTs for nodes with Curve parameters.
         let mut node_data = HashMap::new();
         for step in &plan.steps {
-            if let Some(node) = graph.nodes.get(&step.node_id) {
+            if let Some(node) = graph.nodes().get(&step.node_id) {
                 let lut = node.params.iter().find_map(|p| match p {
                     ParamValue::Curve(pts) if pts.len() >= 2 => Some(CurveLut::from_points(pts)),
                     _ => None,

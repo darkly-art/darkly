@@ -2,6 +2,7 @@
     import { app } from '../../state/app.svelte';
     import { brushGraph } from '../../state/brush_graph.svelte';
     import { config, tooltipForAction } from '../../config/store.svelte';
+    import { toast } from '../../state/toast.svelte';
     import LiveBrushPreviewStrip from '../brush_picker/LiveBrushPreviewStrip.svelte';
     import NodeCanvas from './NodeCanvas.svelte';
     import AddNodeMenu from './AddNodeMenu.svelte';
@@ -75,6 +76,40 @@
 
     function handleReset() {
         brushGraph.resetToDefault();
+    }
+
+    async function handleCopy() {
+        const yaml = brushGraph.exportYaml();
+        if (!yaml) {
+            toast.show('error', 'Nothing to copy');
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(yaml);
+            toast.show('success', 'Graph copied');
+        } catch (e) {
+            toast.show('error', `Copy failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
+    }
+
+    async function handlePaste() {
+        let text: string;
+        try {
+            text = await navigator.clipboard.readText();
+        } catch (e) {
+            toast.show('error', `Paste failed: ${e instanceof Error ? e.message : String(e)}`);
+            return;
+        }
+        if (!text.trim()) {
+            toast.show('warning', 'Clipboard is empty');
+            return;
+        }
+        const err = brushGraph.importYaml(text);
+        if (err) {
+            toast.show('error', err);
+        } else {
+            toast.show('success', 'Graph pasted');
+        }
     }
 
     /** Measure all node widgets in the DOM and run auto-layout with real sizes. */
@@ -225,6 +260,8 @@
         <button class="toolbar-btn" onclick={handleReset} title="Reset to default">Reset</button>
         <button class="toolbar-btn" onclick={handleAutoLayout} title="Auto-layout nodes">Layout</button>
         <div class="spacer"></div>
+        <button class="toolbar-btn" onclick={handleCopy} title="Copy graph as YAML to clipboard">Copy</button>
+        <button class="toolbar-btn" onclick={handlePaste} title="Replace graph with YAML from clipboard">Paste</button>
     </div>
 </div>
 

@@ -73,7 +73,7 @@ impl DarklyEngine {
     pub fn active_brush_supports_erase(&self) -> bool {
         let graph = self.active_brush_graph();
         let registry = crate::brush::registry();
-        for node in graph.nodes.values() {
+        for node in graph.nodes().values() {
             let Some(reg) = registry.get(&node.type_id) else {
                 continue;
             };
@@ -125,6 +125,37 @@ impl DarklyEngine {
         Ok(())
     }
 
+    /// Export the active brush graph as the human/AI-friendly YAML
+    /// format defined by [`crate::brush::portable::PortableBrush`].
+    /// Round-trippable through [`Self::set_brush_graph_yaml`].
+    pub fn active_brush_graph_yaml(&self) -> Result<String, String> {
+        let registry = crate::brush::registry();
+        let portable = crate::brush::portable::PortableBrush::from_graph_only(
+            &self.active_brush_graph(),
+            registry,
+        )?;
+        serde_yml::to_string(&portable).map_err(|e| format!("YAML serialize error: {e}"))
+    }
+
+    /// Replace the active brush graph from a YAML string in the
+    /// [`PortableBrush`](crate::brush::portable::PortableBrush) format.
+    /// Validates and compiles before swapping; on failure the previous
+    /// graph is untouched and an error string describes the problem.
+    pub fn set_brush_graph_yaml(&mut self, yaml: &str) -> Result<(), String> {
+        let portable: crate::brush::portable::PortableBrush =
+            serde_yml::from_str(yaml).map_err(|e| format!("YAML parse error: {e}"))?;
+        let registry = crate::brush::registry();
+        let graph = portable.into_graph(registry)?;
+        self.tool_session
+            .write()
+            .get_mut::<BrushState>()
+            .expect(NO_BRUSH_STATE)
+            .graph = graph;
+        self.snapshot_brush_defaults();
+        self.compile_active(ChangeKind::Topology)?;
+        Ok(())
+    }
+
     /// Reset the active brush graph to the built-in default.
     pub fn reset_brush_graph(&mut self) {
         self.tool_session
@@ -146,11 +177,11 @@ impl DarklyEngine {
         let mut tool = self.tool_session.write();
         let brush = tool.get_mut::<BrushState>().expect(NO_BRUSH_STATE);
         brush.defaults.clear();
-        // Re-borrow split: walking `brush.graph.nodes` and inserting
+        // Re-borrow split: walking `brush.graph.nodes()` and inserting
         // into `brush.defaults` are reads/writes of disjoint fields on
         // `BrushState`, so the borrow checker permits both inside the
         // loop with no separate snapshot.
-        for node in brush.graph.nodes.values() {
+        for node in brush.graph.nodes().values() {
             for port in &node.ports {
                 if port.dir == PortDir::Input {
                     brush
@@ -618,7 +649,7 @@ impl DarklyEngine {
     pub fn brush_node_preview(&mut self, node_id: u64) -> Vec<u8> {
         let tool = self.tool_session.read();
         let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
-        let Some(node) = brush.graph.nodes.get(&NodeId(node_id)) else {
+        let Some(node) = brush.graph.nodes().get(&NodeId(node_id)) else {
             return Vec::new();
         };
         match node.type_id.as_str() {
@@ -864,7 +895,7 @@ impl DarklyEngine {
         let layout = brush.graph.auto_layout();
         let mut result: Vec<ExposedPortInfo> = Vec::new();
 
-        for node in brush.graph.nodes.values() {
+        for node in brush.graph.nodes().values() {
             let reg = registry.get(&node.type_id);
             let display_name = reg.map(|r| r.display_name).unwrap_or("");
 
@@ -973,7 +1004,7 @@ impl DarklyEngine {
         let type_id = {
             let tool = self.tool_session.read();
             let brush = tool.get::<BrushState>().expect(NO_BRUSH_STATE);
-            match brush.graph.nodes.get(&nid) {
+            match brush.graph.nodes().get(&nid) {
                 Some(node) => node.type_id.clone(),
                 None => return Err(format!("node {node_id} not found")),
             }

@@ -300,6 +300,35 @@ class BrushGraphState {
         this.snapshotTopologyVersion();
     }
 
+    /** Return the active brush graph as a portable YAML string. Empty
+     *  string on serialization failure (treated as "nothing to copy"). */
+    exportYaml(): string {
+        if (!app.handle) return '';
+        return app.handle.brush_graph_export_yaml();
+    }
+
+    /** Replace the active brush graph from a portable YAML string.
+     *  Returns null on success or an error string on parse/validation
+     *  failure — same convention as `loadBrush`. */
+    importYaml(yaml: string): string | null {
+        if (!app.handle) return 'engine not ready';
+        const result = app.handle.brush_graph_import_yaml(yaml);
+        if (result !== null) {
+            const err = String(result);
+            this.error = err;
+            return err;
+        }
+        // Same post-mutation refresh as loadBrush / resetToDefault.
+        this.nodePositions = {};
+        this.fetchGraph();
+        this.refreshExposedPorts();
+        this.refreshSupportsErase();
+        this.error = null;
+        this.activeBrush = null;
+        this.snapshotTopologyVersion();
+        return null;
+    }
+
     /** Refresh the brush list from WASM. */
     refreshBrushes() {
         if (!app.handle) return;

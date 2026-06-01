@@ -9,6 +9,12 @@
         oninput?: (points: Point[]) => void;
         pinEndpoints?: boolean;
         gridDivisions?: number;
+        /** Ancestor CSS `scale(zoom)` factor. Pointer event coords come
+         *  back in visual screen pixels but the SVG's internal layout
+         *  (clientWidth/clientHeight, used to size the drawing area) is
+         *  in unscaled layout pixels — divide the screen-pixel delta by
+         *  zoom to convert. Same correction as `portOffsetInGraph`. */
+        zoom?: number;
     }
 
     let {
@@ -17,6 +23,7 @@
         oninput,
         pinEndpoints = true,
         gridDivisions = 4,
+        zoom = 1,
     }: Props = $props();
 
     const PAD = 6; // padding in px so edge points aren't clipped
@@ -81,8 +88,8 @@
 
     function svgToNorm(e: PointerEvent | MouseEvent): Point {
         const rect = svgEl.getBoundingClientRect();
-        const px = e.clientX - rect.left;
-        const py = e.clientY - rect.top;
+        const px = (e.clientX - rect.left) / zoom;
+        const py = (e.clientY - rect.top) / zoom;
         return toNorm(px, py);
     }
 

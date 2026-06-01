@@ -1,0 +1,54 @@
+name: Rough Ink
+category: basic
+nodes:
+  1:
+    type: pen_input
+    port_defaults:
+      stabilize: 0.6
+    exposed:
+    - stabilize
+  2:
+    type: paint_color
+  3:
+    type: curve
+    params:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.4
+        - 0.7
+      - - 1.0
+        - 1.0
+  4:
+    type: random
+  5:
+    type: random
+  6:
+    type: random
+  7:
+    type: circle
+    params:
+      algorithm: 1
+    port_defaults:
+      frequency: 8.0
+      octaves: 4.0
+      softness: 0.1
+  8:
+    type: stamp
+  9:
+    type: paint
+    exposed:
+    - flow
+    - opacity
+    - size
+connections:
+- '1.position -> 9.position'
+- '1.pressure -> 3.input'
+- '1.pressure -> 9.flow'
+- '2.color -> 8.color'
+- '3.output -> 9.size_input'
+- '4.value -> 7.amplitude'
+- '5.value -> 7.phase_input'
+- '6.value -> 7.seed'
+- '7.mask -> 8.tip'
+- '8.dab -> 9.rgba'

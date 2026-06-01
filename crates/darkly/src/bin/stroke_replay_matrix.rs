@@ -206,7 +206,7 @@ fn brush_graph_json(topology: Topology, dab_radius_px: f32) -> String {
         .unwrap_or_else(|err| panic!("brush `{brush_name}`: {err}"));
     let graph = &mut brush.metadata.graph;
     let pen_id = graph
-        .nodes
+        .nodes()
         .iter()
         .find(|(_, n)| n.type_id == darkly::brush::nodes::pen_input::TYPE_ID)
         .map(|(id, _)| *id)

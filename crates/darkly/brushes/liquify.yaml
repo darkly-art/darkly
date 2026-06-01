@@ -1,0 +1,19 @@
+name: Liquify
+category: effects
+nodes:
+  1:
+    type: pen_input
+    port_defaults:
+      spacing: 0.0
+      spacing_min_px: 4.0
+  2:
+    type: liquify
+    exposed:
+    - size
+    - softness
+    - strength
+connections:
+- '1.distance -> 2.distance'
+- '1.drawing_angle -> 2.direction'
+- '1.motion -> 2.motion'
+- '1.position -> 2.position'

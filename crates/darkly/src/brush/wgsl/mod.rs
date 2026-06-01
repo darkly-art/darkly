@@ -264,7 +264,7 @@ pub fn compile_brush_to_wgsl(
         // Resolve inputs from the slot table built so far.
         let mut inputs: HashMap<String, InputBinding> = HashMap::new();
         let node = graph
-            .nodes
+            .nodes()
             .get(&step.node_id)
             .expect("plan step references existing node");
         for slot_info in &step.input_slots {
@@ -308,7 +308,7 @@ pub fn compile_brush_to_wgsl(
         // called, so we skip the extra work.
         let preview_cctx_parts = if step.is_terminal {
             let preview_node = preview_graph
-                .nodes
+                .nodes()
                 .get(&step.node_id)
                 .expect("preview-graph clone has the same node set as the original");
             // Drop wired bindings the override removed — those ports
@@ -704,7 +704,7 @@ fn apply_wire_remap(
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> String {
     let src_range = graph
-        .nodes
+        .nodes()
         .get(&source.node)
         .and_then(|n| {
             n.ports
@@ -713,7 +713,7 @@ fn apply_wire_remap(
         })
         .and_then(|p| p.natural_range);
     let dst_range = graph
-        .nodes
+        .nodes()
         .get(&dest_node)
         .and_then(|n| {
             n.ports
@@ -742,10 +742,10 @@ fn hash_graph_topology(graph: &crate::nodegraph::Graph<BrushWireType>) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
-    let mut node_ids: Vec<_> = graph.nodes.keys().copied().collect();
+    let mut node_ids: Vec<_> = graph.nodes().keys().copied().collect();
     node_ids.sort_by_key(|n| n.0);
     for id in &node_ids {
-        let node = &graph.nodes[id];
+        let node = &graph.nodes()[id];
         id.0.hash(&mut hasher);
         node.type_id.hash(&mut hasher);
         // Hash params by serialising — order is stable; values that

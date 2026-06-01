@@ -107,7 +107,7 @@ impl<W: WireKind> Graph<W> {
     /// fall back to port-count estimation.
     pub fn auto_layout_with_sizes(&self, sizes: &HashMap<NodeId, [f32; 2]>) -> NodeLayout {
         let mut layout: NodeLayout = HashMap::new();
-        if self.nodes.is_empty() {
+        if self.nodes().is_empty() {
             return layout;
         }
 
@@ -218,7 +218,7 @@ impl<W: WireKind> Graph<W> {
 
         let mut widths: HashMap<NodeId, f32> = HashMap::new();
         let mut heights: HashMap<NodeId, f32> = HashMap::new();
-        for (&id, node) in &self.nodes {
+        for (&id, node) in self.nodes() {
             if let Some(&[w, h]) = sizes.get(&id) {
                 widths.insert(id, w);
                 heights.insert(id, h);
@@ -264,7 +264,7 @@ impl<W: WireKind> Graph<W> {
         // ── Disconnected nodes ──────────────────────────────────────
 
         let mut disconnected: Vec<NodeId> = self
-            .nodes
+            .nodes()
             .keys()
             .filter(|id| !connected.contains(id))
             .copied()
@@ -314,7 +314,7 @@ mod tests {
     fn empty_graph() {
         let g = Graph::<TestWireKind>::new();
         let layout = g.auto_layout();
-        assert!(g.nodes.is_empty());
+        assert!(g.nodes().is_empty());
         assert!(layout.is_empty());
     }
 

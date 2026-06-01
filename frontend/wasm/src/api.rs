@@ -1564,6 +1564,29 @@ impl DarklyHandle {
         }
     }
 
+    /// Export the active brush graph as YAML (the human/AI-friendly
+    /// format documented in `crates/darkly/src/brush/portable.rs`).
+    /// Returns an empty string on serialization failure — should not
+    /// happen for a valid in-memory graph.
+    pub fn brush_graph_export_yaml(&self) -> String {
+        self.flush_if_needed();
+        self.engine
+            .borrow()
+            .active_brush_graph_yaml()
+            .unwrap_or_default()
+    }
+
+    /// Replace the active brush graph from YAML. Returns `null` on
+    /// success or an error string on parse / validation failure (same
+    /// convention as `brush_graph_compile`).
+    pub fn brush_graph_import_yaml(&self, yaml: &str) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().set_brush_graph_yaml(yaml) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
     pub fn brush_graph_add_node(&self, type_id: &str) -> JsValue {
         self.flush_if_needed();
         graph_result(self.engine.borrow_mut().brush_graph_add_node(type_id))

@@ -50,14 +50,14 @@ fn adding_a_non_compilable_node_returns_error_and_leaves_graph_unchanged() {
     // The graph must be unchanged — no orphan clamp node committed.
     let after = engine.active_brush_graph();
     assert_eq!(
-        after.nodes.len(),
-        before.nodes.len(),
+        after.nodes().len(),
+        before.nodes().len(),
         "failed add must not insert a node — before had {} nodes, after has {}",
-        before.nodes.len(),
-        after.nodes.len(),
+        before.nodes().len(),
+        after.nodes().len(),
     );
     assert!(
-        after.nodes.values().all(|n| n.type_id != "clamp"),
+        after.nodes().values().all(|n| n.type_id != "clamp"),
         "failed add must not leave a clamp node in the committed graph",
     );
 }
@@ -77,8 +77,8 @@ fn adding_a_compilable_node_still_works() {
     );
     let after = engine.active_brush_graph();
     assert_eq!(
-        after.nodes.len(),
-        before.nodes.len() + 1,
+        after.nodes().len(),
+        before.nodes().len() + 1,
         "successful add must insert exactly one node",
     );
 }

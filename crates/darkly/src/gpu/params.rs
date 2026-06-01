@@ -154,6 +154,100 @@ impl ParamDef {
             ParamDef::Icon { default, .. } => ParamValue::String(default.to_string()),
         }
     }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            ParamDef::Float { name, .. }
+            | ParamDef::FloatInput { name, .. }
+            | ParamDef::Int { name, .. }
+            | ParamDef::Bool { name, .. }
+            | ParamDef::String { name, .. }
+            | ParamDef::Curve { name, .. }
+            | ParamDef::Enum { name, .. }
+            | ParamDef::Icon { name, .. } => name,
+        }
+    }
+
+    /// Coerce an externally-typed scalar (e.g. a value parsed from YAML)
+    /// into the concrete `ParamValue` variant this def expects. Floats
+    /// also accept bare integers, since YAML's `1` and `1.0` are
+    /// distinct but the param's natural type is the same.
+    pub fn coerce_portable(&self, v: PortableValue) -> Result<ParamValue, ParamTypeMismatch> {
+        let actual = v.kind_label();
+        let mismatch = |expected: &'static str| Err(ParamTypeMismatch { expected, actual });
+        match self {
+            ParamDef::Bool { .. } => match v {
+                PortableValue::Bool(b) => Ok(ParamValue::Bool(b)),
+                _ => mismatch("bool"),
+            },
+            ParamDef::Int { .. } | ParamDef::Enum { .. } => match v {
+                PortableValue::Int(i) => Ok(ParamValue::Int(i as i32)),
+                _ => mismatch("integer"),
+            },
+            ParamDef::Float { .. } | ParamDef::FloatInput { .. } => match v {
+                PortableValue::Float(f) => Ok(ParamValue::Float(f as f32)),
+                PortableValue::Int(i) => Ok(ParamValue::Float(i as f32)),
+                _ => mismatch("number"),
+            },
+            ParamDef::String { .. } | ParamDef::Icon { .. } => match v {
+                PortableValue::String(s) => Ok(ParamValue::String(s)),
+                _ => mismatch("string"),
+            },
+            ParamDef::Curve { .. } => match v {
+                PortableValue::Curve(c) => Ok(ParamValue::Curve(c)),
+                _ => mismatch("curve (list of [x, y] pairs)"),
+            },
+        }
+    }
+}
+
+/// Returned by [`ParamDef::coerce_portable`] when the externally-typed
+/// scalar does not match the def's expected variant. Carries just the
+/// type labels — the caller adds parameter-name / node-type context.
+#[derive(Debug)]
+pub struct ParamTypeMismatch {
+    pub expected: &'static str,
+    pub actual: &'static str,
+}
+
+/// Untyped scalar/composite value parsed from an external format (YAML,
+/// JSON). Coerced into the concrete [`ParamValue`] via
+/// [`ParamDef::coerce_portable`] using the registration metadata.
+///
+/// `#[serde(untagged)]` tries variants top-down — more-specific first
+/// so a YAML `true` doesn't slip into `Int(1)`, `42` lands in `Int`
+/// before `Float`, and the variant carrying its source typing through
+/// the round trip means `algorithm: 0` reads back as `0` (not `0.0`).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum PortableValue {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    String(String),
+    Curve(Vec<[f32; 2]>),
+}
+
+impl PortableValue {
+    pub fn from_param(p: &ParamValue) -> Self {
+        match p {
+            ParamValue::Bool(b) => Self::Bool(*b),
+            ParamValue::Int(i) => Self::Int(*i as i64),
+            ParamValue::Float(f) => Self::Float(*f as f64),
+            ParamValue::String(s) => Self::String(s.clone()),
+            ParamValue::Curve(c) => Self::Curve(c.clone()),
+        }
+    }
+
+    fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "bool",
+            Self::Int(_) => "integer",
+            Self::Float(_) => "float",
+            Self::String(_) => "string",
+            Self::Curve(_) => "curve",
+        }
+    }
 }
 
 #[cfg(test)]

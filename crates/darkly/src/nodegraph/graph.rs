@@ -460,7 +460,7 @@ impl std::error::Error for FindTerminalError {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct Graph<W: WireKind> {
-    pub nodes: HashMap<NodeId, NodeInstance<W>>,
+    nodes: HashMap<NodeId, NodeInstance<W>>,
     pub connections: Vec<Connection>,
     next_id: u64,
 }
@@ -478,6 +478,14 @@ impl<W: WireKind> Graph<W> {
             connections: Vec::new(),
             next_id: 1,
         }
+    }
+
+    /// Read-only access to the node map. The graph owns id assignment
+    /// (via [`add_node`](Self::add_node)) and the invariant that every
+    /// connection references existing nodes, so external code must go
+    /// through the graph's methods to mutate the set.
+    pub fn nodes(&self) -> &HashMap<NodeId, NodeInstance<W>> {
+        &self.nodes
     }
 
     /// Add a node and return its assigned id.
