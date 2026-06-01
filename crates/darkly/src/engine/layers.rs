@@ -38,6 +38,118 @@ impl DarklyEngine {
         id
     }
 
+    /// Create a new group and move every id in `ids` into it, preserving
+    /// their relative panel order. The group ends up at the panel-topmost
+    /// selected layer's slot — its parent, its position — so the act
+    /// "wraps" the selection in place. Cross-parent selections are
+    /// supported; sources from other groups get pulled into the new group.
+    ///
+    /// Locked layers and any id whose ancestor is also in `ids` are
+    /// skipped; the new group is created only if at least one editable
+    /// source remains. The whole op is one [`CompoundAction`], so a
+    /// single undo restores the original tree.
+    pub fn group_layers(&mut self, ids: Vec<LayerId>) -> Result<LayerId, String> {
+        if ids.is_empty() {
+            return Err("Need at least one layer to group".into());
+        }
+
+        let mut editable: Vec<LayerId> = Vec::with_capacity(ids.len());
+        for &id in &ids {
+            if self.doc.find_node(id).is_none() {
+                continue;
+            }
+            if !self.doc.is_node_editable(id) {
+                continue;
+            }
+            // Drop any id whose ancestor is also in the batch — moving
+            // the ancestor brings the descendant along; processing both
+            // would yank the descendant out of its group.
+            if ids
+                .iter()
+                .any(|&other| other != id && self.doc.is_ancestor_of(other, id))
+            {
+                continue;
+            }
+            editable.push(id);
+        }
+        if editable.is_empty() {
+            return Err("No editable layers to group".into());
+        }
+
+        // Sort by panel order so the last entry is the panel-topmost
+        // editable source — its slot is where the new group will live.
+        let order = self.doc.all_node_ids_in_order();
+        let order_idx = |id: LayerId| order.iter().position(|&x| x == id).unwrap_or(usize::MAX);
+        editable.sort_by_key(|&id| order_idx(id));
+        let topmost = *editable.last().expect("non-empty");
+        let topmost_parent = self.doc.parent_of(topmost);
+        let topmost_pos = self.doc.position_in_parent(topmost).unwrap_or(0);
+
+        // Create the group at the top of root — a stable spot that
+        // can't accidentally land it inside one of the sources (which
+        // would happen if we anchored on a Group-typed `topmost`, since
+        // `add_group(Some(group))` resolves to `IntoGroupTop(group)`).
+        // We'll move the group to the topmost's slot at the end.
+        let group_id = self.doc.add_group(None);
+        let group_initial_parent = self.doc.parent_of(group_id);
+        let group_initial_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
+
+        let mut actions: Vec<Box<dyn UndoAction>> = Vec::with_capacity(editable.len() + 2);
+        actions.push(Box::new(LayerAddAction::new(
+            group_id,
+            group_initial_parent,
+            group_initial_pos,
+        )));
+
+        // Move sources into the group, preserving bottom-first ordering
+        // (so panel order top-first reads as the original layout). The
+        // first source goes to IntoGroupBottom; subsequent sources chain
+        // `After(prev)` so they land contiguously in the same relative
+        // order they had before.
+        let mut prev: Option<LayerId> = None;
+        for id in editable {
+            let target = match prev {
+                None => MoveTarget::IntoGroupBottom(group_id),
+                Some(p) => MoveTarget::After(p),
+            };
+            if let Some(a) = self.move_layer_inner(id, target) {
+                actions.push(a);
+                prev = Some(id);
+            }
+        }
+
+        // Reposition the group at the topmost's original slot. The
+        // topmost has already been detached (it was the last source
+        // moved into the group), so its parent's children Vec is short
+        // one entry — `topmost_pos` now points at whatever was just
+        // above topmost in panel order. Inserting the group there
+        // lands it exactly where topmost used to be.
+        let group_pre_move_parent = self.doc.parent_of(group_id);
+        let group_pre_move_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
+        self.doc.detach_for_undo(group_id);
+        let clamped_pos = topmost_pos.min(match topmost_parent {
+            Some(p) => self.doc.children_of(p).len(),
+            None => self.doc.children_of(self.doc.root_id()).len(),
+        });
+        self.doc
+            .reinsert_node(group_id, topmost_parent, clamped_pos);
+        let group_final_parent = self.doc.parent_of(group_id);
+        let group_final_pos = self.doc.position_in_parent(group_id).unwrap_or(0);
+        if (group_pre_move_parent, group_pre_move_pos) != (group_final_parent, group_final_pos) {
+            actions.push(Box::new(LayerMoveAction::new(
+                group_id,
+                group_pre_move_parent,
+                group_pre_move_pos,
+                group_final_parent,
+                group_final_pos,
+            )));
+        }
+
+        self.push_undo(Box::new(CompoundAction::new(actions)));
+        self.compositor.mark_dirty();
+        Ok(group_id)
+    }
+
     /// Add a new void (procedural) layer. `params` is matched against the
     /// void type's `ParamDef` schema by index — callers that don't have a
     /// hand-rolled slice should use the type's defaults via
@@ -216,47 +328,164 @@ impl DarklyEngine {
             return Err("Cannot delete the last layer".into());
         }
 
-        let parent = self.doc.parent_of(layer_id);
-        let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
-
-        // Collect tombstones before detaching — `detach_for_undo` severs
-        // the parent links `collect_pixel_node_ids` walks to enumerate the
-        // subtree.
-        let tombstones = self.collect_pixel_node_ids(layer_id);
-
-        if self.doc.detach_for_undo(layer_id).is_some() {
-            // GPU textures stay alive in the compositor's pool until the
-            // owning undo entry is evicted (LayerRemoveAction::on_evict),
-            // so an undo of the removal restores the pixels intact.
-            self.push_undo(Box::new(LayerRemoveAction::new(
-                layer_id, parent, pos, tombstones,
-            )));
+        if let Some(action) = self.detach_layer_for_remove(layer_id) {
+            self.push_undo(action);
         }
-
         self.compositor.mark_dirty();
         Ok(())
     }
 
+    /// Detach a single layer for removal and return the matching undo
+    /// action without pushing it. Returns `None` if `layer_id` isn't in
+    /// the tree. The caller is responsible for any editability or
+    /// "last layer" checks; this is the raw mutation half shared between
+    /// [`Self::remove_layer`] and [`Self::remove_layers`].
+    fn detach_layer_for_remove(&mut self, layer_id: LayerId) -> Option<Box<dyn UndoAction>> {
+        let parent = self.doc.parent_of(layer_id);
+        let pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
+        // Collect tombstones before detaching — `detach_for_undo` severs
+        // the parent links `collect_pixel_node_ids` walks to enumerate
+        // the subtree.
+        let tombstones = self.collect_pixel_node_ids(layer_id);
+        self.doc.detach_for_undo(layer_id)?;
+        Some(Box::new(LayerRemoveAction::new(
+            layer_id, parent, pos, tombstones,
+        )))
+    }
+
+    /// Remove every id in `ids` in a single undo step. Locked layers and
+    /// any id whose ancestor is also in `ids` are silently skipped; the
+    /// return value is the count of locked layers that were ignored so the
+    /// UI can surface a "N locked layers skipped" toast. Errors only when
+    /// removing the editable set would leave zero layers in the document.
+    pub fn remove_layers(&mut self, ids: Vec<LayerId>) -> Result<usize, String> {
+        let mut editable = Vec::with_capacity(ids.len());
+        let mut skipped_locked = 0usize;
+        for &id in &ids {
+            if self.doc.find_node(id).is_none() {
+                continue;
+            }
+            if !self.doc.is_node_editable(id) {
+                skipped_locked += 1;
+                continue;
+            }
+            // Drop any id that's a descendant of another id already in
+            // the batch — removing the ancestor takes the subtree with it.
+            if ids
+                .iter()
+                .any(|&other| other != id && self.doc.is_ancestor_of(other, id))
+            {
+                continue;
+            }
+            editable.push(id);
+        }
+        if editable.is_empty() {
+            self.compositor.mark_dirty();
+            return Ok(skipped_locked);
+        }
+        if self.doc.node_count().saturating_sub(editable.len()) == 0 {
+            return Err("Cannot delete the last layer".into());
+        }
+
+        self.batched_undo(&editable, |engine, id| engine.detach_layer_for_remove(id));
+        self.compositor.mark_dirty();
+        Ok(skipped_locked)
+    }
+
     pub fn move_layer(&mut self, layer_id: LayerId, target: MoveTarget) {
+        if let Some(action) = self.move_layer_inner(layer_id, target) {
+            self.push_undo(action);
+        }
+        self.compositor.mark_dirty();
+    }
+
+    /// Move a single layer and return the matching undo action without
+    /// pushing it. Returns `None` if `layer_id` is locked or not in the
+    /// tree. Shared between [`Self::move_layer`] and
+    /// [`Self::move_layers`].
+    fn move_layer_inner(
+        &mut self,
+        layer_id: LayerId,
+        target: MoveTarget,
+    ) -> Option<Box<dyn UndoAction>> {
         if !self.doc.is_node_editable(layer_id) {
-            return;
+            return None;
         }
         let old_parent = self.doc.parent_of(layer_id);
-        let old_pos = match self.doc.position_in_parent(layer_id) {
-            Some(p) => p,
-            None => return,
-        };
-
+        let old_pos = self.doc.position_in_parent(layer_id)?;
         self.doc.move_layer(layer_id, target);
-
         let new_parent = self.doc.parent_of(layer_id);
         let new_pos = self.doc.position_in_parent(layer_id).unwrap_or(0);
-
-        self.compositor.mark_dirty();
-
-        self.push_undo(Box::new(LayerMoveAction::new(
+        Some(Box::new(LayerMoveAction::new(
             layer_id, old_parent, old_pos, new_parent, new_pos,
-        )));
+        )))
+    }
+
+    /// Move every id in `ids` to land contiguously at `target`, preserving
+    /// their current relative tree order. Locked layers and any id whose
+    /// ancestor is also in `ids` are silently skipped; returns the count
+    /// of locked-layer skips so the UI can toast. Errors when `target`
+    /// references an id in `ids` or a descendant of one (the drop is
+    /// self-referential).
+    pub fn move_layers(&mut self, ids: Vec<LayerId>, target: MoveTarget) -> Result<usize, String> {
+        let target_id = match target {
+            MoveTarget::Before(t)
+            | MoveTarget::After(t)
+            | MoveTarget::IntoGroupTop(t)
+            | MoveTarget::IntoGroupBottom(t) => t,
+        };
+        for &id in &ids {
+            if id == target_id || self.doc.is_ancestor_of(id, target_id) {
+                return Err("Cannot move a layer into itself".into());
+            }
+        }
+
+        let mut editable: Vec<LayerId> = Vec::with_capacity(ids.len());
+        let mut skipped_locked = 0usize;
+        for &id in &ids {
+            if self.doc.find_node(id).is_none() {
+                continue;
+            }
+            if !self.doc.is_node_editable(id) {
+                skipped_locked += 1;
+                continue;
+            }
+            if ids
+                .iter()
+                .any(|&other| other != id && self.doc.is_ancestor_of(other, id))
+            {
+                continue;
+            }
+            editable.push(id);
+        }
+        if editable.is_empty() {
+            return Ok(skipped_locked);
+        }
+
+        // Sort by document DFS order so subsequent `After(prev)` chaining
+        // preserves the user's original top-to-bottom layout at the
+        // destination.
+        let order = self.doc.all_node_ids_in_order();
+        let order_idx = |id: LayerId| order.iter().position(|&x| x == id).unwrap_or(usize::MAX);
+        editable.sort_by_key(|&id| order_idx(id));
+
+        let mut actions: Vec<Box<dyn UndoAction>> = Vec::with_capacity(editable.len());
+        let mut prev: Option<LayerId> = None;
+        for id in editable {
+            let step_target = match prev {
+                None => target,
+                Some(p) => MoveTarget::After(p),
+            };
+            if let Some(a) = self.move_layer_inner(id, step_target) {
+                actions.push(a);
+                prev = Some(id);
+            }
+        }
+        if !actions.is_empty() {
+            self.push_undo(Box::new(CompoundAction::new(actions)));
+        }
+        self.compositor.mark_dirty();
+        Ok(skipped_locked)
     }
 
     // --- Layer properties ---

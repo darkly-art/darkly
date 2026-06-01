@@ -103,7 +103,7 @@ export async function createInstance(
     if (options.seedBackground) {
         const bg = handle.add_raster_layer(-1);
         handle.fill_background(bg);
-        instance.activeLayerId = bg;
+        instance.selectLayer(bg);
     }
 
     instance.canvasEl = canvas;

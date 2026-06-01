@@ -419,3 +419,166 @@ fn flatten_group_with_masks_undo_restores_tree_and_pixels() {
         "group mask pixels survive flatten+undo byte-for-byte"
     );
 }
+
+// ============================================================================
+// merge_layers — multi-source bake, same-parent and cross-parent
+// ============================================================================
+
+/// Merging a same-parent selection lands the result at the panel-topmost
+/// selected sibling's slot and inherits that sibling's name / blend /
+/// opacity / visibility.
+#[test]
+fn merge_layers_same_parent_inherits_topmost_props() {
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let lower = engine.add_raster_layer(None);
+    let upper = engine.add_raster_layer(None);
+    // Rename the topmost so we can confirm the result inherits its name.
+    engine.set_layer_name(upper, "topmost");
+    engine.set_opacity(upper, 0.5);
+
+    paint_dot(&mut engine, lower, 8.0, 8.0, [1.0, 0.0, 0.0]);
+    paint_dot(&mut engine, upper, 16.0, 16.0, [0.0, 1.0, 0.0]);
+
+    let result = engine.merge_layers(vec![lower, upper]).expect("merge ok");
+
+    // Source layers should be detached from the tree.
+    assert!(!engine.has_layer(lower));
+    assert!(!engine.has_layer(upper));
+    assert!(engine.has_layer(result));
+
+    // Result inherits the topmost's name + opacity.
+    let info = engine
+        .layer_tree()
+        .into_iter()
+        .find(|n| match n {
+            LayerInfo::Raster { id, .. } => *id == result.to_ffi() as f64,
+            _ => false,
+        })
+        .expect("result in tree");
+    let (name, opacity) = match info {
+        LayerInfo::Raster { name, opacity, .. } => (name, opacity),
+        _ => panic!(),
+    };
+    assert_eq!(name, "topmost");
+    assert!((opacity - 0.5).abs() < 1e-3, "opacity inherited: {opacity}");
+}
+
+/// A cross-parent selection (one layer at root, one inside a group)
+/// merges successfully: result lands at the topmost selected layer's
+/// slot, and all sources are detached.
+#[test]
+fn merge_layers_cross_parent_lands_at_topmost() {
+    use darkly::document::MoveTarget;
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    // Build [keep, in_group_via_group, group(inner), root_top].
+    let group = engine.add_group(None);
+    let inner = engine.add_raster_layer(None);
+    engine.move_layer(inner, MoveTarget::IntoGroupTop(group));
+    let root_top = engine.add_raster_layer(None);
+    engine.set_layer_name(root_top, "expected-topmost");
+
+    paint_dot(&mut engine, inner, 8.0, 8.0, [1.0, 0.0, 0.0]);
+    paint_dot(&mut engine, root_top, 16.0, 16.0, [0.0, 0.0, 1.0]);
+
+    let result = engine
+        .merge_layers(vec![inner, root_top])
+        .expect("cross-parent merge ok");
+
+    assert!(!engine.has_layer(inner), "inner source detached");
+    assert!(!engine.has_layer(root_top), "root_top source detached");
+    assert!(engine.has_layer(result));
+
+    // Result inherits root_top's name (root_top is the panel-topmost of
+    // the selection: it's the LAST entry of all_node_ids_in_order that
+    // matches an id in the selection).
+    let info = engine
+        .layer_tree()
+        .into_iter()
+        .find(|n| match n {
+            LayerInfo::Raster { id, .. } => *id == result.to_ffi() as f64,
+            _ => false,
+        })
+        .expect("result in tree");
+    let name = match info {
+        LayerInfo::Raster { name, .. } => name,
+        _ => panic!(),
+    };
+    assert_eq!(name, "expected-topmost");
+}
+
+/// A single undo step restores all merged sources, even when they
+/// straddle different parent groups.
+#[test]
+fn merge_layers_undo_restores_all_sources() {
+    use darkly::document::MoveTarget;
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let group = engine.add_group(None);
+    let inner = engine.add_raster_layer(None);
+    engine.move_layer(inner, MoveTarget::IntoGroupTop(group));
+    let root_top = engine.add_raster_layer(None);
+
+    paint_dot(&mut engine, inner, 8.0, 8.0, [1.0, 0.0, 0.0]);
+    paint_dot(&mut engine, root_top, 16.0, 16.0, [0.0, 0.0, 1.0]);
+
+    let inner_before = engine.test_readback_layer(inner);
+    let root_top_before = engine.test_readback_layer(root_top);
+
+    let result = engine
+        .merge_layers(vec![inner, root_top])
+        .expect("merge ok");
+    assert!(engine.has_layer(result));
+    assert!(!engine.has_layer(inner));
+    assert!(!engine.has_layer(root_top));
+
+    engine.undo();
+    engine.render(0.0);
+
+    assert!(engine.has_layer(inner), "inner source restored");
+    assert!(engine.has_layer(root_top), "root_top source restored");
+    assert!(!engine.has_layer(result), "result removed by undo");
+    assert_eq!(
+        engine.test_readback_layer(inner),
+        inner_before,
+        "inner pixels restored byte-for-byte"
+    );
+    assert_eq!(
+        engine.test_readback_layer(root_top),
+        root_top_before,
+        "root_top pixels restored byte-for-byte"
+    );
+}
+
+/// `merge_layers` aborts if any source is locked — a partial bake
+/// would destroy the user's data.
+#[test]
+fn merge_layers_rejects_locked() {
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let l1 = engine.add_raster_layer(None);
+    let l2 = engine.add_raster_layer(None);
+    engine.set_node_locked(l1, true);
+
+    let result = engine.merge_layers(vec![l1, l2]);
+    assert!(result.is_err(), "locked source must reject the merge");
+    assert!(engine.has_layer(l1));
+    assert!(engine.has_layer(l2));
+}
+
+/// `merge_layers` needs at least two distinct sources.
+#[test]
+fn merge_layers_needs_two_sources() {
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let l1 = engine.add_raster_layer(None);
+
+    let r1 = engine.merge_layers(vec![l1]);
+    assert!(r1.is_err(), "single-id merge must error");
+
+    let r2 = engine.merge_layers(vec![l1, l1]);
+    assert!(r2.is_err(), "duplicate-id merge must error (dedupes to 1)");
+}

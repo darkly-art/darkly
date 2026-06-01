@@ -612,9 +612,8 @@ export function registerActions() {
         id: 'deleteLayer',
         displayName: 'Delete Layer',
         category: 'layers',
-        description: 'Delete the active layer (or remove the active veil).',
-        accepts: ['layerId'],
-        handler: (ctx) => {
+        description: 'Delete the selected layers (or remove the active veil).',
+        handler: () => {
             if (!app.handle) return;
             // Veil takes priority: the trash button on the layer panel
             // doubles as veil-remove when a veil is active, so the
@@ -623,16 +622,32 @@ export function registerActions() {
                 app.removeVeil(app.activeVeilIndex);
                 return;
             }
-            const layerId = ctx.layerId ?? app.activeLayerId;
-            if (layerId == null) return;
+            // Structural rule: operate on the current selection. The
+            // right-click handler ensures the clicked row is in the
+            // selection BEFORE the menu opens, so reading from
+            // `app.selectedLayerIds` here picks up exactly what the user
+            // expects. We do NOT accept a `ctx.layerId` override — the
+            // v1 attempt did, and that's what made "Delete N Layers" act
+            // on just one layer.
+            const targets = app.selectedLayerIds.size > 0
+                ? [...app.selectedLayerIds]
+                : app.activeLayerId !== null ? [app.activeLayerId] : [];
+            if (targets.length === 0) return;
             try {
-                // Stop any associated camera MediaStream before the layer is
-                // gone. `refreshLayerTree` does the same reaping as a safety
-                // net (covers undo), but stopping eagerly turns off the
-                // browser's camera-in-use indicator immediately.
-                app.stopCameraVoid(layerId);
-                app.handle.remove_layer(layerId);
-                app.clearSelection();
+                // Stop any associated camera MediaStreams before the
+                // layers go away. `refreshLayerTree` reaps as a safety
+                // net, but stopping eagerly turns off the OS camera
+                // indicator immediately.
+                for (const id of targets) app.stopCameraVoid(id);
+                if (targets.length === 1) {
+                    app.handle.remove_layer(targets[0]);
+                    app.clearSelection();
+                } else {
+                    const skipped = app.handle.remove_layers(Float64Array.from(targets));
+                    if (skipped > 0) {
+                        toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
+                    }
+                }
                 app.refreshLayerTree();
             } catch (e: any) {
                 toast.show('error', e.message ?? String(e));
@@ -644,15 +659,24 @@ export function registerActions() {
         id: 'duplicateLayer',
         displayName: 'Duplicate Layer',
         category: 'layers',
-        description: 'Make a copy of the active layer or group directly above it.',
-        accepts: ['layerId'],
-        handler: (ctx) => {
+        description: 'Duplicate the selected layers; each copy lands directly above its original.',
+        handler: () => {
             if (!app.handle) return;
-            const sourceId = ctx.layerId ?? app.activeLayerId;
-            if (sourceId == null) return;
-            const newId = app.handle.duplicate_node(sourceId);
-            app.refreshLayerTree();
-            if (newId) app.selectLayer(newId);
+            const targets = app.selectedLayerIds.size > 0
+                ? [...app.selectedLayerIds]
+                : app.activeLayerId !== null ? [app.activeLayerId] : [];
+            if (targets.length === 0) return;
+            if (targets.length === 1) {
+                const newId = app.handle.duplicate_node(targets[0]);
+                app.refreshLayerTree();
+                if (newId) app.selectLayer(newId);
+            } else {
+                const newIds = Array.from(
+                    app.handle.duplicate_nodes(Float64Array.from(targets)),
+                );
+                app.refreshLayerTree();
+                if (newIds.length > 0) app.selectLayers(newIds);
+            }
         },
     });
 
@@ -661,13 +685,33 @@ export function registerActions() {
         displayName: 'Merge Down',
         category: 'layers',
         description: 'Merge the active layer or group into the layer below it.',
-        accepts: ['layerId'],
-        handler: (ctx) => {
+        handler: () => {
             if (!app.handle) return;
-            const sourceId = ctx.layerId ?? app.activeLayerId;
+            // Single-layer merge_down: merges with the sibling below. The
+            // menu item routes here only when the selection size is 1.
+            const sourceId = app.activeLayerId;
             if (sourceId == null) return;
             try {
                 const newId = app.handle.merge_down(sourceId);
+                app.refreshLayerTree();
+                if (newId) app.selectLayer(newId);
+            } catch (e: any) {
+                toast.show('error', e.message ?? String(e));
+            }
+        },
+    });
+
+    actions.register({
+        id: 'mergeSelected',
+        displayName: 'Merge Selected Layers',
+        category: 'layers',
+        description: 'Bake every selected layer into a single raster at the panel-topmost selection slot. Cross-parent selections are supported.',
+        handler: () => {
+            if (!app.handle) return;
+            const targets = [...app.selectedLayerIds];
+            if (targets.length < 2) return;
+            try {
+                const newId = app.handle.merge_layers(Float64Array.from(targets));
                 app.refreshLayerTree();
                 if (newId) app.selectLayer(newId);
             } catch (e: any) {

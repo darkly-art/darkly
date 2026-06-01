@@ -147,4 +147,139 @@ impl DarklyEngine {
         };
         pos > 0
     }
+
+    /// Bake every layer in `ids` (≥2, any parent) into one raster placed at
+    /// the panel-topmost selected layer's slot. The result inherits the
+    /// topmost's name / blend mode / opacity / visibility; sources from
+    /// other parents are detached and tombstoned. Groups in the selection
+    /// are flattened during the bake. Returns the id of the result.
+    ///
+    /// Errors when fewer than two distinct sources are provided, when any
+    /// source is locked (a partial bake is destructive), or when a source
+    /// id isn't in the tree.
+    pub fn merge_layers(&mut self, ids: Vec<LayerId>) -> Result<LayerId, String> {
+        // De-dup while preserving caller order — important for the error
+        // path that names the input set in messages.
+        let mut unique: Vec<LayerId> = Vec::with_capacity(ids.len());
+        for id in ids {
+            if !unique.contains(&id) {
+                unique.push(id);
+            }
+        }
+        if unique.len() < 2 {
+            return Err("Merge needs at least two layers".into());
+        }
+        for &id in &unique {
+            if self.doc.find_node(id).is_none() {
+                return Err("Layer not in tree".into());
+            }
+            if !self.doc.is_node_editable(id) {
+                return Err("A selected layer is locked".into());
+            }
+        }
+
+        // Sort by panel display order so the bake walks bottom-to-top and
+        // the LAST entry is the topmost selected layer in the panel — that
+        // one anchors the result's slot and provides the inherited props.
+        let order = self.doc.all_node_ids_in_order();
+        let order_idx = |id: LayerId| order.iter().position(|&x| x == id).unwrap_or(usize::MAX);
+        unique.sort_by_key(|&id| order_idx(id));
+        let topmost_id = *unique.last().expect("len >= 2");
+
+        // Snapshot the topmost's properties + slot now, before any detach.
+        let (top_name, top_visible, top_locked, top_opacity, top_blend_mode) = {
+            let t = self
+                .doc
+                .find_node(topmost_id)
+                .ok_or("Topmost source missing")?;
+            (
+                t.common().name.clone(),
+                t.common().visible,
+                t.common().locked,
+                t.blend().opacity,
+                t.blend().blend_mode,
+            )
+        };
+        let topmost_parent = self.doc.parent_of(topmost_id);
+        let topmost_pos = self
+            .doc
+            .position_in_parent(topmost_id)
+            .ok_or("Topmost source not in tree")?;
+
+        // Record each source's prior (parent, position) for undo reinsert.
+        // Captured BEFORE any detach so positions reflect the live tree.
+        let sources: Vec<BakeSourceSlot> = unique
+            .iter()
+            .map(|&id| BakeSourceSlot {
+                id,
+                parent: self.doc.parent_of(id),
+                position: self.doc.position_in_parent(id).unwrap_or(0),
+            })
+            .collect();
+
+        // Allocate the result raster, anchored at the topmost so it sits
+        // in the right parent group; we'll reposition exactly after the
+        // sources detach.
+        let canvas_bounds = CanvasRect::from_xywh(0, 0, self.doc.width, self.doc.height);
+        let result_id = self.doc.add_raster_layer(Some(topmost_id));
+        if let Some(LayerNode::Layer(Layer::Raster(r))) = self.doc.find_node_mut(result_id) {
+            r.pixels.bounds = canvas_bounds;
+            r.common.name = top_name;
+            r.common.visible = top_visible;
+            r.common.locked = top_locked;
+            r.blend.opacity = top_opacity;
+            r.blend.blend_mode = top_blend_mode;
+        }
+        self.compositor.ensure_raster_layer(
+            &self.gpu.device,
+            &self.gpu.queue,
+            result_id,
+            canvas_bounds,
+        );
+        self.refresh_blend_uniforms(result_id);
+
+        // Bake sources bottom-to-top (the `unique` order after sorting)
+        // so blend modes stack correctly when composited into the result.
+        self.compositor.bake_subtree_to_layer(
+            &self.gpu.device,
+            &self.gpu.queue,
+            &mut self.doc,
+            &unique,
+            result_id,
+        );
+
+        // Collect tombstones from every source BEFORE detach so the walk
+        // can reach the subtrees.
+        let mut source_tombstones: Vec<LayerId> = Vec::new();
+        for &id in &unique {
+            source_tombstones.extend(self.collect_pixel_node_ids(id));
+        }
+
+        // Detach every source. Their textures stay alive in node_textures
+        // as tombstones owned by the BakeLayersAction.
+        for &id in &unique {
+            self.doc.detach_for_undo(id);
+        }
+
+        // Reposition the result at the topmost's original slot. Detach +
+        // reinsert is the simplest exact-slot landing.
+        self.doc.detach_for_undo(result_id);
+        self.doc
+            .reinsert_node(result_id, topmost_parent, topmost_pos);
+
+        let result_parent = self.doc.parent_of(result_id);
+        let result_position = self.doc.position_in_parent(result_id).unwrap_or(0);
+
+        self.compositor.mark_dirty();
+        self.push_undo(Box::new(BakeLayersAction::new(
+            sources,
+            source_tombstones,
+            result_id,
+            result_parent,
+            result_position,
+            vec![result_id],
+        )));
+
+        Ok(result_id)
+    }
 }

@@ -4,6 +4,7 @@
     import { bindingSite } from '../../actions/binding_site';
     import { actions } from '../../actions/registry';
     import { tooltipForAction } from '../../config/store.svelte';
+    import { toast } from '../../state/toast.svelte';
 
     interface Modifier {
         id: number; kind: string; name: string; visible: boolean; locked: boolean;
@@ -38,6 +39,12 @@
     );
 
     let isActive = $derived(app.activeLayerId === layer.id);
+    let isSelected = $derived(app.isSelected(layer.id));
+    let selectionSize = $derived(app.selectedLayerIds.size);
+    let isMulti = $derived(selectionSize > 1);
+    let deleteLabel = $derived(isMulti ? `Delete ${selectionSize} Layers` : 'Delete Layer');
+    let dupLabel = $derived(isMulti ? `Duplicate ${selectionSize} Layers` : 'Duplicate Layer');
+    let mergeLabel = $derived(isMulti ? `Merge ${selectionSize} Layers` : 'Merge Down');
     // The mask is the active edit target whenever the active node id IS the
     // mask modifier id — no session redirect.
     let isEditingMask = $derived(
@@ -101,10 +108,11 @@
         onupdate();
     }
 
-    function onLayerClick() {
+    function onLayerClick(e: MouseEvent) {
         // The layer-item body has no chord bindings — modifier+click is
-        // reserved for the previews. Plain click selects.
-        app.selectLayer(layer.id);
+        // reserved for the previews. Plain / ctrl / shift dispatch is
+        // shared with LayerGroup via app.handleLayerRowClick.
+        app.handleLayerRowClick(layer.id, e);
     }
 
     function clickLayerThumb(e: MouseEvent) {
@@ -134,10 +142,15 @@
     function onLayerContextMenu(e: MouseEvent) {
         e.preventDefault();
         e.stopPropagation();
-        // Select the right-clicked layer so subsequent dispatched actions
-        // that fall back to `app.activeLayerId` (e.g. when ctx.layerId
-        // isn't honoured by a particular handler) still target this layer.
-        app.selectLayer(layer.id);
+        // If the right-clicked row is already in the multi-selection,
+        // keep the selection intact — the menu acts on the whole set.
+        // If it's not in the selection, replace the selection with just
+        // this row (Photoshop / GIMP behavior). This way the menu and
+        // every action it dispatches operate on a selection that
+        // **always includes the right-clicked row**.
+        if (!app.isSelected(layer.id)) {
+            app.selectLayer(layer.id);
+        }
         layerMenuX = e.clientX;
         layerMenuY = e.clientY;
         showLayerMenu = true;
@@ -146,32 +159,46 @@
         requestAnimationFrame(() => document.addEventListener('click', close));
     }
 
+    // Structural menu items dispatch WITHOUT `ctx.layerId` — the action
+    // handler reads `app.selectedLayerIds` (the right-click handler above
+    // guarantees the clicked row is in the selection). This is what
+    // makes "Delete 3 Layers" actually delete 3 layers; the v1 attempt
+    // passed `{ layerId: layer.id }` and silently demoted every action
+    // to single-layer.
+
     function menuDuplicate() {
-        actions.dispatch('duplicateLayer', { layerId: layer.id });
+        actions.dispatch('duplicateLayer');
         onupdate();
     }
 
-    function menuMergeDown() {
-        if (!canMergeDownForThis) return;
-        actions.dispatch('mergeDown', { layerId: layer.id });
+    function menuMerge() {
+        // With 1 selected, route to the existing single-layer merge_down
+        // op (merges with the sibling below). With ≥2, route to the
+        // new merge_layers op (bakes the selection into one raster).
+        if (isMulti) {
+            actions.dispatch('mergeSelected');
+        } else {
+            if (!canMergeDownForThis) return;
+            actions.dispatch('mergeDown');
+        }
         onupdate();
     }
 
     function menuFlatten() {
         if (!hasMask) return;
-        actions.dispatch('flatten', { layerId: layer.id });
+        actions.dispatch('flatten');
         onupdate();
     }
 
     function menuAddMask() {
         if (!canAddMask) return;
-        actions.dispatch('addMask', { layerId: layer.id });
+        actions.dispatch('addMask');
         onupdate();
     }
 
     function menuDelete() {
-        if (!editable) return;
-        actions.dispatch('deleteLayer', { layerId: layer.id });
+        if (!editable && !isMulti) return;
+        actions.dispatch('deleteLayer');
         onupdate();
     }
 
@@ -223,7 +250,19 @@
     let draggable = $state(true);
 
     function onDragStart(e: DragEvent) {
-        e.dataTransfer?.setData('text/plain', String(layer.id));
+        // Grabbed row IS in selection → drag the whole set. Grabbed row
+        // is NOT in selection → drag only it, and replace the selection
+        // with just it (focus commits to what the user grabbed).
+        const ids = app.isSelected(layer.id)
+            ? [...app.selectedLayerIds]
+            : [layer.id];
+        if (!app.isSelected(layer.id)) {
+            app.selectLayer(layer.id);
+        }
+        e.dataTransfer?.setData(
+            'application/x-darkly-layers',
+            JSON.stringify(ids),
+        );
         if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
     }
 
@@ -249,18 +288,28 @@
         e.preventDefault();
         e.stopPropagation();
         dropPos = 'none';
-        const draggedId = e.dataTransfer?.getData('text/plain');
-        if (!draggedId || !app.handle) return;
-        const id = Number(draggedId);
-        if (id === layer.id) return;
+        const payload = e.dataTransfer?.getData('application/x-darkly-layers');
+        if (!payload || !app.handle) return;
+        let ids: number[];
+        try { ids = JSON.parse(payload) as number[]; } catch { return; }
+        if (!Array.isArray(ids) || ids.length === 0) return;
+        // Dropping the dragged set onto one of its own members is a no-op
+        // — the engine would reject it as self-referential anyway.
+        if (ids.includes(layer.id)) return;
 
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
         const ratio = (e.clientY - rect.top) / rect.height;
+        const where = ratio < 0.5 ? 'after' : 'before';
 
-        if (ratio < 0.5) {
-            app.handle.move_layer(id, 'after', layer.id);
-        } else {
-            app.handle.move_layer(id, 'before', layer.id);
+        try {
+            const skipped = app.handle.move_layers(
+                Float64Array.from(ids), where, layer.id,
+            );
+            if (skipped > 0) {
+                toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
+            }
+        } catch (e: any) {
+            toast.show('error', e.message ?? String(e));
         }
         onupdate();
     }
@@ -270,6 +319,7 @@
 <div
     class="layer-item"
     class:active={isActive}
+    class:selected={isSelected}
     class:drop-above={dropPos === 'above'}
     class:drop-below={dropPos === 'below'}
     onclick={onLayerClick}
@@ -383,20 +433,22 @@
         <!-- Duplicate is a read-of-source / create-new-layer op; it does
              not mutate the locked layer, so it stays enabled. -->
         <button onclick={menuDuplicate}>
-            Duplicate layer
+            {dupLabel}
         </button>
-        <button onclick={menuAddMask} disabled={!canAddMask}>
-            Add mask
+        {#if !isMulti}
+            <button onclick={menuAddMask} disabled={!canAddMask}>
+                Add mask
+            </button>
+        {/if}
+        <button onclick={menuMerge} disabled={!isMulti && (!canMergeDownForThis || !editable)}>
+            {mergeLabel}
         </button>
-        <button onclick={menuMergeDown} disabled={!canMergeDownForThis || !editable}>
-            Merge down
-        </button>
-        {#if hasMask}
+        {#if !isMulti && hasMask}
             <button onclick={menuFlatten} disabled={!editable}>Flatten</button>
         {/if}
         <div class="layer-menu-sep"></div>
-        <button onclick={menuDelete} disabled={!editable}>
-            Delete layer
+        <button onclick={menuDelete} disabled={!isMulti && !editable}>
+            {deleteLabel}
         </button>
     </div>
 {/if}
@@ -420,6 +472,10 @@
     }
 
     .layer-item:hover {
+        background: var(--bg-hover);
+    }
+
+    .layer-item.selected {
         background: var(--bg-hover);
     }
 

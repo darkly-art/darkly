@@ -5,6 +5,7 @@
     import VoidPickerModal from '../voids/VoidPickerModal.svelte';
     import { actions } from '../../actions/registry';
     import { tooltipForAction } from '../../config/store.svelte';
+    import { toast } from '../../state/toast.svelte';
 
     let { onupdate }: { onupdate: () => void } = $props();
 
@@ -33,8 +34,24 @@
 
     function addGroup() {
         if (!app.handle) return;
-        const id = app.handle.add_group(app.activeLayerId ?? -1);
-        app.selectLayer(id);
+        // With layers selected, wrap them in a new group at the panel-
+        // topmost selected layer's slot. With nothing selected, fall
+        // back to the legacy "empty group at the active layer's anchor"
+        // behavior so the gesture still works in an empty / unfocused
+        // panel.
+        if (app.selectedLayerIds.size > 0) {
+            try {
+                const groupId = app.handle.group_layers(
+                    Float64Array.from([...app.selectedLayerIds]),
+                );
+                if (groupId) app.selectLayer(groupId);
+            } catch (e: any) {
+                toast.show('error', e.message ?? String(e));
+            }
+        } else {
+            const id = app.handle.add_group(app.activeLayerId ?? -1);
+            app.selectLayer(id);
+        }
         onupdate();
     }
 
@@ -83,6 +100,22 @@
     let canDuplicate = $derived(
         app.activeLayerId !== null
             && findNode(app.layerTree, app.activeLayerId) !== null,
+    );
+
+    // Show the multi-selection count in the footer button tooltips so
+    // the user has a heads-up that the trash/duplicate buttons will
+    // operate on the whole selection, not just the active layer.
+    let selectionSize = $derived(app.selectedLayerIds.size);
+    let isMulti = $derived(selectionSize > 1);
+    let deleteTooltip = $derived(
+        isMulti
+            ? `Delete (${selectionSize})`
+            : tooltipForAction('Delete', 'deleteLayer'),
+    );
+    let duplicateTooltip = $derived(
+        isMulti
+            ? `Duplicate (${selectionSize})`
+            : tooltipForAction('Duplicate', 'duplicateLayer'),
     );
 
     function remove() {
@@ -136,7 +169,7 @@
         class="footer-btn"
         onclick={duplicate}
         disabled={!canDuplicate}
-        title={tooltipForAction('Duplicate', 'duplicateLayer')}
+        title={duplicateTooltip}
     >
         <i class="fa-solid fa-clone"></i>
     </button>
@@ -145,7 +178,7 @@
         class="footer-btn danger"
         onclick={remove}
         disabled={!canDelete || (app.activeVeilIndex === null && !activeEditable)}
-        title={tooltipForAction('Delete', 'deleteLayer')}
+        title={deleteTooltip}
     >
         <i class="fa-solid fa-trash"></i>
     </button>
