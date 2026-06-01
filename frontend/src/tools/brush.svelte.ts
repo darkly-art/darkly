@@ -216,6 +216,7 @@ export const brushTool: Tool = {
         ctx.handle.clear_overlay();
         ctx.handle.clear_brush_preview_pose();
         clearHover();
+        app.toolCursor = 'none';
         const params = brushStrokeParams(e, cx, cy);
         ctx.handle.begin_stroke(layerId);
         ctx.handle.stroke_to('brush_stroke', params);
