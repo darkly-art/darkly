@@ -22,11 +22,11 @@
 // `ExtentContribution` and flows through the dab record so the CPU
 // and GPU sides cannot diverge.
 //
-// `preview_centre` / `preview_size` are written only by the preview
+// `cursor_preview_centre` / `cursor_preview_size` are written only by the preview
 // render path (the hover cursor). The stroke path writes zero and
 // ignores them; the preview path's vertex stage builds its single
-// quad around `preview_centre ± bbox_radius` and clip-maps against
-// `preview_size`.
+// quad around `cursor_preview_centre ± bbox_radius` and clip-maps against
+// `cursor_preview_size`.
 //
 // Symbols defined here are referenced by every compiled brush; keep
 // the surface tight.
@@ -38,7 +38,7 @@ struct IntrinsicUniforms {
     layer_offset:    vec2<i32>,
     layer_size:      vec2<u32>,
     canvas_size:     vec2<u32>,
-    preview_centre:  vec2<f32>,
-    preview_size:    vec2<u32>,
+    cursor_preview_centre:  vec2<f32>,
+    cursor_preview_size:    vec2<u32>,
     _pad:            vec2<u32>,
 };

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, PreviewState};
+use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, CursorPreviewState};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::gpu::test_utils::{readback_texture, test_device};
@@ -58,7 +58,7 @@ fn probe_softness_zero() {
         blend_mode: 0,
         perf: BrushPerfCounters::default(),
         stroke: None,
-        preview: Some(PreviewState {
+        preview: Some(CursorPreviewState {
             mask_view: Some(&view),
             mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
             mask_overlay: None,
@@ -73,7 +73,7 @@ fn probe_softness_zero() {
     };
     runner.seed_sensors(&info, [1.0, 1.0, 1.0, 1.0], 0, 0);
     runner.execute_cpu();
-    runner.render_preview_pipeline(&mut ctx);
+    runner.render_cursor_preview_pipeline(&mut ctx);
     let bpi = ctx.preview.as_ref().and_then(|p| p.info).unwrap();
     eprintln!("bbox_half = {:?}", bpi.half_extent_canvas_px);
     queue.submit([ctx.encoder.finish()]);

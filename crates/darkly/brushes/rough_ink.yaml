@@ -1,5 +1,5 @@
 name: Rough Ink
-category: basic
+category: Basic
 nodes:
   1:
     type: pen_input

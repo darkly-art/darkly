@@ -252,12 +252,13 @@ fn prng_f32(seed: u32, index: u32) -> f32 {
     (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
 }
 
-/// Canvas-space positioning info read from the graph's preview terminal
-/// after a preview-mode evaluation. Consumed by the overlay to place the
-/// `KIND_MASKED_STAMP` primitive — the mask texture itself is bound to
-/// the overlay separately.
+/// Canvas-space positioning info read from the graph's cursor-preview
+/// terminal after a cursor-preview-mode evaluation. Consumed by the
+/// overlay to place the `KIND_MASKED_STAMP` primitive (the cursor halo)
+/// — the cursor-preview mask texture itself is bound to the overlay
+/// separately.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct BrushPreviewInfo {
+pub struct BrushCursorPreviewInfo {
     /// Half-extent in canvas pixels — the overlay primitive's `p1`.
     pub half_extent_canvas_px: [f32; 2],
     /// Rotation in radians — the overlay primitive's `rotation`.
@@ -297,7 +298,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     /// also override this — they read a `brush_preview` input texture and
     /// blit it into `gpu.preview.mask_view`, then publish placement info
     /// via `gpu.preview.info`.
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
@@ -371,7 +372,7 @@ pub trait BrushNodeEvaluator: Send + Sync {
     ///
     /// Non-terminal nodes never have this called — only nodes for
     /// which `is_terminal()` returns `true` invoke the hook.
-    fn compile_preview_body(
+    fn compile_cursor_preview_body(
         &self,
         cctx: &crate::brush::wgsl::CompileWgslCtx,
     ) -> Result<crate::brush::wgsl::NodeWgsl, String> {
@@ -760,19 +761,19 @@ impl BrushGraphRunner {
         self.dispatch_gpu(gpu, |ev, ctx, gpu| ev.evaluate_gpu(ctx, gpu));
     }
 
-    /// Walk GPU steps invoking each evaluator's `render_preview` hook
+    /// Walk GPU steps invoking each evaluator's `render_cursor_preview` hook
     /// instead of `evaluate_gpu`. Same slot-table plumbing — non-terminals
     /// produce shape-appropriate outputs (e.g. stamp emits a B&W tip
     /// texture sized to the brush's canvas-pixel extent), terminals
     /// consume them and render into the overlay's preview mask, publishing
     /// placement info via `gpu.preview.info`.
-    pub fn render_preview_pipeline(&mut self, gpu: &mut BrushGpuContext) {
-        self.dispatch_gpu(gpu, |ev, ctx, gpu| ev.render_preview(ctx, gpu));
+    pub fn render_cursor_preview_pipeline(&mut self, gpu: &mut BrushGpuContext) {
+        self.dispatch_gpu(gpu, |ev, ctx, gpu| ev.render_cursor_preview(ctx, gpu));
     }
 
     /// Shared walker for the per-dab GPU pipeline. Wires inputs from the
     /// slot table, runs the evaluator-supplied closure (`evaluate_gpu` for
-    /// stroke/dab evaluation, `render_preview` for preview regen), and
+    /// stroke/dab evaluation, `render_cursor_preview` for preview regen), and
     /// writes the resulting outputs back to their slots.
     fn dispatch_gpu<F>(&mut self, gpu: &mut BrushGpuContext, mut f: F)
     where
@@ -1022,9 +1023,9 @@ impl BrushGraphRunner {
 
     /// True if any node in the graph has a `brush_preview` input that's
     /// connected (i.e. a wire targets some node's `brush_preview` port).
-    /// `regenerate_brush_preview` uses this to short-circuit when no
+    /// `regenerate_brush_cursor_preview` uses this to short-circuit when no
     /// terminal asked to render a preview.
-    pub fn graph_has_preview_wire(&self) -> bool {
+    pub fn graph_has_cursor_preview_wire(&self) -> bool {
         // Plan steps include input_slots for connected ports only
         // (disconnected ports fall back to defaults and never appear here),
         // so a `brush_preview` input slot is proof of a wire.

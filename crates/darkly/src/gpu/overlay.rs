@@ -117,10 +117,10 @@ pub struct ToolOverlay {
     /// Preview mask texture owned by the overlay and used as a render
     /// target by brush nodes' `render_preview`. Separate from `mask` so
     /// CPU uploads and GPU renders don't stomp each other. Allocated on
-    /// demand via `ensure_preview_mask`.
-    preview_mask: Option<wgpu::Texture>,
-    preview_mask_view: Option<wgpu::TextureView>,
-    preview_mask_size: (u32, u32),
+    /// demand via `ensure_cursor_preview_mask`.
+    cursor_preview_mask: Option<wgpu::Texture>,
+    cursor_preview_mask_view: Option<wgpu::TextureView>,
+    cursor_preview_mask_size: (u32, u32),
     surface_format: wgpu::TextureFormat,
     primitives: Vec<OverlayPrimitive>,
     time: f32,
@@ -361,9 +361,9 @@ impl ToolOverlay {
             dummy_white_mask_view,
             mask: None,
             mask_view: None,
-            preview_mask: None,
-            preview_mask_view: None,
-            preview_mask_size: (0, 0),
+            cursor_preview_mask: None,
+            cursor_preview_mask_view: None,
+            cursor_preview_mask_size: (0, 0),
             surface_format,
             primitives: Vec::new(),
             time: 0.0,
@@ -441,13 +441,13 @@ impl ToolOverlay {
     ///
     /// Allocated with RENDER_ATTACHMENT + TEXTURE_BINDING usage (RGBA8Unorm)
     /// so nodes can render into it and the overlay can sample it as a mask.
-    pub fn ensure_preview_mask(
+    pub fn ensure_cursor_preview_mask(
         &mut self,
         device: &wgpu::Device,
         width: u32,
         height: u32,
     ) -> &wgpu::TextureView {
-        if self.preview_mask_size != (width, height) || self.preview_mask.is_none() {
+        if self.cursor_preview_mask_size != (width, height) || self.cursor_preview_mask.is_none() {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("overlay-preview-mask"),
                 size: wgpu::Extent3d {
@@ -465,17 +465,17 @@ impl ToolOverlay {
                 view_formats: &[],
             });
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            self.preview_mask = Some(tex);
-            self.preview_mask_view = Some(view);
-            self.preview_mask_size = (width, height);
+            self.cursor_preview_mask = Some(tex);
+            self.cursor_preview_mask_view = Some(view);
+            self.cursor_preview_mask_size = (width, height);
         }
-        self.preview_mask_view.as_ref().unwrap()
+        self.cursor_preview_mask_view.as_ref().unwrap()
     }
 
     /// Point the overlay's mask binding at the preview-mask texture so
     /// subsequent `prepare()` calls bind it as the KIND_MASKED_STAMP source.
-    pub fn use_preview_mask_as_mask(&mut self) {
-        if let Some(view) = &self.preview_mask_view {
+    pub fn use_cursor_preview_mask_as_mask(&mut self) {
+        if let Some(view) = &self.cursor_preview_mask_view {
             self.mask_view = Some(view.clone());
             // Drop any CPU-uploaded texture — preview-mask is now authoritative.
             self.mask = None;
@@ -486,7 +486,7 @@ impl ToolOverlay {
     /// to the 1×1 white default). Does not free the preview texture.
     /// Also resets `preview_coverage_scale` to 1.0 so a stale boost can't
     /// leak into a subsequent CPU-uploaded mask render.
-    pub fn clear_preview_mask(&mut self) {
+    pub fn clear_cursor_preview_mask(&mut self) {
         self.mask = None;
         self.mask_view = None;
         self.preview_coverage_scale = 1.0;
@@ -509,14 +509,14 @@ impl ToolOverlay {
     }
 
     /// Current preview mask dimensions (0,0 if never allocated).
-    pub fn preview_mask_size(&self) -> (u32, u32) {
-        self.preview_mask_size
+    pub fn cursor_preview_mask_size(&self) -> (u32, u32) {
+        self.cursor_preview_mask_size
     }
 
     /// Access the preview-mask texture (for engines that need the Texture,
     /// not just the view, e.g. for a BrushGpuContext's canvas_texture slot).
-    pub fn preview_mask_texture(&self) -> Option<&wgpu::Texture> {
-        self.preview_mask.as_ref()
+    pub fn cursor_preview_mask_texture(&self) -> Option<&wgpu::Texture> {
+        self.cursor_preview_mask.as_ref()
     }
 
     /// Returns true if the overlay has content to render.

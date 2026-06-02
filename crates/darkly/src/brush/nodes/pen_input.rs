@@ -8,12 +8,46 @@ use std::sync::Arc;
 
 use crate::brush::eval::{BrushNodeEvaluator, EvalContext};
 use crate::brush::node::BrushNodeRegistration;
+use crate::brush::spacing::SpacingConfig;
 use crate::brush::wgsl::{CompileWgslCtx, DabField, NodeWgsl, WgslType};
 use crate::brush::wire::BrushWireType;
 use crate::brush::wire::ScalarValue;
-use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
+use crate::nodegraph::{Graph, NodeRegistration, PortDef, PortDir, UnitType};
 
 pub const TYPE_ID: &str = "pen_input";
+
+/// Read a scalar input port default off the (first) pen_input node in `graph`.
+/// Returns `None` when no pen_input node is present or the named port isn't
+/// on it (e.g. an older brush from before the port was added).
+pub fn read_scalar_input(graph: &Graph<BrushWireType>, port_name: &str) -> Option<f32> {
+    for node in graph.nodes().values() {
+        if node.type_id == TYPE_ID {
+            for port in &node.ports {
+                if port.name == port_name && port.dir == PortDir::Input {
+                    return Some(port.default);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Build the `SpacingConfig` the stroke engine should run with for `graph`,
+/// reading the pen_input node's `spacing` and `spacing_min_px` port defaults.
+/// Falls back to `SpacingConfig::default()` for graphs that predate either
+/// port. A `spacing_min_px` of 0 (the registration default) also falls back —
+/// it means "use the ratio alone, with the absolute floor".
+pub fn spacing_config(graph: &Graph<BrushWireType>) -> SpacingConfig {
+    let default = SpacingConfig::default();
+    let ratio = read_scalar_input(graph, "spacing").unwrap_or(default.ratio);
+    let min_px_raw = read_scalar_input(graph, "spacing_min_px").unwrap_or(0.0);
+    let min_px = if min_px_raw > 0.0 {
+        min_px_raw
+    } else {
+        default.min_px
+    };
+    SpacingConfig { ratio, min_px }
+}
 
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration::compute(
@@ -224,5 +258,82 @@ impl BrushNodeEvaluator for PenInputEvaluator {
         }
 
         Ok(wgsl)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::brush::spacing::ABSOLUTE_MIN_SPACING_PX;
+
+    fn graph_with_pen_input(
+        spacing: Option<f32>,
+        spacing_min_px: Option<f32>,
+    ) -> Graph<BrushWireType> {
+        let reg = register();
+        let mut ports = reg.ports.clone();
+        if let Some(v) = spacing {
+            ports
+                .iter_mut()
+                .find(|p| p.name == "spacing")
+                .expect("spacing port present")
+                .default = v;
+        }
+        if let Some(v) = spacing_min_px {
+            ports
+                .iter_mut()
+                .find(|p| p.name == "spacing_min_px")
+                .expect("spacing_min_px port present")
+                .default = v;
+        }
+        let mut graph = Graph::<BrushWireType>::new();
+        graph.add_node(TYPE_ID, ports, vec![]);
+        graph
+    }
+
+    /// Regression: scrubbing the pen_input "spacing" port must change the
+    /// SpacingConfig the preview renderer feeds to the stroke engine.
+    /// Previously the editor preview hardcoded `SpacingConfig::default()`,
+    /// so spacing scrubs produced no visible change in the preview.
+    #[test]
+    fn spacing_config_reads_scrubbed_value() {
+        let graph = graph_with_pen_input(Some(0.5), None);
+        let cfg = spacing_config(&graph);
+        assert!((cfg.ratio - 0.5).abs() < 1e-6, "got ratio {}", cfg.ratio);
+        // Distance scales with the user-set ratio, not the 10% default.
+        assert!((cfg.distance(100.0) - 50.0).abs() < 1e-6);
+    }
+
+    /// `spacing_min_px = 0` is the registration default and means
+    /// "use the ratio alone, with the absolute floor". Must NOT clobber
+    /// the spacing engine's default min_px down to zero.
+    #[test]
+    fn spacing_config_zero_min_px_falls_back_to_default() {
+        let graph = graph_with_pen_input(Some(0.1), Some(0.0));
+        let cfg = spacing_config(&graph);
+        assert!(cfg.min_px >= ABSOLUTE_MIN_SPACING_PX);
+    }
+
+    /// A non-zero `spacing_min_px` scrub must pin the absolute spacing
+    /// floor — Liquify and similar brushes rely on this.
+    #[test]
+    fn spacing_config_honors_min_px_override() {
+        let graph = graph_with_pen_input(Some(0.05), Some(8.0));
+        let cfg = spacing_config(&graph);
+        assert!((cfg.ratio - 0.05).abs() < 1e-6);
+        assert!((cfg.min_px - 8.0).abs() < 1e-6);
+        // 50px diameter × 5% = 2.5px, clamped up to the 8px min.
+        assert!((cfg.distance(50.0) - 8.0).abs() < 1e-6);
+    }
+
+    /// Graphs that predate either port (older saved brushes) fall back
+    /// cleanly to the engine's defaults instead of e.g. zeroing the ratio.
+    #[test]
+    fn spacing_config_falls_back_when_pen_input_missing() {
+        let graph = Graph::<BrushWireType>::new();
+        let cfg = spacing_config(&graph);
+        let default = SpacingConfig::default();
+        assert!((cfg.ratio - default.ratio).abs() < 1e-6);
+        assert!((cfg.min_px - default.min_px).abs() < 1e-6);
     }
 }

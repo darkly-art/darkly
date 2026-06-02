@@ -199,18 +199,18 @@ impl DarklyEngine {
     /// real pen data is available — clears any hover history so the next
     /// hover starts fresh (no bogus direction carried across a brush
     /// swap, etc.).
-    pub fn regenerate_brush_preview(&mut self) {
-        self.last_preview_pose = None;
-        let dummy = crate::brush::paint_info::PaintInformation::preview_dummy();
-        self.regenerate_brush_preview_with_pen_internal(dummy);
+    pub fn regenerate_brush_cursor_preview(&mut self) {
+        self.last_cursor_preview_pose = None;
+        let dummy = crate::brush::paint_info::PaintInformation::cursor_preview_dummy();
+        self.regenerate_brush_cursor_preview_with_pen_internal(dummy);
     }
 
     /// Drop the remembered hover pose so the next
-    /// `regenerate_brush_preview_with_pen` starts a fresh hover with no
+    /// `regenerate_brush_cursor_preview_with_pen` starts a fresh hover with no
     /// derived direction/motion/distance/speed. Call this on pointer-leave
     /// and at the start of a stroke.
-    pub fn clear_brush_preview_pose(&mut self) {
-        self.last_preview_pose = None;
+    pub fn clear_brush_cursor_preview_pose(&mut self) {
+        self.last_cursor_preview_pose = None;
     }
 
     /// Re-render the brush preview using live hover data.
@@ -224,14 +224,14 @@ impl DarklyEngine {
     /// tangential_pressure, time) comes from the PointerEvent; tilt
     /// magnitude/direction are derived from the reported tilts. The pose
     /// is stored for the next call's derivation.
-    pub fn regenerate_brush_preview_with_pen(
+    pub fn regenerate_brush_cursor_preview_with_pen(
         &mut self,
         mut pen: crate::brush::paint_info::PaintInformation,
     ) {
         // Chord length between the previous and current hover positions.
         // Chord rather than Catmull-Rom arc length — there is no spline
         // through a single sample.
-        let segment_length = match &self.last_preview_pose {
+        let segment_length = match &self.last_cursor_preview_pose {
             Some(prev) => {
                 let dx = pen.pos[0] - prev.pos[0];
                 let dy = pen.pos[1] - prev.pos[1];
@@ -239,19 +239,19 @@ impl DarklyEngine {
             }
             None => 0.0,
         };
-        pen.derive_sensors(self.last_preview_pose.as_ref(), segment_length);
-        self.last_preview_pose = Some(pen);
-        self.regenerate_brush_preview_with_pen_internal(pen);
+        pen.derive_sensors(self.last_cursor_preview_pose.as_ref(), segment_length);
+        self.last_cursor_preview_pose = Some(pen);
+        self.regenerate_brush_cursor_preview_with_pen_internal(pen);
     }
 
     /// Shared render body — no pose tracking, no sensor derivation.
     /// `pen` must already be fully populated by the caller.
-    fn regenerate_brush_preview_with_pen_internal(
+    fn regenerate_brush_cursor_preview_with_pen_internal(
         &mut self,
         pen: crate::brush::paint_info::PaintInformation,
     ) {
         use crate::brush::gpu_context::{
-            BrushGpuContext, BrushPerfCounters, DabBatch, PreviewState,
+            BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
         };
 
         // Compile under a read guard; drop the guard before any GPU
@@ -264,9 +264,11 @@ impl DarklyEngine {
                 Ok(r) => r,
                 Err(_) => {
                     drop(tool);
-                    self.compositor.tool_overlay_mut().clear_preview_mask();
+                    self.compositor
+                        .tool_overlay_mut()
+                        .clear_cursor_preview_mask();
                     self.compositor.mark_needs_present();
-                    self.brush_preview_info = None;
+                    self.brush_cursor_preview_info = None;
                     return;
                 }
             }
@@ -274,13 +276,13 @@ impl DarklyEngine {
 
         // Always dispatch `render_preview` — individual terminals decide
         // whether they produce output this frame. A graph with no
-        // compiled-terminal hook fires nothing and `brush_preview_info`
+        // compiled-terminal hook fires nothing and `brush_cursor_preview_info`
         // stays None; the four compiled terminals each fire their
         // hook and publish placement info. The post-run
         // `info.is_some()` check below routes both outcomes.
 
         // Split-borrow the compositor so we can hold a mutable handle
-        // on `tool_overlay` (for the terminal's `ensure_preview_mask`
+        // on `tool_overlay` (for the terminal's `ensure_cursor_preview_mask`
         // grow) alongside an immutable borrow of `selection_state` for
         // the brush bind group. The two fields are disjoint;
         // `Compositor::split_overlay_and_selection` documents the
@@ -320,7 +322,7 @@ impl DarklyEngine {
             stroke: None,
             // Tests pre-allocate `mask_view`; the engine path grows the
             // mask on demand via `mask_overlay`.
-            preview: Some(PreviewState {
+            preview: Some(CursorPreviewState {
                 mask_view: None,
                 mask_size: (0, 0),
                 mask_overlay: Some(overlay),
@@ -333,7 +335,7 @@ impl DarklyEngine {
         runner.clear_slots();
         runner.seed_sensors(&pen, [1.0, 1.0, 1.0, 1.0], 0, 0);
         runner.execute_cpu();
-        runner.render_preview_pipeline(&mut gpu_ctx);
+        runner.render_cursor_preview_pipeline(&mut gpu_ctx);
 
         let info = gpu_ctx.preview.as_ref().and_then(|p| p.info);
         let command_buf = gpu_ctx.encoder.finish();
@@ -342,13 +344,15 @@ impl DarklyEngine {
         if info.is_some() {
             self.compositor
                 .tool_overlay_mut()
-                .use_preview_mask_as_mask();
+                .use_cursor_preview_mask_as_mask();
             self.request_brush_cursor_preview_scale_readback();
         } else {
-            self.compositor.tool_overlay_mut().clear_preview_mask();
+            self.compositor
+                .tool_overlay_mut()
+                .clear_cursor_preview_mask();
         }
         self.compositor.mark_needs_present();
-        self.brush_preview_info = info;
+        self.brush_cursor_preview_info = info;
     }
 
     /// Queue a readback of the freshly-rendered preview-mask so the
@@ -371,11 +375,11 @@ impl DarklyEngine {
             return;
         }
         let overlay = self.compositor.tool_overlay_mut();
-        let (width, height) = overlay.preview_mask_size();
+        let (width, height) = overlay.cursor_preview_mask_size();
         if width == 0 || height == 0 {
             return;
         }
-        let Some(texture) = overlay.preview_mask_texture() else {
+        let Some(texture) = overlay.cursor_preview_mask_texture() else {
             return;
         };
         let mut encoder = self
@@ -405,8 +409,8 @@ impl DarklyEngine {
 
     /// Read-only snapshot of the current brush preview info, for the
     /// frontend to place the hover overlay primitive.
-    pub fn brush_preview_info(&self) -> Option<crate::brush::eval::BrushPreviewInfo> {
-        self.brush_preview_info
+    pub fn brush_cursor_preview_info(&self) -> Option<crate::brush::eval::BrushCursorPreviewInfo> {
+        self.brush_cursor_preview_info
     }
 
     /// Compile the active graph in-place.
@@ -446,16 +450,18 @@ impl DarklyEngine {
 
         // Refresh the brush preview overlay now that the graph is compiled —
         // size, rotation, and tip changes all land here.
-        self.regenerate_brush_preview();
+        self.regenerate_brush_cursor_preview();
 
         Ok(())
     }
 
-    /// Set the theme colors used by the editor live preview and by
-    /// brush thumbnail baking. Both paths share one palette so the live
-    /// preview visually matches the brush picker's grid thumbnails.
+    /// Set the theme colors used by the stroke preview, the dab preview,
+    /// and the library thumbnail bake. (The cursor preview composes
+    /// over the live canvas, not a theme bg, so it ignores this.) All
+    /// three bake paths share one palette so they visually match each
+    /// other across the picker grid and the brush editor.
     ///
-    /// Invalidates the cached editor preview, the active-dab preview,
+    /// Invalidates the cached stroke preview, the active-dab preview,
     /// and every per-brush PNG thumbnail in the library so the next
     /// picker refresh re-bakes against the new palette.
     pub fn set_preview_theme(&mut self, fg: [f32; 4], bg: [f32; 4]) {
@@ -464,7 +470,7 @@ impl DarklyEngine {
         }
         self.preview_theme_fg = fg;
         self.preview_theme_bg = bg;
-        self.invalidate_brush_editor_preview();
+        self.invalidate_brush_stroke_preview();
         // Drop baked PNG thumbnails so picker tiles re-bake on demand.
         // The frontend's rAF poll handles the empty→bake→present flow.
         self.brush_library.clear_thumbnails();
@@ -480,7 +486,7 @@ impl DarklyEngine {
     /// Uses the theme colors stored via `set_preview_theme`, not the user's
     /// active paint color — keeps the editor preview visually consistent
     /// with the brush picker's brush thumbnails.
-    pub fn brush_editor_preview(&mut self) -> Vec<u8> {
+    pub fn brush_stroke_preview(&mut self) -> Vec<u8> {
         // Guard against painting while a real stroke is in flight — the
         // preview shares `dab_pool` and `brush_pipelines` with the engine,
         // and running mid-stroke would step on acquired handles and
@@ -491,7 +497,7 @@ impl DarklyEngine {
         // available" and skips the image update — preserving whatever was
         // last shown. A zero-filled buffer would *also* parse cleanly and
         // render as a transparent image, wiping the visible preview.
-        let cached = self.brush_editor_preview_cache.clone();
+        let cached = self.brush_stroke_preview_cache.clone();
 
         // Skip work when nothing has changed and the cache is good. Also
         // skip if a real stroke is in progress — return the most recent
@@ -499,8 +505,8 @@ impl DarklyEngine {
         // stroke's GPU state.
         let current_graph_version = self.brush_graph_version();
         let nothing_to_do = in_stroke
-            || (self.last_rendered_preview_version == current_graph_version
-                && self.brush_editor_preview_cache.is_some());
+            || (self.last_rendered_stroke_preview_version == current_graph_version
+                && self.brush_stroke_preview_cache.is_some());
         if nothing_to_do {
             return cached.unwrap_or_default();
         }
@@ -510,7 +516,7 @@ impl DarklyEngine {
         // could overwrite the fresh one.
         let already_pending = self
             .readbacks
-            .any(|c| matches!(c, ReadbackContext::BrushEditorPreview { .. }));
+            .any(|c| matches!(c, ReadbackContext::BrushStrokePreview { .. }));
         if already_pending {
             return cached.unwrap_or_default();
         }
@@ -530,7 +536,7 @@ impl DarklyEngine {
         let mut graph = self.active_brush_graph();
         graph.apply_preview_overrides();
         let (rw, rh) = super::brush_library::BRUSH_STROKE_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_preview_stroke(
+        let path = crate::brush::preview_renderer::synthesize_stroke_path(
             rw as f32,
             rh as f32,
             30,
@@ -543,25 +549,25 @@ impl DarklyEngine {
             rh,
             fg,
             bg,
-            ReadbackContext::BrushEditorPreview {
+            ReadbackContext::BrushStrokePreview {
                 width: rw,
                 height: rh,
                 graph_version: current_graph_version,
             },
         );
-        self.last_rendered_preview_version = current_graph_version;
+        self.last_rendered_stroke_preview_version = current_graph_version;
 
         cached.unwrap_or_default()
     }
 
     /// Invalidate any cached editor preview — call when the theme colors
-    /// change so the next `brush_editor_preview` request re-renders with
+    /// change so the next `brush_stroke_preview` request re-renders with
     /// the new palette instead of returning the stale cached pixels.
     /// Also drops the active-dab preview cache so the BrushBar trigger
     /// thumbnail and the picker's active-brush strip refresh on the same
     /// signal.
-    pub fn invalidate_brush_editor_preview(&mut self) {
-        self.brush_editor_preview_cache = None;
+    pub fn invalidate_brush_stroke_preview(&mut self) {
+        self.brush_stroke_preview_cache = None;
         self.active_dab_preview_cache = None;
         // Theme changes alter rendered colors → both editor preview and
         // dab thumbnail need to re-render and discard any in-flight
@@ -572,7 +578,7 @@ impl DarklyEngine {
     /// Render a single-dab preview of the active brush and return the
     /// most recent cached PNG bytes synchronously. Pixels update on a
     /// later frame once the async readback completes — same shape as
-    /// `brush_editor_preview` and `layer_thumbnail`. Used by the
+    /// `brush_stroke_preview` and `layer_thumbnail`. Used by the
     /// BrushBar trigger button and the picker's active-brush strip.
     ///
     /// Renders at the same fixed `BRUSH_DAB_RENDER_SIZE` the baked
@@ -588,7 +594,7 @@ impl DarklyEngine {
         // uniform rings.
         let in_stroke = self.brush_stroke_engine.is_some();
 
-        // See `brush_editor_preview` for why we return an empty Vec rather
+        // See `brush_stroke_preview` for why we return an empty Vec rather
         // than a zero-filled one when no cache is available — frontends
         // treat empty as "no fresh bytes" and preserve the last successful
         // render, while a zero buffer would parse as a transparent image
@@ -624,7 +630,7 @@ impl DarklyEngine {
         let mut graph = self.active_brush_graph();
         crate::brush::reset_exposed_scrubs(&mut graph);
         let (rw, rh) = super::brush_library::BRUSH_DAB_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_preview_dab(rw as f32, rh as f32);
+        let path = crate::brush::preview_renderer::synthesize_dab_path(rw as f32, rh as f32);
         self.render_preview_and_request_readback(
             &graph,
             &path,
@@ -676,7 +682,7 @@ impl DarklyEngine {
         bg: [f32; 4],
         context: ReadbackContext,
     ) {
-        let Some(texture) = self.brush_preview_renderer.render_stroke(
+        let Some(texture) = self.brush_stroke_preview_renderer.render_stroke(
             &self.gpu.device,
             &self.gpu.queue,
             &self.brush_pipelines,
@@ -691,7 +697,7 @@ impl DarklyEngine {
         };
 
         // Encode the readback manually (not via `gpu.encode`) so the
-        // borrow of `self.brush_preview_renderer` that produced
+        // borrow of `self.brush_stroke_preview_renderer` that produced
         // `texture` coexists with borrows of `self.gpu` and
         // `self.readbacks` — they're disjoint fields of `self`.
         let mut encoder = self

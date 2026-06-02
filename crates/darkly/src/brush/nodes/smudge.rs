@@ -519,8 +519,8 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
                 layer_offset,
                 layer_size,
                 canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                preview_centre: [0.0, 0.0],
-                preview_size: [0, 0],
+                cursor_preview_centre: [0.0, 0.0],
+                cursor_preview_size: [0, 0],
                 _pad: [0, 0],
             },
         );
@@ -616,13 +616,13 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
     /// Smudge has no rotation port — the cursor is symmetric, and
     /// rotating it wouldn't carry meaningful information for the
     /// user. Publishes `rotation_rad: 0.0`.
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, 0.0);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, 0.0);
         vec![]
     }
 
@@ -675,7 +675,7 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
     /// Semantic for the preview: "show the footprint, not the smear"
     /// — neutral gray, modulated by the upstream shape mask so the
     /// cursor still reads the brush's actual coverage area.
-    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         let mask_expr = cctx.input("mask").as_f32();
         wgsl.body = format!(

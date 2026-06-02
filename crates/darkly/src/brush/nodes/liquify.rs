@@ -555,8 +555,8 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
                 layer_offset,
                 layer_size,
                 canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                preview_centre: [0.0, 0.0],
-                preview_size: [0, 0],
+                cursor_preview_centre: [0.0, 0.0],
+                cursor_preview_size: [0, 0],
                 _pad: [0, 0],
             },
         );
@@ -645,13 +645,13 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
     /// falloff the stroke applies — scrubbing the softness slider
     /// visibly reshapes the cursor. Rotation is 0 (the preview is
     /// radially symmetric).
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, 0.0);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, 0.0);
         vec![]
     }
 
@@ -760,7 +760,7 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
     /// `0.6` thinking that emitted "neutral gray", which actually
     /// just capped peak coverage at 60% — visibly fainter than other
     /// brushes.
-    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         let softness_expr = cctx.input("softness").as_f32();
         let falloff_fn = cctx.ident("liquify_falloff");

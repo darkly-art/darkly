@@ -80,7 +80,7 @@ use self::extent::compose_brush_extent;
 use self::type_system::{compute_struct_size, compute_struct_size_for_uniforms};
 
 /// Below this canvas-px bbox, the dab has effectively no extent and
-/// `render_compiled_preview` early-returns rather than try to compute
+/// `render_compiled_cursor_preview` early-returns rather than try to compute
 /// a canvas-to-target scale.
 const EPS_BBOX_CANVAS_PX: f32 = 1e-3;
 
@@ -97,7 +97,7 @@ pub struct CompiledBrush {
     /// only in the outer skeleton (single-quad vertex stage, `sel =
     /// 1.0`, no `@group(2)` / `@group(3)` bindings). See
     /// [`ShaderMode`].
-    pub preview_wgsl: String,
+    pub cursor_preview_wgsl: String,
     /// Per-dab record layout, in declaration order. The compiler
     /// includes the intrinsic header fields ([`INTRINSIC_DAB_HEADER_FIELDS`])
     /// at the front; everything after is contributed by nodes.
@@ -137,7 +137,7 @@ impl std::fmt::Debug for CompiledBrush {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompiledBrush")
             .field("stroke_wgsl_bytes", &self.stroke_wgsl.len())
-            .field("preview_wgsl_bytes", &self.preview_wgsl.len())
+            .field("cursor_preview_wgsl_bytes", &self.cursor_preview_wgsl.len())
             .field("dab_record_size", &self.dab_record_size)
             .field("uniform_size", &self.uniform_size)
             .field("topology_hash", &self.topology_hash)
@@ -197,7 +197,7 @@ pub fn compile_brush_to_wgsl(
     // literalizes the preview defaults regardless of what the live
     // user-facing scrubs are set to. Encoding the override inside the
     // compiler (rather than at every caller) means the active-brush
-    // compile and `regenerate_brush_preview_with_pen_internal` — which
+    // compile and `regenerate_brush_cursor_preview_with_pen_internal` — which
     // intentionally do not pre-mutate the user's graph — still emit a
     // correct preview shader.
     let preview_graph = {
@@ -213,7 +213,7 @@ pub fn compile_brush_to_wgsl(
     let mut shared_body = String::new();
     // Terminal node bodies, captured per-mode. `stroke_terminal_body`
     // comes from the terminal's `compile_wgsl`; `preview_terminal_body`
-    // comes from `compile_preview_body`. For terminals that don't
+    // comes from `compile_cursor_preview_body`. For terminals that don't
     // override the latter, both are the same source.
     let mut stroke_terminal_body = String::new();
     let mut preview_terminal_body = String::new();
@@ -303,8 +303,8 @@ pub fn compile_brush_to_wgsl(
             .collect();
 
         // For terminal steps, build the preview-mode cctx alongside the
-        // stroke-mode one so `compile_preview_body` sees the overridden
-        // port defaults. Non-terminals never have `compile_preview_body`
+        // stroke-mode one so `compile_cursor_preview_body` sees the overridden
+        // port defaults. Non-terminals never have `compile_cursor_preview_body`
         // called, so we skip the extra work.
         let preview_cctx_parts = if step.is_terminal {
             let preview_node = preview_graph
@@ -397,13 +397,12 @@ pub fn compile_brush_to_wgsl(
                 consumed_outputs: preview_consumed,
                 graph_textures: &graph_textures_cell,
             };
-            let preview_result =
-                evaluator
-                    .compile_preview_body(&preview_cctx)
-                    .map_err(|reason| CompileError::NodeNotCompilable {
-                        type_id: step.type_id.clone(),
-                        reason,
-                    })?;
+            let preview_result = evaluator
+                .compile_cursor_preview_body(&preview_cctx)
+                .map_err(|reason| CompileError::NodeNotCompilable {
+                    type_id: step.type_id.clone(),
+                    reason,
+                })?;
             if !preview_result.body.is_empty() {
                 preview_terminal_body.push_str(&preview_result.body);
                 if !preview_result.body.ends_with('\n') {
@@ -488,8 +487,8 @@ pub fn compile_brush_to_wgsl(
         &terminal_bindings,
         &graph_texture_names,
     );
-    let preview_wgsl = assemble_shader(
-        ShaderMode::Preview,
+    let cursor_preview_wgsl = assemble_shader(
+        ShaderMode::CursorPreview,
         &dab_fields,
         &uniform_fields,
         &decls,
@@ -507,7 +506,7 @@ pub fn compile_brush_to_wgsl(
 
     Ok(CompiledBrush {
         stroke_wgsl,
-        preview_wgsl,
+        cursor_preview_wgsl,
         dab_layout: dab_fields,
         dab_record_size,
         uniform_layout: uniform_fields,
@@ -581,8 +580,8 @@ pub fn pack_uniforms(
 /// What this does:
 /// 1. Grows the preview mask to fit `radius × brush_extent_factor +
 ///    brush_extent_extra_px` (rounded to the next power of two).
-/// 2. Packs the intrinsic uniform header — `preview_centre` /
-///    `preview_size` set live; `layer_offset` / `layer_size` /
+/// 2. Packs the intrinsic uniform header — `cursor_preview_centre` /
+///    `cursor_preview_size` set live; `layer_offset` / `layer_size` /
 ///    `canvas_size` aliased to the preview mask so any node that
 ///    reads them in its `compile_wgsl` body sees a sane (mask-sized)
 ///    target.
@@ -592,9 +591,9 @@ pub fn pack_uniforms(
 ///    contributed dab fields via [`pack_dab_record`].
 /// 5. Calls [`crate::brush::pipeline::BrushPipelines::render_preview`]
 ///    against the shared preview pipeline cache.
-/// 6. Publishes [`crate::brush::eval::BrushPreviewInfo`] for the
+/// 6. Publishes [`crate::brush::eval::BrushCursorPreviewInfo`] for the
 ///    overlay's `KIND_MASKED_STAMP` primitive to consume.
-pub fn render_compiled_preview(
+pub fn render_compiled_cursor_preview(
     gpu: &mut crate::brush::gpu_context::BrushGpuContext,
     radius: f32,
     rotation_rad: f32,
@@ -604,7 +603,7 @@ pub fn render_compiled_preview(
     // footprint as it will be deposited on the canvas, and what the
     // overlay quad consumes via `half_extent_canvas_px` below.
     let bbox_canvas_px = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
-    let (target_view, target_w, target_h) = gpu.ensure_preview_mask(bbox_canvas_px)?;
+    let (target_view, target_w, target_h) = gpu.ensure_cursor_preview_mask(bbox_canvas_px)?;
     if target_w == 0 || target_h == 0 || bbox_canvas_px < EPS_BBOX_CANVAS_PX {
         return None;
     }
@@ -621,7 +620,7 @@ pub fn render_compiled_preview(
     let canvas_to_target = texture_half / bbox_canvas_px;
     let bbox_target_px = texture_half;
     let radius_target_px = (radius * canvas_to_target).max(EPS_RADIUS_TARGET_PX);
-    let preview_centre = [target_w as f32 * 0.5, target_h as f32 * 0.5];
+    let cursor_preview_centre = [target_w as f32 * 0.5, target_h as f32 * 0.5];
 
     // Pack the uniform buffer: intrinsic header first, node-contributed
     // uniforms after.
@@ -629,8 +628,8 @@ pub fn render_compiled_preview(
         layer_offset: [0, 0],
         layer_size: [target_w, target_h],
         canvas_size: [target_w, target_h],
-        preview_centre,
-        preview_size: [target_w, target_h],
+        cursor_preview_centre,
+        cursor_preview_size: [target_w, target_h],
         _pad: [0, 0],
     };
     let total_uniform_size = INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size;
@@ -656,7 +655,7 @@ pub fn render_compiled_preview(
     let mut dab_bytes: Vec<u8> = Vec::with_capacity(compiled.dab_record_size);
     pack_intrinsic_dab_header(
         &mut dab_bytes,
-        preview_centre,
+        cursor_preview_centre,
         bbox_target_px,
         radius_target_px,
     );
@@ -681,7 +680,7 @@ pub fn render_compiled_preview(
     // UV [0, 1] across the quad. With the dab filling the mask's
     // inscribed disc by construction (above), this matches.
     if let Some(preview) = gpu.preview.as_mut() {
-        preview.info = Some(crate::brush::eval::BrushPreviewInfo {
+        preview.info = Some(crate::brush::eval::BrushCursorPreviewInfo {
             half_extent_canvas_px: [bbox_canvas_px, bbox_canvas_px],
             rotation_rad,
         });
@@ -870,7 +869,7 @@ fn assemble_shader(
     // preview-mask viewport in preview mode.
     match mode {
         ShaderMode::Stroke => out.push_str(STROKE_VERTEX_STAGE_WGSL),
-        ShaderMode::Preview => out.push_str(PREVIEW_VERTEX_STAGE_WGSL),
+        ShaderMode::CursorPreview => out.push_str(PREVIEW_VERTEX_STAGE_WGSL),
     }
     out.push('\n');
 
@@ -906,7 +905,7 @@ fn assemble_shader(
         ShaderMode::Stroke => out.push_str(
             "    let sel = textureSampleLevel(sel_tex, sel_smp, target_pos / canvas_size, 0.0).r;\n",
         ),
-        ShaderMode::Preview => out.push_str("    let sel: f32 = 1.0;\n"),
+        ShaderMode::CursorPreview => out.push_str("    let sel: f32 = 1.0;\n"),
     }
     out.push_str(fs_body);
     out.push_str("}\n");
@@ -972,8 +971,8 @@ fn vs_main(
 "#;
 
 /// Preview-mode vertex stage — single quad centred at
-/// `u.intrinsic.preview_centre`, mapped against the preview mask's
-/// NDC viewport (`u.intrinsic.preview_size`). The fragment shader
+/// `u.intrinsic.cursor_preview_centre`, mapped against the preview mask's
+/// NDC viewport (`u.intrinsic.cursor_preview_size`). The fragment shader
 /// reads `dabs[0]` for the (single) record's pose; the per-fragment
 /// math is unchanged from stroke mode. Repeats the `VsOut` /
 /// `quad_corner` declarations so the two vertex stages are
@@ -1001,21 +1000,21 @@ fn quad_corner(vi: u32) -> vec2<f32> {
 fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     let dab = dabs[0];
     let corner = quad_corner(vi);
-    // Read `dab.pos` instead of `u.intrinsic.preview_centre` so the
+    // Read `dab.pos` instead of `u.intrinsic.cursor_preview_centre` so the
     // dab record is the single source of truth for positioning. The
-    // CPU side packs `pos = preview_centre`, making the two equivalent
+    // CPU side packs `pos = cursor_preview_centre`, making the two equivalent
     // by construction, but threading through `dab.pos` keeps the
     // vertex structurally identical to stroke's modulo the clip-space
     // mapping — the invariant is the same: target-space pos, bbox in
     // target px.
     let target_pos = dab.pos + (corner * 2.0 - vec2<f32>(1.0, 1.0)) * dab.bbox_target_px;
-    let preview_size_f = vec2<f32>(
-        f32(u.intrinsic.preview_size.x),
-        f32(u.intrinsic.preview_size.y),
+    let cursor_preview_size_f = vec2<f32>(
+        f32(u.intrinsic.cursor_preview_size.x),
+        f32(u.intrinsic.cursor_preview_size.y),
     );
     let clip = vec2<f32>(
-        target_pos.x / preview_size_f.x * 2.0 - 1.0,
-        1.0 - target_pos.y / preview_size_f.y * 2.0,
+        target_pos.x / cursor_preview_size_f.x * 2.0 - 1.0,
+        1.0 - target_pos.y / cursor_preview_size_f.y * 2.0,
     );
     var out: VsOut;
     out.clip       = vec4<f32>(clip, 0.0, 1.0);

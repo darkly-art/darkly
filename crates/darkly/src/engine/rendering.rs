@@ -364,7 +364,7 @@ impl DarklyEngine {
                 // Tell the frontend "fresh thumbnail bytes available".
                 self.thumbnail_version = self.thumbnail_version.wrapping_add(1);
             }
-            ReadbackContext::BrushEditorPreview {
+            ReadbackContext::BrushStrokePreview {
                 width,
                 height,
                 graph_version,
@@ -384,7 +384,7 @@ impl DarklyEngine {
                     );
                     let png_bytes = encode_rgba_as_png(&framed, tw, th);
                     if !png_bytes.is_empty() {
-                        self.brush_editor_preview_cache = Some(png_bytes);
+                        self.brush_stroke_preview_cache = Some(png_bytes);
                     }
                 }
             }

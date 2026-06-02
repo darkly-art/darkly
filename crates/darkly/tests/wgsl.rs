@@ -57,9 +57,9 @@ fn rough_ink_brush_compiles_to_nonempty_wgsl() {
     assert!(compiled.stroke_wgsl.contains("DabRecord"));
     assert!(compiled.stroke_wgsl.contains("Uniforms"));
     // Preview variant must compile too, with the same upstream shape.
-    assert!(compiled.preview_wgsl.contains("@fragment"));
-    assert!(compiled.preview_wgsl.contains("fn fs_main"));
-    assert!(compiled.preview_wgsl.contains("shape_r_theta"));
+    assert!(compiled.cursor_preview_wgsl.contains("@fragment"));
+    assert!(compiled.cursor_preview_wgsl.contains("fn fs_main"));
+    assert!(compiled.cursor_preview_wgsl.contains("shape_r_theta"));
     assert!(compiled.dab_record_size >= 16); // intrinsic header + pen
     assert!(compiled.uniform_size > 0); // intrinsic + paint_color
     assert!(compiled.topology_hash != 0);

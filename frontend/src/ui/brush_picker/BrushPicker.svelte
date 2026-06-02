@@ -44,7 +44,7 @@
     const groups = $derived.by(() => {
         const map = new Map<string, BrushInfo[]>();
         for (const brush of filtered) {
-            const key = brush.category || 'uncategorised';
+            const key = brush.category || 'Uncategorised';
             const existing = map.get(key);
             if (existing) {
                 existing.push(brush);
@@ -269,7 +269,6 @@
         font-size: 12px;
         font-weight: 600;
         color: var(--text);
-        text-transform: capitalize;
         letter-spacing: 0.2px;
         flex-shrink: 0;
     }

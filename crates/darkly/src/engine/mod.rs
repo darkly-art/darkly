@@ -34,7 +34,7 @@ use crate::brush::gpu_context::BrushPerfCounters;
 use crate::brush::checkpoint_ring::CheckpointRing;
 use crate::brush::library::BrushLibrary;
 use crate::brush::pipeline::BrushPipelines;
-use crate::brush::preview_renderer::BrushPreviewRenderer;
+use crate::brush::preview_renderer::BrushStrokePreviewRenderer;
 use crate::brush::stabilizer::StabilizerRegistry;
 use crate::brush::stroke_buffer::StrokeBuffer;
 use crate::brush::stroke_engine::StrokeEngine;
@@ -166,14 +166,14 @@ pub(crate) enum ReadbackContext {
         thumb_h: u32,
     },
     /// Async readback of a freshly-rendered brush editor preview. Completion
-    /// caches the bytes on the engine so the next `brush_editor_preview()`
+    /// caches the bytes on the engine so the next `brush_stroke_preview()`
     /// call returns them synchronously.
     ///
     /// `width`/`height` are the source render dimensions (the layout of the
     /// readback bytes, always `BRUSH_STROKE_RENDER_SIZE`). The framer crops
     /// the painted region and resizes to the canonical `BRUSH_THUMBNAIL_SIZE`
     /// before PNG-encoding — same shape as `BrushThumbnailForSave`.
-    BrushEditorPreview {
+    BrushStrokePreview {
         width: u32,
         height: u32,
         /// Graph version at the time the render was issued — used to skip
@@ -212,7 +212,7 @@ pub(crate) enum ReadbackContext {
     ActiveBrushDab {
         topology_version: u64,
     },
-    /// Async readback of the freshly-rendered `preview_mask` (the GPU
+    /// Async readback of the freshly-rendered `cursor_preview_mask` (the GPU
     /// texture sampled by the overlay's KIND_MASKED_STAMP) used to derive
     /// the cursor-preview coverage scale. Completion measures mean alpha
     /// and pushes the resulting normalize multiplier into the overlay
@@ -220,7 +220,7 @@ pub(crate) enum ReadbackContext {
     /// version at request time so stale results from superseded
     /// compilations are dropped.
     ///
-    /// `width` / `height` are the preview_mask dimensions at readback
+    /// `width` / `height` are the cursor_preview_mask dimensions at readback
     /// time — used to walk the row-padded buffer the GPU returned.
     BrushCursorPreviewScale {
         topology_version: u64,
@@ -317,36 +317,36 @@ pub struct DarklyEngine {
     pub(crate) tool_session: crate::tool::SharedToolSession,
 
     /// Canvas-space positioning info for the brush preview overlay, cached
-    /// after each `regenerate_brush_preview()` call. Consumed by the brush
+    /// after each `regenerate_brush_cursor_preview()` call. Consumed by the brush
     /// tool to size/rotate the hover overlay primitive. `None` when the
     /// graph has no `color_output.preview` wire.
-    pub(crate) brush_preview_info: Option<crate::brush::eval::BrushPreviewInfo>,
+    pub(crate) brush_cursor_preview_info: Option<crate::brush::eval::BrushCursorPreviewInfo>,
 
-    /// Previous hover sample fed into `regenerate_brush_preview_with_pen`.
+    /// Previous hover sample fed into `regenerate_brush_cursor_preview_with_pen`.
     /// Kept so segment-derived sensors (drawing_angle, motion, distance,
     /// speed) can be derived on the next hover using the same helper the
     /// stroke engine uses. Reset on pointer-leave / stroke-start via
-    /// `clear_brush_preview_pose()` so a return-from-offscreen hover
+    /// `clear_brush_cursor_preview_pose()` so a return-from-offscreen hover
     /// doesn't synthesize a spurious direction.
-    pub(crate) last_preview_pose: Option<crate::brush::paint_info::PaintInformation>,
+    pub(crate) last_cursor_preview_pose: Option<crate::brush::paint_info::PaintInformation>,
 
     // --- Full-stroke brush editor preview ---
     /// Renderer for the Krita-style S-curve preview shown in the brush
     /// editor widget. Reused across calls; holds its own scratch target.
-    pub(crate) brush_preview_renderer: BrushPreviewRenderer,
+    pub(crate) brush_stroke_preview_renderer: BrushStrokePreviewRenderer,
     /// Cached PNG bytes of the most recently-completed editor preview.
-    /// `brush_editor_preview()` returns this synchronously; it's refreshed
-    /// asynchronously via `ReadbackContext::BrushEditorPreview`. The frontend
+    /// `brush_stroke_preview()` returns this synchronously; it's refreshed
+    /// asynchronously via `ReadbackContext::BrushStrokePreview`. The frontend
     /// uses the bytes directly as a `Blob` URL — same shape as
     /// `active_dab_preview_cache`. Always framed to `BRUSH_THUMBNAIL_SIZE`.
-    pub(crate) brush_editor_preview_cache: Option<Vec<u8>>,
+    pub(crate) brush_stroke_preview_cache: Option<Vec<u8>>,
     // `brush_graph_version` and `brush_topology_version` moved into the
     // shared `BrushState` (looked up via `tool_session`). The per-engine
     // `last_rendered_*` cursors below stay per-engine because they track
     // this engine's own render cache versus the shared monotonic counter.
     /// Graph version at the last time we issued a preview render. Compared
     /// against `BrushState::version` to skip redundant work.
-    pub(crate) last_rendered_preview_version: u64,
+    pub(crate) last_rendered_stroke_preview_version: u64,
 
     // --- Active brush dab preview ---
     /// Cached PNG bytes of the most recently-completed active-dab
@@ -366,10 +366,10 @@ pub struct DarklyEngine {
     /// changed shape — the scale is a property of the graph topology,
     /// not the cursor pose.
     pub(crate) last_requested_cursor_scale_topology_version: u64,
-    /// Theme colors for brush thumbnails (not the live editor preview —
-    /// that uses the caller-supplied fg and auto-picked contrast bg). The
-    /// frontend sets these via `set_preview_theme()` when the UI theme
-    /// toggles.
+    /// Theme colors shared by the stroke preview, the dab preview, and
+    /// the library thumbnail bake. (The cursor preview composes over the
+    /// live canvas and ignores these.) The frontend sets these via
+    /// `set_preview_theme()` when the UI theme toggles.
     pub(crate) preview_theme_fg: [f32; 4],
     pub(crate) preview_theme_bg: [f32; 4],
 
@@ -522,11 +522,11 @@ impl DarklyEngine {
             brush_pipelines,
             brush_stroke_engine: None,
             tool_session,
-            brush_preview_info: None,
-            last_preview_pose: None,
-            brush_preview_renderer: BrushPreviewRenderer::new(),
-            brush_editor_preview_cache: None,
-            last_rendered_preview_version: 0,
+            brush_cursor_preview_info: None,
+            last_cursor_preview_pose: None,
+            brush_stroke_preview_renderer: BrushStrokePreviewRenderer::new(),
+            brush_stroke_preview_cache: None,
+            last_rendered_stroke_preview_version: 0,
             active_dab_preview_cache: None,
             last_rendered_dab_topology_version: 0,
             last_requested_cursor_scale_topology_version: 0,
@@ -573,7 +573,7 @@ impl DarklyEngine {
         // Populate the brush preview mask + cached info from the default
         // graph so the hover overlay is live immediately, without needing
         // the user to trigger a `compile_active` via a param change.
-        engine.regenerate_brush_preview();
+        engine.regenerate_brush_cursor_preview();
 
         // Eagerly allocate the document selection modifier + its GPU state.
         // The selection is a typed Modifier on `doc.selection`; the R8 GPU
@@ -621,8 +621,8 @@ impl DarklyEngine {
 
     /// Current overlay preview mask dimensions. Test-only accessor.
     #[cfg(any(test, feature = "testing"))]
-    pub fn compositor_preview_mask_size(&self) -> (u32, u32) {
-        self.compositor.tool_overlay().preview_mask_size()
+    pub fn compositor_cursor_preview_mask_size(&self) -> (u32, u32) {
+        self.compositor.tool_overlay().cursor_preview_mask_size()
     }
 
     /// Current cursor-preview coverage scale uniform — the multiplier the

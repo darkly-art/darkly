@@ -8,7 +8,7 @@
 use darkly::brush::{
     default_graph,
     pipeline::BrushPipelines,
-    preview_renderer::{synthesize_preview_stroke, BrushPreviewRenderer},
+    preview_renderer::{synthesize_stroke_path, BrushStrokePreviewRenderer},
 };
 use darkly::gpu::test_utils::{readback_texture, test_device};
 
@@ -16,12 +16,12 @@ use darkly::gpu::test_utils::{readback_texture, test_device};
 fn renders_s_curve_over_black_background() {
     let (device, queue) = test_device();
     let pipelines = BrushPipelines::new(&device, &queue);
-    let mut renderer = BrushPreviewRenderer::new();
+    let mut renderer = BrushStrokePreviewRenderer::new();
     let graph = default_graph();
 
     let width: u32 = 320;
     let height: u32 = 120;
-    let path = synthesize_preview_stroke(width as f32, height as f32, 30, 0.0);
+    let path = synthesize_stroke_path(width as f32, height as f32, 30, 0.0);
 
     let fg = [1.0, 1.0, 1.0, 1.0]; // white stroke
     let bg = [0.0, 0.0, 0.0, 1.0]; // black background
@@ -92,9 +92,9 @@ fn renders_s_curve_over_black_background() {
 fn renderer_reuses_target_across_renders_of_same_size() {
     let (device, queue) = test_device();
     let pipelines = BrushPipelines::new(&device, &queue);
-    let mut renderer = BrushPreviewRenderer::new();
+    let mut renderer = BrushStrokePreviewRenderer::new();
     let graph = default_graph();
-    let path = synthesize_preview_stroke(320.0, 120.0, 20, 0.0);
+    let path = synthesize_stroke_path(320.0, 120.0, 20, 0.0);
 
     assert!(renderer.current_size().is_none());
 
@@ -129,7 +129,7 @@ fn renderer_reuses_target_across_renders_of_same_size() {
     assert_eq!(first_ptr, second_ptr);
 }
 
-/// Decode a `brush_editor_preview()` PNG to raw RGBA bytes plus its
+/// Decode a `brush_stroke_preview()` PNG to raw RGBA bytes plus its
 /// canonical `BRUSH_THUMBNAIL_SIZE` dimensions — same shape the frontend
 /// receives via the `Blob` URL path.
 fn decode_preview_png(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
@@ -140,7 +140,7 @@ fn decode_preview_png(png_bytes: &[u8]) -> (u32, u32, Vec<u8>) {
 }
 
 #[test]
-fn engine_brush_editor_preview_caches_after_readback() {
+fn engine_brush_stroke_preview_caches_after_readback() {
     use darkly::engine::DarklyEngine;
     use darkly::gpu::context::GpuContext;
 
@@ -151,7 +151,7 @@ fn engine_brush_editor_preview_caches_after_readback() {
     // First call: cache empty, kicks off a readback, returns an empty Vec
     // — the frontend uses that as a "no fresh bytes" signal so it
     // preserves whatever was last shown rather than flashing transparent.
-    let first = engine.brush_editor_preview();
+    let first = engine.brush_stroke_preview();
     assert!(
         first.is_empty(),
         "cache miss should return empty Vec, got {} bytes",
@@ -164,7 +164,7 @@ fn engine_brush_editor_preview_caches_after_readback() {
 
     // Second call: cache now populated with PNG bytes — same shape as
     // `brush_active_dab_preview` / `brush_thumbnail`.
-    let second = engine.brush_editor_preview();
+    let second = engine.brush_stroke_preview();
     assert!(
         !second.is_empty(),
         "post-readback call should return cached PNG bytes"
@@ -189,7 +189,7 @@ fn engine_brush_editor_preview_caches_after_readback() {
 }
 
 #[test]
-fn engine_brush_editor_preview_skips_unchanged_graph() {
+fn engine_brush_stroke_preview_skips_unchanged_graph() {
     use darkly::engine::DarklyEngine;
     use darkly::gpu::context::GpuContext;
 
@@ -198,13 +198,13 @@ fn engine_brush_editor_preview_skips_unchanged_graph() {
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
     // Prime the cache.
-    let _ = engine.brush_editor_preview();
+    let _ = engine.brush_stroke_preview();
     engine.test_flush_readbacks();
-    let first = engine.brush_editor_preview();
+    let first = engine.brush_stroke_preview();
 
     // Without touching the graph, a second call returns the same cache
     // and does not queue another readback.
-    let second = engine.brush_editor_preview();
+    let second = engine.brush_stroke_preview();
     assert_eq!(first, second);
 }
 
@@ -219,19 +219,19 @@ fn set_preview_theme_invalidates_cache() {
 
     // Prime the cache with the default (dark) theme: white on dark.
     engine.set_preview_theme([1.0, 1.0, 1.0, 1.0], [0.02, 0.02, 0.02, 1.0]);
-    let _ = engine.brush_editor_preview();
+    let _ = engine.brush_stroke_preview();
     engine.test_flush_readbacks();
-    let dark_png = engine.brush_editor_preview();
+    let dark_png = engine.brush_stroke_preview();
 
     // Switch to the light theme: black on light. Cache should invalidate
     // and the next readback should produce distinctly different pixels.
     engine.set_preview_theme([0.0, 0.0, 0.0, 1.0], [0.9, 0.9, 0.9, 1.0]);
-    let after_change = engine.brush_editor_preview();
+    let after_change = engine.brush_stroke_preview();
     // Pre-readback call returns an empty Vec (cache was invalidated).
     assert!(after_change.is_empty());
 
     engine.test_flush_readbacks();
-    let light_png = engine.brush_editor_preview();
+    let light_png = engine.brush_stroke_preview();
 
     assert_ne!(
         dark_png, light_png,
@@ -320,9 +320,9 @@ fn airbrush_endpoint_dabs_not_clipped_against_cache_border() {
     engine.brush_load("Airbrush").expect("Airbrush built-in");
 
     // Prime + flush + read.
-    let _ = engine.brush_editor_preview();
+    let _ = engine.brush_stroke_preview();
     engine.test_flush_readbacks();
-    let png = engine.brush_editor_preview();
+    let png = engine.brush_stroke_preview();
     let (width, height, pixels) = decode_preview_png(&png);
     assert_eq!(pixels.len(), (width * height * 4) as usize);
 
@@ -380,7 +380,7 @@ fn stabilize_scrub_does_not_bump_editor_preview_version() {
 
     // Prime the editor preview cache and let the readback land so the
     // version counter is at its post-init steady state.
-    let _ = engine.brush_editor_preview();
+    let _ = engine.brush_stroke_preview();
     engine.test_flush_readbacks();
     let v_before_stabilize = engine.brush_graph_version();
 
@@ -458,7 +458,7 @@ fn size_scrub_does_not_bump_editor_preview_version() {
     let mut engine = DarklyEngine::new(gpu, 1024, 768);
 
     engine.brush_load("Ink Pen").expect("Ink Pen built-in");
-    let _ = engine.brush_editor_preview();
+    let _ = engine.brush_stroke_preview();
     engine.test_flush_readbacks();
     let v_before = engine.brush_graph_version();
 
@@ -489,7 +489,7 @@ fn size_scrub_does_not_bump_editor_preview_version() {
 fn empty_path_returns_none() {
     let (device, queue) = test_device();
     let pipelines = BrushPipelines::new(&device, &queue);
-    let mut renderer = BrushPreviewRenderer::new();
+    let mut renderer = BrushStrokePreviewRenderer::new();
     let graph = default_graph();
 
     let result = renderer.render_stroke(

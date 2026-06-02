@@ -78,7 +78,7 @@ impl DarklyEngine {
         let mut graph = self.active_brush_graph();
         graph.apply_preview_overrides();
         let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_preview_stroke(
+        let path = crate::brush::preview_renderer::synthesize_stroke_path(
             rw as f32,
             rh as f32,
             30,
@@ -129,7 +129,7 @@ impl DarklyEngine {
         let mut graph = brush.metadata.graph.clone();
         graph.apply_preview_overrides();
         let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_preview_stroke(
+        let path = crate::brush::preview_renderer::synthesize_stroke_path(
             rw as f32,
             rh as f32,
             30,
@@ -183,7 +183,7 @@ impl DarklyEngine {
         // so the picker tile and the BrushBar trigger always agree.
         let mut graph = brush.metadata.graph.clone();
         crate::brush::reset_exposed_scrubs(&mut graph);
-        let path = crate::brush::preview_renderer::synthesize_preview_dab(w as f32, h as f32);
+        let path = crate::brush::preview_renderer::synthesize_dab_path(w as f32, h as f32);
         self.render_preview_and_request_readback(
             &graph,
             &path,

@@ -1,14 +1,10 @@
 name: Charcoal
-category: dry_media
+category: Dry Media
 nodes:
   1:
     type: pen_input
   2:
     type: paint_color
-  3:
-    type: noise
-    params:
-      scale: 2.0
   4:
     type: split_color
   5:
@@ -17,40 +13,48 @@ nodes:
       algorithm: 1
     port_defaults:
       amplitude: 0.5
-      softness: 0.1
+      softness: 0.20
   6:
     type: random
   7:
     type: multiply
   8:
     type: multiply
-  9:
-    type: levels
-    port_defaults:
-      in_low: 0.1
-  10:
-    type: multiply
-    port_defaults:
-      b: 0.6
   11:
     type: stamp
   12:
     type: paint
+    port_defaults:
+      flow: 0.50
     exposed:
     - flow
     - opacity
     - size
+  13:
+    type: curve
+    params:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.65899175
+        - 0.3499171
+      - - 1.0
+        - 1.0
+  14:
+    type: image
+    params:
+      scale: 200
+      texture_name: paper
 connections:
 - '1.position -> 12.position'
 - '1.pressure -> 8.b'
 - '1.pressure -> 12.size_input'
 - '2.color -> 11.color'
-- '3.color -> 4.color'
 - '4.luminance -> 7.a'
 - '5.mask -> 7.b'
 - '6.value -> 5.seed'
 - '7.result -> 8.a'
-- '8.result -> 9.input'
-- '9.output -> 10.a'
-- '10.result -> 11.tip'
+- '8.result -> 13.input'
 - '11.dab -> 12.rgba'
+- '13.output -> 11.tip'
+- '14.color -> 4.color'

@@ -75,7 +75,7 @@ mod tests {
         );
         for (label, wgsl) in [
             ("stroke", &compiled.stroke_wgsl),
-            ("preview", &compiled.preview_wgsl),
+            ("preview", &compiled.cursor_preview_wgsl),
         ] {
             assert!(
                 !wgsl.contains("@group(3) @binding(1) var graph_tex_0:"),

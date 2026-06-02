@@ -220,7 +220,7 @@ impl CompileWgslCtx<'_> {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum ShaderMode {
     Stroke,
-    Preview,
+    CursorPreview,
 }
 
 #[cfg(test)]

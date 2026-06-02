@@ -581,7 +581,7 @@ impl<W: WireKind> Graph<W> {
     /// Called by every renderer that wants brush-identity output rather
     /// than the user's momentary scrub state:
     /// - the WGSL compiler, on a clone, before emitting
-    ///   `CompiledBrush::preview_wgsl` (the cursor halo);
+    ///   `CompiledBrush::cursor_preview_wgsl` (the cursor halo);
     /// - the brush-editor stroke preview;
     /// - the library thumbnail bake (`brush_save`, `brush_thumbnail`).
     ///

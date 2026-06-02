@@ -873,12 +873,12 @@ impl DarklyHandle {
     /// `{ halfExtent: [f32, f32], rotation: f32 }`. The overlay mask itself
     /// is already bound internally — the tool only needs this to place the
     /// primitive.
-    pub fn get_brush_preview_info(&self) -> JsValue {
+    pub fn get_brush_cursor_preview_info(&self) -> JsValue {
         // Drain any pending commands so param changes have already triggered
         // a preview regen before we read the cache. Otherwise the tool can
         // read a stale size the first hover after a slider drag.
         self.flush_if_needed();
-        brush_preview_info_as_js(&self.engine.borrow())
+        brush_cursor_preview_info_as_js(&self.engine.borrow())
     }
 
     /// Re-render the brush preview with live pen data, then return the
@@ -893,7 +893,7 @@ impl DarklyHandle {
     /// 1.0 inside the engine because the hover event reports 0 pressure
     /// (no contact) but the preview should reflect what happens "if the
     /// pen presses now" — at full engagement.
-    pub fn refresh_brush_preview(
+    pub fn refresh_brush_cursor_preview(
         &self,
         x: f32,
         y: f32,
@@ -905,7 +905,7 @@ impl DarklyHandle {
     ) -> JsValue {
         self.flush_if_needed();
 
-        let mut pen = PaintInformation::preview_dummy();
+        let mut pen = PaintInformation::cursor_preview_dummy();
         pen.pos = [x, y];
         // Hover reports pressure=0 (no contact) — keep the dummy's 1.0 as
         // a "what-if-pressed-now" fallback. If the pen is actively pressed
@@ -920,15 +920,15 @@ impl DarklyHandle {
 
         self.engine
             .borrow_mut()
-            .regenerate_brush_preview_with_pen(pen);
-        brush_preview_info_as_js(&self.engine.borrow())
+            .regenerate_brush_cursor_preview_with_pen(pen);
+        brush_cursor_preview_info_as_js(&self.engine.borrow())
     }
 
-    /// Drop any remembered hover pose so the next `refresh_brush_preview`
+    /// Drop any remembered hover pose so the next `refresh_brush_cursor_preview`
     /// starts fresh with no derived direction/motion/distance/speed.
     /// Call on pointer-leave and at stroke start.
-    pub fn clear_brush_preview_pose(&self) {
-        self.engine.borrow_mut().clear_brush_preview_pose();
+    pub fn clear_brush_cursor_preview_pose(&self) {
+        self.engine.borrow_mut().clear_brush_cursor_preview_pose();
     }
 
     /// Full-stroke brush editor preview — renders an S-curve sample stroke
@@ -941,9 +941,9 @@ impl DarklyHandle {
     /// preview visually matches the brush picker's thumbnails so users can
     /// scan across both without chromatic surprises. Same shape as
     /// `brush_active_dab_preview`: no promises, no async JS boundary plumbing.
-    pub fn brush_editor_preview(&self) -> Vec<u8> {
+    pub fn brush_stroke_preview(&self) -> Vec<u8> {
         self.flush_if_needed();
-        self.engine.borrow_mut().brush_editor_preview()
+        self.engine.borrow_mut().brush_stroke_preview()
     }
 
     /// Render a single-dab preview of the active brush — the small
@@ -2089,16 +2089,16 @@ fn js_f32_quad(obj: &JsValue, key: &str) -> Option<[f32; 4]> {
     ])
 }
 
-/// Serialize `engine.brush_preview_info()` as a JS `{ halfExtent, rotation }`
+/// Serialize `engine.brush_cursor_preview_info()` as a JS `{ halfExtent, rotation }`
 /// POJO, or `null` when the active graph has no preview source.
-fn brush_preview_info_as_js(engine: &DarklyEngine) -> JsValue {
+fn brush_cursor_preview_info_as_js(engine: &DarklyEngine) -> JsValue {
     #[derive(serde::Serialize)]
     struct Info {
         #[serde(rename = "halfExtent")]
         half_extent: [f32; 2],
         rotation: f32,
     }
-    match engine.brush_preview_info() {
+    match engine.brush_cursor_preview_info() {
         Some(info) => {
             let payload = Info {
                 half_extent: info.half_extent_canvas_px,

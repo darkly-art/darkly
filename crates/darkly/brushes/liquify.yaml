@@ -1,5 +1,5 @@
 name: Liquify
-category: effects
+category: Effects
 nodes:
   1:
     type: pen_input

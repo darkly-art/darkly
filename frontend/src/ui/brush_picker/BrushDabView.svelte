@@ -15,7 +15,7 @@
     let { width = 32, height = 32 }: Props = $props();
 
     /** Throttle window for rAF-driven refreshes — same cadence
-     *  `BrushPreview.svelte` uses for its full-stroke editor preview. */
+     *  `BrushStrokePreview.svelte` uses for the editor stroke preview. */
     const REFRESH_MS = 100;
 
     let dabUrl = $state('');
@@ -57,7 +57,7 @@
         rafHandle = 0;
         if (framesRemaining <= 0) return;
         framesRemaining--;
-        // Same trick as BrushPreview — kick the engine's render loop so
+        // Same trick as BrushStrokePreview — kick the engine's render loop so
         // `poll_pending` advances the in-flight readback.
         app.requestFrame();
         refresh();

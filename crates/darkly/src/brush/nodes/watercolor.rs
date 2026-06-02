@@ -623,8 +623,8 @@ pub fn register() -> BrushNodeRegistration {
                 PortDef::input("color", BrushWireType::Vec4)
                     .with_description("Brush color (typically wired from paint_color)"),
                 // Cursor-preview rotation in radians. Read only by
-                // `render_preview` and published into
-                // `BrushPreviewInfo.rotation_rad`; the stroke shader
+                // `render_cursor_preview` and published into
+                // `BrushCursorPreviewInfo.rotation_rad`; the stroke shader
                 // doesn't apply it (rotation in stroke deposit is a
                 // separate concern). Defaults to 0.
                 PortDef::input("rotation", BrushWireType::Scalar)
@@ -774,8 +774,8 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
                 layer_offset,
                 layer_size,
                 canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                preview_centre: [0.0, 0.0],
-                preview_size: [0, 0],
+                cursor_preview_centre: [0.0, 0.0],
+                cursor_preview_size: [0, 0],
                 _pad: [0, 0],
             },
         );
@@ -901,16 +901,16 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     /// The brush color × shape (perlin/sine) modulated mask reads
     /// against `sel = 1.0` (no selection clipping for the cursor) and
     /// a neutral-load preview body (overridden via
-    /// [`Self::compile_preview_body`] — the stroke body samples the
+    /// [`Self::compile_cursor_preview_body`] — the stroke body samples the
     /// `@group(3)` pickup atlas, which the preview skeleton omits).
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
         let rotation_rad = ctx.input_f32("rotation");
-        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, rotation_rad);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, rotation_rad);
         vec![]
     }
 
@@ -981,7 +981,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     /// silhouette) and the brush color, but drop the atlas pickup /
     /// wetness blend — preview shows what the brush *would* deposit,
     /// not what it'd pick up.
-    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         let mask_expr = cctx.input("mask").as_f32();
         let color_expr = cctx.input("color").as_vec4();

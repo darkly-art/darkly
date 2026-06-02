@@ -1,16 +1,16 @@
 //! GPU context bundle passed to brush node evaluators during `execute_gpu`
-//! and `render_preview_pipeline`.
+//! and `render_cursor_preview_pipeline`.
 //!
 //! Provides everything a GPU node needs: command encoder, device, queue,
 //! dab texture pool, pipelines, canvas target, and selection bind group.
 //! Stroke and preview modes are differentiated by *which* method the runner
-//! invokes (`evaluate_gpu` vs `render_preview`), not by a flag on this
+//! invokes (`evaluate_gpu` vs `render_cursor_preview`), not by a flag on this
 //! struct — terminals stop branching on a mode enum.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::eval::BrushPreviewInfo;
+use super::eval::BrushCursorPreviewInfo;
 use super::pipeline::BrushPipelines;
 use super::scratch::Scratch;
 use super::wgsl::CompiledBrush;
@@ -146,32 +146,32 @@ pub struct StrokeResources<'a> {
     pub pre_stroke_bind_group: &'a wgpu::BindGroup,
 }
 
-/// Cursor-hover preview state. Populated by `brush_graph::regenerate_brush_preview`
+/// Cursor-hover preview state. Populated by `brush_graph::regenerate_brush_cursor_preview`
 /// to drive the overlay's preview-mask texture; absent during a real stroke.
-pub struct PreviewState<'a> {
+pub struct CursorPreviewState<'a> {
     /// Preview mask target. Populated by the engine during preview regen;
-    /// terminal `render_preview` hooks blit their preview texture into it.
+    /// terminal `render_cursor_preview` hooks blit their preview texture into it.
     ///
     /// Used as the fallback when `mask_overlay` is `None` — tests
     /// pre-allocate a fixed-size mask and stuff a view in here. The
     /// engine driver leaves this `None` and grows the mask on demand
-    /// via [`BrushGpuContext::ensure_preview_mask`] through
+    /// via [`BrushGpuContext::ensure_cursor_preview_mask`] through
     /// `mask_overlay`.
     pub mask_view: Option<&'a wgpu::TextureView>,
     pub mask_size: (u32, u32),
     /// Mutable handle to the overlay that owns the preview-mask texture.
-    /// Held by the engine driver so a terminal's `render_preview` can
-    /// grow the mask via [`BrushGpuContext::ensure_preview_mask`] when
+    /// Held by the engine driver so a terminal's `render_cursor_preview` can
+    /// grow the mask via [`BrushGpuContext::ensure_cursor_preview_mask`] when
     /// the brush's bbox would otherwise stairstep through the overlay's
     /// linear sampler. `None` in tests that build the context manually
     /// with a fixed-size pre-allocated mask.
     pub mask_overlay: Option<&'a mut ToolOverlay>,
-    /// Set by a terminal's `render_preview` hook to publish overlay
+    /// Set by a terminal's `render_cursor_preview` hook to publish overlay
     /// placement info (extent + rotation) to the engine. The engine reads
-    /// this after `render_preview_pipeline` returns. `None` outside the
+    /// this after `render_cursor_preview_pipeline` returns. `None` outside the
     /// preview path; first-write-wins if multiple terminals try to publish
     /// (unusual — typically one terminal owns the preview).
-    pub info: Option<BrushPreviewInfo>,
+    pub info: Option<BrushCursorPreviewInfo>,
 }
 
 /// Per-batch dab ledger. Populated by whichever dab-batching terminal is
@@ -372,7 +372,7 @@ pub struct BrushGpuContext<'a> {
     /// `None` in cursor-hover preview where no commit happens.
     pub stroke: Option<StrokeResources<'a>>,
     /// Cursor-hover preview state. `None` during a real stroke.
-    pub preview: Option<PreviewState<'a>>,
+    pub preview: Option<CursorPreviewState<'a>>,
     /// Per-batch dab ledger — see [`DabBatch`].
     pub dab_batch: DabBatch,
 }
@@ -426,7 +426,7 @@ impl<'a> BrushGpuContext<'a> {
     /// [`MAX_PREVIEW_MASK_SIDE`]. When it's `None` (test path), the
     /// caller's pre-allocated `preview.mask_view` / `preview.mask_size`
     /// is returned unchanged. Returns `None` if there is no preview state.
-    pub fn ensure_preview_mask(
+    pub fn ensure_cursor_preview_mask(
         &mut self,
         bbox_radius: f32,
     ) -> Option<(wgpu::TextureView, u32, u32)> {
@@ -436,7 +436,9 @@ impl<'a> BrushGpuContext<'a> {
             .next_power_of_two()
             .clamp(MIN_PREVIEW_MASK_SIDE, MAX_PREVIEW_MASK_SIDE);
         if let Some(overlay) = preview.mask_overlay.as_mut() {
-            let view = overlay.ensure_preview_mask(self.device, side, side).clone();
+            let view = overlay
+                .ensure_cursor_preview_mask(self.device, side, side)
+                .clone();
             return Some((view, side, side));
         }
         // Test fallback — return the pre-allocated mask as-is.

@@ -391,7 +391,7 @@ pub fn register() -> BrushNodeRegistration {
                 // the hover-cursor mask rotate with the pen. The
                 // current paint shader doesn't apply this to the
                 // stroke deposit — it's read only by
-                // `render_preview` for the overlay. Defaults to 0
+                // `render_cursor_preview` for the overlay. Defaults to 0
                 // (no rotation).
                 PortDef::input("rotation", BrushWireType::Scalar)
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
@@ -552,8 +552,8 @@ impl BrushNodeEvaluator for PaintEvaluator {
                 layer_offset,
                 layer_size,
                 canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                preview_centre: [0.0, 0.0],
-                preview_size: [0, 0],
+                cursor_preview_centre: [0.0, 0.0],
+                cursor_preview_size: [0, 0],
                 _pad: [0, 0],
             },
         );
@@ -640,19 +640,19 @@ impl BrushNodeEvaluator for PaintEvaluator {
     }
 
     /// Hover-cursor preview — reuses the shared
-    /// [`crate::brush::wgsl::render_compiled_preview`] helper.
+    /// [`crate::brush::wgsl::render_compiled_cursor_preview`] helper.
     /// `paint`'s stroke body and preview body are the same
-    /// source (no `compile_preview_body` override), so the cursor
+    /// source (no `compile_cursor_preview_body` override), so the cursor
     /// shows the brush color × shape × flow as the stroke would
     /// deposit.
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
         let rotation_rad = ctx.input_f32("rotation");
-        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, rotation_rad);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, rotation_rad);
         vec![]
     }
 

@@ -84,7 +84,7 @@ pub fn intrinsic_dab_header() -> Vec<DabField> {
 
 /// Pack the intrinsic dab header. Single source of truth — every
 /// terminal's `evaluate_gpu` (stroke path) and
-/// [`crate::brush::wgsl::render_compiled_preview`] (preview path) call
+/// [`crate::brush::wgsl::render_compiled_cursor_preview`] (preview path) call
 /// this. The fields are interpreted in the *target texture's pixel
 /// space* (see the docblock on [`intrinsic_dab_header`]). Internally
 /// inverts radius once so the fragment hot path is a multiply, not a
