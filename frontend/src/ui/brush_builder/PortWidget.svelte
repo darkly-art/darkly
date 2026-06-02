@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { getContext } from 'svelte';
+    import { getContext, untrack } from 'svelte';
     import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
@@ -33,25 +33,33 @@
 
     // --- Port offset registration ---
     const { register, unregister, coords } = getContext<NodeCanvasContext>('node-canvas');
-    let dotEl = $state<HTMLDivElement>();
+    // Non-reactive ref: bind:this re-runs on every render, and reading a
+    // reactive dotEl from within $effect would re-fire the effect, which
+    // mutates portVersion → re-render → rebind → infinite loop.
+    let dotEl: HTMLDivElement | undefined;
 
-    // Re-register whenever the dot's offset within the node could change.
-    // `port.name`/`port.dir` cover the index-reuse case (the each block isn't
-    // keyed, so an algorithm switch that hides/shows sibling ports rebinds
-    // existing PortWidget instances to different ports). `node.params` covers
-    // the stable-port-but-shifted-row case — when a sibling becomes hidden
-    // via `visible_when`, ports below it move up a row, and their previously
-    // cached offset would otherwise point one row off.
+    // Re-register whenever `port.name` changes. The `{#each inputPorts}` in
+    // NodeWidget isn't keyed, so when `visible_when` hides/shows a sibling
+    // port, Svelte rebinds existing instances by index — every reused
+    // instance from the hidden port's index downward gets a *different*
+    // `port` (and a different DOM row). Tracking `port.name` therefore
+    // catches every layout shift: an inserted/removed port always changes
+    // `port.name` on at least every index from the change onward.
     $effect(() => {
+        // Tracked reads — re-fire when the port identity changes.
         const portName = port.name;
         const portDir = port.dir;
-        // Reactive dep: param-driven visible_when reshuffles row layout.
-        void brushGraph.graph?.nodes[String(nodeId)]?.params;
-        if (!dotEl) return;
-        const nodeEl = dotEl.closest('[data-node-id]') as HTMLElement;
-        if (!nodeEl) return;
-        register(nodeId, portName, portDir, coords.elementCenterInParent(dotEl, nodeEl));
-        return () => unregister(nodeId, portName, portDir);
+        // The measurement + side-effect are wrapped in `untrack` so the
+        // `zoom` read inside `coords.elementCenterInParent` and the
+        // `portVersion` mutation inside `register` don't feed back into
+        // this effect's dep set (which would cause a re-render loop).
+        untrack(() => {
+            if (!dotEl) return;
+            const nodeEl = dotEl.closest('[data-node-id]') as HTMLElement;
+            if (!nodeEl) return;
+            register(nodeId, portName, portDir, coords.elementCenterInParent(dotEl, nodeEl));
+        });
+        return () => untrack(() => unregister(nodeId, portName, portDir));
     });
 
     function onPointerDown(e: PointerEvent) {

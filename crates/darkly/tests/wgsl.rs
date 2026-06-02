@@ -65,6 +65,43 @@ fn rough_ink_brush_compiles_to_nonempty_wgsl() {
     assert!(compiled.topology_hash != 0);
 }
 
+/// Regression test: `shape_r_theta` must *subtract* the rotation from θ
+/// (not add it). The fragment shader's `theta` is
+/// `atan2(local_uv.y, local_uv.x)` with screen y-down — the same frame
+/// `pen.drawing_angle` (`atan2(dy, dx)`) lives in, where positive angles
+/// are clockwise visually. For a polar formula `r(θ)`, adding α to the
+/// argument rotates the geometry CCW in this frame; subtracting rotates
+/// it CW. The user-facing semantic is "rotation = α (radians) points the
+/// shape's θ=0 reference ray at screen angle α," which makes
+/// `pen.drawing_angle → circle.rotation_input` an identity wire that
+/// orients the shape along the stroke direction. That semantic requires
+/// subtraction. If a future reader is tempted to "clean up" the operator
+/// back to `+`, this test will catch it.
+#[test]
+fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
+    let rough_ink = darkly::brush::builtin_brushes::all()
+        .into_iter()
+        .find(|b| b.metadata.name == "Rough Ink")
+        .expect("Rough Ink brush registered");
+    let reg = registry();
+    let plan = compile(&rough_ink.metadata.graph, reg.as_map()).unwrap();
+    let compiled =
+        compile_brush_to_wgsl(&rough_ink.metadata.graph, &plan, &evals()).expect("compiles");
+    for (label, wgsl) in [
+        ("stroke_wgsl", &compiled.stroke_wgsl),
+        ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
+    ] {
+        assert!(
+            wgsl.contains("theta - p.rotation"),
+            "{label} must subtract rotation from theta (drawing_angle compatibility); not found"
+        );
+        assert!(
+            !wgsl.contains("theta + p.rotation"),
+            "{label} must not add rotation to theta — that rotates the shape opposite to drawing_angle"
+        );
+    }
+}
+
 #[test]
 fn topology_hash_is_stable_for_identical_graphs() {
     let rough_a = darkly::brush::builtin_brushes::all()

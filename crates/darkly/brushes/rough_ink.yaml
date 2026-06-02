@@ -48,7 +48,7 @@ connections:
 - '2.color -> 8.color'
 - '3.output -> 9.size_input'
 - '4.value -> 7.amplitude'
-- '5.value -> 7.phase_input'
+- '5.value -> 7.rotation_input'
 - '6.value -> 7.seed'
 - '7.mask -> 8.tip'
 - '8.dab -> 9.rgba'

@@ -63,7 +63,7 @@ pub fn register() -> BrushNodeRegistration {
                 .with_unit(UnitType::Percent)
                 .with_visible_when("algorithm", [ALGO_SINE as i32, ALGO_PERLIN as i32])
                 .with_description("Bump amplitude as a fraction of the base radius."),
-            // Frequency / phase are universal: the bump count, period, or
+            // Frequency / rotation are universal: the bump count, period, or
             // symmetry order — and the rotation around the shape's centre —
             // matter for every algorithm.
             PortDef::input("frequency", BrushWireType::Scalar)
@@ -79,28 +79,27 @@ pub fn register() -> BrushNodeRegistration {
                      shape fails to close.",
                 ),
             // No `natural_range`: radians are a unit, not a normalized
-            // signal. `pen.tilt_direction → phase_input` is a unit-
+            // signal. `pen.drawing_angle → rotation_input` is a unit-
             // preserving identity wire — values pass through raw and
-            // sum with the user's `phase` offset. Users wanting
-            // `random → phase_input` to span a full revolution must
+            // sum with the user's `rotation` offset. Users wanting
+            // `random → rotation_input` to span a full revolution must
             // pre-scale through `multiply`.
-            PortDef::input("phase_input", BrushWireType::Scalar)
+            PortDef::input("rotation_input", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                .with_label("Phase Input")
+                .with_label("Rotation Input")
                 .with_unit(UnitType::Degrees)
                 .with_description(
-                    "Per-dab phase, summed with `phase`. Wire `pen.tilt_direction` or `pen.drawing_angle` so the shape rotates with the pen.",
+                    "Live rotation, added on top of Rotation. Wire pen direction here so the shape follows your stroke.",
                 ),
-            PortDef::input("phase", BrushWireType::Scalar)
+            PortDef::input("rotation", BrushWireType::Scalar)
                 .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
-                .with_label("Phase")
+                .with_label("Rotation")
                 .with_unit(UnitType::Degrees)
-                // Orientation is part of shape identity (same rationale
-                // as `stamp.rotation`); if the user exposes this knob,
-                // the dab thumbnail should follow it.
+                // Orientation is part of shape identity; if the user
+                // exposes this knob, the dab thumbnail should follow it.
                 .persist_in_thumbnail()
                 .with_description(
-                    "Static rotation of the shape around its own centre, summed with `phase_input`. Route dynamic signals (tilt, drawing angle) into `phase_input` instead.",
+                    "Spin the shape around its centre. Wire a changing signal into Rotation Input instead if you want it to move as you draw.",
                 ),
             PortDef::input("persistence", BrushWireType::Scalar)
                 .with_range(0.0, 1.0, 0.5)
@@ -191,7 +190,7 @@ impl BrushNodeEvaluator for CircleEvaluator {
     ///
     /// `params.algorithm` is read from the node param at compile time
     /// (constant per brush). Per-port shape inputs (`amplitude`,
-    /// `phase`, `seed`, etc.) become input expressions — wired to
+    /// `rotation`, `seed`, etc.) become input expressions — wired to
     /// dab-record fields when modulated, literals when not.
     fn compile_wgsl(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
@@ -205,8 +204,8 @@ impl BrushNodeEvaluator for CircleEvaluator {
         };
         let amplitude = cctx.input("amplitude").as_f32();
         let frequency = cctx.input("frequency").as_f32();
-        let phase = cctx.input("phase").as_f32();
-        let phase_input = cctx.input("phase_input").as_f32();
+        let rotation = cctx.input("rotation").as_f32();
+        let rotation_input = cctx.input("rotation_input").as_f32();
         let persistence = cctx.input("persistence").as_f32();
         let seed = cctx.input("seed").as_f32();
         let octaves = cctx.input("octaves").as_f32();
@@ -240,7 +239,7 @@ impl BrushNodeEvaluator for CircleEvaluator {
              \x20       {algorithm}u,\n\
              \x20       max(({amplitude}), 0.0),\n\
              \x20       max(round(({frequency})), 1.0),\n\
-             \x20       ({phase}) + ({phase_input}),\n\
+             \x20       ({rotation}) + ({rotation_input}),\n\
              \x20       clamp(({persistence}), 0.0, 1.0),\n\
              \x20       ({seed}),\n\
              \x20       clamp(u32(round(({octaves}))), 1u, 6u),\n\

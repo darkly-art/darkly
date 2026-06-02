@@ -199,7 +199,7 @@ pub struct PortDef<W: WireKind> {
     /// exposed input back to its registration default before rendering
     /// the dab thumbnail — the icon represents brush shape/texture, not
     /// the user's working size/opacity/flow knobs. That policy is wrong
-    /// for orientation knobs (rotation, phase): a calligraphy nib at
+    /// for orientation knobs (rotation): a calligraphy nib at
     /// 45° *is* a different-looking brush, and the icon should reflect
     /// that.
     ///
@@ -350,7 +350,7 @@ impl<W: WireKind> PortDef<W> {
     /// Mark this exposed port as part of the brush's identity — its
     /// user-set value persists into the dab thumbnail, and scrubs of
     /// it rebake the thumbnail. See [`PortDef::persist_in_thumbnail`]
-    /// for the contract. Use for orientation knobs (rotation, phase)
+    /// for the contract. Use for orientation knobs (rotation)
     /// that visibly change the dab; don't use for magnitude knobs
     /// (size, opacity, flow) where the icon should stay normalized.
     pub fn persist_in_thumbnail(mut self) -> Self {

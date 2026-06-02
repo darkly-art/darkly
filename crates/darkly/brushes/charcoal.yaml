@@ -15,8 +15,8 @@ nodes:
       amplitude: 0.5
       frequency: 3.0
       n1: 1.0
-      phase: -6.3
-      phase_input: -4.7
+      rotation: 6.3
+      rotation_input: 4.7
       softness: 0.32262525
   5:
     type: random

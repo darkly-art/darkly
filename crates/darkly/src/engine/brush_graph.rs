@@ -26,7 +26,7 @@ enum ChangeKind {
     /// Exposed-port scrub on a port marked `persist_in_thumbnail` — its
     /// value bleeds through to the dab thumbnail render, so both
     /// version counters need to bump to invalidate both preview caches.
-    /// Used for orientation knobs like `circle.phase`.
+    /// Used for orientation knobs like `circle.rotation`.
     ThumbnailRelevantScrub,
     /// User-facing exposed-port scrub on a port the editor preview
     /// pipeline actually reads (size, opacity, hardness, …). Bumps only

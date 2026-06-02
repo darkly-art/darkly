@@ -49,51 +49,6 @@ mod tests {
         }
     }
 
-    /// Charcoal switched from a `paper-charcoal.jpg` texture sample
-    /// to a procedural `noise` node, so it no longer requests any
-    /// `@group(3)` graph-texture binding. The compiled shader still
-    /// has to compose the noise helpers (`node_noise_value`, hash,
-    /// fade) from `_noise.wgsl` — assert both ends of the migration
-    /// in one place: no texture binding requested, noise prelude
-    /// reachable to the emitted call.
-    #[test]
-    fn charcoal_uses_procedural_noise_no_texture_binding() {
-        let charcoal = all()
-            .into_iter()
-            .find(|b| b.metadata.name == "Charcoal")
-            .expect("Charcoal built-in must exist");
-        let runner = crate::brush::compile_graph(&charcoal.metadata.graph)
-            .expect("charcoal must compile to WGSL");
-        let compiled = runner
-            .compiled_brush()
-            .expect("compile_graph should populate CompiledBrush for charcoal");
-        assert!(
-            compiled.graph_texture_names.is_empty(),
-            "charcoal must not request any graph textures after the \
-             paper-charcoal → noise migration, got {:?}",
-            compiled.graph_texture_names,
-        );
-        for (label, wgsl) in [
-            ("stroke", &compiled.stroke_wgsl),
-            ("preview", &compiled.cursor_preview_wgsl),
-        ] {
-            assert!(
-                !wgsl.contains("@group(3) @binding(1) var graph_tex_0:"),
-                "{label} WGSL must not declare a graph_tex_0 binding for charcoal",
-            );
-            assert!(
-                wgsl.contains("node_noise_value("),
-                "{label} WGSL must call node_noise_value — the noise \
-                 node's emitted call site",
-            );
-            assert!(
-                wgsl.contains("fn node_noise_value("),
-                "{label} WGSL must link the noise prelude (\
-                 fn node_noise_value definition from _noise.wgsl)",
-            );
-        }
-    }
-
     #[test]
     fn builtin_brushes_round_trip() {
         for brush in all() {

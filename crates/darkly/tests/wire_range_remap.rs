@@ -369,7 +369,7 @@ fn identity_range_is_a_noop() {
 /// Bipolar destination range: `random [0, 1] → [-100, 100]` spans both
 /// halves, verifying the affine remap handles a negative `dst_min`.
 ///
-/// Note: radian-typed ports (`stamp.rotation`, `circle.phase`, etc.)
+/// Note: radian-typed ports (`circle.rotation`, `liquify.direction`, etc.)
 /// deliberately do NOT have a `natural_range` — radians are a unit, not
 /// a normalized signal, and wires like `pen.drawing_angle → rotation`
 /// must preserve them exactly. This test uses an abstract `[-100, 100]`

@@ -32,4 +32,4 @@ connections:
 - '1.pressure -> 4.flow'
 - '2.color -> 4.color'
 - '3.mask -> 4.mask'
-- '5.value -> 3.phase_input'
+- '5.value -> 3.rotation_input'
