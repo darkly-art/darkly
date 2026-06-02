@@ -5,56 +5,74 @@ nodes:
     type: pen_input
   2:
     type: paint_color
-  4:
+  3:
     type: split_color
-  5:
+  4:
     type: circle
     params:
-      algorithm: 1
+      algorithm: 2
     port_defaults:
       amplitude: 0.5
-      softness: 0.20
-  6:
+      frequency: 3.0
+      n1: 1.0
+      phase: -6.3
+      phase_input: -4.7
+      softness: 0.32262525
+  5:
     type: random
-  7:
+  6:
     type: multiply
   8:
-    type: multiply
-  11:
     type: stamp
-  12:
+  9:
     type: paint
     port_defaults:
-      flow: 0.50
+      flow: 0.5
+      size: 0.07
     exposed:
     - flow
     - opacity
     - size
+  11:
+    type: image
+    params:
+      scale: 300.0
+      texture_name: paper
+  12:
+    type: levels
+    port_defaults:
+      in_low: 0.72
   13:
     type: curve
     params:
       curve:
       - - 0.0
+        - 0.8
+      - - 0.6
+        - 0.5
+      - - 1.0
         - 0.0
-      - - 0.65899175
-        - 0.3499171
+  14:
+    type: curve
+    params:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.5
+        - 0.35
       - - 1.0
         - 1.0
-  14:
-    type: image
-    params:
-      scale: 200
-      texture_name: paper
 connections:
-- '1.position -> 12.position'
-- '1.pressure -> 8.b'
-- '1.pressure -> 12.size_input'
-- '2.color -> 11.color'
-- '4.luminance -> 7.a'
-- '5.mask -> 7.b'
-- '6.value -> 5.seed'
-- '7.result -> 8.a'
-- '8.result -> 13.input'
-- '11.dab -> 12.rgba'
-- '13.output -> 11.tip'
-- '14.color -> 4.color'
+- '1.position -> 9.position'
+- '1.pressure -> 13.input'
+- '1.pressure -> 14.input'
+- '2.color -> 8.color'
+- '3.luminance -> 6.a'
+- '4.mask -> 6.b'
+- '5.value -> 4.seed'
+- '6.result -> 12.input'
+- '8.dab -> 9.rgba'
+- '11.color -> 3.color'
+- '12.output -> 8.tip'
+- '13.output -> 12.in_low'
+- '14.output -> 9.flow'

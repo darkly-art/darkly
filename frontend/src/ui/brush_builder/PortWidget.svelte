@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, onDestroy, getContext } from 'svelte';
+    import { getContext } from 'svelte';
     import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
@@ -35,17 +35,23 @@
     const { register, unregister, coords } = getContext<NodeCanvasContext>('node-canvas');
     let dotEl = $state<HTMLDivElement>();
 
-    onMount(() => {
-        // Wire paths render in graph space; the coord system returns the
-        // dot's center in the node's pre-transform layout coords regardless
-        // of the canvas zoom.
+    // Re-register whenever the dot's offset within the node could change.
+    // `port.name`/`port.dir` cover the index-reuse case (the each block isn't
+    // keyed, so an algorithm switch that hides/shows sibling ports rebinds
+    // existing PortWidget instances to different ports). `node.params` covers
+    // the stable-port-but-shifted-row case — when a sibling becomes hidden
+    // via `visible_when`, ports below it move up a row, and their previously
+    // cached offset would otherwise point one row off.
+    $effect(() => {
+        const portName = port.name;
+        const portDir = port.dir;
+        // Reactive dep: param-driven visible_when reshuffles row layout.
+        void brushGraph.graph?.nodes[String(nodeId)]?.params;
+        if (!dotEl) return;
         const nodeEl = dotEl.closest('[data-node-id]') as HTMLElement;
         if (!nodeEl) return;
-        register(nodeId, port.name, port.dir, coords.elementCenterInParent(dotEl, nodeEl));
-    });
-
-    onDestroy(() => {
-        unregister(nodeId, port.name, port.dir);
+        register(nodeId, portName, portDir, coords.elementCenterInParent(dotEl, nodeEl));
+        return () => unregister(nodeId, portName, portDir);
     });
 
     function onPointerDown(e: PointerEvent) {
