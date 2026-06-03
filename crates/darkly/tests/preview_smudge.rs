@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, PreviewState};
+use darkly::brush::gpu_context::{
+    BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
+};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::gpu::test_utils::{readback_texture, test_device};
@@ -71,9 +73,10 @@ fn smudge_preview_shows_neutral_gray_footprint() {
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
         blend_mode: 0,
+        view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
         stroke: None,
-        preview: Some(PreviewState {
+        preview: Some(CursorPreviewState {
             mask_view: Some(&target_view),
             mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
             mask_overlay: None,
@@ -89,7 +92,7 @@ fn smudge_preview_shows_neutral_gray_footprint() {
     };
     runner.seed_sensors(&info, [1.0, 1.0, 1.0, 1.0], 0xC0FFEE, 0);
     runner.execute_cpu();
-    runner.render_preview_pipeline(&mut ctx);
+    runner.render_cursor_preview_pipeline(&mut ctx);
     let published = ctx
         .preview
         .as_ref()

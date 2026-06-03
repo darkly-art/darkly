@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, PreviewState};
+use darkly::brush::gpu_context::{
+    BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
+};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::gpu::test_utils::{readback_texture, test_device};
@@ -95,14 +97,15 @@ fn render_big_round() -> Out {
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
         blend_mode: 0,
+        view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
         stroke: None,
-        // Drive the test-fallback path on `ensure_preview_mask` — the
+        // Drive the test-fallback path on `ensure_cursor_preview_mask` — the
         // production clamp path needs a real `ToolOverlay`, which is
         // heavier to construct than this test needs. The undersized
         // mask reproduces the exact same target-vs-canvas unit
         // mismatch the production clamp triggers.
-        preview: Some(PreviewState {
+        preview: Some(CursorPreviewState {
             mask_view: Some(&target_view),
             mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
             mask_overlay: None,
@@ -118,12 +121,12 @@ fn render_big_round() -> Out {
     };
     runner.seed_sensors(&info, [1.0, 1.0, 1.0, 1.0], 0xABCDEF, 0);
     runner.execute_cpu();
-    runner.render_preview_pipeline(&mut ctx);
+    runner.render_cursor_preview_pipeline(&mut ctx);
     let published = ctx
         .preview
         .as_ref()
         .and_then(|p| p.info)
-        .expect("render_compiled_preview publishes BrushPreviewInfo");
+        .expect("render_compiled_preview publishes BrushCursorPreviewInfo");
     queue.submit([ctx.encoder.finish()]);
 
     let rgba = readback_texture(

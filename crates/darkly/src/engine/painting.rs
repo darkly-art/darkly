@@ -19,65 +19,23 @@ impl DarklyEngine {
     /// default in the active brush graph.  Returns 0.0 if not found.
     fn pen_input_stabilize_strength(&self) -> f32 {
         use crate::brush::state::BrushState;
-        use crate::nodegraph::PortDir;
         let tool = self.tool_session.read();
         let brush = tool
             .get::<BrushState>()
             .expect("BrushState registered at session init");
-        for node in brush.graph.nodes.values() {
-            if node.type_id == crate::brush::nodes::pen_input::TYPE_ID {
-                for port in &node.ports {
-                    if port.name == "stabilize" && port.dir == PortDir::Input {
-                        return port.default;
-                    }
-                }
-            }
-        }
-        0.0
+        crate::brush::nodes::pen_input::read_scalar_input(&brush.graph, "stabilize").unwrap_or(0.0)
     }
 
-    /// Read a scalar input-port default off the pen_input node by name.
-    /// Returns `None` if no pen_input node is present or the named port
-    /// isn't on the node (e.g. an older brush from before the port was
-    /// added).
-    fn pen_input_scalar_port(&self, port_name: &str) -> Option<f32> {
+    /// Build the `SpacingConfig` for the active brush graph. Reads pen_input
+    /// port defaults — the same source the editor preview reads — so a real
+    /// stroke and its preview stamp at the same intervals.
+    fn active_spacing_config(&self) -> SpacingConfig {
         use crate::brush::state::BrushState;
-        use crate::nodegraph::PortDir;
         let tool = self.tool_session.read();
         let brush = tool
             .get::<BrushState>()
             .expect("BrushState registered at session init");
-        for node in brush.graph.nodes.values() {
-            if node.type_id == crate::brush::nodes::pen_input::TYPE_ID {
-                for port in &node.ports {
-                    if port.name == port_name && port.dir == PortDir::Input {
-                        return Some(port.default);
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Read the dab spacing ratio from the pen_input node's "spacing" port
-    /// default. Falls back to `SpacingConfig::default().ratio` for graphs
-    /// that predate the port (loaded from older brushes).
-    fn pen_input_spacing_ratio(&self) -> f32 {
-        self.pen_input_scalar_port("spacing")
-            .unwrap_or_else(|| SpacingConfig::default().ratio)
-    }
-
-    /// Read the absolute-pixel spacing floor from the pen_input node's
-    /// "spacing_min_px" port default. Zero (the port default) falls
-    /// back to `SpacingConfig::default().min_px`, so brushes that don't
-    /// set the port behave exactly as before.
-    fn pen_input_spacing_min_px(&self) -> f32 {
-        let raw = self.pen_input_scalar_port("spacing_min_px").unwrap_or(0.0);
-        if raw > 0.0 {
-            raw
-        } else {
-            SpacingConfig::default().min_px
-        }
+        crate::brush::nodes::pen_input::spacing_config(&brush.graph)
     }
 
     /// Flush any pending diff-based undo commit. Called before overwriting the
@@ -765,10 +723,7 @@ impl DarklyEngine {
             self.brush_stroke_engine = Some(StrokeEngine::new(
                 runner,
                 color,
-                SpacingConfig {
-                    ratio: self.pen_input_spacing_ratio(),
-                    min_px: self.pen_input_spacing_min_px(),
-                },
+                self.active_spacing_config(),
                 stabilizer,
             ));
 
@@ -910,6 +865,7 @@ impl DarklyEngine {
                         // scratch is a coverage accumulator, and only the
                         // commit composite reads this value.
                         blend_mode: self.brush_blend_mode,
+                        view_rotation: self.view_rotation,
                         perf: BrushPerfCounters::default(),
                         stroke: Some(StrokeResources {
                             scratch,
@@ -1103,6 +1059,7 @@ impl DarklyEngine {
                     canvas_width: canvas_w,
                     canvas_height: canvas_h,
                     blend_mode: self.brush_blend_mode,
+                    view_rotation: self.view_rotation,
                     perf: BrushPerfCounters::default(),
                     // No stroke buffer in this defensive fallback — `move_to`
                     // only updates stabilizer state and never reaches into

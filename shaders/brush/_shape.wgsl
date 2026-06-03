@@ -43,8 +43,12 @@ struct ShapeParams {
     amplitude: f32,
     /// Sine / Perlin period; superformula `m` divided by 4.
     frequency: f32,
-    /// Phase offset added to `θ` before evaluating r(θ).
-    phase: f32,
+    /// Rotation (radians) applied to the shape around its centre.
+    /// Subtracted from `θ` so positive values rotate clockwise in
+    /// screen-y-down space, matching `pen.drawing_angle`'s
+    /// `atan2(dy, dx)` convention — wiring drawing_angle into the
+    /// circle node's rotation port orients the shape along the stroke.
+    rotation: f32,
     /// Perlin fBm amplitude falloff per octave.
     persistence: f32,
     /// Per-dab Perlin seed (typically a random scalar).
@@ -130,7 +134,7 @@ fn shape_r_superformula(p: ShapeParams, theta: f32) -> f32 {
 /// `r = 1`). Branches on `p.algorithm`. Same dispatch table as
 /// `circle.rs::r_theta` and `circle.wgsl::r_theta`.
 fn shape_r_theta(p: ShapeParams, theta: f32) -> f32 {
-    let phased = theta + p.phase;
+    let phased = theta - p.rotation;
     switch p.algorithm {
         case 1u: { return shape_r_perlin(p, phased); }
         case 2u: { return shape_r_superformula(p, phased); }

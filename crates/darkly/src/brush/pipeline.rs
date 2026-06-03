@@ -135,6 +135,10 @@ pub struct BuildContext<'a> {
     pub canvas_copy_bgl: &'a wgpu::BindGroupLayout,
     pub canvas_copy_sampler: &'a wgpu::Sampler,
     pub min_uniform_align: u32,
+    /// Named-texture registry for brush graphs (paper textures and
+    /// similar assets sampled by `image` nodes). Brushes resolve their
+    /// `@group(3)` bind group through this at pipeline-build time.
+    pub texture_registry: &'a crate::gpu::texture_registry::TextureRegistry,
 }
 
 impl<'a> BuildContext<'a> {
@@ -262,11 +266,18 @@ pub struct BrushPipelines {
     // ── Per-node pipelines (modular, looked up by id) ────────────────
     entries: HashMap<&'static str, Box<dyn BrushPipelineEntry>>,
 
+    // ── Engine-owned named-texture registry ──────────────────────────
+    /// Named GPU textures sampled by `image` brush nodes (paper grain,
+    /// canvas, …). Built-ins are registered at construction; graph
+    /// `image` nodes bind through this at per-brush pipeline-build
+    /// time. See [`crate::gpu::texture_registry::TextureRegistry`].
+    texture_registry: crate::gpu::texture_registry::TextureRegistry,
+
     // ── Shared compiled-brush preview pipeline cache ─────────────────
     /// One cache for every compiled terminal's hover-cursor preview.
     /// Pipelines built lazily, keyed by the brush's `topology_hash`.
-    /// See [`PreviewPipelineCache`].
-    preview_pipeline_cache: PreviewPipelineCache,
+    /// See [`CursorPreviewPipelineCache`].
+    cursor_preview_pipeline_cache: CursorPreviewPipelineCache,
 }
 
 impl BrushPipelines {
@@ -546,6 +557,12 @@ impl BrushPipelines {
                 cache: None,
             });
 
+        // ── Engine-owned texture registry (built-ins pre-loaded). ──
+        // Constructed before per-node pipelines so `BuildContext` can
+        // borrow it for pipelines that need to declare graph-texture
+        // bind-group layouts at build time.
+        let texture_registry = crate::gpu::texture_registry::TextureRegistry::new(device, queue);
+
         // ── Per-node pipelines: harvested from node registrations ──
         let build_ctx = BuildContext {
             device,
@@ -555,6 +572,7 @@ impl BrushPipelines {
             canvas_copy_bgl: &canvas_copy_bgl,
             canvas_copy_sampler: &canvas_copy_sampler,
             min_uniform_align,
+            texture_registry: &texture_registry,
         };
         let mut entries: HashMap<&'static str, Box<dyn BrushPipelineEntry>> = HashMap::new();
         let pipeline_regs = crate::brush::nodes::registrations()
@@ -570,8 +588,8 @@ impl BrushPipelines {
         // Shared compiled-brush preview pipeline cache. Owns its own
         // dabs-storage BGL (single-element binding); reuses the
         // already-built `uniform_bgl` at render time via the
-        // build_preview_pipeline path.
-        let preview_pipeline_cache = PreviewPipelineCache::new(device);
+        // build_cursor_preview_pipeline path.
+        let cursor_preview_pipeline_cache = CursorPreviewPipelineCache::new(device);
 
         Self {
             uniform_bgl,
@@ -585,8 +603,16 @@ impl BrushPipelines {
             mask_blit_pipeline,
             scratch_blit_r8_pipeline,
             entries,
-            preview_pipeline_cache,
+            texture_registry,
+            cursor_preview_pipeline_cache,
         }
+    }
+
+    /// Named-texture registry for graph `image` nodes. Built-ins are
+    /// pre-loaded at `BrushPipelines::new`; the per-brush pipeline
+    /// build resolves textures here.
+    pub fn texture_registry(&self) -> &crate::gpu::texture_registry::TextureRegistry {
+        &self.texture_registry
     }
 
     /// BGL used by every per-node pipeline's dynamic-offset uniform
@@ -722,12 +748,12 @@ impl BrushPipelines {
     /// target). Their shape depends only on the brush's
     /// `uniform_layout` / `dab_layout`, not on which terminal compiled
     /// the brush.
-    pub fn preview_cache(&self) -> &PreviewPipelineCache {
-        &self.preview_pipeline_cache
+    pub fn cursor_preview_cache(&self) -> &CursorPreviewPipelineCache {
+        &self.cursor_preview_pipeline_cache
     }
 
     /// Render the brush's hover-cursor preview via the shared
-    /// [`PreviewPipelineCache`]. Builds the per-brush preview pipeline
+    /// [`CursorPreviewPipelineCache`]. Builds the per-brush preview pipeline
     /// lazily on first invocation per `compiled.topology_hash`; later
     /// invocations reuse.
     ///
@@ -751,11 +777,12 @@ impl BrushPipelines {
         dab_bytes: &[u8],
     ) {
         let min_align = device.limits().min_uniform_buffer_offset_alignment;
-        self.preview_pipeline_cache.with_pipeline(
+        self.cursor_preview_pipeline_cache.with_pipeline(
             device,
             &self.uniform_bgl,
             min_align,
             compiled,
+            &self.texture_registry,
             |pp| {
                 pp.render(
                     queue,
@@ -786,6 +813,12 @@ pub struct PreviewPipeline {
     /// Total uniform-block size for this brush — intrinsic header +
     /// node-contributed uniforms, rounded to the ring's alignment.
     uniform_size: usize,
+    /// `@group(3)` graph-texture bind group + the empty placeholder
+    /// bound at `@group(2)` (selection is unused in preview, but the
+    /// pipeline layout is positional, so slot 2 needs *some* BGL
+    /// when slot 3 is present). `None` when the brush samples no
+    /// graph textures (pipeline layout is just `[uniform, dabs]`).
+    graph_textures: Option<(wgpu::BindGroup, wgpu::BindGroup)>,
 }
 
 impl PreviewPipeline {
@@ -842,24 +875,39 @@ impl PreviewPipeline {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.uniform_bind_group, &[uniform_offset]);
         pass.set_bind_group(1, &self.dabs_bind_group, &[]);
+        // Preview shaders never sample selection / scratch / atlas, so
+        // `@group(2)` is unused in WGSL. When the brush samples graph
+        // textures (`@group(3)`), an empty BGL fills slot 2 so slot 3
+        // lines up; bind the cache-owned empty group there.
+        if let Some((empty_bg, graph_bg)) = self.graph_textures.as_ref() {
+            pass.set_bind_group(2, empty_bg, &[]);
+            pass.set_bind_group(3, graph_bg, &[]);
+        }
         pass.draw(0..6, 0..1);
     }
 }
 
 /// Shared cache of preview pipelines for compiled brushes — see
-/// [`BrushPipelines::preview_cache`].
+/// [`BrushPipelines::cursor_preview_cache`].
 ///
 /// Pipelines are built on demand. The cache key is `topology_hash`;
 /// two brushes that compile to identical dab/uniform layouts share
 /// one entry. The pipeline shape is derived entirely from
-/// `CompiledBrush::preview_wgsl`, `dab_layout`, and `uniform_layout`
+/// `CompiledBrush::cursor_preview_wgsl`, `dab_layout`, and `uniform_layout`
 /// — independent of which terminal compiled the brush.
-pub struct PreviewPipelineCache {
+pub struct CursorPreviewPipelineCache {
     pipelines: std::cell::RefCell<HashMap<u64, PreviewPipeline>>,
     dabs_bgl: wgpu::BindGroupLayout,
+    /// Empty bind-group layout used as a positional placeholder for
+    /// `@group(2)` and `@group(3)` when a brush samples graph textures
+    /// (`@group(4)`). The preview shader doesn't reference 2 or 3, but
+    /// pipeline layouts are positional — slot 4 only lines up if 2 and
+    /// 3 exist. Shared across every preview pipeline; built once.
+    empty_bgl: wgpu::BindGroupLayout,
+    empty_bind_group: wgpu::BindGroup,
 }
 
-impl PreviewPipelineCache {
+impl CursorPreviewPipelineCache {
     fn new(device: &wgpu::Device) -> Self {
         let dabs_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("brush-preview-dabs-bgl"),
@@ -874,9 +922,20 @@ impl PreviewPipelineCache {
                 count: None,
             }],
         });
+        let empty_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("brush-preview-empty-bgl"),
+            entries: &[],
+        });
+        let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("brush-preview-empty-bg"),
+            layout: &empty_bgl,
+            entries: &[],
+        });
         Self {
             pipelines: std::cell::RefCell::new(HashMap::new()),
             dabs_bgl,
+            empty_bgl,
+            empty_bind_group,
         }
     }
 
@@ -891,39 +950,71 @@ impl PreviewPipelineCache {
         uniform_bgl: &wgpu::BindGroupLayout,
         min_uniform_align: u32,
         compiled: &crate::brush::wgsl::CompiledBrush,
+        texture_registry: &crate::gpu::texture_registry::TextureRegistry,
         f: impl FnOnce(&PreviewPipeline) -> R,
     ) -> R {
         let key = compiled.topology_hash;
         let mut pipelines = self.pipelines.borrow_mut();
         let entry = pipelines.entry(key).or_insert_with(|| {
-            build_preview_pipeline(
+            build_cursor_preview_pipeline(
                 device,
                 uniform_bgl,
                 &self.dabs_bgl,
+                &self.empty_bgl,
+                &self.empty_bind_group,
                 min_uniform_align,
                 compiled,
+                texture_registry,
             )
         });
         f(entry)
     }
+
+    /// The empty placeholder bind group used at `@group(2)` /
+    /// `@group(3)` of preview pipelines that bind graph textures at
+    /// `@group(4)`.
+    pub fn empty_bind_group(&self) -> &wgpu::BindGroup {
+        &self.empty_bind_group
+    }
 }
 
-fn build_preview_pipeline(
+#[allow(clippy::too_many_arguments)]
+fn build_cursor_preview_pipeline(
     device: &wgpu::Device,
     uniform_bgl: &wgpu::BindGroupLayout,
     dabs_bgl: &wgpu::BindGroupLayout,
+    empty_bgl: &wgpu::BindGroupLayout,
+    _empty_bind_group: &wgpu::BindGroup,
     min_uniform_align: u32,
     compiled: &crate::brush::wgsl::CompiledBrush,
+    texture_registry: &crate::gpu::texture_registry::TextureRegistry,
 ) -> PreviewPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("brush-preview-shader"),
-        source: wgpu::ShaderSource::Wgsl(compiled.preview_wgsl.clone().into()),
+        source: wgpu::ShaderSource::Wgsl(compiled.cursor_preview_wgsl.clone().into()),
     });
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("brush-preview-layout"),
-        bind_group_layouts: &[uniform_bgl, dabs_bgl],
-        immediate_size: 0,
-    });
+    // Pipeline layout. When the brush samples graph textures, slot 3
+    // holds the registry-resolved bind group; the preview shader
+    // doesn't reference `@group(2)` (no selection in preview), so an
+    // empty placeholder BGL fills that slot to keep `@group(3)`
+    // positionally correct.
+    let graph_layout = if compiled.graph_texture_names.is_empty() {
+        None
+    } else {
+        Some(texture_registry.layout_for_count(device, compiled.graph_texture_names.len()))
+    };
+    let layout = match &graph_layout {
+        None => device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("brush-preview-layout"),
+            bind_group_layouts: &[uniform_bgl, dabs_bgl],
+            immediate_size: 0,
+        }),
+        Some(gl) => device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("brush-preview-layout-with-graph-textures"),
+            bind_group_layouts: &[uniform_bgl, dabs_bgl, empty_bgl, gl.as_ref()],
+            immediate_size: 0,
+        }),
+    };
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("brush-preview"),
         layout: Some(&layout),
@@ -994,6 +1085,22 @@ fn build_preview_pipeline(
         }],
     });
 
+    let graph_textures = if compiled.graph_texture_names.is_empty() {
+        None
+    } else {
+        let (_layout, bg) = texture_registry.make_bind_group(device, &compiled.graph_texture_names);
+        // Per-pipeline empty bind group bound at @group(2) (matches
+        // the cache's `empty_bgl`). Cheap to create — no GPU
+        // resources — and keeps `render` self-contained without
+        // taking a `&CursorPreviewPipelineCache`.
+        let empty_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("brush-preview-empty-bg"),
+            layout: empty_bgl,
+            entries: &[],
+        });
+        Some((empty_bg, bg))
+    };
+
     PreviewPipeline {
         pipeline,
         uniform_ring,
@@ -1001,5 +1108,6 @@ fn build_preview_pipeline(
         dabs_buffer,
         dabs_bind_group,
         uniform_size: align_up(uniform_size as u64, min_uniform_align as u64) as usize,
+        graph_textures,
     }
 }

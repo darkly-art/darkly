@@ -15,7 +15,7 @@
 /// (followed by node-contributed uniforms). Lives here (not on each
 /// terminal) so a layout change in one place can't drift from the rest.
 ///
-/// `preview_centre` / `preview_size` are written by the preview path
+/// `cursor_preview_centre` / `cursor_preview_size` are written by the preview path
 /// only; the stroke path writes zero and ignores them.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
@@ -23,9 +23,15 @@ pub struct IntrinsicUniforms {
     pub layer_offset: [i32; 2],
     pub layer_size: [u32; 2],
     pub canvas_size: [u32; 2],
-    pub preview_centre: [f32; 2],
-    pub preview_size: [u32; 2],
-    pub _pad: [u32; 2],
+    pub cursor_preview_centre: [f32; 2],
+    pub cursor_preview_size: [u32; 2],
+    /// Active view rotation in radians (the `rotation` parameter passed to
+    /// `ViewTransform::from_pan_zoom_rotate`). Subtracted from `theta` in the
+    /// per-fragment skeleton so brush stamp orientation counteracts view
+    /// rotation — on-screen orientation stays put as the user rotates the
+    /// view. See `_prelude.wgsl` and `wgsl/mod.rs::assemble_shader`.
+    pub view_rotation: f32,
+    pub _pad: [u32; 1],
 }
 
 /// Size in bytes of the WGSL/Rust `IntrinsicUniforms` struct. Read by

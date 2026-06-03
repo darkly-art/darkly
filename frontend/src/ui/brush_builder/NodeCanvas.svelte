@@ -5,6 +5,7 @@
     import { isModEvent } from '../../actions/mods';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
+    import { createGraphCoords, type GraphCoords } from './coords';
 
     interface Props {
         /** Fires when the user requests "add node" from inside the canvas
@@ -39,21 +40,39 @@
         }
     });
 
-    // --- Port offset registration ---
-    // PortWidget measures its dot's offset relative to its node on mount
-    // and registers it here.  Wire paths use the node's auto-layout
-    // position + this port offset.
+    // --- Pan / zoom ---
 
-    export interface PortRegistration {
+    let containerEl: HTMLDivElement;
+    let nodeLayerEl: HTMLDivElement;
+    let panX = $state(0);
+    let panY = $state(0);
+    let zoom = $state(1);
+
+    // --- Node-canvas context ---
+    // PortWidget measures its dot's offset relative to its node on mount
+    // and registers it here. Wire paths use the node's auto-layout
+    // position + this port offset.
+    //
+    // The same context exposes `coords` — the single source of truth for
+    // screen<->graph coordinate conversion. Descendants never have to
+    // know about `zoom` or `pan`; they ask the coord system instead.
+
+    export interface NodeCanvasContext {
         register(nodeId: number, portName: string, dir: string, offset: { x: number; y: number }): void;
         unregister(nodeId: number, portName: string, dir: string): void;
+        coords: GraphCoords;
     }
 
     const portOffsets = new Map<string, { x: number; y: number }>();
     /** Bumped on every register/unregister so $derived picks up changes. */
     let portVersion = $state(0);
 
-    setContext<PortRegistration>('port-registration', {
+    const coords = createGraphCoords({
+        nodeLayerEl: () => nodeLayerEl,
+        zoom: () => zoom,
+    });
+
+    setContext<NodeCanvasContext>('node-canvas', {
         register(nodeId, portName, dir, offset) {
             portOffsets.set(`${nodeId}:${portName}:${dir}`, offset);
             portVersion++;
@@ -62,14 +81,8 @@
             portOffsets.delete(`${nodeId}:${portName}:${dir}`);
             portVersion++;
         },
+        coords,
     });
-
-    // --- Pan / zoom ---
-
-    let containerEl: HTMLDivElement;
-    let panX = $state(0);
-    let panY = $state(0);
-    let zoom = $state(1);
 
     // --- Interaction state ---
 
@@ -113,12 +126,7 @@
             ) as HTMLElement | null;
             const nodeEl = dotEl?.closest('[data-node-id]') as HTMLElement | null;
             if (dotEl && nodeEl) {
-                const dotRect = dotEl.getBoundingClientRect();
-                const nodeRect = nodeEl.getBoundingClientRect();
-                offset = {
-                    x: (dotRect.left + dotRect.width / 2) - nodeRect.left,
-                    y: (dotRect.top + dotRect.height / 2) - nodeRect.top,
-                };
+                offset = coords.elementCenterInParent(dotEl, nodeEl);
                 portOffsets.set(key, offset);
             }
         }
@@ -159,10 +167,10 @@
     });
 
     // --- Coordinate conversion ---
+    // Thin wrapper for readability at call sites; the helper does the math.
 
     function screenToGraph(sx: number, sy: number) {
-        const r = containerEl.getBoundingClientRect();
-        return { x: (sx - r.left - panX) / zoom, y: (sy - r.top - panY) / zoom };
+        return coords.clientToGraph(sx, sy);
     }
 
     // --- Wheel interaction gating ---
@@ -354,10 +362,11 @@
 
     <div
         class="node-layer"
+        bind:this={nodeLayerEl}
         style="transform: translate({panX}px, {panY}px) scale({zoom}); transform-origin: 0 0;"
     >
         {#each brushGraph.nodeList as node (node.id)}
-            <NodeWidget {node} {zoom} />
+            <NodeWidget {node} />
         {/each}
     </div>
 </div>

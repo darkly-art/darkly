@@ -58,7 +58,7 @@ struct Harness {
 ///   pen_input.position → paint.position
 ///   pen_input.pressure → curve → paint.size_input
 ///   paint_color.color  → stamp.color
-///   circle.texture     → stamp.tip       (per-dab shape feed)
+///   circle.mask    → stamp.tip       (per-dab shape feed)
 ///   stamp.dab          → paint.rgba
 ///
 /// `algorithm` selects the circle's shape function. `amplitude`
@@ -106,11 +106,13 @@ fn build_test_graph(algorithm: i32, amplitude: f32, size: f32) -> Graph<BrushWir
     graph.set_port_default(terminal, "opacity", 1.0).unwrap();
     graph.set_port_default(terminal, "flow", 1.0).unwrap();
 
+    // No `pen.pressure → terminal.flow` wire — tests that scale alpha by
+    // flow rely on the per-test `set_port_default(terminal, "flow", …)`
+    // override, which a wire would shadow.
     let wires = [
         (pen, "pressure", curve, "input"),
         (curve, "output", terminal, "size_input"),
-        (pen, "pressure", stamp, "flow"),
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         (paint_color, "color", stamp, "color"),
         (stamp, "dab", terminal, "rgba"),
         (pen, "position", terminal, "position"),
@@ -183,6 +185,7 @@ macro_rules! make_ctx {
             canvas_width: CANVAS,
             canvas_height: CANVAS,
             blend_mode: 0,
+            view_rotation: 0.0,
             perf: BrushPerfCounters::default(),
             stroke: Some(StrokeResources {
                 scratch: _scratch,
@@ -476,7 +479,7 @@ fn rough_ink_overlapping_dabs_render_without_truncation() {
     // vs-radius divergence we're guarding against is independent of the
     // curve shape.
     let curve_id = graph
-        .nodes
+        .nodes()
         .iter()
         .find(|(_, n)| n.type_id == darkly::brush::nodes::curve::TYPE_ID)
         .map(|(id, _)| *id)

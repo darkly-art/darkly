@@ -44,8 +44,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl::{
-    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, InputBinding,
-    IntrinsicUniforms, NodeWgsl, INTRINSIC_UNIFORMS_SIZE,
+    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, InputBinding, NodeWgsl,
+    INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -79,6 +79,13 @@ struct PerBrushPipeline {
     dabs_bind_group: wgpu::BindGroup,
     /// Total size of the uniform block (intrinsic + node fields), in bytes.
     uniform_size: usize,
+    /// `@group(3)` graph-texture bind group, present when the brush
+    /// graph contains `image`-style nodes. Built once at pipeline
+    /// build from the engine's
+    /// [`crate::gpu::texture_registry::TextureRegistry`]; reused for
+    /// every dab. `None` when the brush requests no graph textures
+    /// (the pipeline layout also omits group 3 in that case).
+    graph_textures_bind_group: Option<wgpu::BindGroup>,
 }
 
 impl PerBrushPipeline {
@@ -109,13 +116,43 @@ impl PerBrushPipeline {
                 }],
             });
 
-        let layout = ctx
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("paint-layout"),
-                bind_group_layouts: &[ctx.uniform_bgl, &dabs_bgl, ctx.selection_bgl],
-                immediate_size: 0,
-            });
+        // Optional `@group(3)` graph-texture bind group. Present only
+        // when the brush graph requested at least one `image`-style
+        // texture. Paint has no terminal bindings of its own, so the
+        // graph-textures layout sits at slot 3 directly — WebGPU's
+        // default `max_bind_groups = 4` rules out anything higher.
+        // The compile walk rejects graphs that combine an `image`
+        // node with a terminal that also claims @group(3) (e.g.
+        // watercolor's pickup atlas).
+        let graph_layout = if compiled.graph_texture_names.is_empty() {
+            None
+        } else {
+            Some(
+                ctx.texture_registry
+                    .layout_for_count(ctx.device, compiled.graph_texture_names.len()),
+            )
+        };
+        let layout = match &graph_layout {
+            None => ctx
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("paint-layout"),
+                    bind_group_layouts: &[ctx.uniform_bgl, &dabs_bgl, ctx.selection_bgl],
+                    immediate_size: 0,
+                }),
+            Some(gl) => ctx
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("paint-layout-with-graph-textures"),
+                    bind_group_layouts: &[
+                        ctx.uniform_bgl,
+                        &dabs_bgl,
+                        ctx.selection_bgl,
+                        gl.as_ref(),
+                    ],
+                    immediate_size: 0,
+                }),
+        };
 
         // Premultiplied source-over: scratch accumulates coverage. See
         // the `paint_pipeline` field doc above for why there's no erase
@@ -209,6 +246,21 @@ impl PerBrushPipeline {
         // `dabs_buffer_size` above.
         let _ = dab_record_size;
 
+        // Resolve the brush's named graph textures against the
+        // engine registry and build the `@group(3)` bind group.
+        // Missing names fall back to the registry's `_fallback`
+        // texture so the pipeline always builds — surfaces a
+        // `log::warn` instead of crashing while the user types in
+        // the node editor.
+        let graph_textures_bind_group = if compiled.graph_texture_names.is_empty() {
+            None
+        } else {
+            let (_layout, bg) = ctx
+                .texture_registry
+                .make_bind_group(ctx.device, &compiled.graph_texture_names);
+            Some(bg)
+        };
+
         Self {
             paint_pipeline,
             uniform_ring,
@@ -216,6 +268,7 @@ impl PerBrushPipeline {
             dabs_buffer,
             dabs_bind_group,
             uniform_size,
+            graph_textures_bind_group,
         }
     }
 }
@@ -338,7 +391,7 @@ pub fn register() -> BrushNodeRegistration {
                 // the hover-cursor mask rotate with the pen. The
                 // current paint shader doesn't apply this to the
                 // stroke deposit — it's read only by
-                // `render_preview` for the overlay. Defaults to 0
+                // `render_cursor_preview` for the overlay. Defaults to 0
                 // (no rotation).
                 PortDef::input("rotation", BrushWireType::Scalar)
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
@@ -349,7 +402,7 @@ pub fn register() -> BrushNodeRegistration {
                 // texture handle. In the compiled path it's a
                 // `vec4<f32>` expression. Without this match, the
                 // graph compiler rejects the connection at brush load.
-                PortDef::input("rgba", BrushWireType::Texture).with_description(
+                PortDef::input("rgba", BrushWireType::Vec4).with_description(
                     "Premultiplied RGBA from the upstream compiled graph (typically `stamp.dab`)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
@@ -495,14 +548,7 @@ impl BrushNodeEvaluator for PaintEvaluator {
         let mut uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
         pack_intrinsic_uniforms(
             &mut uniform_bytes,
-            IntrinsicUniforms {
-                layer_offset,
-                layer_size,
-                canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                preview_centre: [0.0, 0.0],
-                preview_size: [0, 0],
-                _pad: [0, 0],
-            },
+            gpu.intrinsic_header(layer_offset, layer_size),
         );
         let outputs = gpu
             .dab_batch
@@ -556,6 +602,12 @@ impl BrushNodeEvaluator for PaintEvaluator {
             pass.set_bind_group(0, &per_brush.uniform_bind_group, &[uniform_offset]);
             pass.set_bind_group(1, &per_brush.dabs_bind_group, &[]);
             pass.set_bind_group(2, gpu.selection_bind_group, &[]);
+            // `@group(3)` holds the brush's graph textures (paper
+            // grain etc.) when any are requested. Paint never uses
+            // group 3 for anything else.
+            if let Some(graph_bg) = per_brush.graph_textures_bind_group.as_ref() {
+                pass.set_bind_group(3, graph_bg, &[]);
+            }
             pass.draw(0..6, 0..total_dabs);
         });
 
@@ -581,19 +633,19 @@ impl BrushNodeEvaluator for PaintEvaluator {
     }
 
     /// Hover-cursor preview — reuses the shared
-    /// [`crate::brush::wgsl::render_compiled_preview`] helper.
+    /// [`crate::brush::wgsl::render_compiled_cursor_preview`] helper.
     /// `paint`'s stroke body and preview body are the same
-    /// source (no `compile_preview_body` override), so the cursor
+    /// source (no `compile_cursor_preview_body` override), so the cursor
     /// shows the brush color × shape × flow as the stroke would
     /// deposit.
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
         let rotation_rad = ctx.input_f32("rotation");
-        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, rotation_rad);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, rotation_rad);
         vec![]
     }
 
@@ -655,6 +707,7 @@ fn ensure_per_brush_pipeline(
         canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
+        texture_registry: gpu.pipelines.texture_registry(),
     };
     pipe.ensure_pipeline(&ctx, compiled);
 }

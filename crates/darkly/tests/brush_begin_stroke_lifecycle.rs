@@ -143,6 +143,7 @@ fn run_begin_stroke(graph: &Graph<BrushWireType>, setup: Setup) -> Vec<u8> {
         canvas_width: W,
         canvas_height: H,
         blend_mode: 0,
+        view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
         stroke: Some(StrokeResources {
             scratch,

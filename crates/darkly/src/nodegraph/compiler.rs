@@ -59,7 +59,7 @@ pub fn compile<W: WireKind>(
     graph: &Graph<W>,
     registry: &HashMap<String, NodeRegistration<W>>,
 ) -> Result<ExecutionPlan, GraphError> {
-    let node_ids: Vec<NodeId> = graph.nodes.keys().copied().collect();
+    let node_ids: Vec<NodeId> = graph.nodes().keys().copied().collect();
     if node_ids.is_empty() {
         return Ok(ExecutionPlan {
             steps: vec![],
@@ -122,7 +122,7 @@ pub fn compile<W: WireKind>(
 
     // First pass: assign slots to all output ports.
     for &node_id in &sorted {
-        let node = &graph.nodes[&node_id];
+        let node = &graph.nodes()[&node_id];
         for port in &node.ports {
             if port.dir == PortDir::Output {
                 let pr = PortRef {
@@ -156,7 +156,7 @@ pub fn compile<W: WireKind>(
     let mut phase: HashMap<NodeId, bool> = HashMap::new();
 
     for &node_id in &sorted {
-        let node = &graph.nodes[&node_id];
+        let node = &graph.nodes()[&node_id];
         let registration = registry.get(&node.type_id);
         let declared_gpu = registration.map(|r| r.is_gpu).unwrap_or(false);
         let is_terminal = registration.map(|r| r.is_terminal).unwrap_or(false);

@@ -61,8 +61,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl::{
-    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField,
-    IntrinsicUniforms, NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
+    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField, NodeWgsl,
+    WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -365,8 +365,8 @@ pub fn register() -> BrushNodeRegistration {
                 // Optional brush-shape modulation. If wired, the warp
                 // strength multiplies by the upstream coverage. If
                 // unwired, defaults to 1.0 (uniform inside the disc).
-                PortDef::input("mask", BrushWireType::Texture).with_description(
-                    "Per-fragment shape coverage (typically wired from circle.texture); \
+                PortDef::input("mask", BrushWireType::Scalar).with_description(
+                    "Per-fragment shape mask (typically wired from circle.mask); \
                      defaults to 1.0 (uniform inside the disc) when unwired.",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
@@ -551,14 +551,7 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
         let mut uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
         pack_intrinsic_uniforms(
             &mut uniform_bytes,
-            IntrinsicUniforms {
-                layer_offset,
-                layer_size,
-                canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                preview_centre: [0.0, 0.0],
-                preview_size: [0, 0],
-                _pad: [0, 0],
-            },
+            gpu.intrinsic_header(layer_offset, layer_size),
         );
         let outputs = gpu
             .dab_batch
@@ -645,13 +638,13 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
     /// falloff the stroke applies — scrubbing the softness slider
     /// visibly reshapes the cursor. Rotation is 0 (the preview is
     /// radially symmetric).
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, 0.0);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, 0.0);
         vec![]
     }
 
@@ -760,7 +753,7 @@ impl BrushNodeEvaluator for LiquifyEvaluator {
     /// `0.6` thinking that emitted "neutral gray", which actually
     /// just capped peak coverage at 60% — visibly fainter than other
     /// brushes.
-    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         let softness_expr = cctx.input("softness").as_f32();
         let falloff_fn = cctx.ident("liquify_falloff");
@@ -792,6 +785,7 @@ fn ensure_per_brush_pipeline(
         canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
+        texture_registry: gpu.pipelines.texture_registry(),
     };
     pipe.ensure_pipeline(&ctx, compiled);
 }

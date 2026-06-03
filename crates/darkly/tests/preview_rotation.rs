@@ -1,6 +1,6 @@
 //! End-to-end verification that `pen.tilt_direction` flows through
-//! the runner's sensor-seeding into a terminal's `render_preview`
-//! and onward to `BrushPreviewInfo.rotation_rad`. If the rotation
+//! the runner's sensor-seeding into a terminal's `render_cursor_preview`
+//! and onward to `BrushCursorPreviewInfo.rotation_rad`. If the rotation
 //! port doesn't flow live values, the cursor mask can never rotate
 //! with the pen even though the overlay primitive supports it.
 
@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, PreviewState};
+use darkly::brush::gpu_context::{
+    BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
+};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::brush::registry;
@@ -78,7 +80,7 @@ fn pen_tilt_direction_drives_preview_rotation() {
         (pen, "position", term, "position"),
         (pen, "tilt_direction", term, "rotation"),
         (paint_color, "color", stamp, "color"),
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         (stamp, "dab", term, "rgba"),
     ];
     for (from_node, from_port, to_node, to_port) in wires {
@@ -117,9 +119,10 @@ fn pen_tilt_direction_drives_preview_rotation() {
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
         blend_mode: 0,
+        view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
         stroke: None,
-        preview: Some(PreviewState {
+        preview: Some(CursorPreviewState {
             mask_view: Some(&target_view),
             mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
             mask_overlay: None,
@@ -141,7 +144,7 @@ fn pen_tilt_direction_drives_preview_rotation() {
     info.tilt_direction = expected;
     runner.seed_sensors(&info, [1.0, 0.0, 0.0, 1.0], 0xC0FFEE, 0);
     runner.execute_cpu();
-    runner.render_preview_pipeline(&mut ctx);
+    runner.render_cursor_preview_pipeline(&mut ctx);
 
     let rotation = ctx
         .preview

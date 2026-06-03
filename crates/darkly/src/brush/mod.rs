@@ -1,6 +1,5 @@
 //! Node-graph composable brush engine.
 
-pub mod brush_tip;
 pub mod builtin_brushes;
 pub mod bundle;
 pub mod checkpoint_ring;
@@ -16,6 +15,7 @@ pub mod nodes;
 pub mod paint_info;
 pub mod paint_target_ext;
 pub mod pipeline;
+pub mod portable;
 pub mod preview_renderer;
 pub mod save_points;
 pub mod scratch;
@@ -184,10 +184,9 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
     );
 
     let wires = [
-        (pen, "pressure", stamp, "size_input"),
-        (pen, "pressure", stamp, "flow"),
+        (pen, "pressure", terminal, "flow"),
         (paint_color, "color", stamp, "color"),
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         (stamp, "dab", terminal, "rgba"),
         (pen, "position", terminal, "position"),
     ];
@@ -212,35 +211,32 @@ pub fn default_graph() -> crate::nodegraph::Graph<BrushWireType> {
 /// Compile any brush graph into a ready-to-run runner.
 ///
 /// Generates the per-brush WGSL fragment shader and attaches it to
-/// the runner when the graph has a terminal. WGSL compile failures
-/// (e.g. an upstream node with no `compile_wgsl` implementation) are
-/// logged via `eprintln!` and surfaced as `GraphError::CycleDetected`
-/// so the engine's existing error path handles them.
+/// the runner when the graph has a terminal. Errors from the
+/// topological compile or the WGSL compile (e.g. an upstream node
+/// with no `compile_wgsl` implementation) are returned verbatim as
+/// human-readable strings.
 pub fn compile_graph(
     graph: &crate::nodegraph::Graph<BrushWireType>,
-) -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
+) -> Result<eval::BrushGraphRunner, String> {
     let registry = registry();
     let evaluators = registry.evaluators();
-    let mut runner = eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)?;
+    let mut runner = eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)
+        .map_err(|e| format!("{e}"))?;
     if runner.has_terminal() {
-        let plan = crate::nodegraph::compile(graph, registry.as_map())?;
+        let plan =
+            crate::nodegraph::compile(graph, registry.as_map()).map_err(|e| format!("{e}"))?;
         // Build a fresh evaluators map for the compiler — the runner
         // owns the live one. Cheap (just trait-object constructors).
         let compile_evals = registry.evaluators();
-        let compiled = wgsl::compile_brush_to_wgsl(graph, &plan, &compile_evals).map_err(|e| {
-            // Surface the WGSL compile error as a Graph compile
-            // error so the engine's existing error path handles
-            // it. Detail goes through `Display`.
-            eprintln!("paint WGSL compilation failed: {e}");
-            crate::nodegraph::GraphError::CycleDetected
-        })?;
+        let compiled = wgsl::compile_brush_to_wgsl(graph, &plan, &compile_evals)
+            .map_err(|e| format!("paint WGSL compilation failed: {e}"))?;
         runner.set_compiled_brush(std::sync::Arc::new(compiled));
     }
     Ok(runner)
 }
 
 /// Compile the default brush graph into a ready-to-run runner.
-pub fn default_runner() -> Result<eval::BrushGraphRunner, crate::nodegraph::GraphError> {
+pub fn default_runner() -> Result<eval::BrushGraphRunner, String> {
     compile_graph(&default_graph())
 }
 
@@ -250,7 +246,7 @@ pub fn default_runner() -> Result<eval::BrushGraphRunner, crate::nodegraph::Grap
 pub fn compile_from_json(json: &str) -> Result<eval::BrushGraphRunner, String> {
     let graph: crate::nodegraph::Graph<BrushWireType> =
         serde_json::from_str(json).map_err(|e| format!("invalid graph JSON: {e}"))?;
-    compile_graph(&graph).map_err(|e| format!("graph compilation failed: {e}"))
+    compile_graph(&graph)
 }
 
 /// Reset every exposed input port on every node back to its registration
@@ -269,7 +265,7 @@ pub fn compile_from_json(json: &str) -> Result<eval::BrushGraphRunner, String> {
 pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) {
     let registry = registry();
     let mut resets: Vec<(crate::nodegraph::NodeId, String, f32)> = Vec::new();
-    for (id, node) in &graph.nodes {
+    for (id, node) in graph.nodes() {
         let Some(reg) = registry.get(&node.type_id) else {
             continue;
         };
@@ -532,8 +528,8 @@ mod tests {
         let slot = runner.find_node_output_slot(color_node, "color").unwrap();
         let result = runner.read_slot(slot).unwrap();
         match result {
-            ScalarValue::Color(c) => assert_eq!(c, fg_color),
-            other => panic!("expected Color, got {:?}", other),
+            ScalarValue::Vec4(c) => assert_eq!(c, fg_color),
+            other => panic!("expected Vec4, got {:?}", other),
         }
     }
 
@@ -544,112 +540,6 @@ mod tests {
             runner.is_ok(),
             "default_runner() failed: {:?}",
             runner.err()
-        );
-    }
-
-    /// Jitter passes `input` through unchanged when `amount` is zero, and
-    /// stays inside `[input - amount, input + amount]` otherwise.
-    /// Two jitter nodes in the same graph produce independent streams.
-    #[test]
-    fn jitter_bounds_and_independence() {
-        let registry = registry();
-        let mut graph = Graph::new();
-
-        let pen = graph.add_node(
-            "pen_input",
-            registry.get("pen_input").unwrap().ports.clone(),
-            vec![],
-        );
-        let jit_a = graph.add_node(
-            "jitter",
-            registry.get("jitter").unwrap().ports.clone(),
-            vec![],
-        );
-        let jit_b = graph.add_node(
-            "jitter",
-            registry.get("jitter").unwrap().ports.clone(),
-            vec![],
-        );
-
-        // A: pressure → input, amount=0 (default). Should pass through.
-        graph
-            .connect(
-                PortRef {
-                    node: pen,
-                    port: "pressure".into(),
-                },
-                PortRef {
-                    node: jit_a,
-                    port: "input".into(),
-                },
-            )
-            .unwrap();
-
-        // B: pressure → input, amount=0.25 via port default.
-        graph
-            .connect(
-                PortRef {
-                    node: pen,
-                    port: "pressure".into(),
-                },
-                PortRef {
-                    node: jit_b,
-                    port: "input".into(),
-                },
-            )
-            .unwrap();
-        graph.set_port_default(jit_b, "amount", 0.25).unwrap();
-
-        let evaluators = registry.evaluators();
-        let mut runner = BrushGraphRunner::new(&graph, registry.as_map(), evaluators).unwrap();
-
-        let slot_a = runner.find_node_output_slot(jit_a, "value").unwrap();
-        let slot_b = runner.find_node_output_slot(jit_b, "value").unwrap();
-
-        let info = PaintInformation {
-            pressure: 0.5,
-            ..Default::default()
-        };
-
-        let mut distinct_pairs = 0;
-        let mut seen_b: Vec<f32> = Vec::new();
-        for dab in 0..32 {
-            runner.clear_slots();
-            runner.seed_sensors(&info, [0.0; 4], 7, dab);
-            runner.execute_cpu();
-
-            let a = match runner.read_slot(slot_a).unwrap() {
-                ScalarValue::Scalar(v) => v,
-                _ => unreachable!(),
-            };
-            let b = match runner.read_slot(slot_b).unwrap() {
-                ScalarValue::Scalar(v) => v,
-                _ => unreachable!(),
-            };
-
-            // A has amount=0 so it must equal the input exactly.
-            assert!(
-                (a - 0.5).abs() < 1e-6,
-                "jitter with amount=0 must pass input through, got {a}"
-            );
-            // B must stay within input ± amount.
-            assert!(
-                (0.25 - 1e-6..=0.75 + 1e-6).contains(&b),
-                "jitter with input=0.5 amount=0.25 out of bounds: {b}"
-            );
-
-            // Independence from A's stream — A is constant 0.5 so this
-            // collapses to "B varies." Check B varies across dabs.
-            if let Some(&prev_b) = seen_b.last() {
-                if (b - prev_b).abs() > 1e-6 {
-                    distinct_pairs += 1;
-                }
-            }
-            seen_b.push(b);
-        }
-        assert!(
-            distinct_pairs > 20,
-            "per-dab jitter should vary most dabs, got {distinct_pairs} changes in 32 dabs"
         );
     }
 }

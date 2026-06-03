@@ -80,7 +80,7 @@ use self::extent::compose_brush_extent;
 use self::type_system::{compute_struct_size, compute_struct_size_for_uniforms};
 
 /// Below this canvas-px bbox, the dab has effectively no extent and
-/// `render_compiled_preview` early-returns rather than try to compute
+/// `render_compiled_cursor_preview` early-returns rather than try to compute
 /// a canvas-to-target scale.
 const EPS_BBOX_CANVAS_PX: f32 = 1e-3;
 
@@ -97,7 +97,7 @@ pub struct CompiledBrush {
     /// only in the outer skeleton (single-quad vertex stage, `sel =
     /// 1.0`, no `@group(2)` / `@group(3)` bindings). See
     /// [`ShaderMode`].
-    pub preview_wgsl: String,
+    pub cursor_preview_wgsl: String,
     /// Per-dab record layout, in declaration order. The compiler
     /// includes the intrinsic header fields ([`INTRINSIC_DAB_HEADER_FIELDS`])
     /// at the front; everything after is contributed by nodes.
@@ -124,13 +124,20 @@ pub struct CompiledBrush {
     /// contributions (displacement / warp nodes). `0.0` for the
     /// current node set.
     pub brush_extent_extra_px: f32,
+    /// Names of textures sampled by `image`-style nodes in this
+    /// graph, in `@group(3) @binding(1+N)` order. Empty for graphs
+    /// without graph-texture nodes. Resolved against
+    /// [`crate::gpu::texture_registry::TextureRegistry`] at
+    /// pipeline-build time; deduplicated by the compiler so two
+    /// nodes sampling the same paper texture share one binding.
+    pub graph_texture_names: Vec<String>,
 }
 
 impl std::fmt::Debug for CompiledBrush {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CompiledBrush")
             .field("stroke_wgsl_bytes", &self.stroke_wgsl.len())
-            .field("preview_wgsl_bytes", &self.preview_wgsl.len())
+            .field("cursor_preview_wgsl_bytes", &self.cursor_preview_wgsl.len())
             .field("dab_record_size", &self.dab_record_size)
             .field("uniform_size", &self.uniform_size)
             .field("topology_hash", &self.topology_hash)
@@ -181,6 +188,24 @@ pub fn compile_brush_to_wgsl(
         return Err(CompileError::NoTerminal);
     }
 
+    // Preview-time view of the graph: ports flagged with
+    // `PortDef::preview_value` have their incoming wires dropped and
+    // their `default` replaced with the preview constant. The stroke
+    // pass walks the original graph; the preview pass reuses every
+    // upstream node body but rebuilds the terminal step's
+    // `CompileWgslCtx` against this clone so the emitted preview body
+    // literalizes the preview defaults regardless of what the live
+    // user-facing scrubs are set to. Encoding the override inside the
+    // compiler (rather than at every caller) means the active-brush
+    // compile and `regenerate_brush_cursor_preview_with_pen_internal` — which
+    // intentionally do not pre-mutate the user's graph — still emit a
+    // correct preview shader.
+    let preview_graph = {
+        let mut g = graph.clone();
+        g.apply_preview_overrides();
+        g
+    };
+
     let mut decls = String::new();
     // Non-terminal node bodies — shared between the stroke and preview
     // skeletons (they're upstream of the terminal and don't depend on
@@ -188,7 +213,7 @@ pub fn compile_brush_to_wgsl(
     let mut shared_body = String::new();
     // Terminal node bodies, captured per-mode. `stroke_terminal_body`
     // comes from the terminal's `compile_wgsl`; `preview_terminal_body`
-    // comes from `compile_preview_body`. For terminals that don't
+    // comes from `compile_cursor_preview_body`. For terminals that don't
     // override the latter, both are the same source.
     let mut stroke_terminal_body = String::new();
     let mut preview_terminal_body = String::new();
@@ -200,6 +225,13 @@ pub fn compile_brush_to_wgsl(
     // (e.g. `watercolor`'s pickup atlas). Preview mode omits
     // these — the preview body doesn't sample scratch / atlas.
     let mut terminal_bindings = String::new();
+
+    // Graph-texture names contributed by `image`-style nodes, in the
+    // order each new name was first requested. Each node mutates
+    // this through `CompileWgslCtx::request_texture`; sharing the
+    // accumulator across the walk gives stable, dedup'd slot indices
+    // so two nodes sampling the same paper share a binding.
+    let graph_textures_cell: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
 
     // Track each output port's emitted expression so downstream nodes
     // can substitute.
@@ -232,7 +264,7 @@ pub fn compile_brush_to_wgsl(
         // Resolve inputs from the slot table built so far.
         let mut inputs: HashMap<String, InputBinding> = HashMap::new();
         let node = graph
-            .nodes
+            .nodes()
             .get(&step.node_id)
             .expect("plan step references existing node");
         for slot_info in &step.input_slots {
@@ -270,6 +302,33 @@ pub fn compile_brush_to_wgsl(
             .map(|pr| pr.port.clone())
             .collect();
 
+        // For terminal steps, build the preview-mode cctx alongside the
+        // stroke-mode one so `compile_cursor_preview_body` sees the overridden
+        // port defaults. Non-terminals never have `compile_cursor_preview_body`
+        // called, so we skip the extra work.
+        let preview_cctx_parts = if step.is_terminal {
+            let preview_node = preview_graph
+                .nodes()
+                .get(&step.node_id)
+                .expect("preview-graph clone has the same node set as the original");
+            // Drop wired bindings the override removed — those ports
+            // must fall through to the preview-overridden defaults in
+            // the cloned graph.
+            let preview_inputs: HashMap<String, InputBinding> = inputs
+                .iter()
+                .filter(|(port_name, _)| {
+                    preview_graph
+                        .connections
+                        .iter()
+                        .any(|c| c.to.node == step.node_id && &c.to.port == *port_name)
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            Some((preview_node, preview_inputs, consumed_outputs.clone()))
+        } else {
+            None
+        };
+
         let cctx = CompileWgslCtx {
             node_id: step.node_id,
             params: &node.params,
@@ -277,6 +336,7 @@ pub fn compile_brush_to_wgsl(
             inputs,
             lut: lut.as_ref(),
             consumed_outputs,
+            graph_textures: &graph_textures_cell,
         };
 
         let result =
@@ -314,18 +374,35 @@ pub fn compile_brush_to_wgsl(
             // source); watercolor/smudge/liquify override to emit a
             // neutral-color body that doesn't reference `@group(3)`.
             //
+            // The preview cctx wraps the cloned graph (preview overrides
+            // applied) so any `cctx.input(name).as_f32()` for a flagged
+            // port literalizes the preview constant — regardless of
+            // whether the caller pre-applied the override on the graph
+            // they handed in.
+            //
             // Only the `body` field is consumed here — decls / dab_fields
             // / uniform_fields / outputs / terminal_bindings are already
             // accumulated from the stroke pass and shared across modes
             // (helper functions a preview body references — e.g. liquify's
             // `falloff_fn` — live in `decls` and are visible to both
             // skeletons).
-            let preview_result = evaluator.compile_preview_body(&cctx).map_err(|reason| {
-                CompileError::NodeNotCompilable {
+            let (preview_node, preview_inputs, preview_consumed) =
+                preview_cctx_parts.expect("preview_cctx_parts built above for every terminal step");
+            let preview_cctx = CompileWgslCtx {
+                node_id: step.node_id,
+                params: &preview_node.params,
+                port_defs: &preview_node.ports,
+                inputs: preview_inputs,
+                lut: lut.as_ref(),
+                consumed_outputs: preview_consumed,
+                graph_textures: &graph_textures_cell,
+            };
+            let preview_result = evaluator
+                .compile_cursor_preview_body(&preview_cctx)
+                .map_err(|reason| CompileError::NodeNotCompilable {
                     type_id: step.type_id.clone(),
                     reason,
-                }
-            })?;
+                })?;
             if !preview_result.body.is_empty() {
                 preview_terminal_body.push_str(&preview_result.body);
                 if !preview_result.body.ends_with('\n') {
@@ -381,6 +458,26 @@ pub fn compile_brush_to_wgsl(
     // terminal bindings).
     let stroke_body = format!("{shared_body}{stroke_terminal_body}");
     let preview_body = format!("{shared_body}{preview_terminal_body}");
+    let graph_texture_names = graph_textures_cell.into_inner();
+    // `@group(3)` collision check. Terminal `terminal_bindings`
+    // (e.g. watercolor's pickup atlas) and the `image` node's
+    // graph textures both target group 3 — the highest slot WebGPU's
+    // default `max_bind_groups = 4` permits. Mixing the two would
+    // need a different binding scheme (pack into a single bind
+    // group with non-overlapping @binding indices, or request a
+    // higher device limit). Reject the combination now so the
+    // failure mode is "brush won't load" rather than a runtime
+    // shader-binding mismatch.
+    if !terminal_bindings.is_empty() && !graph_texture_names.is_empty() {
+        return Err(CompileError::NodeNotCompilable {
+            type_id: "image".into(),
+            reason: format!(
+                "graph combines an `image` node with a terminal that owns @group(3) \
+                 bindings ({} requested); this combination is not yet supported",
+                graph_texture_names.join(", ")
+            ),
+        });
+    }
     let stroke_wgsl = assemble_shader(
         ShaderMode::Stroke,
         &dab_fields,
@@ -388,14 +485,16 @@ pub fn compile_brush_to_wgsl(
         &decls,
         &stroke_body,
         &terminal_bindings,
+        &graph_texture_names,
     );
-    let preview_wgsl = assemble_shader(
-        ShaderMode::Preview,
+    let cursor_preview_wgsl = assemble_shader(
+        ShaderMode::CursorPreview,
         &dab_fields,
         &uniform_fields,
         &decls,
         &preview_body,
         "",
+        &graph_texture_names,
     );
 
     // Topology hash: stable across runs (uses DefaultHasher; if process
@@ -407,7 +506,7 @@ pub fn compile_brush_to_wgsl(
 
     Ok(CompiledBrush {
         stroke_wgsl,
-        preview_wgsl,
+        cursor_preview_wgsl,
         dab_layout: dab_fields,
         dab_record_size,
         uniform_layout: uniform_fields,
@@ -415,6 +514,7 @@ pub fn compile_brush_to_wgsl(
         topology_hash,
         brush_extent_factor,
         brush_extent_extra_px,
+        graph_texture_names,
     })
 }
 
@@ -480,8 +580,8 @@ pub fn pack_uniforms(
 /// What this does:
 /// 1. Grows the preview mask to fit `radius × brush_extent_factor +
 ///    brush_extent_extra_px` (rounded to the next power of two).
-/// 2. Packs the intrinsic uniform header — `preview_centre` /
-///    `preview_size` set live; `layer_offset` / `layer_size` /
+/// 2. Packs the intrinsic uniform header — `cursor_preview_centre` /
+///    `cursor_preview_size` set live; `layer_offset` / `layer_size` /
 ///    `canvas_size` aliased to the preview mask so any node that
 ///    reads them in its `compile_wgsl` body sees a sane (mask-sized)
 ///    target.
@@ -491,9 +591,9 @@ pub fn pack_uniforms(
 ///    contributed dab fields via [`pack_dab_record`].
 /// 5. Calls [`crate::brush::pipeline::BrushPipelines::render_preview`]
 ///    against the shared preview pipeline cache.
-/// 6. Publishes [`crate::brush::eval::BrushPreviewInfo`] for the
+/// 6. Publishes [`crate::brush::eval::BrushCursorPreviewInfo`] for the
 ///    overlay's `KIND_MASKED_STAMP` primitive to consume.
-pub fn render_compiled_preview(
+pub fn render_compiled_cursor_preview(
     gpu: &mut crate::brush::gpu_context::BrushGpuContext,
     radius: f32,
     rotation_rad: f32,
@@ -503,7 +603,7 @@ pub fn render_compiled_preview(
     // footprint as it will be deposited on the canvas, and what the
     // overlay quad consumes via `half_extent_canvas_px` below.
     let bbox_canvas_px = radius * compiled.brush_extent_factor + compiled.brush_extent_extra_px;
-    let (target_view, target_w, target_h) = gpu.ensure_preview_mask(bbox_canvas_px)?;
+    let (target_view, target_w, target_h) = gpu.ensure_cursor_preview_mask(bbox_canvas_px)?;
     if target_w == 0 || target_h == 0 || bbox_canvas_px < EPS_BBOX_CANVAS_PX {
         return None;
     }
@@ -520,18 +620,13 @@ pub fn render_compiled_preview(
     let canvas_to_target = texture_half / bbox_canvas_px;
     let bbox_target_px = texture_half;
     let radius_target_px = (radius * canvas_to_target).max(EPS_RADIUS_TARGET_PX);
-    let preview_centre = [target_w as f32 * 0.5, target_h as f32 * 0.5];
+    let cursor_preview_centre = [target_w as f32 * 0.5, target_h as f32 * 0.5];
 
     // Pack the uniform buffer: intrinsic header first, node-contributed
-    // uniforms after.
-    let intrinsic = IntrinsicUniforms {
-        layer_offset: [0, 0],
-        layer_size: [target_w, target_h],
-        canvas_size: [target_w, target_h],
-        preview_centre,
-        preview_size: [target_w, target_h],
-        _pad: [0, 0],
-    };
+    // uniforms after. Intrinsic field list lives on `BrushGpuContext` so
+    // adding a future global field (e.g. `view_rotation`) edits one
+    // helper, not every terminal + this preview path.
+    let intrinsic = gpu.intrinsic_preview_header(target_w, target_h, cursor_preview_centre);
     let total_uniform_size = INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size;
     let mut uniform_bytes: Vec<u8> = Vec::with_capacity(total_uniform_size);
     pack_intrinsic_uniforms(&mut uniform_bytes, intrinsic);
@@ -555,7 +650,7 @@ pub fn render_compiled_preview(
     let mut dab_bytes: Vec<u8> = Vec::with_capacity(compiled.dab_record_size);
     pack_intrinsic_dab_header(
         &mut dab_bytes,
-        preview_centre,
+        cursor_preview_centre,
         bbox_target_px,
         radius_target_px,
     );
@@ -580,7 +675,7 @@ pub fn render_compiled_preview(
     // UV [0, 1] across the quad. With the dab filling the mask's
     // inscribed disc by construction (above), this matches.
     if let Some(preview) = gpu.preview.as_mut() {
-        preview.info = Some(crate::brush::eval::BrushPreviewInfo {
+        preview.info = Some(crate::brush::eval::BrushCursorPreviewInfo {
             half_extent_canvas_px: [bbox_canvas_px, bbox_canvas_px],
             rotation_rad,
         });
@@ -603,7 +698,7 @@ fn apply_wire_remap(
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> String {
     let src_range = graph
-        .nodes
+        .nodes()
         .get(&source.node)
         .and_then(|n| {
             n.ports
@@ -612,7 +707,7 @@ fn apply_wire_remap(
         })
         .and_then(|p| p.natural_range);
     let dst_range = graph
-        .nodes
+        .nodes()
         .get(&dest_node)
         .and_then(|n| {
             n.ports
@@ -641,10 +736,10 @@ fn hash_graph_topology(graph: &crate::nodegraph::Graph<BrushWireType>) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = DefaultHasher::new();
-    let mut node_ids: Vec<_> = graph.nodes.keys().copied().collect();
+    let mut node_ids: Vec<_> = graph.nodes().keys().copied().collect();
     node_ids.sort_by_key(|n| n.0);
     for id in &node_ids {
-        let node = &graph.nodes[id];
+        let node = &graph.nodes()[id];
         id.0.hash(&mut hasher);
         node.type_id.hash(&mut hasher);
         // Hash params by serialising — order is stable; values that
@@ -685,9 +780,12 @@ fn assemble_shader(
     node_decls: &str,
     fs_body: &str,
     terminal_bindings: &str,
+    graph_texture_names: &[String],
 ) -> String {
     let mut out = String::new();
     out.push_str(include_str!("../../../../../shaders/brush/_shape.wgsl"));
+    out.push('\n');
+    out.push_str(include_str!("../../../../../shaders/brush/_noise.wgsl"));
     out.push('\n');
     out.push_str(include_str!("../../../../../shaders/brush/_prelude.wgsl"));
     out.push('\n');
@@ -732,6 +830,29 @@ fn assemble_shader(
             }
         }
     }
+    // `@group(3)` — named graph textures (`image` nodes). WebGPU's
+    // default `max_bind_groups` is 4 (groups 0..=3), so this is the
+    // highest slot a shader can use without requesting non-default
+    // device limits. Declared in *both* shader variants so the same
+    // node WGSL works in stroke and preview without the node knowing
+    // which mode it's compiling into; the preview pipeline cache
+    // points at the same registry-owned textures the stroke pipeline
+    // uses, so cursor thumbnails sample the paper grain too.
+    //
+    // Group 3 is the same slot terminals like watercolor use for
+    // their own `terminal_bindings` (pickup atlas). The compile walk
+    // rejects graphs that try to claim both — see the early-return
+    // check in [`compile_brush_to_wgsl`].
+    if !graph_texture_names.is_empty() {
+        out.push_str("@group(3) @binding(0) var graph_smp: sampler;\n");
+        for (i, _) in graph_texture_names.iter().enumerate() {
+            out.push_str(&format!(
+                "@group(3) @binding({}) var graph_tex_{}: texture_2d<f32>;\n",
+                1 + i,
+                i
+            ));
+        }
+    }
     out.push('\n');
 
     // Node-level declarations (helper functions, const arrays).
@@ -743,7 +864,7 @@ fn assemble_shader(
     // preview-mask viewport in preview mode.
     match mode {
         ShaderMode::Stroke => out.push_str(STROKE_VERTEX_STAGE_WGSL),
-        ShaderMode::Preview => out.push_str(PREVIEW_VERTEX_STAGE_WGSL),
+        ShaderMode::CursorPreview => out.push_str(PREVIEW_VERTEX_STAGE_WGSL),
     }
     out.push('\n');
 
@@ -768,7 +889,16 @@ fn assemble_shader(
     out.push_str("    }\n");
     out.push_str("    let local_uv = local * d.inv_radius_target_px;\n");
     out.push_str("    let local_dist = length(local_uv);\n");
-    out.push_str("    let theta = atan2(local_uv.y, local_uv.x);\n");
+    // Brush stamp rotation counteracts view rotation: shape nodes use
+    // `theta - p.rotation`, so subtracting `view_rotation` from `theta`
+    // here makes the shader render the stamp at canvas-rotation
+    // `p.rotation + view_rotation`. The present shader's canvas → screen
+    // rotation (which subtracts `view_rotation` again, per
+    // `ViewTransform::from_pan_zoom_rotate`) lands the stamp at on-
+    // screen rotation `p.rotation` — invariant under view rotation.
+    // The fix is at this one line: every existing and future shape
+    // node consuming `theta` is screen-relative without further code.
+    out.push_str("    let theta = atan2(local_uv.y, local_uv.x) - u.intrinsic.view_rotation;\n");
     out.push_str("    let canvas_size = vec2<f32>(\n");
     out.push_str("        f32(u.intrinsic.canvas_size.x),\n");
     out.push_str("        f32(u.intrinsic.canvas_size.y),\n");
@@ -779,7 +909,7 @@ fn assemble_shader(
         ShaderMode::Stroke => out.push_str(
             "    let sel = textureSampleLevel(sel_tex, sel_smp, target_pos / canvas_size, 0.0).r;\n",
         ),
-        ShaderMode::Preview => out.push_str("    let sel: f32 = 1.0;\n"),
+        ShaderMode::CursorPreview => out.push_str("    let sel: f32 = 1.0;\n"),
     }
     out.push_str(fs_body);
     out.push_str("}\n");
@@ -845,8 +975,8 @@ fn vs_main(
 "#;
 
 /// Preview-mode vertex stage — single quad centred at
-/// `u.intrinsic.preview_centre`, mapped against the preview mask's
-/// NDC viewport (`u.intrinsic.preview_size`). The fragment shader
+/// `u.intrinsic.cursor_preview_centre`, mapped against the preview mask's
+/// NDC viewport (`u.intrinsic.cursor_preview_size`). The fragment shader
 /// reads `dabs[0]` for the (single) record's pose; the per-fragment
 /// math is unchanged from stroke mode. Repeats the `VsOut` /
 /// `quad_corner` declarations so the two vertex stages are
@@ -874,21 +1004,21 @@ fn quad_corner(vi: u32) -> vec2<f32> {
 fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
     let dab = dabs[0];
     let corner = quad_corner(vi);
-    // Read `dab.pos` instead of `u.intrinsic.preview_centre` so the
+    // Read `dab.pos` instead of `u.intrinsic.cursor_preview_centre` so the
     // dab record is the single source of truth for positioning. The
-    // CPU side packs `pos = preview_centre`, making the two equivalent
+    // CPU side packs `pos = cursor_preview_centre`, making the two equivalent
     // by construction, but threading through `dab.pos` keeps the
     // vertex structurally identical to stroke's modulo the clip-space
     // mapping — the invariant is the same: target-space pos, bbox in
     // target px.
     let target_pos = dab.pos + (corner * 2.0 - vec2<f32>(1.0, 1.0)) * dab.bbox_target_px;
-    let preview_size_f = vec2<f32>(
-        f32(u.intrinsic.preview_size.x),
-        f32(u.intrinsic.preview_size.y),
+    let cursor_preview_size_f = vec2<f32>(
+        f32(u.intrinsic.cursor_preview_size.x),
+        f32(u.intrinsic.cursor_preview_size.y),
     );
     let clip = vec2<f32>(
-        target_pos.x / preview_size_f.x * 2.0 - 1.0,
-        1.0 - target_pos.y / preview_size_f.y * 2.0,
+        target_pos.x / cursor_preview_size_f.x * 2.0 - 1.0,
+        1.0 - target_pos.y / cursor_preview_size_f.y * 2.0,
     );
     var out: VsOut;
     out.clip       = vec4<f32>(clip, 0.0, 1.0);

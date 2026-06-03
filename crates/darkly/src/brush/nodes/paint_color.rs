@@ -20,7 +20,7 @@ pub fn register() -> BrushNodeRegistration {
             type_id: TYPE_ID,
             category: "color",
             display_name: "Paint Color",
-            ports: vec![PortDef::output("color", BrushWireType::Color)
+            ports: vec![PortDef::output("color", BrushWireType::Vec4)
                 .with_description("Current foreground painting color (RGBA)")],
             params: &[],
             is_gpu: false,

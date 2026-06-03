@@ -1,7 +1,7 @@
 <!--
     Live equivalent of `BrushPreviewStrip`: same square-dab + S-curve
     layout, but the bytes come from the live engine (`brush_active_dab_preview`
-    + `brush_editor_preview`) instead of the library's baked PNG cache.
+    + `brush_stroke_preview`) instead of the library's baked PNG cache.
 
     Used wherever a preview of the *active* graph is needed — the brush
     builder's preview dock, and the picker dropdown's active strip when
@@ -10,7 +10,7 @@
 -->
 <script lang="ts">
     import BrushDabView from './BrushDabView.svelte';
-    import BrushPreview from '../brush_builder/BrushPreview.svelte';
+    import BrushStrokePreview from '../brush_builder/BrushStrokePreview.svelte';
 
     interface Props {
         /** Total width of the strip in CSS pixels. Height is derived from
@@ -30,7 +30,7 @@
         <BrushDabView width={dabSize} height={dabSize} />
     </div>
     <div class="stroke">
-        <BrushPreview width={strokeWidth} height={stripHeight} />
+        <BrushStrokePreview width={strokeWidth} height={stripHeight} />
     </div>
 </div>
 

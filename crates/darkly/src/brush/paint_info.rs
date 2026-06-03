@@ -67,7 +67,7 @@ impl PaintInformation {
     /// Full pressure so pressure-driven sensors show the brush at its
     /// fully-engaged tip — the silhouette the user expects when previewing
     /// "what this brush looks like."
-    pub fn preview_dummy() -> Self {
+    pub fn cursor_preview_dummy() -> Self {
         Self {
             pressure: 1.0,
             ..Default::default()

@@ -103,9 +103,6 @@ export const WIRE_COLORS: Record<string, string> = {
     Bool: '#ff6b6b',
     Vec2: '#6bff6b',
     Vec4: '#ffaa4a',
-    Color: '#ffd700',
-    Texture: '#ff69b4',
-    Mask: '#b469ff',
 };
 
 // --- State ---
@@ -303,6 +300,35 @@ class BrushGraphState {
         this.snapshotTopologyVersion();
     }
 
+    /** Return the active brush graph as a portable YAML string. Empty
+     *  string on serialization failure (treated as "nothing to copy"). */
+    exportYaml(): string {
+        if (!app.handle) return '';
+        return app.handle.brush_graph_export_yaml();
+    }
+
+    /** Replace the active brush graph from a portable YAML string.
+     *  Returns null on success or an error string on parse/validation
+     *  failure — same convention as `loadBrush`. */
+    importYaml(yaml: string): string | null {
+        if (!app.handle) return 'engine not ready';
+        const result = app.handle.brush_graph_import_yaml(yaml);
+        if (result !== null) {
+            const err = String(result);
+            this.error = err;
+            return err;
+        }
+        // Same post-mutation refresh as loadBrush / resetToDefault.
+        this.nodePositions = {};
+        this.fetchGraph();
+        this.refreshExposedPorts();
+        this.refreshSupportsErase();
+        this.error = null;
+        this.activeBrush = null;
+        this.snapshotTopologyVersion();
+        return null;
+    }
+
     /** Refresh the brush list from WASM. */
     refreshBrushes() {
         if (!app.handle) return;
@@ -405,12 +431,17 @@ class BrushGraphState {
     }
 
     /** Add a node of the given type. The new node is placed at `(x, y)` in
-     *  the local positions map. Returns the new node's ID. */
+     *  the local positions map. Returns the new node's ID, or null if the
+     *  add failed (e.g. the Rust compile step rejected the new graph). */
     addNode(typeId: string, x: number, y: number): number | null {
         if (!app.handle) return null;
         this.applyResult(app.handle.brush_graph_add_node(typeId));
-        // brush_graph_add_node assigns the pre-increment value of next_id,
-        // so the new node's ID is next_id - 1 after the result is applied.
+        // applyResult records the error and leaves `this.graph` unchanged
+        // on failure. If we didn't bail here, the code below would write
+        // `(x, y)` into nodePositions[next_id - 1] — and that id still
+        // points at the *previously*-added node (typically Paint), making
+        // it visibly warp to the cursor.
+        if (this.error) return null;
         if (!this.graph) return null;
         const id = this.graph.next_id - 1;
         // Position assignment is local-only — auto-layout would

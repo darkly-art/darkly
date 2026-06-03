@@ -54,8 +54,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl::{
-    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField,
-    IntrinsicUniforms, NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
+    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, DabField, NodeWgsl,
+    WgslType, INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -326,12 +326,8 @@ pub fn register() -> BrushNodeRegistration {
                     .with_description(
                         "Overall stroke strength. Lower values reduce how much the smudge affects the canvas.",
                     ),
-                // Same `Texture` wire-type as watercolor.mask
-                // — the upstream compiled `circle.texture` output is a
-                // scalar coverage expression; the wire-type label is
-                // shared with the per-dab dispatch model.
-                PortDef::input("mask", BrushWireType::Texture).with_description(
-                    "Per-fragment shape coverage (typically wired from circle.texture)",
+                PortDef::input("mask", BrushWireType::Scalar).with_description(
+                    "Per-fragment shape mask (typically wired from circle.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),
@@ -519,14 +515,7 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
         let mut uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
         pack_intrinsic_uniforms(
             &mut uniform_bytes,
-            IntrinsicUniforms {
-                layer_offset,
-                layer_size,
-                canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                preview_centre: [0.0, 0.0],
-                preview_size: [0, 0],
-                _pad: [0, 0],
-            },
+            gpu.intrinsic_header(layer_offset, layer_size),
         );
         let outputs = gpu
             .dab_batch
@@ -620,13 +609,13 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
     /// Smudge has no rotation port — the cursor is symmetric, and
     /// rotating it wouldn't carry meaningful information for the
     /// user. Publishes `rotation_rad: 0.0`.
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
-        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, 0.0);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, 0.0);
         vec![]
     }
 
@@ -679,7 +668,7 @@ impl BrushNodeEvaluator for SmudgeEvaluator {
     /// Semantic for the preview: "show the footprint, not the smear"
     /// — neutral gray, modulated by the upstream shape mask so the
     /// cursor still reads the brush's actual coverage area.
-    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         let mask_expr = cctx.input("mask").as_f32();
         wgsl.body = format!(
@@ -710,6 +699,7 @@ fn ensure_per_brush_pipeline(
         canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
+        texture_registry: gpu.pipelines.texture_registry(),
     };
     pipe.ensure_pipeline(&ctx, compiled);
 }

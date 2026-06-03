@@ -42,6 +42,7 @@ pub mod selection;
 pub mod straight_composite;
 #[cfg(any(test, feature = "testing"))]
 pub mod test_utils;
+pub mod texture_registry;
 pub mod transform;
 pub mod veil;
 pub mod veil_chain;

@@ -35,7 +35,7 @@
 
     function refresh() {
         if (!app.handle) return;
-        const bytes = app.handle.brush_editor_preview();
+        const bytes = app.handle.brush_stroke_preview();
         if (!bytes || bytes.length === 0) return;
         if (bytes.length === lastLen && dataUrl) return;
         const blob = new Blob([new Uint8Array(bytes)], { type: 'image/png' });

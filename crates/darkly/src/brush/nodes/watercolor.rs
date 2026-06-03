@@ -49,8 +49,8 @@ use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
 use crate::brush::wgsl::{
-    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, IntrinsicUniforms,
-    NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
+    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, NodeWgsl, WgslType,
+    INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -620,25 +620,18 @@ pub fn register() -> BrushNodeRegistration {
                          Smaller values keep the smudge influence local to the brush tip; larger \
                          values pull color from a wider area.",
                     ),
-                PortDef::input("color", BrushWireType::Color)
+                PortDef::input("color", BrushWireType::Vec4)
                     .with_description("Brush color (typically wired from paint_color)"),
                 // Cursor-preview rotation in radians. Read only by
-                // `render_preview` and published into
-                // `BrushPreviewInfo.rotation_rad`; the stroke shader
+                // `render_cursor_preview` and published into
+                // `BrushCursorPreviewInfo.rotation_rad`; the stroke shader
                 // doesn't apply it (rotation in stroke deposit is a
                 // separate concern). Defaults to 0.
                 PortDef::input("rotation", BrushWireType::Scalar)
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                     .with_description("Cursor-preview rotation (radians)"),
-                // Typed as `Texture` to match the upstream
-                // `circle.texture` output's wire type. In the compiled
-                // path the wire's underlying WGSL expression is `f32`
-                // (the shape coverage), but the framework checks
-                // wire types for compatibility — so the declared
-                // wire type must match the source. Same pattern as
-                // `paint.rgba` matching `stamp.dab`.
-                PortDef::input("mask", BrushWireType::Texture).with_description(
-                    "Per-fragment shape coverage (typically wired from circle.texture)",
+                PortDef::input("mask", BrushWireType::Scalar).with_description(
+                    "Per-fragment shape mask (typically wired from circle.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),
@@ -777,14 +770,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let mut composite_uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
         pack_intrinsic_uniforms(
             &mut composite_uniform_bytes,
-            IntrinsicUniforms {
-                layer_offset,
-                layer_size,
-                canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                preview_centre: [0.0, 0.0],
-                preview_size: [0, 0],
-                _pad: [0, 0],
-            },
+            gpu.intrinsic_header(layer_offset, layer_size),
         );
         let outputs = gpu
             .dab_batch
@@ -908,16 +894,16 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     /// The brush color × shape (perlin/sine) modulated mask reads
     /// against `sel = 1.0` (no selection clipping for the cursor) and
     /// a neutral-load preview body (overridden via
-    /// [`Self::compile_preview_body`] — the stroke body samples the
+    /// [`Self::compile_cursor_preview_body`] — the stroke body samples the
     /// `@group(3)` pickup atlas, which the preview skeleton omits).
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
         let rotation_rad = ctx.input_f32("rotation");
-        let _ = crate::brush::wgsl::render_compiled_preview(gpu, radius, rotation_rad);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, rotation_rad);
         vec![]
     }
 
@@ -988,7 +974,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     /// silhouette) and the brush color, but drop the atlas pickup /
     /// wetness blend — preview shows what the brush *would* deposit,
     /// not what it'd pick up.
-    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         let mask_expr = cctx.input("mask").as_f32();
         let color_expr = cctx.input("color").as_vec4();
@@ -1023,6 +1009,7 @@ fn ensure_per_brush_pipeline(
         canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
+        texture_registry: gpu.pipelines.texture_registry(),
     };
     pipe.ensure_pipeline(&ctx, compiled);
 }

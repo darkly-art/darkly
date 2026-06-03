@@ -1,0 +1,43 @@
+name: Ink Pen
+category: Basic
+nodes:
+  1:
+    type: pen_input
+    port_defaults:
+      stabilize: 0.6
+    exposed:
+    - stabilize
+  2:
+    type: paint_color
+  3:
+    type: circle
+    port_defaults:
+      softness: 0.1
+    exposed:
+    - softness
+  4:
+    type: stamp
+  5:
+    type: paint
+    exposed:
+    - flow
+    - opacity
+    - size
+  6:
+    type: curve
+    params:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.4
+        - 0.7
+      - - 1.0
+        - 1.0
+connections:
+- '1.position -> 5.position'
+- '1.pressure -> 5.flow'
+- '1.pressure -> 6.input'
+- '2.color -> 4.color'
+- '3.mask -> 4.tip'
+- '4.dab -> 5.rgba'
+- '6.output -> 5.size_input'
