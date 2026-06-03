@@ -16,17 +16,17 @@
         "test:watch": "vitest"
     },
     "devDependencies": {
-        "@sveltejs/vite-plugin-svelte": "^5.0.0",
+        "@sveltejs/vite-plugin-svelte": "^7.1.2",
         "@vitejs/plugin-basic-ssl": "^2.1.4",
-        "@webgpu/types": "^0.1.69",
-        "svelte": "^5.0.0",
-        "typescript": "^5.7.0",
-        "vite": "^6.0.0",
-        "vitest": "^2.1.0"
+        "@webgpu/types": "^0.1.70",
+        "svelte": "^5.56.1",
+        "typescript": "^6.0.3",
+        "vite": "^8.0.16",
+        "vitest": "^4.1.8"
     },
     "dependencies": {
         "defu": "^6.1.4",
-        "fflate": "^0.8.2",
-        "tinykeys": "^3.0.0"
+        "fflate": "^0.8.3",
+        "tinykeys": "^4.0.0"
     }
 }
