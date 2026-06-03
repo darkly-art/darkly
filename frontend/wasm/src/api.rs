@@ -1156,6 +1156,103 @@ impl DarklyHandle {
             .move_layer(LayerId::from_ffi(layer_id as u64), target)
     }
 
+    /// Remove every layer in `ids` in a single undo step. Returns the
+    /// number of locked layers that were skipped so the UI can toast.
+    /// Errors only when removing the editable set would leave the
+    /// document with zero layers.
+    pub fn remove_layers(&self, ids: Vec<f64>) -> Result<u32, JsError> {
+        self.flush_if_needed();
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .remove_layers(ids)
+            .map(|n| n as u32)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Move every layer in `ids` to land contiguously at the drop target,
+    /// preserving their relative panel order. Returns the count of locked
+    /// layers skipped. Errors when the drop target is one of the moved
+    /// ids or a descendant of one (self-referential drop).
+    pub fn move_layers(
+        &self,
+        ids: Vec<f64>,
+        target_type: &str,
+        target_id: f64,
+    ) -> Result<u32, JsError> {
+        self.flush_if_needed();
+        let target_id = LayerId::from_ffi(target_id as u64);
+        let target = match target_type {
+            "before" => MoveTarget::Before(target_id),
+            "after" => MoveTarget::After(target_id),
+            "into_top" => MoveTarget::IntoGroupTop(target_id),
+            "into_bottom" => MoveTarget::IntoGroupBottom(target_id),
+            _ => return Err(JsError::new("unknown move target")),
+        };
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .move_layers(ids, target)
+            .map(|n| n as u32)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Duplicate every node in `ids` in panel order. Returns the new
+    /// node ids in the same order, suitable for re-selecting the copies.
+    pub fn duplicate_nodes(&self, ids: Vec<f64>) -> Vec<f64> {
+        self.flush_if_needed();
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .duplicate_nodes(ids)
+            .into_iter()
+            .map(|id| id.to_ffi() as f64)
+            .collect()
+    }
+
+    /// Create a new group and move every layer in `ids` into it. The group
+    /// lands at the panel-topmost selected layer's slot; sources from
+    /// other parents are pulled in. Locked layers and ancestors-of-other-
+    /// sources are silently skipped. Returns the new group's id.
+    pub fn group_layers(&self, ids: Vec<f64>) -> Result<f64, JsError> {
+        self.flush_if_needed();
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .group_layers(ids)
+            .map(|id| id.to_ffi() as f64)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Bake every layer in `ids` (≥2) into one raster at the panel-topmost
+    /// selected layer's slot. Cross-parent selections are supported.
+    /// Returns the result id, or an error message if any source is locked
+    /// or fewer than two distinct ids are given.
+    pub fn merge_layers(&self, ids: Vec<f64>) -> Result<f64, JsError> {
+        self.flush_if_needed();
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .merge_layers(ids)
+            .map(|id| id.to_ffi() as f64)
+            .map_err(|e| JsError::new(&e))
+    }
+
     /// Deep-copy a layer or group, placing the duplicate directly above the
     /// source. Returns the new node's id, or `0` (a null `LayerId`) if the
     /// source id is unknown.

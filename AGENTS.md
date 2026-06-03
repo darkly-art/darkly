@@ -73,6 +73,10 @@ shared/styles/          @darkly/styles — tokens + themes (UI + website)
 website/                Astro + Starlight site (splash, docs, /demo/)
 ```
 
+### Hotkey & Config Presets
+
+Darkly's settings use a three-layer resolution order: `user → overlay (krita/ps/gimp) → defaults`. Placement rule is documented in [`crates/darkly/presets/defaults.yaml`](crates/darkly/presets/defaults.yaml)'s header; host-editor reference hotkeys live in [`docs/*-default-hotkeys.md`](docs/).
+
 ## Modularity Principle
 
 **Default to modular.** When you design anything with more than one variant — or that will plausibly grow one — the first question is "what's the unit, and how does the rest of the code stay ignorant of which one it's looking at?" That mindset applies at every scale: from a small enum where one method per variant beats a `match` at the call site, up to full subsystems with traits, registries, and per-variant files. The cost of designing modularly up front is almost always small; the cost of retrofitting after centralized branching has spread across the codebase is large. Hand-written dispatch should feel like an exception that needs justifying, not the default shape.

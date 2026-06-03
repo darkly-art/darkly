@@ -18,6 +18,20 @@ import { detectKind, isImageKind, type FileKind } from '../storage/detectKind';
 import { saveDocument } from '../storage/saveDocument';
 import { shell } from '../multi_tab/shell.svelte';
 
+/** Walk the layer tree to find a node by id. The layer tree is the
+ *  JSON shape produced by `app.refreshLayerTree`, with `children` on
+ *  groups and `modifiers` on hosts. */
+function findNodeInTree(nodes: any[], id: number): any | null {
+    for (const n of nodes) {
+        if (n.id === id) return n;
+        if (n.children) {
+            const found = findNodeInTree(n.children, id);
+            if (found) return found;
+        }
+    }
+    return null;
+}
+
 /** Strip the file extension from a picker-supplied name so we can use
  *  it as a tab title. Matches the basename-only convention already used
  *  by Save As (which seeds `set_document_name` from the chosen filename
@@ -552,6 +566,43 @@ export function registerActions() {
 
     // -- Layers --
     actions.register({
+        id: 'newLayer',
+        displayName: 'New Layer',
+        category: 'layers',
+        description: 'Add a new layer above the active one.',
+        handler: () => {
+            if (!app.handle) return;
+            const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
+            app.selectLayer(id);
+            app.refreshLayerTree();
+        },
+    });
+
+    actions.register({
+        id: 'newGroup',
+        displayName: 'New Group',
+        category: 'layers',
+        description: 'Group the selected layers together, or add an empty group if nothing is selected.',
+        handler: () => {
+            if (!app.handle) return;
+            if (app.selectedLayerIds.size > 0) {
+                try {
+                    const groupId = app.handle.group_layers(
+                        Float64Array.from([...app.selectedLayerIds]),
+                    );
+                    if (groupId) app.selectLayer(groupId);
+                } catch (e: any) {
+                    toast.show('error', e.message ?? String(e));
+                }
+            } else {
+                const id = app.handle.add_group(app.activeLayerId ?? -1);
+                app.selectLayer(id);
+            }
+            app.refreshLayerTree();
+        },
+    });
+
+    actions.register({
         id: 'toggleVisibility',
         displayName: 'Toggle Layer Visibility',
         category: 'layers',
@@ -598,9 +649,8 @@ export function registerActions() {
         id: 'deleteLayer',
         displayName: 'Delete Layer',
         category: 'layers',
-        description: 'Delete the active layer (or remove the active veil).',
-        accepts: ['layerId'],
-        handler: (ctx) => {
+        description: 'Delete the selected layers (or remove the active veil).',
+        handler: () => {
             if (!app.handle) return;
             // Veil takes priority: the trash button on the layer panel
             // doubles as veil-remove when a veil is active, so the
@@ -609,16 +659,32 @@ export function registerActions() {
                 app.removeVeil(app.activeVeilIndex);
                 return;
             }
-            const layerId = ctx.layerId ?? app.activeLayerId;
-            if (layerId == null) return;
+            // Structural rule: operate on the current selection. The
+            // right-click handler ensures the clicked row is in the
+            // selection BEFORE the menu opens, so reading from
+            // `app.selectedLayerIds` here picks up exactly what the user
+            // expects. We do NOT accept a `ctx.layerId` override — the
+            // v1 attempt did, and that's what made "Delete N Layers" act
+            // on just one layer.
+            const targets = app.selectedLayerIds.size > 0
+                ? [...app.selectedLayerIds]
+                : app.activeLayerId !== null ? [app.activeLayerId] : [];
+            if (targets.length === 0) return;
             try {
-                // Stop any associated camera MediaStream before the layer is
-                // gone. `refreshLayerTree` does the same reaping as a safety
-                // net (covers undo), but stopping eagerly turns off the
-                // browser's camera-in-use indicator immediately.
-                app.stopCameraVoid(layerId);
-                app.handle.remove_layer(layerId);
-                app.clearSelection();
+                // Stop any associated camera MediaStreams before the
+                // layers go away. `refreshLayerTree` reaps as a safety
+                // net, but stopping eagerly turns off the OS camera
+                // indicator immediately.
+                for (const id of targets) app.stopCameraVoid(id);
+                if (targets.length === 1) {
+                    app.handle.remove_layer(targets[0]);
+                    app.clearSelection();
+                } else {
+                    const skipped = app.handle.remove_layers(Float64Array.from(targets));
+                    if (skipped > 0) {
+                        toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
+                    }
+                }
                 app.refreshLayerTree();
             } catch (e: any) {
                 toast.show('error', e.message ?? String(e));
@@ -630,15 +696,24 @@ export function registerActions() {
         id: 'duplicateLayer',
         displayName: 'Duplicate Layer',
         category: 'layers',
-        description: 'Make a copy of the active layer or group directly above it.',
-        accepts: ['layerId'],
-        handler: (ctx) => {
+        description: 'Make a copy of each selected layer.',
+        handler: () => {
             if (!app.handle) return;
-            const sourceId = ctx.layerId ?? app.activeLayerId;
-            if (sourceId == null) return;
-            const newId = app.handle.duplicate_node(sourceId);
-            app.refreshLayerTree();
-            if (newId) app.selectLayer(newId);
+            const targets = app.selectedLayerIds.size > 0
+                ? [...app.selectedLayerIds]
+                : app.activeLayerId !== null ? [app.activeLayerId] : [];
+            if (targets.length === 0) return;
+            if (targets.length === 1) {
+                const newId = app.handle.duplicate_node(targets[0]);
+                app.refreshLayerTree();
+                if (newId) app.selectLayer(newId);
+            } else {
+                const newIds = Array.from(
+                    app.handle.duplicate_nodes(Float64Array.from(targets)),
+                );
+                app.refreshLayerTree();
+                if (newIds.length > 0) app.selectLayers(newIds);
+            }
         },
     });
 
@@ -646,11 +721,22 @@ export function registerActions() {
         id: 'mergeDown',
         displayName: 'Merge Down',
         category: 'layers',
-        description: 'Merge the active layer or group into the layer below it.',
-        accepts: ['layerId'],
-        handler: (ctx) => {
+        description: 'Merge the active layer into the one below it, or combine multiple selected layers into a single layer.',
+        handler: () => {
             if (!app.handle) return;
-            const sourceId = ctx.layerId ?? app.activeLayerId;
+            if (app.selectedLayerIds.size >= 2) {
+                try {
+                    const newId = app.handle.merge_layers(
+                        Float64Array.from([...app.selectedLayerIds]),
+                    );
+                    app.refreshLayerTree();
+                    if (newId) app.selectLayer(newId);
+                } catch (e: any) {
+                    toast.show('error', e.message ?? String(e));
+                }
+                return;
+            }
+            const sourceId = app.activeLayerId;
             if (sourceId == null) return;
             try {
                 const newId = app.handle.merge_down(sourceId);
@@ -680,6 +766,28 @@ export function registerActions() {
             } catch (e: any) {
                 toast.show('error', e.message ?? String(e));
             }
+        },
+    });
+
+    actions.register({
+        id: 'addMask',
+        displayName: 'Add Mask',
+        category: 'layers',
+        description: 'Add a mask modifier to the active layer or group and activate it for painting.',
+        accepts: ['layerId'],
+        handler: (ctx) => {
+            if (!app.handle) return;
+            const hostId = ctx.layerId ?? app.activeLayerId;
+            if (hostId == null) return;
+            app.handle.add_mask(hostId);
+            // `add_mask` doesn't return the new modifier id, and we want
+            // the mask to be the active paint target after creation —
+            // refresh the tree, then locate the freshly-added mask
+            // modifier on the host and select it.
+            app.refreshLayerTree();
+            const layer = findNodeInTree(app.layerTree, hostId);
+            const mask = layer?.modifiers?.find((m: any) => m.kind === 'mask');
+            if (mask) app.selectLayer(mask.id);
         },
     });
 

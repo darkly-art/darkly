@@ -39,7 +39,10 @@ hotkeys:
   # binding (clearSelectionContents) coexists via the binding-site scope.
   deleteLayer: layerPanel:Delete
   duplicateLayer: $mod+KeyJ
-  mergeDown: $mod+KeyE
+  # Photoshop's "New Layer" is Ctrl+Shift+N.
+  newLayer: $mod+Shift+KeyN
+  # mergeDown lives in defaults.yaml at the same key — all 2/3-consensus
+  # bindings consolidate there per the placement rule. No override needed.
   # Selection.
   clearSelection: $mod+KeyD
   invertSelection: $mod+Shift+KeyI

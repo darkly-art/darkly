@@ -4300,3 +4300,476 @@ fn copy_with_aa_rect_selection_has_no_transparent_border() {
         }
     }
 }
+
+// ============================================================================
+// Multi-layer structural operations
+// ============================================================================
+
+/// Three layers deleted in one batch produce a single undo step that
+/// restores them all with pixels intact.
+#[test]
+fn multi_delete_undo_redo_round_trip() {
+    let mut engine = test_engine(64, 64);
+    let l1 = engine.add_raster_layer(None);
+    let l2 = engine.add_raster_layer(None);
+    let l3 = engine.add_raster_layer(None);
+    let _keep = engine.add_raster_layer(None);
+
+    paint_at(&mut engine, l1, 8.0, 8.0, 1.0, 0.0, 0.0);
+    paint_at(&mut engine, l2, 16.0, 16.0, 0.0, 1.0, 0.0);
+    paint_at(&mut engine, l3, 24.0, 24.0, 0.0, 0.0, 1.0);
+    let pix1 = engine.test_readback_layer(l1);
+    let pix2 = engine.test_readback_layer(l2);
+    let pix3 = engine.test_readback_layer(l3);
+
+    let skipped = engine.remove_layers(vec![l1, l2, l3]).expect("remove ok");
+    assert_eq!(skipped, 0);
+    assert!(!engine.has_layer(l1));
+    assert!(!engine.has_layer(l2));
+    assert!(!engine.has_layer(l3));
+
+    engine.undo();
+    engine.render(0.0);
+    assert!(engine.has_layer(l1), "one undo must restore all three");
+    assert!(engine.has_layer(l2));
+    assert!(engine.has_layer(l3));
+
+    assert_eq!(engine.test_readback_layer(l1), pix1);
+    assert_eq!(engine.test_readback_layer(l2), pix2);
+    assert_eq!(engine.test_readback_layer(l3), pix3);
+}
+
+/// `remove_layers` skips locked layers silently and reports the skip
+/// count so the UI can toast. Unlocked layers in the same batch are
+/// still removed.
+#[test]
+fn delete_skips_locked_layers() {
+    let mut engine = test_engine(64, 64);
+    let l1 = engine.add_raster_layer(None);
+    let l2 = engine.add_raster_layer(None);
+    let _keep = engine.add_raster_layer(None);
+    engine.set_node_locked(l1, true);
+
+    let skipped = engine.remove_layers(vec![l1, l2]).expect("remove ok");
+    assert_eq!(skipped, 1, "the locked layer should be reported as skipped");
+    assert!(engine.has_layer(l1), "locked layer must remain in the tree");
+    assert!(!engine.has_layer(l2), "unlocked layer should be removed");
+}
+
+/// Refuse a batch that would leave zero layers — same invariant the
+/// single-layer `remove_layer` enforces, scaled to batch.
+#[test]
+fn delete_refuses_to_empty_document() {
+    let mut engine = test_engine(64, 64);
+    let l1 = engine.add_raster_layer(None);
+    let l2 = engine.add_raster_layer(None);
+
+    let result = engine.remove_layers(vec![l1, l2]);
+    assert!(result.is_err(), "must refuse leaving an empty document");
+    assert!(engine.has_layer(l1));
+    assert!(engine.has_layer(l2));
+}
+
+/// Selecting a group AND one of its descendants and deleting both must
+/// dedupe — the descendant comes out with its ancestor, so issuing a
+/// second `LayerRemoveAction` would corrupt the undo stack.
+#[test]
+fn delete_dedupes_ancestor_descendant() {
+    use darkly::document::MoveTarget;
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(64, 64);
+    let _keep = engine.add_raster_layer(None);
+    let group = engine.add_group(None);
+    let child = engine.add_raster_layer(None);
+    engine.move_layer(child, MoveTarget::IntoGroupTop(group));
+
+    let group_in_root = |e: &DarklyEngine| -> bool {
+        e.layer_tree().iter().any(|n| {
+            matches!(
+                n,
+                LayerInfo::Group { id, .. } if *id == group.to_ffi() as f64
+            )
+        })
+    };
+
+    let skipped = engine.remove_layers(vec![group, child]).expect("remove ok");
+    assert_eq!(skipped, 0);
+    assert!(
+        !group_in_root(&engine),
+        "group should be detached from tree"
+    );
+    assert!(!engine.has_layer(group));
+
+    // One undo must restore the group, with its child still attached.
+    // If the dedupe failed, the stack would carry two actions and a
+    // single undo would only restore one of them.
+    engine.undo();
+    engine.render(0.0);
+    assert!(group_in_root(&engine), "one undo restores the group");
+    assert!(
+        engine.has_layer(child),
+        "child must come back with the group"
+    );
+}
+
+/// Moving a non-contiguous selection into a new container preserves
+/// its panel-display order at the destination.
+#[test]
+fn multi_move_preserves_relative_order() {
+    use darkly::document::MoveTarget;
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let l1 = engine.add_raster_layer(None);
+    let _l2 = engine.add_raster_layer(None);
+    let l3 = engine.add_raster_layer(None);
+    let _keep = engine.add_raster_layer(None);
+    let g = engine.add_group(None);
+
+    engine
+        .move_layers(vec![l1, l3], MoveTarget::IntoGroupTop(g))
+        .expect("move ok");
+
+    // Pull the group out of the published tree and inspect its
+    // children. Published children are panel-order (top first); the
+    // expected post-move order inside the group has l3 above l1
+    // (matching their original relative panel order, where l3 sat
+    // above l1).
+    let tree = engine.layer_tree();
+    let group_info = tree
+        .iter()
+        .find(|n| {
+            matches!(
+                n, LayerInfo::Group { id, .. } if *id == g.to_ffi() as f64
+            )
+        })
+        .expect("group still in tree");
+    let children = match group_info {
+        LayerInfo::Group { children, .. } => children,
+        _ => panic!(),
+    };
+    let child_ids: Vec<f64> = children
+        .iter()
+        .map(|c| match c {
+            LayerInfo::Raster { id, .. } => *id,
+            LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Group { id, .. } => *id,
+        })
+        .collect();
+    assert_eq!(
+        child_ids,
+        vec![l3.to_ffi() as f64, l1.to_ffi() as f64],
+        "group's panel-order children should be [l3, l1] — preserving the \
+         original relative panel order"
+    );
+}
+
+/// `move_layers` refuses a target that's one of the moved ids, or a
+/// descendant of one — the operation would be self-referential.
+#[test]
+fn move_refuses_self_target() {
+    use darkly::document::MoveTarget;
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let group = engine.add_group(None);
+    let child = engine.add_raster_layer(None);
+    engine.move_layer(child, MoveTarget::IntoGroupTop(group));
+
+    let result = engine.move_layers(vec![group], MoveTarget::Before(child));
+    assert!(
+        result.is_err(),
+        "moving a group into its own child is nonsense"
+    );
+
+    let result = engine.move_layers(vec![child, group], MoveTarget::Before(group));
+    assert!(
+        result.is_err(),
+        "moving a selection onto a member of itself is nonsense"
+    );
+}
+
+/// `group_layers` wraps the selection in a new group at the panel-
+/// topmost selected layer's slot. The group's children should appear in
+/// the original relative panel order.
+#[test]
+fn group_layers_wraps_selection_at_topmost_slot() {
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let _keep_bottom = engine.add_raster_layer(None);
+    let l1 = engine.add_raster_layer(None);
+    let l2 = engine.add_raster_layer(None);
+    let l3 = engine.add_raster_layer(None); // panel-topmost of the selection
+    let _keep_top = engine.add_raster_layer(None);
+
+    let group_id = engine.group_layers(vec![l1, l2, l3]).expect("group ok");
+
+    let tree = engine.layer_tree();
+    let group_f = group_id.to_ffi() as f64;
+    let group_info = tree
+        .iter()
+        .find(|n| matches!(n, LayerInfo::Group { id, .. } if *id == group_f))
+        .expect("group in tree");
+
+    // Group's panel-order children are [l3, l2, l1] — preserving the
+    // original top-to-bottom order they had at root.
+    let children = match group_info {
+        LayerInfo::Group { children, .. } => children,
+        _ => panic!(),
+    };
+    let child_ids: Vec<f64> = children
+        .iter()
+        .map(|c| match c {
+            LayerInfo::Raster { id, .. } => *id,
+            LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Group { id, .. } => *id,
+        })
+        .collect();
+    assert_eq!(
+        child_ids,
+        vec![l3.to_ffi() as f64, l2.to_ffi() as f64, l1.to_ffi() as f64,],
+        "group children in panel order should preserve original relative order"
+    );
+}
+
+/// Grouping a cross-parent selection pulls each source out of its
+/// current parent and into the new group. Source groups can end up
+/// empty — that's fine; users can delete them if they want.
+#[test]
+fn group_layers_cross_parent() {
+    use darkly::document::MoveTarget;
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let outer = engine.add_group(None);
+    let inside = engine.add_raster_layer(None);
+    engine.move_layer(inside, MoveTarget::IntoGroupTop(outer));
+    let root_top = engine.add_raster_layer(None);
+
+    let group_id = engine
+        .group_layers(vec![inside, root_top])
+        .expect("cross-parent group ok");
+
+    let tree = engine.layer_tree();
+    let new_group = tree
+        .iter()
+        .find(|n| matches!(n, LayerInfo::Group { id, .. } if *id == group_id.to_ffi() as f64))
+        .expect("new group at root");
+    let children = match new_group {
+        LayerInfo::Group { children, .. } => children,
+        _ => panic!(),
+    };
+    let child_ids: Vec<f64> = children
+        .iter()
+        .map(|c| match c {
+            LayerInfo::Raster { id, .. } => *id,
+            LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Group { id, .. } => *id,
+        })
+        .collect();
+    assert_eq!(child_ids.len(), 2);
+    assert!(child_ids.contains(&(inside.to_ffi() as f64)));
+    assert!(child_ids.contains(&(root_top.to_ffi() as f64)));
+
+    // The original outer group should still exist but be empty.
+    let outer_info = tree
+        .iter()
+        .find(|n| matches!(n, LayerInfo::Group { id, .. } if *id == outer.to_ffi() as f64))
+        .expect("outer group still in tree");
+    let outer_children = match outer_info {
+        LayerInfo::Group { children, .. } => children,
+        _ => panic!(),
+    };
+    assert!(
+        outer_children.is_empty(),
+        "outer group emptied as source moved out"
+    );
+}
+
+/// Selecting a group AND one of its descendants and then grouping must
+/// dedupe — moving both would yank the descendant out of its parent.
+/// Moving just the ancestor keeps the descendant with it.
+#[test]
+fn group_layers_dedupes_ancestor_descendant() {
+    use darkly::document::MoveTarget;
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let outer = engine.add_group(None);
+    let inside = engine.add_raster_layer(None);
+    engine.move_layer(inside, MoveTarget::IntoGroupTop(outer));
+
+    let new_group = engine.group_layers(vec![outer, inside]).expect("group ok");
+
+    let tree = engine.layer_tree();
+    let new_info = tree
+        .iter()
+        .find(|n| matches!(n, LayerInfo::Group { id, .. } if *id == new_group.to_ffi() as f64))
+        .expect("new group in tree");
+    let direct_children = match new_info {
+        LayerInfo::Group { children, .. } => children,
+        _ => panic!(),
+    };
+    assert_eq!(direct_children.len(), 1, "ancestor dedup keeps only outer");
+    match &direct_children[0] {
+        LayerInfo::Group { id, children, .. } => {
+            assert_eq!(*id, outer.to_ffi() as f64);
+            assert_eq!(children.len(), 1, "outer still contains inside");
+        }
+        _ => panic!("expected Group as direct child"),
+    }
+}
+
+/// One undo step restores the entire original tree — `add_group` plus
+/// every move are bundled into one `CompoundAction`.
+#[test]
+fn group_layers_one_undo_step_restores_tree() {
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let l1 = engine.add_raster_layer(None);
+    let l2 = engine.add_raster_layer(None);
+
+    let group_id = engine.group_layers(vec![l1, l2]).expect("group ok");
+
+    let group_in_tree = |e: &DarklyEngine| -> bool {
+        e.layer_tree().iter().any(|n| {
+            matches!(
+                n,
+                LayerInfo::Group { id, .. } if *id == group_id.to_ffi() as f64
+            )
+        })
+    };
+    let layer_at_root = |e: &DarklyEngine, id: LayerId| -> bool {
+        e.layer_tree().iter().any(|n| match n {
+            LayerInfo::Raster { id: x, .. } => *x == id.to_ffi() as f64,
+            _ => false,
+        })
+    };
+
+    assert!(group_in_tree(&engine), "group at root after creation");
+    assert!(!layer_at_root(&engine, l1), "l1 moved into group");
+    assert!(!layer_at_root(&engine, l2), "l2 moved into group");
+
+    engine.undo();
+    engine.render(0.0);
+
+    assert!(!group_in_tree(&engine), "group removed by single undo");
+    assert!(layer_at_root(&engine, l1), "l1 back at root");
+    assert!(layer_at_root(&engine, l2), "l2 back at root");
+}
+
+/// Locked layers in the selection are silently skipped — they stay
+/// where they are, and the unlocked layers go into the new group.
+#[test]
+fn group_layers_skips_locked() {
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let l1 = engine.add_raster_layer(None);
+    let l2 = engine.add_raster_layer(None);
+    engine.set_node_locked(l1, true);
+
+    let group_id = engine
+        .group_layers(vec![l1, l2])
+        .expect("group ok with one editable");
+
+    use darkly::engine::types::LayerInfo;
+    let tree = engine.layer_tree();
+    // l1 stays at root (still locked, untouched).
+    let l1_at_root = tree.iter().any(|n| match n {
+        LayerInfo::Raster { id, .. } => *id == l1.to_ffi() as f64,
+        _ => false,
+    });
+    assert!(l1_at_root, "locked layer stayed put at root");
+    // The new group contains only l2.
+    let new_info = tree
+        .iter()
+        .find(|n| matches!(n, LayerInfo::Group { id, .. } if *id == group_id.to_ffi() as f64))
+        .expect("new group in tree");
+    let direct = match new_info {
+        LayerInfo::Group { children, .. } => children,
+        _ => panic!(),
+    };
+    assert_eq!(direct.len(), 1);
+}
+
+/// If every source is locked, error out — there's nothing to group.
+#[test]
+fn group_layers_errors_when_all_locked() {
+    let mut engine = test_engine(32, 32);
+    let _keep = engine.add_raster_layer(None);
+    let l1 = engine.add_raster_layer(None);
+    engine.set_node_locked(l1, true);
+
+    let result = engine.group_layers(vec![l1]);
+    assert!(result.is_err(), "all-locked selection must error");
+}
+
+/// Regression: each duplicate must land directly above its own
+/// source, NOT all stacked at the top of root. With sources [A, B, C]
+/// the final children order is [A, A_dup, B, B_dup, C, C_dup].
+#[test]
+fn multi_duplicate_each_lands_above_its_source() {
+    use darkly::engine::types::LayerInfo;
+    let mut engine = test_engine(32, 32);
+    let _keep_bottom = engine.add_raster_layer(None);
+    let a = engine.add_raster_layer(None);
+    let b = engine.add_raster_layer(None);
+    let c = engine.add_raster_layer(None);
+    engine.set_layer_name(a, "A");
+    engine.set_layer_name(b, "B");
+    engine.set_layer_name(c, "C");
+
+    let news = engine.duplicate_nodes(vec![a, b, c]);
+    assert_eq!(news.len(), 3);
+
+    // Pull the panel-order ids from the published tree. layer_tree() is
+    // top-of-stack first; reverse to read bottom-first for the children
+    // sequence we want to assert on.
+    let mut tree_ids: Vec<f64> = engine
+        .layer_tree()
+        .iter()
+        .map(|n| match n {
+            LayerInfo::Raster { id, .. } => *id,
+            LayerInfo::Void { id, .. } => *id,
+            LayerInfo::Group { id, .. } => *id,
+        })
+        .collect();
+    tree_ids.reverse();
+
+    let pos = |id: darkly::layer::LayerId| {
+        tree_ids
+            .iter()
+            .position(|&x| x == id.to_ffi() as f64)
+            .expect("in tree")
+    };
+    let (pa, pb, pc) = (pos(a), pos(b), pos(c));
+    let (pad, pbd, pcd) = (pos(news[0]), pos(news[1]), pos(news[2]));
+
+    // Each duplicate sits immediately above its own source.
+    assert_eq!(pad, pa + 1, "A_dup should be at A+1, not at the top");
+    assert_eq!(pbd, pb + 1, "B_dup should be at B+1");
+    assert_eq!(pcd, pc + 1, "C_dup should be at C+1");
+}
+
+/// Duplicating a batch returns one new id per source in matching
+/// order, and a single undo step removes them all.
+#[test]
+fn multi_duplicate_returns_new_ids_one_undo() {
+    let mut engine = test_engine(64, 64);
+    let l1 = engine.add_raster_layer(None);
+    let l2 = engine.add_raster_layer(None);
+
+    let news = engine.duplicate_nodes(vec![l1, l2]);
+    assert_eq!(news.len(), 2);
+    for new in &news {
+        assert!(engine.has_layer(*new));
+    }
+
+    engine.undo();
+    engine.render(0.0);
+    for new in news {
+        assert!(
+            !engine.has_layer(new),
+            "one undo must remove every duplicate"
+        );
+    }
+}

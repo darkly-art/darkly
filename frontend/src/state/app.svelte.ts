@@ -149,8 +149,16 @@ export class DarklyInstance {
         this.requestFrame();
     }
 
-    // Active layer
+    // Active layer — the "primary" layer within the selection. Drives the
+    // properties panel, paint target, shift-click anchor, and per-row
+    // emphasis. Always a member of `selectedLayerIds` when that set is
+    // non-empty; null iff the set is empty.
     activeLayerId = $state<number | null>(null);
+
+    // Multi-selection set. Membership is mutated only via `selectLayer`,
+    // `toggleLayer`, `extendSelectionTo`, `selectLayers`, and
+    // `clearSelection` so the invariant with `activeLayerId` holds.
+    selectedLayerIds = $state<Set<number>>(new Set());
 
     // Active veil. Mutually exclusive with activeLayerId — the right
     // sidebar's properties pane shows the props of whichever is non-null.
@@ -213,16 +221,175 @@ export class DarklyInstance {
             this.requestFrame();
         }
         this.activeLayerId = id;
+        this.selectedLayerIds = id === null ? new Set() : new Set([id]);
         this.activeVeilIndex = null;
+    }
+
+    /** Ctrl/Cmd-click router. Adds `id` if absent, removes if present.
+     *  When removing the active id, demotes `activeLayerId` to the next
+     *  remaining selected id in panel order (or null when empty). */
+    toggleLayer(id: number) {
+        const next = new Set(this.selectedLayerIds);
+        if (next.has(id)) {
+            next.delete(id);
+            if (this.activeLayerId === id) {
+                this.activeLayerId = this.firstInTreeOrder(next);
+            }
+            this.selectedLayerIds = next;
+        } else {
+            next.add(id);
+            this.selectedLayerIds = next;
+            this.activeLayerId = id;
+        }
+        this.activeVeilIndex = null;
+    }
+
+    /** Shift-click router. Selects the inclusive range from the current
+     *  active layer (anchor) to `id` in panel order. With no anchor,
+     *  degenerates to a plain select. */
+    extendSelectionTo(id: number) {
+        if (this.activeLayerId === null) {
+            this.selectLayer(id);
+            return;
+        }
+        const order = this.flattenedVisibleIds();
+        const anchorIdx = order.indexOf(this.activeLayerId);
+        const targetIdx = order.indexOf(id);
+        if (anchorIdx < 0 || targetIdx < 0) {
+            this.selectLayer(id);
+            return;
+        }
+        const [lo, hi] = anchorIdx <= targetIdx
+            ? [anchorIdx, targetIdx]
+            : [targetIdx, anchorIdx];
+        this.selectedLayerIds = new Set(order.slice(lo, hi + 1));
+        // Active follows the click so subsequent shift-clicks extend from
+        // where the user is currently pointing — standard Photoshop.
+        this.activeLayerId = id;
+        this.activeVeilIndex = null;
+    }
+
+    /** Replace the multi-selection with `ids`. The last id becomes
+     *  active (matches plain-click semantics: focus follows the most
+     *  recent touch). Used by batch ops like duplicate that want the
+     *  user to land on the freshly-created layers. */
+    selectLayers(ids: number[]) {
+        if (ids.length === 0) {
+            this.clearSelection();
+            return;
+        }
+        if (this.isolatedNodeId !== null) {
+            this.handle?.set_isolated_node(0);
+            this.isolatedNodeId = null;
+            this.requestFrame();
+        }
+        this.selectedLayerIds = new Set(ids);
+        this.activeLayerId = ids[ids.length - 1];
+        this.activeVeilIndex = null;
+    }
+
+    /** True iff `id` is in the multi-selection. */
+    isSelected(id: number): boolean {
+        return this.selectedLayerIds.has(id);
+    }
+
+    /** Layer-panel row click router. Plain → select, ctrl/cmd → toggle,
+     *  shift → extend range. Both LayerItem and LayerGroup call this so
+     *  the modifier handling stays in one place. */
+    handleLayerRowClick(id: number, e: MouseEvent) {
+        if (e.shiftKey) this.extendSelectionTo(id);
+        else if (e.ctrlKey || e.metaKey) this.toggleLayer(id);
+        else this.selectLayer(id);
+    }
+
+    /** Walk the visible tree depth-first, returning every clickable node
+     *  id in panel-top-to-panel-bottom order. Children of collapsed
+     *  groups are skipped (the user can't see them, so shift-click
+     *  shouldn't reach them). */
+    private flattenedVisibleIds(): number[] {
+        const out: number[] = [];
+        const walk = (nodes: any[]) => {
+            for (const n of nodes) {
+                if (n?.id === undefined) continue;
+                out.push(n.id);
+                if (n.type === 'group' && !n.collapsed && Array.isArray(n.children)) {
+                    walk(n.children);
+                }
+            }
+        };
+        walk(this.layerTree);
+        return out;
+    }
+
+    /** Pick the first id in `set` that appears in panel order. Returns
+     *  null when the set is empty or none of its ids are still in the
+     *  tree. Caller is the active-layer demotion path for ctrl-click. */
+    private firstInTreeOrder(set: Set<number>): number | null {
+        if (set.size === 0) return null;
+        for (const id of this.flattenedVisibleIds()) {
+            if (set.has(id)) return id;
+        }
+        return null;
+    }
+
+    /** Reconcile `selectedLayerIds` and `activeLayerId` against the latest
+     *  layer tree. Ids that no longer exist (deleted, undone, replaced by a
+     *  bake result, etc.) drop out; if the active id disappeared, demote
+     *  to the next remaining selected id in panel order or null. Called
+     *  from `refreshLayerTree` so batch-delete / undo / cross-tab swap
+     *  fallout is handled in one place.
+     *
+     *  Takes the tree as a parameter (rather than reading `this.layerTree`)
+     *  so this code path stays write-only on `layerTree` — reading it here
+     *  would tie the LayerPanel's `$effect` to the very state the method
+     *  just wrote, looping Svelte's update guard. Same pattern as
+     *  `reconcileCameraSources(next)`. */
+    private pruneSelectionAgainstTree(tree: any[]) {
+        const alive = new Set<number>();
+        const visibleOrder: number[] = [];
+        const walk = (nodes: any[]) => {
+            for (const n of nodes) {
+                if (n?.id === undefined) continue;
+                alive.add(n.id);
+                visibleOrder.push(n.id);
+                if (Array.isArray(n.modifiers)) {
+                    for (const m of n.modifiers) {
+                        if (m?.id !== undefined) alive.add(m.id);
+                    }
+                }
+                if (n.type === 'group' && !n.collapsed && Array.isArray(n.children)) {
+                    walk(n.children);
+                }
+            }
+        };
+        walk(tree);
+
+        let mutated = false;
+        const nextSelected = new Set<number>();
+        for (const id of this.selectedLayerIds) {
+            if (alive.has(id)) nextSelected.add(id);
+            else mutated = true;
+        }
+        if (mutated) this.selectedLayerIds = nextSelected;
+
+        if (this.activeLayerId !== null && !alive.has(this.activeLayerId)) {
+            let replacement: number | null = null;
+            for (const id of visibleOrder) {
+                if (nextSelected.has(id)) { replacement = id; break; }
+            }
+            this.activeLayerId = replacement;
+        }
     }
 
     selectVeil(index: number | null) {
         this.activeVeilIndex = index;
         this.activeLayerId = null;
+        this.selectedLayerIds = new Set();
     }
 
     clearSelection() {
         this.activeLayerId = null;
+        this.selectedLayerIds = new Set();
         this.activeVeilIndex = null;
     }
 
@@ -446,6 +613,7 @@ export class DarklyInstance {
             // enclosing effect's dependency set — otherwise the write loops
             // back through the effect.
             this.reconcileCameraSources(next);
+            this.pruneSelectionAgainstTree(next);
             this.layerTree = next;
             // Schedule a render frame: callers invoke this after layer
             // mutations (undo/redo, add/remove, drag/drop, etc.), and

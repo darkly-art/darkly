@@ -91,7 +91,7 @@
         inst.onHandleReady = (handle) => {
             const bg = handle.add_raster_layer(-1);
             handle.fill_background_color(bg, new Uint8Array(rgba));
-            inst.activeLayerId = bg;
+            inst.selectLayer(bg);
             app.refreshLayerTree();
             app.requestFrame();
         };
@@ -114,7 +114,7 @@
             const inst = shell.open(undefined, { width: w, height: h });
             inst.onHandleReady = (handle) => {
                 const bg = handle.paste_image(w, h, clip.rgba, 0, 0, -1);
-                inst.activeLayerId = bg;
+                inst.selectLayer(bg);
                 app.refreshLayerTree();
                 app.requestFrame();
             };

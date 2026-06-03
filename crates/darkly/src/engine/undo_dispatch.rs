@@ -7,7 +7,8 @@
 //! own.
 
 use super::DarklyEngine;
-use crate::undo::{PropertyAction, UndoAction};
+use crate::layer::LayerId;
+use crate::undo::{CompoundAction, PropertyAction, UndoAction};
 
 impl DarklyEngine {
     /// Push a completed undo action. Runs `on_evict` on every action that
@@ -33,6 +34,30 @@ impl DarklyEngine {
         let evicted = self.undo_stack.coalesce_property(&mut self.doc, action);
         for mut e in evicted {
             e.on_evict(&mut self.compositor);
+        }
+    }
+
+    /// Run `op` for each id, collecting any returned undo actions into one
+    /// [`CompoundAction`] and pushing the bundle as a single undo step. The
+    /// closure does the per-id mutation directly (so per-id state can be
+    /// snapshotted between iterations — e.g. `position_in_parent` after a
+    /// prior id was detached) and returns `Some(action)` if the op produced
+    /// any reversible work, `None` if it skipped that id.
+    ///
+    /// No undo entry is pushed when every id was skipped — keeps the stack
+    /// clean when, say, every requested removal hit a locked layer.
+    pub(crate) fn batched_undo<F>(&mut self, ids: &[LayerId], mut op: F)
+    where
+        F: FnMut(&mut Self, LayerId) -> Option<Box<dyn UndoAction>>,
+    {
+        let mut actions = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(a) = op(self, id) {
+                actions.push(a);
+            }
+        }
+        if !actions.is_empty() {
+            self.push_undo(Box::new(CompoundAction::new(actions)));
         }
     }
 
