@@ -40,7 +40,10 @@ hotkeys:
   isolateLayer: KeyI
   deleteLayer: Shift+Delete
   duplicateLayer: $mod+KeyJ
-  mergeDown: $mod+KeyE
+  # Krita's "Add Paint Layer" is bound to Insert (host docs line 187).
+  newLayer: Insert
+  # mergeDown lives in defaults.yaml at the same key — all 2/3-consensus
+  # bindings consolidate there per the placement rule. No override needed.
   # Selection.
   clearSelection: $mod+Shift+KeyA
   invertSelection: $mod+Shift+KeyI

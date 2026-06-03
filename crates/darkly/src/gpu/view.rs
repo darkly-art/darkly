@@ -2,9 +2,8 @@
 //! Compositing happens in canvas-pixel space. This transform is applied
 //! only in the present shader to map canvas pixels to screen pixels.
 
-/// Fallback workspace color (matches the legacy hardcoded value previously
-/// baked into `present.wgsl`). The frontend pushes the theme-sourced color
-/// via `set_viewport_bg()` once the UI loads.
+/// Fallback workspace color used until the frontend pushes the theme-sourced
+/// color via `set_viewport_bg()`.
 pub const DEFAULT_WORKSPACE_BG: [f32; 4] = [0.11, 0.11, 0.11, 1.0];
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]

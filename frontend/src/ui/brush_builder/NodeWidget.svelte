@@ -1,26 +1,30 @@
 <script lang="ts">
+    import { getContext } from 'svelte';
     import { brushGraph, type NodeInstance, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
     import PortWidget from './PortWidget.svelte';
     import CurveEditor from '../CurveEditor.svelte';
     import NodePreview from './NodePreview.svelte';
+    import type { NodeCanvasContext } from './NodeCanvas.svelte';
 
     interface Props {
         node: NodeInstance;
-        zoom: number;
     }
 
-    let { node, zoom }: Props = $props();
+    let { node }: Props = $props();
+
+    const { coords } = getContext<NodeCanvasContext>('node-canvas');
 
     let isSelected = $derived(brushGraph.selectedNode === node.id);
     let outputPorts = $derived(node.ports.filter(p => p.dir === 'Output'));
     let position = $derived(brushGraph.nodePositions[node.id] ?? [0, 0]);
-    /** Any GPU node that produces a texture output gets an in-node preview
-     *  thumbnail. The engine<< Updated upstream's `brush_node_preview` walks the predecessor
-     *  closure of the node and renders it through the existing async
-     *  preview path; this gate keeps us from showing previews for nodes
-     *  whose output isn't visualisable (Scalar, Vec2, etc.). */
-    let hasTextureOutput = $derived(outputPorts.some(p => p.wire_type === 'Texture'));
+    /** Nodes opt in to an in-card preview thumbnail by type id. The
+     *  engine's `brush_node_preview` matches on the same id and returns
+     *  PNG bytes (or an empty Vec, which the NodePreview component
+     *  treats as "no preview"). Add new entries here as their backend
+     *  arm in `brush_graph.rs::brush_node_preview` lands. */
+    const PREVIEWABLE_NODE_TYPES = new Set(['noise']);
+    let isPreviewable = $derived(PREVIEWABLE_NODE_TYPES.has(node.type_id));
 
     // Node type info for display name and params.
     let typeInfo = $derived(brushGraph.getNodeType(node.type_id));
@@ -74,9 +78,8 @@
 
     function onNodeMove(e: PointerEvent) {
         if (!dragging) return;
-        const dx = (e.clientX - dragStartX) / zoom;
-        const dy = (e.clientY - dragStartY) / zoom;
-        brushGraph.moveNode(node.id, nodeStartX + dx, nodeStartY + dy);
+        const d = coords.clientDeltaToGraph(e.clientX - dragStartX, e.clientY - dragStartY);
+        brushGraph.moveNode(node.id, nodeStartX + d.x, nodeStartY + d.y);
     }
 
     function onNodeUp(e: PointerEvent) {
@@ -108,8 +111,8 @@
 
     function paramScrubFraction(e: PointerEvent): number {
         if (!scrubEl) return 0;
-        const rect = scrubEl.getBoundingClientRect();
-        return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const local = coords.clientToElementLocal(scrubEl, e.clientX, e.clientY);
+        return Math.max(0, Math.min(1, local.x / scrubEl.clientWidth));
     }
 
     function paramValueFromFraction(frac: number, def: any): number {
@@ -409,7 +412,7 @@
             </div>
         {/if}
 
-        {#if hasTextureOutput}
+        {#if isPreviewable}
             <NodePreview nodeId={node.id} width={96} height={96} />
         {/if}
     </div>

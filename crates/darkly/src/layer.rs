@@ -310,6 +310,19 @@ impl LayerNode {
     pub fn type_id(&self) -> &'static str {
         self.kind().type_id
     }
+
+    /// Composite this node into its parent group's accumulators. The
+    /// variant dispatch is owned by `LayerNode` so the compositor's child
+    /// walk never re-introduces a centralised match on node kind. Each arm
+    /// delegates back through `ctx` into a compositor-private method that
+    /// owns the GPU work — variant *knows itself*, compositor *does the
+    /// work*.
+    pub fn compose_into(&self, ctx: &mut crate::gpu::compositor::CompositionContext<'_>) {
+        match self {
+            LayerNode::Layer(layer) => ctx.compose_layer(layer),
+            LayerNode::Group(group) => ctx.compose_group(group),
+        }
+    }
 }
 
 pub enum Layer {

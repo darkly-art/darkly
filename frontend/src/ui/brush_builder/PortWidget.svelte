@@ -1,8 +1,8 @@
 <script lang="ts">
-    import { onMount, onDestroy, getContext } from 'svelte';
+    import { getContext, untrack } from 'svelte';
     import { brushGraph, WIRE_COLORS, type PortDef } from '../../state/brush_graph.svelte';
     import { app } from '../../state/app.svelte';
-    import type { PortRegistration } from './NodeCanvas.svelte';
+    import type { NodeCanvasContext } from './NodeCanvas.svelte';
 
     interface Props {
         nodeId: number;
@@ -32,23 +32,34 @@
     );
 
     // --- Port offset registration ---
-    const { register, unregister } = getContext<PortRegistration>('port-registration');
-    let dotEl = $state<HTMLDivElement>();
+    const { register, unregister, coords } = getContext<NodeCanvasContext>('node-canvas');
+    // Non-reactive ref: bind:this re-runs on every render, and reading a
+    // reactive dotEl from within $effect would re-fire the effect, which
+    // mutates portVersion → re-render → rebind → infinite loop.
+    let dotEl: HTMLDivElement | undefined;
 
-    onMount(() => {
-        // Measure offset of dot center relative to the ancestor node-widget.
-        const nodeEl = dotEl.closest('[data-node-id]') as HTMLElement;
-        if (!nodeEl) return;
-        const dotRect = dotEl.getBoundingClientRect();
-        const nodeRect = nodeEl.getBoundingClientRect();
-        register(nodeId, port.name, port.dir, {
-            x: (dotRect.left + dotRect.width / 2) - nodeRect.left,
-            y: (dotRect.top + dotRect.height / 2) - nodeRect.top,
+    // Re-register whenever `port.name` changes. The `{#each inputPorts}` in
+    // NodeWidget isn't keyed, so when `visible_when` hides/shows a sibling
+    // port, Svelte rebinds existing instances by index — every reused
+    // instance from the hidden port's index downward gets a *different*
+    // `port` (and a different DOM row). Tracking `port.name` therefore
+    // catches every layout shift: an inserted/removed port always changes
+    // `port.name` on at least every index from the change onward.
+    $effect(() => {
+        // Tracked reads — re-fire when the port identity changes.
+        const portName = port.name;
+        const portDir = port.dir;
+        // The measurement + side-effect are wrapped in `untrack` so the
+        // `zoom` read inside `coords.elementCenterInParent` and the
+        // `portVersion` mutation inside `register` don't feed back into
+        // this effect's dep set (which would cause a re-render loop).
+        untrack(() => {
+            if (!dotEl) return;
+            const nodeEl = dotEl.closest('[data-node-id]') as HTMLElement;
+            if (!nodeEl) return;
+            register(nodeId, portName, portDir, coords.elementCenterInParent(dotEl, nodeEl));
         });
-    });
-
-    onDestroy(() => {
-        unregister(nodeId, port.name, port.dir);
+        return () => untrack(() => unregister(nodeId, portName, portDir));
     });
 
     function onPointerDown(e: PointerEvent) {
@@ -109,8 +120,8 @@
 
     /** Normalized position (0–1) from a pointer event relative to the slider bar. */
     function sliderFraction(e: PointerEvent): number {
-        const rect = sliderEl.getBoundingClientRect();
-        return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        const local = coords.clientToElementLocal(sliderEl, e.clientX, e.clientY);
+        return Math.max(0, Math.min(1, local.x / sliderEl.clientWidth));
     }
 
     /** Quantize a value to multiples of `port.step` from `port.min`. Returns

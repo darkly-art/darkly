@@ -82,10 +82,22 @@ impl DarklyEngine {
             self.doc.width as f32,
             self.doc.height as f32,
         );
+        let rotation_changed = self.view_rotation != rotation;
         self.view_transform = transform;
+        self.view_rotation = rotation;
         self.compositor
             .update_view_transform(&self.gpu.queue, &transform);
         self.compositor.mark_needs_present();
+        // The cursor-preview mask was baked with the old view rotation;
+        // re-render at the cached hover pose so the on-canvas silhouette
+        // matches what the next stroke would actually paint. No-op when
+        // no hover is active (no cached pose) or the rotation didn't
+        // change (zoom / pan / mirror don't affect stamp orientation).
+        if rotation_changed {
+            if let Some(pose) = self.last_cursor_preview_pose {
+                self.regenerate_brush_cursor_preview_with_pen_internal(pose);
+            }
+        }
     }
 
     pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {
@@ -364,7 +376,7 @@ impl DarklyEngine {
                 // Tell the frontend "fresh thumbnail bytes available".
                 self.thumbnail_version = self.thumbnail_version.wrapping_add(1);
             }
-            ReadbackContext::BrushEditorPreview {
+            ReadbackContext::BrushStrokePreview {
                 width,
                 height,
                 graph_version,
@@ -384,7 +396,7 @@ impl DarklyEngine {
                     );
                     let png_bytes = encode_rgba_as_png(&framed, tw, th);
                     if !png_bytes.is_empty() {
-                        self.brush_editor_preview_cache = Some(png_bytes);
+                        self.brush_stroke_preview_cache = Some(png_bytes);
                     }
                 }
             }
@@ -409,6 +421,22 @@ impl DarklyEngine {
                 let png_bytes = frame_dab_thumbnail(&pixels, width, height, self.preview_theme_bg);
                 if !png_bytes.is_empty() {
                     self.brush_library.set_dab_thumbnail(&name, png_bytes);
+                }
+            }
+            ReadbackContext::BrushCursorPreviewScale {
+                topology_version,
+                width,
+                height,
+            } => {
+                // Drop stale results — a later compile may have already
+                // queued its own readback, and the one in hand is no
+                // longer descriptive of the active brush.
+                if topology_version == self.brush_topology_version() {
+                    let scale = cursor_preview_scale_from_mask(&pixels, width, height);
+                    self.compositor
+                        .tool_overlay_mut()
+                        .set_preview_coverage_scale(scale);
+                    self.compositor.mark_needs_present();
                 }
             }
             ReadbackContext::UndoRegionReady { cell } => {
@@ -687,7 +715,7 @@ impl DarklyEngine {
             self.compositor
                 .ensure_layer(&self.gpu.device, &self.gpu.queue, layer);
             let blend = layer.blend();
-            self.compositor.update_layer_uniforms_full(
+            self.compositor.update_layer_uniforms(
                 &self.gpu.queue,
                 layer.id(),
                 blend.opacity,
@@ -893,6 +921,20 @@ fn generate_rgba_thumbnail_from_pixels(
 /// place its stamp.
 const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
 
+/// Target mean luminance the cursor-preview mask gets normalized to,
+/// expressed in the 0..1 range the GPU mask uses (130/255 ≈ 0.51).
+/// Sized to roughly match what a natural full-coverage brush like
+/// Ink Pen produces unboosted, so attenuated brushes (Charcoal: paper
+/// texture × shape masks → ~0.2 unboosted) land at the same apparent
+/// visibility under the cursor. Multiplier-only against an empty
+/// background — preserves true zero coverage exactly; the shader
+/// saturates highlights at 1.0.
+const CURSOR_PREVIEW_TARGET_COVERAGE: f32 = 130.0 / 255.0;
+
+/// Cap on the boost so a near-empty preview mask can't get an extreme
+/// scale that amplifies noise.
+const CURSOR_PREVIEW_MAX_BOOST: f32 = 8.0;
+
 /// Frame a rendered dab into a centered, content-fitted PNG.
 ///
 /// Generic across every brush — no per-brush logic. The procedure:
@@ -909,7 +951,7 @@ const DAB_THUMBNAIL_OUTPUT_SIZE: u32 = 96;
 /// re-centers it. Empty renders (degenerate brushes, or a scatter that
 /// hit fully off-canvas) fall through to a centered square of the bg,
 /// which the picker shows as a flat tile.
-fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> Vec<u8> {
+pub fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> Vec<u8> {
     let expected = (width * height * 4) as usize;
     if pixels.len() < expected {
         log::error!(
@@ -1005,6 +1047,85 @@ fn frame_dab_thumbnail(pixels: &[u8], width: u32, height: u32, bg: [f32; 4]) -> 
         return Vec::new();
     }
     out
+}
+
+/// Compute the coverage scale to apply to the cursor-preview overlay
+/// from a freshly-rendered preview-mask readback. Same content-bbox +
+/// 10% margin shape as `frame_dab_thumbnail` (so attenuated brushes
+/// hit the same target mean coverage they hit pre-removal) — only the
+/// post-process changes: instead of multiplying RGB bytes we hand the
+/// scale to the overlay shader as a uniform.
+///
+/// `pixels` is the unpadded RGBA8 readback of the preview mask
+/// (`width × height × 4` bytes). The runner forces `paint_color.color`
+/// to white in the preview path, so alpha and red channels carry the
+/// same coverage signal; we read alpha as the canonical one.
+pub(crate) fn cursor_preview_scale_from_mask(pixels: &[u8], width: u32, height: u32) -> f32 {
+    let expected = (width * height * 4) as usize;
+    if pixels.len() < expected || width == 0 || height == 0 {
+        return 1.0;
+    }
+
+    // Content bbox via the same alpha tolerance the bake's bg detection
+    // uses (matched against the bake's clear-to-zero, which makes the
+    // "no content" pixel value 0 exactly).
+    const TOLERANCE: u8 = 12;
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0u32;
+    let mut max_y = 0u32;
+    let mut found = false;
+    for y in 0..height {
+        for x in 0..width {
+            let alpha = pixels[((y * width + x) * 4 + 3) as usize];
+            if alpha > TOLERANCE {
+                if x < min_x {
+                    min_x = x;
+                }
+                if y < min_y {
+                    min_y = y;
+                }
+                if x > max_x {
+                    max_x = x;
+                }
+                if y > max_y {
+                    max_y = y;
+                }
+                found = true;
+            }
+        }
+    }
+    if !found {
+        return 1.0;
+    }
+
+    let bbox_w = max_x - min_x + 1;
+    let bbox_h = max_y - min_y + 1;
+    let raw_side = bbox_w.max(bbox_h);
+    let margin = (raw_side / 10).max(2);
+    let side = (raw_side + 2 * margin).min(width.min(height));
+    let cx = min_x + bbox_w / 2;
+    let cy = min_y + bbox_h / 2;
+    let half = side / 2;
+    let crop_x = cx.saturating_sub(half).min(width - side);
+    let crop_y = cy.saturating_sub(half).min(height - side);
+
+    let mut sum: u64 = 0;
+    let mut count: u64 = 0;
+    for y in crop_y..(crop_y + side) {
+        for x in crop_x..(crop_x + side) {
+            sum += pixels[((y * width + x) * 4 + 3) as usize] as u64;
+            count += 1;
+        }
+    }
+    if count == 0 {
+        return 1.0;
+    }
+    let mean = (sum as f32 / count as f32) / 255.0;
+    if mean <= 0.0 || mean >= CURSOR_PREVIEW_TARGET_COVERAGE {
+        return 1.0;
+    }
+    (CURSOR_PREVIEW_TARGET_COVERAGE / mean).min(CURSOR_PREVIEW_MAX_BOOST)
 }
 
 /// Frame a rendered stroke into the cache aspect ratio and resize.
@@ -1128,8 +1249,10 @@ fn frame_stroke_thumbnail(
 }
 
 /// Encode an RGBA8 buffer as a PNG. Used for baking brush thumbnails —
-/// the PNG goes into the `.darkly-brush` ZIP as `preview.png`.
-fn encode_rgba_as_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
+/// the PNG goes into the `.darkly-brush` ZIP as `preview.png`. Also
+/// reused by per-node CPU-rendered previews (the brush builder's
+/// in-card thumbnails).
+pub(crate) fn encode_rgba_as_png(pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
     let expected = (width * height * 4) as usize;
     if pixels.len() < expected {
         log::error!(

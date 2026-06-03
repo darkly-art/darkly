@@ -1,9 +1,9 @@
 //! `.darkly-brush` bundle format — ZIP archive containing a JSON envelope
-//! and optional binary resources (brush tips, textures).
+//! and an optional pre-baked thumbnail.
 //!
 //! Format:
-//!   brush.json         — metadata + serialized node graph
-//!   resources/<name>   — binary assets referenced by the graph
+//!   brush.json   — metadata + serialized node graph
+//!   preview.png  — optional pre-baked thumbnail
 
 use std::io::{Cursor, Read, Write};
 
@@ -13,15 +13,10 @@ use crate::brush::stabilizer::StabilizerConfig;
 use crate::brush::wire::BrushWireType;
 use crate::nodegraph::Graph;
 
-/// Current format version. Loaders reject any archive whose stored
-/// version is greater than this; older versions are not supported.
-pub const FORMAT_VERSION: u32 = 1;
-
 /// Metadata for a brush — the JSON-serialized envelope inside a
 /// `.darkly-brush` archive.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct BrushMetadata {
-    pub format_version: u32,
     pub name: String,
     #[serde(default = "default_engine_version")]
     pub engine_version: String,
@@ -37,35 +32,12 @@ pub struct BrushMetadata {
     /// Stabilizer configuration.  Default = no stabilization (pass-through).
     #[serde(default)]
     pub stabilizer: StabilizerConfig,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub resources: Vec<BrushResourceMeta>,
 }
 
-/// Metadata for a resource embedded in the ZIP.
-/// The actual bytes live in `Brush::resource_data`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BrushResourceMeta {
-    pub name: String,
-    pub kind: ResourceKind,
-    /// Path inside the ZIP (e.g. "resources/tip.png").
-    pub path: String,
-}
-
-/// Kind of embedded resource.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResourceKind {
-    BrushTip,
-    Pattern,
-}
-
-/// A fully-loaded brush with its resource data in memory — the unit of
-/// save/load/share.
+/// A fully-loaded brush — the unit of save/load/share.
 #[derive(Clone, Debug)]
 pub struct Brush {
     pub metadata: BrushMetadata,
-    /// Resource data keyed by the `name` field in `BrushResourceMeta`.
-    pub resource_data: Vec<(String, Vec<u8>)>,
     /// Optional pre-rendered preview PNG, stored in the ZIP as
     /// `preview.png`. Produced by the async thumbnail bake on brush save
     /// and consumed by the brush picker grid. `None` for freshly-saved
@@ -78,10 +50,9 @@ fn default_engine_version() -> String {
 }
 
 impl BrushMetadata {
-    /// Create metadata from just a graph (no resources).
+    /// Create metadata from just a graph.
     pub fn from_graph(name: impl Into<String>, graph: Graph<BrushWireType>) -> Self {
         BrushMetadata {
-            format_version: FORMAT_VERSION,
             name: name.into(),
             engine_version: default_engine_version(),
             category: String::new(),
@@ -90,17 +61,15 @@ impl BrushMetadata {
             tags: Vec::new(),
             graph,
             stabilizer: StabilizerConfig::default(),
-            resources: Vec::new(),
         }
     }
 }
 
 impl Brush {
-    /// Create a brush from metadata with no resources.
-    pub fn without_resources(metadata: BrushMetadata) -> Self {
+    /// Create a brush from metadata.
+    pub fn from_metadata(metadata: BrushMetadata) -> Self {
         Brush {
             metadata,
-            resource_data: Vec::new(),
             thumbnail_png: None,
         }
     }
@@ -127,23 +96,6 @@ impl Brush {
             .map_err(|e| format!("zip write error: {e}"))?;
         zip.write_all(json.as_bytes())
             .map_err(|e| format!("zip write error: {e}"))?;
-
-        // Write resources
-        for (name, data) in &self.resource_data {
-            // Find the matching metadata to get the ZIP path.
-            let path = self
-                .metadata
-                .resources
-                .iter()
-                .find(|r| r.name == *name)
-                .map(|r| r.path.clone())
-                .unwrap_or_else(|| format!("resources/{name}"));
-
-            zip.start_file(&path, options)
-                .map_err(|e| format!("zip write error: {e}"))?;
-            zip.write_all(data)
-                .map_err(|e| format!("zip write error: {e}"))?;
-        }
 
         // Optional pre-baked preview PNG for the brush picker grid.
         if let Some(png) = &self.thumbnail_png {
@@ -177,32 +129,6 @@ impl Brush {
                 .map_err(|e| format!("invalid {}: {e}", Self::METADATA_JSON_PATH))?
         };
 
-        if metadata.format_version > FORMAT_VERSION {
-            return Err(format!(
-                "brush format version {} is newer than supported version {FORMAT_VERSION}",
-                metadata.format_version
-            ));
-        }
-
-        // Read resource data
-        let mut resource_data = Vec::new();
-        for meta in &metadata.resources {
-            match archive.by_name(&meta.path) {
-                Ok(mut file) => {
-                    let mut data = Vec::with_capacity(file.size() as usize);
-                    file.read_to_end(&mut data)
-                        .map_err(|e| format!("failed to read resource '{}': {e}", meta.name))?;
-                    resource_data.push((meta.name.clone(), data));
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "resource '{}' referenced at '{}' not found in ZIP: {e}",
-                        meta.name, meta.path
-                    ));
-                }
-            }
-        }
-
         // Read the optional preview PNG — older archives don't have one
         // and we treat that as `None`, not an error.
         let thumbnail_png = match archive.by_name(Self::PREVIEW_PNG_PATH) {
@@ -217,17 +143,8 @@ impl Brush {
 
         Ok(Brush {
             metadata,
-            resource_data,
             thumbnail_png,
         })
-    }
-
-    /// Look up resource data by name.
-    pub fn resource(&self, name: &str) -> Option<&[u8]> {
-        self.resource_data
-            .iter()
-            .find(|(n, _)| n == name)
-            .map(|(_, d)| d.as_slice())
     }
 
     /// Save to a file path.
@@ -254,56 +171,18 @@ mod tests {
     fn round_trip_no_resources() {
         let graph = brush::default_graph();
         let metadata = BrushMetadata::from_graph("Test Brush", graph.clone());
-        let brush = Brush::without_resources(metadata);
+        let brush = Brush::from_metadata(metadata);
 
         let bytes = brush.to_bytes().unwrap();
         let loaded = Brush::from_bytes(&bytes).unwrap();
 
         assert_eq!(loaded.metadata.name, "Test Brush");
-        assert_eq!(loaded.metadata.format_version, FORMAT_VERSION);
 
         // Verify graph round-trips: same nodes and connections.
         // Compare as serde_json::Value to avoid HashMap key ordering differences.
         let orig_val = serde_json::to_value(&brush.metadata.graph).unwrap();
         let loaded_val = serde_json::to_value(&loaded.metadata.graph).unwrap();
         assert_eq!(orig_val, loaded_val);
-    }
-
-    #[test]
-    fn round_trip_with_resources() {
-        let graph = brush::default_graph();
-        let tip_data = vec![0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4, 5]; // fake PNG
-        let mut metadata = BrushMetadata::from_graph("Tip Brush", graph);
-        metadata.resources.push(BrushResourceMeta {
-            name: "tip.png".into(),
-            kind: ResourceKind::BrushTip,
-            path: "resources/tip.png".into(),
-        });
-        let brush = Brush {
-            metadata,
-            resource_data: vec![("tip.png".into(), tip_data.clone())],
-            thumbnail_png: None,
-        };
-
-        let bytes = brush.to_bytes().unwrap();
-        let loaded = Brush::from_bytes(&bytes).unwrap();
-
-        assert_eq!(loaded.metadata.name, "Tip Brush");
-        assert_eq!(loaded.metadata.resources.len(), 1);
-        assert_eq!(loaded.metadata.resources[0].kind, ResourceKind::BrushTip);
-        assert_eq!(loaded.resource("tip.png").unwrap(), &tip_data);
-    }
-
-    #[test]
-    fn future_version_rejected() {
-        let graph = brush::default_graph();
-        let mut metadata = BrushMetadata::from_graph("Future", graph);
-        metadata.format_version = FORMAT_VERSION + 1;
-        let brush = Brush::without_resources(metadata);
-
-        let bytes = brush.to_bytes().unwrap();
-        let err = Brush::from_bytes(&bytes).unwrap_err();
-        assert!(err.contains("newer than supported"), "got: {err}");
     }
 
     #[test]
@@ -335,7 +214,7 @@ mod tests {
         let graph = brush::default_graph();
         let metadata = BrushMetadata::from_graph("Thumbnailed", graph);
         let png = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
-        let mut brush = Brush::without_resources(metadata);
+        let mut brush = Brush::from_metadata(metadata);
         brush.thumbnail_png = Some(png.clone());
 
         let bytes = brush.to_bytes().unwrap();
@@ -350,7 +229,7 @@ mod tests {
         // `thumbnail_png: None`, not error.
         let graph = brush::default_graph();
         let metadata = BrushMetadata::from_graph("Bare", graph);
-        let brush = Brush::without_resources(metadata);
+        let brush = Brush::from_metadata(metadata);
         let bytes = brush.to_bytes().unwrap();
 
         let loaded = Brush::from_bytes(&bytes).unwrap();

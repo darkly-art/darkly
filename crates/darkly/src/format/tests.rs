@@ -10,9 +10,9 @@
 use serde::{Deserialize, Serialize};
 
 use super::registry_io::{deserialize_instance, serialize_instance, InstancePayload};
+use crate::brush::registry;
 use crate::brush::stabilizer::StabilizerRegistry;
 use crate::brush::wire::BrushWireType;
-use crate::brush::BrushNodeRegistry;
 use crate::document::layer_kind;
 use crate::document::modifier;
 use crate::gpu::blend_mode;
@@ -158,7 +158,7 @@ fn round_trip_every_stabilizer() {
 
 #[test]
 fn round_trip_every_brush_node() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let types: Vec<&str> = registry.types().map(|reg| reg.type_id).collect();
     assert!(
         !types.is_empty(),
@@ -178,7 +178,7 @@ fn round_trip_every_brush_node() {
             .unwrap_or_else(|e| panic!("deserialize graph with '{type_id}' failed: {e}"));
 
         let node = back
-            .nodes
+            .nodes()
             .get(&id)
             .unwrap_or_else(|| panic!("node lost across round-trip for '{type_id}'"));
         assert_eq!(node.type_id, type_id);

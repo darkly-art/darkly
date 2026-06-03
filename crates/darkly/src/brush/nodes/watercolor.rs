@@ -48,9 +48,9 @@ use crate::brush::paint_target_ext::BrushPaintTargetExt;
 use crate::brush::pipeline::{
     BrushPipelineEntry, BrushPipelineRegistration, BuildContext, DynamicUniformRing,
 };
-use crate::brush::wgsl_compile::{
-    pack_dab_record, pack_intrinsic_dab_header, pack_intrinsic_uniforms, pack_uniforms,
-    CompileWgslCtx, CompiledBrush, IntrinsicUniforms, NodeWgsl, WgslType, INTRINSIC_UNIFORMS_SIZE,
+use crate::brush::wgsl::{
+    pack_intrinsic_uniforms, pack_uniforms, CompileWgslCtx, CompiledBrush, NodeWgsl, WgslType,
+    INTRINSIC_UNIFORMS_SIZE,
 };
 use crate::brush::wire::{BrushWireType, ScalarValue};
 use crate::nodegraph::{NodeRegistration, PortDef, UnitType};
@@ -551,6 +551,8 @@ pub const TYPE_ID: &str = "watercolor";
 pub fn register() -> BrushNodeRegistration {
     BrushNodeRegistration {
         pipelines: vec![watercolor_pipeline_reg()],
+        evaluator: || Box::new(WatercolorEvaluator),
+        lifecycle: crate::brush::node::Lifecycle::ClearScratchToTransparent,
         node: NodeRegistration {
             type_id: TYPE_ID,
             category: "output",
@@ -618,25 +620,18 @@ pub fn register() -> BrushNodeRegistration {
                          Smaller values keep the smudge influence local to the brush tip; larger \
                          values pull color from a wider area.",
                     ),
-                PortDef::input("color", BrushWireType::Color)
+                PortDef::input("color", BrushWireType::Vec4)
                     .with_description("Brush color (typically wired from paint_color)"),
                 // Cursor-preview rotation in radians. Read only by
-                // `render_preview` and published into
-                // `BrushPreviewInfo.rotation_rad`; the stroke shader
+                // `render_cursor_preview` and published into
+                // `BrushCursorPreviewInfo.rotation_rad`; the stroke shader
                 // doesn't apply it (rotation in stroke deposit is a
                 // separate concern). Defaults to 0.
                 PortDef::input("rotation", BrushWireType::Scalar)
                     .with_range(-std::f32::consts::TAU, std::f32::consts::TAU, 0.0)
                     .with_description("Cursor-preview rotation (radians)"),
-                // Typed as `Texture` to match the upstream
-                // `circle.texture` output's wire type. In the compiled
-                // path the wire's underlying WGSL expression is `f32`
-                // (the shape coverage), but the framework checks
-                // wire types for compatibility — so the declared
-                // wire type must match the source. Same pattern as
-                // `paint.rgba` matching `stamp.dab`.
-                PortDef::input("mask", BrushWireType::Texture).with_description(
-                    "Per-fragment shape coverage (typically wired from circle.texture)",
+                PortDef::input("mask", BrushWireType::Scalar).with_description(
+                    "Per-fragment shape mask (typically wired from circle.mask)",
                 ),
                 PortDef::output("dab_size", BrushWireType::Vec2)
                     .with_description("Brush mark size in canvas pixels"),
@@ -670,13 +665,14 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
-        let Some(compiled) = gpu.compiled_brush.clone() else {
+        let Some(compiled) = gpu.dab_batch.compiled_brush.clone() else {
             debug_assert!(false, "watercolor requires compiled_brush on gpu_context");
             return vec![];
         };
-        let Some(paint_target) = gpu.paint_target.as_ref() else {
+        let Some(stroke) = gpu.stroke.as_ref() else {
             return vec![];
         };
+        let paint_target = &stroke.paint_target;
         let position = ctx.input("position").as_vec2();
         let radius = Self::effective_radius(ctx);
         let diameter = radius * 2.0;
@@ -701,16 +697,17 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let bbox_y = cy0.floor() as i32;
         let bbox_w = (cx1.ceil() as i32 - bbox_x) as u32;
         let bbox_h = (cy1.ceil() as i32 - bbox_y) as u32;
-        gpu.push_dab_write_bbox(crate::coord::CanvasRect::from_xywh(
-            bbox_x, bbox_y, bbox_w, bbox_h,
-        ));
         let layer_w = canvas_ext.width;
         let layer_h = canvas_ext.height;
         let local_x0 = (bbox_x - canvas_ext.x0()).max(0) as u32;
         let local_y0 = (bbox_y - canvas_ext.y0()).max(0) as u32;
         let local_x1 = (local_x0 + bbox_w).min(layer_w);
         let local_y1 = (local_y0 + bbox_h).min(layer_h);
-        gpu.pending_dabs_bbox = Some(match gpu.pending_dabs_bbox {
+        gpu.dab_batch
+            .push_write_bbox(crate::coord::CanvasRect::from_xywh(
+                bbox_x, bbox_y, bbox_w, bbox_h,
+            ));
+        gpu.dab_batch.bbox = Some(match gpu.dab_batch.bbox {
             Some([x0, y0, x1, y1]) => [
                 x0.min(local_x0),
                 y0.min(local_y0),
@@ -720,96 +717,50 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
             None => [local_x0, local_y0, local_x1, local_y1],
         });
 
-        let record_start = gpu.pending_dab_bytes.len();
-        pack_intrinsic_dab_header(&mut gpu.pending_dab_bytes, position, bbox_radius, radius);
-        let outputs = gpu
-            .slot_outputs_owned
-            .as_ref()
-            .expect("watercolor requires slot_outputs_owned");
-        pack_dab_record(&compiled, outputs, &mut gpu.pending_dab_bytes);
-        let written = gpu.pending_dab_bytes.len() - record_start;
-        if written < compiled.dab_record_size {
-            gpu.pending_dab_bytes
-                .resize(record_start + compiled.dab_record_size, 0);
-        }
-        gpu.pending_dab_count = gpu.pending_dab_count.saturating_add(1);
-        debug_assert!(
-            gpu.pending_dab_count <= MAX_DABS_PER_PHASE,
-            "watercolor dab queue overflowed MAX_DABS_PER_PHASE"
-        );
+        gpu.dab_batch
+            .queue_dab(&compiled, position, bbox_radius, radius);
 
         vec![("dab_size".into(), ScalarValue::Vec2([diameter, diameter]))]
     }
 
-    fn begin_stroke(&self, _ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        gpu.clear_pending_dabs();
-
-        // Clear the scratch to transparent — its premultiplied source-over
-        // composite accumulates from zero, so a fresh stroke (or a rewind
-        // boundary triggered by the stabilizer) must start from that state.
-        // Without this, partial re-render after divergence leaves the
-        // defunct stroke's pigment in the scratch outside the checkpoint
-        // bbox; commit then composites those stale pixels onto the layer.
-        let scratch = gpu
-            .scratch
-            .as_deref()
-            .expect("watercolor::begin_stroke requires Scratch");
-        let _ = gpu.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("watercolor-begin_stroke-clear"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: scratch.write_view(),
-                resolve_target: None,
-                depth_slice: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            ..Default::default()
-        });
-    }
-
     fn flush_dabs(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        if gpu.pending_dab_count == 0 {
+        if gpu.dab_batch.count == 0 {
             return;
         }
-        let Some(compiled) = gpu.compiled_brush.clone() else {
+        let Some(compiled) = gpu.dab_batch.compiled_brush.clone() else {
             debug_assert!(false, "watercolor::flush_dabs requires compiled_brush");
             return;
         };
 
-        let bbox = gpu.pending_dabs_bbox.unwrap_or([0, 0, 0, 0]);
+        let bbox = gpu.dab_batch.bbox.unwrap_or([0, 0, 0, 0]);
         let union_w = bbox[2].saturating_sub(bbox[0]);
         let union_h = bbox[3].saturating_sub(bbox[1]);
-        let (dab_bytes, total_dabs) = gpu.take_pending_dabs();
+        let (dab_bytes, total_dabs) = gpu.dab_batch.take();
         if total_dabs == 0 {
             return;
         }
         gpu.perf
             .record_dab_flush_workload(total_dabs, union_w, union_h);
 
-        let pre_stroke_bg = match gpu.pre_stroke_bind_group {
-            Some(bg) => bg,
-            None => return,
+        let Some(stroke) = gpu.stroke.as_ref() else {
+            return;
         };
-        let pre_stroke_tex = match gpu.pre_stroke_texture {
-            Some(t) => t,
-            None => return,
-        };
-        let pre_stroke_size = [pre_stroke_tex.width(), pre_stroke_tex.height()];
+        let pre_stroke_bg = stroke.pre_stroke_bind_group;
+        let pre_stroke_size = [
+            stroke.pre_stroke_texture.width(),
+            stroke.pre_stroke_texture.height(),
+        ];
 
         let pipeline_ref = gpu.pipelines.get::<WatercolorPipeline>("watercolor");
 
         ensure_per_brush_pipeline(gpu, pipeline_ref, &compiled);
 
-        let scratch = gpu
-            .scratch
-            .as_deref()
-            .expect("watercolor::flush_dabs requires Scratch");
-        let paint_target = gpu
-            .paint_target
+        let stroke = gpu
+            .stroke
             .as_ref()
-            .expect("watercolor::flush_dabs requires paint_target");
+            .expect("watercolor::flush_dabs requires stroke resources");
+        let scratch = &*stroke.scratch;
+        let paint_target = &stroke.paint_target;
         let canvas_ext = paint_target.canvas_extent();
         let pre_stroke_origin = [canvas_ext.x0(), canvas_ext.y0()];
         let layer_offset = [canvas_ext.x0(), canvas_ext.y0()];
@@ -819,19 +770,13 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
         let mut composite_uniform_bytes: Vec<u8> = Vec::with_capacity(MAX_UNIFORM_BYTES);
         pack_intrinsic_uniforms(
             &mut composite_uniform_bytes,
-            IntrinsicUniforms {
-                layer_offset,
-                layer_size,
-                canvas_size: [gpu.canvas_width, gpu.canvas_height],
-                preview_centre: [0.0, 0.0],
-                preview_size: [0, 0],
-                _pad: [0, 0],
-            },
+            gpu.intrinsic_header(layer_offset, layer_size),
         );
         let outputs = gpu
-            .slot_outputs_owned
+            .dab_batch
+            .slot_outputs
             .as_ref()
-            .expect("watercolor::flush_dabs requires slot_outputs_owned");
+            .expect("watercolor::flush_dabs requires dab_batch.slot_outputs");
         pack_uniforms(&compiled, outputs, &mut composite_uniform_bytes);
 
         // Pickup size is a stroke-level scrub — the lifecycle context
@@ -928,23 +873,17 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     }
 
     fn commit(&self, ctx: &EvalContext, gpu: &mut BrushGpuContext) {
-        let Some(pre_stroke_bg) = gpu.pre_stroke_bind_group else {
-            return;
-        };
-        let Some(scratch) = gpu.scratch.as_deref() else {
-            return;
-        };
-        let Some(paint_target) = gpu.paint_target.as_ref() else {
+        let Some(stroke) = gpu.stroke.as_ref() else {
             return;
         };
         let opacity = ctx.input_f32("opacity").clamp(0.0, 1.0);
-        paint_target.commit_brush_dab(
+        stroke.paint_target.commit_brush_dab(
             &mut gpu.encoder,
             gpu.pipelines,
             gpu.queue,
-            scratch.write_bind_group(),
+            stroke.scratch.write_bind_group(),
             gpu.selection_bind_group,
-            pre_stroke_bg,
+            stroke.pre_stroke_bind_group,
             opacity,
             gpu.blend_mode,
             /* fg_premultiplied */ true,
@@ -955,16 +894,16 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     /// The brush color × shape (perlin/sine) modulated mask reads
     /// against `sel = 1.0` (no selection clipping for the cursor) and
     /// a neutral-load preview body (overridden via
-    /// [`Self::compile_preview_body`] — the stroke body samples the
+    /// [`Self::compile_cursor_preview_body`] — the stroke body samples the
     /// `@group(3)` pickup atlas, which the preview skeleton omits).
-    fn render_preview(
+    fn render_cursor_preview(
         &self,
         ctx: &EvalContext,
         gpu: &mut BrushGpuContext,
     ) -> Vec<(String, ScalarValue)> {
         let radius = Self::effective_radius(ctx);
         let rotation_rad = ctx.input_f32("rotation");
-        let _ = crate::brush::wgsl_compile::render_compiled_preview(gpu, radius, rotation_rad);
+        let _ = crate::brush::wgsl::render_compiled_cursor_preview(gpu, radius, rotation_rad);
         vec![]
     }
 
@@ -1035,7 +974,7 @@ impl BrushNodeEvaluator for WatercolorEvaluator {
     /// silhouette) and the brush color, but drop the atlas pickup /
     /// wetness blend — preview shows what the brush *would* deposit,
     /// not what it'd pick up.
-    fn compile_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
+    fn compile_cursor_preview_body(&self, cctx: &CompileWgslCtx) -> Result<NodeWgsl, String> {
         let mut wgsl = NodeWgsl::default();
         let mask_expr = cctx.input("mask").as_f32();
         let color_expr = cctx.input("color").as_vec4();
@@ -1070,6 +1009,7 @@ fn ensure_per_brush_pipeline(
         canvas_copy_bgl: gpu.pipelines.canvas_copy_bind_group_layout(),
         canvas_copy_sampler: gpu.pipelines.canvas_copy_sampler(),
         min_uniform_align: gpu.device.limits().min_uniform_buffer_offset_alignment,
+        texture_registry: gpu.pipelines.texture_registry(),
     };
     pipe.ensure_pipeline(&ctx, compiled);
 }

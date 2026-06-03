@@ -8,7 +8,9 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use darkly::brush::gpu_context::{
+    BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
+};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::gpu::test_utils::{readback_texture, test_device};
@@ -38,10 +40,10 @@ fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
 
 struct PreviewOutput {
     rgba: Vec<u8>,
-    info: darkly::brush::eval::BrushPreviewInfo,
+    info: darkly::brush::eval::BrushCursorPreviewInfo,
 }
 
-fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> PreviewOutput {
+fn render_cursor_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> PreviewOutput {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == brush_name)
@@ -68,27 +70,20 @@ fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> Prev
         device: &device,
         queue: &queue,
         pipelines: &pipelines,
-        scratch: None,
+        selection_bind_group: pipelines.default_selection_bind_group(),
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
-        paint_target: None,
-        selection_bind_group: pipelines.default_selection_bind_group(),
-        preview_target_view: Some(&target_view),
         blend_mode: 0,
-        preview_mask_view: Some(&target_view),
-        preview_mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
-        preview_mask_overlay: None,
-        brush_preview_info: None,
-        pre_stroke_texture: None,
-        pre_stroke_bind_group: None,
-        dab_write_canvas_bbox: None,
+        view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
-        pending_dab_bytes: Vec::new(),
-        pending_dab_count: 0,
-        pending_dabs_bbox: None,
-        pending_dab_meta_bytes: Vec::new(),
-        compiled_brush: None,
-        slot_outputs_owned: None,
+        stroke: None,
+        preview: Some(CursorPreviewState {
+            mask_view: Some(&target_view),
+            mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
+            mask_overlay: None,
+            info: None,
+        }),
+        dab_batch: DabBatch::default(),
     };
 
     let info = PaintInformation {
@@ -98,9 +93,11 @@ fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> Prev
     };
     runner.seed_sensors(&info, color, 0xC0FFEE, 0);
     runner.execute_cpu();
-    runner.render_preview_pipeline(&mut ctx);
+    runner.render_cursor_preview_pipeline(&mut ctx);
     let published = ctx
-        .brush_preview_info
+        .preview
+        .as_ref()
+        .and_then(|p| p.info)
         .expect("watercolor publishes brush_preview_info");
     queue.submit([ctx.encoder.finish()]);
 
@@ -125,7 +122,7 @@ fn px(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 fn smooth_watercolor_preview_shows_color() {
-    let out = render_preview("Smooth Watercolor", 0.1, [0.2, 0.3, 0.9, 1.0]);
+    let out = render_cursor_preview("Smooth Watercolor", 0.1, [0.2, 0.3, 0.9, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     // Smooth Watercolor: pressure=1 → flow ~ 1 → centre is brush color
@@ -141,7 +138,7 @@ fn smooth_watercolor_preview_shows_color() {
 
 #[test]
 fn rough_watercolor_preview_shows_color_and_silhouette_variance() {
-    let out = render_preview("Rough Watercolor", 0.2, [0.9, 0.3, 0.2, 1.0]);
+    let out = render_cursor_preview("Rough Watercolor", 0.2, [0.9, 0.3, 0.2, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     // Centre should lean red (the seeded brush color).

@@ -1,0 +1,27 @@
+name: Smudge
+category: Effects
+nodes:
+  1:
+    type: pen_input
+    port_defaults:
+      spacing: 0.01
+      stabilize: 0.4
+    exposed:
+    - stabilize
+  2:
+    type: circle
+    port_defaults:
+      softness: 0.4
+    exposed:
+    - softness
+  3:
+    type: smudge
+    exposed:
+    - opacity
+    - rate
+    - size
+connections:
+- '1.motion -> 3.motion'
+- '1.position -> 3.position'
+- '1.pressure -> 3.size_input'
+- '2.mask -> 3.mask'

@@ -1,6 +1,6 @@
 //! End-to-end verification that `pen.tilt_direction` flows through
-//! the runner's sensor-seeding into a terminal's `render_preview`
-//! and onward to `BrushPreviewInfo.rotation_rad`. If the rotation
+//! the runner's sensor-seeding into a terminal's `render_cursor_preview`
+//! and onward to `BrushCursorPreviewInfo.rotation_rad`. If the rotation
 //! port doesn't flow live values, the cursor mask can never rotate
 //! with the pen even though the overlay primitive supports it.
 
@@ -8,11 +8,13 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use darkly::brush::gpu_context::{
+    BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
+};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
+use darkly::brush::registry;
 use darkly::brush::wire::BrushWireType;
-use darkly::brush::BrushNodeRegistry;
 use darkly::gpu::test_utils::test_device;
 use darkly::nodegraph::{Graph, PortRef};
 
@@ -45,7 +47,7 @@ fn pen_tilt_direction_drives_preview_rotation() {
     // `pen.tilt_direction → terminal.rotation`. The built-in brushes
     // don't wire rotation today, so the test constructs its own
     // graph rather than mutating a builtin's defaults.
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::<BrushWireType>::new();
 
     let pen = graph.add_node(
@@ -78,7 +80,7 @@ fn pen_tilt_direction_drives_preview_rotation() {
         (pen, "position", term, "position"),
         (pen, "tilt_direction", term, "rotation"),
         (paint_color, "color", stamp, "color"),
-        (circle, "texture", stamp, "tip"),
+        (circle, "mask", stamp, "tip"),
         (stamp, "dab", term, "rgba"),
     ];
     for (from_node, from_port, to_node, to_port) in wires {
@@ -113,27 +115,20 @@ fn pen_tilt_direction_drives_preview_rotation() {
         device: &device,
         queue: &queue,
         pipelines: &pipelines,
-        scratch: None,
+        selection_bind_group: pipelines.default_selection_bind_group(),
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
-        paint_target: None,
-        selection_bind_group: pipelines.default_selection_bind_group(),
-        preview_target_view: Some(&target_view),
         blend_mode: 0,
-        preview_mask_view: Some(&target_view),
-        preview_mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
-        preview_mask_overlay: None,
-        brush_preview_info: None,
-        pre_stroke_texture: None,
-        pre_stroke_bind_group: None,
-        dab_write_canvas_bbox: None,
+        view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
-        pending_dab_bytes: Vec::new(),
-        pending_dab_count: 0,
-        pending_dabs_bbox: None,
-        pending_dab_meta_bytes: Vec::new(),
-        compiled_brush: None,
-        slot_outputs_owned: None,
+        stroke: None,
+        preview: Some(CursorPreviewState {
+            mask_view: Some(&target_view),
+            mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
+            mask_overlay: None,
+            info: None,
+        }),
+        dab_batch: DabBatch::default(),
     };
 
     // Non-zero pen tilt direction. The runner's `seed_sensors` writes
@@ -149,10 +144,12 @@ fn pen_tilt_direction_drives_preview_rotation() {
     info.tilt_direction = expected;
     runner.seed_sensors(&info, [1.0, 0.0, 0.0, 1.0], 0xC0FFEE, 0);
     runner.execute_cpu();
-    runner.render_preview_pipeline(&mut ctx);
+    runner.render_cursor_preview_pipeline(&mut ctx);
 
     let rotation = ctx
-        .brush_preview_info
+        .preview
+        .as_ref()
+        .and_then(|p| p.info)
         .expect("paint publishes brush_preview_info during preview")
         .rotation_rad;
 

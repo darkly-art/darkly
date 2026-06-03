@@ -14,8 +14,8 @@
 
 use darkly::brush::eval::BrushGraphRunner;
 use darkly::brush::paint_info::PaintInformation;
+use darkly::brush::registry;
 use darkly::brush::wire::ScalarValue;
-use darkly::brush::{default_evaluators, BrushNodeRegistry};
 use darkly::gpu::params::ParamValue;
 use darkly::nodegraph::{Graph, PortDef, PortRef};
 
@@ -52,13 +52,13 @@ fn run_one_dab(runner: &mut BrushGraphRunner, pressure: f32, dab_index: u32) {
 /// caused `random → circle.seed` to repeat.
 #[test]
 fn random_outputs_unit_range_and_varies_per_dab() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
     let random_reg = registry.get("random").unwrap();
     graph.add_node("random", random_reg.ports.clone(), random_params());
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     let mut samples = Vec::with_capacity(16);
     for dab in 0..16 {
@@ -89,29 +89,29 @@ fn random_outputs_unit_range_and_varies_per_dab() {
 ///
 /// We can't observe `circle.seed` directly without a GPU, but the runner's
 /// remap step happens at `gather_inputs` — same code path for CPU and GPU
-/// nodes. So we exercise it through a CPU node (`mix`) with a per-instance
-/// override on its `factor` port: `natural_range = Some((0, 1024))`. The
-/// mix evaluator computes `a + (b - a) * factor` with the default `a=0`
-/// and `b=1`, so `mix.result == factor_after_remap`.
+/// nodes. So we exercise it through a CPU node (`multiply`) with a
+/// per-instance override on its `a` port: `natural_range = Some((0, 1024))`.
+/// The multiply evaluator computes `a * b` with the default `b = 1`, so
+/// `multiply.result == a_after_remap`.
 #[test]
 fn random_to_wide_range_input_remaps() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
     let random = graph.add_node("random", random_reg.ports.clone(), random_params());
 
-    // Clone mix's ports, then widen the `factor` input's natural_range to
+    // Clone multiply's ports, then widen the `a` input's natural_range to
     // simulate wiring random into something like `circle.seed`.
-    let mix_reg = registry.get("mix").unwrap();
-    let mut mix_ports = mix_reg.ports.clone();
-    for p in mix_ports.iter_mut() {
-        if p.name == "factor" {
+    let multiply_reg = registry.get("multiply").unwrap();
+    let mut multiply_ports = multiply_reg.ports.clone();
+    for p in multiply_ports.iter_mut() {
+        if p.name == "a" {
             *p = std::mem::replace(p, PortDef::input("placeholder", p.wire_type))
                 .with_natural_range(0.0, 1024.0);
         }
     }
-    let mix = graph.add_node("mix", mix_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
 
     graph
         .connect(
@@ -120,22 +120,22 @@ fn random_to_wide_range_input_remaps() {
                 port: "value".into(),
             },
             PortRef {
-                node: mix,
-                port: "factor".into(),
+                node: multiply,
+                port: "a".into(),
             },
         )
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     let mut samples = Vec::new();
     for dab in 0..16 {
         run_one_dab(&mut runner, 0.5, dab);
-        let v = read_scalar(&runner, "mix", "result");
+        let v = read_scalar(&runner, "multiply", "result");
         assert!(
             (0.0..=1024.0).contains(&v),
-            "mix.result {v} outside [0, 1024] on dab {dab}",
+            "multiply.result {v} outside [0, 1024] on dab {dab}",
         );
         samples.push(v);
     }
@@ -153,21 +153,21 @@ fn random_to_wide_range_input_remaps() {
 /// pressure ∈ [0, 1] cast to a frequency in [1, 16] rounded to 1 forever.
 #[test]
 fn pen_pressure_to_frequency_range_remaps() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
     let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
 
-    let mix_reg = registry.get("mix").unwrap();
-    let mut mix_ports = mix_reg.ports.clone();
-    for p in mix_ports.iter_mut() {
-        if p.name == "factor" {
+    let multiply_reg = registry.get("multiply").unwrap();
+    let mut multiply_ports = multiply_reg.ports.clone();
+    for p in multiply_ports.iter_mut() {
+        if p.name == "a" {
             *p = std::mem::replace(p, PortDef::input("placeholder", p.wire_type))
                 .with_natural_range(1.0, 16.0);
         }
     }
-    let mix = graph.add_node("mix", mix_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
 
     graph
         .connect(
@@ -176,37 +176,37 @@ fn pen_pressure_to_frequency_range_remaps() {
                 port: "pressure".into(),
             },
             PortRef {
-                node: mix,
-                port: "factor".into(),
+                node: multiply,
+                port: "a".into(),
             },
         )
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
-    // pressure 0.0 → factor 1.0
+    // pressure 0.0 → a 1.0
     run_one_dab(&mut runner, 0.0, 0);
-    let v = read_scalar(&runner, "mix", "result");
+    let v = read_scalar(&runner, "multiply", "result");
     assert!(
         (v - 1.0).abs() < 1e-4,
-        "pressure 0 → factor expected 1.0, got {v}"
+        "pressure 0 → a expected 1.0, got {v}"
     );
 
-    // pressure 0.5 → factor 8.5
+    // pressure 0.5 → a 8.5
     run_one_dab(&mut runner, 0.5, 1);
-    let v = read_scalar(&runner, "mix", "result");
+    let v = read_scalar(&runner, "multiply", "result");
     assert!(
         (v - 8.5).abs() < 1e-4,
-        "pressure 0.5 → factor expected 8.5, got {v}"
+        "pressure 0.5 → a expected 8.5, got {v}"
     );
 
-    // pressure 1.0 → factor 16.0
+    // pressure 1.0 → a 16.0
     run_one_dab(&mut runner, 1.0, 2);
-    let v = read_scalar(&runner, "mix", "result");
+    let v = read_scalar(&runner, "multiply", "result");
     assert!(
         (v - 16.0).abs() < 1e-4,
-        "pressure 1.0 → factor expected 16.0, got {v}"
+        "pressure 1.0 → a expected 16.0, got {v}"
     );
 }
 
@@ -217,52 +217,60 @@ fn pen_pressure_to_frequency_range_remaps() {
 /// any existing math-node-based brush.
 #[test]
 fn math_node_output_passes_through_to_ranged_input() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
-    // multiply with explicit defaults: a=0.5, b=0.5 → result=0.25.
-    let multiply_reg = registry.get("multiply").unwrap();
-    let mut multiply_ports = multiply_reg.ports.clone();
-    for p in multiply_ports.iter_mut() {
+    // Source multiply with explicit defaults a=0.5, b=0.5 → result=0.25.
+    let multiply_src_reg = registry.get("multiply").unwrap();
+    let mut multiply_src_ports = multiply_src_reg.ports.clone();
+    for p in multiply_src_ports.iter_mut() {
         if p.name == "a" || p.name == "b" {
             p.default = 0.5;
         }
     }
-    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
+    let multiply_src = graph.add_node("multiply", multiply_src_ports, vec![]);
 
-    // mix.factor with natural_range Some((0, 1024)) — if multiply were
-    // mistakenly opted in to source-side remap, we'd see 0.25 stretched
-    // to 256. The passthrough invariant says we should see 0.25 raw.
-    let mix_reg = registry.get("mix").unwrap();
-    let mut mix_ports = mix_reg.ports.clone();
-    for p in mix_ports.iter_mut() {
-        if p.name == "factor" {
+    // Sink multiply: `a` carries an overridden natural_range Some((0, 1024)).
+    // If multiply_src were mistakenly opted in to source-side remap, we'd
+    // see 0.25 stretched to 256. The passthrough invariant says we should
+    // see 0.25 raw.
+    let multiply_sink_reg = registry.get("multiply").unwrap();
+    let mut multiply_sink_ports = multiply_sink_reg.ports.clone();
+    for p in multiply_sink_ports.iter_mut() {
+        if p.name == "a" {
             *p = std::mem::replace(p, PortDef::input("placeholder", p.wire_type))
                 .with_natural_range(0.0, 1024.0);
         }
     }
-    let mix = graph.add_node("mix", mix_ports, vec![]);
+    let multiply_sink = graph.add_node("multiply", multiply_sink_ports, vec![]);
 
     graph
         .connect(
             PortRef {
-                node: multiply,
+                node: multiply_src,
                 port: "result".into(),
             },
             PortRef {
-                node: mix,
-                port: "factor".into(),
+                node: multiply_sink,
+                port: "a".into(),
             },
         )
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     run_one_dab(&mut runner, 0.0, 0);
-    let v = read_scalar(&runner, "mix", "result");
-    // mix.result = a + (b - a) * factor with mix's own a=0, b=1, so it
-    // mirrors the factor value reaching the evaluator.
+    // Sink's b defaults to 1.0, so result == a (the value that reached
+    // the evaluator after any wire remap). Read by node id to disambiguate
+    // from the source multiply.
+    let slot = runner
+        .find_node_output_slot(multiply_sink, "result")
+        .expect("sink slot exists");
+    let v = match runner.read_slot(slot).expect("slot has value") {
+        ScalarValue::Scalar(v) => v,
+        other => panic!("expected Scalar, got {other:?}"),
+    };
     assert!((v - 0.25).abs() < 1e-4, "expected raw 0.25, got {v}");
 }
 
@@ -273,22 +281,22 @@ fn math_node_output_passes_through_to_ranged_input() {
 /// of being mapped onto the slider's `[0, 4]` hint.
 #[test]
 fn ranged_source_to_unranged_input_passes_through() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
     let random = graph.add_node("random", random_reg.ports.clone(), random_params());
 
-    // mix.factor — explicitly STRIP the natural_range we added so this
-    // node-instance behaves as if the consumer hadn't opted in.
-    let mix_reg = registry.get("mix").unwrap();
-    let mut mix_ports = mix_reg.ports.clone();
-    for p in mix_ports.iter_mut() {
-        if p.name == "factor" {
+    // multiply.a — explicitly STRIP the natural_range so this node-instance
+    // behaves as if the consumer hadn't opted in.
+    let multiply_reg = registry.get("multiply").unwrap();
+    let mut multiply_ports = multiply_reg.ports.clone();
+    for p in multiply_ports.iter_mut() {
+        if p.name == "a" {
             p.natural_range = None;
         }
     }
-    let mix = graph.add_node("mix", mix_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
 
     graph
         .connect(
@@ -297,18 +305,18 @@ fn ranged_source_to_unranged_input_passes_through() {
                 port: "value".into(),
             },
             PortRef {
-                node: mix,
-                port: "factor".into(),
+                node: multiply,
+                port: "a".into(),
             },
         )
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     for dab in 0..8 {
         run_one_dab(&mut runner, 0.5, dab);
-        let v = read_scalar(&runner, "mix", "result");
+        let v = read_scalar(&runner, "multiply", "result");
         // Raw random value, unscaled — should stay in [0, 1).
         assert!(
             (0.0..1.0).contains(&v),
@@ -322,7 +330,7 @@ fn ranged_source_to_unranged_input_passes_through() {
 /// exactly, so the identity curve's output equals pressure.
 #[test]
 fn identity_range_is_a_noop() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
@@ -352,7 +360,7 @@ fn identity_range_is_a_noop() {
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     for pressure in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
         run_one_dab(&mut runner, pressure, 0);
@@ -369,7 +377,7 @@ fn identity_range_is_a_noop() {
 /// Bipolar destination range: `random [0, 1] → [-100, 100]` spans both
 /// halves, verifying the affine remap handles a negative `dst_min`.
 ///
-/// Note: radian-typed ports (`stamp.rotation`, `circle.phase`, etc.)
+/// Note: radian-typed ports (`circle.rotation`, `liquify.direction`, etc.)
 /// deliberately do NOT have a `natural_range` — radians are a unit, not
 /// a normalized signal, and wires like `pen.drawing_angle → rotation`
 /// must preserve them exactly. This test uses an abstract `[-100, 100]`
@@ -377,21 +385,21 @@ fn identity_range_is_a_noop() {
 /// "angular signal."
 #[test]
 fn unit_source_to_bipolar_dest_spans_full_range() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let random_reg = registry.get("random").unwrap();
     let random = graph.add_node("random", random_reg.ports.clone(), random_params());
 
-    let mix_reg = registry.get("mix").unwrap();
-    let mut mix_ports = mix_reg.ports.clone();
-    for p in mix_ports.iter_mut() {
-        if p.name == "factor" {
+    let multiply_reg = registry.get("multiply").unwrap();
+    let mut multiply_ports = multiply_reg.ports.clone();
+    for p in multiply_ports.iter_mut() {
+        if p.name == "a" {
             *p = std::mem::replace(p, PortDef::input("placeholder", p.wire_type))
                 .with_natural_range(-100.0, 100.0);
         }
     }
-    let mix = graph.add_node("mix", mix_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
 
     graph
         .connect(
@@ -400,20 +408,20 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
                 port: "value".into(),
             },
             PortRef {
-                node: mix,
-                port: "factor".into(),
+                node: multiply,
+                port: "a".into(),
             },
         )
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     let mut min = f32::INFINITY;
     let mut max = f32::NEG_INFINITY;
     for dab in 0..32 {
         run_one_dab(&mut runner, 0.5, dab);
-        let v = read_scalar(&runner, "mix", "result");
+        let v = read_scalar(&runner, "multiply", "result");
         assert!(
             (-100.0..=100.0).contains(&v),
             "value {v} outside [-100, 100] on dab {dab}",
@@ -444,21 +452,21 @@ fn unit_source_to_bipolar_dest_spans_full_range() {
 /// CPU-only test pins the contract at the runner level.
 #[test]
 fn radian_to_radian_wire_passes_through() {
-    let registry = BrushNodeRegistry::new();
+    let registry = registry();
     let mut graph = Graph::new();
 
     let pen_reg = registry.get("pen_input").unwrap();
     let pen = graph.add_node("pen_input", pen_reg.ports.clone(), vec![]);
 
-    // mix.factor with no natural_range (radians-style dest).
-    let mix_reg = registry.get("mix").unwrap();
-    let mut mix_ports = mix_reg.ports.clone();
-    for p in mix_ports.iter_mut() {
-        if p.name == "factor" {
+    // multiply.a with no natural_range (radians-style dest).
+    let multiply_reg = registry.get("multiply").unwrap();
+    let mut multiply_ports = multiply_reg.ports.clone();
+    for p in multiply_ports.iter_mut() {
+        if p.name == "a" {
             p.natural_range = None;
         }
     }
-    let mix = graph.add_node("mix", mix_ports, vec![]);
+    let multiply = graph.add_node("multiply", multiply_ports, vec![]);
 
     graph
         .connect(
@@ -467,18 +475,18 @@ fn radian_to_radian_wire_passes_through() {
                 port: "drawing_angle".into(),
             },
             PortRef {
-                node: mix,
-                port: "factor".into(),
+                node: multiply,
+                port: "a".into(),
             },
         )
         .unwrap();
 
     let mut runner =
-        BrushGraphRunner::new(&graph, registry.as_map(), default_evaluators()).unwrap();
+        BrushGraphRunner::new(&graph, registry.as_map(), registry.evaluators()).unwrap();
 
     // drawing_angle defaults to 0 in PaintInformation. Set it explicitly
     // via a custom PaintInformation to a known radian value and confirm
-    // mix sees the same raw value (no [0, TAU] → [???] remap).
+    // multiply sees the same raw value (no [0, TAU] → [???] remap).
     let info = PaintInformation {
         drawing_angle: std::f32::consts::PI,
         ..Default::default()
@@ -488,7 +496,7 @@ fn radian_to_radian_wire_passes_through() {
     runner.seed_sensors(&info, [0.0, 0.0, 0.0, 1.0], 42, 0);
     runner.execute_cpu();
 
-    let v = read_scalar(&runner, "mix", "result");
+    let v = read_scalar(&runner, "multiply", "result");
     assert!(
         (v - std::f32::consts::PI).abs() < 1e-5,
         "drawing_angle PI rad should pass through to rotation as PI rad, got {v}",

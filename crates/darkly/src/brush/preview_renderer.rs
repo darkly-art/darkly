@@ -14,10 +14,10 @@
 //! `set_preview_theme`), not the active paint color, so all previews
 //! share a consistent palette.
 
-use super::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use super::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
+use super::nodes::pen_input;
 use super::paint_info::PaintInformation;
 use super::pipeline::BrushPipelines;
-use super::spacing::SpacingConfig;
 use super::stabilizer::PassThrough;
 use super::stroke_buffer::StrokeBuffer;
 use super::stroke_engine::StrokeEngine;
@@ -67,11 +67,11 @@ impl PreviewTarget {
 /// Renders a full-stroke preview into an offscreen RGBA texture using the
 /// real stroke engine. One instance is reusable across renders; it holds
 /// onto its scratch target between calls and reallocates only on size change.
-pub struct BrushPreviewRenderer {
+pub struct BrushStrokePreviewRenderer {
     target: Option<PreviewTarget>,
 }
 
-impl BrushPreviewRenderer {
+impl BrushStrokePreviewRenderer {
     pub fn new() -> Self {
         Self { target: None }
     }
@@ -154,7 +154,11 @@ impl BrushPreviewRenderer {
         // Fresh StrokeEngine every render — reusing the engine's own
         // `brush_stroke_engine` would contaminate save-points and dab-size
         // state with the user's in-flight real stroke.
-        let spacing = SpacingConfig::default();
+        //
+        // Spacing comes from the graph's pen_input node — same source the
+        // real stroke uses — so scrubbing the spacing slider actually moves
+        // the dabs in the preview.
+        let spacing = pen_input::spacing_config(graph);
         let mut engine = StrokeEngine::new(runner, fg_color, spacing, Box::new(PassThrough::new()));
 
         // Pre-cooked points: pass them through a pass-through stabilizer so
@@ -179,28 +183,24 @@ impl BrushPreviewRenderer {
                     device,
                     queue,
                     pipelines,
-                    scratch: Some(scratch),
+                    selection_bind_group: sel_bg,
                     canvas_width: width,
                     canvas_height: height,
-                    // Preview render target is canvas-aligned RGBA8.
-                    paint_target: Some(paint_target),
-                    selection_bind_group: sel_bg,
-                    preview_target_view: None,
                     blend_mode: 0,
-                    preview_mask_view: None,
-                    preview_mask_size: (0, 0),
-                    preview_mask_overlay: None,
-                    brush_preview_info: None,
-                    pre_stroke_texture: Some(pre_stroke_texture),
-                    pre_stroke_bind_group: Some(pre_stroke_bind_group),
-                    dab_write_canvas_bbox: None,
+                    // Editor preview always renders at identity view; the
+                    // S-curve preview shouldn't shift orientation when the
+                    // user happens to rotate the canvas while editing.
+                    view_rotation: 0.0,
                     perf: BrushPerfCounters::default(),
-                    pending_dab_bytes: Vec::new(),
-                    pending_dab_count: 0,
-                    pending_dabs_bbox: None,
-                    pending_dab_meta_bytes: Vec::new(),
-                    compiled_brush: None,
-                    slot_outputs_owned: None,
+                    // Preview render target is canvas-aligned RGBA8.
+                    stroke: Some(StrokeResources {
+                        scratch,
+                        paint_target,
+                        pre_stroke_texture,
+                        pre_stroke_bind_group,
+                    }),
+                    preview: None,
+                    dab_batch: DabBatch::default(),
                 }
             }};
         }
@@ -243,7 +243,7 @@ impl BrushPreviewRenderer {
     }
 }
 
-impl Default for BrushPreviewRenderer {
+impl Default for BrushStrokePreviewRenderer {
     fn default() -> Self {
         Self::new()
     }
@@ -255,7 +255,7 @@ impl Default for BrushPreviewRenderer {
 /// stationary sample — useful for the brush picker's tile-shape thumbnail
 /// (and the BrushBar trigger button), where the user wants to see the
 /// tip silhouette without a full stroke arc.
-pub fn synthesize_preview_dab(width: f32, height: f32) -> Vec<PaintInformation> {
+pub fn synthesize_dab_path(width: f32, height: f32) -> Vec<PaintInformation> {
     vec![PaintInformation {
         pos: [width * 0.5, height * 0.5],
         pressure: 1.0,
@@ -277,7 +277,7 @@ pub fn synthesize_preview_dab(width: f32, height: f32) -> Vec<PaintInformation> 
 /// Shape follows Krita's `KisPresetLivePreviewView::setupAndPaintStroke`
 /// — start low-left at pressure 0, end high-right at pressure 0.2, peak
 /// pressure at the midpoint.
-pub fn synthesize_preview_stroke(
+pub fn synthesize_stroke_path(
     width: f32,
     height: f32,
     n_points: usize,
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn synthesized_stroke_bounds() {
         let inset = 16.0;
-        let path = synthesize_preview_stroke(320.0, 120.0, 30, inset);
+        let path = synthesize_stroke_path(320.0, 120.0, 30, inset);
         assert_eq!(path.len(), 30);
 
         // Endpoints sit at the inset edge so an `inset`-radius dab fits.
@@ -358,7 +358,7 @@ mod tests {
 
     #[test]
     fn synthesized_stroke_respects_min_points() {
-        let path = synthesize_preview_stroke(100.0, 100.0, 1, 0.0);
+        let path = synthesize_stroke_path(100.0, 100.0, 1, 0.0);
         assert_eq!(path.len(), 2);
     }
 }

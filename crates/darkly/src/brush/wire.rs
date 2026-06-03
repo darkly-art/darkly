@@ -2,6 +2,20 @@
 //!
 //! Everything speaks 0-1.  Sensors output 0-1.  Curves map 0-1 → 0-1.
 //! GPU stage inputs expect 0-1 and internally map to their actual range.
+//!
+//! Wire types are strictly the WGSL data shape — `Scalar` / `Int` /
+//! `Bool` / `Vec2` / `Vec4`. There is no separate `Color`, `Texture`,
+//! or `Mask` "semantic" type: an RGBA color is just a `Vec4`, a
+//! coverage value is just a `Scalar`. Two wires connect iff their
+//! underlying shapes match; if a node needs to go from RGBA to a
+//! scalar channel, that's an explicit `split_color` node.
+//!
+//! Pre-WGSL there was a `Texture` wire that carried a runtime
+//! `TextureHandle` — that whole infrastructure was deleted in
+//! commit `ff5a2eb`. The vestigial wire-type labels (`Texture`,
+//! `Mask`, `Color`) stuck around as labels even though nothing
+//! texture-shaped flows on the wires anymore. They've now been
+//! dropped so the wire vocabulary matches what's actually on the wire.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,24 +24,20 @@ use crate::nodegraph::WireKind;
 // ── Wire types ──────────────────────────────────────────────────────
 
 /// The set of data types that can flow along wires in a brush graph.
+/// Strictly mirrors WGSL shapes — no semantic skins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BrushWireType {
-    /// Single f32 (0-1 normalized).
+    /// Single `f32`. Used for sensor outputs, coverage values, mask
+    /// luminance — anything one-channel.
     Scalar,
-    /// Integer value.
+    /// `i32` value (enum index, count).
     Int,
-    /// Boolean flag.
+    /// `bool` flag.
     Bool,
-    /// Two-component vector (e.g. position, tilt).
+    /// `vec2<f32>` (position, tilt, motion).
     Vec2,
-    /// Four-component vector.
+    /// `vec4<f32>` (RGBA color, premultiplied; arbitrary 4-vector).
     Vec4,
-    /// RGBA color (linear, premultiplied alpha).
-    Color,
-    /// Handle to a GPU texture (dab, stamp, mask).
-    Texture,
-    /// Handle to a GPU mask texture.
-    Mask,
 }
 
 impl WireKind for BrushWireType {
@@ -36,27 +46,16 @@ impl WireKind for BrushWireType {
         if from == to {
             return true;
         }
-        // Implicit coercions — keep this small and obvious.
+        // Keep coercions small and obvious.
         matches!(
             (from, to),
             // Scalar widens to Int (truncates) or vice versa.
-            (Scalar, Int) | (Int, Scalar) |
-            // Scalar promotes to Color (grayscale).
-            (Scalar, Color) |
-            // Texture and Mask are interchangeable (same underlying format).
-            (Texture, Mask) | (Mask, Texture)
+            (Scalar, Int) | (Int, Scalar)
         )
     }
 }
 
 // ── Scalar value ────────────────────────────────────────────────────
-
-/// A GPU-texture handle stored in the slot table.
-///
-/// Index into the runner's texture slot array.  `u16` because we'll
-/// never have more than a few thousand textures in flight.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TextureHandle(pub u16);
 
 /// A value that fits in a slot in the evaluation table.
 ///
@@ -71,9 +70,6 @@ pub enum ScalarValue {
     Bool(bool),
     Vec2([f32; 2]),
     Vec4([f32; 4]),
-    Color([f32; 4]),
-    Texture(TextureHandle),
-    Mask(TextureHandle),
 }
 
 impl ScalarValue {
@@ -87,17 +83,17 @@ impl ScalarValue {
         }
     }
 
-    /// Extract as [f32; 4] color, coercing scalar to grayscale.
+    /// Extract as `[f32; 4]`, broadcasting scalar to grayscale (RGB)
+    /// with full alpha.
     pub fn as_color(self) -> [f32; 4] {
         match self {
-            Self::Color(c) => c,
             Self::Vec4(v) => v,
             Self::Scalar(v) => [v, v, v, 1.0],
             _ => [0.0, 0.0, 0.0, 1.0],
         }
     }
 
-    /// Extract as [f32; 2].
+    /// Extract as `[f32; 2]`, broadcasting scalar to both components.
     pub fn as_vec2(self) -> [f32; 2] {
         match self {
             Self::Vec2(v) => v,
@@ -114,9 +110,6 @@ impl ScalarValue {
             BrushWireType::Bool => Self::Bool(self.as_f32() > 0.5),
             BrushWireType::Vec2 => Self::Vec2(self.as_vec2()),
             BrushWireType::Vec4 => Self::Vec4(self.as_color()),
-            BrushWireType::Color => Self::Color(self.as_color()),
-            BrushWireType::Texture => self, // can't coerce into a texture
-            BrushWireType::Mask => self,
         }
     }
 }
@@ -135,47 +128,44 @@ mod tests {
     fn compatible_same_type() {
         for ty in [
             BrushWireType::Scalar,
-            BrushWireType::Color,
-            BrushWireType::Texture,
+            BrushWireType::Int,
+            BrushWireType::Vec2,
+            BrushWireType::Vec4,
         ] {
             assert!(BrushWireType::compatible(ty, ty));
         }
     }
 
     #[test]
-    fn compatible_coercions() {
+    fn compatible_scalar_int_coercions() {
         assert!(BrushWireType::compatible(
             BrushWireType::Scalar,
             BrushWireType::Int
         ));
         assert!(BrushWireType::compatible(
-            BrushWireType::Scalar,
-            BrushWireType::Color
-        ));
-        assert!(BrushWireType::compatible(
-            BrushWireType::Texture,
-            BrushWireType::Mask
+            BrushWireType::Int,
+            BrushWireType::Scalar
         ));
     }
 
     #[test]
-    fn incompatible_types() {
+    fn incompatible_unrelated_types() {
         assert!(!BrushWireType::compatible(
-            BrushWireType::Color,
+            BrushWireType::Vec4,
             BrushWireType::Scalar
         ));
         assert!(!BrushWireType::compatible(
             BrushWireType::Vec2,
-            BrushWireType::Color
+            BrushWireType::Vec4
         ));
     }
 
     #[test]
-    fn scalar_value_coerce() {
+    fn scalar_value_coerce_to_vec4_broadcasts_grayscale() {
         let v = ScalarValue::Scalar(0.75);
         assert_eq!(
-            v.coerce(BrushWireType::Color),
-            ScalarValue::Color([0.75, 0.75, 0.75, 1.0])
+            v.coerce(BrushWireType::Vec4),
+            ScalarValue::Vec4([0.75, 0.75, 0.75, 1.0])
         );
         assert_eq!(v.as_f32(), 0.75);
     }

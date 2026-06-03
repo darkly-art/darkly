@@ -635,7 +635,6 @@ mod tests {
     fn coverage_invariant_holds_with_segment_boundary_pattern() {
         let mut ring = CheckpointRing::new();
         let max_div = 65usize;
-        let _spacing = CheckpointRing::spacing(max_div);
 
         for step in 1usize..400 {
             let tip = step * 3; // grow tip steadily

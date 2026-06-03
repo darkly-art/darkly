@@ -1,7 +1,7 @@
 //! Hover-cursor preview render through `paint`. Verifies the
 //! shared `render_compiled_preview` helper produces the brush's
 //! actual color × shape × flow into the preview mask, and publishes
-//! sane placement info via `BrushPreviewInfo`.
+//! sane placement info via `BrushCursorPreviewInfo`.
 //!
 //! Runs against the live built-in brush graphs (no test-only
 //! rewiring) so per-brush wire bugs surface here.
@@ -10,7 +10,9 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use darkly::brush::gpu_context::{
+    BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
+};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::gpu::test_utils::{readback_texture, test_device};
@@ -40,10 +42,10 @@ fn preview_target(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
 
 struct PreviewOutput {
     rgba: Vec<u8>,
-    info: darkly::brush::eval::BrushPreviewInfo,
+    info: darkly::brush::eval::BrushCursorPreviewInfo,
 }
 
-fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> PreviewOutput {
+fn render_cursor_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> PreviewOutput {
     let brush = darkly::brush::builtin_brushes::all()
         .into_iter()
         .find(|b| b.metadata.name == brush_name)
@@ -70,27 +72,20 @@ fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> Prev
         device: &device,
         queue: &queue,
         pipelines: &pipelines,
-        scratch: None,
+        selection_bind_group: pipelines.default_selection_bind_group(),
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
-        paint_target: None,
-        selection_bind_group: pipelines.default_selection_bind_group(),
-        preview_target_view: Some(&target_view),
         blend_mode: 0,
-        preview_mask_view: Some(&target_view),
-        preview_mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
-        preview_mask_overlay: None,
-        brush_preview_info: None,
-        pre_stroke_texture: None,
-        pre_stroke_bind_group: None,
-        dab_write_canvas_bbox: None,
+        view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
-        pending_dab_bytes: Vec::new(),
-        pending_dab_count: 0,
-        pending_dabs_bbox: None,
-        pending_dab_meta_bytes: Vec::new(),
-        compiled_brush: None,
-        slot_outputs_owned: None,
+        stroke: None,
+        preview: Some(CursorPreviewState {
+            mask_view: Some(&target_view),
+            mask_size: (PREVIEW_SIDE, PREVIEW_SIDE),
+            mask_overlay: None,
+            info: None,
+        }),
+        dab_batch: DabBatch::default(),
     };
 
     let info = PaintInformation {
@@ -100,9 +95,11 @@ fn render_preview(brush_name: &str, size_override: f32, color: [f32; 4]) -> Prev
     };
     runner.seed_sensors(&info, color, 0xC0FFEE, 0);
     runner.execute_cpu();
-    runner.render_preview_pipeline(&mut ctx);
+    runner.render_cursor_preview_pipeline(&mut ctx);
     let published = ctx
-        .brush_preview_info
+        .preview
+        .as_ref()
+        .and_then(|p| p.info)
         .expect("paint publishes brush_preview_info");
     queue.submit([ctx.encoder.finish()]);
 
@@ -129,7 +126,7 @@ fn px(rgba: &[u8], x: u32, y: u32) -> [u8; 4] {
 fn round_brush_preview_shows_color_and_shape() {
     // Round: pressure=1 → flow=1 → centre pixel must be the seeded
     // color at near-full alpha.
-    let out = render_preview("Round", 0.1, [1.0, 0.0, 0.0, 1.0]);
+    let out = render_cursor_preview("Round", 0.1, [1.0, 0.0, 0.0, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     assert!(
@@ -152,7 +149,7 @@ fn round_brush_preview_shows_color_and_shape() {
 
 #[test]
 fn ink_pen_preview_shows_color() {
-    let out = render_preview("Ink Pen", 0.1, [0.0, 0.6, 0.0, 1.0]);
+    let out = render_cursor_preview("Ink Pen", 0.1, [0.0, 0.6, 0.0, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     assert!(
@@ -163,7 +160,7 @@ fn ink_pen_preview_shows_color() {
 
 #[test]
 fn airbrush_preview_shows_color_with_alpha_falloff() {
-    let out = render_preview("Airbrush", 0.1, [0.0, 0.0, 1.0, 1.0]);
+    let out = render_cursor_preview("Airbrush", 0.1, [0.0, 0.0, 1.0, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     assert!(
@@ -174,7 +171,7 @@ fn airbrush_preview_shows_color_with_alpha_falloff() {
 
 #[test]
 fn rough_ink_preview_shows_color() {
-    let out = render_preview("Rough Ink", 0.2, [0.7, 0.4, 0.0, 1.0]);
+    let out = render_cursor_preview("Rough Ink", 0.2, [0.7, 0.4, 0.0, 1.0]);
     let half = PREVIEW_SIDE / 2;
     let centre = px(&out.rgba, half, half);
     // Centre should be the brush color (orange-ish). Perlin noise can

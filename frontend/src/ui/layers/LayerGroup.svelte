@@ -4,6 +4,7 @@
     import { actions } from '../../actions/registry';
     import { bindingSite } from '../../actions/binding_site';
     import { tooltipForAction } from '../../config/store.svelte';
+    import { toast } from '../../state/toast.svelte';
     import LayerItem from './LayerItem.svelte';
     import LayerGroup from './LayerGroup.svelte';
 
@@ -38,6 +39,12 @@
     );
 
     let isActive = $derived(app.activeLayerId === group.id);
+    let isSelected = $derived(app.isSelected(group.id));
+    let selectionSize = $derived(app.selectedLayerIds.size);
+    let isMulti = $derived(selectionSize > 1);
+    let deleteLabel = $derived(isMulti ? `Delete ${selectionSize} Layers` : 'Delete Group');
+    let dupLabel = $derived(isMulti ? `Duplicate ${selectionSize} Layers` : 'Duplicate Group');
+    let mergeLabel = $derived(isMulti ? `Merge ${selectionSize} Layers` : 'Merge Down');
     let isEditingMask = $derived(
         maskModifier !== null && app.activeLayerId === maskModifier.id,
     );
@@ -74,6 +81,8 @@
         return siblingBelowExists(app.layerTree, group.id);
     });
 
+    let canAddMask = $derived(!hasMask && editable);
+
     // Chord dispatch is owned by `use:bindingSite` on each preview element
     // below — `bindingSite` intercepts modifier+click in capture phase
     // and dispatches against its named site. These onclick handlers are
@@ -98,10 +107,11 @@
         }
     }
 
-    function onLayerClick() {
+    function onLayerClick(e: MouseEvent) {
         // The group-header body has no bindings — modifier+click is
-        // reserved for the previews. Plain click selects.
-        app.selectLayer(group.id);
+        // reserved for the previews. Plain / ctrl / shift dispatch is
+        // shared with LayerItem via app.handleLayerRowClick.
+        app.handleLayerRowClick(group.id, e);
     }
 
     function startRename() {
@@ -139,7 +149,12 @@
     function onLayerContextMenu(e: MouseEvent) {
         e.preventDefault();
         e.stopPropagation();
-        app.selectLayer(group.id);
+        // Mirror LayerItem: only replace the selection if the right-
+        // clicked row isn't already part of it. Otherwise the menu
+        // operates on the whole selected set.
+        if (!app.isSelected(group.id)) {
+            app.selectLayer(group.id);
+        }
         layerMenuX = e.clientX;
         layerMenuY = e.clientY;
         showLayerMenu = true;
@@ -147,19 +162,36 @@
         requestAnimationFrame(() => document.addEventListener('click', close));
     }
 
+    // Structural menu items dispatch WITHOUT `ctx.layerId` — the action
+    // handler reads `app.selectedLayerIds` directly. See LayerItem.svelte
+    // for the same pattern and the rationale.
+
     function menuDuplicate() {
-        actions.dispatch('duplicateLayer', { layerId: group.id });
+        actions.dispatch('duplicateLayer');
         onupdate();
     }
 
-    function menuMergeDown() {
-        if (!canMergeDownForThis) return;
-        actions.dispatch('mergeDown', { layerId: group.id });
+    function menuMerge() {
+        // `mergeDown` is selection-aware (see LayerItem.svelte's menuMerge).
+        if (!isMulti && !canMergeDownForThis) return;
+        actions.dispatch('mergeDown');
         onupdate();
     }
 
     function menuFlatten() {
-        actions.dispatch('flatten', { layerId: group.id });
+        actions.dispatch('flatten');
+        onupdate();
+    }
+
+    function menuAddMask() {
+        if (!canAddMask) return;
+        actions.dispatch('addMask');
+        onupdate();
+    }
+
+    function menuDelete() {
+        if (!editable && !isMulti) return;
+        actions.dispatch('deleteLayer');
         onupdate();
     }
 
@@ -187,7 +219,16 @@
     }
 
     function onDragStart(e: DragEvent) {
-        e.dataTransfer?.setData('text/plain', String(group.id));
+        const ids = app.isSelected(group.id)
+            ? [...app.selectedLayerIds]
+            : [group.id];
+        if (!app.isSelected(group.id)) {
+            app.selectLayer(group.id);
+        }
+        e.dataTransfer?.setData(
+            'application/x-darkly-layers',
+            JSON.stringify(ids),
+        );
         if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
     }
 
@@ -220,17 +261,26 @@
         e.stopPropagation();
         const pos = dropPos;
         dropPos = 'none';
-        const draggedId = e.dataTransfer?.getData('text/plain');
-        if (!draggedId || !app.handle) return;
-        const id = Number(draggedId);
-        if (id === group.id) return;
+        const payload = e.dataTransfer?.getData('application/x-darkly-layers');
+        if (!payload || !app.handle) return;
+        let ids: number[];
+        try { ids = JSON.parse(payload) as number[]; } catch { return; }
+        if (!Array.isArray(ids) || ids.length === 0) return;
+        if (ids.includes(group.id)) return;
 
-        if (pos === 'above') {
-            app.handle.move_layer(id, 'after', group.id);
-        } else if (pos === 'below') {
-            app.handle.move_layer(id, 'before', group.id);
-        } else {
-            app.handle.move_layer(id, 'into_top', group.id);
+        const where = pos === 'above' ? 'after'
+            : pos === 'below' ? 'before'
+            : 'into_top';
+
+        try {
+            const skipped = app.handle.move_layers(
+                Float64Array.from(ids), where, group.id,
+            );
+            if (skipped > 0) {
+                toast.show('info', `${skipped} locked layer${skipped === 1 ? '' : 's'} skipped`);
+            }
+        } catch (e: any) {
+            toast.show('error', e.message ?? String(e));
         }
         onupdate();
     }
@@ -241,6 +291,7 @@
     <div
         class="group-header"
         class:active={isActive}
+        class:selected={isSelected}
         class:drop-above={dropPos === 'above'}
         class:drop-below={dropPos === 'below'}
         class:drop-into={dropPos === 'into'}
@@ -331,11 +382,22 @@
 {#if showLayerMenu}
     <div class="layer-menu" style:left="{layerMenuX}px" style:top="{layerMenuY}px">
         <!-- Duplicate doesn't mutate the locked node — allowed. -->
-        <button onclick={menuDuplicate}>Duplicate group</button>
-        <button onclick={menuMergeDown} disabled={!canMergeDownForThis || !editable}>
-            Merge down
+        <button onclick={menuDuplicate}>{dupLabel}</button>
+        {#if !isMulti}
+            <button onclick={menuAddMask} disabled={!canAddMask}>
+                Add mask
+            </button>
+        {/if}
+        <button onclick={menuMerge} disabled={!isMulti && (!canMergeDownForThis || !editable)}>
+            {mergeLabel}
         </button>
-        <button onclick={menuFlatten} disabled={!editable}>Flatten</button>
+        {#if !isMulti}
+            <button onclick={menuFlatten} disabled={!editable}>Flatten</button>
+        {/if}
+        <div class="layer-menu-sep"></div>
+        <button onclick={menuDelete} disabled={!isMulti && !editable}>
+            {deleteLabel}
+        </button>
     </div>
 {/if}
 
@@ -371,6 +433,10 @@
     }
 
     .group-header:hover {
+        background: var(--bg-hover);
+    }
+
+    .group-header.selected {
         background: var(--bg-hover);
     }
 
@@ -547,5 +613,11 @@
     .layer-menu button:disabled {
         color: var(--text-dim);
         cursor: default;
+    }
+
+    .layer-menu-sep {
+        height: 1px;
+        background: var(--bg-hover);
+        margin: 4px 0;
     }
 </style>

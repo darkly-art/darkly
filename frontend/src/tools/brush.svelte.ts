@@ -31,7 +31,7 @@ const SMALL_ON_SCREEN = 6;
 /** Half-extent in *on-screen* pixels at/above which BASE_STRENGTH applies. */
 const LARGE_ON_SCREEN = 40;
 
-interface BrushPreviewInfo {
+interface BrushCursorPreviewInfo {
     halfExtent: [number, number];
     rotation: number;
 }
@@ -46,7 +46,7 @@ function previewStrength(halfExtent: [number, number]): number {
     return MAX_STRENGTH + (BASE_STRENGTH - MAX_STRENGTH) * smooth;
 }
 
-/** Pen pose passed to `refresh_brush_preview` — drives any pressure /
+/** Pen pose passed to `refresh_brush_cursor_preview` — drives any pressure /
  *  tilt / twist dynamics wired into the brush graph. Components are in
  *  the normalised ranges WASM expects (pressure 0–1, tilt ±1, twist 0–1). */
 export interface PenPose {
@@ -96,7 +96,7 @@ let lastHover: { cx: number; cy: number; pose: PenPose } | null = null;
  *  scrub, which uses `FULL_PRESS_POSE` so the circle shows the brush's
  *  max extent) can keep the preview in sync after mutating the graph. */
 export function pushHoverOverlay(handle: any, pose: PenPose, cx: number, cy: number) {
-    const info = handle.refresh_brush_preview(
+    const info = handle.refresh_brush_cursor_preview(
         cx,
         cy,
         pose.pressure,
@@ -104,7 +104,7 @@ export function pushHoverOverlay(handle: any, pose: PenPose, cx: number, cy: num
         pose.tiltY,
         pose.twist,
         pose.tangentialPressure,
-    ) as BrushPreviewInfo | null;
+    ) as BrushCursorPreviewInfo | null;
     if (!info) {
         handle.clear_overlay();
         app.toolCursor = null;
@@ -194,7 +194,7 @@ export const brushTool: Tool = {
         ctx.handle.set_brush_blend_mode(brushSession.eraseMode ? 1 : 0);
         // Hide the native cursor only if a preview is available — otherwise
         // fall back to the default cursor so the user has *something* to see.
-        const info = ctx.handle.get_brush_preview_info();
+        const info = ctx.handle.get_brush_cursor_preview_info();
         app.toolCursor = info ? 'none' : null;
     },
 
@@ -214,8 +214,9 @@ export const brushTool: Tool = {
         // Clear the hover overlay while painting — the stamp renders onto
         // the canvas directly; a ghost at the cursor would just clutter.
         ctx.handle.clear_overlay();
-        ctx.handle.clear_brush_preview_pose();
+        ctx.handle.clear_brush_cursor_preview_pose();
         clearHover();
+        app.toolCursor = 'none';
         const params = brushStrokeParams(e, cx, cy);
         ctx.handle.begin_stroke(layerId);
         ctx.handle.stroke_to('brush_stroke', params);
@@ -243,7 +244,7 @@ export const brushTool: Tool = {
         // Pointer left the canvas: drop the hover ghost so it doesn't
         // linger at the last-seen edge position.
         ctx.handle.clear_overlay();
-        ctx.handle.clear_brush_preview_pose();
+        ctx.handle.clear_brush_cursor_preview_pose();
         clearHover();
     },
 

@@ -168,22 +168,7 @@ impl RegionScratch {
         }
         let new_w = w.max(self.scratch_width);
         let new_h = h.max(self.scratch_height);
-        self.scratch_rgba = Self::create_scratch(
-            device,
-            new_w,
-            new_h,
-            wgpu::TextureFormat::Rgba8Unorm,
-            "scratch-rgba",
-        );
-        self.scratch_r8 = Self::create_scratch(
-            device,
-            new_w,
-            new_h,
-            wgpu::TextureFormat::R8Unorm,
-            "scratch-r8",
-        );
-        self.scratch_width = new_w;
-        self.scratch_height = new_h;
+        self.realloc_scratch_pair(device, new_w, new_h, None);
     }
 
     /// Reallocate the scratch textures to `(new_w, new_h)` and copy the
@@ -211,76 +196,85 @@ impl RegionScratch {
         {
             return;
         }
+        let target_w = new_w.max(self.scratch_width);
+        let target_h = new_h.max(self.scratch_height);
+        self.realloc_scratch_pair(
+            device,
+            target_w,
+            target_h,
+            Some((encoder, dst_offset_x, dst_offset_y)),
+        );
+    }
+
+    /// Reallocate both scratch textures (RGBA8 + R8) to `(new_w, new_h)`.
+    /// When `copy` is `Some((encoder, dst_x, dst_y))`, the existing
+    /// scratch contents are copied into the new textures at the given
+    /// offset before the old textures are dropped. `(scratch_width,
+    /// scratch_height)` is updated to `(new_w, new_h)` regardless of copy.
+    fn realloc_scratch_pair(
+        &mut self,
+        device: &wgpu::Device,
+        new_w: u32,
+        new_h: u32,
+        copy: Option<(&mut wgpu::CommandEncoder, u32, u32)>,
+    ) {
+        let pairs = [
+            (
+                &mut self.scratch_rgba,
+                wgpu::TextureFormat::Rgba8Unorm,
+                "scratch-rgba",
+            ),
+            (
+                &mut self.scratch_r8,
+                wgpu::TextureFormat::R8Unorm,
+                "scratch-r8",
+            ),
+        ];
         let copy_w = self.scratch_width;
         let copy_h = self.scratch_height;
-        let new_rgba = Self::create_scratch(
-            device,
-            new_w.max(self.scratch_width),
-            new_h.max(self.scratch_height),
-            wgpu::TextureFormat::Rgba8Unorm,
-            "scratch-rgba",
-        );
-        let new_r8 = Self::create_scratch(
-            device,
-            new_w.max(self.scratch_width),
-            new_h.max(self.scratch_height),
-            wgpu::TextureFormat::R8Unorm,
-            "scratch-r8",
-        );
-
-        if copy_w > 0 && copy_h > 0 {
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.scratch_rgba,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &new_rgba,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: dst_offset_x,
-                        y: dst_offset_y,
-                        z: 0,
+        let (encoder_opt, dst_offset_x, dst_offset_y) = match copy {
+            Some((enc, x, y)) => (Some(enc), x, y),
+            None => (None, 0, 0),
+        };
+        let do_copy = encoder_opt.is_some() && copy_w > 0 && copy_h > 0;
+        // The encoder borrow has to be threaded through the loop body; an
+        // `Option<&mut _>` doesn't `Copy`, so reborrow via `as_deref_mut`
+        // each iteration.
+        let mut encoder_opt = encoder_opt;
+        for (field, format, label) in pairs {
+            let new_tex = Self::create_scratch(device, new_w, new_h, format, label);
+            if do_copy {
+                let encoder = encoder_opt
+                    .as_deref_mut()
+                    .expect("do_copy implies encoder present");
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: field,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
                     },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: copy_w,
-                    height: copy_h,
-                    depth_or_array_layers: 1,
-                },
-            );
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.scratch_r8,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &new_r8,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d {
-                        x: dst_offset_x,
-                        y: dst_offset_y,
-                        z: 0,
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &new_tex,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: dst_offset_x,
+                            y: dst_offset_y,
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
                     },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: copy_w,
-                    height: copy_h,
-                    depth_or_array_layers: 1,
-                },
-            );
+                    wgpu::Extent3d {
+                        width: copy_w,
+                        height: copy_h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            *field = new_tex;
         }
-
-        self.scratch_rgba = new_rgba;
-        self.scratch_r8 = new_r8;
-        self.scratch_width = new_w.max(self.scratch_width);
-        self.scratch_height = new_h.max(self.scratch_height);
+        self.scratch_width = new_w;
+        self.scratch_height = new_h;
     }
 
     /// Copy a canvas-space rect from a layer/mask texture into the scratch

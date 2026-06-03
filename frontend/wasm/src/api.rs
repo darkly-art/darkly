@@ -873,12 +873,12 @@ impl DarklyHandle {
     /// `{ halfExtent: [f32, f32], rotation: f32 }`. The overlay mask itself
     /// is already bound internally — the tool only needs this to place the
     /// primitive.
-    pub fn get_brush_preview_info(&self) -> JsValue {
+    pub fn get_brush_cursor_preview_info(&self) -> JsValue {
         // Drain any pending commands so param changes have already triggered
         // a preview regen before we read the cache. Otherwise the tool can
         // read a stale size the first hover after a slider drag.
         self.flush_if_needed();
-        brush_preview_info_as_js(&self.engine.borrow())
+        brush_cursor_preview_info_as_js(&self.engine.borrow())
     }
 
     /// Re-render the brush preview with live pen data, then return the
@@ -893,7 +893,7 @@ impl DarklyHandle {
     /// 1.0 inside the engine because the hover event reports 0 pressure
     /// (no contact) but the preview should reflect what happens "if the
     /// pen presses now" — at full engagement.
-    pub fn refresh_brush_preview(
+    pub fn refresh_brush_cursor_preview(
         &self,
         x: f32,
         y: f32,
@@ -905,7 +905,7 @@ impl DarklyHandle {
     ) -> JsValue {
         self.flush_if_needed();
 
-        let mut pen = PaintInformation::preview_dummy();
+        let mut pen = PaintInformation::cursor_preview_dummy();
         pen.pos = [x, y];
         // Hover reports pressure=0 (no contact) — keep the dummy's 1.0 as
         // a "what-if-pressed-now" fallback. If the pen is actively pressed
@@ -920,15 +920,15 @@ impl DarklyHandle {
 
         self.engine
             .borrow_mut()
-            .regenerate_brush_preview_with_pen(pen);
-        brush_preview_info_as_js(&self.engine.borrow())
+            .regenerate_brush_cursor_preview_with_pen(pen);
+        brush_cursor_preview_info_as_js(&self.engine.borrow())
     }
 
-    /// Drop any remembered hover pose so the next `refresh_brush_preview`
+    /// Drop any remembered hover pose so the next `refresh_brush_cursor_preview`
     /// starts fresh with no derived direction/motion/distance/speed.
     /// Call on pointer-leave and at stroke start.
-    pub fn clear_brush_preview_pose(&self) {
-        self.engine.borrow_mut().clear_brush_preview_pose();
+    pub fn clear_brush_cursor_preview_pose(&self) {
+        self.engine.borrow_mut().clear_brush_cursor_preview_pose();
     }
 
     /// Full-stroke brush editor preview — renders an S-curve sample stroke
@@ -941,9 +941,9 @@ impl DarklyHandle {
     /// preview visually matches the brush picker's thumbnails so users can
     /// scan across both without chromatic surprises. Same shape as
     /// `brush_active_dab_preview`: no promises, no async JS boundary plumbing.
-    pub fn brush_editor_preview(&self) -> Vec<u8> {
+    pub fn brush_stroke_preview(&self) -> Vec<u8> {
         self.flush_if_needed();
-        self.engine.borrow_mut().brush_editor_preview()
+        self.engine.borrow_mut().brush_stroke_preview()
     }
 
     /// Render a single-dab preview of the active brush — the small
@@ -1154,6 +1154,103 @@ impl DarklyHandle {
         self.engine
             .borrow_mut()
             .move_layer(LayerId::from_ffi(layer_id as u64), target)
+    }
+
+    /// Remove every layer in `ids` in a single undo step. Returns the
+    /// number of locked layers that were skipped so the UI can toast.
+    /// Errors only when removing the editable set would leave the
+    /// document with zero layers.
+    pub fn remove_layers(&self, ids: Vec<f64>) -> Result<u32, JsError> {
+        self.flush_if_needed();
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .remove_layers(ids)
+            .map(|n| n as u32)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Move every layer in `ids` to land contiguously at the drop target,
+    /// preserving their relative panel order. Returns the count of locked
+    /// layers skipped. Errors when the drop target is one of the moved
+    /// ids or a descendant of one (self-referential drop).
+    pub fn move_layers(
+        &self,
+        ids: Vec<f64>,
+        target_type: &str,
+        target_id: f64,
+    ) -> Result<u32, JsError> {
+        self.flush_if_needed();
+        let target_id = LayerId::from_ffi(target_id as u64);
+        let target = match target_type {
+            "before" => MoveTarget::Before(target_id),
+            "after" => MoveTarget::After(target_id),
+            "into_top" => MoveTarget::IntoGroupTop(target_id),
+            "into_bottom" => MoveTarget::IntoGroupBottom(target_id),
+            _ => return Err(JsError::new("unknown move target")),
+        };
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .move_layers(ids, target)
+            .map(|n| n as u32)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Duplicate every node in `ids` in panel order. Returns the new
+    /// node ids in the same order, suitable for re-selecting the copies.
+    pub fn duplicate_nodes(&self, ids: Vec<f64>) -> Vec<f64> {
+        self.flush_if_needed();
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .duplicate_nodes(ids)
+            .into_iter()
+            .map(|id| id.to_ffi() as f64)
+            .collect()
+    }
+
+    /// Create a new group and move every layer in `ids` into it. The group
+    /// lands at the panel-topmost selected layer's slot; sources from
+    /// other parents are pulled in. Locked layers and ancestors-of-other-
+    /// sources are silently skipped. Returns the new group's id.
+    pub fn group_layers(&self, ids: Vec<f64>) -> Result<f64, JsError> {
+        self.flush_if_needed();
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .group_layers(ids)
+            .map(|id| id.to_ffi() as f64)
+            .map_err(|e| JsError::new(&e))
+    }
+
+    /// Bake every layer in `ids` (≥2) into one raster at the panel-topmost
+    /// selected layer's slot. Cross-parent selections are supported.
+    /// Returns the result id, or an error message if any source is locked
+    /// or fewer than two distinct ids are given.
+    pub fn merge_layers(&self, ids: Vec<f64>) -> Result<f64, JsError> {
+        self.flush_if_needed();
+        let ids: Vec<LayerId> = ids
+            .into_iter()
+            .map(|v| LayerId::from_ffi(v as u64))
+            .collect();
+        self.engine
+            .borrow_mut()
+            .merge_layers(ids)
+            .map(|id| id.to_ffi() as f64)
+            .map_err(|e| JsError::new(&e))
     }
 
     /// Deep-copy a layer or group, placing the duplicate directly above the
@@ -1559,6 +1656,29 @@ impl DarklyHandle {
     pub fn brush_graph_compile(&self, json: &str) -> JsValue {
         self.flush_if_needed();
         match self.engine.borrow_mut().set_brush_graph(json) {
+            Ok(()) => JsValue::NULL,
+            Err(e) => JsValue::from_str(&e),
+        }
+    }
+
+    /// Export the active brush graph as YAML (the human/AI-friendly
+    /// format documented in `crates/darkly/src/brush/portable.rs`).
+    /// Returns an empty string on serialization failure — should not
+    /// happen for a valid in-memory graph.
+    pub fn brush_graph_export_yaml(&self) -> String {
+        self.flush_if_needed();
+        self.engine
+            .borrow()
+            .active_brush_graph_yaml()
+            .unwrap_or_default()
+    }
+
+    /// Replace the active brush graph from YAML. Returns `null` on
+    /// success or an error string on parse / validation failure (same
+    /// convention as `brush_graph_compile`).
+    pub fn brush_graph_import_yaml(&self, yaml: &str) -> JsValue {
+        self.flush_if_needed();
+        match self.engine.borrow_mut().set_brush_graph_yaml(yaml) {
             Ok(()) => JsValue::NULL,
             Err(e) => JsValue::from_str(&e),
         }
@@ -2066,16 +2186,16 @@ fn js_f32_quad(obj: &JsValue, key: &str) -> Option<[f32; 4]> {
     ])
 }
 
-/// Serialize `engine.brush_preview_info()` as a JS `{ halfExtent, rotation }`
+/// Serialize `engine.brush_cursor_preview_info()` as a JS `{ halfExtent, rotation }`
 /// POJO, or `null` when the active graph has no preview source.
-fn brush_preview_info_as_js(engine: &DarklyEngine) -> JsValue {
+fn brush_cursor_preview_info_as_js(engine: &DarklyEngine) -> JsValue {
     #[derive(serde::Serialize)]
     struct Info {
         #[serde(rename = "halfExtent")]
         half_extent: [f32; 2],
         rotation: f32,
     }
-    match engine.brush_preview_info() {
+    match engine.brush_cursor_preview_info() {
         Some(info) => {
             let payload = Info {
                 half_extent: info.half_extent_canvas_px,

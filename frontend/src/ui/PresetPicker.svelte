@@ -1,6 +1,15 @@
 <script lang="ts">
     import { config } from '../config/store.svelte';
     import Modal from './Modal.svelte';
+    import kritaSvg from '../assets/presets/krita.svg?raw';
+    import gimpSvg from '../assets/presets/gimp.svg?raw';
+    import photoshopSvg from '../assets/presets/photoshop.svg?raw';
+
+    const logos: Record<string, string> = {
+        krita: kritaSvg,
+        gimp: gimpSvg,
+        photoshop: photoshopSvg,
+    };
 
     function pick(name: string) {
         // Just sets `app.baseSettings` in the user layer. The overlay
@@ -12,13 +21,14 @@
 
 <Modal bind:open={config.needsPresetChoice} size="sm" bare>
     <div class="preset-picker">
-        <h2>Choose your starting keybindings</h2>
-        <p>Pick a familiar layout to seed your settings. Each option is just a
-            base layer — you can rebind anything, and you can switch base
-            layouts later from Settings without losing your customizations.</p>
+        <h2>Pick your starting hotkeys</h2>
+        <p>You can change this anytime in Settings.</p>
         <div class="presets">
             {#each config.baseNames as name (name)}
                 <button type="button" class="preset-btn" onclick={() => pick(name)}>
+                    {#if logos[name.toLowerCase()]}
+                        <span class="preset-logo" aria-hidden="true">{@html logos[name.toLowerCase()]}</span>
+                    {/if}
                     <span class="preset-name">{name}</span>
                 </button>
             {/each}
@@ -53,20 +63,34 @@
 
     .preset-btn {
         display: flex;
-        flex-direction: column;
+        flex-direction: row;
         align-items: center;
-        gap: 2px;
+        gap: 14px;
         background: var(--bg-hover);
         border: 1px solid var(--bg-hover);
         border-radius: 6px;
-        padding: 14px 16px;
+        padding: 12px 16px;
         cursor: pointer;
-        transition: border-color 0.15s, background 0.15s;
+        color: var(--text-muted);
+        transition: border-color 0.15s, background 0.15s, color 0.15s;
     }
 
     .preset-btn:hover {
         background: var(--bg-active);
         border-color: var(--accent);
+        color: var(--text);
+    }
+
+    .preset-logo {
+        display: inline-flex;
+        width: 24px;
+        height: 24px;
+        flex: 0 0 auto;
+    }
+
+    .preset-logo :global(svg) {
+        width: 100%;
+        height: 100%;
     }
 
     .preset-name {

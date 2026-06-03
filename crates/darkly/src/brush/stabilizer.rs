@@ -166,7 +166,7 @@ impl StabilizerRegistry {
 }
 
 /// Per-brush stabilizer configuration — stored in `BrushMetadata`.
-#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct StabilizerConfig {
     /// Algorithm type_id.  Empty string or "none" = pass-through.
     #[serde(default)]

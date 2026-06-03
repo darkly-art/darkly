@@ -125,20 +125,45 @@ pub struct PortDef<W: WireKind> {
     /// Whether this port is exposed in the brush properties panel.
     #[serde(default)]
     pub exposed: bool,
-    /// Value substituted for this port during preview rendering. When
-    /// set, the preview pipeline calls `apply_preview_overrides`, which
-    /// drops any incoming wire on this port and replaces `default`
-    /// with this constant. The user's actual port value (defaults,
-    /// scrubs, wired modulators) is excluded from the preview entirely.
+    /// Value substituted for this port in every "brush identity"
+    /// render: the cursor-following dab overlay, the editor stroke
+    /// preview, and the library thumbnail bake. The brush WGSL
+    /// compiler clones the graph, drops incoming wires on flagged
+    /// ports, and replaces `default` with this constant — so all
+    /// previews read as a showcase of the brush regardless of the
+    /// user's working scrub. Real strokes still honour the
+    /// configured value.
     ///
-    /// This is how a node opts its port out of preview rendering — the
-    /// pipeline never inspects the port itself, never knows what it
-    /// means, and never branches on its value. Use it for ports whose
-    /// value is irrelevant to a brush's *identity* and would distort
-    /// the preview if surfaced (canonical example: `stamp.size`, which
-    /// is a working scaling factor, not part of how a brush looks).
+    /// Use when the port is something the user actively scrubs but
+    /// the preview must stay at a canonical value (otherwise the
+    /// preview becomes a moving target as the user dials in their
+    /// brush). The picker dab tile uses a more aggressive
+    /// neutralizer (`reset_exposed_scrubs`) that targets every
+    /// exposed scrub regardless of `preview_value`.
+    ///
+    /// Canonical example: `paint.size` (0.1, so a huge brush's
+    /// preview still fits the small cursor mask and the editor
+    /// preview doesn't redraw on every size scrub).
     #[serde(default)]
     pub preview_value: Option<f32>,
+    /// Declares that scrubbing this port's value does **not** change
+    /// what the synthetic-stroke editor preview produces, so the
+    /// preview cache and version counter should not bump on its scrub.
+    ///
+    /// Used by ports whose value the preview *pipeline* (not the
+    /// shader) ignores. Canonical example: `pen_input.stabilize` —
+    /// the editor preview's stroke engine is hard-wired to use
+    /// `PassThrough` as the stabilizer (the path is pre-cooked), so
+    /// the live `stabilize` value never reaches it. Marking this
+    /// declaratively avoids re-rendering a full stroke every ~100 ms
+    /// while the user drags the slider for no visible effect.
+    ///
+    /// Distinct from [`PortDef::preview_value`]: that one substitutes
+    /// values into the *cursor overlay shader*; this one skips a
+    /// version bump on the *editor stroke preview*. A port can carry
+    /// either, both, or neither.
+    #[serde(default)]
+    pub preview_irrelevant_scrub: bool,
     /// Conditional visibility: the port is only shown in the UI when the
     /// value of the named param is one of the listed integer values. The
     /// param is referenced by its registration name (e.g. `"algorithm"`)
@@ -163,7 +188,7 @@ pub struct PortDef<W: WireKind> {
     /// stays "UI hint only, not enforced", and `with_natural_range` is the
     /// separate, explicit opt-in for wire-boundary range mapping. Most
     /// ports declare both with the same numbers; the two diverge for
-    /// over-drag sliders like `stamp.size`, where the slider range is
+    /// over-drag sliders like `paint.size`, where the slider range is
     /// a hint but the wire-side semantics are passthrough.
     #[serde(default)]
     pub natural_range: Option<(f32, f32)>,
@@ -174,7 +199,7 @@ pub struct PortDef<W: WireKind> {
     /// exposed input back to its registration default before rendering
     /// the dab thumbnail — the icon represents brush shape/texture, not
     /// the user's working size/opacity/flow knobs. That policy is wrong
-    /// for orientation knobs (rotation, phase): a calligraphy nib at
+    /// for orientation knobs (rotation): a calligraphy nib at
     /// 45° *is* a different-looking brush, and the icon should reflect
     /// that.
     ///
@@ -200,6 +225,7 @@ impl<W: WireKind> PortDef<W> {
             label: String::new(),
             exposed: false,
             preview_value: None,
+            preview_irrelevant_scrub: false,
             visible_when: None,
             step: 0.0,
             natural_range: None,
@@ -221,6 +247,7 @@ impl<W: WireKind> PortDef<W> {
             label: String::new(),
             exposed: false,
             preview_value: None,
+            preview_irrelevant_scrub: false,
             visible_when: None,
             step: 0.0,
             natural_range: None,
@@ -311,10 +338,19 @@ impl<W: WireKind> PortDef<W> {
         self
     }
 
+    /// Declare that this port's value is ignored by the synthetic-stroke
+    /// editor preview pipeline, so the editor preview's cache need not
+    /// rebuild on its scrub. See [`PortDef::preview_irrelevant_scrub`]
+    /// for the contract.
+    pub fn preview_irrelevant_scrub(mut self) -> Self {
+        self.preview_irrelevant_scrub = true;
+        self
+    }
+
     /// Mark this exposed port as part of the brush's identity — its
     /// user-set value persists into the dab thumbnail, and scrubs of
     /// it rebake the thumbnail. See [`PortDef::persist_in_thumbnail`]
-    /// for the contract. Use for orientation knobs (rotation, phase)
+    /// for the contract. Use for orientation knobs (rotation)
     /// that visibly change the dab; don't use for magnitude knobs
     /// (size, opacity, flow) where the icon should stay normalized.
     pub fn persist_in_thumbnail(mut self) -> Self {
@@ -424,7 +460,7 @@ impl std::error::Error for FindTerminalError {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct Graph<W: WireKind> {
-    pub nodes: HashMap<NodeId, NodeInstance<W>>,
+    nodes: HashMap<NodeId, NodeInstance<W>>,
     pub connections: Vec<Connection>,
     next_id: u64,
 }
@@ -442,6 +478,14 @@ impl<W: WireKind> Graph<W> {
             connections: Vec::new(),
             next_id: 1,
         }
+    }
+
+    /// Read-only access to the node map. The graph owns id assignment
+    /// (via [`add_node`](Self::add_node)) and the invariant that every
+    /// connection references existing nodes, so external code must go
+    /// through the graph's methods to mutate the set.
+    pub fn nodes(&self) -> &HashMap<NodeId, NodeInstance<W>> {
+        &self.nodes
     }
 
     /// Add a node and return its assigned id.
@@ -528,18 +572,25 @@ impl<W: WireKind> Graph<W> {
     }
 
     /// Neutralize ports annotated with [`PortDef::preview_value`] so
-    /// the graph renders representably as a preview.
+    /// the graph compiles to a cursor-overlay-friendly preview shader.
     ///
-    /// For each port carrying a `preview_value`, this drops any
-    /// incoming wire on the port and replaces its `default` with the
-    /// annotated constant. The user's runtime value (whatever scrub
-    /// or modulator drove that port) is excluded from the preview.
-    /// Ports without a `preview_value` are left alone.
+    /// For each port carrying a `preview_value`, this drops any incoming
+    /// wire on the port and replaces its `default` with the annotated
+    /// constant. Ports without a `preview_value` are left alone.
     ///
-    /// This is the only place the preview pipeline mutates the graph.
-    /// Per-node knowledge — "the preview-time value of *my* port" —
-    /// lives on the port registration; the pipeline is brush-agnostic.
-    pub fn apply_preview_overrides(&mut self) {
+    /// Called by every renderer that wants brush-identity output rather
+    /// than the user's momentary scrub state:
+    /// - the WGSL compiler, on a clone, before emitting
+    ///   `CompiledBrush::cursor_preview_wgsl` (the cursor halo);
+    /// - the brush-editor stroke preview;
+    /// - the library thumbnail bake (`brush_save`, `brush_thumbnail`).
+    ///
+    /// The picker dab tile uses a different, more aggressive neutralizer
+    /// (`reset_exposed_scrubs`) that resets every exposed scrub to its
+    /// registration default. Both kinds of preview want the same end:
+    /// scrubbing any `preview_value`-tagged port shouldn't redraw the
+    /// preview, because the rendered output is identical by construction.
+    pub(crate) fn apply_preview_overrides(&mut self) {
         let mut overrides: Vec<(NodeId, String, f32)> = Vec::new();
         for node in self.nodes.values() {
             for port in &node.ports {

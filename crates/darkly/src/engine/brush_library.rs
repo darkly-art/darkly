@@ -10,8 +10,8 @@ pub(crate) const BRUSH_THUMBNAIL_SIZE: (u32, u32) = (320, 120);
 
 /// Render canvas for stroke previews. Sized once, statically, with
 /// enough headroom around `BRUSH_THUMBNAIL_SIZE` to fit endpoint dabs
-/// at the largest preview-time radius any port's `preview_max` allows
-/// (currently `stamp.size` ≤ 0.1 → ≤ 26 px radius). The pipeline never
+/// at the largest preview-time radius any port's `preview_value` allows
+/// (currently `paint.size` ≤ 0.1 → ≤ 26 px radius). The pipeline never
 /// inspects the brush graph to size this canvas — `apply_preview_overrides`
 /// has already neutralized any port that would otherwise blow it out.
 pub(crate) const BRUSH_STROKE_RENDER_SIZE: (u32, u32) = (384, 192);
@@ -36,17 +36,12 @@ impl DarklyEngine {
     }
 
     /// Load a brush by name and set it as the active brush graph.
-    ///
-    /// Also uploads any brush tip resources to the GPU dab pool cache.
     pub fn brush_load(&mut self, name: &str) -> Result<(), String> {
         let brush = self
             .brush_library
             .get(name)
             .ok_or_else(|| format!("brush '{}' not found", name))?
             .clone();
-
-        // Upload brush tip resources to the GPU.
-        self.ensure_brush_resources(&brush);
 
         let json = serde_json::to_string(&brush.metadata.graph)
             .map_err(|e| format!("failed to serialize graph: {e}"))?;
@@ -67,20 +62,23 @@ impl DarklyEngine {
     pub fn brush_save(&mut self, name: &str, category: &str) -> Result<(), String> {
         let mut metadata = BrushMetadata::from_graph(name, self.active_brush_graph());
         metadata.category = category.to_string();
-        self.brush_library
-            .insert(Brush::without_resources(metadata));
+        self.brush_library.insert(Brush::from_metadata(metadata));
         // Saving establishes a new "brush baseline" — what the user just
         // saved IS what reset-to-default should now return to.
         self.snapshot_brush_defaults();
 
         // Kick off the thumbnail bake. Uses theme colors (not the active
-        // fg) so the picker grid looks consistent across brushes.
+        // fg) so the picker grid looks consistent across brushes. Apply
+        // preview overrides so the saved brush thumbnails are size-
+        // invariant — the picker grid should show brush identity, not a
+        // snapshot of whatever scrub value the user happened to have
+        // when saving.
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
         let mut graph = self.active_brush_graph();
         graph.apply_preview_overrides();
         let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_preview_stroke(
+        let path = crate::brush::preview_renderer::synthesize_stroke_path(
             rw as f32,
             rh as f32,
             30,
@@ -126,18 +124,12 @@ impl DarklyEngine {
         let Some(brush) = self.brush_library.get(name).cloned() else {
             return Vec::new();
         };
-        // Image-based brushes need their tip/pattern textures on the
-        // GPU before the bake; without this, picker tiles for inactive
-        // image brushes render bg-only. (No image-based builtins remain
-        // after the brush-compute port, but the call is still required
-        // for any custom user brushes that bundle resources.)
-        self.ensure_brush_resources(&brush);
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
         let mut graph = brush.metadata.graph.clone();
         graph.apply_preview_overrides();
         let (rw, rh) = BRUSH_STROKE_RENDER_SIZE;
-        let path = crate::brush::preview_renderer::synthesize_preview_stroke(
+        let path = crate::brush::preview_renderer::synthesize_stroke_path(
             rw as f32,
             rh as f32,
             30,
@@ -177,9 +169,6 @@ impl DarklyEngine {
         let Some(brush) = self.brush_library.get(name).cloned() else {
             return Vec::new();
         };
-        // Image-based brushes need their tip texture on the GPU before
-        // the bake — same path as the stroke thumbnail.
-        self.ensure_brush_resources(&brush);
         let (w, h) = BRUSH_DAB_RENDER_SIZE;
         let fg = self.preview_theme_fg;
         let bg = self.preview_theme_bg;
@@ -194,7 +183,7 @@ impl DarklyEngine {
         // so the picker tile and the BrushBar trigger always agree.
         let mut graph = brush.metadata.graph.clone();
         crate::brush::reset_exposed_scrubs(&mut graph);
-        let path = crate::brush::preview_renderer::synthesize_preview_dab(w as f32, h as f32);
+        let path = crate::brush::preview_renderer::synthesize_dab_path(w as f32, h as f32);
         self.render_preview_and_request_readback(
             &graph,
             &path,
@@ -212,17 +201,7 @@ impl DarklyEngine {
     }
 
     /// Import a brush from `.darkly-brush` ZIP bytes into the library.
-    ///
-    /// Uploads brush tip resources to the GPU if the brush is loaded.
     pub fn brush_import(&mut self, bytes: &[u8]) -> Result<String, String> {
         self.brush_library.import_bytes(bytes)
     }
-
-    /// Ensure brush image resources are loaded.
-    ///
-    /// No-op — image-stamp brushes are unsupported (see
-    /// [`crate::brush::nodes::stamp`]). Bundles with brush-tip or
-    /// pattern resources round-trip on disk but their bytes are not
-    /// uploaded anywhere.
-    pub(crate) fn ensure_brush_resources(&mut self, _brush: &Brush) {}
 }

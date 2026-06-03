@@ -22,6 +22,7 @@ pub enum SelectionMode {
     Intersect,
 }
 
+#[derive(Clone, Copy)]
 pub enum MoveTarget {
     Before(LayerId),
     After(LayerId),
@@ -268,6 +269,21 @@ impl Document {
         self.parent.get(id).copied()
     }
 
+    /// True iff `ancestor` appears on the parent chain above `descendant`.
+    /// A node is not its own ancestor. Detached or orphaned nodes have no
+    /// ancestors. Used by batch ops to dedupe a selection that contains
+    /// both a group and one of its descendants.
+    pub fn is_ancestor_of(&self, ancestor: LayerId, descendant: LayerId) -> bool {
+        let mut cur = self.parent_of(descendant);
+        while let Some(p) = cur {
+            if p == ancestor {
+                return true;
+            }
+            cur = self.parent_of(p);
+        }
+        false
+    }
+
     /// True iff this node and every ancestor up to the root are individually
     /// `visible`. The compositor's `compose_children` walk already short-
     /// circuits invisible subtrees ([`crate::gpu::compositor::Compositor`]
@@ -493,6 +509,35 @@ impl Document {
 
     pub fn flat_layer_index(&self, id: LayerId) -> Option<usize> {
         self.flat_layers().iter().position(|l| l.id() == id)
+    }
+
+    /// All tree-node ids (layers + groups) in display order (DFS over the
+    /// full tree, descending into every group regardless of visibility or
+    /// collapsed-state). Excludes the implicit root and modifiers. Used by
+    /// batch ops that need a stable total order across a selection that
+    /// mixes layers and groups, including cross-parent selections.
+    ///
+    /// Iteration is bottom-of-stack first within each parent's
+    /// `children` Vec — so for a panel that displays "top of stack first,"
+    /// the last entry in this Vec for a given selection is the
+    /// **panel-topmost** member. `merge_layers` uses this to locate the
+    /// topmost selected layer across arbitrary parents.
+    pub fn all_node_ids_in_order(&self) -> Vec<LayerId> {
+        let mut out = Vec::new();
+        self.collect_node_ids(self.root, &mut out);
+        out
+    }
+
+    fn collect_node_ids(&self, group_id: LayerId, out: &mut Vec<LayerId>) {
+        let Some(LayerNode::Group(g)) = self.find_node(group_id) else {
+            return;
+        };
+        for &child_id in &g.children {
+            out.push(child_id);
+            if matches!(self.find_node(child_id), Some(LayerNode::Group(_))) {
+                self.collect_node_ids(child_id, out);
+            }
+        }
     }
 
     // ---------------------------------------------------------------

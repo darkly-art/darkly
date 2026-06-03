@@ -24,17 +24,17 @@
     }
 
 
+    // The new-layer / new-group footer buttons route through the action
+    // registry so their tooltips can surface the bound hotkey (resolved
+    // via `tooltipForAction`). The selection-aware "wrap or empty group"
+    // logic lives on the action handler in actions/index.ts.
     function addNormalLayer() {
-        if (!app.handle) return;
-        const id = app.handle.add_raster_layer(app.activeLayerId ?? -1);
-        app.selectLayer(id);
+        actions.dispatch('newLayer');
         onupdate();
     }
 
     function addGroup() {
-        if (!app.handle) return;
-        const id = app.handle.add_group(app.activeLayerId ?? -1);
-        app.selectLayer(id);
+        actions.dispatch('newGroup');
         onupdate();
     }
 
@@ -70,17 +70,9 @@
     });
 
     function addMask() {
-        if (!app.handle || app.activeLayerId === null) return;
         if (!canAddMask) return;
-        const hostId = app.activeLayerId;
-        app.handle.add_mask(hostId);
-        // After add_mask the host gains a mask modifier; refresh tree, then
-        // activate the modifier id (the new paint target) so strokes land
-        // on the mask without a session redirect.
+        actions.dispatch('addMask');
         onupdate();
-        const layer = findNode(app.layerTree, hostId);
-        const mask = layer?.modifiers?.find((m: any) => m.kind === 'mask');
-        if (mask) app.selectLayer(mask.id);
     }
 
     let canDelete = $derived(
@@ -91,6 +83,22 @@
     let canDuplicate = $derived(
         app.activeLayerId !== null
             && findNode(app.layerTree, app.activeLayerId) !== null,
+    );
+
+    // Show the multi-selection count in the footer button tooltips so
+    // the user has a heads-up that the trash/duplicate buttons will
+    // operate on the whole selection, not just the active layer.
+    let selectionSize = $derived(app.selectedLayerIds.size);
+    let isMulti = $derived(selectionSize > 1);
+    let deleteTooltip = $derived(
+        isMulti
+            ? `Delete (${selectionSize})`
+            : tooltipForAction('Delete', 'deleteLayer'),
+    );
+    let duplicateTooltip = $derived(
+        isMulti
+            ? `Duplicate (${selectionSize})`
+            : tooltipForAction('Duplicate', 'duplicateLayer'),
     );
 
     function remove() {
@@ -144,7 +152,7 @@
         class="footer-btn"
         onclick={duplicate}
         disabled={!canDuplicate}
-        title={tooltipForAction('Duplicate', 'duplicateLayer')}
+        title={duplicateTooltip}
     >
         <i class="fa-solid fa-clone"></i>
     </button>
@@ -153,7 +161,7 @@
         class="footer-btn danger"
         onclick={remove}
         disabled={!canDelete || (app.activeVeilIndex === null && !activeEditable)}
-        title={tooltipForAction('Delete', 'deleteLayer')}
+        title={deleteTooltip}
     >
         <i class="fa-solid fa-trash"></i>
     </button>

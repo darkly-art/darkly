@@ -7,37 +7,88 @@
 use super::DarklyEngine;
 use crate::document::MoveTarget;
 use crate::layer::{Layer, LayerId, LayerNode};
-use crate::undo::DuplicateAction;
+use crate::undo::{CompoundAction, DuplicateAction, UndoAction};
 
 impl DarklyEngine {
     /// Duplicate `source_id` and place the copy directly above it in the
     /// same parent. Returns the id of the new top-level node (the duplicated
     /// raster or group). Returns `None` if the source isn't a layer / group.
     pub fn duplicate_node(&mut self, source_id: LayerId) -> Option<LayerId> {
+        let (new_id, action) = self.duplicate_node_inner(source_id)?;
+        self.compositor.mark_dirty();
+        self.push_undo(action);
+        Some(new_id)
+    }
+
+    /// Duplicate every id in `ids` in document order and return their new
+    /// counterparts as a single undo step. Ids whose ancestor is already in
+    /// `ids` are skipped — duplicating the ancestor takes the descendant
+    /// with it, so a second pass would produce a redundant copy. Cross-
+    /// parent selections are supported: each duplicate lands above its own
+    /// source, no matter which parent group that source lives in.
+    pub fn duplicate_nodes(&mut self, ids: Vec<LayerId>) -> Vec<LayerId> {
+        let mut filtered: Vec<LayerId> = ids
+            .iter()
+            .copied()
+            .filter(|&id| self.doc.find_node(id).is_some())
+            .filter(|&id| {
+                !ids.iter()
+                    .any(|&other| other != id && self.doc.is_ancestor_of(other, id))
+            })
+            .collect();
+        let order = self.doc.all_node_ids_in_order();
+        let order_idx = |id: LayerId| order.iter().position(|&x| x == id).unwrap_or(usize::MAX);
+        filtered.sort_by_key(|&id| order_idx(id));
+
+        let mut new_ids = Vec::with_capacity(filtered.len());
+        let mut actions: Vec<Box<dyn UndoAction>> = Vec::with_capacity(filtered.len());
+        for id in filtered {
+            if let Some((new_id, action)) = self.duplicate_node_inner(id) {
+                new_ids.push(new_id);
+                actions.push(action);
+            }
+        }
+        if !actions.is_empty() {
+            self.compositor.mark_dirty();
+            self.push_undo(Box::new(CompoundAction::new(actions)));
+        }
+        new_ids
+    }
+
+    /// Duplicate a single node and return both the new id and the matching
+    /// undo action without pushing it. Shared between [`Self::duplicate_node`]
+    /// and [`Self::duplicate_nodes`].
+    fn duplicate_node_inner(
+        &mut self,
+        source_id: LayerId,
+    ) -> Option<(LayerId, Box<dyn UndoAction>)> {
         self.doc.find_node(source_id)?;
-
         let root_new_id = self.clone_subtree(source_id, None, /* is_root: */ true)?;
-
-        // Anchor the duplicate directly above the source. `add_raster_layer`
-        // / `add_group` insert with `anchor=source_id` at the time of
-        // creation (see clone_subtree); a second move is unnecessary except
-        // when we created via `add_group` on root (which lands at the top).
-        // The "anchor above source" placement is built into the document's
-        // add methods.
-
+        // `clone_subtree(..., None, ...)` lands the new node at the top of
+        // root via `add_*(None) → IntoGroupTop(root)`. Move it next to the
+        // source so each duplicate sits directly above its own original —
+        // critical for multi-duplicate, where N "tops" would otherwise
+        // stack all duplicates together at the top of the panel.
+        //
+        // `MoveTarget::After(source)` lands the new node at source's
+        // position + 1 in source's parent regardless of whether source is
+        // a Layer or a Group. Anchoring `add_*` directly on source would
+        // land the duplicate INSIDE the source when source is a Group
+        // (the `IntoGroupTop` semantic on group anchors).
+        self.doc
+            .move_layer(root_new_id, MoveTarget::After(source_id));
         let parent = self.doc.parent_of(root_new_id);
         let position = self.doc.position_in_parent(root_new_id).unwrap_or(0);
         let tombstones = self.collect_pixel_node_ids(root_new_id);
-
-        self.compositor.mark_dirty();
-        self.push_undo(Box::new(DuplicateAction::new(
+        Some((
             root_new_id,
-            parent,
-            position,
-            tombstones,
-        )));
-
-        Some(root_new_id)
+            Box::new(DuplicateAction::new(
+                root_new_id,
+                parent,
+                position,
+                tombstones,
+            )),
+        ))
     }
 
     /// Recursive subtree clone. `anchor` is the position the new node should

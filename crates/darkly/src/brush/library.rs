@@ -224,10 +224,10 @@ mod tests {
         assert!(lib.is_empty());
 
         let metadata = BrushMetadata::from_graph("Alpha", brush::default_graph());
-        lib.insert(Brush::without_resources(metadata));
+        lib.insert(Brush::from_metadata(metadata));
 
         let metadata2 = BrushMetadata::from_graph("Beta", brush::default_graph());
-        lib.insert(Brush::without_resources(metadata2));
+        lib.insert(Brush::from_metadata(metadata2));
 
         assert_eq!(lib.len(), 2);
 
@@ -246,7 +246,7 @@ mod tests {
         let mut lib = BrushLibrary::new();
 
         let metadata = BrushMetadata::from_graph("Roundtrip", brush::default_graph());
-        let brush = Brush::without_resources(metadata);
+        let brush = Brush::from_metadata(metadata);
         let bytes = brush.to_bytes().unwrap();
 
         let name = lib.import_bytes(&bytes).unwrap();
@@ -261,7 +261,7 @@ mod tests {
     fn library_remove() {
         let mut lib = BrushLibrary::new();
         let metadata = BrushMetadata::from_graph("ToRemove", brush::default_graph());
-        lib.insert(Brush::without_resources(metadata));
+        lib.insert(Brush::from_metadata(metadata));
         assert_eq!(lib.len(), 1);
 
         assert!(lib.remove("ToRemove"));
@@ -278,7 +278,7 @@ mod tests {
         // Write two brushes.
         for name in &["Scan A", "Scan B"] {
             let metadata = BrushMetadata::from_graph(*name, brush::default_graph());
-            let brush = Brush::without_resources(metadata);
+            let brush = Brush::from_metadata(metadata);
             brush
                 .save(&dir.join(format!("{name}.darkly-brush")))
                 .unwrap();

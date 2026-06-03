@@ -4,7 +4,7 @@ use super::rendering::commit_undo_region;
 use super::types::StrokeOp;
 use super::{DarklyEngine, PendingUndoCommit, ReadbackContext};
 use crate::brush::checkpoint_ring::CheckpointRing;
-use crate::brush::gpu_context::{BrushGpuContext, BrushPerfCounters};
+use crate::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, StrokeResources};
 use crate::brush::paint_info::PaintInformation;
 use crate::brush::spacing::SpacingConfig;
 use crate::brush::stroke_buffer::StrokeBuffer;
@@ -19,65 +19,23 @@ impl DarklyEngine {
     /// default in the active brush graph.  Returns 0.0 if not found.
     fn pen_input_stabilize_strength(&self) -> f32 {
         use crate::brush::state::BrushState;
-        use crate::nodegraph::PortDir;
         let tool = self.tool_session.read();
         let brush = tool
             .get::<BrushState>()
             .expect("BrushState registered at session init");
-        for node in brush.graph.nodes.values() {
-            if node.type_id == crate::brush::nodes::pen_input::TYPE_ID {
-                for port in &node.ports {
-                    if port.name == "stabilize" && port.dir == PortDir::Input {
-                        return port.default;
-                    }
-                }
-            }
-        }
-        0.0
+        crate::brush::nodes::pen_input::read_scalar_input(&brush.graph, "stabilize").unwrap_or(0.0)
     }
 
-    /// Read a scalar input-port default off the pen_input node by name.
-    /// Returns `None` if no pen_input node is present or the named port
-    /// isn't on the node (e.g. an older brush from before the port was
-    /// added).
-    fn pen_input_scalar_port(&self, port_name: &str) -> Option<f32> {
+    /// Build the `SpacingConfig` for the active brush graph. Reads pen_input
+    /// port defaults — the same source the editor preview reads — so a real
+    /// stroke and its preview stamp at the same intervals.
+    fn active_spacing_config(&self) -> SpacingConfig {
         use crate::brush::state::BrushState;
-        use crate::nodegraph::PortDir;
         let tool = self.tool_session.read();
         let brush = tool
             .get::<BrushState>()
             .expect("BrushState registered at session init");
-        for node in brush.graph.nodes.values() {
-            if node.type_id == crate::brush::nodes::pen_input::TYPE_ID {
-                for port in &node.ports {
-                    if port.name == port_name && port.dir == PortDir::Input {
-                        return Some(port.default);
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    /// Read the dab spacing ratio from the pen_input node's "spacing" port
-    /// default. Falls back to `SpacingConfig::default().ratio` for graphs
-    /// that predate the port (loaded from older brushes).
-    fn pen_input_spacing_ratio(&self) -> f32 {
-        self.pen_input_scalar_port("spacing")
-            .unwrap_or_else(|| SpacingConfig::default().ratio)
-    }
-
-    /// Read the absolute-pixel spacing floor from the pen_input node's
-    /// "spacing_min_px" port default. Zero (the port default) falls
-    /// back to `SpacingConfig::default().min_px`, so brushes that don't
-    /// set the port behave exactly as before.
-    fn pen_input_spacing_min_px(&self) -> f32 {
-        let raw = self.pen_input_scalar_port("spacing_min_px").unwrap_or(0.0);
-        if raw > 0.0 {
-            raw
-        } else {
-            SpacingConfig::default().min_px
-        }
+        crate::brush::nodes::pen_input::spacing_config(&brush.graph)
     }
 
     /// Flush any pending diff-based undo commit. Called before overwriting the
@@ -285,6 +243,7 @@ impl DarklyEngine {
         // post-`begin_stroke` drain subtracts against zero rather than
         // the previous stroke's totals.
         self.brush_perf = BrushPerfCounters::default();
+        self.brush_full_rerender_events = 0;
         self.last_brush_perf = BrushPerfCounters::default();
         // GPU setup is deferred to first stroke_to (lazy init).
     }
@@ -692,7 +651,7 @@ impl DarklyEngine {
 
         // Refresh the blend-uniform buffer so the composite pass sees the
         // new offset/size on the next render.
-        self.compositor.update_layer_uniforms_full(
+        self.compositor.update_layer_uniforms(
             &self.gpu.queue,
             layer_id,
             opacity,
@@ -764,10 +723,7 @@ impl DarklyEngine {
             self.brush_stroke_engine = Some(StrokeEngine::new(
                 runner,
                 color,
-                SpacingConfig {
-                    ratio: self.pen_input_spacing_ratio(),
-                    min_px: self.pen_input_spacing_min_px(),
-                },
+                self.active_spacing_config(),
                 stabilizer,
             ));
 
@@ -901,31 +857,24 @@ impl DarklyEngine {
                         device: &self.gpu.device,
                         queue: &self.gpu.queue,
                         pipelines: &self.brush_pipelines,
-                        scratch: Some(scratch),
+                        selection_bind_group: sel_bg,
                         canvas_width: canvas_w,
                         canvas_height: canvas_h,
-                        paint_target: Some(paint_target),
-                        selection_bind_group: sel_bg,
-                        preview_target_view: None,
                         // blend_mode applies at commit (paint vs. erase).
                         // Per-dab passes hard-code source-over — the
                         // scratch is a coverage accumulator, and only the
                         // commit composite reads this value.
                         blend_mode: self.brush_blend_mode,
-                        preview_mask_view: None,
-                        preview_mask_size: (0, 0),
-                        preview_mask_overlay: None,
-                        brush_preview_info: None,
-                        pre_stroke_texture: Some(pre_stroke_texture),
-                        pre_stroke_bind_group: Some(pre_stroke_bind_group),
-                        dab_write_canvas_bbox: None,
+                        view_rotation: self.view_rotation,
                         perf: BrushPerfCounters::default(),
-                        pending_dab_bytes: Vec::new(),
-                        pending_dab_count: 0,
-                        pending_dabs_bbox: None,
-                        pending_dab_meta_bytes: Vec::new(),
-                        compiled_brush: None,
-                        slot_outputs_owned: None,
+                        stroke: Some(StrokeResources {
+                            scratch,
+                            paint_target,
+                            pre_stroke_texture,
+                            pre_stroke_bind_group,
+                        }),
+                        preview: None,
+                        dab_batch: DabBatch::default(),
                     }
                 }};
             }
@@ -982,7 +931,7 @@ impl DarklyEngine {
                     // Only the former is a "mid-stroke full re-render
                     // fallback" worth counting.
                     if self.checkpoint_ring.has_any_valid() {
-                        self.brush_perf.full_rerender_events += 1;
+                        self.brush_full_rerender_events += 1;
                     }
                     engine.reset_render_state();
                     self.checkpoint_ring.clear();
@@ -1096,8 +1045,7 @@ impl DarklyEngine {
             // field level, leaving `&mut self.dab_pool` free.
             let layer_tex = self.compositor.node_texture(layer_id);
             if let Some(layer_tex) = layer_tex {
-                let canvas_view = layer_tex.view();
-                let paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
+                let _paint_target = GpuPaintTarget::from_node(layer_tex, canvas_w, canvas_h);
                 let mut gpu_ctx = BrushGpuContext {
                     encoder: self.gpu.device.create_command_encoder(
                         &wgpu::CommandEncoderDescriptor {
@@ -1107,31 +1055,19 @@ impl DarklyEngine {
                     device: &self.gpu.device,
                     queue: &self.gpu.queue,
                     pipelines: &self.brush_pipelines,
-                    // No stroke buffer in this defensive fallback — `move_to`
-                    // only updates stabilizer state and never reaches into
-                    // scratch.  Anything that does would panic, which is the
-                    // correct signal that the fallback was reached.
-                    scratch: None,
+                    selection_bind_group: sel_bg,
                     canvas_width: canvas_w,
                     canvas_height: canvas_h,
-                    paint_target: Some(paint_target),
-                    selection_bind_group: sel_bg,
-                    preview_target_view: Some(canvas_view),
                     blend_mode: self.brush_blend_mode,
-                    preview_mask_view: None,
-                    preview_mask_size: (0, 0),
-                    preview_mask_overlay: None,
-                    brush_preview_info: None,
-                    pre_stroke_texture: None,
-                    pre_stroke_bind_group: None,
-                    dab_write_canvas_bbox: None,
+                    view_rotation: self.view_rotation,
                     perf: BrushPerfCounters::default(),
-                    pending_dab_bytes: Vec::new(),
-                    pending_dab_count: 0,
-                    pending_dabs_bbox: None,
-                    pending_dab_meta_bytes: Vec::new(),
-                    compiled_brush: None,
-                    slot_outputs_owned: None,
+                    // No stroke buffer in this defensive fallback — `move_to`
+                    // only updates stabilizer state and never reaches into
+                    // scratch. Anything that does would panic, which is the
+                    // correct signal that the fallback was reached.
+                    stroke: None,
+                    preview: None,
+                    dab_batch: DabBatch::default(),
                 };
                 self.brush_pipelines.reset_uniform_rings();
                 engine.move_to(info, &mut gpu_ctx);

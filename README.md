@@ -1,4 +1,4 @@
-![darkly](https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7)
+<a href="https://github.com/darkly-art/darkly"><img src="https://github.com/user-attachments/assets/62115b89-ab63-453c-93ce-a513e500fad7" alt="darkly" width="675"></a>
 
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
 [![Patreon](https://img.shields.io/badge/Patreon-Forbidden_Relics-orange?logo=patreon&style=for-the-badge&color=6914ff)](https://www.patreon.com/c/DarklyArt)
@@ -14,7 +14,7 @@
 > [!IMPORTANT]
 > **Darkly is in beta**! Features are being [added daily](#feature-roadmap). Please [report bugs](https://github.com/darkly-art/darkly/issues/new) so we can squash them.
 
-[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital artists. It aims to have everything you expect from a paint program, plus some special **[dark arts](#unique-darkly-features)** to help you rage against the machine.
+[Darkly](https://darkly.art) is a GPU-native editor written in Rust and geared towards digital artists. It aims to have everything you expect from a paint program, plus some special **[dark arts](#dark-arts)** to help you rage against the machine.
 
 ### Darkly pledges to:
 
@@ -23,7 +23,7 @@
 - ☯️ Never [steal or license](https://x.com/SamSantala/status/1798292952219091042) your art
 - ☮️ Stay free and open source forever
 
-Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with Darkly, where messes are made and happy accidents incur. Madness isn't a bug, it's a feature.
+Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructive workflows? Break free with Darkly, where messes are made and happy accidents emerge. Madness isn't a bug, it's a feature.
 
 **Try the demo [here](https://demo.darkly.art).**
 
@@ -31,26 +31,44 @@ Do you suffer from the **oppressive sanity** of rulers, guides, and nondestructi
 
 ## Upcoming Kickstarter
 
-We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, and rescue our friends and colleagues from the iron grip of corporate software!
+We're gearing up for a Kickstarter! Vote in the [discord](https://discord.gg/kFz2FGhbpu) for which features you want most. Help us make Darkly feature-complete, so we can rescue our friends and colleagues from the grip of corporate software!
 
-## Unique Darkly Features
+## Features
 
-In addition to the usual paint features, Darkly has some entropic tools to empower you in your dark arts.
+### Node-Based Brush Engine
+
+![brush-engine-screenshot](https://github.com/user-attachments/assets/28baa4dc-9cf1-4d9f-b1e3-4ccbe5943171)
+
+Darkly features a unified node-based brush system. Every brush type -- clone, liquify, watercolor, etc. -- all live in a single engine. This enables infinite customizability, mixing and matching of brush features, and on-the-fly creation of custom brushes.
+
+### Familiar Hotkeys
+
+<img src="https://github.com/user-attachments/assets/63544586-f006-4616-b378-97dd54e321d3" width="400"/>
+
+On first launch, Darkly will ask you which editor preset you want.  Currently we support GIMP, Krita, and Photoshop. I come from Krita, so that one's gotten the most TLC. We want them all to feel natural to new users. If you find any gaps, please let us know!
+
+### Hotkey Cheatsheet
+
+<img src="https://github.com/user-attachments/assets/2bb1737b-169b-4ca2-9687-2c54fbc07a6b" width="500"/>
+
+Darkly also comes with a searchable hotkey cheatsheet, which opens in a separate window, handy for printing or putting on a second screen.
+
+## Dark Arts
 
 ### Veils
 
 https://github.com/user-attachments/assets/ee281ac2-37a8-4e52-91b3-78d564420e9d
 
-Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, and is visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
+Veils are where Darkly gets its name; *"For now we see through a glass, darkly"*. They're a special type of layer that sits overtop the viewport, visible only to the artist. By shrouding your art behind a mysterious pane, they invite you to see something that maybe wasn't there before.
 
 Veils have practical uses too:
 
 - By hiding fine details, they can prevent **premature fixation on detail**, freeing you to focus on composition.
 - During the sketching / ideation phase, they can help with **blank page syndrome** and **destructive self-criticism** by giving you permission to be messy, and explore freely.
-- They can also help remedy **art fatigue** (losing eyes for art by staring at it for too long) by letting you view it through a new lense.
+- They can also help remedy **art fatigue** (losing eyes for a piece by staring at it for too long) by helping you view it through a fresh lens.
 
 > [!NOTE]
-> Veils live in their own dedicated group, but within that you can stack and order them however you like. Keep in mind that adding too many can drain your battery, due to the heavy load on your GPU.
+> Veils live in their own group, but within it you can stack and order them however you like. Remember that adding too many can drain your battery, due to the heavy load on your GPU.
 
 ### Voids
 
@@ -61,12 +79,6 @@ Voids are a type of layer that specializes in pulling inspiration from outside s
 You can use the `Noise` void to inject entropy, or `Screenshare` to stream another app (3D software, movie, or video game) directly into a layer. This is great for hybrid workflows, and situations where you want to try out different lighting or camera angles, without having to pose, render and paste over and over.
 
 Voids can live anywhere in your layer stack -- over or underneath any other layer. They support masks and blend modes. They are the natural compliment to veils, and a natural integration point for other art programs like Blender, which may have dedicated voids in the future 🧡
-
-### Node-Based Brush Engine
-
-![brush-engine-screenshot](https://github.com/user-attachments/assets/28baa4dc-9cf1-4d9f-b1e3-4ccbe5943171)
-
-Darkly features a unified node-based brush system. Every brush type -- clone, liquify, watercolor, etc. -- all live in a single engine. This enables infinite customizability, mixing and matching of brush features, and on-the-fly creation of custom brushes.
 
 ## Feature Roadmap
 
@@ -84,7 +96,7 @@ These are features that are helpful or essential to digital art workflows. They'
     - [x] Smudge
     - [ ] Blur
     - [ ] Dodge/burn
-    - [ ] Pencil / Charcoal
+    - [x] Charcoal (Pencil still TODO)
     - [ ] Oil / Impasto
 - [x] Brush tool, eraser, fill (flood), gradient (linear), color picker
 - [x] Pressure / tilt / spacing / distance / angle inputs
@@ -158,7 +170,6 @@ These are features that are helpful or essential to digital art workflows. They'
 ### File I/O
 - [x] New document (custom canvas size + background color)
 - [x] Clipboard copy / cut / paste (PNG via browser clipboard)
-- [x] Brush export / import (binary bundle)
 - [x] Export to PNG / JPEG / WebP file
 - [x] Open image from file
 - [x] Save / Open native `.darkly` document
@@ -175,7 +186,7 @@ These are features that are helpful or essential to digital art workflows. They'
 - [x] Config schema with 8 sections, typed widgets, hotkey capture
 - [x] Krita / Photoshop / GIMP hotkey presets
 - [x] Settings modal, theme system
-- [ ] Per‑brush preset save/load UI
+- [ ] Brush save/load + editable nodes/wires (e.g. YAML) 
 
 ### Misc
 - [ ] Text tool / text layers
