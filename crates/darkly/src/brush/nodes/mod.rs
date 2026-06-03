@@ -2,27 +2,19 @@
 // To add a new module, create a .rs file in this directory
 // that exports `pub fn register() -> crate::brush::BrushNodeRegistration`.
 
-pub mod add;
 pub mod circle;
-pub mod clamp;
 pub mod curve;
 pub mod image;
-pub mod jitter;
 pub mod levels;
 pub mod liquify;
-pub mod make_color;
-pub mod mix;
 pub mod multiply;
 pub mod noise;
 pub mod paint;
 pub mod paint_color;
 pub mod pen_input;
 pub mod random;
-pub mod remap;
-pub mod scatter;
 pub mod smudge;
 pub mod split_color;
-pub mod split_vec2;
 pub mod stamp;
 pub mod watercolor;
 
@@ -31,27 +23,19 @@ use crate::brush::BrushNodeRegistration;
 #[rustfmt::skip]
 pub fn registrations() -> Vec<BrushNodeRegistration> {
     vec![
-        add::register(),
         circle::register(),
-        clamp::register(),
         curve::register(),
         image::register(),
-        jitter::register(),
         levels::register(),
         liquify::register(),
-        make_color::register(),
-        mix::register(),
         multiply::register(),
         noise::register(),
         paint::register(),
         paint_color::register(),
         pen_input::register(),
         random::register(),
-        remap::register(),
-        scatter::register(),
         smudge::register(),
         split_color::register(),
-        split_vec2::register(),
         stamp::register(),
         watercolor::register(),
     ]
