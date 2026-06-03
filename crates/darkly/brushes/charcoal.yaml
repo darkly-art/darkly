@@ -3,6 +3,8 @@ category: Dry Media
 nodes:
   1:
     type: pen_input
+    port_defaults:
+      spacing: 0.02
   2:
     type: paint_color
   3:
@@ -14,65 +16,70 @@ nodes:
     port_defaults:
       amplitude: 0.5
       frequency: 3.0
-      n1: 1.0
-      rotation: 6.3
+      rotation: 3.14159
       rotation_input: 4.7
-      softness: 0.32262525
+      softness: 0.32
+    exposed:
+    - rotation
   5:
-    type: random
-  6:
     type: multiply
-  8:
+  6:
     type: stamp
-  9:
+  7:
     type: paint
     port_defaults:
       flow: 0.5
-      size: 0.07
+      size: 0.12
     exposed:
     - flow
     - opacity
     - size
-  11:
+  8:
     type: image
     params:
-      scale: 300.0
+      scale: 500.0
       texture_name: paper
-  12:
+  9:
     type: levels
     port_defaults:
       in_low: 0.72
-  13:
+  10:
     type: curve
     params:
       curve:
       - - 0.0
         - 0.8
-      - - 0.6
-        - 0.5
       - - 1.0
-        - 0.0
-  14:
+        - 0.6
+  11:
     type: curve
     params:
       curve:
       - - 0.0
         - 0.0
-      - - 0.5
+      - - 1.0
         - 0.35
+  12:
+    type: curve
+    params:
+      curve:
+      - - 0.0
+        - 0.0
+      - - 0.46
+        - 0.53
       - - 1.0
         - 1.0
 connections:
-- '1.position -> 9.position'
-- '1.pressure -> 13.input'
-- '1.pressure -> 14.input'
-- '2.color -> 8.color'
-- '3.luminance -> 6.a'
-- '4.mask -> 6.b'
-- '5.value -> 4.seed'
-- '6.result -> 12.input'
-- '8.dab -> 9.rgba'
-- '11.color -> 3.color'
-- '12.output -> 8.tip'
-- '13.output -> 12.in_low'
-- '14.output -> 9.flow'
+- '1.position -> 7.position'
+- '1.pressure -> 10.input'
+- '1.pressure -> 11.input'
+- '2.color -> 6.color'
+- '3.luminance -> 12.input'
+- '4.mask -> 5.b'
+- '5.result -> 9.input'
+- '6.dab -> 7.rgba'
+- '8.color -> 3.color'
+- '9.output -> 6.tip'
+- '10.output -> 9.in_low'
+- '11.output -> 7.flow'
+- '12.output -> 5.a'

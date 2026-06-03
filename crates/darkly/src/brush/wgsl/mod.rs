@@ -623,15 +623,10 @@ pub fn render_compiled_cursor_preview(
     let cursor_preview_centre = [target_w as f32 * 0.5, target_h as f32 * 0.5];
 
     // Pack the uniform buffer: intrinsic header first, node-contributed
-    // uniforms after.
-    let intrinsic = IntrinsicUniforms {
-        layer_offset: [0, 0],
-        layer_size: [target_w, target_h],
-        canvas_size: [target_w, target_h],
-        cursor_preview_centre,
-        cursor_preview_size: [target_w, target_h],
-        _pad: [0, 0],
-    };
+    // uniforms after. Intrinsic field list lives on `BrushGpuContext` so
+    // adding a future global field (e.g. `view_rotation`) edits one
+    // helper, not every terminal + this preview path.
+    let intrinsic = gpu.intrinsic_preview_header(target_w, target_h, cursor_preview_centre);
     let total_uniform_size = INTRINSIC_UNIFORMS_SIZE + compiled.uniform_size;
     let mut uniform_bytes: Vec<u8> = Vec::with_capacity(total_uniform_size);
     pack_intrinsic_uniforms(&mut uniform_bytes, intrinsic);
@@ -894,7 +889,16 @@ fn assemble_shader(
     out.push_str("    }\n");
     out.push_str("    let local_uv = local * d.inv_radius_target_px;\n");
     out.push_str("    let local_dist = length(local_uv);\n");
-    out.push_str("    let theta = atan2(local_uv.y, local_uv.x);\n");
+    // Brush stamp rotation counteracts view rotation: shape nodes use
+    // `theta - p.rotation`, so subtracting `view_rotation` from `theta`
+    // here makes the shader render the stamp at canvas-rotation
+    // `p.rotation + view_rotation`. The present shader's canvas → screen
+    // rotation (which subtracts `view_rotation` again, per
+    // `ViewTransform::from_pan_zoom_rotate`) lands the stamp at on-
+    // screen rotation `p.rotation` — invariant under view rotation.
+    // The fix is at this one line: every existing and future shape
+    // node consuming `theta` is screen-relative without further code.
+    out.push_str("    let theta = atan2(local_uv.y, local_uv.x) - u.intrinsic.view_rotation;\n");
     out.push_str("    let canvas_size = vec2<f32>(\n");
     out.push_str("        f32(u.intrinsic.canvas_size.x),\n");
     out.push_str("        f32(u.intrinsic.canvas_size.y),\n");

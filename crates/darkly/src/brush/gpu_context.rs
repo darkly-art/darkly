@@ -13,7 +13,7 @@ use std::sync::Arc;
 use super::eval::BrushCursorPreviewInfo;
 use super::pipeline::BrushPipelines;
 use super::scratch::Scratch;
-use super::wgsl::CompiledBrush;
+use super::wgsl::{CompiledBrush, IntrinsicUniforms};
 use super::wire::ScalarValue;
 use crate::gpu::overlay::ToolOverlay;
 use crate::gpu::paint_target::GpuPaintTarget;
@@ -362,6 +362,11 @@ pub struct BrushGpuContext<'a> {
     /// Composite blend mode override: 0 = source-over (paint), 1 = destination-out (erase).
     /// Set per-stroke by the engine based on the active tool.
     pub blend_mode: u32,
+    /// Active view rotation in radians (the `rotation` arg passed to
+    /// `ViewTransform::from_pan_zoom_rotate`). Threaded into
+    /// `IntrinsicUniforms.view_rotation` by `intrinsic_header` / `intrinsic_preview_header`
+    /// so terminals never need to know about view rotation themselves.
+    pub view_rotation: f32,
     /// Host-side counters for this context's lifetime. Written by the
     /// stroke engine + compute terminals via `record_*` helpers; drained
     /// by `submit_final` so the engine can `+= ` the result into its own
@@ -378,6 +383,51 @@ pub struct BrushGpuContext<'a> {
 }
 
 impl<'a> BrushGpuContext<'a> {
+    /// Build the per-stroke intrinsic header for a terminal flushing dabs
+    /// into a layer. Single source of truth for which fields go where so
+    /// terminals don't each maintain their own `IntrinsicUniforms { … }`
+    /// literal; adding a future global intrinsic field only touches this
+    /// method (and `intrinsic_preview_header` below). Cursor-preview-only
+    /// fields are zeroed here — see `intrinsic_preview_header` for the
+    /// other mode.
+    pub fn intrinsic_header(
+        &self,
+        layer_offset: [i32; 2],
+        layer_size: [u32; 2],
+    ) -> IntrinsicUniforms {
+        IntrinsicUniforms {
+            layer_offset,
+            layer_size,
+            canvas_size: [self.canvas_width, self.canvas_height],
+            cursor_preview_centre: [0.0, 0.0],
+            cursor_preview_size: [0, 0],
+            view_rotation: self.view_rotation,
+            _pad: [0],
+        }
+    }
+
+    /// Build the intrinsic header for the cursor-preview render path.
+    /// The preview target is its own square texture (not the canvas), so
+    /// `layer_offset / layer_size / canvas_size` collapse to the target
+    /// dimensions; `cursor_preview_centre / size` carry the preview
+    /// viewport the vertex stage maps against.
+    pub fn intrinsic_preview_header(
+        &self,
+        target_w: u32,
+        target_h: u32,
+        centre: [f32; 2],
+    ) -> IntrinsicUniforms {
+        IntrinsicUniforms {
+            layer_offset: [0, 0],
+            layer_size: [target_w, target_h],
+            canvas_size: [target_w, target_h],
+            cursor_preview_centre: centre,
+            cursor_preview_size: [target_w, target_h],
+            view_rotation: self.view_rotation,
+            _pad: [0],
+        }
+    }
+
     /// Submit the batched encoder and consume the context. Returns the
     /// per-context perf counters so the caller can fold them into the
     /// stroke-level accumulator; the final submit's wall clock is

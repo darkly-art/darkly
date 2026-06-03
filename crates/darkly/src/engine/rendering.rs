@@ -82,10 +82,22 @@ impl DarklyEngine {
             self.doc.width as f32,
             self.doc.height as f32,
         );
+        let rotation_changed = self.view_rotation != rotation;
         self.view_transform = transform;
+        self.view_rotation = rotation;
         self.compositor
             .update_view_transform(&self.gpu.queue, &transform);
         self.compositor.mark_needs_present();
+        // The cursor-preview mask was baked with the old view rotation;
+        // re-render at the cached hover pose so the on-canvas silhouette
+        // matches what the next stroke would actually paint. No-op when
+        // no hover is active (no cached pose) or the rotation didn't
+        // change (zoom / pan / mirror don't affect stamp orientation).
+        if rotation_changed {
+            if let Some(pose) = self.last_cursor_preview_pose {
+                self.regenerate_brush_cursor_preview_with_pen_internal(pose);
+            }
+        }
     }
 
     pub fn screen_to_canvas(&self, screen_x: f32, screen_y: f32) -> (f32, f32) {

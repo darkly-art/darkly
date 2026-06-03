@@ -246,7 +246,7 @@ impl DarklyEngine {
 
     /// Shared render body — no pose tracking, no sensor derivation.
     /// `pen` must already be fully populated by the caller.
-    fn regenerate_brush_cursor_preview_with_pen_internal(
+    pub(crate) fn regenerate_brush_cursor_preview_with_pen_internal(
         &mut self,
         pen: crate::brush::paint_info::PaintInformation,
     ) {
@@ -312,6 +312,7 @@ impl DarklyEngine {
             canvas_width: 0,
             canvas_height: 0,
             blend_mode: 0,
+            view_rotation: self.view_rotation,
             perf: BrushPerfCounters::default(),
             // The preview pipeline doesn't touch the stroke scratch / paint
             // target — the terminal's `render_preview` writes to the

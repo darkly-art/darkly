@@ -85,6 +85,7 @@ fn render_one_dab(brush_name: &str, color: [f32; 4], canvas: &[u8]) -> Vec<u8> {
                 canvas_width: CANVAS,
                 canvas_height: CANVAS,
                 blend_mode: 0,
+                view_rotation: 0.0,
                 perf: BrushPerfCounters::default(),
                 stroke: Some(StrokeResources {
                     scratch,

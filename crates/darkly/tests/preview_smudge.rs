@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use darkly::brush::compile_graph;
 use darkly::brush::eval::BrushGraphRunner;
-use darkly::brush::gpu_context::{BrushGpuContext, BrushPerfCounters, DabBatch, CursorPreviewState};
+use darkly::brush::gpu_context::{
+    BrushGpuContext, BrushPerfCounters, CursorPreviewState, DabBatch,
+};
 use darkly::brush::paint_info::PaintInformation;
 use darkly::brush::pipeline::BrushPipelines;
 use darkly::gpu::test_utils::{readback_texture, test_device};
@@ -71,6 +73,7 @@ fn smudge_preview_shows_neutral_gray_footprint() {
         canvas_width: PREVIEW_SIDE,
         canvas_height: PREVIEW_SIDE,
         blend_mode: 0,
+        view_rotation: 0.0,
         perf: BrushPerfCounters::default(),
         stroke: None,
         preview: Some(CursorPreviewState {

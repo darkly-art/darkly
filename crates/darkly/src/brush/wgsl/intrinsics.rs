@@ -25,7 +25,13 @@ pub struct IntrinsicUniforms {
     pub canvas_size: [u32; 2],
     pub cursor_preview_centre: [f32; 2],
     pub cursor_preview_size: [u32; 2],
-    pub _pad: [u32; 2],
+    /// Active view rotation in radians (the `rotation` parameter passed to
+    /// `ViewTransform::from_pan_zoom_rotate`). Subtracted from `theta` in the
+    /// per-fragment skeleton so brush stamp orientation counteracts view
+    /// rotation — on-screen orientation stays put as the user rotates the
+    /// view. See `_prelude.wgsl` and `wgsl/mod.rs::assemble_shader`.
+    pub view_rotation: f32,
+    pub _pad: [u32; 1],
 }
 
 /// Size in bytes of the WGSL/Rust `IntrinsicUniforms` struct. Read by

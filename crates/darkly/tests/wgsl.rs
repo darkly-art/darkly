@@ -102,6 +102,114 @@ fn shape_rotation_subtracts_from_theta_for_drawing_angle_compatibility() {
     }
 }
 
+/// Regression test: brush stamp rotation must counteract view rotation,
+/// so the on-screen orientation is invariant under the user spinning
+/// the canvas. The implementation places this correction at two
+/// places in the compiled WGSL — every shape node and the canonical
+/// stroke-follow wire share these two intercepts, no per-node code.
+///
+/// 1. The per-fragment skeleton subtracts `u.intrinsic.view_rotation`
+///    from `theta`. `_shape.wgsl` does `theta - p.rotation`, so the
+///    effective canvas-frame stamp rotation becomes
+///    `p.rotation + view_rotation`. The present shader's canvas→screen
+///    transform then subtracts `view_rotation` again, leaving the on-
+///    screen orientation = the user-set `p.rotation`. Static rotation
+///    knobs (e.g. Charcoal's constant 6.3) become screen-relative.
+///
+/// 2. `pen_input` subtracts `u.intrinsic.view_rotation` from
+///    `drawing_angle`'s wire output. `drawing_angle` is
+///    `atan2(canvas_dy, canvas_dx)` — a canvas-frame angle. The
+///    subtraction lifts it to screen-frame so the canonical
+///    `pen.drawing_angle → circle.rotation_input` wire keeps following
+///    the on-screen stroke direction after the skeleton's
+///    counteraction.
+///
+/// Wrong signs here (add instead of subtract) cause a self-consistent
+/// failure: the cursor rotates at 2× the view's rate. This test
+/// guards against both directions.
+#[test]
+fn stamp_rotation_counteracts_view_rotation() {
+    let reg = registry();
+    let mut graph = Graph::<BrushWireType>::new();
+    let pen = graph.add_node(
+        "pen_input",
+        reg.get("pen_input").unwrap().ports.clone(),
+        vec![],
+    );
+    let paint_color = graph.add_node(
+        "paint_color",
+        reg.get("paint_color").unwrap().ports.clone(),
+        vec![],
+    );
+    let circle = graph.add_node(
+        "circle",
+        reg.get("circle").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)], // Sine
+    );
+    let stamp = graph.add_node(
+        "stamp",
+        reg.get("stamp").unwrap().ports.clone(),
+        vec![darkly::gpu::params::ParamValue::Int(0)],
+    );
+    let term = graph.add_node("paint", reg.get("paint").unwrap().ports.clone(), vec![]);
+    let wires = [
+        (pen, "position", term, "position"),
+        (pen, "drawing_angle", circle, "rotation_input"),
+        (paint_color, "color", stamp, "color"),
+        (circle, "mask", stamp, "tip"),
+        (stamp, "dab", term, "rgba"),
+    ];
+    for (fnode, fport, tnode, tport) in wires {
+        graph
+            .connect(
+                PortRef {
+                    node: fnode,
+                    port: fport.into(),
+                },
+                PortRef {
+                    node: tnode,
+                    port: tport.into(),
+                },
+            )
+            .unwrap();
+    }
+    let plan = compile(&graph, reg.as_map()).unwrap();
+    let compiled = compile_brush_to_wgsl(&graph, &plan, &evals()).expect("compiles");
+
+    for (label, wgsl) in [
+        ("stroke_wgsl", &compiled.stroke_wgsl),
+        ("cursor_preview_wgsl", &compiled.cursor_preview_wgsl),
+    ] {
+        // (1) Skeleton intercept.
+        assert!(
+            wgsl.contains("atan2(local_uv.y, local_uv.x) - u.intrinsic.view_rotation"),
+            "{label} skeleton must subtract view_rotation from theta — without it, \
+             stamps rotate with the canvas instead of counteracting view rotation"
+        );
+        // (2) pen.drawing_angle wire intercept. Field name embeds the
+        // node id (e.g. `f0_drawing_angle`); match the suffix.
+        assert!(
+            wgsl.contains("_drawing_angle - u.intrinsic.view_rotation"),
+            "{label} pen.drawing_angle must subtract view_rotation — without it, \
+             the canonical drawing_angle → rotation_input wire would push the \
+             stamp off the on-screen stroke direction by V"
+        );
+        // Wrong-sign guards. Adding instead of subtracting was exactly
+        // the previous attempt's bug: the two adjustments compounded
+        // and the cursor rotated at 2× the view's rate.
+        assert!(
+            !wgsl.contains("atan2(local_uv.y, local_uv.x) + u.intrinsic.view_rotation"),
+            "{label} adds view_rotation to theta — sign error rotates stamp WITH \
+             the view at 2× rate"
+        );
+        assert!(
+            !wgsl.contains("_drawing_angle + u.intrinsic.view_rotation"),
+            "{label} adds view_rotation to drawing_angle — sign error rotates \
+             stamp WITH the view at 2× rate"
+        );
+    }
+}
+
 #[test]
 fn topology_hash_is_stable_for_identical_graphs() {
     let rough_a = darkly::brush::builtin_brushes::all()

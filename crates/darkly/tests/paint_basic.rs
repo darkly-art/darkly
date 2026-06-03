@@ -100,6 +100,7 @@ fn render_single_dab_with_pressure(
                 canvas_width: CANVAS,
                 canvas_height: CANVAS,
                 blend_mode: 0,
+                view_rotation: 0.0,
                 perf: BrushPerfCounters::default(),
                 stroke: Some(StrokeResources {
                     scratch,

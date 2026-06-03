@@ -253,8 +253,20 @@ impl BrushNodeEvaluator for PenInputEvaluator {
                     bytes.extend_from_slice(bytemuck::bytes_of(&v));
                 }),
             });
-            wgsl.outputs
-                .insert((*name).into(), format!("d.{}", field_name));
+            // `drawing_angle` is `atan2(canvas_dy, canvas_dx)` — a
+            // canvas-frame angle. The skeleton subtracts `view_rotation`
+            // from `theta`, so to keep `pen.drawing_angle → circle.rotation_input`
+            // (the canonical stroke-follow wire) aligned with the on-
+            // screen stroke direction, subtract `view_rotation` here too:
+            // canvas-frame angle minus V = screen-frame angle. Both
+            // adjustments compose into screen-relative stamp orientation
+            // for static knobs AND screen-aligned stroke following.
+            let expr = if *name == "drawing_angle" {
+                format!("(d.{} - u.intrinsic.view_rotation)", field_name)
+            } else {
+                format!("d.{}", field_name)
+            };
+            wgsl.outputs.insert((*name).into(), expr);
         }
 
         Ok(wgsl)

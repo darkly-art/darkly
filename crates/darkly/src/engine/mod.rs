@@ -278,6 +278,13 @@ pub struct DarklyEngine {
     /// kinds — works for any future filter / adjustment modifier too.
     pub(crate) isolated_node: Option<LayerId>,
     pub(crate) view_transform: ViewTransform,
+    /// Active view rotation in radians — the `rotation` arg last passed to
+    /// `set_view_transform`. Cached alongside the GPU-uploaded
+    /// `view_transform` (which is bytemuck-Pod and can't grow Rust-side
+    /// fields without breaking the GPU layout) so the brush stack can
+    /// thread it into `IntrinsicUniforms.view_rotation` for stamp-
+    /// counteracting-view-rotation.
+    pub(crate) view_rotation: f32,
     /// Persistent marching ants overlay (regenerated when selection changes).
     pub(crate) selection_overlay: Vec<OverlayPrimitive>,
     /// Transient tool overlay (set/cleared by the active tool).
@@ -511,6 +518,7 @@ impl DarklyEngine {
             active_stroke_layer: None,
             isolated_node: None,
             view_transform: ViewTransform::identity(),
+            view_rotation: 0.0,
             selection_overlay: Vec::new(),
             tool_overlay: Vec::new(),
             clipboard: None,

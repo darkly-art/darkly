@@ -187,6 +187,10 @@ impl BrushStrokePreviewRenderer {
                     canvas_width: width,
                     canvas_height: height,
                     blend_mode: 0,
+                    // Editor preview always renders at identity view; the
+                    // S-curve preview shouldn't shift orientation when the
+                    // user happens to rotate the canvas while editing.
+                    view_rotation: 0.0,
                     perf: BrushPerfCounters::default(),
                     // Preview render target is canvas-aligned RGBA8.
                     stroke: Some(StrokeResources {

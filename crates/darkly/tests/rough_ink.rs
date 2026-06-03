@@ -185,6 +185,7 @@ macro_rules! make_ctx {
             canvas_width: CANVAS,
             canvas_height: CANVAS,
             blend_mode: 0,
+            view_rotation: 0.0,
             perf: BrushPerfCounters::default(),
             stroke: Some(StrokeResources {
                 scratch: _scratch,

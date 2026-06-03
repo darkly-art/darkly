@@ -111,6 +111,7 @@ fn render_smudge_dabs(size_override: f32, dabs: &[([f32; 2], [f32; 2])]) -> Vec<
                 canvas_width: CANVAS,
                 canvas_height: CANVAS,
                 blend_mode: 0,
+                view_rotation: 0.0,
                 perf: BrushPerfCounters::default(),
                 stroke: Some(StrokeResources {
                     scratch,

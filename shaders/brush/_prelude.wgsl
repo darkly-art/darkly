@@ -40,5 +40,9 @@ struct IntrinsicUniforms {
     canvas_size:     vec2<u32>,
     cursor_preview_centre:  vec2<f32>,
     cursor_preview_size:    vec2<u32>,
-    _pad:            vec2<u32>,
+    // Active view rotation in radians (canvas → screen). Subtracted from
+    // `theta` in the per-fragment skeleton so brush stamp orientation
+    // counteracts the view rotation that the present shader applies on top.
+    view_rotation:   f32,
+    _pad:            u32,
 };
