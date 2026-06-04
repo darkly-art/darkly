@@ -22,7 +22,8 @@ connections:
 - '4.dab -> 5.rgba'
 - '6.output -> 5.size_input'
 exposed_ports:
+  "1.stabilize": {}
+  "5.size": {}
   "3.softness": {}
   "5.flow": {}
   "5.opacity": {}
-  "5.size": {}

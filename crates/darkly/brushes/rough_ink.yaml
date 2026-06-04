@@ -48,6 +48,6 @@ connections:
 - '8.dab -> 9.rgba'
 exposed_ports:
   "1.stabilize": {}
+  "9.size": {}
   "9.flow": {}
   "9.opacity": {}
-  "9.size": {}

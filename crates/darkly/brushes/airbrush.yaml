@@ -20,7 +20,8 @@ connections:
 - '3.mask -> 4.tip'
 - '4.dab -> 5.rgba'
 exposed_ports:
+  "1.stabilize": {}
+  "5.size": {}
   "3.softness": {}
   "5.flow": {}
   "5.opacity": {}
-  "5.size": {}

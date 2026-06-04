@@ -35,12 +35,24 @@
         // sits inside. A click whose target is the dialog itself == backdrop.
         if (e.target === dialogEl) open = false;
     }
+
+    function onKeydown(e: KeyboardEvent) {
+        // The browser closes the dialog on Escape (we still get the
+        // `close` event), but the KeyboardEvent itself keeps bubbling
+        // and triggers any other Escape-bound handlers — collapsing the
+        // brush builder, deselecting a layer, exiting a tool, etc. Stop
+        // the bubble so dismissing the modal stays a modal-only action.
+        if (e.key === 'Escape') {
+            e.stopPropagation();
+        }
+    }
 </script>
 
 <dialog
     bind:this={dialogEl}
     onclose={onClose}
     onclick={onBackdropClick}
+    onkeydown={onKeydown}
     class="modal size-{size}"
     class:bare
 >

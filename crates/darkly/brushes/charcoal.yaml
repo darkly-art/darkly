@@ -78,7 +78,8 @@ connections:
 - '11.output -> 7.flow'
 - '12.output -> 5.a'
 exposed_ports:
+  "1.stabilize": {}
+  "7.size": {}
   "4.rotation": {}
   "7.flow": {}
   "7.opacity": {}
-  "7.size": {}

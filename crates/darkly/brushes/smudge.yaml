@@ -19,7 +19,7 @@ connections:
 - '2.mask -> 3.mask'
 exposed_ports:
   "1.stabilize": {}
+  "3.size": {}
   "2.softness": {}
   "3.opacity": {}
   "3.rate": {}
-  "3.size": {}

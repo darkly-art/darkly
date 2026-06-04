@@ -1,5 +1,7 @@
 <script lang="ts">
     import { getContext } from 'svelte';
+    import { flip } from 'svelte/animate';
+    import { cubicOut } from 'svelte/easing';
     import { brushGraph, type ExposedPortInfo } from '../../state/brush_graph.svelte';
     import BrushBarEntryModal from './BrushBarEntryModal.svelte';
     import type { NodeCanvasContext } from './NodeCanvas.svelte';
@@ -43,57 +45,88 @@
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     }
 
-    // Drag-reorder state for rows.
+    // Drag-reorder state. `liveOrder` shadows the engine's port list
+    // during a drag so the rows can shuffle in real time on every
+    // `dragover` — `animate:flip` rides those reactive reorders and
+    // slides the rows past the cursor. On drop we commit the final
+    // index to the engine in one call; on cancel/escape we just drop
+    // the shadow and revert to whatever the engine still says.
     let dragKey = $state<string | null>(null);
-    let dropIndicator = $state<{ index: number; pos: 'above' | 'below' } | null>(null);
+    let liveOrder = $state<ExposedPortInfo[] | null>(null);
+
+    /** Rows the brush bar actually renders — the live drag shadow when
+     *  a drag is in flight, otherwise the engine's order. */
+    let displayPorts = $derived(liveOrder ?? brushGraph.exposedPorts);
 
     function onRowDragStart(e: DragEvent, port: ExposedPortInfo) {
         dragKey = port.key;
+        // Snapshot the current order as a mutable shadow we'll
+        // splice the dragged entry through on every dragover.
+        liveOrder = [...brushGraph.exposedPorts];
         if (e.dataTransfer) {
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', port.key);
         }
     }
-    function onRowDragOver(e: DragEvent, idx: number) {
-        if (dragKey === null) return;
+
+    function onRowDragOver(e: DragEvent, hoverIdx: number) {
+        if (dragKey === null || !liveOrder) return;
         e.preventDefault();
+        e.stopPropagation();
         if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+
         const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const ratio = (e.clientY - rect.top) / rect.height;
-        dropIndicator = { index: idx, pos: ratio < 0.5 ? 'above' : 'below' };
+        const insertBelow = (e.clientY - rect.top) / rect.height >= 0.5;
+
+        const fromIdx = liveOrder.findIndex((p) => p.key === dragKey);
+        if (fromIdx === -1) return;
+
+        let target = hoverIdx + (insertBelow ? 1 : 0);
+        if (fromIdx < target) target -= 1;
+        target = Math.max(0, Math.min(liveOrder.length - 1, target));
+        if (target === fromIdx) return;
+
+        // Reassign with a fresh array so Svelte's keyed-each diff
+        // notices the reorder and animate:flip can play.
+        const next = liveOrder.slice();
+        const [moved] = next.splice(fromIdx, 1);
+        next.splice(target, 0, moved);
+        liveOrder = next;
     }
+
     function onRowDragLeave() {
-        // Don't reset on leave — the next dragover wins.
+        // No-op — leaving one row to enter another is fine; the next
+        // dragover sets the new target. Leaving the whole list is
+        // handled by dragend.
     }
+
     function onRowDrop(e: DragEvent) {
         e.preventDefault();
-        if (dragKey === null || !dropIndicator) {
-            dragKey = null;
-            dropIndicator = null;
-            return;
-        }
-        // Compute the target index: insertion point above/below the
-        // hovered row. Then collapse to a stable index for the engine
-        // call (which moves the entry to that position).
-        let target = dropIndicator.index;
-        if (dropIndicator.pos === 'below') target += 1;
-        // Account for the dragged entry's own removal from earlier in
-        // the list — when we move forward past our origin, the target
-        // shifts back by one.
-        const fromIdx = brushGraph.exposedPorts.findIndex((p) => p.key === dragKey);
-        if (fromIdx >= 0 && fromIdx < target) target -= 1;
-        if (target < 0) target = 0;
-        const last = brushGraph.exposedPorts.length - 1;
-        if (target > last) target = last;
-        if (target !== fromIdx) {
-            brushGraph.reorderExposedPort(dragKey, target);
-        }
-        dragKey = null;
-        dropIndicator = null;
+        e.stopPropagation();
+        commitDrag();
     }
+
     function onRowDragEnd() {
+        // Drop fired? We've already committed. Drop didn't fire (drag
+        // ended outside any row or via Escape)? Discard the shadow.
+        commitDrag();
+    }
+
+    function commitDrag() {
+        const key = dragKey;
+        const order = liveOrder;
+        if (key !== null && order) {
+            const finalIdx = order.findIndex((p) => p.key === key);
+            const engineIdx = brushGraph.exposedPorts.findIndex((p) => p.key === key);
+            if (finalIdx !== -1 && finalIdx !== engineIdx) {
+                // Sync engine state synchronously; the resulting engine
+                // order will match liveOrder, so clearing the shadow
+                // below doesn't flash the row back to its old slot.
+                brushGraph.reorderExposedPort(key, finalIdx);
+            }
+        }
         dragKey = null;
-        dropIndicator = null;
+        liveOrder = null;
     }
 
     // Edit modal state.
@@ -125,19 +158,16 @@
             </p>
         {:else}
             <ul class="rows" ondragend={onRowDragEnd}>
-                {#each brushGraph.exposedPorts as port, idx (port.key)}
-                    <!-- svelte-ignore a11y_click_events_have_key_events -->
-                    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+                {#each displayPorts as port, idx (port.key)}
                     <li
                         class="entry-row"
-                        class:drag-above={dropIndicator?.index === idx && dropIndicator?.pos === 'above'}
-                        class:drag-below={dropIndicator?.index === idx && dropIndicator?.pos === 'below'}
+                        class:dragging={dragKey === port.key}
+                        animate:flip={{ duration: 100, easing: cubicOut }}
                         draggable="true"
                         ondragstart={(e) => onRowDragStart(e, port)}
                         ondragover={(e) => onRowDragOver(e, idx)}
                         ondragleave={onRowDragLeave}
                         ondrop={onRowDrop}
-                        onclick={() => openEditor(port)}
                     >
                         <span class="row-grip" aria-hidden="true">
                             <i class="fa-solid fa-grip-vertical"></i>
@@ -146,6 +176,14 @@
                             <span class="row-icon"><i class={port.icon}></i></span>
                         {/if}
                         <span class="row-label">{port.label}</span>
+                        <button
+                            class="row-edit"
+                            title="Edit label, description, and icon"
+                            onclick={(e) => { e.stopPropagation(); openEditor(port); }}
+                            ondragstart={(e) => e.preventDefault()}
+                        >
+                            <i class="fa-solid fa-pen"></i>
+                        </button>
                     </li>
                 {/each}
             </ul>
@@ -217,11 +255,9 @@
         background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
         border-color: var(--bg-hover);
     }
-    .entry-row.drag-above {
-        border-top-color: var(--accent);
-    }
-    .entry-row.drag-below {
-        border-bottom-color: var(--accent);
+    .entry-row.dragging {
+        opacity: 0.55;
+        border-color: var(--accent);
     }
     .row-grip {
         color: var(--text-muted);
@@ -238,5 +274,24 @@
         overflow: hidden;
         white-space: nowrap;
         text-overflow: ellipsis;
+    }
+    .row-edit {
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        font-size: 10px;
+        padding: 2px 4px;
+        border-radius: 3px;
+        opacity: 0;
+        transition: opacity 0.1s, color 0.1s;
+    }
+    .entry-row:hover .row-edit {
+        opacity: 0.8;
+    }
+    .row-edit:hover {
+        color: var(--text);
+        background: color-mix(in srgb, var(--accent) 18%, transparent);
+        opacity: 1;
     }
 </style>

@@ -29,10 +29,10 @@ connections:
 - '5.value -> 3.seed'
 exposed_ports:
   "1.stabilize": {}
+  "4.size": {}
   "3.softness": {}
   "4.deposit": {}
   "4.flow": {}
   "4.opacity": {}
   "4.pickup_size": {}
-  "4.size": {}
   "4.wetness": {}
