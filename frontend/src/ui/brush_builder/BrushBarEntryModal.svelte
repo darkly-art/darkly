@@ -83,17 +83,24 @@
             </label>
             <label class="field">
                 <span class="field-label">Icon</span>
-                <input
-                    type="text"
-                    class="text-input"
-                    bind:value={iconInput}
-                    placeholder="fa-solid fa-circle"
-                    oninput={validateIcon}
-                />
+                <div class="icon-field-row">
+                    <span class="icon-preview" class:placeholder={!iconInput || !!iconError}>
+                        {#if iconInput && !iconError}
+                            <i class={iconInput}></i>
+                        {:else}
+                            <i class="fa-regular fa-square"></i>
+                        {/if}
+                    </span>
+                    <input
+                        type="text"
+                        class="text-input"
+                        bind:value={iconInput}
+                        placeholder="fa-solid fa-circle"
+                        oninput={validateIcon}
+                    />
+                </div>
                 {#if iconError}
                     <span class="icon-error">{iconError}</span>
-                {:else if iconInput}
-                    <span class="icon-preview"><i class={iconInput}></i></span>
                 {/if}
             </label>
             <footer class="actions">
@@ -146,9 +153,28 @@
         font-size: 11px;
         color: var(--error, #d44);
     }
+    .icon-field-row {
+        display: flex;
+        align-items: stretch;
+        gap: 8px;
+    }
+    .icon-field-row .text-input {
+        flex: 1;
+    }
     .icon-preview {
-        font-size: 18px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 36px;
+        font-size: 16px;
         color: var(--text);
+        background: var(--bg);
+        border: 1px solid var(--bg-hover);
+        border-radius: 4px;
+        flex-shrink: 0;
+    }
+    .icon-preview.placeholder {
+        color: var(--text-muted);
     }
     .actions {
         display: flex;

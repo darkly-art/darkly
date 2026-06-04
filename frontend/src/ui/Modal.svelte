@@ -37,14 +37,13 @@
     }
 
     function onKeydown(e: KeyboardEvent) {
-        // The browser closes the dialog on Escape (we still get the
-        // `close` event), but the KeyboardEvent itself keeps bubbling
-        // and triggers any other Escape-bound handlers — collapsing the
-        // brush builder, deselecting a layer, exiting a tool, etc. Stop
-        // the bubble so dismissing the modal stays a modal-only action.
-        if (e.key === 'Escape') {
-            e.stopPropagation();
-        }
+        // Stop every keydown inside the modal from bubbling to the
+        // window-level hotkey handlers (pan-tool space, brush-builder
+        // Escape, tool shortcuts, etc.). Without this, typing a space
+        // into a text input fires the pan-tool toggle and the input
+        // never sees the character. The dialog's own browser-default
+        // Escape handling still runs (it doesn't depend on bubbling).
+        e.stopPropagation();
     }
 </script>
 
