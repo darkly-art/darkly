@@ -19,8 +19,6 @@ nodes:
       rotation: 3.14159
       rotation_input: 4.7
       softness: 0.32
-    exposed:
-    - rotation
   5:
     type: multiply
   6:
@@ -30,10 +28,6 @@ nodes:
     port_defaults:
       flow: 0.5
       size: 0.12
-    exposed:
-    - flow
-    - opacity
-    - size
   8:
     type: image
     params:
@@ -83,3 +77,8 @@ connections:
 - '10.output -> 9.in_low'
 - '11.output -> 7.flow'
 - '12.output -> 5.a'
+exposed_ports:
+  "4.rotation": {}
+  "7.flow": {}
+  "7.opacity": {}
+  "7.size": {}

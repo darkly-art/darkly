@@ -219,16 +219,27 @@ pub fn compile_graph(
     graph: &crate::nodegraph::Graph<BrushWireType>,
 ) -> Result<eval::BrushGraphRunner, String> {
     let registry = registry();
+    // Rewrite Switch nodes on a throwaway clone before any downstream
+    // consumer reads the graph. Every consumer below (runner, topo
+    // compile, WGSL compile) must see the same rewritten shape so a
+    // Switch never leaks past this point. The persisted graph is
+    // untouched — save/load, undo, and the brush-builder UI keep seeing
+    // the original placement.
+    let rewritten = {
+        let mut g = graph.clone();
+        nodes::switch::apply_to(&mut g);
+        g
+    };
     let evaluators = registry.evaluators();
-    let mut runner = eval::BrushGraphRunner::new(graph, registry.as_map(), evaluators)
+    let mut runner = eval::BrushGraphRunner::new(&rewritten, registry.as_map(), evaluators)
         .map_err(|e| format!("{e}"))?;
     if runner.has_terminal() {
         let plan =
-            crate::nodegraph::compile(graph, registry.as_map()).map_err(|e| format!("{e}"))?;
+            crate::nodegraph::compile(&rewritten, registry.as_map()).map_err(|e| format!("{e}"))?;
         // Build a fresh evaluators map for the compiler — the runner
         // owns the live one. Cheap (just trait-object constructors).
         let compile_evals = registry.evaluators();
-        let compiled = wgsl::compile_brush_to_wgsl(graph, &plan, &compile_evals)
+        let compiled = wgsl::compile_brush_to_wgsl(&rewritten, &plan, &compile_evals)
             .map_err(|e| format!("paint WGSL compilation failed: {e}"))?;
         runner.set_compiled_brush(std::sync::Arc::new(compiled));
     }
@@ -265,6 +276,12 @@ pub fn compile_from_json(json: &str) -> Result<eval::BrushGraphRunner, String> {
 pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) {
     let registry = registry();
     let mut resets: Vec<(crate::nodegraph::NodeId, String, f32)> = Vec::new();
+    // Walk every node and consult the *registration*'s `.exposed()`
+    // flag — only ports the node type declares as user-tunable by
+    // default get neutralized. Author-added entries in
+    // `graph.exposed_ports` (size, opacity, etc. that the author
+    // surfaced themselves) are part of the brush's identity and stay
+    // at the author's configured values for the thumbnail.
     for (id, node) in graph.nodes() {
         let Some(reg) = registry.get(&node.type_id) else {
             continue;
@@ -287,8 +304,11 @@ pub fn reset_exposed_scrubs(graph: &mut crate::nodegraph::Graph<BrushWireType>) 
 ///
 /// Returns Ok(()) or a human-readable error string.
 pub fn validate_graph_json(json: &str) -> Result<(), String> {
-    let graph: crate::nodegraph::Graph<BrushWireType> =
+    let mut graph: crate::nodegraph::Graph<BrushWireType> =
         serde_json::from_str(json).map_err(|e| format!("invalid graph JSON: {e}"))?;
+    // Mirror compile_graph: Switch rewriting must happen before the topo
+    // pass for validation to match what compilation will actually see.
+    nodes::switch::apply_to(&mut graph);
     let registry = registry();
     crate::nodegraph::compile(&graph, registry.as_map())
         .map_err(|e| format!("graph validation failed: {e}"))?;

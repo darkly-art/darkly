@@ -5,8 +5,6 @@ nodes:
     type: pen_input
     port_defaults:
       stabilize: 0.5
-    exposed:
-    - stabilize
   2:
     type: paint_color
   3:
@@ -19,17 +17,8 @@ nodes:
       octaves: 4.0
       persistence: 0.55
       softness: 0.05
-    exposed:
-    - softness
   4:
     type: watercolor
-    exposed:
-    - deposit
-    - flow
-    - opacity
-    - pickup_size
-    - size
-    - wetness
   5:
     type: random
 connections:
@@ -38,3 +27,12 @@ connections:
 - '2.color -> 4.color'
 - '3.mask -> 4.mask'
 - '5.value -> 3.seed'
+exposed_ports:
+  "1.stabilize": {}
+  "3.softness": {}
+  "4.deposit": {}
+  "4.flow": {}
+  "4.opacity": {}
+  "4.pickup_size": {}
+  "4.size": {}
+  "4.wetness": {}

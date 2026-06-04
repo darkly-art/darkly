@@ -5,6 +5,7 @@
     import { isModEvent } from '../../actions/mods';
     import NodeWidget from './NodeWidget.svelte';
     import WireRenderer from './WireRenderer.svelte';
+    import BrushBarNode from './BrushBarNode.svelte';
     import { createGraphCoords, type GraphCoords } from './coords';
 
     interface Props {
@@ -368,6 +369,10 @@
         {#each brushGraph.nodeList as node (node.id)}
             <NodeWidget {node} />
         {/each}
+        <!-- Brush Bar lives in graph-space alongside the nodes — pans
+             and zooms with them; the author drags it around like any
+             other node. -->
+        <BrushBarNode />
     </div>
 </div>
 

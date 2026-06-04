@@ -16,6 +16,7 @@ pub mod random;
 pub mod smudge;
 pub mod split_color;
 pub mod stamp;
+pub mod switch;
 pub mod watercolor;
 
 use crate::brush::BrushNodeRegistration;
@@ -37,6 +38,7 @@ pub fn registrations() -> Vec<BrushNodeRegistration> {
         smudge::register(),
         split_color::register(),
         stamp::register(),
+        switch::register(),
         watercolor::register(),
     ]
 }

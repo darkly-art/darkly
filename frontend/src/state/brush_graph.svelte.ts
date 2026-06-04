@@ -74,12 +74,15 @@ export interface BrushInfo {
 
 export type ExposedValue =
     | { kind: 'scalar'; value: number; min: number; max: number; default: number; unitType: string }
+    | { kind: 'bool'; value: boolean }
     // Future: | { kind: 'int'; value: number; min: number; max: number }
-    // Future: | { kind: 'bool'; value: boolean }
     ;
 
 
 export interface ExposedPortInfo {
+    /** `"<node_id>.<port_name>"` — passed back to setExposedPortMeta /
+     *  reorderExposedPort to address the same entry. */
+    key: string;
     nodeId: number;
     portName: string;
     label: string;
@@ -367,10 +370,42 @@ class BrushGraphState {
         }
     }
 
-    /** Toggle whether a port is exposed in the brush properties panel. */
-    togglePortExposed(nodeId: number, portName: string, exposed: boolean) {
+    /** Append a brush-bar entry for an input port. Idempotent. */
+    exposePort(nodeId: number, portName: string) {
         if (!app.handle) return;
-        this.applyResult(app.handle.brush_graph_set_port_exposed(nodeId, portName, exposed));
+        this.applyResult(app.handle.brush_graph_expose_port(nodeId, portName));
+    }
+
+    /** Drop a brush-bar entry. Idempotent. */
+    unexposePort(nodeId: number, portName: string) {
+        if (!app.handle) return;
+        this.applyResult(app.handle.brush_graph_unexpose_port(nodeId, portName));
+    }
+
+    /** Returns true when the named input port has a live brush-bar entry. */
+    isPortExposed(nodeId: number, portName: string): boolean {
+        return this.exposedPorts.some(
+            (p) => p.nodeId === nodeId && p.portName === portName,
+        );
+    }
+
+    /** Overwrite a brush-bar entry's label / description / icon. */
+    setExposedPortMeta(
+        key: string,
+        label: string,
+        description: string,
+        icon: string,
+    ) {
+        if (!app.handle) return;
+        this.applyResult(
+            app.handle.brush_graph_set_exposed_port_meta(key, label, description, icon),
+        );
+    }
+
+    /** Move a brush-bar entry to a target index in the display order. */
+    reorderExposedPort(key: string, newIndex: number) {
+        if (!app.handle) return;
+        this.applyResult(app.handle.brush_graph_reorder_exposed_port(key, newIndex));
     }
 
     /** Load a brush by name. */
