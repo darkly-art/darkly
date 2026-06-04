@@ -597,6 +597,7 @@ pub fn register() -> BrushNodeRegistration {
                     .with_natural_range(0.0, 1.0)
                     .with_label("Deposit")
                     .with_unit(UnitType::Percent)
+                    .with_icon("fa-solid fa-circle")
                     .exposed()
                     .with_description(
                         "How strongly the brush color replaces the pickup canvas color",
